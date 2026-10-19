@@ -52,6 +52,22 @@ export { transcriptEvents } from './session-transcript-events.js';
 export { priceTurn } from './session-driver-events.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
+/**
+ * Changes to the index are written at most this often. The file is a couple
+ * of megabytes on a busy machine and took ~15 ms to write, and it was written
+ * on every status change, turn end and setting, so a burst of them held the
+ * daemon for whole frames. stop(), process exit and any reader in this
+ * process (a second Sessions loading the file) flush first; a step that must
+ * be on disk before its next move calls flush() itself.
+ */
+const SAVE_DELAY_MS = 250;
+/** Writes waiting for their timer, across every Sessions in this process. */
+const pendingSaves = new Set();
+/** Put every waiting index write on disk now. */
+export function flushSessionIndex() {
+  for (const flush of [...pendingSaves]) flush();
+}
+process.on('exit', flushSessionIndex);
 // A headless agent that has been idle this long is closed; the next message
 // resumes the same conversation, so nothing is lost but the warm process.
 const IDLE_REAP_MS = 30 * 60_000;
@@ -199,7 +215,8 @@ export class Sessions extends EventEmitter {
     this.procs = procHost ?? new TerminalHost({ socketPath: PROC_SOCKET_PATH, unit: 'helm-procs' });
     this.#load();
     const recovered = this.checkpoints.recover(this.events, this.#index);
-    if (recovered.length) { this.#save(); this.checkpoints.finishRecovery(recovered); }
+    // The journal moves on only once the index it describes is on disk.
+    if (recovered.length) { this.#save(); this.flush(); this.checkpoints.finishRecovery(recovered); }
     this.#dropNonAgentTasks();
     // A daemon killed abruptly cannot answer its old hook sockets. Leave the
     // terminal's own prompt available, without showing an unanswerable card.
@@ -319,6 +336,7 @@ export class Sessions extends EventEmitter {
       inventory: this.#inventory.bind(this),
       handle: this.#handle.bind(this),
       save: this.#save.bind(this),
+      flush: () => this.flush(),
       startDriven: this.#startDriven.bind(this),
       driverStarts: this.#driverStarts,
       preparing: this.#preparing.bind(this),
@@ -436,6 +454,8 @@ export class Sessions extends EventEmitter {
   // ------------------------------------------------------------- persistence
 
   #load() {
+    // Another Sessions in this process may still hold the newest copy.
+    flushSessionIndex();
     if (!existsSync(INDEX_FILE)) return;
     try {
       const raw = JSON.parse(readFileSync(INDEX_FILE, 'utf8'));
@@ -497,21 +517,43 @@ export class Sessions extends EventEmitter {
     if (changed) this.#save();
   }
 
+  #saveTimer = null;
+  #flushSave = () => this.flush();
+
+  /** Mark the index changed; it is written within SAVE_DELAY_MS. */
   #save() {
-    mkdirSync(HELM_DIR, { recursive: true });
-    writeFileSync(
-      `${INDEX_FILE}.tmp`,
-      JSON.stringify({
-        version: 1,
-        // Subagent cards are re-read from Claude's files, never remembered.
-        sessions: [...this.#index.values()].map(({ nativeCards, ...s }) => s),
-        external: Object.fromEntries(this.#marks),
-        seen: Object.fromEntries(this.#seen),
-        removedAt: Object.fromEntries(this.#removedAt),
-      }, null, 2),
-      { mode: 0o600 }
-    );
-    renameSync(`${INDEX_FILE}.tmp`, INDEX_FILE);
+    if (this.#saveTimer) return;
+    this.#saveTimer = setTimeout(this.#flushSave, SAVE_DELAY_MS);
+    this.#saveTimer.unref?.();
+    pendingSaves.add(this.#flushSave);
+  }
+
+  /** Write a waiting index change now. Nothing waiting, nothing written. */
+  flush() {
+    if (!this.#saveTimer) return;
+    clearTimeout(this.#saveTimer);
+    this.#saveTimer = null;
+    pendingSaves.delete(this.#flushSave);
+    try {
+      mkdirSync(HELM_DIR, { recursive: true });
+      writeFileSync(
+        `${INDEX_FILE}.tmp`,
+        JSON.stringify({
+          version: 1,
+          // Subagent cards are re-read from Claude's files, never remembered.
+          sessions: [...this.#index.values()].map(({ nativeCards, ...s }) => s),
+          external: Object.fromEntries(this.#marks),
+          seen: Object.fromEntries(this.#seen),
+          removedAt: Object.fromEntries(this.#removedAt),
+        }),
+        { mode: 0o600 }
+      );
+      renameSync(`${INDEX_FILE}.tmp`, INDEX_FILE);
+    } catch (error) {
+      // Off the caller's stack now, so a full disk must not end the daemon.
+      // The next change tries again.
+      this.log(`could not save the session list: ${error.message}`);
+    }
   }
 
   // ------------------------------------------------------------------ events
@@ -800,7 +842,12 @@ export class Sessions extends EventEmitter {
   rewind(id, turnId, options) { return this.#rewinder.rewind(id, turnId, options); }
   fork(id, turnId) { return this.#rewinder.fork(id, turnId); }
 
-  async start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null }) {
+  /** A new chat is on disk before anyone is told it exists. */
+  async start(options) {
+    try { return await this.#start(options); } finally { this.flush(); }
+  }
+
+  async #start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null }) {
     if (originAutomationId != null) {
       if (!/^[A-Za-z0-9._:-]{1,120}$/.test(originAutomationId)) throw new Error('invalid automation identity');
       const existing = this.findAutomationSession(originAutomationId);
@@ -1863,7 +1910,9 @@ export class Sessions extends EventEmitter {
       if (d) await d.kill();
       this.#index.delete(id);
       this.#dropQuickDir(s);
+      // On disk before its log goes, so a crash never lists a chat whose history is gone.
       this.#save();
+      this.flush();
       this.events.remove(id);
       rmSync(join(HELM_DIR, 'agent-messages', id), { recursive: true, force: true });
       rmSync(join(HELM_DIR, 'uploads', id), { recursive: true, force: true });
@@ -1996,6 +2045,7 @@ export class Sessions extends EventEmitter {
 
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
+    this.flush();
     clearInterval(this.limitRecoveryTimer);
     this.limitRecoveryTimer = null;
     for (const timer of this.#natives.modeReads) clearTimeout(timer);
@@ -2019,5 +2069,7 @@ export class Sessions extends EventEmitter {
     this.terminals.detach?.();
     this.nativeTerminals.detach?.();
     this.procs.detach?.();
+    // Stopping settles turns and drivers, which change the index again.
+    this.flush();
   }
 }

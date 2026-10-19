@@ -52,6 +52,7 @@ test('reset inference accepts absolute timestamps, chooses exhausted windows and
 test('auto-continuation is opt-in, persists provider reset and resumes once when due', async t => {
   const f = backend(); t.after(() => f.sessions.stop()); const { s, resetAt } = await limited(f);
   assert.equal(s.recovery.resetAt, resetAt);
+  f.sessions.flush();
   assert.equal(JSON.parse(readFileSync(join(process.env.HELM_DIR, 'sessions.json'), 'utf8')).sessions[0].recovery.resetAt, resetAt);
   await f.sessions.tickLimitRecovery(resetAt + 1); assert.equal(f.drivers[0].sent.length, 1);
   f.sessions.setAutoResumeLimited(s.id, true);
@@ -97,6 +98,7 @@ test('disabling during continuation staging withdraws its ticket; fresh-thread i
   const child = await f.sessions.start({ cwd: process.env.HELM_DIR, profileId: 'fake', originAutomationId: 'local-schedule-durable' });
   assert.equal((await f.sessions.start({ cwd: process.env.HELM_DIR, profileId: 'fake', originAutomationId: 'local-schedule-durable' })).id, child.id);
   assert.equal(f.sessions.findAutomationSession('local-schedule-durable').id, child.id);
+  f.sessions.flush();
   assert.equal(JSON.parse(readFileSync(join(process.env.HELM_DIR, 'sessions.json'), 'utf8')).sessions.find(r => r.id === child.id).originAutomationId, 'local-schedule-durable');
 });
 

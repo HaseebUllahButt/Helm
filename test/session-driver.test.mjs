@@ -539,6 +539,7 @@ test('a missing Claude conversation id is cleared and resend starts a fresh thre
   // Recreate the pre-fix persisted state. On restart, the error in the log
   // still proves that this id must not be passed to Claude a second time.
   const indexPath = join(process.env.HELM_DIR, 'sessions.json');
+  sessions.flush();
   const saved = JSON.parse(readFileSync(indexPath, 'utf8'));
   saved.sessions.find((row) => row.id === s.id).engineSessionId = staleId;
   writeFileSync(indexPath, JSON.stringify(saved));

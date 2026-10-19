@@ -29,6 +29,13 @@ import { HELM_DIR } from './paths.js';
 export const EVENTS_DIR = join(HELM_DIR, 'events');
 const KEEP = 2000;
 export const EVENT_KEEP = KEEP;
+/**
+ * A live log is trimmed back to KEEP only once its tail is this far past it.
+ * Trimming walks and sorts the whole kept history; doing it on every event
+ * made each event of a long chat cost ~0.3 ms instead of ~0.02. Readers see
+ * the same newest KEEP events, plus at most this many older ones in between.
+ */
+const TRIM_EVERY = 200;
 /** How many of a chat's visuals outlive the KEEP tail (see retain). */
 const KEEP_VISUALS = 100;
 
@@ -257,6 +264,7 @@ export class EventLog {
         }
       };
       Object.assign(log, retain(tail, older));
+      log.context = log.events.length - tail.length;
       if (log.events.length) log.seq = log.events[log.events.length - 1].seq;
       // Compact to the tail and its identities, preserving ownership across
       // eviction/restart as well as while this instance remains in memory.
@@ -343,15 +351,17 @@ export class EventLog {
     const full = { seq: ++log.seq, at: Date.now(), ...event };
     log.events.push(full);
     this.#track(this.#pending.get(id), full);
-    if (log.events.length > KEEP) {
+    // `context` counts the older events kept ahead of the tail for it.
+    if (log.events.length - (log.context ?? 0) > KEEP + TRIM_EVERY) {
       const old = log.events, from = old.length - KEEP;
       Object.assign(log, retain(old.slice(from), function* () {
         for (let i = from - 1; i >= 0; i--) yield old[i];
       }));
+      log.context = log.events.length - KEEP;
       const kept = new Set(log.events.map(e => e.seq));
       const dropped = old.filter(e => !kept.has(e.seq));
       if (dropped.some((e) => e.attachments?.length || e.visual?.ref)) this.#sweep(id, log.events);
-    } else log.first = log.events[0]?.seq ?? 0;
+    } else if (!log.context) log.first = log.events[0]?.seq ?? 0;
     mkdirSync(this.dir, { recursive: true });
     appendFileSync(this.#file(id), JSON.stringify(full) + '\n', { mode: 0o600 });
     return full;

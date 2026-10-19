@@ -299,7 +299,8 @@ test('retention preserves the real owner and item of a turn longer than 2000 eve
   const log = new EventLog(dir);
   log.append('s', { type: 'turn.start', turnId: 'host', text: 'long original task' });
   log.append('s', { type: 'item.start', id: 'reply', turnId: 'host', kind: 'text' });
-  for (let i = 0; i < 2100; i++) log.append('s', { type: 'item.delta', id: 'reply', text: 'x' });
+  // Far enough past KEEP that the live log has been trimmed once too.
+  for (let i = 0; i < 2300; i++) log.append('s', { type: 'item.delta', id: 'reply', text: 'x' });
   log.append('s', { type: 'turn.start', turnId: 'local-next', text: 'also check this', queued: true });
   log.append('s', { type: 'turn.deliver', turnId: 'local-next' });
   log.append('s', { type: 'turn.accept', turnId: 'local-next' });
@@ -311,7 +312,9 @@ test('retention preserves the real owner and item of a turn longer than 2000 eve
     assert.equal(host?.text, 'long original task');
     assert.ok(host?.items.find(i => i.id === 'reply')?.text.endsWith(' latest answer'));
     assert.equal(state.turns.find(t => t.id === 'local-next')?.queued, false);
-    assert.equal(window.logFirst, instance.last('s') - 1999);
+    // The newest 2000, and in a live log up to 200 more until its next trim.
+    const tail = instance.last('s') - window.logFirst + 1;
+    assert.ok(tail >= 2000 && tail <= 2200, `tail of ${tail}`);
     assert.ok(window.firstSeq >= window.logFirst);
     assert.ok(window.events[0].seq < window.logFirst, 'sparse anchors remain separate from retained history');
     assert.deepEqual(instance.window('s', { before: window.logFirst }).events, []);
@@ -367,7 +370,7 @@ test('old owner anchors disappear when no retained event needs them', () => {
     log.append('s', { type: 'turn.done', turnId: `t${turn}`, status: 'ok' });
   }
   const events = log.since('s');
-  assert.equal(events.length, 2002);
+  assert.ok(events.length >= 2002 && events.length <= 2202, 'trimmed in batches of 200');
   assert.deepEqual(events.filter(e => e.type === 'turn.start').map(e => e.turnId), ['t2']);
   assert.equal(new EventLog(dir).since('s').length, 2002);
 });
@@ -459,5 +462,22 @@ test('a glance at a cold log gives a restart what opening it would', () => {
     assert.equal(cold.last('s'), opened.last('s'));
     assert.deepEqual(cold.glance('s').turns.map((e) => e.turnId), ['local-q', 't1']);
     assert.equal(cold.since('s').length, opened.since('s').length);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a live log trimmed in batches shows what a fresh read of it shows, plus at most 200 older events', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-batch-'));
+  try {
+    const log = new EventLog(dir);
+    for (let i = 0; i < 5000; i++) {
+      if (i % 300 === 0) log.append('s', { type: 'turn.start', turnId: `t${i}`, text: 'go' });
+      log.append('s', { type: 'item.delta', id: `r${i - i % 300}`, turnId: `t${i - i % 300}`, text: String(i) });
+    }
+    const live = log.since('s'), cold = new EventLog(dir).since('s');
+    const plain = (events) => JSON.parse(JSON.stringify(events));
+    assert.deepEqual(plain(live.slice(-2000)), plain(cold.slice(-2000)), 'the newest 2000 are the same');
+    const seen = new Set(live.map(e => e.seq));
+    assert.ok(cold.every(e => seen.has(e.seq)), 'nothing a fresh read keeps is missing');
+    assert.ok(live.length > cold.length && live.length <= cold.length + 200, `${live.length} against ${cold.length}`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
