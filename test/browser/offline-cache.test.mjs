@@ -38,6 +38,7 @@ before(async () => {
       workspace.saveWorkspace(scope,{environments:[{id:'machine',name:'Laptop',online:true,lastSeen:null,info:{}}],
         sessions:{machine:[session('Cached chat'),session('Another chat')]},
         view:{envId:'machine',session:session('Cached chat')}});
+      workspace.writeWorkspaces();
       await cache.saveCached('machine','Cached chat',3,events(),1);
       await cache.saveCached('machine','Another chat',3,events('Other saved response'),1);
       await txn('kv','readonly',s=>s.get('helm.workspace:'+scope));
@@ -328,6 +329,7 @@ test('workspace cache separates memberships and omits provider configuration', a
   const result = await page.evaluate(async () => {
     await window.seed();
     window.workspace.saveWorkspace(window.scope,{sessions:{machine:[{...window.session('safe'),env:{SECRET:'private'},token:'private'}]}});
+    window.workspace.writeWorkspaces();
     return {other:window.workspace.loadWorkspace('other:device'),raw:localStorage.getItem('helm.workspace:'+window.scope)};
   });
   assert.deepEqual(result.other,{environments:[],sessions:{}});
@@ -430,4 +432,26 @@ test('resuming on HTTP clears the saved-workspace disconnect notice without wait
   await page.evaluate(()=>{window.failed=false;window.dispatchEvent(new Event('focus'));});
   await page.waitForFunction(()=>!document.querySelector('.sidebar').textContent.includes('Saved workspace · reconnecting'));
   await page.locator('.sidebar .rt-text').getByText('Recovered machine',{exact:true}).waitFor();
+});
+
+test('many chat updates in a row are written to the device once, and a page hide writes at once', async t => {
+  const { page } = await pageFor(t);
+  const result = await page.evaluate(async () => {
+    await window.seed();
+    const writes = [], setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (k, v) { if (k.startsWith('helm.workspace:')) writes.push(k); return setItem.call(this, k, v); };
+    for (let i = 0; i < 50; i++) window.workspace.updateWorkspaceSession(window.scope, 'machine', { ...window.session('Cached chat'), title: 'Renamed ' + i });
+    const during = writes.length;
+    // The open chat is read back from memory straight away, already renamed.
+    const view = window.workspace.loadWorkspace(window.scope).view.session.title;
+    window.workspace.updateWorkspaceSession(window.scope, 'machine', { ...window.session('Cached chat'), title: 'Last name' });
+    window.dispatchEvent(new Event('pagehide'));
+    const saved = JSON.parse(localStorage.getItem('helm.workspace:' + window.scope));
+    Storage.prototype.setItem = setItem;
+    return { during, view, after: writes.length, saved: saved.view.session.title };
+  });
+  assert.equal(result.during, 0);
+  assert.equal(result.view, 'Renamed 49');
+  assert.equal(result.after, 2);
+  assert.equal(result.saved, 'Last name');
 });
