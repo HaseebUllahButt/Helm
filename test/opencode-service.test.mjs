@@ -16,6 +16,7 @@ const { inventory, inventoryPage } = await import('../packages/connect/src/inven
 const { opencodeServiceSessions } = await import('../packages/connect/src/opencode-service.js');
 const { ExternalSessions } = await import('../packages/connect/src/session-external.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
+const { loadPty } = await import('../packages/connect/src/pty.js');
 const profiles = [{ id: 'oc2', engine: 'opencode2', env: {} }];
 writeFileSync(join(root, 'helm', 'profiles.json'), JSON.stringify({ profiles }));
 const dbPath = join(root, 'data/opencode/opencode.db');
@@ -96,6 +97,69 @@ test('completed V2 sessions stop being live while saved history stays available'
   const rows = await inventory(profiles, { limit: Infinity });
   assert.equal(rows.find((s) => s.id === 'ses_64').active, false);
   assert.equal(rows.length, 65);
+});
+
+test('an idle O2 terminal exposes its exact tabs without reviving closed folders', async () => {
+  const tabsDir = join(root, 'state/opencode/latest/tui');
+  mkdirSync(tabsDir, { recursive: true });
+  writeFileSync(join(tabsDir, 'tabs.json'), JSON.stringify({
+    global: { tabs: [{ sessionID: 'ses_62' }] },
+    cwd: { [root]: { tabs: [{ sessionID: 'ses_60' }] }, '/closed-folder': { tabs: [{ sessionID: 'ses_61' }] } },
+  }));
+  const bin = join(root, 'opencode');
+  writeFileSync(bin, 'console.log("READY"); setInterval(() => {}, 1000)');
+  const pty = await loadPty();
+  const client = pty.spawn(process.execPath, [bin], { cwd: root, env: { ...process.env } });
+  await new Promise((resolve) => { const listener = client.onData((s) => { if (s.includes('READY')) { listener.dispose(); resolve(); } }); });
+  try {
+    const live = await opencodeServiceSessions({ fresh: true });
+    assert.equal(live.get('ses_60'), 'idle');
+    assert.equal(live.get('ses_62'), 'idle');
+    assert.equal(live.has('ses_61'), false);
+    active = { ses_60: { type: 'running' } };
+    assert.equal((await opencodeServiceSessions({ fresh: true })).get('ses_60'), 'working');
+    active = {};
+    await opencodeServiceSessions({ fresh: true });
+    writeFileSync(join(root, 'helm', 'profiles.json'), JSON.stringify({ profiles: [{ id: 'shell', engine: 'shell' }] }));
+    class Runtime extends EventEmitter { async listLive() { return new Map(); } }
+    const sessions = new Sessions(new Runtime());
+    try {
+      await Promise.race([
+        once(sessions, 'discovery'),
+        new Promise((_, reject) => setTimeout(() => reject(Error('new outside tabs did not publish discovery')), 6000).unref()),
+      ]);
+      const liveRow = (await sessions.list()).find((s) => s.engineSessionId === 'ses_60');
+      assert.equal(liveRow?.externalActive, true);
+      assert.equal(liveRow.status, 'idle');
+      const opened = await sessions.resumeExternal({ engine: 'opencode2', account: 'oc2:opencode', id: 'ses_60' });
+      assert.equal(opened.profileId, 'opencode2-service', 'a running service supplies a missing tool entry');
+      assert.equal(opened.externalService, true);
+      assert.equal(opened.externalActive, true);
+      const external = new ExternalSessions({ get: () => opened, emit() {} }, { index: new Map([[opened.id, opened]]), save() {} });
+      await external.handoffExternal(opened);
+    } finally {
+      await sessions.stop();
+      writeFileSync(join(root, 'helm', 'profiles.json'), JSON.stringify({ profiles }));
+    }
+  } finally {
+    await new Promise((resolve) => { client.onExit(resolve); client.kill(); });
+  }
+  assert.equal((await opencodeServiceSessions({ fresh: true })).has('ses_60'), false, 'saved tabs alone do not mean open');
+});
+
+test('V2 services installed as opencode and opencode2.exe report live chats', async () => {
+  active = { ses_64: { type: 'running' } };
+  for (const name of ['opencode', 'opencode2.exe']) {
+    const path = join(root, name);
+    writeFileSync(path, 'setInterval(() => {}, 1000)');
+    const child = spawn(process.execPath, [path, 'serve', '--service'], { stdio: 'ignore' });
+    await once(child, 'spawn');
+    try {
+      writeFileSync(statePath, JSON.stringify({ ...record, pid: child.pid }));
+      assert.equal((await opencodeServiceSessions({ fresh: true })).get('ses_64'), 'working', name);
+    } finally { child.kill(); await once(child, 'exit'); }
+  }
+  writeFileSync(statePath, JSON.stringify(record));
 });
 
 test('stale pids and nonlocal service records never receive the service password', async () => {

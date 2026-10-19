@@ -538,6 +538,7 @@ export class Daemon {
     }, WARM_DELAY_MS);
     warm.unref?.();
     this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session: wire(session) }));
+    this.sessions.on('discovery', () => this.#emit(E.SESSION_UPDATE, {}));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
     this.sessions.on('exit', (e) => this.#emit(E.SESSION_EXIT, e));

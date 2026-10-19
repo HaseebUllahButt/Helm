@@ -10,7 +10,7 @@ import { EVENT_KEEP } from './events.js';
 import { accountKey } from './settings.js';
 import { defaultMode } from './modes.js';
 import { inventory } from './inventory.js';
-import { opencodeServiceActive, opencodeServiceSessions } from './opencode-service.js';
+import { opencodeServiceActive, opencodeServiceStatus, opencodeServiceSessions } from './opencode-service.js';
 import { claudeLiveSessions, claudeLiveStatus } from './external-process.js';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
 import { openFiles, processArgv, processCwd } from './procinfo.js';
@@ -212,7 +212,7 @@ export class ExternalSessions {
     }
     const activity = await sessionActivity({ engine: s.engine, path: s.transcript,
       sessionId: s.engineSessionId, active, updatedAt: s.updatedAt,
-      liveStatus: s.engine === 'opencode2' && opencodeServiceActive(s.engineSessionId) ? 'working' : s.engine === 'claude' && s.externalHome
+      liveStatus: s.engine === 'opencode2' ? opencodeServiceStatus(s.engineSessionId) : s.engine === 'claude' && s.externalHome
         ? claudeLiveStatus(claudeLiveSessions(s.externalHome).get(s.engineSessionId) ?? []) : null });
     if (!s.external || this.#core.index.get(s.id) !== s) return { status: s.status, turns: s.turns ?? 0 };
     if (s.status !== activity.status || s.externalActive !== active || s.turns !== activity.turns) {
@@ -227,7 +227,7 @@ export class ExternalSessions {
 
   externalActive(s) {
     if (!s.external) return false;
-    if (s.engine === 'opencode2' && opencodeServiceActive(s.engineSessionId)) return true;
+    if (s.engine === 'opencode2' && opencodeServiceStatus(s.engineSessionId)) return true;
     if (s.engine === 'claude' && s.externalHome
       && claudeLiveSessions(s.externalHome).has(s.engineSessionId)) return true;
     if (s.engine === 'codex' && s.externalLock && existsSync(s.externalLock)) return true;
@@ -273,6 +273,7 @@ export class ExternalSessions {
     if (!this.externalActive(s)) return;
     await this.refreshExternalActivity(s, true);
     if (opencodeServiceActive(s.engineSessionId) && s.engine === 'opencode2') throw new Error('This OpenCode 2 chat is still running. Wait for its current step to finish, then send here.');
+    if (s.engine === 'opencode2' && opencodeServiceStatus(s.engineSessionId) === 'idle') return;
     throw new Error(`This ${s.engine} chat was started outside Helm's shared terminal. Use Take over above to continue here without manually closing it. New terminal chats share automatically when Helm's CLI integration is on.`);
   }
 

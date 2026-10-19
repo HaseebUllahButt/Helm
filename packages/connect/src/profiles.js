@@ -3,6 +3,7 @@ import { discoverProfiles } from './discover.js';
 import { ENGINES } from './engines.js';
 import { HELM_DIR, PROFILES_FILE, SECRETS_FILE, expand } from './paths.js';
 import { migrateProfileSettings } from './settings.js';
+import { opencodeServiceSessions, opencodeServiceProfile } from './opencode-service.js';
 
 const write = (file, body, mode = 0o600) => {
   mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
@@ -65,15 +66,27 @@ export async function refreshProfiles({ keepCustom = true } = {}) {
     found.push(...custom);
   }
   if (saved?.profiles) migrateProfileSettings(saved.profiles, found);
+  await addServiceProfile(found);
   saveProfiles(found);
   return { profiles: found, installed };
 }
 
 export async function getProfiles() {
   const saved = loadProfiles();
-  if (saved?.profiles?.length) return saved.profiles;
-  const { profiles } = await refreshProfiles();
+  const profiles = saved?.profiles?.length ? saved.profiles : (await refreshProfiles()).profiles;
+  if (await addServiceProfile(profiles)) saveProfiles(profiles);
   return profiles;
+}
+
+async function addServiceProfile(profiles) {
+  if (!profiles.some((p) => p.engine === 'opencode2')) {
+    await opencodeServiceSessions();
+    const service = opencodeServiceProfile();
+    // An O2 installed outside the login shell's PATH is still usable. The
+    // validated local service tells us its real command, including wrappers.
+    if (service) { profiles.push(service); return true; }
+  }
+  return false;
 }
 
 /**

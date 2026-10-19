@@ -283,6 +283,13 @@ export class Sessions extends EventEmitter {
       for (const s of this.#index.values()) {
         if (this.#subagents.hasNative(s) && (['working', 'starting', 'blocked'].includes(s.status) || nativeActive(s.nativeCards))) void this.#subagents.refreshNative(s);
       }
+      // New outside O2 tabs have no Helm driver to publish their arrival.
+      // Reuse this poll to push a list refresh, including when a tab closes.
+      const openCode = JSON.stringify([...(await opencodeServiceSessions())].sort(([a], [b]) => a.localeCompare(b)));
+      if (openCode !== this.#openCodeState) {
+        this.#openCodeState = openCode;
+        this.emit('discovery');
+      }
       if (!this.nativeDiscovery) return;
       try {
         await this.nativeTerminals.ensure({ spawn: false });
@@ -392,6 +399,7 @@ export class Sessions extends EventEmitter {
 
   /** What the last list found, so opening a row it just showed skips a rescan. */
   #lastDetected = null;
+  #openCodeState = '[]';
 
   /** Several screens list at once; one scan of every process serves them. */
   #inventoryScan = null;
