@@ -19,6 +19,10 @@ const { PI_SETTINGS_EXTENSION } = await import('../packages/connect/src/pi-setti
 const { loadPty } = await import('../packages/connect/src/pty.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 
+// Loaded before any test is declared: an await between declarations lets the
+// runner think every test has ended and run test.after() (deleting root) early.
+const ptyLoaded = !!(await loadPty());
+
 async function until(fn, ms = 10000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) { const result = await fn(); if (result) return result; await new Promise((r) => setTimeout(r, 30)); }
@@ -72,7 +76,7 @@ test('bash login PATH changes cannot bypass the shared CLI launcher', () => {
   }
 });
 
-for (const engine of ['claude', 'pi', 'devin', 'opencode']) test(`${engine}: native launch preserves arguments and account; phone answers after laptop closes and daemon restarts`, { skip: !(await loadPty()) }, async (t) => {
+for (const engine of ['claude', 'pi', 'devin', 'opencode']) test(`${engine}: native launch preserves arguments and account; phone answers after laptop closes and daemon restarts`, { skip: !ptyLoaded }, async (t) => {
   const pty = await loadPty();
   const provider = join(root, 'native-provider.cjs');
   writeFileSync(provider, `const readline = require('node:readline');
