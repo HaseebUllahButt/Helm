@@ -36,6 +36,53 @@ export class ExternalSessions {
   /** session object -> in-flight full-rollout reconciliation */
   #imports = new WeakMap();
 
+  /** A conversation can return to O2 after Helm last drove it. */
+  async monitorService(s, found) {
+    const idle = () => !(s.engine !== 'opencode2' || !s.driver || s.external || !s.engineSessionId
+      || ['working', 'blocked', 'starting'].includes(s.status)
+      || ['working', 'blocked', 'starting'].includes(this.#core.drivers.get(s.id)?.status)
+      || this.#core.drivers.get(s.id)?.pending?.size || this.#core.drivers.get(s.id)?.backgroundTasks > 0
+      || this.#sessions.events.activeTurn(s.id) || this.#sessions.events.pending(s.id).length
+      || this.#core.driverStarts.has(s.id) || this.#core.retiring.has(s.id)
+      || this.#core.sending.has(s.id) || this.#core.outbox.get(s.id)?.length);
+    if (!idle() || !opencodeServiceStatus(s.engineSessionId)) return;
+    found ??= (await inventory((await getProfiles()).filter(p => p.engine === 'opencode2'), { limit: Infinity }))
+      .find(x => x.id === s.engineSessionId);
+    if (!found?.serviceActive || this.#core.index.get(s.id) !== s || !idle()) return;
+    const through = this.#sessions.events.tail(s.id, 0)
+      .findLast(e => e.type === 'turn.done' && !e.imported && !e.local && !e.undelivered)?.at ?? s.updatedAt ?? 0;
+    if (opencodeServiceStatus(s.engineSessionId) !== 'working') {
+      if (found.updatedAt <= through) return;
+      // Session metadata can be saved after Helm's reply. Only a new user
+      // message proves that a short outside turn ran between our polls.
+      const messages = await readMessages({ engine: s.engine, path: found.transcript, sessionId: s.engineSessionId, all: true });
+      if (!messages.some(m => m.role === 'user' && Number(m.at) > through) || !idle()) return;
+    }
+    // Keep the same chat. Release only Helm's idle ACP connection: it has
+    // cached the old conversation. The separate shared O2 service stays alive.
+    // The saved event time separates already-shown Helm replies from new
+    // outside messages, even on old records whose import cursor is stale.
+    s.externalAfter = through;
+    Object.assign(s, { external: true, externalSource: true, externalActive: true,
+      externalService: true, externalPid: null, transcript: found.transcript,
+      status: opencodeServiceStatus(s.engineSessionId), updatedAt: found.updatedAt, adopted: true });
+    const driver = this.#core.drivers.get(s.id);
+    if (driver) {
+      clearTimeout(this.#core.reapers.get(s.id));
+      this.#core.reapers.delete(s.id);
+      this.#core.drivers.delete(s.id);
+      driver.removeAllListeners?.();
+      const retiring = Promise.resolve().then(() => driver.kill());
+      this.#core.retiring.set(s.id, retiring);
+      try { await retiring; }
+      finally { if (this.#core.retiring.get(s.id) === retiring) this.#core.retiring.delete(s.id); }
+    }
+    this.#core.save();
+    this.#sessions.emit('session', s);
+    await this.importExternalTranscript(s);
+    this.#core.viewers.watchTranscript(s.id, s.transcript);
+  }
+
 /**
    * Pick up a conversation this machine's CLI recorded on its own.
    *
@@ -381,6 +428,10 @@ export class ExternalSessions {
 
   async #connect(id) {
     const s = this.#sessions.get(id);
+    if (s.engine === 'opencode2') {
+      await opencodeServiceSessions({ fresh: true });
+      await this.monitorService(s);
+    }
     if (s.external) {
       await this.importExternalTranscript(s);
       await this.handoffExternal(s);
@@ -438,6 +489,9 @@ export class ExternalSessions {
     }
     if (s.engine === 'claude') s.externalTextVersion = 1;
     let imported = Math.min(s.externalImported ?? 0, messages.length);
+    if (s.engine === 'opencode2' && s.externalAfter) {
+      imported = Math.max(imported, messages.findLastIndex(m => Number(m.at) <= s.externalAfter) + 1);
+    }
     if (s.engine === 'codex' && s.externalImagesVersion !== 1 && imported) {
       // The old parser omitted image-only messages entirely. Translate its
       // cursor before continuing, rather than importing old answers twice.

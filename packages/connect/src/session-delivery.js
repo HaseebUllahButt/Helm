@@ -8,6 +8,7 @@ import { sessionSnapshot } from './transcript.js';
 import { canInspectExternalCodex } from './drivers/codex.js';
 import { devinUsageReport } from './devin-usage.js';
 import { defaultMode } from './modes.js';
+import { opencodeServiceSessions, opencodeServiceActive } from './opencode-service.js';
 import { hostedProcId } from './hosted-process.js';
 import { messageDelivery } from '@helm/protocol/message-delivery';
 import { DRIVERS, wire } from './session-wire.js';
@@ -130,6 +131,11 @@ export class SessionDelivery {
       if (s.delegation) s.delegation.parentGeneration = this.#core.index.get(s.delegation.parentId)?.stopGeneration ?? 0;
       this.#core.save();
       this.#sessions.emit('session', s);
+    }
+    if (!raw && s.engine === 'opencode2') {
+      await opencodeServiceSessions({ fresh: true });
+      await this.#core.external.monitorService(s);
+      if (opencodeServiceActive(s.engineSessionId)) throw new Error('This OpenCode 2 chat is still running. Wait for its current step to finish, then send here.');
     }
     if (s.external) {
       await this.#core.external.importExternalTranscript(s);
@@ -363,6 +369,12 @@ export class SessionDelivery {
     if (this.#core.retiring.has(s.id)) d = null;
     let echo = null;
     try {
+      // A queued message can reach this point after the owner reopened the
+      // same chat in O2. Recheck this chat before sending to its ACP copy.
+      if (s.engine === 'opencode2') {
+        await opencodeServiceSessions({ fresh: true });
+        if (opencodeServiceActive(s.engineSessionId)) throw Object.assign(new Error('This OpenCode 2 chat is still running. Wait for its current step to finish, then send here.'), { code: 'external_busy' });
+      }
       d ??= await this.#core.driver(s);
       if (this.#core.delegation.discardConsumedResult(s, item.turnId)) return;
       if (s.stoppedAt || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0))) {
@@ -441,6 +453,7 @@ export class SessionDelivery {
       const failed = this.#sessions.events.append(s.id, {
         type: 'turn.done', turnId: item.turnId, status: 'error',
         error: String(err?.message || err),
+        ...(err?.code === 'external_busy' ? { undelivered: true } : {}),
       });
       s.lastSeq = failed.seq;
       if (!s.stoppedAt && isUsageLimit(err)) {

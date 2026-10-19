@@ -147,6 +147,8 @@ export class DriverEvents {
       if (s.delegation && !s.stoppedAt && ['working', 'blocked'].includes(status)) s.delegation.status = status;
       if (s.delegation) this.#core.delegation.updateTeam(s);
       if (e.status === 'exited' && this.#core.drivers.get(s.id) === d) { this.#core.drivers.delete(s.id); this.#core.awaitingEcho.delete(s.id); }
+      // An idle ACP connection does not own a chat resumed in O2's service.
+      if (s.external && s.engine === 'opencode2') return;
       if (e.status === 'exited' && s.shared) this.#sessions.emit('session', { ...s, alive: false });
       this.#core.reap(s, status);
       if (status !== s.status && this.#core.index.has(s.id)) {

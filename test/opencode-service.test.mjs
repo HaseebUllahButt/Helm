@@ -99,12 +99,84 @@ test('completed V2 sessions stop being live while saved history stays available'
   assert.equal(rows.length, 65);
 });
 
+test('an idle Helm conversation reopened in O2 becomes the same live monitor', async () => {
+  const db = new DatabaseSync(dbPath);
+  db.exec('CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, data TEXT, time_created INTEGER, seq INTEGER)');
+  for (const [seq, type, text, at] of [[1, 'user', 'Earlier Helm question', 10], [2, 'assistant', 'Earlier Helm answer', 20], [3, 'user', 'New outside question', 110], [4, 'assistant', 'New outside answer', 120]]) {
+    db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?)').run(String(seq), 'ses_59', type, JSON.stringify({ content: [{ type: 'text', text }] }), at, seq);
+  }
+  db.close();
+  writeFileSync(join(root, 'helm/sessions.json'), JSON.stringify({ sessions: [
+    { id: 'returned-o2', engine: 'opencode2', driver: 'opencode2', profileId: 'oc2', engineSessionId: 'ses_59', transcript: dbPath, cwd: '/work/same-folder', title: 'Earlier Helm question', status: 'idle', external: false, externalImported: 2 },
+  ] }));
+  class Runtime extends EventEmitter { async listLive() { return new Map(); } }
+  const drivers = [];
+  class Driver extends EventEmitter {
+    constructor(opts) { super(); Object.assign(this, opts); this.status = 'idle'; drivers.push(this); }
+    async start() {}
+    async send(text) { this.sent = text; }
+    async kill() { this.killed = true; }
+  }
+  const sessions = new Sessions(new Runtime(), { makeDriver: (_, opts) => new Driver(opts) });
+  sessions.events.append('returned-o2', { type: 'turn.start', turnId: 'managed', text: 'Earlier Helm question', at: 10 });
+  sessions.events.append('returned-o2', { type: 'turn.done', turnId: 'managed', status: 'ok', at: 100 });
+  await sessions.connect('returned-o2');
+  assert.equal(drivers.length, 1);
+  active = { ses_59: { type: 'running' } };
+  await opencodeServiceSessions({ fresh: true });
+  try {
+    const managed = sessions.get('returned-o2');
+    managed.status = drivers[0].status = 'working';
+    sessions.events.append(managed.id, { type: 'turn.start', turnId: 'local-active', text: 'Local work', at: 90 });
+    assert.equal((await sessions.list()).find(s => s.id === managed.id).external, false);
+    assert.notEqual(drivers[0].killed, true, 'never retire a local turn in progress');
+    await assert.rejects(sessions.input(managed.id, 'Do not queue across writers'), /still running/);
+    sessions.events.append(managed.id, { type: 'turn.done', turnId: 'local-active', status: 'ok', at: 100 });
+    sessions.events.append(managed.id, { type: 'turn.done', turnId: 'refused-queue', status: 'error', undelivered: true, at: 200 });
+    managed.status = drivers[0].status = 'idle';
+    const rows = await sessions.list();
+    const matches = rows.filter(s => s.engineSessionId === 'ses_59');
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0].id, 'returned-o2');
+    assert.equal(matches[0].status, 'working');
+    assert.equal(matches[0].external, true);
+    assert.equal(matches[0].externalService, true);
+    assert.equal(drivers[0].killed, true, 'release only the old idle ACP copy');
+    assert.equal(drivers.length, 1, 'monitoring starts no replacement provider');
+    await sessions.prepareHistory('returned-o2');
+    const events = sessions.events.tail('returned-o2', 0);
+    assert.equal(events.filter(e => e.type === 'turn.start' && e.text === 'Earlier Helm question').length, 1);
+    assert.equal(events.filter(e => e.type === 'turn.start' && e.text === 'New outside question').length, 1);
+    assert.ok(events.some(e => e.type === 'item.delta' && e.text === 'New outside answer'));
+    await assert.rejects(sessions.input('returned-o2', 'Do not overlap'), /still running/);
+    active = {};
+    await opencodeServiceSessions({ fresh: true });
+    assert.equal((await sessions.list()).find(s => s.id === 'returned-o2').status, 'done');
+    await sessions.input('returned-o2', 'Continue after outside work');
+    assert.equal(drivers.length, 2, 'continuing reloads the conversation in a fresh connection');
+    assert.equal(drivers[1].engineSessionId, 'ses_59');
+    for (const e of sessions.events.tail(managed.id, 0).filter(e => e.type === 'turn.start')) {
+      if (sessions.events.turnState(managed.id, e.turnId) === 'open') sessions.events.append(managed.id, { type: 'turn.done', turnId: e.turnId, status: 'ok', at: 100 });
+    }
+    managed.status = drivers[1].status = 'idle';
+    active = { ses_59: { type: 'running' } };
+    await assert.rejects(sessions.input(managed.id, 'Detect before the next list'), /still running/);
+    assert.equal(managed.external, true, 'a direct send rechecks ownership before the next poll');
+    assert.equal(drivers[1].killed, true);
+  } finally {
+    await sessions.stop();
+    writeFileSync(join(root, 'helm/sessions.json'), JSON.stringify({ sessions: [] }));
+    active = {};
+    await opencodeServiceSessions({ fresh: true });
+  }
+});
+
 test('an idle O2 terminal exposes its exact tabs without reviving closed folders', async () => {
   const tabsDir = join(root, 'state/opencode/latest/tui');
   mkdirSync(tabsDir, { recursive: true });
   writeFileSync(join(tabsDir, 'tabs.json'), JSON.stringify({
     global: { tabs: [{ sessionID: 'ses_62' }] },
-    cwd: { [root]: { tabs: [{ sessionID: 'ses_60' }] }, '/closed-folder': { tabs: [{ sessionID: 'ses_61' }] } },
+    cwd: { [root]: { tabs: [{ sessionID: 'ses_60' }, { sessionID: 'ses_59' }, { sessionID: 'ses_58' }] }, '/closed-folder': { tabs: [{ sessionID: 'ses_61' }] } },
   }));
   const bin = join(root, 'opencode');
   writeFileSync(bin, 'console.log("READY"); setInterval(() => {}, 1000)');
@@ -121,6 +193,13 @@ test('an idle O2 terminal exposes its exact tabs without reviving closed folders
     active = {};
     await opencodeServiceSessions({ fresh: true });
     writeFileSync(join(root, 'helm', 'profiles.json'), JSON.stringify({ profiles: [{ id: 'shell', engine: 'shell' }] }));
+    const db = new DatabaseSync(dbPath);
+    db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?)').run('metadata-only', 'ses_58', 'user', JSON.stringify({ content: [{ type: 'text', text: 'Already shown' }] }), 50, 1);
+    db.close();
+    writeFileSync(join(root, 'helm/sessions.json'), JSON.stringify({ sessions: [59, 58].map(n => ({
+      id: `missed-${n}`, engine: 'opencode2', driver: 'opencode2', profileId: 'oc2', engineSessionId: `ses_${n}`,
+      transcript: dbPath, cwd: '/work/same-folder', status: 'idle', external: false, updatedAt: 100,
+    })) }));
     class Runtime extends EventEmitter { async listLive() { return new Map(); } }
     const sessions = new Sessions(new Runtime());
     try {
@@ -129,6 +208,8 @@ test('an idle O2 terminal exposes its exact tabs without reviving closed folders
         new Promise((_, reject) => setTimeout(() => reject(Error('new outside tabs did not publish discovery')), 6000).unref()),
       ]);
       const liveRow = (await sessions.list()).find((s) => s.engineSessionId === 'ses_60');
+      assert.equal(sessions.get('missed-59').external, true, 'a completed outside turn is detected between polls');
+      assert.equal(sessions.get('missed-58').external, false, 'late session metadata alone does not retire a provider');
       assert.equal(liveRow?.externalActive, true);
       assert.equal(liveRow.status, 'idle');
       const opened = await sessions.resumeExternal({ engine: 'opencode2', account: 'oc2:opencode', id: 'ses_60' });
@@ -139,6 +220,7 @@ test('an idle O2 terminal exposes its exact tabs without reviving closed folders
       await external.handoffExternal(opened);
     } finally {
       await sessions.stop();
+      writeFileSync(join(root, 'helm/sessions.json'), JSON.stringify({ sessions: [] }));
       writeFileSync(join(root, 'helm', 'profiles.json'), JSON.stringify({ profiles }));
     }
   } finally {

@@ -710,6 +710,8 @@ export class Sessions extends EventEmitter {
     }
 
     for (const s of this.#index.values()) {
+      await this.#external.monitorService(s, detectedById.get(`${s.engine}:${s.engineSessionId}`))
+        .catch(err => this.log(`OpenCode 2 monitor: ${err.message}`));
       if (s.external) {
         const profile = profiles.find((p) => p.id === s.profileId);
         s.externalHome = profile?.env?.[ENGINES[s.engine]?.homeEnv] ?? ENGINES[s.engine]?.defaultHome;
@@ -1542,6 +1544,10 @@ export class Sessions extends EventEmitter {
   /** Backfill images when an existing imported chat is opened after upgrade. */
   async prepareHistory(id) {
     const s = this.get(id);
+    if (s.engine === 'opencode2') {
+      await opencodeServiceSessions();
+      await this.#external.monitorService(s);
+    }
     if (s.external || s.engine === 'codex' && s.externalSource && s.transcript && s.externalImagesVersion !== 1) {
       await this.#external.importExternalTranscript(s);
     }
