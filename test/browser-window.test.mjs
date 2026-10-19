@@ -11,7 +11,12 @@ test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true, ma
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow } = await import('../packages/connect/src/browser-window.js');
 const { chromium } = await import('playwright');
-const pinned = process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {};
+const realChromium = ['/usr/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
+// Playwright's own Chromium, else the system one Helm itself falls back to.
+const starts = options => chromium.launch({ headless: true, ...options }).then(browser => browser.close().then(() => true), () => false);
+const pinned = process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM }
+  : await starts({}) ? {} : realChromium && await starts({ executablePath: realChromium }) ? { executablePath: realChromium } : null;
+const noChromium = !pinned && 'no Chromium here: npx playwright install chromium';
 
 // The real window is headed; the same persistent profile runs headless here.
 const setup = async (t, extra = {}) => {
@@ -36,7 +41,7 @@ test('a screen is needed for a window: a display on Linux, always on a Mac or Wi
   assert.equal(canOpenWindow({}, 'darwin'), true);
 });
 
-test('tabs open in the thread’s own window, already signed in; the agent works there and its cursor shows', { timeout: 60000 }, async t => {
+test('tabs open in the thread’s own window, already signed in; the agent works there and its cursor shows', { timeout: 60000, skip: noChromium }, async t => {
   const { manager, url, windows } = await setup(t);
   // What the thread signed in to before comes along into a fresh window.
   mkdirSync(join(manager.directory, 'one'), { recursive: true });
@@ -59,7 +64,7 @@ test('tabs open in the thread’s own window, already signed in; the agent works
   assert.equal((await manager.run('one', a.tab.id, { kind: 'evaluate', script: '!!document.getElementById("__helm_pointer")' })).value, true);
 });
 
-test('the agent waits while the owner is using the window, then carries on', { timeout: 60000 }, async t => {
+test('the agent waits while the owner is using the window, then carries on', { timeout: 60000, skip: noChromium }, async t => {
   const { manager, url } = await setup(t);
   const { tab } = await manager.open('one', { url });
   const page = manager.tabs.get(tab.id).page;
@@ -76,7 +81,7 @@ test('the agent waits while the owner is using the window, then carries on', { t
   assert.ok(Date.now() - quick < 350);
 });
 
-test('a closed window keeps its tabs asleep; listing does not reopen it, the agent’s next step does', { timeout: 60000 }, async t => {
+test('a closed window keeps its tabs asleep; listing does not reopen it, the agent’s next step does', { timeout: 60000, skip: noChromium }, async t => {
   const { manager, url, windows } = await setup(t);
   const a = await manager.open('one', { url }), b = await manager.open('one', { url: `${url}/#b` }), c = await manager.open('one', { url: `${url}/#c` });
   // Closing one tab closes just that tab.
@@ -97,7 +102,7 @@ test('a closed window keeps its tabs asleep; listing does not reopen it, the age
   assert.equal(windows.length, 2); assert.equal((await manager.list('one')).open, true);
 });
 
-test('Show window opens an empty thread with one blank tab; without a screen it says so plainly', { timeout: 60000 }, async t => {
+test('Show window opens an empty thread with one blank tab; without a screen it says so plainly', { timeout: 60000, skip: noChromium }, async t => {
   const { manager } = await setup(t);
   const shown = await manager.show('one');
   assert.equal(shown.open, true); assert.equal(shown.tabs.length, 1);
@@ -107,7 +112,7 @@ test('Show window opens an empty thread with one blank tab; without a screen it 
   assert.equal((await headless.list('one')).canWindow, false);
 });
 
-test('saving a window’s sign-ins never flashes a tab, even with frames from other sites', { timeout: 60000 }, async t => {
+test('saving a window’s sign-ins never flashes a tab, even with frames from other sites', { timeout: 60000, skip: noChromium }, async t => {
   const { manager, url } = await setup(t);
   // The same server under another name is another site, framed in the page.
   const framed = url.replace('127.0.0.1', 'localhost');
@@ -127,7 +132,6 @@ test('saving a window’s sign-ins never flashes a tab, even with frames from ot
   assert.ok(JSON.parse(readFileSync(join(manager.directory, 'one', 'storage.json'), 'utf8')).cookies.some(c => c.name === 'who'));
 });
 
-const realChromium = ['/usr/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
 test('a Helm restart leaves the window open; the next Helm takes its tabs back without reloading them', { timeout: 90000, skip: !realChromium && 'no system Chromium' }, async t => {
   // The real way of starting a window, kept off the screen for the test.
   const wrapper = join(process.env.HELM_DIR, 'chromium-headless');
