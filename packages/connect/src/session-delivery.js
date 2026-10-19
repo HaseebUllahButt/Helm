@@ -676,7 +676,7 @@ export class SessionDelivery {
     const s = this.#sessions.get(id);
     const item = (this.#core.outbox.get(id) ?? []).find((x) => x.turnId === turnId);
     if (!item) return { ok: true, found: false, sent: false };
-    if (this.#core.preparing(s)) throw new Error('This goes to the agent once the repo is cloned.');
+    if (this.#core.preparing(s)) throw new Error(s.chatWorktree?.setup === 'running' ? 'This goes to the agent once its worktree is set up.' : 'This goes to the agent once the repo is cloned.');
     if (this.#core.sending.has(s.id)) throw new Error('message is already being sent');
     this.#core.sending.add(s.id);
     this.#core.delivering.set(id, turnId);

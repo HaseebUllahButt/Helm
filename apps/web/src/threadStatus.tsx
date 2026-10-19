@@ -17,6 +17,7 @@ type Thread = {
   recovery?: { kind?: string } | null;
   /** Started on a repo still coming down from GitHub. */
   clone?: { state?: string; percent?: number } | null;
+  chatWorktree?: { setup?: string } | null;
 };
 
 export type ThreadMood = 'needs' | 'failed' | 'working' | 'unread' | 'quiet';
@@ -155,7 +156,8 @@ export function ThreadStatus({ s, mood, now, label }: { s: Thread; mood: ThreadM
   }
   if (mood === 'working') {
     // "starting" and "compacting" are not the turn's work yet; the word says so.
-    const word = s.clone?.state === 'cloning' ? `cloning ${s.clone.percent ?? 0}%` : busyWord(s.status, s.compacting);
+    const word = s.clone?.state === 'cloning' ? `cloning ${s.clone.percent ?? 0}%`
+      : s.chatWorktree?.setup === 'running' ? 'setting up' : busyWord(s.status, s.compacting);
     return (
       <span className="tstat working" data-mood="working">
         <Icon name="think" size={13} className="tspin" />

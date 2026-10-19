@@ -26,6 +26,24 @@ edited files in; with none, the Git sheet says so.
   same tree.
 - **Tests:** `test/git`, `git-head`; `test/browser/inline-diff`.
 
+## A worktree per chat (`helm.json`)
+- **Rules:** a repo opts in with a committed `helm.json` at its root:
+  `{"worktrees": "per-chat", "setup": "<optional command>"}`. Never for
+  quick chats, the brain, clones, hidden helpers, a folder that is already
+  a linked worktree, or the checkout Helm runs from. Only the branch is
+  renamed after the chat; the folder keeps its `-chat-<id>` name because
+  the CLI files its conversation under that path.
+- **Prove (driven 2026-10-20):** make `$W` as above with
+  `{"worktrees":"per-chat","setup":"sleep 45"}` and a `node_modules/x`.
+  `session.start` in `$W` returns a `cwd` of `$W-chat-<id>`; open it: the
+  header says "setting up" and a message waits "Once setup is done". The
+  machine page counts it under the repo's project; Git shows the branch
+  and "worktree". Commit in the worktree, merge into main in `$W`, send one
+  more message: the folder and branch are gone. Send again: it is back.
+- **Traps:** the agent's process runs in that folder, so Helm stops it
+  before removing a merged worktree; a rebuilt branch starts afresh.
+- **Tests:** `test/chat-worktree`.
+
 ## CI / CD
 - **Not yet driven;** needs a GitHub repo and account. Merge needs an
   explicit choice.

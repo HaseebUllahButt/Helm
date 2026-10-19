@@ -178,7 +178,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const childrenWorking = !!session.team?.working || team.some(({ session: child }) => ['working', 'starting'].includes(child.delegation?.status ?? child.status));
   // A repo still coming down is not the agent at work: nothing to stop
   // yet, and the chat reads as a new one you can already write in.
-  const preparing = !!session.clone && session.clone.state !== 'done';
+  const settingUp = session.chatWorktree?.setup === 'running';
+  const preparing = (!!session.clone && session.clone.state !== 'done') || settingUp;
   const cloning = session.clone?.state === 'cloning';
   const working = (busyStatus(status) && !preparing) || childrenWorking;
   const [reviewingRequest, setReviewingRequest] = useState(() => session.ask?.requestId ?? '');
@@ -731,7 +732,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             )}
           </span>
         </div>
-        {cloning ? <span className="chip working" role="status"><i />cloning {session.clone!.percent}%</span> : chip(status)}
+        {cloning ? <span className="chip working" role="status"><i />cloning {session.clone!.percent}%</span>
+          : settingUp ? <span className="chip working" role="status"><i />setting up</span> : chip(status)}
         {/* Git gets its own button with the count of changed files: it is
             the thing most often checked. The other opens agents and repeats.
             It is always there, Git project or not: hiding it when a folder was
@@ -830,7 +832,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         onRemoveQueued={(turn) => void queueAction(turn, 'session.dequeue')}
         onMoveQueued={moveQueued}
         onSendQueued={preparing ? undefined : (turn) => void queueAction(turn, 'session.send-now')}
-        pendingLabel={preparing ? 'Once the repo is in' : messageDelivery(session.engine).pending}
+        pendingLabel={settingUp ? 'Once setup is done' : preparing ? 'Once the repo is in' : messageDelivery(session.engine).pending}
         queueBusy={queueBusy}
         history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
       >

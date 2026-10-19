@@ -77,6 +77,7 @@ export class SessionTitles {
     s.titleBy = by;
     this.#core.save();
     this.#sessions.emit('session', s);
+    this.#sessions.titled?.(s);
   }
 
   /**

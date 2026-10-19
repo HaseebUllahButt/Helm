@@ -45,6 +45,8 @@ import { ExternalSessions } from './session-external.js';
 import { NativeSessions } from './session-native.js';
 import { DriverEvents } from './session-driver-events.js';
 import { SessionDelivery } from './session-delivery.js';
+import { SessionWorktrees } from './session-worktrees.js';
+import { runSetup } from './chat-worktree.js';
 import { projectKeysFor } from './project-key.js';
 
 export { DRIVERS, wire } from './session-wire.js';
@@ -320,6 +322,7 @@ export class Sessions extends EventEmitter {
   #natives;
   #driverEvents;
   #delivery;
+  #worktrees;
   #makeParts() {
     const sessions = this;
     const core = {
@@ -364,6 +367,7 @@ export class Sessions extends EventEmitter {
     core.natives = this.#natives = new NativeSessions(this, core);
     core.driverEvents = this.#driverEvents = new DriverEvents(this, core);
     core.delivery = this.#delivery = new SessionDelivery(this, core);
+    core.worktrees = this.#worktrees = new SessionWorktrees(this, core);
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
@@ -483,6 +487,12 @@ export class Sessions extends EventEmitter {
         // chat says so and offers to go again.
         if (s.clone && !['done', 'failed'].includes(s.clone.state)) {
           s.clone = { ...s.clone, state: 'failed', error: 'Helm restarted before the repo was in.' };
+          if (s.status === 'starting') s.status = 'idle';
+        }
+        // Its setup command died with the daemon; the agent starts on the
+        // next message, in the worktree as it is.
+        if (s.chatWorktree?.setup === 'running') {
+          s.chatWorktree.setup = 'failed';
           if (s.status === 'starting') s.status = 'idle';
         }
         this.#index.set(s.id, s);
@@ -918,14 +928,33 @@ export class Sessions extends EventEmitter {
         } else cloning = { job, login };
       }
     }
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning });
+    // A repo whose helm.json asks for it gives every new chat its own
+    // worktree (session-worktrees.js); made once the chat has its id.
+    const own = await this.#worktrees.plan({ cwd, quick, brain, clone, delegation });
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning, own });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
     // What was chosen in the app, in the CLI's own words. An explicit choice
     // goes after the alias's own arguments so it wins if the two disagree.
     spec.args = [...spec.args, ...optionArgs(profile.engine, { model, auto, effort })];
-    const dir = expand(cwd);
+    let dir = expand(cwd);
+    const named = dir;
+    // A CLI in a terminal has no chat to show progress in: its worktree and
+    // setup are done before its pane opens, and problems go to the log.
+    const id = randomBytes(6).toString('hex');
+    let chatWorktree;
+    if (own && !spec.plain) {
+      const made = await this.#worktrees.make(own, id);
+      if (made.record) {
+        dir = made.cwd;
+        chatWorktree = made.record;
+        if (own.setup) {
+          const result = await runSetup(own.setup, expand(made.record.path));
+          if (!result.ok) this.log(`[${id}] the setup command in helm.json failed: ${result.output.slice(-500)}`);
+        }
+      }
+    }
 
     // A plain shell is a terminal, and helm can run one itself - far better
     // than borrowing a herdr pane and reading its screen back. Where the pty
@@ -937,11 +966,11 @@ export class Sessions extends EventEmitter {
     const handle = await this.runtime.createSession({
       cwd: dir,
       env: spec.env,
-      label: title || `${profile.label} · ${dir.split('/').pop()}`,
+      label: title || `${profile.label} · ${named.split('/').pop()}`,
     });
 
     const session = {
-      id: randomBytes(6).toString('hex'),
+      id,
       workspaceId: handle.workspaceId,
       paneId: handle.paneId,
       tabId: handle.tabId,
@@ -950,13 +979,14 @@ export class Sessions extends EventEmitter {
       model: model || null,
       auto: !!auto,
       cwd: dir,
-      title: title || `${dir.split('/').pop() || dir}`,
+      title: title || `${named.split('/').pop() || named}`,
       titleBy: title ? 'user' : null,
       status: 'starting',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       parent: lineage,
       originHandoffId: originHandoffId || undefined,
+      chatWorktree,
     };
 
     if (spec.plain) {
@@ -1046,9 +1076,16 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null, cloning = null }) {
+  async #startDriven({ cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null, cloning = null, own = null, chatWorktree = null }) {
     this.#rewinder.assertRewindUnlocked(null, cwd ? expand(cwd) : null);
     const id = randomBytes(6).toString('hex');
+    // The chat's own worktree, before its agent starts there. When it
+    // cannot be made the chat still starts, in the folder asked for, and
+    // says why.
+    const made = own ? await this.#worktrees.make(own, id) : null;
+    // Named after the folder asked for, not the worktree's generated one.
+    const named = cwd ? expand(cwd) : null;
+    if (made?.record) cwd = made.cwd;
     // A quick chat's folder is made for it, empty, and named by its id. A
     // branch of one keeps its parent's: the CLI files a conversation under
     // the folder it ran in, so that is where the copy has to be read from.
@@ -1069,7 +1106,7 @@ export class Sessions extends EventEmitter {
       cwd: dir,
       // A quick chat's folder name is its id, which says nothing; it waits
       // for the agent or the first prompts to name it.
-      title: title || (quick ? 'Quick chat' : `${dir.split('/').pop() || dir}`),
+      title: title || (quick ? 'Quick chat' : `${named.split('/').pop() || named}`),
       titleBy: title ? 'user' : null,
       quick: quick || undefined,
       // The brain is a thread like any other - same driver, same events, same
@@ -1093,7 +1130,24 @@ export class Sessions extends EventEmitter {
       parent: parentLink(parent),
       originAutomationId: originAutomationId || undefined,
       originHandoffId: originHandoffId || undefined,
+      chatWorktree: made?.record ? { ...made.record, ...(own.setup ? { setup: 'running' } : {}) } : chatWorktree || undefined,
     };
+    if (made?.error) {
+      this.#index.set(session.id, session);
+      this.#worktrees.say(session, made.error);
+    }
+    if (session.chatWorktree?.setup) {
+      // Like a clone: listed and open at once, saying it is setting up;
+      // the agent starts once the repo's setup command is done.
+      session.status = 'starting';
+      this.#index.set(session.id, session);
+      this.#save();
+      this.emit('session', session);
+      void this.#worktrees.setup(session, own.setup).then(() => {
+        if (this.#index.get(session.id) === session) return this.#startPrepared(session);
+      });
+      return session;
+    }
     if (cloning) {
       // Listed and open straight away, so the owner can write in it or
       // leave it; the agent starts in the folder once the repo is in, and
@@ -1148,6 +1202,7 @@ export class Sessions extends EventEmitter {
       driver?.removeAllListeners?.('event');
       await Promise.resolve(driver?.kill?.()).catch(() => {});
       this.#dropQuickDir(session);
+      await this.#worktrees.dropped(session);
       this.#save();
       throw err;
     }
@@ -1160,7 +1215,7 @@ export class Sessions extends EventEmitter {
   #clones = new Map();
 
   /** Started with a repo that is not in yet: no agent, and what is sent waits. */
-  #preparing(s) { return !!s.clone && s.clone.state !== 'done'; }
+  #preparing(s) { return (!!s.clone && s.clone.state !== 'done') || s.chatWorktree?.setup === 'running'; }
 
   /** The clone's bar while it runs, then the agent in the new folder. */
   async #followClone(s, job) {
@@ -1193,6 +1248,12 @@ export class Sessions extends EventEmitter {
     s.clone = { ...s.clone, state: 'done', percent: 100, error: undefined };
     s.status = 'starting';
     this.emit('session', s);
+    // The repo is in; only the agent has to be tried again.
+    await this.#startPrepared(s, (err) => { s.clone = { ...s.clone, state: 'failed', cloned: true, error: `The agent did not start: ${err.message}` }; });
+  }
+
+  /** The agent of a chat that had something to do first (a clone, a setup command). */
+  async #startPrepared(s, failed = (err) => this.#worktrees.say(s, `The agent did not start: ${err.message}`)) {
     let driver = null;
     try {
       driver = await this.#driver(s);
@@ -1206,8 +1267,7 @@ export class Sessions extends EventEmitter {
       driver?.removeAllListeners?.('event');
       await Promise.resolve(driver?.kill?.()).catch(() => {});
       if (this.#index.get(s.id) !== s) return;
-      // The repo is in; only the agent has to be tried again.
-      s.clone = { ...s.clone, state: 'failed', cloned: true, error: `The agent did not start: ${err.message}` };
+      failed(err);
       s.status = 'idle';
     }
     s.updatedAt = Date.now();
@@ -1255,7 +1315,7 @@ export class Sessions extends EventEmitter {
   }
 
   async #createDriver(s) {
-    if (this.#preparing(s)) throw new Error('The repo is not cloned yet.');
+    if (this.#preparing(s)) throw new Error(s.chatWorktree?.setup === 'running' ? 'The worktree is still being set up.' : 'The repo is not cloned yet.');
     let d;
     // A thread opened from local history can outlive the provider's
     // transcript. If a previous attempt already proved its id is missing,
@@ -1274,6 +1334,8 @@ export class Sessions extends EventEmitter {
     // A quick chat's folder is helm's own; if it went missing (cleaned by
     // hand), an empty one is as good as the old one.
     if (s.quick && isQuickDir(s.cwd)) mkdirSync(expand(s.cwd), { recursive: true, mode: 0o700 });
+    // A chat's own worktree is removed once merged; reopened, it is rebuilt.
+    await this.#worktrees.ensure(s);
     // The brain's tools are the `helm` command, so which `helm` it finds is
     // the whole question. Give it this daemon's own, ahead of the installed
     // one: a machine that has not been upgraded yet would otherwise hand the
@@ -1367,6 +1429,8 @@ export class Sessions extends EventEmitter {
 
   /** Finished children release their runtime quickly; their conversation stays resumable. */
   #reap(s, status) {
+    // A turn just ended: its work may have been merged back.
+    if (status === 'idle' && s.chatWorktree) setTimeout(() => void this.#worktrees.tidy(s), 3000).unref?.();
     clearTimeout(this.#reapers.get(s.id));
     this.#reapers.delete(s.id);
     if (status !== 'idle' || (s.shared && !s.delegation) || !this.#drivers.has(s.id)) return;
@@ -1932,6 +1996,7 @@ export class Sessions extends EventEmitter {
       if (d) await d.kill();
       this.#index.delete(id);
       this.#dropQuickDir(s);
+      await this.#worktrees.dropped(s);
       // On disk before its log goes, so a crash never lists a chat whose history is gone.
       this.#save();
       this.flush();
@@ -2063,7 +2128,35 @@ export class Sessions extends EventEmitter {
 
   // After a daemon restart (session-resume.js)
   adoptTerminals() { return this.#resumer.adoptTerminals(); }
-  resume() { return this.#resumer.resume(); }
+  resume() { this.#worktrees.watch(); return this.#resumer.resume(); }
+
+  /**
+   * Let an idle chat's agent process go now rather than at the idle reaper.
+   * Its conversation stays and the next message starts it again.
+   */
+  async release(id) {
+    clearTimeout(this.#reapers.get(id));
+    this.#reapers.delete(id);
+    await this.#retiring.get(id);
+    const d = this.#drivers.get(id);
+    if (!d) return;
+    // The reaper's own steps, so a message sent meanwhile waits for them.
+    const retiring = Promise.resolve().then(() => d.kill()).then(() => {
+      if (this.#drivers.get(id) === d) this.#drivers.delete(id);
+      const s = this.#index.get(id);
+      if (s) this.emit('session', { ...wire(s), alive: false });
+    }, (err) => this.log(`[${id}] could not release its agent: ${err.message}`)).finally(() => {
+      if (this.#retiring.get(id) === retiring) this.#retiring.delete(id);
+    });
+    this.#retiring.set(id, retiring);
+    await retiring;
+  }
+
+  /** Remove a chat's worktree now if its work is merged back (tests, and the sweep's own check). */
+  worktreeTidy(id) { return this.#worktrees.tidy(this.get(id)); }
+
+  /** The chat's title changed: its worktree branch may take the name. */
+  titled(s) { if (s.chatWorktree) void this.#worktrees.titled(s); }
 
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
@@ -2074,6 +2167,7 @@ export class Sessions extends EventEmitter {
     this.#natives.modeReads.clear();
     clearInterval(this.nativePoll);
     this.#viewers.stop();
+    this.#worktrees.stop();
     for (const timer of this.#reapers.values()) clearTimeout(timer);
     this.#reapers.clear();
     await Promise.allSettled(this.#retiring.values());

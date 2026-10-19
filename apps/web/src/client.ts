@@ -90,6 +90,8 @@ export interface Session {
    * means the repo is in and only the agent failed to start.
    */
   clone?: { repo: string; login?: string | null; state: 'cloning' | 'done' | 'failed'; percent: number; error?: string; cloned?: boolean };
+  /** The chat's own git worktree, in a repo whose helm.json asks for one. */
+  chatWorktree?: { repo: string; path: string; branch: string; base: string; setup?: 'running' | 'failed' };
   /** The git branch the folder is on, read by the machine; null outside a repo. */
   branch?: string | null;
   engine: string;

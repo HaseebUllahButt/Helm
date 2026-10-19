@@ -210,6 +210,8 @@ export class SessionRewind {
       cwd: s.cwd, quick: !!s.quick, profile, title: `${s.title} (branch)`,
       model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
       forkFrom: { sessionId: s.engineSessionId, at },
+      // Same folder, so the same worktree: kept, rebuilt and removed together.
+      chatWorktree: s.chatWorktree ? { ...s.chatWorktree, setup: undefined } : null,
     });
   }
 }
