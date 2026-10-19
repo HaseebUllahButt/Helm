@@ -102,7 +102,7 @@ test('the composer is a card with a context-aware placeholder', async (t) => {
   assert.equal(await area.getAttribute('placeholder'), 'Ask anything, @ to attach a chat, / for commands');
   assert.equal(await page.locator('.todo-strip').count(), 0, 'no list, no tab');
   const box = await page.locator('.slab').boundingBox();
-  assert.ok(box.width <= 46 * 16 + 2, `the card stays in the chat lane: ${box.width}`);
+  assert.ok(box.width <= 55 * 16 + 2, `the card stays in the chat lane: ${box.width}`);
   const radius = await page.locator('.slab').evaluate((el) => parseFloat(getComputedStyle(el).borderTopLeftRadius));
   assert.ok(radius >= 20, `rounded: ${radius}`);
   await shot(page, 'composer-normal-1280.png');

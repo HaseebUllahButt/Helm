@@ -309,7 +309,7 @@ code, pre, kbd { font-family: var(--mono); }
    title is the agent's sentence, so it stays in the reading face. */
 .bar:not(.session-bar) h1 { font-family: var(--display); font-weight: 650; letter-spacing: -0.015em; }
 @media (min-width: 900px) {
-  .bar { min-height: 50px; padding-block: 4px; padding-inline: 16px 14px; }
+  .bar { min-height: 46px; padding-block: 4px; padding-inline: 16px 14px; }
   .bar:not(.session-bar) h1 { font-size: 19px; }
 }
 /* The engine mark rides the subtitle line, so it is sized to that line. */
@@ -1394,7 +1394,15 @@ pre.snippet {
   .chip-pick:has(.chip-label) .cg { display: none; }
 }
 /* Account usage has its own row beneath the controls, at every width. */
-.slab-status { margin: 0 14px; padding: 8px 0 2px; min-width: 0; }
+.slab { container: slab / inline-size; }
+/* Usage sits in the button row of a wide box, and on its own line inside a narrow one. */
+.slab-foot { flex-wrap: wrap; }
+.slab-status { order: 10; flex: 1 0 100%; min-width: 0; padding: 2px 4px 0; }
+@container slab (min-width: 760px) {
+  .slab-foot { flex-wrap: nowrap; }
+  .slab-status { order: 0; flex: 0 1 auto; padding: 0 4px; }
+  .slab-status .limits-line, .slab-status .limits-windows { flex-wrap: nowrap; justify-content: flex-end; }
+}
 .limits-line { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; color: var(--mutedfg); font-size: var(--t-micro); }
 .limits-caption { flex: none; }
 .limits-caption.account { flex: 0 1 auto; min-width: 0; max-width: 100%; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2061,6 +2069,8 @@ button.sheet-editlink:hover { color: var(--text); }
 
 /* A wider reading column for a wide screen. */
 :root[data-width="wide"] { --measure: 68rem; }
+/* The chat reads wider than settings pages; "wide" above still widens both. */
+:root:not([data-width="wide"]) :is(.chat-wrap, .composer-wrap) { --measure: 55rem; }
 
 /* Compact lists: the same rows, less air. */
 :root[data-density="compact"] .row.tall { min-height: 44px; padding-block: 5px; }
@@ -3256,6 +3266,11 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   .turn.user { padding-bottom: 22px; }
   .turn.user .bubble { position: relative; }
   .turn.user:not(.queued) .bubble-meta { position: absolute; top: 100%; right: 4px; margin: 3px 0 0; white-space: nowrap; }
+  /* Copy and cost of an older reply hang in the gap below it, on the left,
+     away from the next message's bubble on the right: a row of their own
+     under every reply cost the chat a line each. The last reply keeps its row. */
+  .turn.assistant { position: relative; }
+  .turn.assistant:not(:nth-last-child(1 of .turn.assistant)) > .final-meta { position: absolute; top: calc(100% - 8px); left: 4px; }
 }
 /* A touch screen has no hover to reveal the time, so it stays in the bubble:
    at the end of the last line when it fits, the way messaging apps do, so a
@@ -3376,6 +3391,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .crumb-more:hover { background: var(--accent); color: var(--text); }
 .crumb-more:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 1px; }
 .session-bar .titles { gap: 2px; }
+/* On a wide screen the machine and cost follow the title on its line: a second
+   line made the bar a row taller than anything in it needed. */
+@media (min-width: 900px) {
+  .session-bar .titles { flex-direction: row; align-items: center; gap: 12px; }
+  .session-bar .crumb { flex: 0 1 auto; min-width: 0; }
+  .session-bar .titles > .sub { flex: 0 1000 auto; padding-left: 0; }
+}
 .session-bar .sub { padding-left: 26px; }
 .session-bar .sub .route-machine { font-family: var(--sans); font-weight: 500; font-size: var(--t-meta); color: var(--mutedfg); max-width: none; }
 .sub-folder { display: none; }

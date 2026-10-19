@@ -182,7 +182,7 @@ test('team summary surfaces blocked descendants and keeps completed results comp
 });
 
 
-test('account limits occupy their own row without covering mobile composer controls', async context => {
+test('account limits never cover composer controls, on their own line or beside them', async context => {
   const page = await pageFor(context, 390);
   for (const width of [320,390,600,1280]) {
     await page.setViewportSize({width,height:850});
@@ -196,7 +196,9 @@ test('account limits occupy their own row without covering mobile composer contr
       await button.scrollIntoViewIfNeeded();
       const b = await button.boundingBox();
       assert.ok(b.x>=0 && b.x+b.width<=width, 'every control stays on screen');
-      assert.ok(b.y+b.height<=bounds.y+1, 'usage never overlaps a control');
+      // Usage has its own line in a narrow box and sits beside the controls in a wide one.
+      const apart = b.y+b.height<=bounds.y+1 || b.x+b.width<=bounds.x+1 || bounds.x+bounds.width<=b.x+1;
+      assert.ok(apart, 'usage never overlaps a control');
     }
     await page.getByRole('button',{name:'Permissions',exact:true}).scrollIntoViewIfNeeded();
     await page.getByRole('button',{name:'Permissions',exact:true}).click();

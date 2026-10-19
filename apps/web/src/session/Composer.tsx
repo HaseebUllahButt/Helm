@@ -546,6 +546,9 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
                 chips under the box cost a line of screen on every visit to
                 say what never changes between messages. */}
             {foot ? <div className="slab-controls">{foot}</div> : <span className="spacer" />}
+            {/* Beside the pickers on a wide box, its own line inside it on a narrow
+                one: a line under the card cost the chat a row on every screen. */}
+            {statusLine && <div className="slab-status">{statusLine}</div>}
             {working && onStop && (
               <button className="stop" onClick={onStop} title="stop the agent" aria-label="stop the agent">
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>
@@ -561,9 +564,6 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
             </div>
           )}
         </div>
-        {/* Under the card, not in it: what the plan has left is not part of
-            what you are writing. */}
-        {statusLine && <div className="slab-status">{statusLine}</div>}
       </div>
     </div>
   );
