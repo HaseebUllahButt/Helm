@@ -32,10 +32,20 @@ export class DriverEvents {
 
   /** session id -> the compaction item open in it */
   #compactions = new Map();
+  /** session id -> the last usage reading written to its log */
+  #limits = new Map();
 
   onDriverEvent(s, d, e) {
     const current = this.#core.drivers.get(s.id);
     if (current !== d && (current || e.type !== 'status')) return;
+    // Codex reports the same usage again and again. On 2026-10-19, 82% of
+    // the limits rows in the owner's logs only repeated the row before, and
+    // some chats held nothing else. Account limits still record every report.
+    if (e.type === 'limits') {
+      const reading = JSON.stringify(e);
+      if (this.#limits.get(s.id) === reading) return;
+      this.#limits.set(s.id, reading);
+    }
     if (!['limits', 'title', 'settings', 'context'].includes(e.type)) this.#core.rewinder.providerRevisions.set(s.id, (this.#core.rewinder.providerRevisions.get(s.id) ?? 0) + 1);
     // A command card (/status, /usage) answers beside the task. It is not
     // the task's reply, and its end is not the task's end.

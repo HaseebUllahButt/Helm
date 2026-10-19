@@ -138,6 +138,20 @@ test('rate limits pause queued work and recovery resumes it once', async () => {
   await sessions.stop();
 });
 
+test('a usage reading that repeats the last one is not written to the chat again', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-limits-repeat'));
+  const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  t.after(() => sessions.stop());
+  const session = await sessions.start({ cwd: '/tmp', profileId: 'codex' });
+  const driver = FakeDriver.made.at(-1);
+  const reading = (used) => ({ codex: { primary: { usedPercent: used, windowDurationMins: 300 } } });
+  for (const used of [10, 10, 10, 12, 12, 10]) driver.push('limits', reading(used));
+  const rows = events.tail(session.id, 0).filter(e => e.type === 'limits');
+  assert.deepEqual(rows.map(e => e.codex.primary.usedPercent), [10, 12, 10]);
+});
+
 test('provider error metadata survives in the recovery record without replaying work', async (t) => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
