@@ -11,6 +11,8 @@ import { messageDelivery } from '../packages/protocol/message-delivery.js';
 // wrong waiting message on the way.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-message-delivery-'));
 process.env.HELM_NO_SERVICE = '1';
+// The owner's own OpenCode 2 service lives here; never ask it about test chats.
+process.env.XDG_STATE_HOME = join(process.env.HELM_DIR, 'state');
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ version: 1, profiles:
   ['codex', 'claude', 'opencode', 'devin', 'opencode2', 'pi'].map((engine) => ({ id: engine, engine, cmd: engine, env: {}, source: 'alias' })),
 }));
