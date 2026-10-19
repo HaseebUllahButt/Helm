@@ -3,14 +3,47 @@ import { Client, type Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { useNow } from '../useNow';
 
+type TeamMember = { session: Session; depth: number };
+
+/** The helpers under `parentId`, nested, as the team card lists them. */
+function teamOf(sessions: Iterable<Session>, parentId: string): TeamMember[] {
+  const list = [...sessions];
+  const team: TeamMember[] = [];
+  const visited = new Set([parentId]);
+  const collect = (id: string, depth: number) => {
+    for (const session of list.filter((candidate) => !candidate.archived && candidate.delegation?.parentId === id)) {
+      if (visited.has(session.id)) continue;
+      visited.add(session.id);
+      team.push({ session, depth });
+      collect(session.id, depth + 1);
+    }
+  };
+  collect(parentId, 0);
+  return team;
+}
+
+/**
+ * Every chat on the machine reports here, so the whole inventory is kept
+ * outside React: only a change to this chat's own helpers draws the screen
+ * again. An unrelated chat's status used to redraw the open chat each time.
+ */
 export function useThreadTeam(client: Client, envId: string, parentId: string) {
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [team, setTeam] = useState<TeamMember[]>([]);
   useEffect(() => {
     let stale = false;
     const updates = new Map<string, { version: number; session: Session }>();
     let version = 0;
     let request = 0;
-    setSessions([]);
+    let all = new Map<string, Session>();
+    let shown = '[]';
+    setTeam([]);
+    const publish = () => {
+      const next = teamOf(all.values(), parentId);
+      const key = JSON.stringify(next);
+      if (key === shown) return;
+      shown = key;
+      setTeam(next);
+    };
     const load = () => {
       const requestedVersion = version;
       const requested = ++request;
@@ -19,7 +52,8 @@ export function useThreadTeam(client: Client, envId: string, parentId: string) {
         if (!stale && requested === request) {
           const merged = new Map((result.sessions ?? []).map((session) => [session.id, session]));
           for (const [id, update] of updates) if (update.version > requestedVersion) merged.set(id, update.session);
-          setSessions([...merged.values()].filter((session) => session.status !== 'exited'));
+          all = new Map([...merged].filter(([, session]) => session.status !== 'exited'));
+          publish();
         }
       }).catch(() => {});
     };
@@ -28,23 +62,14 @@ export function useThreadTeam(client: Client, envId: string, parentId: string) {
       if (kind === 'connection' && payload?.online) void load();
       if (machine === envId && kind === 'session.update' && payload?.session) {
         updates.set(payload.session.id, { version: ++version, session: payload.session });
-        setSessions((current) => [...current.filter((session) => session.id !== payload.session.id), ...(payload.session.status === 'exited' ? [] : [payload.session])]);
+        all.delete(payload.session.id);
+        if (payload.session.status !== 'exited') all.set(payload.session.id, payload.session);
+        publish();
       }
       if (machine === envId && kind === 'session.exit') void load();
     });
     return () => { stale = true; off(); };
   }, [client, envId, parentId]);
-  const team: { session: Session; depth: number }[] = [];
-  const visited = new Set([parentId]);
-  const collect = (id: string, depth: number) => {
-    for (const session of sessions.filter((candidate) => !candidate.archived && candidate.delegation?.parentId === id)) {
-      if (visited.has(session.id)) continue;
-      visited.add(session.id);
-      team.push({ session, depth });
-      collect(session.id, depth + 1);
-    }
-  };
-  collect(parentId, 0);
   return team;
 }
 

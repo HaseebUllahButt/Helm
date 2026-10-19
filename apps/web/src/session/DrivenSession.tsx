@@ -2,7 +2,7 @@ import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
 import { Client, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
 import { useNow, waitingSince } from '../useNow';
-import { Composer } from './Composer';
+import { LiveComposer, createLiveDraft } from './liveDraft';
 import { prepareAttachment } from './image';
 import { EngineMark } from '../EngineMark';
 import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
@@ -105,16 +105,15 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const readVisual = useCallback((ref: string) => client.rpc<{ html: string }>(env.id, 'session.visual', { id: session.id, ref }, 60_000), [client, env.id, session.id]);
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
-  const [draft, setDraftRaw] = useState(() => loadDraft(env.id, session.id));
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
+  // Typing must not redraw the conversation, so the words live outside this
+  // screen's state; only the composer listens to them.
+  const [live] = useState(() => createLiveDraft(loadDraft(env.id, session.id)));
   const editRevision = useRef(0);
   const setDraft = useCallback((v: string) => {
     editRevision.current += 1;
-    draftRef.current = v;
-    setDraftRaw(v);
+    live.set(v);
     saveDraft(env.id, session.id, v);
-  }, [env.id, session.id]);
+  }, [live, env.id, session.id]);
   const [error, setError] = useState('');
   const { images: attachments, setImages: setAttachmentsRaw, loading: loadingImages, saving: savingImages } = useDraftImages<Attachment>(env.id, session.id, setError);
   const setAttachments = useCallback((next: SetStateAction<Attachment[]>) => {
@@ -149,10 +148,15 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // A spawn step in the chat opens the helper it started, by the tool call
   // that started it or, for Codex, the thread the step names.
   const nativeCards = session.nativeCards;
+  // The screen above passes a new onOpenNative each time it draws. Read
+  // through a ref, so every tool row in the chat does not redraw with it.
+  const openNative = useRef(onOpenNative);
+  openNative.current = onOpenNative;
+  const canOpenNative = !!onOpenNative;
   const openAgent = useCallback((item: Item) => {
-    const card = onOpenNative && nativeCards?.find((agent) => agent.toolUseId === item.id || (!!item.agent?.id && agent.id === item.agent.id));
-    return card ? () => onOpenNative!(card) : null;
-  }, [nativeCards, onOpenNative]);
+    const card = canOpenNative && nativeCards?.find((agent) => agent.toolUseId === item.id || (!!item.agent?.id && agent.id === item.agent.id));
+    return card ? () => openNative.current?.(card) : null;
+  }, [nativeCards, canOpenNative]);
   useEffect(() => {
     let stale = false;
     client.rpc<{ sessions: Session[] }>(env.id, 'session.list', {}).then((result) => {
@@ -371,7 +375,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     } finally { retryingSends.current.delete(failed.id); }
   };
   const send = async () => {
-    const body = expandPastes(draft.trim());
+    const body = expandPastes(live.get().trim());
     if (preparingImages || loadingImages || savingImages || sendingImages) return;
     if (!body && !attachments.length) return;
     // Typing while a question is open answers it; the words are not a new message.
@@ -443,7 +447,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       const r: any = await client.rpc(env.id, 'session.dequeue', { id: session.id, turnId: turn.id });
       if (r?.found) {
         const back = splitNote(turn.text).text ?? turn.text;
-        setDraft(draftRef.current ? `${draftRef.current.replace(/\s*$/, '')}\n${back}` : back);
+        setDraft(live.get() ? `${live.get().replace(/\s*$/, '')}\n${back}` : back);
         if (turn.references?.length) setReferences((current) => [...current, ...turn.references!.filter((id) => !current.some((item) => item.id === id)).map((id) => referenceOptions.find((item) => item.id === id) ?? { id, title: id })].slice(0, 3));
         if (turn.attachments?.length) setAttachments((current) => [...current, ...turn.attachments!.filter((item) => item.data).map((item) => ({ name: item.filename, mime: item.mime, data: item.data!, url: `data:${item.mime};base64,${item.data}` }))]);
       }
@@ -804,9 +808,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <button disabled={failed.retrying} onClick={() => setFailedSends((current) => current.filter((item) => item.id !== failed.id))}>Dismiss</button>
         </span>
       </div>)}
-      <Composer
+      <LiveComposer
         onTranscribe={onTranscribe}
-        draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
+        live={live} setDraft={setDraft} onSend={send} onStop={stop} working={working}
         engine={engine} keys={false} waiting={!!pending} ask={pending ? (pending.kind === 'question' ? 'question' : 'approval') : undefined}
         shoulder={taskList && <TodoStrip todos={taskList} />}
         banner={pending && <div ref={permissionBox} className="ask-box"><PermissionSheet key={pending.requestId} variant="banner" permission={pending} onAnswer={answer} busy={busy} onHandle={holdQuestion} /></div>}
@@ -856,7 +860,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             <Icon name="forward" size={14} /><span>{request.title}</span>
           </button>)}
         </div>}
-      </Composer>
+      </LiveComposer>
 
       {browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
       {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
@@ -870,7 +874,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         <div className="modal-title">Edit from here?</div>
         <div className="modal-body">
           <p>This message and the replies after it will be removed. The message returns to your draft. The old history stays saved on the machine.</p>
-          {(draft.trim() || attachments.length > 0) && <p>Your current draft will be replaced.</p>}
+          {(live.get().trim() || attachments.length > 0) && <p>Your current draft will be replaced.</p>}
           <label className="rewind-files"><input type="checkbox" checked={rewinding.restore} disabled={!rewinding.allowed || busy} onChange={event => setRewinding({ ...rewinding, restore: event.target.checked })} />Put files back as they were before this message</label>
           <p>{rewinding.allowed ? 'This includes staged and new files. Ignored files stay.' : rewinding.reason}</p>
           {error && <p role="alert" className="error">{error}</p>}

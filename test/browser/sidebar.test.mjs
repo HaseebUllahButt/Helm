@@ -21,7 +21,7 @@ before(async () => {
       environments: async () => ({ environments: envs }),
       on: () => () => {}, subscribe: () => {}, watchLatency: () => () => {},
       openDirect: async () => {}, route: async () => null,
-      rpc: (env, method) => method === 'session.list' ? Promise.resolve({ sessions: sessions[env] ?? [] })
+      rpc: (env, method) => method === 'session.list' ? Promise.resolve({ sessions: structuredClone(sessions[env] ?? []) })
         : method in extra ? Promise.resolve(typeof extra[method] === 'function' ? extra[method](env) : extra[method])
         : new Promise(() => {}),
     });
@@ -892,7 +892,7 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
         parent.team.failed = 0;
         localStorage.setItem('test.failure-dismissed', 'yes');
         publish();
-        return Promise.resolve({ session: parent });
+        return Promise.resolve({ session: structuredClone(parent) });
       }
       return rpc(env, method, params);
     };

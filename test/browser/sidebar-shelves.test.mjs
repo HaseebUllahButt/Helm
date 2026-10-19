@@ -20,7 +20,7 @@ before(async () => {
       environments: async () => ({ environments: envs }),
       on: () => () => {}, subscribe: () => {}, watchLatency: () => () => {},
       openDirect: async () => {}, route: async () => null,
-      rpc: (env, method) => method === 'session.list' ? Promise.resolve({ sessions: sessions[env] ?? [] })
+      rpc: (env, method) => method === 'session.list' ? Promise.resolve({ sessions: structuredClone(sessions[env] ?? []) })
         : method in extra ? Promise.resolve(typeof extra[method] === 'function' ? extra[method](env) : extra[method])
         : new Promise(() => {}),
     });

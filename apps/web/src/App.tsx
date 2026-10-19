@@ -464,8 +464,12 @@ function Shell({ client, conn, onSignOut }: {
     if (during) during.set(up.id, { ...during.get(up.id), ...up, recovery: up.recovery });
     setSessions((all) => {
       const list = all[envId];
-      if (!list?.some(x => x.id === up.id)) return all;
-      return { ...all, [envId]: list.map(x => x.id === up.id ? { ...x, ...up, recovery: up.recovery } : x) };
+      const known = list?.find(x => x.id === up.id);
+      if (!known) return all;
+      // An update that changes nothing keeps the same objects, so nothing
+      // drawn from them has to be drawn again.
+      if (sameSession(known, up)) return all;
+      return { ...all, [envId]: list!.map(x => x === known ? { ...x, ...up, recovery: up.recovery } : x) };
     });
     updateWorkspaceSession(scope, envId, up);
   }, [scope]);
@@ -483,7 +487,7 @@ function Shell({ client, conn, onSignOut }: {
         const list = pushed.size
           ? r.sessions.map((x) => { const up = pushed.get(x.id); return up ? { ...x, ...up, recovery: up.recovery } : x; })
           : r.sessions;
-        setSessions((s) => ({ ...s, [envId]: list }));
+        setSessions((s) => ({ ...s, [envId]: keepUnchanged(s[envId], list) }));
         saveWorkspace(scope, { sessions: { [envId]: list } });
       })
       .catch(() => {
@@ -1788,4 +1792,31 @@ function Shell({ client, conn, onSignOut }: {
       )}
     </div>
   );
+}
+
+/** Whether laying `up` over `known` would change anything it holds. */
+function sameSession(known: Session, up: Session) {
+  if (JSON.stringify(known.recovery) !== JSON.stringify(up.recovery)) return false;
+  for (const [key, value] of Object.entries(up)) {
+    const was = (known as unknown as Record<string, unknown>)[key];
+    if (was === value) continue;
+    if (value && typeof value === 'object' && JSON.stringify(was) === JSON.stringify(value)) continue;
+    return false;
+  }
+  return true;
+}
+
+
+/** A fresh list, reusing the old object for every chat that did not change. */
+function keepUnchanged(old: Session[] | undefined, fresh: Session[]) {
+  if (!old?.length) return fresh;
+  const before = new Map(old.map((s) => [s.id, s]));
+  let same = old.length === fresh.length;
+  const next = fresh.map((s, i) => {
+    const was = before.get(s.id);
+    const kept = was && JSON.stringify(was) === JSON.stringify(s) ? was : s;
+    if (kept !== old[i]) same = false;
+    return kept;
+  });
+  return same ? old : next;
 }
