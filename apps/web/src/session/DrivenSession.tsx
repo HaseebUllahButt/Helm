@@ -951,10 +951,9 @@ function useTokenRate(turn: Turn | undefined, working: boolean): number | null {
     if (id) samples.current = addSample(samples.current, Date.now(), chars);
   }, [turn?.id, working, chars]);
   const [rate, setRate] = useState<number | null>(null);
+  const second = useNow(1000, working);
   useEffect(() => {
-    if (!working) { setRate(null); return; }
-    const timer = setInterval(() => setRate(tokensPerSecond(samples.current, Date.now())), 1000);
-    return () => clearInterval(timer);
-  }, [working]);
+    setRate(working ? tokensPerSecond(samples.current, Date.now()) : null);
+  }, [working, second]);
   return rate;
 }

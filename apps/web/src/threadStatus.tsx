@@ -1,7 +1,7 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { Icon } from './Icon';
 import { busyWord, needsAttention, runningThread } from './format';
-import { waitingSince } from './useNow';
+import { useNow, waitingSince } from './useNow';
 
 /**
  * What a sidebar row says at its right edge, in one slot: it is working (with
@@ -130,18 +130,6 @@ export function clock(ms: number): string {
   return `${h}h ${String(m % 60).padStart(2, '0')}m`;
 }
 
-/** Re-draw every second, but only while something is working. */
-function useSecond(active: boolean) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [active]);
-  return now;
-}
-
 /** "5m", "2h", "3d" - and "now" for the first moments. */
 export const compactAge = (ts: number | undefined, now: number) => {
   const text = waitingSince(ts, now);
@@ -156,7 +144,8 @@ export const wrappedUp = (ts: number | undefined, now: number): { lead: string; 
 
 export function ThreadStatus({ s, mood, now, label }: { s: Thread; mood: ThreadMood; now: number; label?: string }) {
   const live = mood === 'working';
-  const tick = useSecond(live);
+  // Re-draw every second, but only while something is working.
+  const tick = useNow(1000, live);
   useEffect(() => { if (!live) forgetTurn(s.id); }, [live, s.id]);
   if (mood === 'needs') {
     return <span className="tstat needs" data-mood="needs"><Icon name="ask" size={13} /><span>Needs you</span></span>;

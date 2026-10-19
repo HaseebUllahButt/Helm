@@ -97,7 +97,8 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   const busy = working.locator('.tri-row').filter({ hasText: 'Rebuild the sidebar shelves' });
   assert.match(await busy.locator('.tstat.working').innerText(), /^2m 0[5-9]s$/);
   assert.match(await working.locator('.tri-row').filter({ hasText: 'Fix flaky login test' }).locator('.tstat.working').innerText(), /^4\ds$/);
-  await page.clock.runFor(4000);
+  // Clocks turn over on the whole second, so one can trail its turn by up to a second.
+  await page.clock.runFor(5000);
   assert.match(await busy.locator('.tstat.working').innerText(), /^2m (09|1\d)s$/, 'the clock keeps counting');
   assert.equal(await busy.evaluate(e => getComputedStyle(e).opacity), '0.7');
   await busy.hover();

@@ -1,25 +1,46 @@
 import { useEffect, useState } from 'react';
 
 /**
- * "Waiting 12m" ages while you look at it. A shared ticker so a row and a
- * sheet asking the same question do not each run their own clock - the
- * interval only exists while something is subscribed, and re-renders are
- * once a tick rather than once a frame.
+ * One clock for every "Working 42s" and "Waiting 12m" on screen. It ticks on
+ * the whole second, so every counter turns over together, in one redraw,
+ * instead of each row waking on its own schedule. It runs at the fastest
+ * pace anyone showing asks for (a seconds counter needs 1s, a "5m ago"
+ * 15s), and each user is redrawn only when its own pace turns over. The
+ * clock only exists while something is subscribed.
  */
-const listeners = new Set<() => void>();
-let timer: ReturnType<typeof setInterval> | null = null;
+const paces = new Map<(now: number) => void, number>();
+let timer: ReturnType<typeof setTimeout> | null = null;
+let timerPace = 0;
 
-export function useNow(ms = 15_000): number {
+function schedule() {
+  if (timer) clearTimeout(timer);
+  timer = null;
+  if (!paces.size) return;
+  timerPace = Math.min(...paces.values());
+  // To the next whole step on the wall clock, not one step from now.
+  timer = setTimeout(() => {
+    timer = null;
+    const now = Date.now();
+    paces.forEach((_pace, tell) => tell(now));
+    schedule();
+  }, timerPace - (Date.now() % timerPace) + 5);
+}
+
+/** The time, redrawn every `ms` (on the whole step) while `active`. */
+export function useNow(ms = 15_000, active = true): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const tick = () => setNow(Date.now());
-    listeners.add(tick);
-    timer ??= setInterval(() => listeners.forEach((fn) => fn()), ms);
+    if (!active) return;
+    const step = (t: number) => setNow((was) => (Math.floor(was / ms) === Math.floor(t / ms) ? was : t));
+    // A clock switched on late must not show the time it was mounted at.
+    step(Date.now());
+    paces.set(step, ms);
+    if (!timer || ms < timerPace) schedule();
     return () => {
-      listeners.delete(tick);
-      if (!listeners.size && timer) { clearInterval(timer); timer = null; }
+      paces.delete(step);
+      if (!paces.size) schedule();
     };
-  }, [ms]);
+  }, [ms, active]);
   return now;
 }
 
