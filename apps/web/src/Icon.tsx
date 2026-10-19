@@ -1,3 +1,4 @@
+import { memo } from 'react';
 /**
  * helm's own icon set: one stroke weight, one 24-unit grid, drawn rather than
  * typed. Text symbols like `⧉ ↻ ⚡ ◎` come from whatever font each phone has,
@@ -71,7 +72,9 @@ const PATHS: Record<IconName, JSX.Element> = {
   lock: <><rect x="5" y="10.5" width="14" height="9.5" rx="2" /><path d="M8.5 10.5V7.5a3.5 3.5 0 017 0v3" /></>,
 };
 
-export function Icon({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {
+// Icons sit in every row and header, and take only plain values: they skip
+// drawing again when those are the same.
+export const Icon = memo(function Icon({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {
   return (
     <svg
       className={`icon${className ? ` ${className}` : ''}`} width={size} height={size} viewBox="0 0 24 24"
@@ -79,10 +82,10 @@ export function Icon({ name, size = 16, className }: { name: IconName; size?: nu
       aria-hidden="true" focusable="false"
     >{PATHS[name]}</svg>
   );
-}
+});
 
 /** The way back, the same size on every screen. */
-export const BackIcon = () => <Icon name="back" size={20} />;
+export const BackIcon = memo(() => <Icon name="back" size={20} />);
 
 /** A tool call's kind, from the name the CLI gave it. */
 export type ToolKind = 'read' | 'edit' | 'run' | 'search' | 'web' | 'tool' | 'ask' | 'plan';

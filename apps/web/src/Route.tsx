@@ -1,3 +1,4 @@
+import { memo } from 'react';
 /**
  * Where a screen is: `machine › folder`, the path you took to get here, in
  * the same place under every title that belongs to one - a session, a new
@@ -8,7 +9,7 @@
 const folderName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
 const homePath = (p = '') => p.replace(/^\/(home|Users)\/[^/]+/, '~') || '/';
 
-export function Route({ machine, folder, full = false, quick = false }: {
+export const Route = memo(function Route({ machine, folder, full = false, quick = false }: {
   machine: string; folder?: string;
   /** The whole path rather than its last part - where the path is the point, as when browsing. */
   full?: boolean;
@@ -34,4 +35,4 @@ export function Route({ machine, folder, full = false, quick = false }: {
       )}
     </span>
   );
-}
+});

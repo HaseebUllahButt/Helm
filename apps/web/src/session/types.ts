@@ -49,7 +49,7 @@ function stopAgents(turns: Turn[], seq: number) {
   for (const turn of turns) for (const it of turn.items) {
     if (it.kind !== 'subagent' || !['running', 'pendingInit', 'working'].includes(it.agent?.status ?? '')) continue;
     it.agent = foldAgent(it.agent, { status: 'stopped' });
-    turn.revision = seq;
+    touch(turn, it, seq);
   }
 }
 
@@ -59,7 +59,7 @@ function closeCompactions(turns: Turn[], at: number, seq: number) {
     if (it.status !== 'streaming' || it.kind !== 'tool' || (it.name !== 'compact' && it.name !== 'contextCompaction')) continue;
     it.status = 'ok';
     it.doneAt = at;
-    turn.revision = seq;
+    touch(turn, it, seq);
   }
 }
 
@@ -69,6 +69,11 @@ export interface Item {
   turnId?: string;
   /** Set when this item ran inside a subagent: the id of its `subagent` card. */
   parentId?: string;
+  /**
+   * The event that last changed this item or one inside it. Items change in
+   * place, so this is how a drawn step knows it can skip drawing again.
+   */
+  revision?: number;
   agent?: AgentInfo;
   /** Prose, thinking, or command output as it streams. */
   text: string;
@@ -195,10 +200,21 @@ export const emptyLog = (): LogState => ({ turns: [], pending: [], status: 'idle
 
 // ------------------------------------------------------------------ reduce
 
+/** Marks an item, the subagent cards it sits inside, and its turn as changed. */
+function touch(turn: Turn, item: Item, seq: number) {
+  turn.revision = seq;
+  let it: Item | undefined = item;
+  for (let hops = 0; it && hops <= turn.items.length; hops++) {
+    it.revision = seq;
+    const parent: string | undefined = it.parentId;
+    it = parent ? turn.items.find((x) => x.id === parent) : undefined;
+  }
+}
+
 const findItem = (turns: Turn[], id: string, revision: number): Item | undefined => {
   for (let i = turns.length - 1; i >= 0; i--) {
     const it = turns[i].items.find((x) => x.id === id);
-    if (it) { turns[i].revision = revision; return it; }
+    if (it) { touch(turns[i], it, revision); return it; }
   }
   return undefined;
 };
@@ -324,11 +340,13 @@ export function apply(state: LogState, e: HelmEvent): void {
       // One compaction runs at a time. A restart of helm mid-compaction left
       // the old marker open, spinning on after the new one finished.
       if (e.kind === 'tool' && (e.name === 'compact' || e.name === 'contextCompaction')) closeCompactions(state.turns, e.at, e.seq);
-      turn.items.push({
+      const item: Item = {
         id: e.id, kind: e.kind, turnId: e.turnId, text: '', status: 'streaming', startedAt: e.at,
         name: e.name, input: e.input, command: e.command, actions: e.actions, cwd: e.cwd, changes: e.changes,
         parentId: e.parentId, agent: e.agent, visual: e.visual,
-      });
+      };
+      turn.items.push(item);
+      touch(turn, item, e.seq);
       return;
     }
     case 'item.delta': {
@@ -443,7 +461,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         };
       }
       // Anything still streaming in this turn is over too.
-      for (const it of turn?.items ?? []) if (it.status === 'streaming') { it.status = e.status === 'interrupted' ? 'ok' : it.status === 'streaming' ? 'ok' : it.status; it.doneAt ??= e.at; }
+      for (const it of turn?.items ?? []) if (it.status === 'streaming') { it.status = e.status === 'interrupted' ? 'ok' : it.status === 'streaming' ? 'ok' : it.status; it.doneAt ??= e.at; touch(turn!, it, e.seq); }
       // A stop ends the agent's background helpers with it.
       if (e.status === 'interrupted') stopAgents(state.turns, e.seq);
       return;

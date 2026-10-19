@@ -520,8 +520,25 @@ function ErrorLine({ text }: { text: string }) {
   );
 }
 
+type ItemProps = { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean; plain?: boolean };
+
 /** `plain` draws a plain step as one line of plain words; a finished turn's list keeps the full cards. */
-function ItemView({ item, byParent, commandOutput, plain }: { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean; plain?: boolean }) {
+function ItemView(props: ItemProps) {
+  // Items change in place, so the revision is passed on by value: it is
+  // what tells a step that only the reply around it grew to skip drawing.
+  return <ItemBody {...props} revision={props.item.revision} />;
+}
+
+/** Whether both maps hold the same items under `id`, all the way down. A
+ * change inside one already moves the revision of every card it sits in. */
+function sameKids(a: Map<string, Item[]>, b: Map<string, Item[]>, id: string): boolean {
+  const x = a.get(id), y = b.get(id);
+  if (x === y) return true;
+  if (!x || !y || x.length !== y.length) return false;
+  return x.every((kid, i) => kid === y[i] && sameKids(a, b, kid.id));
+}
+
+const ItemBody = memo(function ItemBody({ item, byParent, commandOutput, plain }: ItemProps & { revision?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const { focusItem } = useContext(Requests);
   useEffect(() => {
@@ -540,7 +557,8 @@ function ItemView({ item, byParent, commandOutput, plain }: { item: Item; byPare
       {plain && rowable(item) ? <StepRow item={item} byParent={byParent} /> : <ItemContent item={item} byParent={byParent} commandOutput={commandOutput} />}
     </div>
   );
-}
+}, (a, b) => a.item === b.item && a.revision === b.revision && a.commandOutput === b.commandOutput
+  && a.plain === b.plain && sameKids(a.byParent, b.byParent, b.item.id));
 
 function ItemContent({ item, byParent, commandOutput }: { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean }) {
   switch (item.kind) {

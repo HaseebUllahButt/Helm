@@ -29,8 +29,22 @@ async function onMessage(m) {
     case 'session/load': case 'session/set_config_option': return reply({});
     case 'session/prompt': {
       const sid = m.params.sessionId;
+      const upd = (update) => out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update } });
+      // A few tool steps and a helper card first, so the transcript has the
+      // same kinds of rows a real turn does.
+      let step = 0;
+      const tool = (title, command) => {
+        const id = `tool-${m.id}-${++step}`;
+        upd({ sessionUpdate: 'tool_call', toolCallId: id, title, kind: 'execute', status: 'in_progress', rawInput: { command } });
+        upd({ sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: `ran ${command}\nok` } }] });
+      };
+      tool('Run ls', 'ls -la'); tool('Run tests', 'npm test'); tool('Run git status', 'git status');
+      const helper = `helper-${m.id}`;
+      upd({ sessionUpdate: 'tool_call', toolCallId: helper, title: 'Task', status: 'in_progress', rawInput: { description: 'look around' } });
+      upd({ sessionUpdate: 'tool_call_update', toolCallId: helper, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'helper finished' } }] });
       const end = Date.now() + total;
       for (let n = 0; Date.now() < end; n++) {
+        if (n && n % 50 === 0) tool('Run more', `echo step ${n}`);
         // A paragraph break every 12 words, so the reply grows like real markdown.
         const text = WORDS[n % WORDS.length] + (n % 12 === 11 ? '.\n\n' : ' ');
         out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
