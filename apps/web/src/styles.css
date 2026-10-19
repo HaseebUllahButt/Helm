@@ -3619,21 +3619,21 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 
 /* A folded bar: one quiet row that opens to what is behind it. Used where a
    screen had more than its main job on show (Git's agents, CI / CD settings). */
-.fold { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
-.fold > summary {
+details.fold { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+details.fold > summary {
   display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; cursor: pointer;
   list-style: none; color: var(--text-dim); font-size: var(--t-body); font-weight: 550;
 }
-.fold > summary::-webkit-details-marker { display: none; }
-.fold > summary::after {
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::after {
   content: ''; margin-left: auto; width: 7px; height: 7px; border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor;
   transform: rotate(-45deg); transition: transform 0.15s var(--ease); opacity: 0.7;
 }
-.fold[open] > summary::after { transform: rotate(45deg); }
-.fold > summary:hover { color: var(--text); }
+details.fold[open] > summary::after { transform: rotate(45deg); }
+details.fold > summary:hover { color: var(--text); }
 .fold-meta { color: var(--mutedfg); font-size: var(--t-meta); font-weight: 450; }
-.fold[open] { padding-bottom: 6px; }
-.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
+details.fold[open] { padding-bottom: 6px; }
+details.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
 .git-fold { margin-bottom: 10px; }
 .git-fold > .git-checkouts { border: 0; background: none; margin: 0; }
 .pipeline > .fold { margin-top: 14px; }
