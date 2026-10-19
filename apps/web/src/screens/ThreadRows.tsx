@@ -7,7 +7,7 @@ import { plainProblem } from '../session/problem';
 import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
 import type { Session } from '../client';
-import { money, unknownThread } from '../format';
+import { unknownThread } from '../format';
 import { engineOf } from '../engines';
 
 /**
@@ -236,7 +236,7 @@ export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Sessi
           <EngineMark engine={eng.cls} />
           <span className="grow">
             <span className="need-title">{s.title}</span>
-            <span className="need-m">{[eng.label, whereOf(s), machine, money(s.costUsd)].filter(Boolean).join(' · ')}</span>
+            <span className="need-m">{[eng.label, whereOf(s), machine].filter(Boolean).join(' · ')}</span>
           </span>
         </span>
         {ask?.text && <span className={`need-q${ask.kind === 'command' ? ' mono' : ''}`}>{ask.text}{ask.more ? ` (+${ask.more} more)` : ''}</span>}
@@ -303,7 +303,7 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
       </span>
       <span className="tri-bot">
         <Icon name={s.quick ? 'bolt' : 'folder'} size={12} />
-        <span className="tri-where">{[whereOf(s), machine, money(s.costUsd)].filter(Boolean).join(' · ')}</span>
+        <span className="tri-where">{[whereOf(s), machine].filter(Boolean).join(' · ')}</span>
         {note && <span className="tri-note">{note}</span>}
         {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
         <span className="tri-end">
