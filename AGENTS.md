@@ -34,8 +34,6 @@ chat with `helm render`. Say what you could not check.
 
 ## Working alongside other chats
 
-- Start every chat that edits Helm in its own worktree; merge it back by branch
-  when done.
 - Commit your own work as soon as it is verified, not as one big tree later.
 
 ## Owner rules for the product
@@ -58,13 +56,9 @@ chat with `helm render`. Say what you could not check.
   character (`"helm.js serv[e]"`). Never stop Helm processes by unit name
   (`helm-terminals-<uid>`): a test copy and the real laptop share those names.
   Find a test copy's processes by its HELM_DIR.
-- A "before" timing from a git worktree secretly runs the new code:
-  `node_modules/@helm/*` link back to the main checkout. Relink them first.
 - Roster cleaning must leave a valid record exactly as it is, or machines
   re-send rosters forever. Validate and reject; normalise where it is used.
 - A latency number is only real after about 10 seconds of samples.
-- A worktree without a built node-pty hangs in `proc-host.test.mjs`. Fix:
-  `npx node-gyp rebuild` in the pty package.
 
 ## Docs
 
