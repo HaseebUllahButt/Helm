@@ -3,6 +3,8 @@
 Control the coding agents on all your computers from one app on your
 phone.
 
+Available for noncommercial use. See [License](#license) for permitted uses.
+
 Every Helm network belongs to its owner. You run it on your own always-on VM;
 there is no Helm cloud account and no dependency on the person who made Helm.
 
@@ -437,3 +439,22 @@ It keeps existing settings and writes a backup first. It sets auto-compaction
 at 350k tokens for Opus 5.5, 250k for Sonnet 5.5 and 99k for Haiku 5.5
 (verified with Claude Code 2.1.295). Accounts that share a config directory
 share the policy.
+
+## License
+
+Helm's original source code and documentation use the
+[PolyForm Noncommercial License 1.0.0](LICENSE).
+
+You can use, copy, change, and share Helm for noncommercial purposes,
+including personal study and hobby projects. Commercial use needs a separate
+license from [HaseebUllahButt](https://github.com/HaseebUllahButt). Examples
+include paid client work, internal business work, and selling hosted Helm.
+
+The license also permits use by the organizations listed in its
+Noncommercial Organizations section, including schools, charities, and
+government institutions. Read the full license for the exact terms.
+
+The copyright holder also offers their original code and documentation in
+earlier revisions of this repository under the same license. This does not
+revoke any rights already granted. Third-party code and dependencies keep
+their own licenses.
