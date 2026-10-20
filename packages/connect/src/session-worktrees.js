@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { expand } from './paths.js';
-import { keepReason, makeChatWorktree, removeChatWorktree, renameChatBranch, restoreChatWorktree, runSetup, worktreePlan } from './chat-worktree.js';
+import { keepReason, makeChatWorktree, removeChatWorktree, renameChatBranch, repoConfig, restoreChatWorktree, runSetup, worktreePlan } from './chat-worktree.js';
 
 /** How often idle chats are checked for a branch merged back. */
 const SWEEP_MS = 2 * 60_000;
@@ -23,6 +23,8 @@ export class SessionWorktrees {
   #busy = new Set();
   /** Worktree folders being removed, from their agents' release to the end. */
   #removing = new Map();
+  /** Stops the setup commands running now when the daemon goes away. */
+  #stopping = new AbortController();
   constructor(sessions, core) {
     this.#sessions = sessions;
     this.#core = core;
@@ -50,15 +52,32 @@ export class SessionWorktrees {
     this.#sessions.emit('event', { id: s.id, event });
   }
 
-  /** The repo's setup command, while the chat says it is setting up. */
+  /**
+   * The repo's setup command, while the chat says it is setting up. False
+   * when the daemon stopped it: the chat stays "setting up" on disk, and the
+   * next daemon runs it again from the start (`setupCommand`).
+   */
   async setup(s, command) {
-    const result = await runSetup(command, expand(s.chatWorktree.path));
-    if (this.#core.index.get(s.id) !== s) return;
+    const signal = this.#stopping.signal;
+    let result;
+    try {
+      // A folder removed since it was made (a restart, by hand) comes back first.
+      await this.ensure(s);
+      result = command ? await runSetup(command, expand(s.chatWorktree.path), { signal }) : { ok: true };
+    } catch (err) { result = { ok: false, output: err.message }; }
+    if (signal.aborted) return false;
+    if (this.#core.index.get(s.id) !== s) return false;
     if (result.ok) delete s.chatWorktree.setup;
     else {
       s.chatWorktree.setup = 'failed';
       this.say(s, `The setup command in helm.json failed, so the agent starts without it.\n${result.output.slice(-1500)}`);
     }
+    return true;
+  }
+
+  /** The setup command a chat's worktree asks for now, read from its own helm.json. */
+  setupCommand(s) {
+    return repoConfig(expand(s.chatWorktree.path))?.setup ?? repoConfig(expand(s.chatWorktree.repo))?.setup ?? null;
   }
 
   /** Before an agent starts: a chat reopened after its folder was removed gets it back. */
@@ -102,7 +121,12 @@ export class SessionWorktrees {
     void this.sweep();
   }
 
-  stop() { clearInterval(this.#timer); this.#timer = null; }
+  stop() {
+    clearInterval(this.#timer);
+    this.#timer = null;
+    this.#stopping.abort();
+    this.#stopping = new AbortController();
+  }
 
   async sweep() {
     for (const s of [...this.#core.index.values()]) {

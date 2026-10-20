@@ -364,7 +364,9 @@ export class SessionResume {
       // The process a failed reconnect was about is gone; so is the mark.
       // Anything it was doing is settled just above, as "restart" if need be.
       if (this.unreachable(s)) { delete s.recovery; s.queuePaused = false; }
-      if (s.status !== 'idle') {
+      // A worktree whose setup the restart cut off stays "setting up": it
+      // runs again (Sessions.resume) before its agent ever starts.
+      if (s.status !== 'idle' && !this.#core.preparing(s)) {
         s.status = 'idle';
         s.updatedAt = Date.now();
         // The log is what a viewer replays for status: closing the turns

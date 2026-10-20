@@ -436,12 +436,9 @@ export class Sessions extends EventEmitter {
           s.clone = { ...s.clone, state: 'failed', error: 'Helm restarted before the repo was in.' };
           if (s.status === 'starting') s.status = 'idle';
         }
-        // Its setup command died with the daemon; the agent starts on the
-        // next message, in the worktree as it is.
-        if (s.chatWorktree?.setup === 'running') {
-          s.chatWorktree.setup = 'failed';
-          if (s.status === 'starting') s.status = 'idle';
-        }
+        // Its setup command died with the daemon: it runs again from the
+        // start once resumed, and what was sent meanwhile still waits.
+        if (s.chatWorktree?.setup === 'running') s.status = 'starting';
         this.#index.set(s.id, s);
       }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
@@ -1110,9 +1107,7 @@ export class Sessions extends EventEmitter {
       this.#index.set(session.id, session);
       this.#save();
       this.emit('session', session);
-      void this.#worktrees.setup(session, own.setup).then(() => {
-        if (this.#index.get(session.id) === session) return this.#startPrepared(session);
-      });
+      this.#setUp(session, own.setup);
       return session;
     }
     if (cloning) {
@@ -1217,6 +1212,13 @@ export class Sessions extends EventEmitter {
     this.emit('session', s);
     // The repo is in; only the agent has to be tried again.
     await this.#startPrepared(s, (err) => { s.clone = { ...s.clone, state: 'failed', cloned: true, error: `The agent did not start: ${err.message}` }; });
+  }
+
+  /** The repo's setup command, then the agent; a stopping daemon leaves both for the next one. */
+  #setUp(s, command) {
+    void this.#worktrees.setup(s, command).then((done) => {
+      if (done && this.#index.get(s.id) === s) return this.#startPrepared(s);
+    });
   }
 
   /** The agent of a chat that had something to do first (a clone, a setup command). */
@@ -2142,7 +2144,16 @@ export class Sessions extends EventEmitter {
 
   // After a daemon restart (session-resume.js)
   adoptTerminals() { return this.#resumer.adoptTerminals(); }
-  resume() { this.#worktrees.watch(); return this.#resumer.resume(); }
+  async resume() {
+    this.#worktrees.watch();
+    await this.#resumer.resume();
+    // A setup the restart cut off runs again before the agent gets anything.
+    for (const s of this.#index.values()) {
+      if (s.chatWorktree?.setup !== 'running') continue;
+      this.emit('session', s);
+      this.#setUp(s, this.#worktrees.setupCommand(s));
+    }
+  }
 
   /**
    * Let an idle chat's agent process go now rather than at the idle reaper.

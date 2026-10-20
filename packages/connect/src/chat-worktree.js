@@ -157,19 +157,25 @@ function scan(root, max = 3) {
  * The repo's own setup command, run once in a new worktree. Bounded by a
  * generous timeout so a command that never ends cannot keep the chat from
  * ever starting; the owner sees the error and the agent starts anyway.
+ * `signal` stops it with everything it started (a daemon going away).
  */
 export const SETUP_TIMEOUT_MS = 10 * 60_000;
-export function runSetup(command, cwd, { timeout = SETUP_TIMEOUT_MS } = {}) {
+export function runSetup(command, cwd, { timeout = SETUP_TIMEOUT_MS, signal } = {}) {
   return new Promise((done) => {
     let output = '';
-    const child = spawn('sh', ['-c', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
+    // Its own process group, so stopping it stops what it started too.
+    const child = spawn('sh', ['-c', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: process.env, detached: true });
+    const kill = () => { try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); } };
+    if (signal?.aborted) kill();
+    signal?.addEventListener('abort', kill, { once: true });
     const keep = (b) => { output = (output + b).slice(-4000); };
     child.stdout.on('data', keep);
     child.stderr.on('data', keep);
-    const timer = setTimeout(() => { output += `\n(stopped after ${Math.round(timeout / 60_000)} minutes)`; child.kill('SIGTERM'); }, timeout);
+    const timer = setTimeout(() => { output += `\n(stopped after ${Math.round(timeout / 60_000)} minutes)`; kill(); }, timeout);
     timer.unref?.();
-    child.on('error', (err) => { clearTimeout(timer); done({ ok: false, output: err.message }); });
-    child.on('close', (code) => { clearTimeout(timer); done({ ok: code === 0, output: output.trim() }); });
+    const end = (result) => { clearTimeout(timer); signal?.removeEventListener('abort', kill); done(result); };
+    child.on('error', (err) => end({ ok: false, output: err.message }));
+    child.on('close', (code) => end({ ok: code === 0, output: output.trim() }));
   });
 }
 
