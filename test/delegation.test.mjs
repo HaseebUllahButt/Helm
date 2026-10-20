@@ -373,6 +373,23 @@ test('stopping a parent cascades and late child results cannot restart it', asyn
   assert.equal(sessions.get(child.id).delegation.status, 'interrupted');
 });
 
+test('stopping a parent leaves a helper that already finished as it was', async (context) => {
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: done } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const { session: busy } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Check tests' });
+  drivers.get(done.id).finish();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sessions.get(done.id).delegation.status, 'done');
+  const finishedAt = sessions.get(done.id).delegation.finishedAt;
+  await sessions.interrupt(parent.id);
+  assert.equal(sessions.get(done.id).delegation.status, 'done', 'a finished helper keeps its result');
+  assert.equal(sessions.get(done.id).delegation.finishedAt, finishedAt);
+  assert.equal(sessions.get(done.id).recovery, undefined, 'and is not marked stopped');
+  assert.equal(sessions.get(busy.id).delegation.status, 'interrupted', 'one still at work is stopped');
+  assert.equal(parent.recovery.message, 'Stopped by you. Its helper was stopped too.');
+});
+
 test('a child completion wakes its idle parent once with a durable result ticket', async (context) => {
   const { sessions, drivers } = setup(context);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });

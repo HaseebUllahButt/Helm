@@ -1668,17 +1668,19 @@ export class Sessions extends EventEmitter {
     }
     visited.add(id);
     const session = this.#index.get(id);
-    const children = [...this.#index.values()].filter((child) => child.delegation?.parentId === id);
+    // A helper that already finished keeps its result: only those still at
+    // work are stopped, and only they say so.
+    const finished = (s) => ['done', 'error', 'interrupted'].includes(s.delegation?.status);
+    const running = [...this.#index.values()].filter((child) => child.delegation?.parentId === id && !finished(child));
     if (session) {
       session.stoppedAt = Date.now();
       session.stopGeneration = (session.stopGeneration ?? 0) + 1;
       // Helpers are mentioned only when there were some to stop.
-      const running = children.filter((child) => !['done', 'error', 'interrupted'].includes(child.delegation?.status));
       session.recovery = {
         kind: 'interrupted', at: Date.now(),
         message: running.length ? `You stopped this chat. Helm also stopped ${running.length === 1 ? 'its helper' : 'its helpers'}.` : 'Stopped by you.',
       };
-      if (session.delegation) {
+      if (session.delegation && !finished(session)) {
         session.delegation.status = 'interrupted';
         session.delegation.finishedAt = Date.now();
       }
@@ -1686,7 +1688,7 @@ export class Sessions extends EventEmitter {
       this.#save();
       this.emit('session', session);
     }
-    const stopping = children.map((child) => this.interrupt(child.id, visited));
+    const stopping = running.map((child) => this.interrupt(child.id, visited));
     // "Stop" stops the queue too, and before the driver is asked: a settled
     // turn is what wakes the pump, so a stop that left the queue intact
     // would fire the next message the moment the interrupt landed. Each
