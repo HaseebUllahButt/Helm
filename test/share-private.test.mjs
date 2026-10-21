@@ -90,13 +90,12 @@ const enter = (pass, host = `secret.${HOST}`) => request(host, '/.helm-share/ent
 
 const cookieOf = (r, name) => r.headers['set-cookie']?.find((c) => c.startsWith(`${name}=`))?.split(';')[0];
 
-test('a stranger sees a plain private page, and scripts a plain refusal', async () => {
+test('a visitor goes straight to Helm with the exact destination, and scripts get a refusal', async () => {
   const r = await request(`secret.${HOST}`, '/inside?a=1', { headers: { accept: 'text/html' } });
-  assert.equal(r.status, 401);
-  assert.match(r.text, /Private to your Helm/);
+  assert.equal(r.status, 303);
   // The way in goes to the Helm app, on the hub's own address, with nothing
   // secret in it.
-  const hop = /href="([^"]+)"/.exec(r.text)[1].replace(/&amp;/g, '&');
+  const hop = r.headers.location;
   const u = new URL(hop);
   assert.equal(u.origin, `https://${HOST}`);
   const p = new URLSearchParams(u.hash.slice(1));

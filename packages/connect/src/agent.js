@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import { createHash } from 'node:crypto';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { hostname, platform, arch, release, homedir } from 'node:os';
-import { connect as tcpConnect } from 'node:net';
+import { connectLoopback, checkSharePort } from './loopback.js';
 import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -1539,7 +1539,7 @@ export class Daemon {
       return link.send(T.TUNNEL_CLOSE, { sid, reason: 'port not allowed' });
     }
     const key = this.#key(link, sid);
-    const sock = tcpConnect({ host: '127.0.0.1', port: wanted });
+    const sock = connectLoopback(wanted);
     const tunnel = { sock, link, release: beginTransferActivity() };
     this.#tunnels.set(key, tunnel);
     const end = reason => {
@@ -1766,6 +1766,7 @@ export class Daemon {
       case M.SHARE_ADD: {
         const taken = (p.replace ? [] : listShares()).find((x) => x.name === String(p.name ?? '').toLowerCase());
         if (taken) throw new Error(`"${taken.name}" is already shared from here (port ${taken.port}); use replace`);
+        await checkSharePort(Number(p.port));
         return { share: this.#shareView(addShare(p)) };
       }
       case M.SHARE_REMOVE:

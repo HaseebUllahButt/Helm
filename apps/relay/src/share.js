@@ -28,9 +28,8 @@ import {
 
 const COOKIE = '__Host-helm-share';
 const MEMBER = '__Host-helm-member';
-// "This browser has been in before": lets a returning member skip the
-// private page and go straight to the app when their pass runs out. It
-// proves nothing; a stranger without it sees the plain page.
+// Older hubs use this marker to skip their private landing page. Keep it
+// during rolling updates, and never forward it to the shared app.
 const SEEN = '__Host-helm-member-seen';
 const OURS = [COOKIE, MEMBER, SEEN];
 const COOKIE_DAYS = 30;
@@ -101,6 +100,7 @@ function readForm(req, limit = 4096) {
 export function createShareRoute({ online, callEnv, openTcp }) {
   let cache = { at: 0, map: new Map() };
   let loading = null;
+  const misses = new Map();
   const tries = new Map(); // ip|name -> { n, until }
 
   const refresh = () => (loading ??= (async () => {
@@ -113,6 +113,7 @@ export function createShareRoute({ online, callEnv, openTcp }) {
       } catch { /* an older daemon, or one that is going away */ }
     }));
     cache = { at: Date.now(), map };
+    for (const [name, at] of misses) if (cache.map.has(name) || Date.now() - at >= MISS_MS) misses.delete(name);
   })().finally(() => { loading = null; }));
 
   async function lookup(name) {
@@ -125,10 +126,13 @@ export function createShareRoute({ online, callEnv, openTcp }) {
       if (age > CACHE_MS) refresh().catch(() => {});
       return cache.map.get(name);
     }
-    // A name not seen yet is looked for again, but not on every request: a
-    // stranger guessing names must not turn into an RPC storm.
-    if (age > MISS_MS) await refresh();
-    return cache.map.get(name) ?? null;
+    // Check a new name on its first visit even if another link just warmed
+    // the cache. Otherwise freshly created spins fail once with a 404.
+    if (Date.now() - (misses.get(name) ?? 0) < MISS_MS) return null;
+    await refresh();
+    const share = cache.map.get(name) ?? null;
+    if (!share) misses.set(name, Date.now());
+    return share;
   }
 
   // One connection pool per shared port. Opening a tunnel is a round trip
@@ -180,16 +184,17 @@ export function createShareRoute({ online, callEnv, openTcp }) {
    * address if the link is under it, else the first one the network has.
    * The fragment never reaches a server, so it stays out of every log.
    */
-  function appHop(base, name, next) {
+  function appHop(base, share, next) {
     const hosts = publicHosts(loadNetwork());
     const app = hosts.includes(base) ? base : hosts[0];
     if (!app) return null;
-    const hash = new URLSearchParams({ share: name, host: base, next: safeSharePath(next) });
+    const source = loadNetwork()?.machines?.[share.env]?.name || online.get(share.env)?.info?.name;
+    const hash = new URLSearchParams({ share: share.name, host: base, next: safeSharePath(next), ...(source ? { source } : {}) });
     return `https://${app}/#${hash}`;
   }
 
   const privatePage = (res, share, base, next, why = '') => {
-    const hop = appHop(base, share.name, next);
+    const hop = appHop(base, share, next);
     page(res, 401, `${share.name} - private`, `
 <h1>Private to your Helm</h1><p>Only devices signed in to the Helm that shares <b>${esc(share.name)}</b> can open it.</p>
 ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${esc(hop)}">Sign in with Helm</a>` : ''}`);
@@ -239,7 +244,7 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     if (cookie) out.Cookie = cookie;
     // Dev servers (Vite, Next, webpack) refuse a Host they do not know; to
     // the app, this is a local visit. Where it really came from is below.
-    out.Host = `localhost:${share.port}`;
+    out.Host = share.preserveHost ? req.headers.host : `localhost:${share.port}`;
     out['X-Forwarded-Host'] = req.headers.host || '';
     out['X-Forwarded-Proto'] = 'https';
     out['X-Forwarded-For'] = clientIp(req);
@@ -272,8 +277,8 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
 
   const offline = (res, share, err) => page(res, 502, `${share.name} - not reachable`, `
 <h1>Not reachable right now</h1><p>${/not connected|offline/i.test(err?.message || '')
-    ? 'The computer sharing this link is offline.'
-    : `Nothing answered on that computer's port ${share.port}. Is the app still running?`}</p>`);
+    ? 'The computer sharing this link is offline. Open Helm on that computer and keep it connected.'
+    : `Nothing answered at 127.0.0.1:${share.port} or [::1]:${share.port} on the sharing computer. Start the app on port ${share.port}.`}</p><p>This page tries again in 3 seconds.</p><a class="b" href="">Try now</a>`, { refresh: '3' });
 
   /** Handle a request if it is for a share. Returns false when it is not. */
   async function route(req, res) {
@@ -300,9 +305,9 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
       // a plain refusal, which is what a script can understand.
       const pageLoad = req.method === 'GET' && /text\/html/.test(req.headers.accept || '');
       if (share.private) {
-        // A member who has been in before goes straight back to the app for
-        // a fresh pass; nobody else is sent anywhere.
-        const hop = pageLoad && cookies(req.headers.cookie)[SEEN] ? appHop(base, share.name, path) : null;
+        // The app alone can check this browser's sign-in. Go there directly:
+        // members get a pass without a sign-in screen or an extra click.
+        const hop = pageLoad ? appHop(base, share, path) : null;
         if (hop) { res.writeHead(303, { location: hop, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end(); }
         else if (pageLoad) privatePage(res, share, base, path);
         else { res.writeHead(401, { 'content-type': 'text/plain' }); res.end('private to its Helm'); }

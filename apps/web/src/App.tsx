@@ -29,7 +29,7 @@ import { useViewingReport } from './useViewingReport';
 import { ownTerminal, byRecent, ago } from './screens/common';
 import { Gear } from './screens/icons';
 import { whereOf, HomeRow, StatusChip, Fold, NeedCard, NEVER_SNOOZE, when, PagedRows, SETTLED_FIRST, SETTLED_STEP } from './screens/ThreadRows';
-import { shareHopTarget, ShareHop } from './screens/ShareHop';
+import { shareHopTarget, clearShareHop, ShareHop } from './screens/ShareHop';
 import { type Auth, Login } from './screens/Login';
 import { DevicesView } from './screens/Devices';
 import { EnvView } from './screens/EnvView';
@@ -117,12 +117,17 @@ export function App() {
 
   const signOut = () => { forgetWorkspace(workspaceScope(auth?.token)); clearAuth(); setAuth(null); setClient(null); };
   const [shareHop, setShareHop] = useState(shareHopTarget);
-  const leaveShareHop = () => { history.replaceState(null, '', location.pathname + location.search); setShareHop(null); };
+  const leaveShareHop = () => { clearShareHop(); history.replaceState(null, '', location.pathname + location.search); setShareHop(null); };
+  useEffect(() => {
+    // A link opened in an existing Helm tab can change only the fragment.
+    const hop = () => { const target = shareHopTarget(); if (target) setShareHop(target); };
+    window.addEventListener('hashchange', hop);
+    return () => window.removeEventListener('hashchange', hop);
+  }, []);
 
   if (auth === undefined) return null;
   if (!auth) {
-    const why = shareHop ? `${shareHop.name} is private to your Helm. Pair this device to open it.` : '';
-    return <Login notice={notice || why} onDone={(a) => { setNotice(''); saveAuth(a); setAuth(a); }} />;
+    return <Login notice={notice} onDone={(a) => { setNotice(''); saveAuth(a); setAuth(a); }} />;
   }
   if (!client) return null;
   if (shareHop) return <ShareHop client={client} target={shareHop} onDone={leaveShareHop} />;
