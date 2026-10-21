@@ -20,7 +20,7 @@ before(async () => {
       const report = {totals:{},daily:[],groups:[],accounts:[],scan:{},at:Date.now()};
       const client = {token,relay:'http://helm-test',
         environments:async()=>({environments:envs}), on:()=>()=>{}, subscribe:()=>{}, watchLatency:()=>()=>{},
-        openDirect:async()=>{}, route:async()=>null, usage:async()=>report,
+        openDirect:async()=>{}, directStatus:()=>({state:'not requested'}), route:async()=>null, usage:async()=>report,
         rpc:async(env,method,params)=>{
           window.calls.push({env,method,params});
           if(method==='session.list') return {sessions:env==='laptop'?[{id:'done1',title:'Yesterday work',cwd:'/work/yesterday',engine:'claude',profileId:'claude',driver:'claude',alive:true,status:'idle',turns:3,updatedAt:Date.now()-3600000}]:[]};

@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { directRpc } from '../packages/connect/src/direct-rpc.js';
-import { PeerHub } from '../packages/connect/src/peer.js';
-import { RTCPeerConnection } from 'node-datachannel/polyfill';
+await import('./fixtures/loopback-rtc.mjs');
+const { directRpc } = await import('../packages/connect/src/direct-rpc.js');
+const { PeerHub } = await import('../packages/connect/src/peer.js');
+const { RTCPeerConnection } = await import('node-datachannel/polyfill');
 import { cleanup } from 'node-datachannel';
 
 test.after(() => cleanup());

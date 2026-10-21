@@ -78,6 +78,12 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
           <p>Hub: {client.relay}</p>
           <p>Socket: {client.connected ? 'connected' : 'reconnecting'}</p>
           {client.lastError && <p>Last connection error: {client.lastError}</p>}
+          {envs.map(env => {
+            const direct = client.directStatus(env.id);
+            return direct.state === 'not requested' ? null : <p key={env.id}>
+              {env.name}: direct link {direct.state}.{direct.reason ? ` ${direct.reason}` : ''}
+            </p>;
+          })}
         </details>
         <div className="rows">
           <button className="row destructive" onClick={onUnpair}>

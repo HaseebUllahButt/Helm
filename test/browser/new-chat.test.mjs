@@ -20,7 +20,7 @@ before(async () => {
       window.calls = [];
       const client = {input:(env,params)=>client.rpc(env,'session.input',params),token,relay:'http://helm-test',
         environments:async()=>({environments:envs}), on:()=>()=>{}, subscribe:()=>{}, watchLatency:()=>()=>{},
-        openDirect:async()=>{}, route:async()=>null,
+        openDirect:async()=>{}, directStatus:()=>({state:'not requested'}), route:async()=>null,
         rpc:async(env,method,params)=>{
           window.calls.push({env,method,params});
           if(method==='session.list') return {sessions:env==='laptop'?[session,quick]:[]};

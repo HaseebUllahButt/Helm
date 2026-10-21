@@ -9,6 +9,7 @@ const root = mkdtempSync(join(tmpdir(), 'helm-task-transport-'));
 process.env.HELM_DIR = root;
 process.env.HELM_DB = join(root, 'hub.sqlite');
 process.env.HELM_NO_SERVICE = '1';
+await import('./fixtures/loopback-rtc.mjs');
 const { createNetwork, saveNetwork } = await import('@helm/protocol/network');
 const { mintToken, ROLE } = await import('@helm/protocol/identity');
 const { T, M } = await import('@helm/protocol');
@@ -42,7 +43,8 @@ await new Promise((resolve, reject) => {
     }
   });
 });
-test.after(() => { receiver.stop(); socket.close(); hub.stop(); rmSync(root, { recursive: true, force: true }); });
+const { cleanup } = await import('node-datachannel');
+test.after(() => { receiver.stop(); socket.close(); hub.stop(); cleanup(); rmSync(root, { recursive: true, force: true }); });
 
 test('hub signalling introduces machines but the project payload takes WebRTC', async () => {
   let route;

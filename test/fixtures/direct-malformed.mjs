@@ -1,5 +1,6 @@
-import { PeerHub } from '../../packages/connect/src/peer.js';
-import { directPeer } from '../../packages/connect/src/direct-rpc.js';
+await import('./loopback-rtc.mjs');
+const { PeerHub } = await import('../../packages/connect/src/peer.js');
+const { directPeer } = await import('../../packages/connect/src/direct-rpc.js');
 import { cleanup } from 'node-datachannel';
 let sender;
 const receiver = new PeerHub((_id, payload) => void sender.receive(payload), async () => 'ok');

@@ -2,15 +2,13 @@ import { RTCPeerConnection } from 'node-datachannel/polyfill';
 import { randomBytes } from 'node:crypto';
 import { loadNetwork } from '@helm/protocol/network';
 import { signDirectOffer } from './direct-auth.js';
+import { nativeDirectConfig } from './direct-config.js';
 
 const CHUNK = 16_000;
 const MAX_FRAME = 64 * 1024 * 1024;
 
-export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, env }) {
-  const pc = new RTCPeerConnection({ iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun.cloudflare.com:3478' },
-  ] });
+export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, env, rtcConfig = nativeDirectConfig() }) {
+  const pc = new RTCPeerConnection(rtcConfig);
   const channel = pc.createDataChannel('helm', { ordered: true });
   const negotiation = randomBytes(12).toString('hex');
   const candidates = [];
@@ -18,6 +16,8 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
   const fragments = new Map();
   let offerSent = false, remoteReady = false;
   let open = false, closed = false;
+  let disconnectedTimer;
+  let localCount = 0, remoteCount = 0;
   let sendChain = Promise.resolve();
   let resolveReady, rejectReady;
   const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
@@ -25,11 +25,12 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
     if (closed) return;
     closed = true;
     clearTimeout(connectTimer);
+    clearTimeout(disconnectedTimer);
     try { channel.close(); pc.close(); } catch {}
     if (!open) rejectReady(error ?? new Error('direct channel closed'));
     try { onClose?.(error); } catch {}
   };
-  const connectTimer = setTimeout(() => finish(new Error('direct connection timed out')), connectTimeout);
+  const connectTimer = setTimeout(() => finish(new Error(`direct connection timed out (${remoteReady ? 'answer received' : 'no answer'}; ${localCount} local, ${remoteCount} remote addresses; ${pc.iceConnectionState})`)), connectTimeout);
   channel.onmessage = ({ data }) => {
     let message;
     try { message = JSON.parse(data); } catch { return; }
@@ -61,10 +62,15 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
   channel.onopen = () => { open = true; clearTimeout(connectTimer); resolveReady(); };
   channel.onclose = () => finish(open ? undefined : new Error('direct channel closed'));
   pc.onconnectionstatechange = () => {
-    if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) finish(new Error('direct connection closed'));
+    clearTimeout(disconnectedTimer);
+    if (['failed', 'closed'].includes(pc.connectionState)) finish(new Error(`direct connection ${pc.connectionState}`));
+    // Brief packet loss is recoverable. Closing immediately makes the two
+    // sides discard a channel that ICE could still restore on its own.
+    else if (pc.connectionState === 'disconnected') disconnectedTimer = setTimeout(() => finish(new Error('direct connection lost')), 5000);
   };
   pc.onicecandidate = ({ candidate }) => {
     if (!candidate || closed) return;
+    localCount++;
     if (offerSent) signal({ type: 'candidate', candidate, negotiation });
     else localCandidates.push(candidate);
   };
@@ -119,6 +125,7 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
           remoteReady = true;
           for (const candidate of candidates.splice(0)) await pc.addIceCandidate(candidate);
         } else if (payload?.type === 'candidate' && payload.candidate) {
+          remoteCount++;
           if (remoteReady) await pc.addIceCandidate(payload.candidate);
           else if (candidates.length < 128) candidates.push(payload.candidate);
         }

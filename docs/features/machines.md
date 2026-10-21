@@ -11,7 +11,11 @@ machines with care.
   Chrome · this device · online now".
 - **Traps:** never press "Make join command" or remove devices on the real
   network to test. Removing a device signs it out everywhere. Join links
-  expire in minutes.
+  expire in minutes. Public machines need inbound UDP 44301–44332 in both
+  cloud and host firewalls for direct links. Native peers share these ports;
+  `config.json` can override them with `directPorts: {begin, end}`. The end
+  must be greater than the beginning. Private tests must match their own
+  firewall rules and never change the owner's network.
 - **Tests:** `test/machine-kind`, `device-presence`, `roster-watch`,
   `gossip`, `lan-discovery`, `direct-mesh`, `auth`, `local-login`,
   `hub-authz`, `roster-trust`.
