@@ -82,8 +82,10 @@ export function Canvas({ client, env, cwd, changed, path, onPath, onClose }: {
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
   useEffect(() => {
+    setTree(null);
     if (!cwd) { setError('This quick chat has no folder yet.'); return; }
     let live = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     setError('');
     client.rpc<Tree>(env.id, 'git.files', { cwd }, 30_000)
       .then((t) => {
@@ -91,8 +93,14 @@ export function Canvas({ client, env, cwd, changed, path, onPath, onClose }: {
         if (!Array.isArray(t?.files)) { setError('This machine cannot list files yet. Update Helm on it.'); return; }
         setTree(t);
       })
-      .catch((e: any) => { if (live) setError(/not a git/i.test(e?.message ?? '') ? 'The canvas works in Git projects. This folder is not one.' : e?.message || 'Could not list the files.'); });
-    return () => { live = false; };
+      .catch((e: any) => {
+        if (!live) return;
+        if (/not connected|disconnected/i.test(e?.message ?? '')) {
+          setError('Waiting for this machine…');
+          retry = setTimeout(() => setReload((n) => n + 1), WATCH_MS);
+        } else setError(/not a git/i.test(e?.message ?? '') ? 'The canvas works in Git projects. This folder is not one.' : e?.message || 'Could not list the files.');
+      });
+    return () => { live = false; clearTimeout(retry); };
   }, [client, env.id, cwd, reload]);
 
   // A file named in the chat may be a full path: find it in the project.
