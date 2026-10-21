@@ -29,7 +29,7 @@ test('siblings exchange short named messages and replies; parent sees each once,
   assert.equal(f.sent.length,2);
   assert.match(f.sent[0].text,/From claude agent one/);
   assert.match(f.sent[0].text,new RegExp(`helm reply ${mid(1)}`));
-  assert.equal(f.sent[0].options.delivery,'queue');
+  assert.equal(f.sent[0].options.delivery,'auto');
   assert.equal(f.sent[0].options.source,'agent');
   assert.match(f.sent[1].text,/Reply to/);
   const listing=await f.service.list('parent');

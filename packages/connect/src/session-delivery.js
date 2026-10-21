@@ -805,11 +805,19 @@ export class SessionDelivery {
       : s.status === 'working');
     const eligible = (item) => !!item && item.delivery !== 'queue' && !item.nativeRejected && !item.referenceContext
       && this.#canSteer(d, item);
-    if (!ready() || !eligible(this.#core.outbox.get(s.id)?.[0])) return;
+    // Oldest first, but another agent's message passes the owner's held
+    // ones: those wait for the task by choice, a teammate should not.
+    const next = () => {
+      const q = this.#core.outbox.get(s.id) ?? [];
+      const at = q.findIndex((item, i) => i === 0 ? eligible(item)
+        : item.source === 'agent' && eligible(item) && q.slice(0, i).every((held) => held.delivery === 'queue'));
+      return at < 0 ? undefined : q[at];
+    };
+    if (!ready() || !next()) return;
     this.#core.sending.add(s.id);
     try {
       for (;;) {
-        const item = this.#core.outbox.get(s.id)?.[0];
+        const item = next();
         if (!eligible(item) || !ready()) break;
         try { await this.#steerOne(s, d, item); }
         catch (err) {

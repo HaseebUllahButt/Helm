@@ -10,6 +10,7 @@ import { TodoStrip, stripTodos } from './Todos';
 import { RecoveryCard } from './RecoveryCard';
 import { Controls, trayPrefs, type Kind } from './Controls';
 import { Transcript, splitNote, isCompaction } from './Transcript';
+import { helperMessage } from './agentMessage';
 import { useGitStatus } from './gitStatus';
 import { changesOf } from './stepWords';
 import { expandPastes } from './pasteStore';
@@ -218,6 +219,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // transcript turns: they only become a bubble once the agent echoes them.
   const queueOrder = new Map((session.queueOrder ?? []).map((id, index) => [id, index]));
   const queuedTurns = log.turns.filter((turn) => turn.queued && !turn.done).sort((left, right) => (queueOrder.get(left.id) ?? Infinity) - (queueOrder.get(right.id) ?? Infinity));
+  // Other agents' messages wait in the same line but are not the owner's.
+  const helperTurns = queuedTurns.filter((turn) => !turn.delivered && helperMessage(turn.text));
+  const ownQueued = queuedTurns.filter((turn) => !helperTurns.includes(turn));
   const transcriptTurns = log.turns.filter((turn) => !turn.queued);
 
   // The catalogue this device last heard, then the machine's answer behind it.
@@ -428,12 +432,16 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     finally { setQueueBusy(''); }
   };
   const moveQueued = (turn: Turn, direction: -1 | 1) => {
-    const ids = queuedTurns.filter((entry) => !entry.delivered).map((entry) => entry.id);
+    const ids = ownQueued.filter((entry) => !entry.delivered).map((entry) => entry.id);
     const index = ids.indexOf(turn.id);
     const next = index + direction;
     if (index < 0 || next < 0 || next >= ids.length) return;
     [ids[index], ids[next]] = [ids[next], ids[index]];
-    void queueAction(turn, 'session.queue-reorder', { turnIds: ids });
+    // Helpers' messages keep their places; only the owner's swap.
+    const mine = new Set(ids);
+    let at = 0;
+    const order = queuedTurns.filter((entry) => !entry.delivered).map((entry) => mine.has(entry.id) ? ids[at++] : entry.id);
+    void queueAction(turn, 'session.queue-reorder', { turnIds: order });
   };
 
   /**
@@ -823,7 +831,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         referenceOptions={referenceOptions} references={references}
         onReference={(id) => { const item = referenceOptions.find((option) => option.id === id); if (item) setReferences((current) => [...current, item].slice(0, 3)); }}
         onRemoveReference={(id) => setReferences((current) => current.filter((item) => item.id !== id))}
-        queued={queuedTurns.map((turn) => ({
+        helpers={helperTurns.map((turn) => ({ id: turn.id, ...helperMessage(turn.text)! }))}
+        queued={ownQueued.map((turn) => ({
           turn, text: splitNote(turn.text).text ?? turn.text,
           attachments: turn.attachments?.length ?? 0, delivered: turn.delivered,
         }))}

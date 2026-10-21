@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import type { Client, Mode, ModelList, ModelNote, Session, NativeControl } from '../client';
 import { Icon, type IconName } from '../Icon';
 import { modelRing, nextInRing } from './chatKeys';
+import { foldTiers, levelsOf, providerOf, shelve, variantFor } from './modelShelf';
 import { fadeWhenCut } from '../fadeWhenCut';
 
 /** One thing you can change while the agent is running. */
@@ -12,6 +13,8 @@ export interface Choice {
   danger?: boolean;
   /** A small picture before the label, such as an account's CLI logo. */
   icon?: ReactNode;
+  /** A heading the row sits under, such as the provider an aggregator reaches. */
+  section?: string;
 }
 
 /**
@@ -26,7 +29,7 @@ export interface Choice {
  * The sheet docks in the same slot a permission prompt uses, because that is
  * where your eyes already are.
  */
-export function Controls({ options, session, busy, pending, onPick, onFavs, onEffortFavs, onDefault, onNewsSeen, onNativeControl, defaultsFor = 'new chats' }: {
+export function Controls({ options, session, busy, pending, onPick, onFavs, onDefault, onNewsSeen, onNativeControl, defaultsFor = 'new chats' }: {
   options: ModelList | null;
   onNativeControl?: (kind: NativeControl) => void;
   session: Session;
@@ -35,8 +38,6 @@ export function Controls({ options, session, busy, pending, onPick, onFavs, onEf
   onPick: (kind: Kind, id: string) => void;
   /** Save favorite models on the machine, so every device shows the same list. */
   onFavs?: (next: string[]) => void;
-  /** Favorites for the current model's thinking levels. */
-  onEffortFavs?: (model: string, next: string[]) => void;
   /** Make a choice what new chats on this account start with. */
   onDefault?: (kind: Kind, id: string) => Promise<void> | void;
   /** The owner saw the "new model" note; it need not show again. */
@@ -46,11 +47,8 @@ export function Controls({ options, session, busy, pending, onPick, onFavs, onEf
   const [open, setOpen] = useState<Kind | null>(null);
   const groups = groupsFor(options, session);
   const group = groups.find((g) => g.kind === open);
-  const model = session.model || session.engineModel || options?.default || '';
-  const effortFavs = (options?.effortFavs ?? []).flatMap((entry) => {
-    try { const [m, effort] = JSON.parse(entry); return m === model && typeof effort === 'string' ? [effort] : []; }
-    catch { return []; }
-  });
+  // A row can stand for another id: devin's "high" is the model "...-high".
+  const pickOf = (g: Group, id: string) => g.pick?.(id) ?? [g.kind, id] as const;
   // The chat keys: one press, the next choice, applied exactly as a tap on
   // that row would be. A CLI that keeps the list to itself gets its own
   // picker opened instead, as its chip does.
@@ -61,14 +59,14 @@ export function Controls({ options, session, busy, pending, onPick, onFavs, onEf
       if (options?.nativeControls?.includes(kind)) onNativeControl?.(kind);
       return;
     }
-    const favs = options?.favs !== undefined && onFavs ? options.favs : favsOf(session.engine);
+    const favs = g.favs !== undefined && onFavs ? g.favs : favsOf(session.engine);
     const ring = kind === 'model'
       ? modelRing(g.choices.map((c) => c.id), (g.more ?? []).map((c) => c.id), favs)
       : g.choices.map((c) => c.id);
     const next = nextInRing(ring, g.current);
     if (next === undefined || next === g.current) return;
     setOpen(null);
-    onPick(kind, next);
+    onPick(...pickOf(g, next));
   };
 
   /**
@@ -123,7 +121,7 @@ export function Controls({ options, session, busy, pending, onPick, onFavs, onEf
     ),
     sheet: group ? (
       <ChoiceSheet
-        key={`${group.kind}:${session.engine}${group.kind === 'effort' ? `:${model}` : ''}`}
+        key={`${group.kind}:${session.engine}${group.kind === 'effort' ? `:${session.model || session.engineModel || options?.default || ''}` : ''}`}
         title={group.title}
         note={group.note}
         choices={group.choices}
@@ -132,15 +130,15 @@ export function Controls({ options, session, busy, pending, onPick, onFavs, onEf
         saved={group.saved}
         busy={busy}
         searchable={group.kind === 'model'}
-        favKey={group.kind === 'model' ? session.engine : group.kind === 'effort' ? `${session.engine}:effort:${model}` : undefined}
-        favs={group.kind === 'model' ? options?.favs : group.kind === 'effort' && options?.effortFavs !== undefined ? effortFavs : undefined}
-        onFavs={group.kind === 'model' ? onFavs : group.kind === 'effort' && onEffortFavs ? (next) => onEffortFavs(model, next) : undefined}
-        onDefault={onDefault && group.saved !== undefined ? (id) => onDefault(group.kind, id) : undefined}
+        favKey={group.kind === 'model' ? session.engine : undefined}
+        favs={group.kind === 'model' ? group.favs : undefined}
+        onFavs={group.kind === 'model' ? onFavs : undefined}
+        onDefault={onDefault && group.saved !== undefined ? (id) => onDefault(...pickOf(group, id)) : undefined}
         defaultsFor={defaultsFor}
         news={group.kind === 'model' ? options?.news : undefined}
         onNewsSeen={group.kind === 'model' ? onNewsSeen : undefined}
         onClose={() => setOpen(null)}
-        onPick={(id) => { setOpen(null); onPick(group.kind, id); }}
+        onPick={(id) => { setOpen(null); onPick(...pickOf(group, id)); }}
       />
     ) : null,
   };
@@ -163,14 +161,6 @@ export function trayPrefs({ client, env, engine, profileId, options, setOptions,
   const onFavs = (next: string[]) => {
     setOptions((now) => now && { ...now, favs: next });
     client.rpc(env, 'picker.prefs', { favs: { [engine]: next } }, 15_000).catch((e) => setError(e.message));
-  };
-  const onEffortFavs = (model: string, next: string[]) => {
-    const others = (options?.effortFavs ?? []).filter((entry) => {
-      try { return JSON.parse(entry)[0] !== model; } catch { return false; }
-    });
-    const effortFavs = [...others, ...next.map((effort) => JSON.stringify([model, effort]))];
-    setOptions((now) => now && { ...now, effortFavs });
-    client.rpc(env, 'picker.prefs', { favs: { [`${engine}-effort`]: effortFavs } }, 15_000).catch((e) => setError(e.message));
   };
   const onDefault = profileId ? async (kind: Kind, value: string) => {
     if (!options) return;
@@ -196,7 +186,7 @@ export function trayPrefs({ client, env, engine, profileId, options, setOptions,
     setOptions((now) => now && { ...now, news: [] });
     client.rpc(env, 'model.news', { profileId }, 15_000).catch(() => { /* it shows once more, no harm */ });
   } : undefined;
-  return { onFavs, onEffortFavs, onDefault, onNewsSeen };
+  return { onFavs, onDefault, onNewsSeen };
 }
 
 interface Group {
@@ -212,6 +202,10 @@ interface Group {
   danger?: boolean;
   /** What new chats on this account start with; undefined when it cannot be set. */
   saved?: string | null;
+  /** Favorite models, as the ids these rows use. */
+  favs?: string[];
+  /** What picking a row asks for, when that is not this chip's own kind and id. */
+  pick?: (id: string) => readonly [Kind, string];
 }
 
 /** The short word a chip shows, so four of them fit on a phone. */
@@ -236,33 +230,97 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
   // does the chip have nothing to name.
   const model = session.model || session.engineModel || options.default || '';
 
+  const labels = options.labels ?? {};
+  const fold = session.engine === 'devin' ? foldTiers([...options.models, ...(options.more ?? [])], labels) : null;
+  const toBase = (id: string) => fold?.baseOf.get(id) ?? id;
+  const variants = fold?.variants.get(toBase(model));
+  const now = variants?.find((v) => v.id === model);
+  const savedModel = options.prefs?.default ?? options.default ?? null;
+  const savedVariant = variants?.find((v) => v.id === savedModel);
+
   if (options.models.length || options.more?.length) {
-    const choice = (m: string): Choice => ({
-      id: m,
-      label: options.labels?.[m] ?? m,
-    });
-    const choices = options.models.map(choice);
-    const more = (options.more ?? []).map(choice);
+    const name = (m: string) => fold?.names[m] ?? labels[m] ?? m;
+    const unique = (ids: string[]) => [...new Set(ids.map(toBase))];
+    let ids = unique(options.models);
+    let more = unique(options.more ?? []).filter((m) => !ids.includes(m));
+    const current = toBase(model);
+    // An approved list is the owner's own short list. Without one, the
+    // picker makes it: the newest of each line, the rest one tap away.
+    if (!options.prefs?.approved?.length) {
+      const shelf = shelve(ids, Object.fromEntries(ids.map((m) => [m, name(m)])), [current, savedModel ? toBase(savedModel) : '']);
+      ids = shelf.main;
+      more = [...shelf.rest, ...more];
+    }
+    // opencode and pi reach many providers: each gets a heading, and the
+    // row drops the "(Antigravity)" its heading already says.
+    const sectioned = new Set([...ids, ...more].map(providerOf)).size > 1;
+    const choice = (m: string): Choice => {
+      const section = sectioned ? providerOf(m) || undefined : undefined;
+      const label = name(m);
+      return { id: m, label: section ? label.replace(/\s*\(([^)]*)\)$/, (all, p) => p.toLowerCase() === section.toLowerCase() ? '' : all) : label, section };
+    };
+    const choices = ids.map(choice);
+    const rest = more.map(choice);
     // A model the CLI reported but that is in neither list is still the one
     // in use, so it belongs in the list rather than being unselectable.
-    if (model && !choices.some((c) => c.id === model) && !more.some((c) => c.id === model)) {
-      choices.unshift({ id: model, label: options.labels?.[model] ?? model, hint: 'in use now' });
+    if (current && !choices.some((c) => c.id === current) && !rest.some((c) => c.id === current)) {
+      choices.unshift({ id: current, label: name(current), hint: 'in use now' });
     }
     out.push({
       kind: 'model',
       title: 'model',
       glyph: 'model',
       choices,
-      more,
-      current: model,
-      currentLabel: model ? shortModel(model, options.labels, session.engine) : 'model',
-      saved: options.prefs?.default ?? options.default ?? null,
+      more: rest,
+      current,
+      currentLabel: current ? shortModel(current, fold ? { ...labels, ...fold.names } : labels, session.engine) : 'model',
+      saved: savedModel ? toBase(savedModel) : null,
+      favs: options.favs && [...new Set(options.favs.map(toBase))],
+      pick: fold ? (m) => {
+        const list = fold.variants.get(m);
+        return ['model', list ? variantFor(list, {}, now).id : m] as const;
+      } : undefined,
     });
+  }
+
+  // devin's levels and speeds are other models; their chips pick those.
+  if (variants) {
+    const levels = levelsOf(variants, now?.speed ?? '');
+    if (levels.length) {
+      out.push({
+        kind: 'effort',
+        title: 'thinking',
+        glyph: 'effort',
+        note: 'How long it reasons before answering. More is slower and costs more.',
+        choices: levels.map((e) => ({ id: e, label: e === 'none' ? 'off' : e })),
+        current: now?.effort ?? '',
+        currentLabel: now?.effort || 'think',
+        saved: savedVariant?.effort ?? null,
+        pick: (e) => ['model', variantFor(variants, { effort: e }, now).id] as const,
+      });
+    }
+    const speeds = [...new Set(variants.map((v) => v.speed).filter(Boolean))];
+    const fast = (s: string) => s === 'priority' ? 'Fast' : cap(s);
+    if (speeds.length) {
+      out.push({
+        kind: 'speed',
+        title: 'speed',
+        glyph: 'bolt',
+        choices: [
+          { id: '', label: 'Normal', hint: 'the usual speed' },
+          ...speeds.map((s) => ({ id: s, label: fast(s), hint: 'sooner, costs more' })),
+        ],
+        current: now?.speed ?? '',
+        currentLabel: now?.speed ? fast(now.speed) : 'normal',
+        saved: savedVariant ? savedVariant.speed : null,
+        pick: (s) => ['model', variantFor(variants, { speed: s }, now).id] as const,
+      });
+    }
   }
 
   // Only concrete thinking levels. Some CLIs include a `default` reset
   // sentinel in their catalog; it is not another level to pick or favorite.
-  const offeredEfforts = (options.effortsByModel?.[model] ?? options.efforts ?? []).filter((e) => e !== 'default');
+  const offeredEfforts = variants ? [] : (options.effortsByModel?.[model] ?? options.efforts ?? []).filter((e) => e !== 'default');
   const reportedEffort = session.effort || session.engineEffort;
   const efforts = reportedEffort && reportedEffort !== 'default' && !offeredEfforts.includes(reportedEffort) ? [reportedEffort, ...offeredEfforts] : offeredEfforts;
   if (offeredEfforts.length) {
@@ -302,7 +360,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
   }
 
   // codex's service tier: a plain on/off, because there is only ever one.
-  const speeds = options.speedByModel?.[model] ?? options.speeds ?? [];
+  const speeds = variants ? [] : options.speedByModel?.[model] ?? options.speeds ?? [];
   if (speeds.length) {
     out.push({
       kind: 'speed',
@@ -419,7 +477,8 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
             aria-label={`Favorite ${c.label}`} onChange={() => toggleFav(c.id)} />
           <Icon name={fav ? 'star-on' : 'star'} size={17} />
         </label>}
-        {onDefault && <button type="button"
+        {onDefault && !on && !isDefault && <span className="picker-default" aria-hidden="true" />}
+        {onDefault && (on || isDefault) && <button type="button"
           className={`picker-default${isDefault ? ' on' : ''}`} aria-pressed={isDefault}
           aria-label={isDefault ? `${c.label} is the default for ${defaultsFor}` : `Use ${c.label} by default for ${defaultsFor}`}
           title={isDefault ? `Default for ${defaultsFor}` : `Set as default for ${defaultsFor}`}
@@ -430,6 +489,11 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
       </div>
     );
   };
+  // Rows from many providers sit under a heading each.
+  const headed = (rows: Choice[], after?: string) => rows.flatMap((c, i) => {
+    const before = i ? rows[i - 1].section : after;
+    return c.section && c.section !== before ? [<div className="modesheet-label" key={`section:${c.section}:${c.id}`}>{c.section}</div>, row(c)] : [row(c)];
+  });
   const search = more.length > 0 || (!!searchable && choices.length > 6);
   const sheet = useRef<HTMLDivElement>(null);
   const filter = useRef<HTMLInputElement>(null);
@@ -492,13 +556,13 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
       )}
       {favorites.length > 0 && <div className="modesheet-label">favorites</div>}
       {favorites.map(row)}
-      {favorites.length > 0 && main.length > 0 && <div className="modesheet-label">all</div>}
-      {main.map(row)}
-      {rest.length > 0 && (q || expanded ? rest.map(row) : (
+      {favorites.length > 0 && main.length > 0 && !main[0].section && <div className="modesheet-label">all</div>}
+      {headed(main)}
+      {rest.length > 0 && (q || expanded ? headed(rest, main.at(-1)?.section) : (
         <button type="button" className="moderow more" onClick={() => setExpanded(true)}>
           <span className="grow">
             <span className="rt">{rest.length} more</span>
-            <span className="rm">everything else the account offers</span>
+            <span className="rm">{main.length || favorites.length ? 'older versions and the rest' : 'search, or show them all'}</span>
           </span>
           <span className="chev">›</span>
         </button>

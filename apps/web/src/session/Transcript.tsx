@@ -5,7 +5,7 @@ import type { Change, Item, Turn, Permission } from './types';
 import { seconds } from '../format';
 import { Icon, toolKind, type IconName } from '../Icon';
 import { userMessage } from './userMessage';
-import { splitAgentMessage } from './agentMessage';
+import { splitAgentMessage, helperMessage } from './agentMessage';
 import { stripBrief } from '@helm/protocol/brief';
 import { plainError } from './problem';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
@@ -662,6 +662,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   onRewind?: (turn: Turn) => void;
 }) {
   const said = splitNote(turn.text);
+  const helper = helperMessage(turn.text);
   const display = userMessage(said.text, turn.attachments);
   said.text = display.text;
   // A prompt that is itself a command means the turn's text is that
@@ -738,7 +739,20 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   return (
     <>
       {head && display.printed && !!said.text && <div className="turn assistant command-note"><Markdown text={said.text} className="prose" /></div>}
-      {head && !display.printed && !!(turn.text || turn.attachments?.length) && (
+      {/* Another agent talking, the way Claude Code shows a teammate: its
+          name and first line, the rest a tap away. Never the owner's bubble. */}
+      {head && helper && (
+        <details className="turn helper-msg">
+          <summary>
+            <span className="helper-name">{helper.from}</span>
+            {helper.status && helper.status !== 'done' && <span className="helper-status">{helper.status}</span>}
+            <span className="helper-line">{helper.text.trim().split('\n')[0]}</span>
+            <span className="helper-time">{clock(turn.at)}</span>
+          </summary>
+          <Markdown text={helper.text} className="prose" />
+        </details>
+      )}
+      {head && !helper && !display.printed && !!(turn.text || turn.attachments?.length) && (
         <div className={`turn user${queued ? ' queued' : ''}`}><div className="bubble">
           {display.to && <span className="turn-note">To {display.to}</span>}
           {said.note && (said.note.length > 160

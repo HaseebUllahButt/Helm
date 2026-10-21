@@ -227,6 +227,8 @@ function Shell({ client, conn, onSignOut }: {
   /** "thread X needs you" while a different session is on screen. */
   const [toast, setToast] = useState<Toast | null>(null);
   const [palette, setPalette] = useState(false);
+  /** The repo behind the chat on screen, when that chat has its own worktree. */
+  const worktreeRepo = useRef<{ envId: string; folder: string } | null>(null);
   /** The keyboard new-chat box; a folder skips straight to the agent picker. */
   const [newChat, setNewChat] = useState<{ envId?: string; folder?: string; quick?: boolean; draft?: string } | null>(null);
   const [lastFolder, setLastFolder] = useState<{ envId: string; folder: string } | null>(() => {
@@ -650,7 +652,8 @@ function Shell({ client, conn, onSignOut }: {
       if (mod && !e.altKey && (e.key === '/' || e.key === '?') && !el?.closest?.('.xterm')) { e.preventDefault(); setPalette(false); setHelp((v) => !v); return; }
       // A terminal keeps Ctrl+N: it is "next line" to a shell.
       const ctrlN = !e.shiftKey && (e.key === 'n' || e.key === 'N') && !el?.closest?.('.xterm');
-      if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
+      // From a chat in its own worktree, a new chat belongs to the repo it came from.
+      if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat(worktreeRepo.current ?? {}); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       // Settings and usage from anywhere. Letters with Ctrl/Cmd+Shift that
@@ -781,8 +784,9 @@ function Shell({ client, conn, onSignOut }: {
     ? (sessions[selected ?? ''] ?? []).find(s => s.id === view.session.id) ?? view.session : null;
   // A quick chat's scratch folder is not a place anyone would start in again.
   const inQuick = !!viewSession?.quick || (view.kind === 'start' && !!view.quick);
+  // A chat in its own worktree: "here" is the repo the worktree came from.
   const currentFolder = inQuick ? undefined
-    : viewSession ? viewSession.cwd
+    : viewSession ? viewSession.chatWorktree?.repo ?? viewSession.cwd
     : view.kind === 'start' || view.kind === 'transfer' ? view.cwd
     : view.kind === 'verify' ? view.path
     : view.kind === 'new' || view.kind === 'browse' || view.kind === 'transfer-browse' ? view.path ?? '~'
@@ -791,6 +795,7 @@ function Shell({ client, conn, onSignOut }: {
   useEffect(() => {
     if (selected && currentFolder) rememberChatFolder(selected, currentFolder);
   }, [selected, currentFolder, rememberChatFolder]);
+  worktreeRepo.current = selected && viewSession?.chatWorktree?.repo ? { envId: selected, folder: viewSession.chatWorktree.repo } : null;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

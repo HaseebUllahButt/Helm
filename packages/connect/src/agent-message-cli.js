@@ -33,5 +33,5 @@ export async function runMessageCommand(command, args, { rpc, self, findSession,
   try { result = await rpc(self, 'session.agent-send', { id: senderId, to, text, messageId,
     ...(command === 'reply' ? { replyTo: target } : {}), ...(callerThreadId ? { callerThreadId } : {}) }, 70_000); }
   catch (error) { throw new Error(`${error.message}\nRetry this same message with: helm ${command} ${target} --message-id ${messageId} -- <same text>`); }
-  write(options.json ? JSON.stringify(result) : `Message ${result.message.id ?? messageId} ${result.duplicate ? 'already delivered' : 'delivered'} to ${result.message.to.title}. It will be read at the next turn.`);
+  write(options.json ? JSON.stringify(result) : `Message ${result.message.id ?? messageId} ${result.duplicate ? 'already delivered' : 'delivered'} to ${result.message.to.title}. It will be read after its current step.`);
 }

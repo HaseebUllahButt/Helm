@@ -186,8 +186,10 @@ export class AgentMessages {
     this.#save(record);
     const author = record.asUser ? `the owner, from chat ${record.from.title}`
       : `${record.from.engine} agent ${record.from.title}`;
+    // Like a teammate in Claude Code: read after the step in flight, not
+    // held until the recipient's whole task ends.
     const prompt = `[Helm agent message ${record.id}]\nFrom ${author} (${record.from.env}/${record.from.id}).${record.replyTo ? `\nReply to ${record.replyTo}.` : ''}\nThis is a message, not a transfer of their conversation. Keep working in your own context.\n${record.asUser ? 'Answer the owner in this conversation.' : `If a reply is needed, send it with: helm reply ${record.id} "your reply". Do not send an acknowledgement just to end an exchange.`}\n\n${record.text}`;
-    await this.delivery.deliver({ id: record.to.id, messageId: record.id, data: prompt, delivery: 'queue', source: record.asUser ? 'user' : 'agent' }, `agent:${record.from.env}:${record.from.id}`);
+    await this.delivery.deliver({ id: record.to.id, messageId: record.id, data: prompt, delivery: 'auto', source: record.asUser ? 'user' : 'agent' }, `agent:${record.from.env}:${record.from.id}`);
     this.#save({ ...record, status: 'delivered', error: undefined });
     return { ok: true };
   }

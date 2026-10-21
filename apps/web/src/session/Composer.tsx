@@ -40,11 +40,6 @@ export const QUICK: { label: string; key: string }[] = [
 const QUEUE_SHOWN = 4;
 
 /** A finished-task report is long; the queue only needs to say which task it is. */
-function shortQueued(text: string) {
-  const done = /^A delegated task finished\..*?\nTask: (.+)/s.exec(text ?? '');
-  return done ? `Task finished: ${done[1].split('\n')[0]}` : text;
-}
-
 /** Since when, as "0:42": the bar counts while you look at it. */
 function CompactingBar({ since }: { since?: number }) {
   const now = useNow(1000);
@@ -58,7 +53,7 @@ function CompactingBar({ since }: { since?: number }) {
   );
 }
 
-export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, pendingLabel = 'After current response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After current response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   /** The agent's pending question or approval, as the top of the card. */
   banner?: React.ReactNode;
@@ -91,6 +86,11 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
    * handed to the agent, so they sit here rather than in the transcript.
    */
   queued?: { turn: Turn; text: string; attachments: number; delivered?: boolean }[];
+  /**
+   * Other agents' messages and helpers' reports waiting for this agent. They
+   * are not the owner's to edit or reorder, so they get one quiet line.
+   */
+  helpers?: { id: string; from: string; text: string }[];
   /** Pull a queued message back into the draft before the agent sees it. */
   onWithdrawQueued?: (turn: Turn) => void;
   /**
@@ -133,6 +133,10 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
   };
   useEffect(() => { setReferencePick(0); }, [draft]);
   const narrow = useNarrow();
+  const timing = (turn: Turn) => turn.delivery === 'queue' ? 'After this task' : turn.delivery === 'steer' ? 'Sending now' : pendingLabel;
+  // Said once in the heading when every waiting message goes at one time.
+  const sameTiming = queued.length > 0 && queued.every((item) => !item.delivered && timing(item.turn) === timing(queued[0].turn))
+    ? timing(queued[0].turn).toLowerCase() : '';
   const hints = [onReference && referenceOptions.length ? (narrow ? '@ chats' : '@ to attach a chat') : '', commands?.length ? (narrow ? '/ commands' : '/ for commands') : ''].filter(Boolean);
   const placeholder = ask === 'question' ? (narrow ? 'Answer above, or type your own' : 'Answer the question above, or type your own answer')
     : ask === 'approval' ? (narrow ? 'Decide above, or reply instead' : 'Decide above, or tell the agent what to do instead')
@@ -392,14 +396,25 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
               ))}
             </div>
           )}
+          {helpers.length > 0 && (
+            <details className="queued-panel helper-inbox">
+              <summary className="queued-head">
+                <b>{helpers.length === 1 ? '1 message from a helper' : `${helpers.length} messages from helpers`}</b>
+                <span className="helper-from">{[...new Set(helpers.map((h) => h.from))].join(', ')}</span>
+              </summary>
+              {helpers.map((h) => (
+                <div className="helper-row" key={h.id}><b>{h.from}</b> {h.text}</div>
+              ))}
+            </details>
+          )}
           {queued.length > 0 && (
             <div className="queued-panel">
               <div className="queued-head">
-                <b>{queued.length} waiting</b>
+                <b>{queued.length} waiting{sameTiming && ` · ${sameTiming}`}</b>
                 {queued.length > QUEUE_SHOWN && <button onClick={() => setAllQueued(!allQueued)}>{allQueued ? 'Show fewer' : `Show all ${queued.length}`}</button>}
               </div>
               {queued.map((item, index) => ({ item, index })).filter(({ index }) => allQueued || index < QUEUE_SHOWN).map(({ item, index }) => {
-                const label = shortQueued(item.text) || (item.attachments === 1 ? 'Image' : `${item.attachments} images`);
+                const label = item.text || (item.attachments === 1 ? 'Image' : `${item.attachments} images`);
                 const name = label.length > 80 ? `${label.slice(0, 79)}…` : label;
                 const busy = queueBusy === item.turn.id;
                 return (
@@ -411,8 +426,8 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
                       )}
                       {/* When it will be read: a held message waits for the
                           task; the rest follow the CLI's own timing. */}
-                      {!item.delivered && <span className="queued-timing">
-                        {item.turn.delivery === 'queue' ? 'After this task' : item.turn.delivery === 'steer' ? 'Sending now' : pendingLabel}
+                      {!item.delivered && !sameTiming && <span className="queued-timing">
+                        {timing(item.turn)}
                       </span>}
                     </span>
                     {/* Once the CLI has it there is no taking it back -
