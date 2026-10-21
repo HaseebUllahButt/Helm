@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stat, readFile, realpath, open, writeFile, mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import { existsSync, statSync, readFileSync } from 'node:fs';
 import { join, dirname, basename, resolve, relative } from 'node:path';
 import { expand, collapse } from './paths.js';
@@ -251,8 +252,8 @@ export async function file(cwd, path, since) {
     const buf = Buffer.alloc(Math.min(s.size, TEXT_LIMIT));
     const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
     const head = buf.subarray(0, bytesRead);
-    if (head.subarray(0, 8000).includes(0)) return { path: rel, size: s.size, binary: true };
     const truncated = s.size > TEXT_LIMIT;
+    if (head.includes(0) || (!truncated && !isUtf8(head))) return { path: rel, size: s.size, binary: true };
     const hash = truncated ? undefined : hashOf(head);
     if (since && hash === since) return { path: rel, same: true };
     return { path: rel, size: s.size, text: head.toString('utf8'), truncated, ...(hash ? { hash } : {}) };
@@ -301,7 +302,7 @@ async function writeChecked(cwd, path, text, base) {
     const s = await stat(full);
     if (!s.isFile()) throw new Error('that is not a file');
     const now = await readFile(full);
-    if (now.subarray(0, 8000).includes(0)) throw new Error('this is not a text file');
+    if (now.includes(0) || !isUtf8(now)) throw new Error('this is not a text file');
     if (hashOf(now) !== base) return { path: rel, conflict: true };
     await writeFile(full, text);
   } else {

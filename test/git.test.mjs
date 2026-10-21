@@ -325,3 +325,35 @@ test('simultaneous canvas saves accept only one version, including through a lin
   const current = await file(dir, 'shared.md');
   assert.ok((await write(dir, 'shared.md', 'next', current.hash)).hash, 'the file is released after saving');
 });
+
+
+test('canvas refuses late binary bytes and invalid UTF-8 rather than changing them', async () => {
+  const dir = repo();
+  for (const bytes of [Buffer.concat([Buffer.alloc(9000, 65), Buffer.from([0])]), Buffer.from([65, 255])]) {
+    writeFileSync(join(dir, 'binary.md'), bytes);
+    assert.equal((await file(dir, 'binary.md')).binary, true);
+    await assert.rejects(write(dir, 'binary.md', 'changed', 'irrelevant'), /not a text file/);
+    assert.deepEqual(readFileSync(join(dir, 'binary.md')), bytes);
+  }
+});
+
+test('canvas preserves text bytes, bounds large files, and reports removed files on save', async () => {
+  const dir = repo();
+  mkdirSync(join(dir, 'docs'));
+  for (const text of ['one\r\ntwo\r\n', 'no final newline']) {
+    writeFileSync(join(dir, 'note.md'), text);
+    const original = await file(join(dir, 'docs'), 'note.md');
+    assert.equal(original.text, text);
+    await write(dir, 'note.md', text, original.hash);
+    assert.equal(readFileSync(join(dir, 'note.md'), 'utf8'), text);
+  }
+  writeFileSync(join(dir, 'big.md'), 'a'.repeat(400001));
+  const big = await file(dir, 'big.md');
+  assert.equal(big.truncated, true);
+  assert.equal(big.text.length, 400000);
+  assert.equal(big.hash, undefined);
+  await assert.rejects(write(dir, 'big.md', 'a'.repeat(400001), ''), /too long/);
+  const original = await file(dir, 'note.md');
+  git(dir, 'clean', '-fd');
+  assert.equal((await write(dir, 'note.md', 'mine', original.hash)).gone, true);
+});
