@@ -196,6 +196,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['Ctrl/⌘ Shift M', 'Next model (favorites first)'],
     ['Ctrl/⌘ Shift A', 'Open or close agents'],
     ['Ctrl/⌘ Shift B', 'Open or close the browser'],
+    ['Ctrl/⌘ Shift D', 'Open or close the canvas (notes and docs)'],
     ['↑ ↓ Enter', 'Move and pick in an open list'],
   ]],
 ];

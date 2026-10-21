@@ -15,6 +15,24 @@
 - **Tests:** `test/browser/image-paste`; `test/paste-store`,
   `retain-assets`.
 
+## Canvas (notes and docs beside the chat)
+- **Reach:** the canvas button in a chat's header, or Ctrl/⌘ Shift D. A wide
+  screen gets a third column (shares the browser panel's slot, one at a
+  time); a phone gets a full-screen sheet. Open state and file are kept per
+  chat on the device. A file name in a turn's "changed files" opens it there.
+- **Rules:** Git projects only (it lists with `git.files`). Saves go through
+  `git.write` with the hash the file was read at: a file the agent changed
+  since is never overwritten silently; the owner picks "Use the new file" or
+  "Save mine over it". Secrets and `.git/` are never written; a new file
+  under a link that leads out of the repo is refused before any folder is
+  made. Unsaved edits live in memory while the app is open.
+- **Prove (driven 2026-10-21):** make a git repo in the copy's work folder,
+  `$V rpc session.start '{"cwd":"<repo>","profileId":"fake"}'`, open it at
+  `size 1600 900`, click "Canvas", open a `.md`, Edit, type, Ctrl+S; then
+  append to the file from the shell (the page follows within 2 s) and again
+  while editing (the clash card shows).
+- **Traps:** `wait` does not read the edit box; check it with `eval`.
+
 ## Voice
 - **Decision:** the device calls Groq itself. It asks a machine once for the
   key (`voice.direct`), keeps it in the browser (`helm.voice.direct`), and

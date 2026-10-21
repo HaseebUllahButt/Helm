@@ -1,7 +1,7 @@
 import { useCopySelection } from '../useCopySelection';
 import type { Transcribe } from './voice';
 import { useDismiss } from '../useDismiss';
-import { useCallback, useEffect, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { recacheWarning, type Recache } from '@helm/usage/recache';
 import { Markdown } from '../Markdown';
@@ -15,6 +15,7 @@ import { CompactionLine } from './Transcript';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
 import { useChatKeys } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
+import { Canvas, useCanvas } from './Canvas';
 import { prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
 import { loadDraft, saveDraft } from '../draftStore';
@@ -70,6 +71,8 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const team = useThreadTeam(client, env.id, session.id);
   const agentCount = team.length + (session.nativeCards?.length ?? 0);
   const browser = useBrowserDock(client, env, session, !isShell);
+  // The canvas and the browser panel share the column beside the chat: one at a time.
+  const canvas = useCanvas(env, session, !isShell);
   const [status, setStatus] = useState(session.status);
   const [compacting, setCompacting] = useState(session.compacting || false);
   // When it entered the status it is in, for "working 14m" beside the word.
@@ -84,6 +87,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   // when something has usually just changed. A quick chat has no folder.
   const git = useGitStatus(client, env, session.quick ? '' : session.cwd, status === 'working' ? 'working' : `rest:${statusAt ?? 0}`);
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
+  const changedPaths = useMemo(() => git.status?.files?.map((f) => f.path) ?? [], [git.status]);
 
   const [nativeOptions, setNativeOptions] = useState<ModelList | null>(null);
   const [nativeCommands, setNativeCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
@@ -424,7 +428,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
             Hiding it here made it look gone. The sheet says when there is no Git. */}
         <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
           onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
-        {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
+        {!isShell && <button className="iconbtn" title="Canvas: notes and docs (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
+          onClick={() => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); }}><Icon name="canvas" size={17} /></button>}
+        {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={() => { if (!browser.open) canvas.setOpen(false); browser.toggle(); }}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
@@ -467,7 +473,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       {details && <ThreadDetails client={client} env={env} session={session} tab={details} nativeOnly={!session.nativeChat}
         git={git.status} gitCwd={session.quick ? '' : session.cwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
-      {!isShell && browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
+      {!isShell && (canvas.open
+        ? <Canvas client={client} env={env} cwd={session.quick ? '' : session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath} onClose={() => canvas.setOpen(false)} />
+        : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />)}
 
       {/* Every open terminal on this machine, one tap apart. */}
       {isShell && terminals.length > 1 && (

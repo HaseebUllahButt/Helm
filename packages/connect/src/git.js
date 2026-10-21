@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { stat, readFile, realpath, open } from 'node:fs/promises';
+import { stat, readFile, realpath, open, writeFile, mkdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { existsSync, statSync, readFileSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { expand, collapse } from './paths.js';
@@ -11,7 +12,8 @@ import { expand, collapse } from './paths.js';
  * The phone asks about a folder it has chosen, so every call resolves that to a
  * real directory first, and the one argument that names a file inside it is
  * refused if it could point anywhere else. Nothing here writes to a repo except
- * `addWorktree`, which only ever adds a sibling checkout on a new branch.
+ * `addWorktree`, which only ever adds a sibling checkout on a new branch, and
+ * `write`, which saves one file the owner edited in the canvas.
  */
 
 const exec = promisify(execFile);
@@ -223,8 +225,15 @@ export async function files(cwd) {
   };
 }
 
-/** One file's text, read only. Secrets, pictures and other binary files say what they are instead. */
-export async function file(cwd, path) {
+/** What a save compares against, so it never overwrites a change it did not see. */
+const hashOf = (buf) => createHash('sha256').update(buf).digest('hex');
+
+/**
+ * One file's text. Secrets, pictures and other binary files say what they are
+ * instead. `hash` is there when the whole file was read; with `since` equal to
+ * it, only `{ same: true }` comes back, which is how the canvas watches a file.
+ */
+export async function file(cwd, path, since) {
   const dir = await folder(cwd);
   const rel = inside(path);
   const root = await toplevel(dir);
@@ -242,8 +251,54 @@ export async function file(cwd, path) {
     const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
     const head = buf.subarray(0, bytesRead);
     if (head.subarray(0, 8000).includes(0)) return { path: rel, size: s.size, binary: true };
-    return { path: rel, size: s.size, text: head.toString('utf8'), truncated: s.size > TEXT_LIMIT };
+    const truncated = s.size > TEXT_LIMIT;
+    const hash = truncated ? undefined : hashOf(head);
+    if (since && hash === since) return { path: rel, same: true };
+    return { path: rel, size: s.size, text: head.toString('utf8'), truncated, ...(hash ? { hash } : {}) };
   } finally { await handle.close(); }
+}
+
+/**
+ * Save one file the owner edited. `base` is the hash it was read at: if the
+ * file changed since (the agent wrote to it), nothing is written and
+ * `{ conflict: true }` comes back. `base: null` makes a new file and refuses
+ * one that exists. Secrets and git's own folder are never written.
+ */
+export async function write(cwd, path, text, base) {
+  const dir = await folder(cwd);
+  const rel = inside(path);
+  if (typeof text !== 'string') throw new Error('nothing to save');
+  if (Buffer.byteLength(text) > TEXT_LIMIT) throw new Error('this file is too long to save from here');
+  const root = await toplevel(dir);
+  if (!root) throw new Error('not a git repository');
+  if (isSecretPath(rel)) throw new Error('this file may hold passwords or keys; it is not saved from here');
+  if (rel.split('/')[0] === '.git') throw new Error('that is git’s own folder');
+  const realRoot = await realpath(root);
+  const target = join(root, rel);
+  const full = await realpath(target).catch(() => null);
+  if (full) {
+    if (!full.startsWith(realRoot + '/')) throw new Error('no such file in this folder');
+    if (base === null) return { path: rel, exists: true };
+    const s = await stat(full);
+    if (!s.isFile()) throw new Error('that is not a file');
+    const now = await readFile(full);
+    if (now.subarray(0, 8000).includes(0)) throw new Error('this is not a text file');
+    if (hashOf(now) !== base) return { path: rel, conflict: true };
+    await writeFile(full, text);
+  } else {
+    if (base !== null) return { path: rel, conflict: true, gone: true };
+    // A new file's folder may not exist yet. The nearest folder that does is
+    // checked before anything is made, so a link cannot lead the new folders out.
+    const within = (p) => p === realRoot || p.startsWith(realRoot + '/');
+    let near = dirname(target);
+    while (!existsSync(near)) near = dirname(near);
+    if (!within(await realpath(near))) throw new Error('that is not a path inside the folder');
+    await mkdir(dirname(target), { recursive: true });
+    const parent = await realpath(dirname(target));
+    if (!within(parent)) throw new Error('that is not a path inside the folder');
+    await writeFile(join(parent, basename(target)), text, { flag: 'wx' });
+  }
+  return { path: rel, hash: hashOf(Buffer.from(text)), size: Buffer.byteLength(text) };
 }
 
 /**

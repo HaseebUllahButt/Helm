@@ -42,6 +42,7 @@ import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { useChatKeys } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
+import { Canvas, useCanvas } from './Canvas';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
 
 const ENGINE_LABEL: Record<string, string> = {
@@ -130,6 +131,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [details, setDetails] = useState<DetailsTab | null>(reviewChildren ? 'agents' : null);
   const browser = useBrowserDock(client, env, session);
+  // The canvas and the browser panel share the column beside the chat: one at a time.
+  const canvas = useCanvas(env, session);
   useEffect(() => { if (reviewChildren) setDetails('agents'); }, [reviewChildren]);
   const [reviewNative, setReviewNative] = useState(false);
   const [focusItem, setFocusItem] = useState<{ id: string; visit: number }>();
@@ -676,6 +679,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // Empty when there is nowhere to read Git: a quick chat that has not edited anything.
   const gitCwd = git === otherGit ? otherGit.status?.root ?? editedDir : session.quick ? editedDir : session.cwd;
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
+  const changedPaths = useMemo(() => git.status?.files?.map((f) => f.path) ?? [], [git.status]);
 
   // The clip is only offered when the running model can see images;
   // the daemon enforces the same rule, so this is presentation, not trust.
@@ -752,7 +756,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         )}
         <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents"
           onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
-        <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
+        {!session.brain && <button className="iconbtn" title="Canvas: notes and docs (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
+          onClick={() => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); }}><Icon name="canvas" size={17} /></button>}
+        <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={() => { if (!browser.open) canvas.setOpen(false); browser.toggle(); }}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -872,7 +878,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         </div>}
       </LiveComposer>
 
-      {browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
+      {canvas.open && !session.brain
+        ? <Canvas client={client} env={env} cwd={gitCwd || session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath} onClose={() => canvas.setOpen(false)} />
+        : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
       {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}

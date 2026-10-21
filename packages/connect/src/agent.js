@@ -1641,7 +1641,8 @@ export class Daemon {
       case M.GIT_GRAPH: return gitq.graph(p.cwd, await this.sessions.list());
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
       case M.GIT_FILES: return gitq.files(p.cwd);
-      case M.GIT_FILE: return gitq.file(p.cwd, p.path);
+      case M.GIT_FILE: return gitq.file(p.cwd, p.path, p.since);
+      case M.GIT_WRITE: return gitq.write(p.cwd, p.path, p.text, p.base);
       case M.GIT_COMMIT: return gitq.commit(p.cwd, p.hash, p.path);
       case M.GIT_WORKTREE: return gitq.addWorktree(p.cwd, p.name);
       case M.GIT_PRS: return this.github.pullRequests(p.cwd, p);
