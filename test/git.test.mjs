@@ -295,3 +295,19 @@ test('the canvas saves only over the version it read, and never outside the repo
   await assert.rejects(write(dir, '.git/config', 'x', null), /git’s own folder/);
   await assert.rejects(write(dir, '../x.md', 'x', null), /not a path inside/);
 });
+
+
+test('canvas links inside the repo keep secret and git-folder protections', async () => {
+  const dir = repo();
+  writeFileSync(join(dir, '.env'), 'EXAMPLE_SECRET=demo');
+  symlinkSync('.env', join(dir, 'notes.md'));
+  assert.equal((await file(dir, 'notes.md')).hidden, true);
+  await assert.rejects(write(dir, 'notes.md', 'changed', null), /passwords or keys/);
+  symlinkSync('.git/config', join(dir, 'config.md'));
+  const config = await file(dir, 'config.md');
+  await assert.rejects(write(dir, 'config.md', 'changed', config.hash), /git’s own folder/);
+  symlinkSync('a.txt', join(dir, 'safe.md'));
+  const safe = await file(dir, 'safe.md');
+  assert.ok((await write(dir, 'safe.md', 'safe', safe.hash)).hash);
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'safe');
+});

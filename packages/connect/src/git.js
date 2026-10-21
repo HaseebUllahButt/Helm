@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import { stat, readFile, realpath, open, writeFile, mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { existsSync, statSync, readFileSync } from 'node:fs';
-import { join, dirname, basename, resolve } from 'node:path';
+import { join, dirname, basename, resolve, relative } from 'node:path';
 import { expand, collapse } from './paths.js';
 
 /**
@@ -243,6 +243,7 @@ export async function file(cwd, path, since) {
   const full = await realpath(join(root, rel)).catch(() => null);
   // A link that leads out of the repo is not "a file in this folder".
   if (!full || !full.startsWith(realRoot + '/')) throw new Error('no such file in this folder');
+  if (isSecretPath(relative(realRoot, full))) return { path: rel, hidden: true };
   const s = await stat(full);
   if (!s.isFile()) throw new Error('that is not a file');
   const handle = await open(full, 'r');
@@ -278,6 +279,9 @@ export async function write(cwd, path, text, base) {
   const full = await realpath(target).catch(() => null);
   if (full) {
     if (!full.startsWith(realRoot + '/')) throw new Error('no such file in this folder');
+    const resolved = relative(realRoot, full);
+    if (isSecretPath(resolved)) throw new Error('this file may hold passwords or keys; it is not saved from here');
+    if (resolved.split('/')[0] === '.git') throw new Error('that is git’s own folder');
     if (base === null) return { path: rel, exists: true };
     const s = await stat(full);
     if (!s.isFile()) throw new Error('that is not a file');
