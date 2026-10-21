@@ -219,6 +219,7 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
   const loaded = typeof file === 'object' && 'text' in file && file.text != null ? file : null;
   const dirty = draft != null && loaded != null && draft !== loaded.text;
   const setDraft = (text: string | null) => {
+    if (text != null && loaded?.text?.includes('\r\n')) text = text.replace(/\r?\n/g, '\r\n');
     setDraftRaw(text);
     if (text == null || (loaded && text === loaded.text)) drafts.delete(dkey);
     else if (loaded) drafts.set(dkey, { text, base: loaded });
