@@ -352,7 +352,7 @@ export class Daemon {
       const running = (await this.#versionP)?.full;
       const net = loadNetwork() ?? this.net;
       const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
-        selfUpdate, syncFromBundle, net, id: this.id, rpc: hubRpc });
+        syncFromBundle, net, id: this.id, rpc: hubRpc });
       this.syncNote = r.note ?? null;
       if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting when safe'); }
     } catch (err) {
@@ -635,7 +635,7 @@ export class Daemon {
     this.#syncMedia().catch((err) =>
       console.error('[helm] nas media:', err?.message || err));
 
-    // Every machine checks the published release and peers: a
+    // Every machine checks its checkout and peers: a
     // version saved here is built and started, and a newer one saved on
     // another machine is copied over the network. Soon after start, then
     // every couple of minutes.

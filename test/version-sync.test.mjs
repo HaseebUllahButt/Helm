@@ -19,22 +19,20 @@ function fixture(overrides = {}) {
   return { calls, opts };
 }
 
-test('startup/reconnect takes the published release even when no peer has it', async () => {
-  const { opts, calls } = fixture({ rpc: async () => { throw new Error('must not ask peers after updating'); } });
-  assert.equal((await synchronizeVersion(opts)).updated, true);
-  assert.deepEqual(calls, ['github']);
+test('startup/reconnect never fetches GitHub, including when no peer is online', async () => {
+  const { opts, calls } = fixture({ rpc: async () => { throw new Error('offline peer'); } });
+  assert.deepEqual(await synchronizeVersion(opts), { note: null });
+  assert.deepEqual(calls, []);
 });
-test('GitHub unavailable still catches up from a peer, ignoring offline machines', async () => {
-  const { opts, calls } = fixture({ selfUpdate: async () => { throw new Error('offline GitHub'); } });
+test('automatic updates come from a peer, ignoring offline machines', async () => {
+  const { opts, calls } = fixture();
   assert.equal((await synchronizeVersion(opts)).updated, true);
   assert.deepEqual(calls, ['saved-version']);
 });
-test('a live concurrent update is normal progress and never an attention warning or peer race', async () => {
-  const { opts, calls } = fixture({ selfUpdate: async () => {
-    calls.push('github'); return { updated: false, reason: 'an update is already running' };
-  }, rpc: async () => { throw new Error('must not race a live updater'); } });
-  assert.deepEqual(await synchronizeVersion(opts), { note: null });
-  assert.deepEqual(calls, ['github']);
+test('a live concurrent update is normal progress and never an attention warning', async () => {
+  const { opts, calls } = fixture({ syncFromBundle: async () => ({ updated: false, reason: 'an update is already running' }) });
+  assert.deepEqual((await synchronizeVersion(opts)).note, null);
+  assert.deepEqual(calls, []);
 });
 test('dirty installs report the reason without fetching or overwriting edits', async () => {
   const { opts, calls } = fixture({ currentVersion: async () => ({ full: 'old', dirty: true }) });
