@@ -222,11 +222,11 @@ export class Sessions extends EventEmitter {
     // The journal moves on only once the index it describes is on disk.
     if (recovered.length) { this.#save(); this.flush(); this.checkpoints.finishRecovery(recovered); }
     this.#dropNonAgentTasks();
-    // A daemon killed abruptly cannot answer its old hook sockets. Leave the
-    // terminal's own prompt available, without showing an unanswerable card.
+    // Old hook sockets died with the last daemon. A hook that asks again keeps
+    // its card; any other is unanswerable here, and the terminal still asks.
     for (const s of this.#index.values()) if (s.nativeCli) {
       for (const pending of this.events.pending(s.id)) {
-        this.events.append(s.id, { type: 'permission.resolved', requestId: pending.requestId });
+        if (!pending.reasks) this.events.append(s.id, { type: 'permission.resolved', requestId: pending.requestId });
       }
     }
     runtime.on('status', (e) => this.#onStatus(e));
