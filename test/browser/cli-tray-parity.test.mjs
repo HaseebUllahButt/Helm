@@ -13,7 +13,7 @@ before(async () => {
     window.calls=[];
     const engine=window.engine;
     const options={models:['model-a','model-b'],labels:{'model-a':'Model A','model-b':'Model B'},default:'model-a',
-      efforts:['low','high'],modes:MODES[engine] || [],favs:[],effortFavs:[],prefs:{default:'model-a',approved:[]},
+      efforts:['low','high'],modes:MODES[engine] || [],favs:[],prefs:{default:'model-a',approved:[]},
       defaults:{effort:'low'},...(engine==='codex' ? {speeds:['fast']} : {})};
     const client={on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
       if(method==='model.list') return options;
@@ -65,7 +65,6 @@ for(const engine of ['claude','codex','opencode','opencode2','devin','grok','cur
     await page.getByRole('option',{name:'Model B',exact:true}).click();
     await page.waitForFunction(()=>window.current.model==='model-b');
     await page.getByRole('button',{name:'thinking: low',exact:true}).click();
-    await page.getByRole('checkbox',{name:'Favorite high',exact:true}).check();
     await page.getByRole('button',{name:'Use high by default for new chats',exact:true}).click();
     await page.getByRole('button',{name:'high is the default for new chats',exact:true}).waitFor();
     await page.getByRole('option',{name:'high',exact:true}).click();
@@ -87,7 +86,7 @@ for(const engine of ['claude','codex','opencode','opencode2','devin','grok','cur
     const calls=await page.evaluate(()=>window.calls);
     for(const call of calls.filter(c=>['model.prefs','profile.defaults'].includes(c.method)))assert.equal(call.params.profileId,engine+'-account');
     assert.deepEqual(calls.find(c=>c.method==='picker.prefs').params.favs,{[engine]:['model-b']});
-    assert.deepEqual(calls.filter(c=>c.method==='picker.prefs')[1].params.favs,{[engine+'-effort']:[JSON.stringify(['model-b','high'])]});
+    assert.equal(calls.filter(c=>c.method==='picker.prefs').length,1);
     assert.equal(await page.locator('textarea').count(),1);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     assert.deepEqual(errors,[]);

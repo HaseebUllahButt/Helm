@@ -48,9 +48,12 @@
 - **Prove (driven):** `$V rpc profile.list` lists `fake` and `fake-ask`;
   `$V rpc agent.list` gives CLI details. `$V key Control+Shift+s; $V click
   "CLI defaults"` shows rows for "Devin · fake" and "Devin · fake-ask".
-- **Traps:** "Set default" is separate from this chat's model. The model
-  list can be up to ten minutes old, with no refresh button yet.
-- **Tests:** `test/alias-accounts`, `native-account`, `profiles-refresh`,
+- **Traps:** "Set default" is separate from this chat's model; on a phone
+  it shows only on the chosen row. The model list can be up to ten minutes
+  old, with no refresh button yet. Without an approved list the picker
+  shows only the newest of each line (`modelShelf.ts`); devin's
+  "-high-fast" ids fold into one row plus thinking and speed chips.
+- **Tests:** `test/model-shelf`, `test/alias-accounts`, `native-account`, `profiles-refresh`,
   `engines`, `discover-wrapper`, `models`, `models-refresh`, `model-prefs`,
   `model-follow`, `project-settings`, `session-settings`;
   `test/browser/models`, `effort-default`.

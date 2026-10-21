@@ -8,11 +8,12 @@
  * leaves the rest one search away.
  */
 
-/** More than this after trimming is an aggregator's list: search it instead. */
-export const SHORT_MAX = 12;
+/** The most rows a picker shows before "more". */
+export const SHORT_MAX = 20;
 
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const SPEEDS = ['fast', 'priority', 'lightning'];
+const TIER = /^(none|minimal|low|medium|high|xhigh|max|thinking)$/;
 
 /** "opencode/gpt-6-sol" -> "opencode"; a plain id has none. */
 export const providerOf = (id: string) => {
@@ -24,9 +25,12 @@ export const providerOf = (id: string) => {
 function lineOf(id: string, labels: Record<string, string>) {
   const provider = providerOf(id);
   let name = (labels[id] || id.slice(provider ? provider.length + 1 : 0).replace(/(\d)-(?=\d)/g, '$1.')).toLowerCase();
-  // "(latest)" and "(Antigravity)" say nothing about which line it is.
-  name = name.replace(/\s*\((latest|[^)]*)\)/g, (m, word) =>
-    word === 'latest' || (provider && word.includes(provider)) ? '' : m).replace(/[-.]?\d{8}\b/, '').trim();
+  // "(latest)", "(Antigravity)", "High Thinking" and "1M" (how much it
+  // reads) say nothing about which line it is or how new.
+  name = name.replace(/\s*\(([^)]*)\)/g, (m, word) =>
+    word === 'latest' || TIER.test(word) || (provider && word.includes(provider)) ? '' : m)
+    .replace(/[-.]?\d{8}\b/, '').replace(/\b\d+[mk]\b/g, '')
+    .replace(/(^|[\s-])(no thinking|thinking|none|minimal|low|medium|high|xhigh|fast|priority|lightning)(?=$|[\s-])/g, '$1').trim();
   const version = (name.match(/\d+(?:\.\d+)*/g) ?? []).join('.').split('.').filter(Boolean).map(Number);
   return { key: `${provider}|${name.replace(/\d+(?:\.\d+)*/g, '#').replace(/[\s_-]+/g, ' ')}`, version };
 }
@@ -41,24 +45,35 @@ const newer = (a: number[], b: number[]) => {
 
 /**
  * Split a list into what the picker shows and what waits behind "more".
- * `keep` (the model in use, the default) always shows. A list still too long
- * after keeping only the newest of each line shows just `keep`.
+ * A model shows when it is the newest of its line ("Claude Opus 4.8" loses
+ * to 5.5) and of its brand's newest generation ("GPT-5.6 Terra" loses to
+ * the GPT-6 lines), up to SHORT_MAX in the CLI's own order. A list from
+ * many providers that is still too long shows only `keep` (the model in
+ * use, the default): it is for searching. `rest` puts what would have shown first, then
+ * older models, then devin's fusion pairs, each under its own heading.
  */
 export function shelve(ids: string[], labels: Record<string, string>, keep: string[]) {
-  const best = new Map<string, number[]>();
   const lines = new Map(ids.map((id) => [id, lineOf(id, labels)]));
+  const best = new Map<string, number[]>();
+  const major = new Map<string, number>();
   for (const { key, version } of lines.values()) {
     const top = best.get(key);
     if (!top || newer(version, top)) best.set(key, version);
+    const brand = key.split('#')[0];
+    if (version.length) major.set(brand, Math.max(major.get(brand) ?? 0, version[0]));
   }
-  let main = ids.filter((id) => {
-    const line = lines.get(id)!;
-    return !newer(best.get(line.key)!, line.version) && !/^fusion\b/i.test(labels[id] ?? id);
-  });
-  if (main.length > SHORT_MAX) main = [];
+  const shelf = new Map(ids.map((id) => {
+    const { key, version } = lines.get(id)!;
+    if (/^fusion\b/i.test(labels[id] ?? id)) return [id, 'fusion pairs'];
+    const old = newer(best.get(key)!, version) || (version.length > 0 && version[0] < major.get(key.split('#')[0])!);
+    return [id, old ? 'older' : 'newest'];
+  }));
+  let main = ids.filter((id) => shelf.get(id) === 'newest');
+  if (main.length > SHORT_MAX) main = new Set(ids.map(providerOf)).size > 1 ? [] : main.slice(0, SHORT_MAX);
   for (const id of keep) if (id && ids.includes(id) && !main.includes(id)) main.push(id);
   main = ids.filter((id) => main.includes(id));
-  return { main, rest: ids.filter((id) => !main.includes(id)) };
+  const rest = ['newest', 'older', 'fusion pairs'].flatMap((name) => ids.filter((id) => shelf.get(id) === name && !main.includes(id)));
+  return { main, rest, shelf: (id: string) => shelf.get(id)! };
 }
 
 export interface Variant { id: string; effort: string; speed: string }
@@ -89,7 +104,9 @@ export function foldTiers(ids: string[], labels: Record<string, string>) {
     for (const v of list) baseOf.set(v.id, base);
     const label = labels[list[0].id];
     names[base] = label
-      ? label.replace(/\s+(fast|priority|lightning)$/i, '').replace(/\s+(no|none|minimal|low|medium|high|xhigh|max)(\s+thinking)?$/i, '').trim()
+      // "Opus 5.5 High Fast" and "Fusion (... + SWE-2 Medium)" lose their tier.
+      ? label.replace(/\s+(fast|priority|lightning)(\)?)$/i, '$2')
+        .replace(/\s+(no|none|minimal|low|medium|high|xhigh|max)(\s+thinking)?(\)?)$/i, '$3').trim()
       : base;
   }
   return { variants, baseOf, names };
@@ -103,8 +120,8 @@ export function variantFor(list: Variant[], want: Partial<Pick<Variant, 'effort'
   const effort = want.effort ?? now?.effort;
   const speed = want.speed ?? now?.speed ?? '';
   return list.find((v) => v.effort === effort && v.speed === speed)
-    ?? (want.effort !== undefined ? list.find((v) => v.effort === effort) : undefined)
-    ?? (want.speed !== undefined ? list.find((v) => v.speed === speed) : undefined)
+    // Asked for a speed: any level at it. Otherwise: this level at any speed.
+    ?? list.find((v) => want.speed !== undefined ? v.speed === speed : v.effort === effort)
     ?? list.find((v) => !v.speed && v.effort === 'medium')
     ?? list.find((v) => !v.speed)
     ?? list[0];

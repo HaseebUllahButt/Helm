@@ -171,14 +171,13 @@ test('native tray shares account favorites and defaults without changing the run
   await page.getByRole('button', {name:'Use opus by default for new chats',exact:true}).click();
   await page.getByRole('button', {name:'opus is the default for new chats',exact:true}).waitFor();
   await page.getByRole('button', {name:'thinking: think',exact:true}).click();
-  await page.getByRole('checkbox', {name:'Favorite high',exact:true}).check();
+  assert.equal(await page.getByRole('checkbox', {name:'Favorite high',exact:true}).count(), 0);
   await page.getByRole('button', {name:'Use high by default for new chats',exact:true}).click();
   await page.getByRole('button', {name:'high is the default for new chats',exact:true}).waitFor();
   const calls = await page.evaluate(() => window.calls);
-  assert.deepEqual(calls.map(c => c.method), ['picker.prefs','model.prefs','picker.prefs','profile.defaults']);
+  assert.deepEqual(calls.map(c => c.method), ['picker.prefs','model.prefs','profile.defaults']);
   assert.equal(calls[1].params.profileId, 'claude-personal');
-  assert.equal(calls[3].params.profileId, 'claude-personal');
-  assert.deepEqual(calls[2].params.favs['claude-effort'], [JSON.stringify(['opus','high'])]);
+  assert.equal(calls[2].params.profileId, 'claude-personal');
   await page.getByRole('button', {name:'model: opus',exact:true}).waitFor();
   await page.getByRole('button', {name:'thinking: think',exact:true}).waitFor();
 });
