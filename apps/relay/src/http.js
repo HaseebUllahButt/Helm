@@ -105,6 +105,8 @@ export const SECURITY_HEADERS = {
     // browser could not decode it" - the CSP, not the file.
     "img-src 'self' data: blob:",
     "connect-src 'self' https: wss: http: ws:",
+    // Live canvas pages use their own sandbox; saved visuals keep their stricter policy.
+    "frame-src 'self' https: http:",
     "frame-ancestors 'none'",
   ].join('; '),
   'x-content-type-options': 'nosniff',

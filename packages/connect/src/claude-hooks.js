@@ -1,5 +1,5 @@
 import { createConnection, createServer } from 'node:net';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, readFileSync, unlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +20,8 @@ import { NATIVE_SOCKET_PATH } from './terminals.js';
  *
  * The question stays on the terminal's screen while the hook waits, so
  * either side can answer it; whichever does first wins, and Claude ends the
- * other's wait.
+ * other's wait. A Helm restart is neither: the hook asks the next Helm the
+ * same question under the same id, and the card stays open meanwhile.
  */
 
 const statusScript = fileURLToPath(new URL('../bin/helm-claude-statusline.js', import.meta.url));
@@ -103,17 +104,20 @@ function claudeStatusLine(args, settings, cwd) {
  * the terminal was opened under, Claude's hook input, and `reply(output)`:
  * the JSON the hook prints, or null for nothing. `reply.onClose(fn)` fires if
  * the hook goes away first - Claude got its answer somewhere else.
+ * `reply.ask` is the question's own id, the same each time its hook asks.
  */
 export async function startHookServer(onEvent, path = hookSocketPath()) {
   try { unlinkSync(path); } catch { /* none left over */ }
   const sockets = new Set();
+  // Closing for a restart answers nothing: the hooks will ask again.
+  let closing = false;
   const server = createServer((socket) => {
     sockets.add(socket);
     socket.setEncoding('utf8');
     let data = '', handled = false, replied = false;
     const closers = [];
     socket.on('error', () => {});
-    socket.on('close', () => { sockets.delete(socket); if (!replied) for (const fn of closers) fn(); });
+    socket.on('close', () => { sockets.delete(socket); if (!replied && !closing) for (const fn of closers) fn(); });
     socket.on('data', (chunk) => {
       if (handled) return;
       data += chunk;
@@ -128,6 +132,7 @@ export async function startHookServer(onEvent, path = hookSocketPath()) {
         socket.end(JSON.stringify({ output: output ?? null }) + '\n');
       };
       reply.onClose = (fn) => closers.push(fn);
+      reply.ask = typeof msg.ask === 'string' && /^[\w-]{1,64}$/.test(msg.ask) ? msg.ask : null;
       try { onEvent(String(msg.native ?? ''), msg.event ?? {}, reply); }
       catch { reply(null); }
     });
@@ -143,6 +148,7 @@ export async function startHookServer(onEvent, path = hookSocketPath()) {
     throw error;
   }
   return { server, close: () => {
+    closing = true;
     const closed = new Promise((resolve) => server.close(resolve));
     // server.close alone leaves approval sockets (and the old daemon) alive.
     for (const socket of sockets) socket.destroy();
@@ -151,22 +157,38 @@ export async function startHookServer(onEvent, path = hookSocketPath()) {
   } };
 }
 
-/** The hook's side: hand the event over and print whatever comes back. */
-export function sendHook(native, event, { path = hookSocketPath(), timeoutMs = 3000 } = {}) {
+/**
+ * The hook's side: hand the event over and print whatever comes back.
+ * Only a question waits on a person; everything else is a notice. A
+ * question that finds no Helm, or loses it before the answer (an update),
+ * waits for the next one and asks it again under the same id; Claude ends
+ * that wait if the terminal answers first.
+ */
+export function sendHook(native, event, { path = hookSocketPath(), timeoutMs = 3000, retryMs = 500 } = {}) {
+  const question = event.hook_event_name === 'PermissionRequest';
+  const ask = question ? randomUUID() : undefined;
   return new Promise((resolve) => {
-    const socket = createConnection(path);
-    socket.setEncoding('utf8');
-    let input = '', done = false;
-    const finish = (value) => { if (done) return; done = true; socket.destroy(); resolve(value); };
-    // Only a question waits on a person; everything else is a notice.
-    if (event.hook_event_name !== 'PermissionRequest') socket.setTimeout(timeoutMs, () => finish(null));
-    socket.on('error', () => finish(null));
-    socket.on('connect', () => socket.write(JSON.stringify({ native, event }) + '\n'));
-    socket.on('data', (chunk) => {
-      input += chunk;
-      if (!input.includes('\n')) return;
-      try { finish(JSON.parse(input.slice(0, input.indexOf('\n'))).output ?? null); } catch { finish(null); }
-    });
-    socket.on('close', () => finish(null));
+    const attempt = () => {
+      const socket = createConnection(path);
+      socket.setEncoding('utf8');
+      let input = '', done = false;
+      const finish = (value) => { if (done) return; done = true; socket.destroy(); resolve(value); };
+      const lost = () => {
+        if (done) return;
+        if (!question) return finish(null);
+        done = true; socket.destroy();
+        setTimeout(attempt, retryMs);
+      };
+      if (!question) socket.setTimeout(timeoutMs, () => finish(null));
+      socket.on('error', lost);
+      socket.on('connect', () => { socket.write(JSON.stringify({ native, event, ask }) + '\n'); });
+      socket.on('data', (chunk) => {
+        input += chunk;
+        if (!input.includes('\n')) return;
+        try { finish(JSON.parse(input.slice(0, input.indexOf('\n'))).output ?? null); } catch { finish(null); }
+      });
+      socket.on('close', lost);
+    };
+    attempt();
   });
 }

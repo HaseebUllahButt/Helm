@@ -526,7 +526,7 @@ const CLAUDE_FALLBACK_FAMILY = [
  * additive overlay; the configured model and an already-running ACP session
  * still win when they know more about this account.
  */
-async function claudeModels(root) {
+async function claudeModels(root, environment = {}) {
   const published = await modelsDevProvider('anthropic');
   const seen = new Set([...CLAUDE_FALLBACK_FAMILY, ...published.models]);
   let def = null;
@@ -538,18 +538,38 @@ async function claudeModels(root) {
       if (typeof p?.model === 'string') seen.add(p.model);
     }
   } catch { /* no config yet */ }
+  // What a chat started without --model really runs: ANTHROPIC_MODEL, else
+  // the account's settings.json - often an alias such as "opus". Its
+  // `effortLevel` is the thinking level it starts with.
+  let settings = {};
+  try { settings = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8')) ?? {}; } catch { /* none */ }
+  const chosen = [environment.ANTHROPIC_MODEL, settings.env?.ANTHROPIC_MODEL, settings.model]
+    .find((v) => typeof v === 'string' && v.trim() && v.trim() !== 'default');
   // Newest first, so a model that shipped this week sits at the top of the
   // picker instead of behind two years of older ones (Models.dev dates each).
   const models = newestFirst([...seen], published.releasedAt);
+  if (chosen) def = claudeAlias(chosen.trim(), models) ?? def;
   if (def && !models.includes(def)) models.unshift(def);
   const labels = { 'claude-opus-5-5': 'Claude Opus 5.5', ...published.labels };
-  // `claude --effort`; the default depends on the model, so none is claimed.
-  // Every model in the family takes image input.
+  // `claude --effort`; without a saved level the default depends on the
+  // model, so none is claimed. Every model in the family takes image input.
+  const effort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(settings.effortLevel) ? settings.effortLevel : null;
   return {
-    default: def, models, labels, effort: null, efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    default: def, models, labels, effort, efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     images: true,
     imagesByModel: Object.fromEntries(models.map((m) => [m, published.imagesByModel[m] ?? true])),
   };
+}
+
+/**
+ * A Claude model setting as the id it runs: "opus" and "opusplan" mean the
+ * newest Opus, "sonnet[1m]" the newest Sonnet. A full id stays itself.
+ */
+export function claudeAlias(value, models) {
+  const plain = value.replace(/\[[^\]]*\]$/, '');
+  if (models.includes(plain) || plain.startsWith('claude-')) return plain;
+  const family = /^(opus|sonnet|haiku|fable)(plan)?$/.exec(plain)?.[1];
+  return family ? models.find((m) => m.startsWith(`claude-${family}-`) && !isSnapshot(m)) ?? null : null;
 }
 
 /** Read one provider's rows from the public Models.dev catalog. */

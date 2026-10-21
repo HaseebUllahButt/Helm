@@ -1,6 +1,6 @@
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
-import { Client, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
+import { Client, chatFolder, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
 import { useNow, waitingSince } from '../useNow';
 import { LiveComposer, createLiveDraft } from './liveDraft';
 import { prepareAttachment } from './image';
@@ -10,6 +10,7 @@ import { TodoStrip, stripTodos } from './Todos';
 import { RecoveryCard } from './RecoveryCard';
 import { Controls, trayPrefs, type Kind } from './Controls';
 import { Transcript, splitNote, isCompaction } from './Transcript';
+import { helperMessage } from './agentMessage';
 import { useGitStatus } from './gitStatus';
 import { changesOf } from './stepWords';
 import { expandPastes } from './pasteStore';
@@ -41,6 +42,9 @@ import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { useChatKeys } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
+import { Canvas, useCanvas } from './Canvas';
+import { CanvasContext } from './VisualReply';
+import { useExclusiveDocks } from './SideDock';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
 
 const ENGINE_LABEL: Record<string, string> = {
@@ -129,6 +133,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [details, setDetails] = useState<DetailsTab | null>(reviewChildren ? 'agents' : null);
   const browser = useBrowserDock(client, env, session);
+  // The canvas and the browser panel share the column beside the chat: one at a time.
+  const canvas = useCanvas(env, session, !session.brain);
+  useExclusiveDocks(canvas, browser);
+  const canvasVisuals = useMemo(() => session.brain ? undefined : { shown: canvas.open ? canvas.visual?.ref : undefined, show: canvas.showVisual },
+    [session.brain, canvas.open, canvas.visual?.ref, canvas.showVisual]);
   useEffect(() => { if (reviewChildren) setDetails('agents'); }, [reviewChildren]);
   const [reviewNative, setReviewNative] = useState(false);
   const [focusItem, setFocusItem] = useState<{ id: string; visit: number }>();
@@ -218,6 +227,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // transcript turns: they only become a bubble once the agent echoes them.
   const queueOrder = new Map((session.queueOrder ?? []).map((id, index) => [id, index]));
   const queuedTurns = log.turns.filter((turn) => turn.queued && !turn.done).sort((left, right) => (queueOrder.get(left.id) ?? Infinity) - (queueOrder.get(right.id) ?? Infinity));
+  // Other agents' messages wait in the same line but are not the owner's.
+  const helperTurns = queuedTurns.filter((turn) => !turn.delivered && helperMessage(turn.text));
+  const ownQueued = queuedTurns.filter((turn) => !helperTurns.includes(turn));
   const transcriptTurns = log.turns.filter((turn) => !turn.queued);
 
   // The catalogue this device last heard, then the machine's answer behind it.
@@ -428,12 +440,16 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     finally { setQueueBusy(''); }
   };
   const moveQueued = (turn: Turn, direction: -1 | 1) => {
-    const ids = queuedTurns.filter((entry) => !entry.delivered).map((entry) => entry.id);
+    const ids = ownQueued.filter((entry) => !entry.delivered).map((entry) => entry.id);
     const index = ids.indexOf(turn.id);
     const next = index + direction;
     if (index < 0 || next < 0 || next >= ids.length) return;
     [ids[index], ids[next]] = [ids[next], ids[index]];
-    void queueAction(turn, 'session.queue-reorder', { turnIds: ids });
+    // Helpers' messages keep their places; only the owner's swap.
+    const mine = new Set(ids);
+    let at = 0;
+    const order = queuedTurns.filter((entry) => !entry.delivered).map((entry) => mine.has(entry.id) ? ids[at++] : entry.id);
+    void queueAction(turn, 'session.queue-reorder', { turnIds: order });
   };
 
   /**
@@ -551,7 +567,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     const next = nameDraft.trim();
     if (save && next) void rename(next);
   };
-  const folder = !session.brain && !session.quick && session.cwd ? session.cwd.replace(/\/+$/, '').split('/').pop() || '~' : '';
+  const folder = !session.brain && !session.quick && session.cwd ? chatFolder(session).replace(/\/+$/, '').split('/').pop() || '~' : '';
 
   // "Ping me when it finishes": one ring, once, the next time the thread
   // settles. New sessions start enabled; the owner can silence this thread.
@@ -668,6 +684,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // Empty when there is nowhere to read Git: a quick chat that has not edited anything.
   const gitCwd = git === otherGit ? otherGit.status?.root ?? editedDir : session.quick ? editedDir : session.cwd;
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
+  const changedPaths = useMemo(() => git.status?.files?.map((f) => f.path) ?? [], [git.status]);
 
   // The clip is only offered when the running model can see images;
   // the daemon enforces the same rule, so this is presentation, not trust.
@@ -695,7 +712,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <div className="crumb">
             <EngineMark engine={session.engine} />
             {folder && <>
-              <span className="crumb-folder" title={session.cwd}>{folder}</span>
+              <span className="crumb-folder" title={chatFolder(session)}>{folder}</span>
               <span className="crumb-sep" aria-hidden="true">/</span>
             </>}
             {renaming ? (
@@ -722,7 +739,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
               <span key={part}><span className="sep"> · </span>{part}</span>
             ))}
             {/* On a phone the folder leaves the title line to the title. */}
-            {folder && <span className="sub-folder" title={session.cwd}><span className="sep"> · </span>{folder}</span>}
+            {folder && <span className="sub-folder" title={chatFolder(session)}><span className="sep"> · </span>{folder}</span>}
             {log.loaded && (logError || (!env.online && syncing))
               ? <span className="offline" role="status"> · Saved chat · reconnecting…</span>
               : syncing && !(cameUpEmpty && !log.loaded) && <span role="status"> · Syncing chat…</span>}
@@ -744,7 +761,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         )}
         <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents"
           onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
-        <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
+        {!session.brain && <button className="iconbtn" title="Canvas: notes and docs (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
+          onClick={() => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); }}><Icon name="canvas" size={17} /></button>}
+        <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={() => { if (!browser.open) canvas.setOpen(false); browser.toggle(); }}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -782,8 +801,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       <ExternalSessionNotice session={session}
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       <span ref={dockAnchor} hidden />
-      {firstMessage && <EmptyChat cwd={session.cwd} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={options?.labels?.[modelNow] ?? modelNow} still={cameUpEmpty} />}
-      <Transcript
+      {firstMessage && <EmptyChat cwd={chatFolder(session)} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={options?.labels?.[modelNow] ?? modelNow} still={cameUpEmpty} />}
+      <CanvasContext.Provider value={canvasVisuals}><Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
         readVisual={readVisual} openAgent={openAgent}
         pending={log.pending} onReviewRequest={reviewRequest} focusItem={focusItem}
@@ -797,7 +816,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         } : undefined}
         onBranch={session.engine === 'claude' && onOpenSession ? setBranching : undefined}
         empty={preparing ? '' : session.alive === false ? 'This conversation resumes with your next message.' : sentFirst ? 'Waiting for the agent…' : undefined}
-      />
+      /></CanvasContext.Provider>
 
       {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
         <strong>Send not confirmed</strong>
@@ -823,7 +842,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         referenceOptions={referenceOptions} references={references}
         onReference={(id) => { const item = referenceOptions.find((option) => option.id === id); if (item) setReferences((current) => [...current, item].slice(0, 3)); }}
         onRemoveReference={(id) => setReferences((current) => current.filter((item) => item.id !== id))}
-        queued={queuedTurns.map((turn) => ({
+        helpers={helperTurns.map((turn) => ({ id: turn.id, ...helperMessage(turn.text)! }))}
+        queued={ownQueued.map((turn) => ({
           turn, text: splitNote(turn.text).text ?? turn.text,
           attachments: turn.attachments?.length ?? 0, delivered: turn.delivered,
         }))}
@@ -863,7 +883,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         </div>}
       </LiveComposer>
 
-      {browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
+      {canvas.open && !session.brain
+        ? <Canvas client={client} env={env} cwd={gitCwd || (session.quick ? '' : session.cwd)} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}
+          visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)} />
+        : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
       {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}

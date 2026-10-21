@@ -655,6 +655,7 @@ function Shell({ client, conn, onSignOut }: {
       if (mod && !e.altKey && (e.key === '/' || e.key === '?') && !el?.closest?.('.xterm')) { e.preventDefault(); setPalette(false); setHelp((v) => !v); return; }
       // A terminal keeps Ctrl+N: it is "next line" to a shell.
       const ctrlN = !e.shiftKey && (e.key === 'n' || e.key === 'N') && !el?.closest?.('.xterm');
+      // A new chat from the start: machine first. "In this folder" is Ctrl+Shift+N.
       if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
@@ -786,8 +787,9 @@ function Shell({ client, conn, onSignOut }: {
     ? (sessions[selected ?? ''] ?? []).find(s => s.id === view.session.id) ?? view.session : null;
   // A quick chat's scratch folder is not a place anyone would start in again.
   const inQuick = !!viewSession?.quick || (view.kind === 'start' && !!view.quick);
+  // A chat in its own worktree: "here" is the repo the worktree came from.
   const currentFolder = inQuick ? undefined
-    : viewSession ? viewSession.cwd
+    : viewSession ? viewSession.chatWorktree?.repo ?? viewSession.worktreeHome ?? viewSession.cwd
     : view.kind === 'start' || view.kind === 'transfer' ? view.cwd
     : view.kind === 'verify' ? view.path
     : view.kind === 'new' || view.kind === 'browse' || view.kind === 'transfer-browse' ? view.path ?? '~'

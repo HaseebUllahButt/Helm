@@ -128,14 +128,11 @@ export class AgyDriver extends Driver {
 
     let pipe = null;
     if (this.procId && this.procHost) {
-      try {
-        await this.procHost.openProc(this.procId, {
-          cmd: this.cmd, args: this.args, cwd: this.cwd, env: this.env,
-        });
-        pipe = this.procHost.procPipe(this.procId);
-      } catch (e) {
-        this.log(`agy: no proc host (${e.message}); running under the daemon`);
-      }
+      await this.procHost.openProc(this.procId, {
+        cmd: this.cmd, args: this.args, cwd: this.cwd, env: this.env,
+      });
+      pipe = this.procHost.procPipe(this.procId);
+      if (!pipe) throw new Error('could not attach to the agent process host');
     }
     this.#hosted = !!pipe;
     if (!pipe) {

@@ -6,7 +6,7 @@
 //   node scripts/verify-helm.mjs click <text> | type <text> | key <key> | wait <text> [ms]
 //   node scripts/verify-helm.mjs text | shot [file.png] [--full] | errors [--clear] | logs [n] | size <w> <h>
 //   node scripts/verify-helm.mjs eval <js> | rpc <method> [json] | upload <file>...
-//   node scripts/verify-helm.mjs status | down [--keep]
+//   node scripts/verify-helm.mjs restart | status | down [--keep]
 //
 // Each chat gets its own copy (named from HELM_SESSION_ID, or --name /
 // HELM_VERIFY), so two agents never share one. Everything lives under
@@ -97,13 +97,34 @@ async function up() {
     if (await fetch(url).then((r) => r.ok, () => false)) break;
     await sleep(500);
   }
-  save({ name, root: ROOT, url, port, daemon: child.pid });
+  save({ name, root: ROOT, url, port, daemon: child.pid, real });
   // Real logins only on request: a real chat costs money and lands in that
   // account's history.
   if (real) await rpc('profile.list', { refresh: true });
   say(`up: ${url}  (copy "${name}", files in ${ROOT})`);
   say(`accounts: "fake" (answers in 0.8 s), "fake-ask" (asks permission first), "fake-pics" (takes pictures) and "fake-slow" (works for 2 minutes)${real ? ', plus your real logins' : ''}.`);
   say(`work folder for test chats: ${join(ROOT, 'work')}`);
+}
+
+/** Replace only this private daemon; keep its hosts and agents running. */
+async function restart() {
+  const s = state() ?? die('not up');
+  if (s.root !== ROOT || !alive(s.daemon)) die('private daemon is not running');
+  process.kill(s.daemon, 'SIGTERM');
+  for (let i = 0; i < 100 && alive(s.daemon); i++) await sleep(100);
+  if (alive(s.daemon)) die('private daemon did not stop; agents were left running');
+  const log = openSync(join(ROOT, 'daemon.log'), 'a');
+  const child = spawn(process.execPath, [join(REPO, 'packages/connect/bin/helm.js'), 'up',
+    '--port', String(s.port), '--host', '127.0.0.1', '--name', `verify-${name}`],
+  { cwd: REPO, env: sandboxEnv(ROOT, !!s.real), stdio: ['ignore', log, log], detached: true });
+  child.unref();
+  save({ ...s, daemon: child.pid });
+  for (let i = 0; i < 60; i++) {
+    if (!alive(child.pid)) die('private replacement daemon stopped; see daemon.log');
+    if (await fetch(s.url).then((r) => r.ok, () => false)) return say(`restarted private daemon ${s.daemon} → ${child.pid}`);
+    await sleep(500);
+  }
+  die('private replacement daemon did not become ready');
 }
 
 /** Sign-in key for this copy, read with HELM_DIR pointing at it. */
@@ -363,6 +384,7 @@ switch (cmd) {
     say(!s ? `no copy "${name}"` : `copy "${name}": Helm ${alive(s.daemon) ? 'up' : 'stopped'} at ${s.url}, browser ${s.browser && alive(s.browser.pid) ? 'open' : 'closed'}, files in ${s.root}`);
     break;
   }
+  case 'restart': await restart(); break;
   case 'down': await down(); break;
   default:
     say(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 9).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));

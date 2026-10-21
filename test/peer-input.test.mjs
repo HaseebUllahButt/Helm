@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { build } from 'esbuild';
 
 const bundle = await build({ entryPoints: [new URL('../packages/connect/src/peer.js', import.meta.url).pathname],
-  bundle: true, write: false, format: 'cjs', platform: 'node', external: ['node-datachannel/polyfill'] });
+  bundle: true, write: false, format: 'cjs', platform: 'node', external: ['node-datachannel/polyfill', './direct-config.js'] });
 
 async function harness() {
   const maps = [], calls = [], sent = [];
@@ -20,7 +20,9 @@ async function harness() {
   const context = { module: { exports: {} }, exports: {}, setTimeout, clearTimeout,
     JSON: { stringify: JSON.stringify, parse: (...args) => { parses++; return JSON.parse(...args); } },
     Map: class extends Map { constructor(...args) { super(...args); maps.push(this); } },
-    require: () => ({ RTCPeerConnection: Connection }) };
+    require: specifier => specifier === './direct-config.js'
+      ? { nativeDirectConfig: () => ({ iceServers: [] }) }
+      : { RTCPeerConnection: Connection } };
   vm.runInNewContext(bundle.outputFiles[0].text, context);
   const hub = new context.module.exports.PeerHub(() => {}, async (...args) => { calls.push(args); return 'ok'; });
   await hub.signal('browser', { type: 'offer', sdp: 'test' }, null, 'device');

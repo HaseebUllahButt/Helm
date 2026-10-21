@@ -136,3 +136,14 @@ test('Pi model list keeps only the table rows Pi can use', async () => {
   ]);
   assert.deepEqual(parsePiModelList('No models available. Log in with /login.\n  /opt/pi/docs/models.md\n'), []);
 });
+
+test("Claude's model setting names the model a new chat really starts with", async () => {
+  const { claudeAlias } = await import('../packages/connect/src/models.js');
+  const models = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-5-20251101'];
+  assert.equal(claudeAlias('opus', models), 'claude-opus-5-5');
+  assert.equal(claudeAlias('opusplan', models), 'claude-opus-5-5');
+  assert.equal(claudeAlias('sonnet[1m]', models), 'claude-sonnet-5-5');
+  assert.equal(claudeAlias('claude-opus-5', models), 'claude-opus-5');
+  assert.equal(claudeAlias('fable', models), null);
+  assert.equal(claudeAlias('something-else', models), null);
+});

@@ -44,11 +44,11 @@ test('Claude picker selects Opus 5.5 immediately and receives later catalog addi
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
     await page.locator('button[title^="model:"]').click();
-    await page.getByRole('option', { name: 'Claude Opus 5.5', exact: true }).click();
+    await page.getByRole('option', { name: 'Opus 5.5', exact: true }).click();
     assert.equal(await page.evaluate(() => window.picked), 'claude-opus-5-5');
     await page.evaluate(() => window.completeCatalog());
     await page.locator('button[title^="model:"]').click();
-    await page.getByRole('option', { name: 'Claude Sonnet 5.5', exact: true }).click();
+    await page.getByRole('option', { name: 'Sonnet 5.5', exact: true }).click();
     assert.equal(await page.evaluate(() => window.picked), 'claude-sonnet-5-5');
   } finally { await browser.close(); }
 });
@@ -64,14 +64,13 @@ test('favorite stars never select a model or change its default; explicit defaul
         default:'a', effort:'low', efforts:['low','high','xhigh'],
         effortsByModel:{a:['low','high','xhigh'], b:['low'], c:[]}, speeds:['fast'],
         modes:[{id:'ask',label:'Ask'},{id:'yolo',label:'YOLO',danger:true}], defaultMode:'ask',
-        defaults:{effort:'xhigh', mode:'ask',speed:'fast'}, favs:['a'], effortFavs:[] });
+        defaults:{effort:'xhigh', mode:'ask',speed:'fast'}, favs:['a'] });
       const controls = Controls({ options, session,
         // Model changes return the provider's accepted effort in a real chat.
         // The picker itself preserves reported settings until that response.
         onPick:(kind,id)=>{ window.picks = (window.picks ?? 0)+1; setSession(s=>({...s,[kind]:id,
           ...(kind==='model' ? {effort:id==='b' ? 'low' : id==='c' ? '' : s.effort} : {})})); },
         onFavs:favs=>setOptions(o=>({...o,favs})),
-        onEffortFavs:(model,levels)=>setOptions(o=>({...o,effortFavs:levels.map(level=>JSON.stringify([model,level]))})),
         onDefault:async(kind,id)=>{
           if (window.failSave) throw new Error('Save failed; try again');
           window.saved = {kind,id};
@@ -91,9 +90,9 @@ test('favorite stars never select a model or change its default; explicit defaul
       await page.locator('button[title^="thinking:"]').click();
       assert.equal(await page.getByRole('option',{name:'high',exact:true}).getAttribute('aria-selected'),'true');
       await page.getByRole('button',{name:'Use low by default for new chats',exact:true}).click();
-      await page.getByRole('checkbox',{name:'Favorite high',exact:true}).check();
+      // Five levels need no favorites.
+      assert.equal(await page.getByRole('checkbox',{name:'Favorite high',exact:true}).count(),0);
       assert.equal(await page.locator('.modesheet').count(),1);
-      assert.equal(await page.getByRole('checkbox',{name:'Favorite low',exact:true}).isChecked(),false);
       assert.equal(await page.getByRole('button',{name:'low is the default for new chats'}).getAttribute('aria-pressed'),'true');
       assert.equal(await page.getByRole('option',{name:'high',exact:true}).getAttribute('aria-selected'),'true');
       assert.equal(await page.evaluate(()=>window.picks ?? 0),0);
@@ -139,12 +138,11 @@ test('favorite stars never select a model or change its default; explicit defaul
       assert.equal(await page.evaluate(()=>window.picks ?? 0),1);
       assert.equal(await page.locator('button[title="thinking: low"]').count(),1);
       await page.locator('button[title^="thinking:"]').click();
-      assert.equal(await page.getByRole('checkbox',{name:'Favorite low',exact:true}).isChecked(),false);
       assert.equal(await page.getByRole('option',{name:'high',exact:true}).count(),0);
       await page.locator('button[title^="model:"]').click();
       await page.getByRole('option',{name:'Model A',exact:true}).click();
       await page.locator('button[title^="thinking:"]').click();
-      assert.equal(await page.getByRole('checkbox',{name:'Favorite high',exact:true}).isChecked(),true);
+      assert.equal(await page.getByRole('option',{name:'high',exact:true}).count(),1);
       await page.locator('button[title^="model:"]').click();
       await page.getByRole('button',{name:/1 more/}).click();
       await page.getByRole('option',{name:'Model C',exact:true}).click();
@@ -191,4 +189,102 @@ test('settings saves use the hub when a direct channel stops answering, with dir
     }
     assert.deepEqual(await page.evaluate(()=>window.testRoute('session.messages',true)),['direct']);
   } finally {await browser.close();}
+});
+
+test('devin shows each model once; its thinking and speed chips pick the matching variant', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React, { useState } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Controls } from './apps/web/src/session/Controls';
+    const ids = ['claude-opus-5-5-medium','claude-opus-5-5-low','claude-opus-5-5-high','claude-opus-5-5-high-fast',
+      'claude-opus-5-5-low-fast','claude-opus-4-8-medium','claude-opus-4-8-high','swe-2-high','swe-2-medium',
+      'fusion-claude-opus-5-5-high-sidekick-swe-2-medium','fusion-claude-opus-5-5-high-sidekick-swe-2-high'];
+    const labels = {'claude-opus-5-5-medium':'Claude Opus 5.5 Medium','claude-opus-4-8-medium':'Claude Opus 4.8 Medium',
+      'swe-2-high':'SWE-2 High','fusion-claude-opus-5-5-high-sidekick-swe-2-medium':'Fusion (Claude Opus 5.5 High + SWE-2 Medium)'};
+    function Picker() {
+      const [model, setModel] = useState('claude-opus-5-5-high-fast');
+      const controls = Controls({ options:{ models:ids, labels, prefs:{default:'swe-2-high', approved:[]}, favs:['claude-opus-5-5-high'] },
+        session:{ engine:'devin', model }, onFavs:()=>{},
+        onPick:(kind,id)=>{ window.picked = [kind,id]; setModel(id); } });
+      return <>{controls.chips}{controls.sheet}</>;
+    }
+    createRoot(document.getElementById('root')).render(<Picker />);
+  `, resolveDir:process.cwd(), loader:'tsx' }, bundle:true,write:false,format:'iife',jsx:'automatic' });
+  const browser = await chromium.launch({headless:true,...(process.env.HELM_TEST_CHROMIUM ? {executablePath:process.env.HELM_TEST_CHROMIUM} : {})});
+  try {
+    const page = await browser.newPage({ viewport:{width:390,height:844} });
+    await page.setContent('<div class="session"><div id="root"></div></div>');
+    await page.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
+    await page.addScriptTag({content:bundle.outputFiles[0].text});
+    await page.locator('button[title="model: Claude Opus 5.5"]').click();
+    // A favorite saved as one variant stars the whole model.
+    assert.deepEqual(await page.getByRole('option').allTextContents(), ['Claude Opus 5.5', 'SWE-2']);
+    await page.getByRole('button',{name:/2 more/}).click();
+    assert.deepEqual(await page.locator('.modesheet-label').allTextContents(), ['favorites', 'all', 'older', 'fusion pairs']);
+    await page.getByRole('option',{name:'Claude Opus 4.8',exact:true}).click();
+    // No fast variant there: the level carries over, the speed cannot.
+    assert.deepEqual(await page.evaluate(()=>window.picked), ['model','claude-opus-4-8-high']);
+    await page.locator('button[title="model: Claude Opus 4.8"]').click();
+    await page.getByRole('option',{name:'Claude Opus 5.5',exact:true}).click();
+    assert.deepEqual(await page.evaluate(()=>window.picked), ['model','claude-opus-5-5-high']);
+    await page.locator('button[title="speed: normal"]').click();
+    await page.getByRole('option',{name:/^Fast/}).click();
+    assert.deepEqual(await page.evaluate(()=>window.picked), ['model','claude-opus-5-5-high-fast']);
+    await page.locator('button[title="thinking: high"]').click();
+    assert.deepEqual(await page.getByRole('option').allTextContents(), ['low', 'high']);
+    await page.getByRole('option',{name:'low',exact:true}).click();
+    assert.deepEqual(await page.evaluate(()=>window.picked), ['model','claude-opus-5-5-low-fast']);
+  } finally { await browser.close(); }
+});
+
+test('Claude with bare ids: the newest four, recent first, an old default waits behind more', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Controls } from './apps/web/src/session/Controls';
+    function Picker() {
+      const controls = Controls({ options:{ models:['claude-haiku-5-5','claude-sonnet-5-5','claude-opus-5-5','claude-fable-5-1','claude-opus-5','claude-sonnet-5'],
+        default:'claude-sonnet-5', prefs:{default:'claude-sonnet-5', approved:[]}, recent:['claude-fable-5-1','claude-opus-4-8'], favs:[] },
+        session:{ engine:'claude', model:'claude-opus-5-5' }, onFavs:()=>{}, onPick:()=>{}, onDefault:()=>{} });
+      return <>{controls.chips}{controls.sheet}</>;
+    }
+    createRoot(document.getElementById('root')).render(<Picker />);
+  `, resolveDir:process.cwd(), loader:'tsx' }, bundle:true,write:false,format:'iife',jsx:'automatic' });
+  const browser = await chromium.launch({headless:true,...(process.env.HELM_TEST_CHROMIUM ? {executablePath:process.env.HELM_TEST_CHROMIUM} : {})});
+  try {
+    const page = await browser.newPage({ viewport:{width:390,height:844} });
+    await page.setContent('<div class="session"><div id="root"></div></div>');
+    await page.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
+    await page.addScriptTag({content:bundle.outputFiles[0].text});
+    await page.locator('button[title="model: Opus 5.5"]').click();
+    assert.deepEqual(await page.getByRole('option').allTextContents(), ['Fable 5.1', 'Haiku 5.5', 'Sonnet 5.5', 'Opus 5.5']);
+    assert.deepEqual(await page.locator('.modesheet-label').allTextContents(), ['recent', 'latest']);
+    assert.equal(await page.locator('.moderow.more').innerText(), '2 more\n›');
+  } finally { await browser.close(); }
+});
+
+test('Esc closes the picker wherever focus is', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Controls } from './apps/web/src/session/Controls';
+    function Picker() {
+      const controls = Controls({ options:{ models:['claude-opus-5-5','claude-sonnet-5-5'], favs:[] },
+        session:{ engine:'claude', model:'claude-opus-5-5' }, onFavs:()=>{}, onPick:()=>{} });
+      return <><textarea aria-label="message" />{controls.chips}{controls.sheet}</>;
+    }
+    createRoot(document.getElementById('root')).render(<Picker />);
+  `, resolveDir:process.cwd(), loader:'tsx' }, bundle:true,write:false,format:'iife',jsx:'automatic' });
+  const browser = await chromium.launch({headless:true,...(process.env.HELM_TEST_CHROMIUM ? {executablePath:process.env.HELM_TEST_CHROMIUM} : {})});
+  try {
+    const page = await browser.newPage({ viewport:{width:390,height:844}, hasTouch:true, isMobile:true });
+    await page.setContent('<div class="session"><div id="root"></div></div>');
+    await page.addScriptTag({content:bundle.outputFiles[0].text});
+    await page.locator('button[title^="model:"]').click();
+    await page.locator('.modesheet').waitFor();
+    // Focus left in the message box, as after tapping a chip on a phone.
+    await page.getByLabel('message').focus();
+    await page.keyboard.press('Escape');
+    await page.locator('.modesheet').waitFor({ state:'detached' });
+  } finally { await browser.close(); }
 });

@@ -6,7 +6,7 @@ import { ThreadStatus, moodOf, isUnread, useSeenVersion, wrappedUp } from '../th
 import { plainProblem } from '../session/problem';
 import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
-import type { Session } from '../client';
+import { chatFolder, type Session } from '../client';
 import { shownTitle, unknownThread } from '../format';
 import { engineOf } from '../engines';
 import { fadeWhenCut } from '../fadeWhenCut';
@@ -176,7 +176,7 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: 
 const dirName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
 
 /** Where a thread runs, in a word: its folder, or "quick chat" when it has none. */
-export const whereOf = (s: Session) => (s.quick ? 'quick chat' : dirName(s.cwd));
+export const whereOf = (s: Session) => (s.quick ? 'quick chat' : dirName(chatFolder(s)));
 
 /**
  * A session that is waiting on you, as the first thing on Home.

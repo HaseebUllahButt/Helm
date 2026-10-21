@@ -78,11 +78,11 @@ export class DirectMesh {
         env,
         signal: (payload) => this.sendSignal(env, channel.id, payload),
         onMessage: (message) => this.#message(channel, message),
-        onClose: () => this.#closed(channel),
+        onClose: (error) => this.#closed(channel, error),
         connectTimeout: CONNECT_TIMEOUT_MS,
       });
-    } catch {
-      this.#closed(channel);
+    } catch (error) {
+      this.#closed(channel, error);
       return;
     }
     channel.peer.ready.then(() => {
@@ -91,7 +91,7 @@ export class DirectMesh {
       channel.opened = this.now();
       this.ping(env);
       this.changed(env);
-    }, () => {});
+    }, (error) => this.#closed(channel, error));
   }
 
   /** A signalling blob from a hub. True if it belonged to one of our channels. */
@@ -112,7 +112,7 @@ export class DirectMesh {
     else request.reject(Object.assign(new Error(message.error?.message ?? 'remote request failed'), { code: message.error?.code, rpc: true }));
   }
 
-  #closed(channel) {
+  #closed(channel, error) {
     if (this.channels.get(channel.env) !== channel) return;
     this.channels.delete(channel.env);
     try { channel.peer?.close(); } catch {}
@@ -128,6 +128,7 @@ export class DirectMesh {
     }
     const steady = channel.opened != null && this.now() - channel.opened >= STEADY_MS;
     const wait = this.waits.get(channel.env) ?? { failures: 0, retryAt: 0 };
+    wait.reason = String(error?.message ?? 'direct channel closed').replace(/[\r\n\t]/g, ' ').slice(0, 240);
     wait.failures = steady ? 0 : wait.failures + 1;
     const delay = Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** wait.failures);
     wait.retryAt = this.now() + delay * (0.75 + Math.random() * 0.5);
@@ -261,7 +262,8 @@ export class DirectMesh {
     const channel = this.channels.get(env);
     if (channel) return { state: channel.state, ms: channel.ms == null ? null : Math.round(channel.ms) };
     if (!this.supports(env)) return { state: 'unsupported', ms: null };
-    if (this.waits.get(env)?.failures) return { state: 'retrying', ms: null };
+    const wait = this.waits.get(env);
+    if (wait?.failures) return { state: 'retrying', ms: null, reason: wait.reason, retryInMs: Math.max(0, Math.round(wait.retryAt - this.now())) };
     return { state: 'off', ms: null };
   }
 

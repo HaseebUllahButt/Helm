@@ -11,7 +11,7 @@ const code = bundle.outputFiles[0].text;
 
 function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, machineIds = {}, socket = 'open', socketDelay = 1, pong = true, location } = {}) {
   let now = 0, serial = 0, parses = 0;
-  const timers = new Map(), sockets = [], peers = [], events = [], requests = [], windows = new Map(), documents = new Map();
+  const timers = new Map(), sockets = [], peers = [], events = [], requests = [], windows = new Map(), documents = new Map(), connection = new Map();
   const timer = (fn, delay = 0, interval = 0) => {
     const id = ++serial; timers.set(id, { fn, at: now + delay, interval }); return id;
   };
@@ -74,6 +74,7 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     AbortController, AbortSignal, WebSocket: Socket, RTCPeerConnection: Peer,
     ...(location ? { location } : {}),
     document,
+    navigator: { connection: { addEventListener: (kind, fn) => connection.set(kind, fn), removeEventListener: kind => connection.delete(kind) } },
     window: { addEventListener: (kind, fn) => windows.set(kind, fn), removeEventListener: kind => windows.delete(kind) },
     fetch: (url, init) => new Promise((resolve, reject) => {
       requests.push({ url, init });
@@ -93,8 +94,45 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
   const start = () => client.connect().catch(error => error.message);
   return { client, sockets, peers, events, requests, timers, document, advance, start, parses: () => parses,
     suspend: ms => { now += ms; },
-    window: kind => windows.get(kind)?.(), visible: () => documents.get('visibilitychange')?.() };
+    window: kind => windows.get(kind)?.(), network: () => connection.get('change')?.(), visible: () => documents.get('visibilitychange')?.() };
 }
+
+test('a browser connection change retries a failed direct link without discarding a healthy link', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('failed'); await h.client.openDirect('healthy');
+  h.peers[1].open();
+  h.peers[0].connectionState = 'failed'; h.peers[0].onconnectionstatechange();
+  assert.equal(h.client.directStatus('failed').state, 'trying again');
+  assert.match(h.client.directStatus('failed').reason, /backup/);
+  h.network(); await h.advance(10);
+  assert.equal(h.peers.length, 3);
+  assert.equal(h.client.directTo('healthy'), true);
+  h.client.close(); h.network(); await h.advance(100);
+  assert.equal(h.peers.length, 3, 'close removes the connection listener');
+});
+
+test('a direct link survives brief packet loss and falls back after sustained loss', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('vm'); const peer = h.peers[0]; peer.open();
+  peer.connectionState = 'disconnected'; peer.onconnectionstatechange();
+  await h.advance(4000);
+  peer.connectionState = 'connected'; peer.onconnectionstatechange();
+  await h.advance(2000);
+  assert.equal(h.client.directTo('vm'), true);
+  peer.connectionState = 'disconnected'; peer.onconnectionstatechange();
+  await h.advance(5000);
+  assert.equal(h.client.directTo('vm'), false);
+  assert.match(h.client.directStatus('vm').reason, /stopped answering/);
+  h.client.close();
+});
+
+test('frequent browser quality changes cannot postpone a dead connection check forever', async () => {
+  const h = harness({ pong: false }); h.start(); await h.advance(200);
+  const first = h.sockets[0];
+  for (let i = 0; i < 17; i++) { h.network(); await h.advance(1000); }
+  assert.equal(first.readyState, 3);
+  h.client.close();
+});
 
 test('an ordinary browser direct event is parsed once', async () => {
   const h = harness(); h.start(); await h.advance(200);
@@ -103,6 +141,18 @@ test('an ordinary browser direct event is parsed once', async () => {
   h.peers[0].message({ t: 'event', kind: 'session.events', payload: { events: [] } });
   assert.equal(h.events.at(-1).kind, 'session.events');
   assert.equal(h.parses() - before, 1);
+  h.client.close();
+});
+
+test('watching a restored chat starts a direct link without opening its machine screen', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const watched = h.client.rpc('vm', 'session.watch', { id: 'saved-chat' });
+  await h.advance(1);
+  assert.equal(h.peers.length, 1);
+  assert.ok(h.sockets[0].frames.some(frame => frame.t === 'signal' && frame.env === 'vm'));
+  const frame = h.sockets[0].frames.find(frame => frame.method === 'session.watch');
+  h.sockets[0].message({ t: 'rpcResult', id: frame.id, ok: true, result: { last: 0 } });
+  assert.deepEqual(await watched, { last: 0 });
   h.client.close();
 });
 

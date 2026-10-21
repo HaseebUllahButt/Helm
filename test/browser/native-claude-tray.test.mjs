@@ -71,8 +71,8 @@ test('a taken-over Claude chat offers the whole tray and changes its permission 
 
   // Favorites and "Set default" ride along, as in a Helm chat.
   await page.getByRole('button', {name:'model: Opus 5.5', exact:true}).click();
-  await page.getByRole('checkbox', {name:'Favorite Claude Sonnet 5.5'}).waitFor();
-  await page.getByRole('button', {name:'Use Claude Sonnet 5.5 by default for new chats'}).waitFor();
+  await page.getByRole('checkbox', {name:'Favorite Sonnet 5.5'}).waitFor();
+  await page.getByRole('button', {name:'Use Sonnet 5.5 by default for new chats'}).waitFor();
   await page.getByRole('button', {name:'close', exact:true}).click();
 
   await page.getByRole('button', {name:'permissions: auto', exact:true}).click();

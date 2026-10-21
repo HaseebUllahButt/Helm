@@ -1,7 +1,7 @@
 import { useCopySelection } from '../useCopySelection';
 import type { Transcribe } from './voice';
 import { useDismiss } from '../useDismiss';
-import { useCallback, useEffect, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { recacheWarning, type Recache } from '@helm/usage/recache';
 import { Markdown } from '../Markdown';
@@ -12,9 +12,11 @@ import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { nativeConversation } from './nativeView';
 import { CompactionLine } from './Transcript';
-import { VisualReply, Visuals, type VisualReader } from './VisualReply';
+import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
 import { useChatKeys } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
+import { Canvas, useCanvas } from './Canvas';
+import { useExclusiveDocks } from './SideDock';
 import { prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
 import { loadDraft, saveDraft } from '../draftStore';
@@ -29,7 +31,7 @@ import type { Decision } from './types';
 import { EngineMark } from '../EngineMark';
 import { BackIcon, Icon, toolKind } from '../Icon';
 import { Route } from '../Route';
-import { Client, type Environment, type Session, type Message, type ModelList, type NativeControl, type NativeAgent } from '../client';
+import { Client, chatFolder, type Environment, type Session, type Message, type ModelList, type NativeControl, type NativeAgent } from '../client';
 import { followModelRefresh } from '../modelRefresh';
 import { loadMessages, saveMessages } from './logCache';
 import { engineOf } from '../engines';
@@ -70,6 +72,11 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const team = useThreadTeam(client, env.id, session.id);
   const agentCount = team.length + (session.nativeCards?.length ?? 0);
   const browser = useBrowserDock(client, env, session, !isShell);
+  // The canvas and the browser panel share the column beside the chat: one at a time.
+  const canvas = useCanvas(env, session, !isShell);
+  useExclusiveDocks(canvas, browser);
+  const canvasVisuals = useMemo(() => isShell ? undefined : { shown: canvas.open ? canvas.visual?.ref : undefined, show: canvas.showVisual },
+    [isShell, canvas.open, canvas.visual?.ref, canvas.showVisual]);
   const [status, setStatus] = useState(session.status);
   const [compacting, setCompacting] = useState(session.compacting || false);
   // When it entered the status it is in, for "working 14m" beside the word.
@@ -84,6 +91,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   // when something has usually just changed. A quick chat has no folder.
   const git = useGitStatus(client, env, session.quick ? '' : session.cwd, status === 'working' ? 'working' : `rest:${statusAt ?? 0}`);
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
+  const changedPaths = useMemo(() => git.status?.files?.map((f) => f.path) ?? [], [git.status]);
 
   const [nativeOptions, setNativeOptions] = useState<ModelList | null>(null);
   const [nativeCommands, setNativeCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
@@ -414,7 +422,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           <h1>{session.title}</h1>
           <span className="sub">
             <EngineMark engine={eng.cls} />
-            <Route machine={env.name} folder={session.cwd} quick={session.quick} />
+            <Route machine={env.name} folder={chatFolder(session)} quick={session.quick} />
             <span className="sep"> · </span>{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''}
             {!isShell && messages && (readError || !env.online) && <span className="offline" role="status"> · Saved chat · reconnecting…</span>}
           </span>
@@ -424,7 +432,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
             Hiding it here made it look gone. The sheet says when there is no Git. */}
         <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
           onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
-        {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
+        {!isShell && <button className="iconbtn" title="Canvas: notes and docs (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
+          onClick={() => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); }}><Icon name="canvas" size={17} /></button>}
+        {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={() => { if (!browser.open) canvas.setOpen(false); browser.toggle(); }}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
@@ -467,7 +477,10 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       {details && <ThreadDetails client={client} env={env} session={session} tab={details} nativeOnly={!session.nativeChat}
         git={git.status} gitCwd={session.quick ? '' : session.cwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
-      {!isShell && browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
+      {!isShell && (canvas.open
+        ? <Canvas client={client} env={env} cwd={session.quick ? '' : session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}
+          visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)} />
+        : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />)}
 
       {/* Every open terminal on this machine, one tap apart. */}
       {isShell && terminals.length > 1 && (
@@ -506,7 +519,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         ? <Suspense fallback={<div className="xterm-host" />}>
             <Terminal client={client} env={env.id} sessionId={session.id} />
           </Suspense>
-        : <Chat messages={messages} status={status} compacting={compacting} readVisual={readVisual} />}
+        : <Chat messages={messages} status={status} compacting={compacting} readVisual={readVisual} canvas={canvasVisuals} />}
 
       {session.nativeChat && raw && !session.nativeCli && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
       {session.nativeChat && !raw && nativeNotice && (
@@ -560,7 +573,7 @@ function NativeClaudeApprovals({ client, env, sessionId, handle, children }: {
   </div></div>;
 }
 
-function Chat({ messages, status, compacting = false, readVisual }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader }) {
+function Chat({ messages, status, compacting = false, readVisual, canvas }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader; canvas?: CanvasVisuals }) {
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
@@ -596,7 +609,7 @@ function Chat({ messages, status, compacting = false, readVisual }: { messages: 
                 : 'Send a message to start the conversation.'}
             </p>
           )}
-          <Visuals.Provider value={readVisual}>{messages?.map((m, i) => <Turn key={m.sourceId ?? i} m={m} />)}</Visuals.Provider>
+          <Visuals.Provider value={readVisual}><CanvasContext.Provider value={canvas}>{messages?.map((m, i) => <Turn key={m.sourceId ?? i} m={m} />)}</CanvasContext.Provider></Visuals.Provider>
           {compacting ? <CompactionLine live />
             : status === 'working' && <div className="working"><span className="shine">Working…</span></div>}
         </div>

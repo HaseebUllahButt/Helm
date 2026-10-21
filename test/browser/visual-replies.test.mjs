@@ -87,6 +87,10 @@ test('a picture followed by more steps stays in view, while working and after th
     await page.evaluate(d => window.renderMid(d), done);
     await page.frameLocator('.visual-frame').getByText('Isolated').waitFor();
     assert.equal(await page.locator('.final .visual-frame').count(), 1, done ? 'after the turn' : 'while working');
+    // Newer steps land below the picture, the way a chat grows, never above it.
+    const picture = await page.locator('.final .visual-frame').boundingBox();
+    const steps = await page.locator(done ? '.work-head' : '.work.live').last().boundingBox();
+    assert.ok(steps.y > picture.y, done ? 'later work sits below the picture' : 'the running step sits below the picture');
   }
   await page.getByText('All done.').waitFor();
 });

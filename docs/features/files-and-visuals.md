@@ -15,6 +15,24 @@
 - **Tests:** `test/browser/image-paste`; `test/paste-store`,
   `retain-assets`.
 
+## Canvas (notes and docs beside the chat)
+- **Reach:** the canvas button in a chat's header, or Ctrl/⌘ Shift D. A wide
+  screen gets a third column (shares the browser panel's slot, one at a
+  time); a phone gets a full-screen sheet. Open state and file are kept per
+  chat on the device. A file name in a turn's "changed files" opens it there.
+- **Rules:** Git projects only (it lists with `git.files`). Saves go through
+  `git.write` with the hash the file was read at: a file the agent changed
+  since is never overwritten silently; the owner picks "Use the new file" or
+  "Save mine over it". Secrets and `.git/` are never written; a new file
+  under a link that leads out of the repo is refused before any folder is
+  made. Unsaved edits live in memory while the app is open.
+- **Prove (driven 2026-10-21):** make a git repo in the copy's work folder,
+  `$V rpc session.start '{"cwd":"<repo>","profileId":"fake"}'`, open it at
+  `size 1600 900`, click "Canvas", open a `.md`, Edit, type, Ctrl+S; then
+  append to the file from the shell (the page follows within 2 s) and again
+  while editing (the clash card shows).
+- **Traps:** `wait` does not read the edit box; check it with `eval`.
+
 ## Voice
 - **Decision:** the device calls Groq itself. It asks a machine once for the
   key (`voice.direct`), keeps it in the browser (`helm.voice.direct`), and
@@ -31,6 +49,23 @@
 - **Proof:** one POST to api.groq.com (200) and no `voice:` line in
   `$V logs`. A tone gives no words.
 - **Tests:** `test/voice`, `voice-key`.
+
+## Agent-opened Canvas
+- **Prove (driven 2026-10-21):** Create a Git project in the private copy's
+  work folder, add `docs/notes.md`, and start a fake chat there. Run
+  `$H canvas docs/notes.md --session <chat-id>`. Open that chat on a phone,
+  close the canvas, then run `$H canvas /path/to/page.html --session <chat-id>`.
+  Resize to 1280×800 and type into the chat with the canvas still open.
+  Run `$H canvas http://127.0.0.1:<fixture-port>/ --session <chat-id>` for a
+  local test website. Close it and send a new file request.
+- **Proof:** The phone shows the selected file or page. The desktop shows
+  chat and canvas together, with the draft intact. A new request replaces
+  the selection and opens a closed canvas. The live page has a new-tab link.
+- **Traps:** Project files need a Git folder; HTML, images and URLs also work
+  in quick chats. Public spin routing needs a VM; the private copy proves
+  the live frame with a local website and `spin` create/list/stop only.
+- **Tests:** `test/visual-replies`, `test/browser/visual-canvas`,
+  `test/browser/visual-replies`.
 
 ## Visuals in a chat
 - **Prove (driven):**

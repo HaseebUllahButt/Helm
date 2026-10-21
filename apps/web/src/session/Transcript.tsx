@@ -1,11 +1,11 @@
 import { useCopySelection } from '../useCopySelection';
-import { createContext, useContext, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, Fragment, useContext, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Markdown } from '../Markdown';
 import type { Change, Item, Turn, Permission } from './types';
 import { seconds } from '../format';
 import { Icon, toolKind, type IconName } from '../Icon';
 import { userMessage } from './userMessage';
-import { splitAgentMessage } from './agentMessage';
+import { splitAgentMessage, helperMessage } from './agentMessage';
 import { stripBrief } from '@helm/protocol/brief';
 import { plainError } from './problem';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
@@ -14,7 +14,8 @@ import { TodoCard, isTodoItem, parseTodos } from './Todos';
 import { parseContextUsage } from './contextUsage';
 import { Reveal, WorkingLine, ChangedFiles, changedFiles, testResult } from './TurnPulse';
 import { stepWords, thoughtBody, thoughtTitle, toolSummary, tryParse, rawCommand, toolChanges, changesOf, changeStats, unifiedDiff, diffCounts } from './stepWords';
-import { money } from '../format';
+import { money, shownTitle } from '../format';
+import { fadeWhenCut } from '../fadeWhenCut';
 
 /** The session is still working, so an open compaction is really running. */
 const Busy = createContext(false);
@@ -598,6 +599,12 @@ export function splitNote(text?: string): { note?: string; text?: string } {
   return note ? { note, text: shown.text } : shown;
 }
 
+/** A helper is named after its task; the first sentence says who it is. */
+function helperName(from: string) {
+  const name = shownTitle(from).text;
+  return name.split(/(?<=[.!?])\s/)[0].replace(/[.!?]$/, '') || name;
+}
+
 /** How long ago a bubble was sent, in the transcript's own quiet type. */
 function clock(ts?: number) {
   if (!ts) return '';
@@ -662,6 +669,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   onRewind?: (turn: Turn) => void;
 }) {
   const said = splitNote(turn.text);
+  const helper = helperMessage(turn.text);
   const display = userMessage(said.text, turn.attachments);
   said.text = display.text;
   // A prompt that is itself a command means the turn's text is that
@@ -711,34 +719,65 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
     // "Worked for" row: show what is left instead.
     else if (d.status === 'ok') { answer = [...pre, ...answer]; pre = []; }
   }
-  // A picture the agent drew (helm render, its own or a helper's) is part of
-  // the reply, never a step: one followed by more work used to fold into
-  // "Worked for" the moment the turn ended. Keep it out in the open, in order.
-  const drawn = pre.filter((it) => it.kind === 'visual');
-  if (drawn.length) { pre = pre.filter((it) => it.kind !== 'visual'); answer = [...drawn, ...answer]; }
-  const work = pre.filter((it) => !isApart(it));
-  const outside = pre.filter(isApart);
+  // A picture the agent drew (helm render, its own or a helper's), an error
+  // and a compaction line stay out in the open, in order: the steps around
+  // them split into one block before and one after, so newer steps land
+  // below them like the rest of a chat instead of piling up above.
+  const pinned = (it: Item) => it.kind === 'visual' || isApart(it);
+  const work = pre.filter((it) => !pinned(it));
+  const blocks: { work: Item[]; after: Item[] }[] = [{ work: [], after: [] }];
+  for (const it of pre) {
+    const block = blocks[blocks.length - 1];
+    // What it said just before a picture introduces it, so it stays in view too.
+    if (pinned(it) && !block.after.length) while (block.work.length && block.work[block.work.length - 1].kind === 'text') block.after.unshift(block.work.pop()!);
+    if (pinned(it)) block.after.push(it);
+    else if (block.after.length) blocks.push({ work: [it], after: [] });
+    else block.work.push(it);
+  }
   // A chat read from another CLI's history has no streaming steps and no end.
   const live = !d && (list.some((it) => it.status === 'streaming') || (tail && !!working));
-  const answerNodes: ReactNode[] = [];
-  for (let i = 0; i < answer.length;) {
-    if (isApart(answer[i])) { answerNodes.push(<ItemView key={answer[i].id} item={answer[i]} byParent={byParent} commandOutput={commandOutput} />); i += 1; continue; }
-    let j = i;
-    while (j < answer.length && !isApart(answer[j])) j += 1;
-    const group = answer.slice(i, j);
-    answerNodes.push(<div key={`final-${group[0].id}`} className="final">{group.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}</div>);
-    i = j;
-  }
+  const outLoud = (items: Item[]) => {
+    const nodes: ReactNode[] = [];
+    for (let i = 0; i < items.length;) {
+      if (isApart(items[i])) { nodes.push(<ItemView key={items[i].id} item={items[i]} byParent={byParent} commandOutput={commandOutput} />); i += 1; continue; }
+      let j = i;
+      while (j < items.length && !isApart(items[j])) j += 1;
+      const group = items.slice(i, j);
+      nodes.push(<div key={`final-${group[0].id}`} className="final">{group.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}</div>);
+      i = j;
+    }
+    return nodes;
+  };
+  const answerNodes = outLoud(answer);
   const answerText = answer.filter((it) => it.kind === 'text' && it.text).map((it) => it.text.trim()).join('\n\n');
   const files = tail && d ? changedFiles(list) : [];
-  const took = d?.durationMs || workSpan(turn, work, tail);
-  const workLabel = d?.status === 'interrupted'
-    ? (took ? `You stopped after ${seconds(took)}` : 'You stopped')
-    : (took ? `Worked for ${seconds(took)}` : 'Worked');
+  const lastBlock = blocks.length - 1;
+  const workLabel = (i: number) => {
+    const split = lastBlock > 0;
+    const took = (!split && d?.durationMs) || workSpan(turn, blocks[i].work, tail && i === 0);
+    return d?.status === 'interrupted' && i === lastBlock
+      ? (took ? `You stopped after ${seconds(took)}` : 'You stopped')
+      : (took ? `Worked for ${seconds(took)}` : 'Worked');
+  };
   return (
     <>
       {head && display.printed && !!said.text && <div className="turn assistant command-note"><Markdown text={said.text} className="prose" /></div>}
-      {head && !display.printed && !!(turn.text || turn.attachments?.length) && (
+      {/* Another agent talking, the way Claude Code shows a teammate: its
+          name and first line, the rest a tap away. Never the owner's bubble. */}
+      {head && helper && (
+        <details className="turn helper-msg">
+          {/* One quiet line of text: the helper's short name, its words cut
+              to fit, the time. A tap shows the whole message. */}
+          <summary>
+            <span className="helper-name" ref={fadeWhenCut}>{helperName(helper.from)}</span>
+            {helper.status && helper.status !== 'done' && <span className="helper-status">{helper.status}</span>}
+            <span className="helper-line">{helper.text.trim()}</span>
+            <span className="helper-time">{clock(turn.at)}</span>
+          </summary>
+          <Markdown text={helper.text} className="prose" />
+        </details>
+      )}
+      {head && !helper && !display.printed && !!(turn.text || turn.attachments?.length) && (
         <div className={`turn user${queued ? ' queued' : ''}`}><div className="bubble">
           {display.to && <span className="turn-note">To {display.to}</span>}
           {said.note && (said.note.length > 160
@@ -774,10 +813,15 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
         </div></div>
       )}
       <div className={`turn assistant${note ? ' command-note' : ''}`}>
-        {work.length > 0 && (
-          <Work key={`work-${turn.id}`} turn={turn} items={work} byParent={byParent} live={live} label={workLabel} blocked={blocked} />
-        )}
-        {outside.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}
+        {blocks.map((block, i) => (
+          <Fragment key={i ? `block-${block.work[0].id}` : 'block-0'}>
+            {block.work.length > 0 && (
+              <Work key={i ? `work-${block.work[0].id}` : `work-${turn.id}`} turn={turn} items={block.work} byParent={byParent}
+                live={live && i === lastBlock} label={workLabel(i)} blocked={blocked} />
+            )}
+            {outLoud(block.after)}
+          </Fragment>
+        ))}
         {answerNodes}
         {tail && !d && working && work.length === 0 && !turn.items.some((it) => it.status === 'streaming' && (it.kind === 'text' || isCompaction(it))) && (
           <WorkingLine turn={turn} blocked={blocked} />

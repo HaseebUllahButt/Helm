@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, existsSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -263,6 +263,170 @@ test('Codex completion buffered during downtime reaches the replacement driver',
   await d2.start();
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
+  assert.equal(d2.status, 'idle');
+  await d2.kill();
+});
+
+// What a Codex chat's event log would hold open across the restart.
+const codexLog = (driver) => {
+  const log = collect(driver);
+  return { log, pending: () => {
+    const open = new Map();
+    for (const e of log.events) {
+      if (e.type === 'permission.request') open.set(e.requestId, e);
+      if (e.type === 'permission.resolved') open.delete(e.requestId);
+    }
+    return [...open.values()];
+  } };
+};
+
+async function codexRestart(t, fake, env, { strip = false } = {}) {
+  const first = procHost();
+  t.after(() => first.detach());
+  assert.equal(await first.ensure(), true);
+  const d1 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', procHost: first });
+  const { log: log1, pending } = codexLog(d1);
+  await d1.send('Run the shell command `echo helm-test`');
+  const ask = await log1.until((e) => e.type === 'permission.request');
+  const turnId = log1.of('turn.start')[0]?.turnId;
+  const threadId = d1.threadId;
+  await d1.suspend();
+  first.detach();
+  const second = procHost();
+  t.after(() => second.detach());
+  assert.equal(await second.ensure(), true);
+  const saved = pending().map(({ codex, ...e }) => (strip ? e : { ...e, codex }));
+  const d2 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', engineSessionId: threadId,
+    procHost: second, openTurn: () => turnId, pendingEvents: () => saved });
+  return { ask, d2, log2: collect(d2) };
+}
+
+test('a Codex approval asked before a restart is answered after it', async (t) => {
+  const fake = fakeCli('codex', 'command');
+  const env = { CODEX_HOME: join(fake.dir, 'home') };
+  const { ask, d2, log2 } = await codexRestart(t, fake, env);
+  assert.equal(ask.codex.method, 'item/commandExecution/requestApproval');
+  await d2.start();
+  assert.equal(d2.status, 'blocked');
+  assert.equal(log2.of('permission.resolved').length, 0, 'the question must stay open');
+  await d2.answer(ask.requestId, { option: 'allow' });
+  const done = await log2.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.deepEqual(fake.stdinLines().find((l) => l.id === ask.codex.id && l.result)?.result, { decision: 'accept' });
+  await d2.kill();
+});
+
+test('a Codex approval saved by an older Helm is still answerable after the update', async (t) => {
+  const fake = fakeCli('codex', 'command');
+  const env = { CODEX_HOME: join(fake.dir, 'home') };
+  const { ask, d2, log2 } = await codexRestart(t, fake, env, { strip: true });
+  await d2.start();
+  assert.equal(d2.status, 'blocked');
+  await d2.answer(ask.requestId, { option: 'deny' });
+  const done = await log2.until((e) => e.type === 'turn.done');
+  assert.ok(done);
+  assert.deepEqual(fake.stdinLines().find((l) => String(l.id) === ask.requestId && l.result)?.result, { decision: 'decline' });
+  await d2.kill();
+});
+
+test('a Codex approval asked during the restart waits for its own chat', async (t) => {
+  const fake = fakeCli('codex', 'command');
+  const env = { CODEX_HOME: join(fake.dir, 'home'), FAKE_EVENT_MS: '40' };
+  const first = procHost();
+  t.after(() => first.detach());
+  assert.equal(await first.ensure(), true);
+  const d1 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', procHost: first });
+  const log1 = collect(d1);
+  await d1.send('Run the shell command `echo helm-test`');
+  const turnId = log1.of('turn.start')[0]?.turnId;
+  const threadId = d1.threadId;
+  await d1.suspend();
+  first.detach();
+  assert.equal(log1.of('permission.request').length, 0, 'the question should come while no daemon listens');
+  await new Promise((r) => setTimeout(r, 1500));
+  const second = procHost();
+  t.after(() => second.detach());
+  assert.equal(await second.ensure(), true);
+  // Another chat on the same account binds first and takes the whole replay.
+  const other = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask',
+    engineSessionId: '00000000-0000-0000-0000-000000000000', procHost: second });
+  await other.start();
+  const d2 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', engineSessionId: threadId,
+    procHost: second, openTurn: () => turnId, pendingEvents: () => [] });
+  const log2 = collect(d2);
+  await d2.start();
+  const ask = await log2.until((e) => e.type === 'permission.request');
+  assert.equal(fake.stdinLines().some((l) => String(l.id) === ask.requestId && l.result), false, 'nobody may decline it meanwhile');
+  await d2.answer(ask.requestId, { option: 'allow' });
+  const done = await log2.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  await other.suspend();
+  await d2.kill();
+});
+
+test('a Codex approval held for its chat survives a second restart before the chat binds', async (t) => {
+  const fake = fakeCli('codex', 'command');
+  const env = { CODEX_HOME: join(fake.dir, 'home'), FAKE_EVENT_MS: '40' };
+  const daemon = async () => {
+    const host = procHost();
+    t.after(() => host.detach());
+    assert.equal(await host.ensure(), true);
+    return host;
+  };
+  const first = await daemon();
+  const d1 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', procHost: first });
+  const log1 = collect(d1);
+  await d1.send('Run the shell command `echo helm-test`');
+  const turnId = log1.of('turn.start')[0]?.turnId;
+  const threadId = d1.threadId;
+  await d1.suspend();
+  first.detach();
+  await new Promise((r) => setTimeout(r, 1500));
+  // Another chat binds first and takes the replay, then Helm restarts again.
+  const second = await daemon();
+  const other = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask',
+    engineSessionId: '00000000-0000-0000-0000-000000000000', procHost: second });
+  await other.start();
+  await other.suspend();
+  second.detach();
+  const third = await daemon();
+  const d2 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', engineSessionId: threadId,
+    procHost: third, openTurn: () => turnId, pendingEvents: () => [] });
+  const log2 = collect(d2);
+  await d2.start();
+  const ask = await log2.until((e) => e.type === 'permission.request');
+  assert.equal(log2.of('permission.request').length, 1);
+  assert.equal(fake.stdinLines().some((l) => String(l.id) === ask.requestId && l.result), false, 'nobody may decline it meanwhile');
+  await d2.answer(ask.requestId, { option: 'allow' });
+  const done = await log2.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.equal(existsSync(join(dir, 'codex-held')) && readdirSync(join(dir, 'codex-held')).length, 0, 'nothing stays held');
+  await d2.kill();
+});
+
+test('a Codex question settled during the restart is closed, not left open', async (t) => {
+  const fake = fakeCli('codex', 'plain');
+  const env = { CODEX_HOME: join(fake.dir, 'home') };
+  const first = procHost();
+  t.after(() => first.detach());
+  assert.equal(await first.ensure(), true);
+  const d1 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', procHost: first });
+  const log1 = collect(d1);
+  await d1.send('hello');
+  await log1.until((e) => e.type === 'turn.done');
+  const threadId = d1.threadId;
+  await d1.suspend();
+  first.detach();
+  const second = procHost();
+  t.after(() => second.detach());
+  assert.equal(await second.ensure(), true);
+  const stale = { type: 'permission.request', requestId: '41', kind: 'command', tool: 'commandExecution',
+    codex: { id: 41, method: 'item/commandExecution/requestApproval', params: {} } };
+  const d2 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', engineSessionId: threadId,
+    procHost: second, openTurn: () => null, pendingEvents: () => [stale] });
+  const log2 = collect(d2);
+  await d2.start();
+  assert.deepEqual(log2.of('permission.resolved').map((e) => [e.requestId, e.decision]), [['41', 'cancelled']]);
   assert.equal(d2.status, 'idle');
   await d2.kill();
 });

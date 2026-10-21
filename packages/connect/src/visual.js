@@ -9,16 +9,32 @@ export const MAX_VISUAL_BYTES = 4 * 1024 * 1024;
 const MAX_HTML_BYTES = 512 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
-export function validateVisual({ html, title = 'Visual reply', height = 420, renderId }) {
+/** Live pages stay separate from saved HTML; never fetch an agent's URL here. */
+export function visualUrl(value) {
+  if (typeof value !== 'string') throw new Error('canvas URL must be http or https without a login');
+  let url;
+  try { url = new URL(value); } catch { throw new Error('canvas URL must be http or https without a login'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('canvas URL must be http or https without a login');
+  return url.href;
+}
+
+export function validateVisual({ html, title = 'Visual reply', height = 420, renderId, placement, url }) {
+  if (url !== undefined) {
+    url = visualUrl(url);
+    if (placement !== 'canvas') throw new Error('live pages must open in canvas');
+    const escaped = url.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    html = `<p><a href="${escaped}">Open live page</a></p>`;
+  }
   if (typeof html !== 'string' || !html.trim() || Buffer.byteLength(html) > MAX_VISUAL_BYTES) {
     throw new Error('a visual must contain HTML, up to 4 MiB including embedded images');
   }
   if (typeof title !== 'string' || !title.trim() || title.length > 160) throw new Error('visual title must be 1–160 characters');
   if (!Number.isInteger(height) || height < 120 || height > 1200) throw new Error('visual height must be an integer from 120 to 1200');
   if (!/^[a-f0-9]{24}$/.test(renderId ?? '')) throw new Error('invalid render ID');
+  if (placement !== undefined && placement !== 'canvas') throw new Error('invalid visual placement');
   const normalized = serialize(parse(html));
   if (Buffer.byteLength(normalized) > MAX_VISUAL_BYTES) throw new Error('visual exceeds 4 MiB');
-  return { html: normalized, title: title.trim(), height, renderId };
+  return { html: normalized, title: title.trim(), height, renderId, ...(placement ? { placement } : {}), ...(url ? { url } : {}) };
 }
 
 /** Only recognized image bytes may be copied into a page, never arbitrary files. */

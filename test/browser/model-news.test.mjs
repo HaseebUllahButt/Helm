@@ -99,7 +99,7 @@ test('setting a default from the chat picker leaves the saved list to the machin
   const page = await pageFor();
   await page.evaluate(() => window.mountPicker());
   await page.locator('button[title^="model:"]').click();
-  await page.getByRole('button', { name: /Use Claude Sonnet 5.5 by default/ }).click();
+  await page.getByRole('button', { name: /Use Sonnet 5.5 by default/ }).click();
   await page.waitForFunction(() => window.calls.some((c) => c.method === 'model.prefs'));
   const call = await page.evaluate(() => window.calls.find((c) => c.method === 'model.prefs').params);
   assert.equal(call.keepApproved, true);

@@ -42,6 +42,23 @@ const DETAILS = {
   link that stays. helm forward <machine> <port> opens another machine's
   shared port on this one's localhost.`,
 
+  spin: `
+  An alias for helm share. See helm share --help for link options.`,
+
+  canvas: `
+  Opens the existing Canvas column beside the chat on wide screens. On
+  phones it opens a full-screen canvas with a Close button.
+  Markdown, text and code files open from the chat's Git project. Relative
+  paths use your current folder, or the target chat's folder with --session.
+  The canvas follows file edits and lets the owner edit and save safely.
+  HTML and pictures are saved snapshots, like helm render. Run the command
+  again after changing them to show the new version.
+  An http/https spin URL shows a live website. Use the public spin address:
+  localhost means the viewer's machine. Sites that block frames or require
+  a separate login can use Open in new tab.
+  Supports --title, --height, --session and --render-id like helm render.
+  See helm render --help for snapshot limits and security.`,
+
   render: `
   A picture file (png, jpg, gif, webp, avif, svg) is shown as it is.
   Otherwise write one self-contained HTML file: inline CSS/JS, SVG or canvas.
@@ -50,7 +67,8 @@ const DETAILS = {
   each a real image up to 2 MiB, the whole page up to 4 MiB. For theme-aware
   colours use --bg --card --text --text-dim --line --primary-q.
   Check it first with helm preview (--width 390 for a phone), fix any
-  reported JavaScript errors, then helm render saves it in this chat.`,
+  reported JavaScript errors, then helm render saves it in this chat.
+  Use helm canvas instead to open the visual beside the conversation.`,
 
   browser: `
   Tabs are Chromium on this machine (localhost reaches your dev servers),

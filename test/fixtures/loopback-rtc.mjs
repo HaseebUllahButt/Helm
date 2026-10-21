@@ -9,7 +9,10 @@ registerHooks({
       import { RTCPeerConnection as Native } from ${JSON.stringify(resolved.url)};
       export class RTCPeerConnection extends Native {
         constructor(config = {}) {
-          super({ ...config, iceServers: [], bindAddress: '127.0.0.1' });
+          // Two simulated machines in this process cannot share one mux
+          // socket and then connect it to itself. Real-machine coverage
+          // uses separate processes and keeps production multiplexing.
+          super({ ...config, iceServers: [], bindAddress: '127.0.0.1', enableIceUdpMux: false });
         }
       }
     `;

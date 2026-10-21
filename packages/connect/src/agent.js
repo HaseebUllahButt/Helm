@@ -352,9 +352,9 @@ export class Daemon {
       const running = (await this.#versionP)?.full;
       const net = loadNetwork() ?? this.net;
       const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
-        selfUpdate, syncFromBundle, net, id: this.id, rpc: hubRpc });
+        syncFromBundle, net, id: this.id, rpc: hubRpc });
       this.syncNote = r.note ?? null;
-      if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting when safe'); }
+      if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting now'); }
     } catch (err) {
       console.error('[helm] version sync:', err?.message || err);
     } finally {
@@ -635,7 +635,7 @@ export class Daemon {
     this.#syncMedia().catch((err) =>
       console.error('[helm] nas media:', err?.message || err));
 
-    // Every machine checks the published release and peers: a
+    // Every machine checks its checkout and peers: a
     // version saved here is built and started, and a newer one saved on
     // another machine is copied over the network. Soon after start, then
     // every couple of minutes.
@@ -1641,7 +1641,8 @@ export class Daemon {
       case M.GIT_GRAPH: return gitq.graph(p.cwd, await this.sessions.list());
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
       case M.GIT_FILES: return gitq.files(p.cwd);
-      case M.GIT_FILE: return gitq.file(p.cwd, p.path);
+      case M.GIT_FILE: return gitq.file(p.cwd, p.path, p.since);
+      case M.GIT_WRITE: return gitq.write(p.cwd, p.path, p.text, p.base);
       case M.GIT_COMMIT: return gitq.commit(p.cwd, p.hash, p.path);
       case M.GIT_WORKTREE: return gitq.addWorktree(p.cwd, p.name);
       case M.GIT_PRS: return this.github.pullRequests(p.cwd, p);
@@ -1672,7 +1673,7 @@ export class Daemon {
       // own changes on a backup branch and then uses GitHub's.
       case M.ENV_UPDATE: {
         const r = await selfUpdate(undefined, { replace: !!p.replace });
-        // The restart is on a five second timer, so this reply gets out first.
+        // Replacement is already queued; reconnect reads the new version.
         return { ...r, version: r.updated ? null : this.version };
       }
 
@@ -1898,7 +1899,7 @@ export class Daemon {
             // the terminal button already shows.
             nativeControls: nativeControls(native.engine).filter(kind => kind !== 'settings' &&
               !(kind === 'model' && (filtered.models?.length || filtered.more?.length)) && !(kind === 'effort' && hasEffort)),
-            favs: pickerPrefs().favs[native.engine] ?? [], effortFavs: pickerPrefs().favs[`${native.engine}-effort`] ?? [],
+            favs: pickerPrefs().favs[native.engine] ?? [], recent: this.sessions.recentModels?.(native.engine) ?? [],
             ...(account ? { prefs, defaults: startPrefs(account), account: accountKey(account), profileId: account.id } : { defaults: {} }) };
         }
         if (native?.nativeChat && native.engine === 'claude') {
@@ -1916,7 +1917,7 @@ export class Daemon {
           // the chips show what Claude reports, and `default`/`effort` stay
           // empty so they never stand in for it.
           return { ...filtered, default: null, effort: null, modes: modesFor('claude'), defaultMode: null,
-            favs: pickerPrefs().favs.claude ?? [], effortFavs: pickerPrefs().favs['claude-effort'] ?? [],
+            favs: pickerPrefs().favs.claude ?? [], recent: this.sessions.recentModels?.('claude') ?? [],
             ...(account ? { prefs, defaults: startPrefs(account), account: accountKey(account), profileId: account.id, ...modelWatch(account) } : { defaults: {} }) };
         }
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
@@ -1968,9 +1969,8 @@ export class Daemon {
         // picker can show and change both without a second round trip.
         return {
           ...filtered, prefs, modes: engine?.driver ? live?.modes ?? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine),
-          favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile), subagentDefaults: subagentPrefs(profile), account: accountKey(profile),
+          favs: pickerPrefs().favs[profile.engine] ?? [], recent: this.sessions.recentModels?.(profile.engine) ?? [], defaults: startPrefs(profile), subagentDefaults: subagentPrefs(profile), account: accountKey(profile),
           ...modelWatch(profile),
-          effortFavs: pickerPrefs().favs[`${profile.engine}-effort`] ?? [],
         };
       }
 
@@ -2057,6 +2057,7 @@ export class Daemon {
       case M.SESSION_REWIND_CHECK: return this.sessions.rewindCheck(p.id, p.turnId);
 
       // Headless agent sessions.
+      case M.SESSION_CANVAS: return this.sessions.openCanvas(p.id, p);
       case M.SESSION_RENDER: return this.sessions.renderVisual(p.id, p);
       case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref);
       case M.SESSION_EVENTS:

@@ -24,6 +24,13 @@ before(async () => {
       ]} />
       <Composer draft="" setDraft={() => {}} onSend={() => {}} working={live} compacting={live ? t0 : undefined} />
     </>);
+    window.renderMid = () => root.render(<Transcript status="working" loaded turns={[
+      { id: 't2', text: 'fix it', at: t0, items: [
+        { id: 's1', kind: 'command', command: 'npm run check', text: '', status: 'ok', exitCode: 0, startedAt: t0 },
+        { id: 'c2', kind: 'tool', name: 'compact', text: '', status: 'ok', startedAt: t0 + 1000, doneAt: t0 + 4000 },
+        { id: 's2', kind: 'command', command: 'npm test', text: '', status: 'streaming', startedAt: t0 + 5000 },
+      ] },
+    ]} />);
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   browser = await chromium.launch({ headless: true, ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
   page = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -50,4 +57,12 @@ test('once it is done the bar goes and the line says it compacted', async () => 
   await page.locator('.compaction:not(.live)').waitFor();
   assert.equal(await page.locator('.docked.compacting').count(), 0);
   assert.match(await page.locator('.compaction').innerText(), /Conversation compacted · 9s/);
+});
+
+test('steps after a compaction land below its line, the way a chat grows', async () => {
+  await page.evaluate(() => window.renderMid());
+  const line = await page.locator('.compaction').boundingBox();
+  const live = await page.locator('.work.live').boundingBox();
+  assert.ok(live.y > line.y, 'the running step sits below the line');
+  assert.equal(await page.locator('.work').count(), 2, 'one block before the line, one after');
 });

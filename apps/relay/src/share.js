@@ -109,7 +109,10 @@ export function createShareRoute({ online, callEnv, openTcp }) {
       try {
         // `members`: this hub keeps private links private, so it may see them.
         const { shares } = await callEnv(env, 'share.list', { forHub: true, members: true }, { timeout: 4000 });
-        for (const s of shares ?? []) if (!map.has(s.name)) map.set(s.name, { ...s, env });
+        for (const s of shares ?? []) {
+          if (s.expiresAt != null && !(s.expiresAt > Date.now())) continue;
+          if (!map.has(s.name)) map.set(s.name, { ...s, env });
+        }
       } catch { /* an older daemon, or one that is going away */ }
     }));
     cache = { at: Date.now(), map };
@@ -118,6 +121,10 @@ export function createShareRoute({ online, callEnv, openTcp }) {
 
   async function lookup(name) {
     const age = Date.now() - cache.at;
+    // A warm HTTP tunnel can outlive its share. Check expiry here too:
+    // pooling means there may be no new port-open check on the machine.
+    const known = cache.map.get(name);
+    if (known?.expiresAt != null && !(known.expiresAt > Date.now())) cache.map.delete(name);
     // A known name is answered from memory and checked again behind the
     // request: asking every machine costs a round trip, which on a slow link
     // was most of a page load. A stopped share can be served once more from
@@ -260,8 +267,7 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     }
     let form;
     try { form = await readForm(req); } catch { return signIn(res, share.name, '/', 'That did not arrive. Try again.', 400); }
-    const next = String(form.get('next') || '/');
-    const safeNext = next.startsWith('/') && !next.startsWith('//') ? next : '/';
+    const safeNext = safeSharePath(form.get('next'));
     if (!checkSharePassword(form.get('password') || '', share.lock)) {
       tries.set(key, { n: (seen && seen.until > now ? seen.n : 0) + 1, until: now + 10 * 60_000 });
       return signIn(res, share.name, safeNext, 'That is not the password.');
@@ -319,6 +325,9 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     }
     const up = http.request({ method: req.method, path, headers: upstreamHeaders(req, share), agent: agentFor(share) });
     up.on('response', (ur) => {
+      // Once headers arrived, a broken tunnel fails the response stream,
+      // not the request. End the visitor too, so downloads do not hang.
+      ur.on('error', () => res.destroy());
       const out = [];
       for (let i = 0; i < ur.rawHeaders.length; i += 2) {
         if (!HOP.has(ur.rawHeaders[i].toLowerCase())) out.push(ur.rawHeaders[i], ur.rawHeaders[i + 1]);

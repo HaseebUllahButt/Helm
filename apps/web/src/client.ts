@@ -92,8 +92,12 @@ export interface Session {
   clone?: { repo: string; login?: string | null; state: 'cloning' | 'done' | 'failed'; percent: number; error?: string; cloned?: boolean };
   /** The chat's own git worktree, in a repo whose helm.json asks for one. */
   chatWorktree?: { repo: string; path: string; branch: string; base: string; setup?: 'running' | 'failed' };
+  /** In a linked worktree: the same folder in the repo it came from. */
+  worktreeHome?: string;
   /** The git branch the folder is on, read by the machine; null outside a repo. */
   branch?: string | null;
+  /** The agent's latest ask to show something in the canvas: a project file or a page. */
+  canvas?: { requestId: string; path?: string; visual?: import('./session/types').Visual };
   engine: string;
   profileId: string;
   status: Status;
@@ -268,8 +272,8 @@ export interface ModelList {
   defaultMode?: string | null;
   /** Models starred for this engine on this machine, shared by every device. */
   favs?: string[];
-  /** Favorite thinking levels, stored as JSON [model, effort] pairs per engine. */
-  effortFavs?: string[];
+  /** Models this machine's own chats on this engine used last, newest first. */
+  recent?: string[];
   /** What a new chat on this account starts with, besides the model. */
   defaults?: { effort?: string; mode?: string; speed?: string } | null;
   subagentDefaults?: SubagentDefaults;
@@ -329,6 +333,19 @@ export interface UsageReport {
 }
 
 /** The share of input tokens that came back out of the prompt cache. */
+/**
+ * The folder a chat is about, as the owner chose it. A chat with its own
+ * worktree runs in a copy named `<repo>-chat-<id>`; this names the repo
+ * instead, keeping any subfolder the chat was started in.
+ */
+export const chatFolder = (s: Pick<Session, 'cwd' | 'chatWorktree'>) => {
+  const wt = s.chatWorktree;
+  if (!wt || !s.cwd) return s.cwd;
+  const copy = '/' + (wt.path.replace(/\/+$/, '').split('/').pop() ?? '');
+  const at = s.cwd.lastIndexOf(copy);
+  return at < 0 ? wt.repo : wt.repo.replace(/\/+$/, '') + s.cwd.slice(at + copy.length);
+};
+
 export const hitRate = (t: Pick<UsageTotals, 'input' | 'cacheRead'>) => {
   const denom = (t.input || 0) + (t.cacheRead || 0);
   return denom ? t.cacheRead / denom : 0;
@@ -493,6 +510,7 @@ interface Peer {
   candidates: RTCIceCandidateInit[];
   fragments: Map<string, { n: number; parts: string[]; got: number }>;
   deadline?: ReturnType<typeof setTimeout>;
+  disconnectedTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -751,6 +769,18 @@ export class Client {
     this.emit('', 'connection', { online: false, reachable: false, hub: this.relay });
     this.scheduleReconnect();
   };
+  // Browsers can move between Wi-Fi and mobile data without going offline.
+  // Connection quality changes also fire this event, so probe healthy links
+  // instead of discarding them on every bandwidth estimate.
+  private onConnectionChange = () => {
+    if (this.closed) return;
+    this.probeSocket?.();
+    this.retryDirectNow();
+    this.refreshReachability();
+    this.recoverConnection(true);
+  };
+  private browserConnection = typeof navigator === 'undefined' ? undefined
+    : (navigator as Navigator & { connection?: EventTarget }).connection;
   /** What the last connection attempt ran into, for the diagnostics line. */
   public lastError = '';
 
@@ -893,6 +923,7 @@ export class Client {
       window.addEventListener('pageshow', this.onVisible);
       window.addEventListener('focus', this.onVisible);
     }
+    this.browserConnection?.addEventListener('change', this.onConnectionChange);
   }
 
   /**
@@ -1316,6 +1347,7 @@ export class Client {
       window.removeEventListener('focus', this.onVisible);
     }
     this.wantDirect.clear();
+    this.browserConnection?.removeEventListener('change', this.onConnectionChange);
     for (const timer of this.directRetry.values()) clearTimeout(timer);
     this.directRetry.clear();
     for (const timer of this.rttTimers.values()) clearInterval(timer);
@@ -1388,6 +1420,9 @@ export class Client {
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
+    // Watching an open chat includes restored tabs and deep links, which
+    // never visit the machine screen that originally started direct links.
+    if (method === 'session.watch') void this.openDirect(env).catch(() => {});
     if (this.closed) return Promise.reject(new Error('client closed'));
     const peer = this.peers.get(env);
     // Tiny persistent settings writes should use the acknowledged hub route
@@ -1601,8 +1636,15 @@ export class Client {
   private wantDirect = new Set<string>();
   private directRetry = new Map<string, ReturnType<typeof setTimeout>>();
   private directWait = new Map<string, number>();
+  private directErrors = new Map<string, string>();
   private static DIRECT_FIRST_MS = 4_000;
   private static DIRECT_MAX_MS = 30_000;
+
+  directStatus(env: string) {
+    const peer = this.peers.get(env);
+    return { state: peer?.ready ? 'connected' : peer ? 'connecting' : this.wantDirect.has(env) ? 'trying again' : 'not requested',
+      reason: this.directErrors.get(env) };
+  }
 
   private retryDirect(env: string) {
     if (!this.wantDirect.has(env) || this.closed) return;
@@ -1631,8 +1673,17 @@ export class Client {
     this.wantDirect.add(env);
     if (this.peers.has(env) || !this.connected) { this.retryDirect(env); return; }
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    const channel = pc.createDataChannel('helm', { ordered: true });
+    let pc: RTCPeerConnection;
+    let channel: RTCDataChannel;
+    try {
+      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      try { channel = pc.createDataChannel('helm', { ordered: true }); }
+      catch (error) { pc.close(); throw error; }
+    } catch {
+      this.directErrors.set(env, 'This browser could not start the direct link.');
+      this.retryDirect(env);
+      return;
+    }
     const negotiation = `${Date.now().toString(36)}-${++this.seq}`;
     const peer: Peer = { pc, channel, ready: false, fragments: new Map(), negotiation, remoteReady: false, candidates: [] };
     let offerSent = false;
@@ -1640,7 +1691,9 @@ export class Client {
     this.peers.set(env, peer);
     // Failed signalling can leave the browser's peer in "new" forever,
     // which otherwise blocks every retry because peers.has(env) stays true.
-    peer.deadline = setTimeout(() => this.dropDirect(env, peer), 15_000);
+    peer.deadline = setTimeout(() => this.dropDirect(env, peer, peer.remoteReady
+      ? 'The machines exchanged addresses, but the direct link did not open.'
+      : 'The machine did not answer the direct connection request.'), 15_000);
 
     pc.onicecandidate = ({ candidate }) => {
       if (!candidate || this.peers.get(env) !== peer) return;
@@ -1648,8 +1701,12 @@ export class Client {
       else localCandidates.push(candidate.toJSON());
     };
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
-        this.dropDirect(env, peer);
+      clearTimeout(peer.disconnectedTimer);
+      if (['failed', 'closed'].includes(pc.connectionState)) {
+        this.dropDirect(env, peer, 'The direct link closed. Helm is using the backup connection.');
+      } else if (pc.connectionState === 'disconnected') {
+        peer.disconnectedTimer = setTimeout(() => this.dropDirect(env, peer,
+          'The direct link stopped answering. Helm is using the backup connection.'), 5000);
       }
     };
 
@@ -1657,6 +1714,7 @@ export class Client {
       if (this.peers.get(env) !== peer || this.closed) return;
       clearTimeout(peer.deadline);
       peer.ready = true;
+      this.directErrors.delete(env);
       // It worked, so the next failure starts its backoff from scratch.
       this.directWait.delete(env);
       this.emit(env, 'transport', { direct: true });
@@ -1681,7 +1739,7 @@ export class Client {
         for (const candidate of localCandidates) this.signal(env, { type: 'candidate', candidate, negotiation });
         localCandidates.length = 0;
       }
-    } catch { this.dropDirect(env, peer); }
+    } catch { this.dropDirect(env, peer, 'This browser could not start the direct link.'); }
   }
 
   /** Ids of events already handed on, so the second copy is ignored. */
@@ -1724,7 +1782,7 @@ export class Client {
         if (this.peers.get(env) !== peer) return;
         peer.remoteReady = true;
         for (const candidate of peer.candidates.splice(0)) await peer.pc.addIceCandidate(candidate).catch(() => {});
-      } catch { this.dropDirect(env, peer); }
+      } catch { this.dropDirect(env, peer, 'The direct connection reply could not be read.'); }
     } else if (payload?.type === 'candidate' && payload.candidate) {
       if (peer.remoteReady) await peer.pc.addIceCandidate(payload.candidate).catch(() => {});
       else if (peer.candidates.length < 128) peer.candidates.push(payload.candidate);
@@ -1764,12 +1822,14 @@ export class Client {
     return msg && typeof msg === 'object' && !Array.isArray(msg) ? msg : null;
   }
 
-  dropDirect(env: string, expected?: Peer) {
+  dropDirect(env: string, expected?: Peer, reason?: string) {
     const peer = this.peers.get(env);
     if (!peer || (expected && peer !== expected)) return;
     this.peers.delete(env);
     peer.ready = false;
     clearTimeout(peer.deadline);
+    clearTimeout(peer.disconnectedTimer);
+    if (reason) this.directErrors.set(env, reason);
     try { peer.channel.close(); peer.pc.close(); } catch { /* already gone */ }
     this.emit(env, 'transport', { direct: false });
     // Losing it is not the end of trying for it.

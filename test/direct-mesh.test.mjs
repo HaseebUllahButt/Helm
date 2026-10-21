@@ -3,6 +3,23 @@ import assert from 'node:assert/strict';
 import { HubMesh, routeLines } from '../packages/connect/src/hub-mesh.js';
 import { directCaller } from '../packages/connect/src/peer.js';
 import { T } from '@helm/protocol';
+import { DirectMesh } from '../packages/connect/src/direct-mesh.js';
+
+test('a rejected peer reports its failure and leaves connecting state even without a close callback', async () => {
+  const mesh = new DirectMesh({
+    network: () => ({ self: 'local', machines: { local: {}, remote: {} } }),
+    supports: () => true, signal: () => {},
+    makePeer: () => ({ ready: Promise.reject(new Error('no answer\nfrom remote')), close() {} }),
+  });
+  mesh.want('remote');
+  await new Promise(resolve => setImmediate(resolve));
+  const status = mesh.status('remote');
+  assert.equal(status.state, 'retrying');
+  assert.equal(status.reason, 'no answer from remote');
+  assert.ok(status.retryInMs > 0);
+  assert.equal(mesh.channels.size, 0);
+  mesh.stop();
+});
 
 /**
  * Direct channels between machines, with the hub as the backup. These pin

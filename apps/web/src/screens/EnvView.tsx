@@ -5,7 +5,7 @@ import { useNow, waitingSince } from '../useNow';
 import { EngineMark } from '../EngineMark';
 import { sendAction } from '../send/store';
 import { BackIcon, Icon } from '../Icon';
-import { Client, type Environment, type Session, type SendJob, type InventorySession, type Project } from '../client';
+import { Client, chatFolder, type Environment, type Session, type SendJob, type InventorySession, type Project } from '../client';
 import { money, busyWord, needsAttention, runningThread } from '../format';
 import { engineOf } from '../engines';
 import { useLiveInterval } from '../useLiveInterval';
@@ -26,7 +26,7 @@ const projectNote = (cwd: string) => {
   return name === cwd ? undefined : cwd;
 };
 
-const pathOf = (s: Session) => (s.quick ? 'quick chat' : shortPath(s.cwd));
+const pathOf = (s: Session) => (s.quick ? 'quick chat' : shortPath(chatFolder(s)));
 
 /**
  * How far back a machine screen looks, and what the window does not apply to.

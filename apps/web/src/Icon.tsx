@@ -13,7 +13,7 @@ export type IconName =
   | 'subagents' | 'git' | 'branch' | 'terminal' | 'raw'
   | 'star' | 'star-on' | 'bolt' | 'model' | 'effort' | 'shield' | 'key'
   | 'read' | 'edit' | 'run' | 'search' | 'web' | 'tool' | 'ask' | 'plan' | 'think' | 'alert'
-  | 'folder' | 'repo' | 'machine' | 'transfer' | 'image' | 'sidebar' | 'jump' | 'stop'
+  | 'folder' | 'repo' | 'machine' | 'transfer' | 'image' | 'sidebar' | 'canvas' | 'jump' | 'stop'
   | 'tag' | 'cloud' | 'copy' | 'github' | 'lock';
 
 const PATHS: Record<IconName, JSX.Element> = {
@@ -63,6 +63,7 @@ const PATHS: Record<IconName, JSX.Element> = {
   transfer: <path d="M5 8.5h13l-3.5-3.5M19 15.5H6l3.5 3.5" />,
   image: <><rect x="3.5" y="5" width="17" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="M20.5 15.5l-5-5L6 19" /></>,
   sidebar: <><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M9.5 4.5v15" /></>,
+  canvas: <><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M13 4.5v15M15.8 9h2M15.8 12h2" /></>,
   jump: <><path d="M4.5 12h11M11.5 7l5 5-5 5" /><path d="M19.5 5v14" /></>,
   stop: <rect x="7" y="7" width="10" height="10" rx="1.8" fill="currentColor" stroke="none" />,
   tag: <><path d="M3.5 12.2V4.5a1 1 0 011-1h7.7l8.3 8.3a1.5 1.5 0 010 2.1l-6.4 6.4a1.5 1.5 0 01-2.1 0z" /><circle cx="8" cy="8" r="1.3" /></>,

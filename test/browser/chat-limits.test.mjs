@@ -46,7 +46,9 @@ test('a chat on a fresh browser shows its account limits and reset times from th
     }
     createRoot(document.getElementById('root')).render(<Chat />);
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
-  const view = await browser.newPage({ viewport: { width: 1280, height: 844 } });
+  const view = await browser.newPage({ viewport: { width: 1280, height: 844 }, timezoneId: 'UTC' });
+  // Keep the two-hour reset on the same date, even when tests run near midnight.
+  await view.clock.setFixedTime(new Date('2026-10-21T12:00:00Z'));
   view.setDefaultTimeout(10_000);
   try {
     await view.route('http://helm-limits-test/**', route => route.fulfill({ contentType: 'text/html', body: '<div class="session" id="root"></div>' }));

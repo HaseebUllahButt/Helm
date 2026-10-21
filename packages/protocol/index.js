@@ -129,7 +129,8 @@ export const M = {
   GIT_GRAPH: 'git.graph',          // { cwd } -> bounded commit ancestry and live agents by checkout
   GIT_DIFF: 'git.diff',            // { cwd, path } -> { path, diff, truncated }
   GIT_FILES: 'git.files',          // { cwd } -> { root, start, files[], secret[], truncated }  for the read-only file viewer
-  GIT_FILE: 'git.file',            // { cwd, path } -> { path, size, text?, truncated?, binary?, hidden? }
+  GIT_FILE: 'git.file',            // { cwd, path, since? } -> { path, size, text?, hash?, truncated?, binary?, hidden? } | { same }
+  GIT_WRITE: 'git.write',          // { cwd, path, text, base: hash | null } -> { path, hash, size } | { conflict, gone? } | { exists }  the canvas saving a file
   GIT_COMMIT: 'git.commit',        // { cwd, hash } -> { hash, subject, body, author, date, parents[], files[] }
   GIT_WORKTREE: 'git.worktree',    // { cwd, name? } -> { path, branch, base }  a sibling checkout on a new branch
   GIT_PRS: 'git.prs',              // { cwd, state?, page? } -> bounded PR list
@@ -205,7 +206,8 @@ export const M = {
   SESSION_MESSAGES: 'session.messages', // { id, limit? } -> { messages[], source }
   // Headless agent sessions: the conversation as helm's own event stream.
   SESSION_EVENTS: 'session.events',   // { id, since?, tail?, before?, limit? } -> { events[], pending[], last, session, hasMore, earlier, firstSeq }
-  SESSION_RENDER: 'session.render',   // { id, html, title?, height?, renderId } -> { visual } saved, never provider work
+  SESSION_CANVAS: 'session.canvas', // { id, path, requestId } -> { canvas } select a project file beside chat
+  SESSION_RENDER: 'session.render',   // { id, html, title?, height?, renderId, placement?: 'canvas', url? } -> { visual } saved, never provider work
   SESSION_VISUAL: 'session.visual',   // { id, ref } -> { html } lazy authenticated snapshot read
   SESSION_WATCH: 'session.watch',     // { id } -> { ok, last }   start/renew E.SESSION_EVENT pushes
   SESSION_UNWATCH: 'session.unwatch', // { id }

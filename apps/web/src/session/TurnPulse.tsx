@@ -3,6 +3,7 @@ import { useNow } from '../useNow';
 import type { Item, Turn } from './types';
 import { seconds } from '../format';
 import { changeStats, changesOf, baseName, rawCommand } from './stepWords';
+import { openInCanvas } from './Canvas';
 
 /** Lets the changed-files card ask the transcript to open and show one step. */
 export const Reveal = createContext<(id: string) => void>(() => {});
@@ -93,7 +94,7 @@ export function ChangedFiles({ files }: { files: FileChange[] }) {
       <ul className="tf-list">
         {files.slice(0, MAX_FILES).map((f) => (
           <li key={f.path} title={f.path}>
-            <span className="tf-name">{nameFor(f, files)}</span>
+            <button type="button" className="tf-name" title={`Open ${f.path} in the canvas`} onClick={() => openInCanvas(f.path)}>{nameFor(f, files)}</button>
             <Counts add={f.add} del={f.del} />
           </li>
         ))}

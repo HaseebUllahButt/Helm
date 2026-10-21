@@ -18,11 +18,13 @@ const ID = /^[a-f0-9]{24}$/;
 const quote = s => `'${String(s).replace(/'/g, "''")}'`;
 
 function abortable(work, signal) {
-  if (signal.aborted) return Promise.reject(new Error('send cancelled'));
   return new Promise((resolve, reject) => {
     const abort = () => reject(new Error('send cancelled'));
     signal.addEventListener('abort', abort, { once: true });
     work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    // The work has already started. Even an immediate cancel must observe
+    // its eventual rejection, or a failed scan can stop the daemon.
+    if (signal.aborted) abort();
   });
 }
 
@@ -33,7 +35,7 @@ export class SendEngine {
     this.jobs = new Map(); this.running = new Map(); this.capabilities = new Map(); this.connections = new CopyConnections();
     this.socket = join(directory, `tunnel-${process.pid}-${randomBytes(3).toString('hex')}.sock`);
     for (const r of records(directory)) {
-      if (ACTIVE.has(r.job.phase)) { r.job.phase = 'interrupted'; r.job.error = 'The source daemon stopped. Retry to resume.'; r.job.updatedAt = Date.now(); saveRecord(this.file(r.job.id), r); }
+      if (ACTIVE.has(r.job.phase)) { r.job.phase = 'interrupted'; r.job.rate = null; r.job.eta = null; r.job.error = 'The source daemon stopped. Retry to resume.'; r.job.updatedAt = Date.now(); saveRecord(this.file(r.job.id), r); }
       this.jobs.set(r.job.id, r);
     }
   }
@@ -101,19 +103,22 @@ export class SendEngine {
       try { const response = await this.rpc(r.job.target.machineId, M.SEND_RECEIPT, { jobId }, { timeout: 3000, budget: 3000 }); if (response.receipt) this.acceptReceipt(r, response.receipt); } catch {}
     }
     if (r.receipt) { r.job.phase = 'done'; r.job.error = null; r.job.finishedAt = r.receipt.at; r.job.bytes.sent = r.job.bytes.total ?? r.job.bytes.sent; r.job.files.sent = r.job.files.total ?? r.job.files.sent; this.update(r, true); }
-    if (r.job.phase !== 'done') { r.job.phase = 'cancelled'; r.job.finishedAt = Date.now(); r.job.error = null; this.update(r, true); }
+    if (r.job.phase !== 'done') { r.job.phase = 'cancelled'; r.job.rate = null; r.job.eta = null; r.job.finishedAt = Date.now(); r.job.error = null; this.update(r, true); }
     return { job: structuredClone(r.job) };
   }
   retry({ jobId }, caller) {
     this.authorize(caller); const r = this.get(jobId);
     if (!['failed','cancelled','interrupted'].includes(r.job.phase)) throw new Error('only a stopped send can be retried');
-    r.job.phase = 'preparing'; r.job.error = null; r.job.finishedAt = null; this.update(r, true); this.launch(r); return { job: structuredClone(r.job) };
+    r.job.phase = 'preparing'; r.job.error = null; r.job.finishedAt = null;
+    r.job.rate = null; r.job.eta = null; r.job.route = null; r.job.changed = null; r.tail = '';
+    this.update(r, true); this.launch(r); return { job: structuredClone(r.job) };
   }
   launch(r) {
     const run = { abort: new AbortController(), child: null, cancelled: false };
     this.running.set(r.job.id, run);
     run.work = Promise.resolve().then(() => this.perform(r, run)).catch(e => {
       r.job.phase = run.cancelled ? 'cancelled' : this.stopping ? 'interrupted' : 'failed'; this.capabilities.delete(r.job.target.machineId);
+      r.job.rate = null; r.job.eta = null;
       r.job.error = run.cancelled ? null : String(e.message).slice(0, 500); r.job.finishedAt = Date.now(); this.update(r, true);
     }).finally(() => this.running.delete(r.job.id));
   }
@@ -160,6 +165,22 @@ export class SendEngine {
   async perform(r, run) {
     const endActivity = beginTransferActivity(); this.timing('job-start', { jobId: r.job.id });
     try {
+      // Recover an already published job before touching its source again.
+      // The source may have changed or gone away since the reply was lost.
+      if (r.attempted && r.intent) {
+        if (!r.receipt && (await abortable(this.capability(r.job.target.machineId), run.abort.signal)).sendV2 === true) {
+          try {
+            const result = await abortable(this.rpc(r.job.target.machineId, M.SEND_RECEIPT, { jobId: r.job.id }, { direct: true }), run.abort.signal);
+            if (result.receipt) this.acceptReceipt(r, result.receipt);
+          } catch (e) { if (!/no send receipt/.test(e.message)) throw e; }
+        }
+        if (r.receipt) {
+          r.job.phase = 'done'; r.job.error = null; r.job.finishedAt = r.receipt.at;
+          r.job.bytes.sent = r.job.bytes.total ?? r.job.bytes.sent;
+          r.job.files.sent = r.job.files.total ?? r.job.files.sent; r.job.eta = 0;
+          this.timing('job-done', { jobId: r.job.id }); this.update(r, true); return;
+        }
+      }
       // Remote discovery and local enumeration overlap; no preview or hashing round trip.
       const [plan, info] = await abortable(Promise.all([scanSend(r.options.path, { includeEnv: r.options.includeEnv, filterFile: join(this.directory, `${r.job.id}.filter`) }), this.capability(r.job.target.machineId)]), run.abort.signal);
       this.timing('scan-and-capability', { jobId: r.job.id });
@@ -205,15 +226,11 @@ export class SendEngine {
           } finally { rmSync(dir, { recursive: true, force: true }); }
         }
       } else {
-        // A lost exit/receipt is recovered without replaying an already published job.
-        if (r.receipt) { r.job.target.path = r.receipt.folder; }
-        else if (r.attempted) {
-          try { const result = await this.rpc(r.job.target.machineId, M.SEND_RECEIPT, { jobId: r.job.id }, { direct: true }); if (result.receipt) this.acceptReceipt(r, result.receipt); }
-          catch (e) { if (!/no send receipt/.test(e.message)) throw e; }
-        }
         if (!r.receipt) {
           r.attempted = true;
-          await this.ensureServer(); r.job.phase = 'sending'; this.update(r, true);
+          await this.ensureServer();
+          if (run.abort.signal.aborted) throw new Error('send cancelled');
+          r.job.phase = 'sending'; this.update(r, true);
           const remote = [process.execPath, fileURLToPath(new URL('./send-proxy.js', import.meta.url)), this.socket, r.job.id].map(quote).join(' ');
           const flags = ['-a', '--no-owner', '--no-group', '--protect-args', '--mkpath', '--compress', '--compress-level=1', '--compress-choice=zstd', '--checksum-choice=xxh128', '--skip-compress=3g2/3gp/7z/avi/bz2/gif/gz/ico/jpeg/jpg/lz/lz4/mp3/mp4/mov/ogg/pdf/png/rar/webm/webp/xz/zip/zst', `--partial-dir=.helm-partial-${r.job.id}`, '--info=progress2', '--outbuf=L', '--stats', '--timeout=120'];
           // A folder sent again lands straight in the real folder, where the

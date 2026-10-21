@@ -1,4 +1,5 @@
 import { RTCPeerConnection } from 'node-datachannel/polyfill';
+import { nativeDirectConfig } from './direct-config.js';
 
 /**
  * Direct connections to clients.
@@ -9,10 +10,6 @@ import { RTCPeerConnection } from 'node-datachannel/polyfill';
  * same network costs single-digit milliseconds. The relay stays as the
  * fallback for networks where hole punching cannot succeed.
  */
-const ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun.cloudflare.com:3478' },
-];
 
 /**
  * libdatachannel (and browsers) cap a single data-channel message well below
@@ -182,7 +179,7 @@ export class PeerHub {
   }
 
   #create(peerId, link = null) {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection(nativeDirectConfig());
     const peer = { id: peerId, pc, channel: null, link, remoteReady: false, candidates: [] };
     peer.transport = {
       id: `dc-${peerId}-${++this.#transportSeq}`,
@@ -199,8 +196,12 @@ export class PeerHub {
     };
 
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+      clearTimeout(peer.disconnectedTimer);
+      if (['failed', 'closed'].includes(pc.connectionState)) {
         this.drop(peerId, peer);
+      } else if (pc.connectionState === 'disconnected') {
+        peer.disconnectedTimer = setTimeout(() => this.drop(peerId, peer), 5000);
+        peer.disconnectedTimer.unref?.();
       }
     };
 
@@ -308,6 +309,7 @@ export class PeerHub {
     if (!peer || (expected && expected !== peer)) return;
     this.#peers.delete(peerId);
     clearTimeout(peer.deadline);
+    clearTimeout(peer.disconnectedTimer);
     peer.fragments?.clear();
     try { peer.channel?.close(); peer.pc.close(); } catch { /* already torn down */ }
     const transport = peer.transport;
