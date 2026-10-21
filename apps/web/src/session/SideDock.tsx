@@ -25,6 +25,8 @@ export function SideDock({ label, widthKey, className, share = 0.45, onClose, ch
   onClose: () => void; children: ReactNode;
 }) {
   const wide = useWide();
+  const drag = useRef<(() => void) | null>(null);
+  useEffect(() => () => { drag.current?.(); }, [wide]);
   const box = useRef<HTMLElement>(null), close = useRef(onClose); close.current = onClose;
   const [width, setWidth] = useState(() => Number(readLocal(widthKey)) || 0);
   // On a phone it is a sheet over the chat: Escape closes it. Focus goes to
@@ -53,10 +55,13 @@ export function SideDock({ label, widthKey, className, share = 0.45, onClose, ch
     {wide && <div className="side-dock-handle" role="separator" aria-orientation="vertical" aria-label={`Resize ${label.toLowerCase()}`} tabIndex={0} aria-valuenow={Math.round(current())}
       onPointerDown={e => {
         if (e.button !== 0) return;
+        drag.current?.();
         e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); document.body.classList.add('side-dock-dragging');
         const right = box.current!.getBoundingClientRect().right; let last: number | undefined;
         const move = (m: PointerEvent) => { last = resize(right - m.clientX); };
-        const up = () => { document.body.classList.remove('side-dock-dragging'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); save(last); };
+        const cleanup = () => { document.body.classList.remove('side-dock-dragging'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); drag.current = null; };
+        const up = () => { cleanup(); save(last); };
+        drag.current = cleanup;
         window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
       }}
       onDoubleClick={() => { setWidth(0); writeLocal(widthKey, ''); }}
