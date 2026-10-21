@@ -325,10 +325,19 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
   const canEdit = !!loaded && !loaded.truncated && !!loaded.hash;
   const text = draft ?? loaded?.text ?? '';
 
-  return <div className="canvas-file"
-    onKeyDown={(e) => {
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); if (dirty) void save(); }
-    }}>
+  useEffect(() => {
+    const onSave = (e: KeyboardEvent) => {
+      if (e.isComposing || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 's') return;
+      const modal = [...document.querySelectorAll('[aria-modal="true"]')].at(-1);
+      if (modal && !modal.matches('.canvas')) return;
+      e.preventDefault();
+      if (dirty) void save();
+    };
+    window.addEventListener('keydown', onSave);
+    return () => window.removeEventListener('keydown', onSave);
+  });
+
+  return <div className="canvas-file">
     <div className="canvas-pad canvas-top">
       <CanvasHead title={base(path)} sub={slash > 0 ? path.slice(0, slash) : './'} onBack={onBack} onClose={onClose}>
         {canEdit && <div className="segmented canvas-mode" role="group" aria-label="Show">
