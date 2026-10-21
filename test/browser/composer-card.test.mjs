@@ -143,7 +143,7 @@ test('a question sits in the card and a number key answers it, even from the emp
   const banner = page.locator('.slab .sheet.banner.question');
   await banner.waitFor();
   assert.equal(await page.locator('.composer-col > .sheet').count(), 0, 'no separate sheet');
-  assert.equal(await page.locator('.slab textarea').getAttribute('placeholder'), 'Answer the question above, or type your own answer');
+  assert.equal(await page.locator('.slab textarea').getAttribute('placeholder'), 'Answer the question above or type an answer');
   assert.equal(await banner.getByLabel('Your own answer').count(), 0, 'the composer is the free-text box');
   assert.deepEqual(await banner.locator('.q-num').allTextContents(), ['1', '2', '3']);
   await shot(page, 'composer-question-1280.png');
@@ -203,7 +203,7 @@ test('a command approval is the top of the card with the command in a mono block
   await banner.waitFor();
   assert.equal(await banner.locator('.ask-kind').textContent(), 'Command approval');
   assert.match(await banner.locator('.sheet-cmd').innerText(), /^npm exec --workspace/);
-  assert.match(await page.locator('.slab textarea').getAttribute('placeholder'), /^Decide above/);
+  assert.match(await page.locator('.slab textarea').getAttribute('placeholder'), /^Select an answer above/);
   assert.deepEqual(await banner.locator('.sheet-actions button').allTextContents(), ['Decline', 'Always allow npm', 'Approve']);
   assert.equal(await page.locator('.todo-strip').count(), 1, 'the task tab stays behind the card');
   await shot(page, 'composer-approval-1280.png');
@@ -238,7 +238,7 @@ test('a tool approval shows what the tool was given as plain lines, not JSON', a
 
 test('edit before allowing still works from the card', async (t) => {
   const page = await open(t, 'command');
-  await page.getByRole('button', { name: 'edit before allowing' }).click();
+  await page.getByRole('button', { name: 'Edit command' }).click();
   await page.locator('.sheet-edit').fill('npm run lint');
   await page.getByRole('button', { name: 'Allow edited command' }).click();
   await answered(page);

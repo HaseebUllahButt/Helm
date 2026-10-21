@@ -23,19 +23,19 @@ export function CloneCard({ clone, agent, waiting, busy, offline, onRetry }: {
       <span className="pglyph"><Icon name="github" size={18} /></span>
       <span className="grow">
         <span className="clone-title">
-          {failed ? clone.cloned ? `${agent} did not start in` : 'Could not clone' : 'Cloning'} {name} <span className="dim">· {owner}</span>
+          {failed ? clone.cloned ? `${agent} did not start in` : 'Cannot copy project' : 'Copying project'} {name} <span className="dim">· {owner}</span>
         </span>
         {failed
-          ? <span className="clone-error">{clone.error || 'The clone failed.'}</span>
+          ? <span className="clone-error">{clone.error || 'Helm did not copy the project.'}</span>
           : <>
             <span className="clone-progress"><i style={{ width: `${Math.max(4, clone.percent)}%` }} /></span>
             <span className="clone-note">{waiting
-              ? `${waiting === 1 ? 'Your message goes' : 'Your messages go'} to ${agent} once the repo is in.`
-              : `Write now if you like: it goes to ${agent} once the repo is in.`}</span>
+              ? `${waiting === 1 ? 'Your message goes' : 'Your messages go'} to ${agent} when the project is ready.`
+              : `Write a message now. ${agent} receives it when the project is ready.`}</span>
           </>}
       </span>
       {failed
-        ? <button className="primary clone-retry" disabled={busy || offline} title={offline ? 'The machine is offline' : undefined} onClick={onRetry}><Icon name="refresh" size={14} />Try again</button>
+        ? <button className="primary clone-retry" disabled={busy || offline} title={offline ? 'The machine is offline.' : undefined} onClick={onRetry}><Icon name="refresh" size={14} />Try again</button>
         : <span className="clone-percent">{clone.percent}%</span>}
     </div>
   );

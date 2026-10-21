@@ -26,13 +26,13 @@ const ago = (ts: number, now: number) => {
 
 /** One quiet line under the version: what happened last, or why nothing can. */
 export function toolNote(t: Tool, running: boolean, auto: boolean, now: number): { text: string; tone: 'quiet' | 'done' | 'bad' } {
-  if (running) return { text: 'updating…', tone: 'quiet' };
+  if (running) return { text: 'Helm is updating this tool.', tone: 'quiet' };
   const r = t.lastResult;
-  if (r && !r.ok) return { text: `update failed ${ago(r.at, now)}${r.message ? ` - ${r.message}` : ''}`, tone: 'bad' };
-  if (!t.canUpdate) return { text: `can’t update: ${t.reason ?? 'unknown install'}`, tone: 'quiet' };
-  if (r?.changed) return { text: `updated ${ago(r.at, now)}${r.from && r.to ? ` (${r.from} → ${r.to})` : ''}`, tone: 'done' };
-  if (r) return { text: `up to date · checked ${ago(r.at, now)}`, tone: 'quiet' };
-  return { text: auto ? 'will update by itself' : 'not updated by Helm yet', tone: 'quiet' };
+  if (r && !r.ok) return { text: `The update failed ${ago(r.at, now)}.${r.message ? ` - ${r.message}` : ''}`, tone: 'bad' };
+  if (!t.canUpdate) return { text: `Helm cannot update this tool: ${t.reason ?? 'unknown installation method'}`, tone: 'quiet' };
+  if (r?.changed) return { text: `Helm updated this tool ${ago(r.at, now)}.${r.from && r.to ? ` (${r.from} → ${r.to})` : ''}`, tone: 'done' };
+  if (r) return { text: `The tool is up to date. Helm checked it ${ago(r.at, now)}.`, tone: 'quiet' };
+  return { text: auto ? 'Helm will update this tool automatically.' : 'Helm has not updated this tool yet.', tone: 'quiet' };
 }
 
 export function CodingTools({ client, env }: { client: Client; env: Environment }) {
@@ -51,7 +51,7 @@ export function CodingTools({ client, env }: { client: Client; env: Environment 
       return r;
     } catch (e: any) {
       if (alive.current) setError(/unknown method|not supported/i.test(e.message)
-        ? `${env.name} runs an older Helm - it will show its tools once it has updated.` : e.message);
+        ? `${env.name} runs an older Helm version. Its tools will appear after the update.` : e.message);
       return null;
     }
   }, [client, env.id, env.name]);
@@ -94,20 +94,20 @@ export function CodingTools({ client, env }: { client: Client; env: Environment 
               <span className={`mark ${t.engine}`}><EngineMark engine={t.engine} /></span>
               <span className="grow">
                 <span className="rt"><span className="rt-text">{t.label}</span></span>
-                <span className="rm">{t.version ? <code>{t.version}</code> : 'version unknown'}
-                  {t.outdated && t.latest ? ` · ${t.latest} is out` : ''}</span>
+                <span className="rm">{t.version ? <code>{t.version}</code> : 'Unknown version'}
+                  {t.outdated && t.latest ? ` · ${t.latest} is available` : ''}</span>
                 <span className={`rm wrap${note.tone === 'done' ? ' up-done' : note.tone === 'bad' ? ' up-failed' : ''}`}>{note.text}</span>
               </span>
             </div>
           );
         })}
-        {info && !info.tools.length && <div className="empty quiet">No coding tools found on {env.name}</div>}
-        {!info && !error && <div className="empty quiet">Looking at {env.name}…</div>}
+        {info && !info.tools.length && <div className="empty quiet">Helm found no coding tools on {env.name}.</div>}
+        {!info && !error && <div className="empty quiet">Helm is checking {env.name}.</div>}
         {info && (
           <div className="row toggle">
             <span className="grow">
               <span className="rt">Update automatically</span>
-              <span className="rm wrap">Every few hours. Running chats are not stopped.</span>
+              <span className="rm wrap">Helm checks every few hours. Running chats continue.</span>
             </span>
             <button className={`switch${info.auto ? ' on' : ''}`} role="switch" aria-checked={info.auto}
               aria-label={`Update coding tools automatically on ${env.name}`} onClick={() => setAuto(!info.auto)}><i /></button>
@@ -117,7 +117,7 @@ export function CodingTools({ client, env }: { client: Client; env: Environment 
       {info && (
         <button className="action coding-update" disabled={starting || running || !canUpdate} onClick={updateNow}>
           <span className="plus"><Icon name="refresh" size={15} /></span>
-          {running ? `Updating on ${env.name}…` : `Update coding tools on ${env.name}`}
+          {running ? `Helm is updating tools on ${env.name}.` : `Update coding tools on ${env.name}`}
         </button>
       )}
       {error && <div className="error">{error}</div>}

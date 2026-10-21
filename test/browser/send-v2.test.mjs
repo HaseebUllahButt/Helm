@@ -125,7 +125,7 @@ async function shot(page, state) {
     await page.screenshot({ animations: 'disabled', path: join(process.env.HELM_TEST_SCREENSHOT_DIR, `send-v2-${state}-${width}x${height}.png`) });
   }
 }
-async function begin(page, label = 'Send to VM') { await page.getByRole('button', { name: label, exact: true }).click(); await page.getByRole('status').filter({hasText:'Preparing…'}).waitFor(); }
+async function begin(page, label = 'Send to VM') { await page.getByRole('button', { name: label, exact: true }).click(); await page.getByRole('status').filter({hasText:'Helm is preparing the send.'}).waitFor(); }
 async function change(page, patch, emit = true, id = 'job-1') { await page.evaluate(({id,patch,emit}) => window.changes(id,patch,emit), {id,patch,emit}); }
 const sendingPatch = { phase:'sending', bytes:{total:1000,sent:400}, files:{total:10,sent:4},rate:200,eta:3 };
 const donePatch = { phase:'done',bytes:{total:1000,sent:1000}, files:{total:10,sent:10},finishedAt:Date.now(),eta:0 };
@@ -149,11 +149,11 @@ for (const size of sizes) {
       await page.getByText('4 of 10 files · 200 B/s · 3s left',{exact:true}).waitFor();
       await shot(page,'progress');
       await change(page,{...sendingPatch,phase:'finishing',bytes:{total:1000,sent:1000},eta:null});
-      await page.getByRole('status').filter({hasText:'Finishing…'}).waitFor();
+      await page.getByRole('status').filter({hasText:'Helm is finishing the send.'}).waitFor();
       assert.equal(await page.getByRole('button',{name:'Open folder there',exact:true}).count(),0);
       await change(page,donePatch);
       await page.getByText('On VM in ~/project',{exact:true}).waitFor();
-      await page.getByText('project is on VM · View',{exact:true}).waitFor();
+      await page.getByText('View project on VM',{exact:true}).waitFor();
       await shot(page,'done');
       const note = await page.getByText('Files stay on Laptop.',{exact:true}).boundingBox();
       const open = await page.getByRole('button',{name:'Open folder there',exact:true}).boundingBox();
@@ -171,7 +171,7 @@ for (const size of sizes) {
       await begin(page);await change(page,donePatch);
       await page.getByRole('button',{name:'Send again',exact:true}).click();
       await page.getByRole('button',{name:'Send again to VM',exact:true}).waitFor();
-      await page.getByText('Only changes will be sent.',{exact:true}).waitFor();
+      await page.getByText('Helm will send only changes.',{exact:true}).waitFor();
       assert.equal(await page.getByText('About 42,000 files · 2.0 GB',{exact:true}).count(),0);
       await shot(page,'again-plan');
       await begin(page,'Send again to VM');
@@ -192,15 +192,15 @@ for (const size of sizes) {
       await begin(page);await change(page,{phase:'failed',error:'VM needs more free space.'});
       await page.getByText('VM needs more free space.',{exact:true}).waitFor();await shot(page,'failed');
       await page.getByRole('button',{name:'Retry',exact:true}).click();
-      await page.getByRole('status').filter({hasText:'Sending…'}).waitFor();
+      await page.getByRole('status').filter({hasText:'Helm is sending files.'}).waitFor();
       assert.deepEqual(await page.evaluate(()=>window.calls.find(call=>call.method==='send.retry')),{env:'source',method:'send.retry',params:{jobId:'job-1'}});
       await page.getByRole('button',{name:'Cancel send',exact:true}).click();
       await page.getByRole('button',{name:'Stopping…',exact:true}).waitFor();
-      assert.equal(await page.getByRole('status').filter({hasText:'Cancelled'}).count(),0);
+      assert.equal(await page.getByRole('status').filter({hasText:'Helm cancelled the send.'}).count(),0);
       await page.evaluate(()=>window.release());
-      await page.getByRole('status').filter({hasText:'Cancelled'}).waitFor();await shot(page,'cancelled');
+      await page.getByRole('status').filter({hasText:'Helm cancelled the send.'}).waitFor();await shot(page,'cancelled');
       await page.getByRole('button',{name:'Retry',exact:true}).click();
-      await page.getByRole('status').filter({hasText:'Sending…'}).waitFor();
+      await page.getByRole('status').filter({hasText:'Helm is sending files.'}).waitFor();
       assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.method==='send.start').length),1);
     } finally {await page.cleanup();}
   });
@@ -221,9 +221,9 @@ for (const size of sizes) {
       // Miss an event: the 2-second fallback must still finish the same job.
       await change(page,donePatch,false);
       await page.getByText('On VM in ~/project',{exact:true}).waitFor();
-      await page.getByText('project is on VM · View',{exact:true}).waitFor();
+      await page.getByText('View project on VM',{exact:true}).waitFor();
       await change(page,donePatch);
-      assert.equal(await page.getByText('project is on VM · View',{exact:true}).count(),1);
+      assert.equal(await page.getByText('View project on VM',{exact:true}).count(),1);
     } finally {await page.cleanup();}
   });
 }
@@ -243,7 +243,7 @@ test('single files, target changes, offline defaults and plan retry use the same
   } finally {await page.cleanup();}
   const offline=await fixture(sizes[0],{offline:true});
   try {
-    await offline.getByText('VM is offline. Try again when it is back.',{exact:true}).waitFor();
+    await offline.getByText('VM is offline. Try again when it is online.',{exact:true}).waitFor();
     assert.equal(await offline.getByRole('button',{name:'Send to VM',exact:true}).isDisabled(),true);
     await shot(offline,'offline');
   } finally {await offline.cleanup();}
@@ -260,7 +260,7 @@ test('start shows preparing immediately and lost acknowledgement discovers the e
     await page.getByText('4 of 10 files · 200 B/s · 3s left',{exact:true}).waitFor();
     await page.evaluate(()=>window.emitJob({...window.jobs()[0],phase:'preparing',updatedAt:1}));
     await page.getByText('4 of 10 files · 200 B/s · 3s left',{exact:true}).waitFor();
-    assert.equal(await page.getByRole('status').filter({hasText:'Preparing…'}).count(),0);
+    assert.equal(await page.getByRole('status').filter({hasText:'Helm is preparing the send.'}).count(),0);
   } finally {await page.cleanup();}
 });
 
@@ -281,7 +281,7 @@ test('cancel finishing may acknowledge a completed send instead of cancellation'
     await begin(page);await change(page,{...sendingPatch,phase:'finishing'});
     await page.getByRole('button',{name:'Cancel send',exact:true}).click();
     await page.getByText('On VM in ~/project',{exact:true}).waitFor();
-    assert.equal(await page.getByRole('status').filter({hasText:'Cancelled'}).count(),0);
+    assert.equal(await page.getByRole('status').filter({hasText:'Helm cancelled the send.'}).count(),0);
   } finally {await page.cleanup();}
 });
 for(const size of sizes) test(`long names and paths wrap at ${size.width}`,async()=>{
@@ -309,10 +309,10 @@ test('a completion discovered after reload announces a previously running job on
     await begin(page);await page.getByRole('button',{name:'Back',exact:true}).click();
     await change(page,donePatch,false);
     await page.reload();
-    await page.getByText('project is on VM · View',{exact:true}).waitFor();
+    await page.getByText('View project on VM',{exact:true}).waitFor();
     await page.reload();
     await page.getByText('On VM in ~/project',{exact:true}).waitFor();
-    assert.equal(await page.getByText('project is on VM · View',{exact:true}).count(),0);
+    assert.equal(await page.getByText('View project on VM',{exact:true}).count(),0);
   }finally{await page.cleanup();}
 });
 
@@ -326,7 +326,7 @@ test('task options and files-only conversion preserve the chosen target and envi
     await page.getByText('Options',{exact:true}).click();
     await page.getByRole('button',{name:'Send a task with these files',exact:true}).click();
     await page.getByRole('button',{name:'Send task to Home PC',exact:true}).waitFor();
-    await page.getByText('Agent and destination options',{exact:true}).click();
+    await page.getByText('Agent and machine options',{exact:true}).click();
     assert.equal(await page.getByLabel('Include .env files').isChecked(),false);
     // The mode checkbox navigates to a different component; click avoids checking a removed input.
     await page.getByRole('checkbox',{name:'Send a task with this project',exact:false}).click();

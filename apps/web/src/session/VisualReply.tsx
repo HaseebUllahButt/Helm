@@ -69,8 +69,8 @@ export function useVisualHtml(read: VisualReader | undefined, ref: string, activ
     if (!active) return;
     let stale = false;
     setHtml(undefined); setError('');
-    if (!read) { setError('Connect to the chat’s machine to load this visual.'); return; }
-    read(ref).then(result => { if (!stale) setHtml(result.html); }).catch(err => { if (!stale) setError(err.message || 'Could not load this visual.'); });
+    if (!read) { setError('Connect to this chat’s machine to load the image or page.'); return; }
+    read(ref).then(result => { if (!stale) setHtml(result.html); }).catch(err => { if (!stale) setError(err.message || 'Helm cannot load this visual.'); });
     return () => { stale = true; };
   }, [active, read, ref, retry]);
   return { html, error, retry: () => setRetry(value => value + 1) };

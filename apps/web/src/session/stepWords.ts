@@ -32,15 +32,15 @@ const VERBS: Record<string, [string, string]> = {
   show: ['Showing', 'Showed'], read: ['Reading', 'Read'], print: ['Printing', 'Printed'], count: ['Counting', 'Counted'],
   create: ['Creating', 'Created'], delete: ['Deleting', 'Deleted'], remove: ['Removing', 'Removed'], move: ['Moving', 'Moved'],
   copy: ['Copying', 'Copied'], make: ['Making', 'Made'], start: ['Starting', 'Started'], stop: ['Stopping', 'Stopped'],
-  kill: ['Killing', 'Killed'], restart: ['Restarting', 'Restarted'], commit: ['Committing', 'Committed'], push: ['Pushing', 'Pushed'],
-  pull: ['Pulling', 'Pulled'], fetch: ['Fetching', 'Fetched'], clone: ['Cloning', 'Cloned'], verify: ['Verifying', 'Verified'],
-  lint: ['Linting', 'Linted'], format: ['Formatting', 'Formatted'], compile: ['Compiling', 'Compiled'], inspect: ['Inspecting', 'Inspected'],
+  kill: ['Stopping', 'Stopped'], restart: ['Restarting', 'Restarted'], commit: ['Committing', 'Committed'], push: ['Pushing', 'Pushed'],
+  pull: ['Pulling', 'Pulled'], fetch: ['Loading', 'Loaded'], clone: ['Copying project', 'Copied project'], verify: ['Verifying', 'Verified'],
+  lint: ['Checking code', 'Checked code'], format: ['Formatting', 'Formatted'], compile: ['Compiling', 'Compiled'], inspect: ['Inspecting', 'Inspected'],
   view: ['Viewing', 'Viewed'], open: ['Opening', 'Opened'], get: ['Getting', 'Got'], fix: ['Fixing', 'Fixed'],
   update: ['Updating', 'Updated'], add: ['Adding', 'Added'], write: ['Writing', 'Wrote'], edit: ['Editing', 'Edited'],
   look: ['Looking', 'Looked'], confirm: ['Confirming', 'Confirmed'], validate: ['Validating', 'Validated'], launch: ['Launching', 'Launched'],
-  execute: ['Executing', 'Executed'], apply: ['Applying', 'Applied'], revert: ['Reverting', 'Reverted'], reset: ['Resetting', 'Reset'],
+  execute: ['Running', 'Ran'], apply: ['Applying', 'Applied'], revert: ['Reverting', 'Reverted'], reset: ['Resetting', 'Reset'],
   stage: ['Staging', 'Staged'], merge: ['Merging', 'Merged'], download: ['Downloading', 'Downloaded'], extract: ['Extracting', 'Extracted'],
-  query: ['Querying', 'Queried'], ping: ['Pinging', 'Pinged'], diff: ['Comparing', 'Compared'], compare: ['Comparing', 'Compared'],
+  query: ['Searching', 'Searched'], ping: ['Pinging', 'Pinged'], diff: ['Comparing', 'Compared'], compare: ['Comparing', 'Compared'],
   clean: ['Cleaning', 'Cleaned'], rebuild: ['Rebuilding', 'Rebuilt'], rerun: ['Rerunning', 'Reran'], save: ['Saving', 'Saved'],
   generate: ['Generating', 'Generated'], display: ['Showing', 'Showed'], browse: ['Browsing', 'Browsed'], review: ['Reviewing', 'Reviewed'],
   try: ['Trying', 'Tried'], retry: ['Retrying', 'Retried'], wait: ['Waiting', 'Waited'], watch: ['Watching', 'Watched'],
@@ -274,13 +274,13 @@ export function stepWords(it: Item): Words {
     case 'Grep': { const q = field(it, 'pattern'); return q ? { now: `Searching for ${clip(q, 40)}`, past: `Searched for ${clip(q, 40)}` } : { now: 'Searching', past: 'Searched' }; }
     case 'Glob': { const q = field(it, 'pattern'); return q ? { now: `Looking for ${clip(q, 40)}`, past: `Looked for ${clip(q, 40)}` } : { now: 'Looking for files', past: 'Looked for files' }; }
     case 'LS': { const p = baseName(field(it, 'path')); return { now: `Listing ${p ? p + '/' : 'files'}`, past: `Listed ${p ? p + '/' : 'files'}` }; }
-    case 'WebFetch': { const u = field(it, 'url'); return u ? { now: `Fetching ${host(u)}`, past: `Fetched ${host(u)}` } : { now: 'Fetching a page', past: 'Fetched a page' }; }
+    case 'WebFetch': { const u = field(it, 'url'); return u ? { now: `Loading ${host(u)}`, past: `Loaded ${host(u)}` } : { now: 'Loading a page', past: 'Loaded a page' }; }
     case 'WebSearch': case 'webSearch': { const q = field(it, 'query'); return q ? { now: `Searching the web for ${clip(q, 40)}`, past: `Searched the web for ${clip(q, 40)}` } : { now: 'Searching the web', past: 'Searched the web' }; }
     case 'ToolSearch': return { now: 'Looking for a tool', past: 'Looked for a tool' };
     case 'ExitPlanMode': return { now: 'Writing a plan', past: 'Wrote a plan' };
     case 'AskUserQuestion': return { now: 'Asking a question', past: 'Asked a question' };
     case 'Skill': { const s = field(it, 'skill'); return { now: `Using ${s || 'a skill'}`, past: `Used ${s || 'a skill'}` }; }
-    case 'compact': case 'contextCompaction': return { now: 'Compacting the conversation', past: 'Compacted the conversation' };
+    case 'compact': case 'contextCompaction': return { now: 'Summarizing the chat', past: 'Summarized the chat' };
     default: {
       const label = prettyTool(it.name);
       const sum = toolSummary(it);

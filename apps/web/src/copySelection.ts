@@ -100,5 +100,5 @@ export async function writeSelectionClipboard(data: { text: string; html: string
   document.addEventListener('copy', copy, true);
   try { if (document.execCommand('copy')) return; }
   finally { document.removeEventListener('copy', copy, true); }
-  throw new Error('The browser blocked copying this selection.');
+  throw new Error('The browser blocked the copy.');
 }

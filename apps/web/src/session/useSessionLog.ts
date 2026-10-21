@@ -120,7 +120,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
           // The machine may have trimmed past this device's cache or restored
           // an older log. In either case take a complete fresh tail window.
           if (!cold && (r.last < cursor || (r.logFirst ?? 0) > cursor + 1)) {
-            if (resetOnce) throw new Error('Chat history changed while syncing; retrying…');
+            if (resetOnce) throw new Error('Chat history changed during loading. Helm is trying again…');
             if (r.last < cursor) buffered.clear();
             reset(); resetOnce = true; target = undefined;
             continue;
@@ -138,7 +138,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
           }
           publish();
           if (!r.hasMore || log.last >= target) break;
-          if (log.last <= cursor) throw new Error('Chat history did not advance; retrying…');
+          if (log.last <= cursor) throw new Error('Helm received no new chat history. It is trying again…');
         }
         setError(''); setSyncing(false); retryDelay = 1000;
         dirty = true;

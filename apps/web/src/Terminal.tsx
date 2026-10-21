@@ -19,8 +19,8 @@ const csi = (normal: string, app: string) => (on: boolean) => (on ? app : normal
 // computer has the real keys, and the phone keyboard has Enter and delete.
 const TERMKEYS: TermKey[] = [
   { label: 'esc', aria: 'Escape', bytes: () => '\x1b' },
-  { label: 'ctrl', aria: 'Control, applies to the next key', mod: 'ctrl' },
-  { label: 'alt', aria: 'Alt, applies to the next key', mod: 'alt' },
+  { label: 'ctrl', aria: 'Apply Ctrl to the next key', mod: 'ctrl' },
+  { label: 'alt', aria: 'Apply Alt to the next key', mod: 'alt' },
   { label: 'tab', aria: 'Tab', bytes: () => '\t' },
   { label: 'paste', aria: 'Paste from clipboard', paste: true },
   { label: 'clear', aria: 'Clear the screen', clear: true },
@@ -72,11 +72,11 @@ export function Terminal({ client, env, sessionId }: {
   };
   const paste = async () => {
     try {
-      if (!navigator.clipboard?.readText) return flash('Clipboard blocked');
+      if (!navigator.clipboard?.readText) return flash('The browser blocked the clipboard.');
       const text = await navigator.clipboard.readText();
-      if (!text) return flash('Nothing to paste');
+      if (!text) return flash('The clipboard is empty.');
       send(text);
-    } catch { flash('Clipboard blocked'); }
+    } catch { flash('The browser blocked the clipboard.'); }
   };
   const disarm = () => { pending.current = null; setArmed(null); };
   const stopRepeat = () => {
@@ -212,7 +212,7 @@ export function Terminal({ client, env, sessionId }: {
       // Back after a drop: ask for everything, since pushes were missed.
       if (kind === 'connection' && payload?.online) attach();
       if (e === env && kind === 'session.exit' && payload?.id === sessionId) {
-        xterm.write('\r\n\x1b[2m[ the terminal ended ]\x1b[0m\r\n');
+        xterm.write('\r\n\x1b[2m[ The terminal ended. ]\x1b[0m\r\n');
       }
     });
 

@@ -174,25 +174,25 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
 
       <div className="scroll"><div className="pad usage">
         <div className="usage-controls">
-          <select aria-label="Environment" value={scope} onChange={(e) => setScope(e.target.value)}>
+          <select aria-label="Machine" value={scope} onChange={(e) => setScope(e.target.value)}>
             <option value="all">All machines</option>
             {envs.map((env) => <option key={env.id} value={env.id}>{env.name}</option>)}
           </select>
           <Tabs label="Period" items={WINDOWS} value={win} onChange={setWin} />
         </div>
 
-        {loading && <div className="empty quiet">reading what the CLIs recorded…</div>}
+        {loading && <div className="empty quiet">Helm is reading usage records.</div>}
 
         {!loading && answered.length === 0 && <div className="empty quiet">
-          <p>{targets.length ? 'No machine sent usage yet.' : 'No machines to report usage.'}</p>
+          <p>{targets.length ? 'No machine has sent a usage report.' : 'No machines can report usage.'}</p>
           {!!targets.length && <button className="linkish" onClick={() => targets.forEach(e => fetchReport(e, false))}>Retry usage</button>}
         </div>}
         {!loading && answered.length > 0 && <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />}
 
         {!loading && answered.length > 0 && (
-          <section className="usage-where" aria-label="Where it went">
+          <section className="usage-where" aria-label="Usage by group">
             <div className="usage-where-head">
-              <h2 className="section">Where it went</h2>
+              <h2 className="section">Usage by group</h2>
               <Tabs label="Group by" items={FACETS} value={facet} onChange={setFacet} />
             </div>
             <Breakdown key={facet} groups={groups} facet={facet} onModel={setModel} />
@@ -242,16 +242,16 @@ function ModelDetail({ client, targets, model, since, window, onClose }: {
   return <Sheet label={`${model || 'Unknown model'} usage`} onClose={onClose}>
     <div className="usage-model-detail">
       <div className="modal-head"><div className="modal-title">{model || 'Unknown model'}</div><button className="ghost" onClick={onClose}>Close</button></div>
-      {pending && <p role="status" className="usage-limits-note">Reading model history…</p>}
+      {pending && <p role="status" className="usage-limits-note">Helm is reading model history.</p>}
       {answered > 0 && <>
         <Headline totals={t} window={window} tiles={false} />
-        {t.unpriced && <p className="usage-limits-note">Some usage has no price, so the cost is low.</p>}
+        {t.unpriced && <p className="usage-limits-note">Some usage has no price. The total excludes that cost.</p>}
         <dl className="usage-token-detail">
-          {([['Turns', t.turns], ['Fresh input', t.input], ['Output', t.output], ['Cache read', t.cacheRead], ['Cache write', t.cacheWrite], ['Reasoning', t.reasoning]] as const)
-            .map(([label, count]) => <div key={label}><dt title={label === 'Reasoning' ? 'Included in output where the provider reports it' : undefined}>{label}</dt><dd>{count.toLocaleString()}</dd></div>)}
+          {([['Turns', t.turns], ['New input', t.input], ['Output', t.output], ['Reused input', t.cacheRead], ['Input saved for reuse', t.cacheWrite], ['Reasoning', t.reasoning]] as const)
+            .map(([label, count]) => <div key={label}><dt title={label === 'Reasoning' ? 'Output includes reasoning tokens when the provider reports them.' : undefined}>{label}</dt><dd>{count.toLocaleString()}</dd></div>)}
         </dl>
       </>}
-      {!pending && answered === 0 && <p className="usage-limits-note">Model history unavailable. The machines may be offline or need an update.</p>}
+      {!pending && answered === 0 && <p className="usage-limits-note">Helm cannot get model history. Check machine connections and updates.</p>}
       <p className="usage-limits-note" title={targets.map(e => e.name).join(', ')}>{answered} of {targets.length} machines</p>
     </div>
   </Sheet>;
@@ -282,15 +282,15 @@ function Headline({ totals, window, tiles = true }: { totals: UsageTotals; windo
   return (
     <div className="usage-hero">
       <div className="usage-hero-fig">{money(totals.costUsd)}</div>
-      <div className="usage-hero-cap" title="Published rates × the tokens the CLIs recorded">
-        At API prices · {spanPhrase(window)}
+      <div className="usage-hero-cap" title="Published pay-per-use prices × recorded tokens (pieces of text)">
+        At pay-per-use prices · {spanPhrase(window)}
       </div>
       {tiles && <dl className="usage-stats">
         <div><dt>Tokens</dt><dd>{tokens(totals.total)}</dd></div>
         <div><dt>Turns</dt><dd>{totals.turns.toLocaleString()}</dd></div>
         {(totals.cacheRead > 0 || totals.input > 0) && (
-          <div className="usage-cache" title={`${totals.cacheRead.toLocaleString()} cached · ${totals.input.toLocaleString()} fresh input tokens`}>
-            <dt>Saved by cache</dt>
+          <div className="usage-cache" title={`${totals.cacheRead.toLocaleString()} cached · ${totals.input.toLocaleString()} new input tokens`}>
+            <dt>Saved by reusing input</dt>
             <dd>{saved > 0 ? money(saved) : '$0'}</dd>
             <small>{cachePercent(rate)} cached</small>
           </div>
@@ -353,7 +353,7 @@ function Breakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: Fa
   const value = (g: ChartGroup) => (priced ? g.costUsd : g.total);
   const sorted = [...groups].sort((a, b) => value(b) - value(a)).filter((g) => value(g) > 0 || g.total > 0);
   const whole = sorted.reduce((s, g) => s + value(g), 0);
-  if (!sorted.length) return <div className="empty quiet">nothing recorded yet</div>;
+  if (!sorted.length) return <div className="empty quiet">Helm has no usage records yet.</div>;
 
   const top = value(sorted[0]) || 1;
   const name = (g: ChartGroup) =>
@@ -409,8 +409,8 @@ function Provenance({ answered, total, stale, failed, unpriced, rescanning, onRe
   rescanning: boolean; onRescan: () => void;
 }) {
   const detail = [
-    stale > 0 ? `${stale} from memory` : '',
-    unpriced ? 'some models have no published rate and count in tokens only' : '',
+    stale > 0 ? `${stale} saved reports` : '',
+    unpriced ? 'Some models have no published price. Helm shows only their token counts.' : '',
   ].filter(Boolean).join(' · ');
   return (
     <p className="usage-note" title={detail || undefined}>
@@ -421,7 +421,7 @@ function Provenance({ answered, total, stale, failed, unpriced, rescanning, onRe
           transcripts, so it is the answer to "that cannot be right" rather
           than a refresh button. */}
       <button className="linkish" disabled={rescanning} onClick={onRescan}>
-        {rescanning ? 'Rescanning…' : 'Rescan'}
+        {rescanning ? 'Helm is reading usage again.' : 'Read usage again'}
       </button>
     </p>
   );

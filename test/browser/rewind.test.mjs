@@ -109,9 +109,9 @@ for (const width of [390, 1280]) test(`Edit from here confirms a refused file re
 
   await edit.click(); await dialog.waitFor();
   assert.equal(await dialog.getByText('Edit from here?', { exact: true }).isVisible(), true);
-  assert.match(await dialog.innerText(), /message and the replies after it will be removed/);
-  assert.match(await dialog.innerText(), /Your current draft will be replaced/);
-  const restore = dialog.getByRole('checkbox', { name: 'Put files back as they were before this message', exact: true });
+  assert.match(await dialog.innerText(), /Helm removes this message and later replies/);
+  assert.match(await dialog.innerText(), /This replaces your draft/);
+  const restore = dialog.getByRole('checkbox', { name: 'Restore files to before this message', exact: true });
   assert.equal(await restore.isDisabled(), true); assert.equal(await restore.isChecked(), false);
   assert.equal(await dialog.getByText(await page.evaluate(() => window.restoreReason), { exact: true }).isVisible(), true);
   assert.equal(await composer.inputValue(), 'Keep this draft until confirmation');
@@ -125,7 +125,7 @@ for (const width of [390, 1280]) test(`Edit from here confirms a refused file re
   await edit.click(); await dialog.waitFor();
   await dialog.getByRole('button', { name: 'Edit from here', exact: true }).click();
   await page.waitForFunction(() => typeof window.completeRewind === 'function');
-  assert.equal(await dialog.getByRole('button', { name: 'Rewinding…', exact: true }).isDisabled(), true);
+  assert.equal(await dialog.getByRole('button', { name: 'Restoring…', exact: true }).isDisabled(), true);
   assert.equal(await composer.inputValue(), 'Keep this draft until confirmation', 'the draft waits for RPC success');
   assert.equal(await page.locator('.attach-preview').count(), 0);
   assert.deepEqual(await mutations(), [{ env: 'fixture-machine', method: 'session.rewind',
@@ -138,12 +138,12 @@ for (const width of [390, 1280]) test(`Edit from here confirms a refused file re
   await page.waitForFunction(() => document.querySelector('.attach-preview img')?.naturalWidth > 0);
   assert.equal(await image.getAttribute('src'), await page.evaluate(() => 'data:image/png;base64,' + window.expectedDraft.attachments[0].data));
   assert.equal(await page.locator('.attach-preview').getAttribute('title'), '[Image #1] recovered.png');
-  assert.equal(await page.getByRole('button', { name: 'Remove context: Design review', exact: true }).isVisible(), true);
-  assert.equal(await page.getByRole('button', { name: 'Remove context: Thread', exact: true }).isVisible(), true);
+  assert.equal(await page.getByRole('button', { name: 'Remove chat details: Design review', exact: true }).isVisible(), true);
+  assert.equal(await page.getByRole('button', { name: 'Remove chat details: Chat', exact: true }).isVisible(), true);
   assert.equal(await page.evaluate(() => localStorage.getItem('helm-draft:fixture-machine:rewind-chat')),
     await page.evaluate(() => window.expectedDraft.text));
   assert.deepEqual(await page.evaluate(() => window.savedImages()), await page.evaluate(() => window.expectedDraft.attachments.map(({filename,mime,data}) => ({name:filename,mime,data}))));
-  await page.getByText('Conversation rewound. Edit your draft and send when ready.', { exact: true }).waitFor();
+  await page.getByText('Chat restored. Edit your draft and send it.', { exact: true }).waitFor();
   await page.getByText('Original transcript wording', { exact: true }).waitFor({ state: 'detached' });
   await page.getByText('Discarded reply', { exact: true }).waitFor({ state: 'detached' });
   assert.deepEqual(await page.evaluate(() => window.sessionUpdates.map(session => session.engineSessionId)), ['rewound-provider']);

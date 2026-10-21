@@ -115,7 +115,7 @@ test('the Public links screen offers private links and opens one with a pass', a
   assert.equal(await tab.evaluate(() => window.opener), null, 'the shared page cannot reach back into Helm');
 
   // The switch: on, the password goes away and the add says private.
-  await page.getByRole('button', { name: /Share a port/ }).click();
+  await page.getByRole('button', { name: /Create a Spin/ }).click();
   await page.getByPlaceholder('3000').fill('5173');
   const toggle = page.getByRole('switch');
   assert.equal(await toggle.getAttribute('aria-checked'), 'false');
@@ -123,7 +123,7 @@ test('the Public links screen offers private links and opens one with a pass', a
   await toggle.click();
   assert.equal(await toggle.getAttribute('aria-checked'), 'true');
   assert.equal(await page.getByText('Password').count(), 0);
-  await page.getByRole('button', { name: 'Share', exact: true }).click();
+  await page.getByRole('button', { name: 'Create Spin', exact: true }).click();
   await page.waitForFunction(() => window.calls.some((c) => c.method === 'share.add'));
   const add = await page.evaluate(() => window.calls.find((c) => c.method === 'share.add').params);
   assert.equal(add.port, 5173);

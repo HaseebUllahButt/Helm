@@ -58,7 +58,7 @@ test('catalog and custom form add to the chosen machine and account', async () =
   const form = page.getByRole('dialog', { name: 'Connector details' });
   await form.getByLabel('Name', { exact: true }).fill('new-connector');
   await form.getByLabel('URL', { exact: true }).fill('https://example.test/mcp');
-  await form.getByLabel('Scope').selectOption('user');
+  await form.getByLabel('Applies to').selectOption('user');
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
   await form.getByRole('button', { name: 'Add', exact: true }).click();
   await page.getByText('new-connector', { exact: true }).waitFor();
@@ -71,21 +71,21 @@ test('Connect opens returned terminal; account changes expose supported actions 
   await detail.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.waitForFunction(() => window.opened?.id === 'auth-terminal');
   assert.equal(await page.evaluate(() => window.calls.find(c=>c.method==='integrations.mcp.connect').params.profileId), 'claudea');
-  await page.getByRole('button', { name: 'Choose account', exact: true }).click();
+  await page.getByRole('button', { name: 'Pick an account', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: /Codex work/ }).click();
-  await page.getByText('No connectors configured.').waitFor();
+  await page.getByText('This account has no connectors.').waitFor();
   await page.getByRole('button', { name: 'Add skill', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Add skill', exact: true }).getByLabel('Git URL or absolute folder').fill('/skills');
+  await page.getByRole('dialog', { name: 'Add skill', exact: true }).getByLabel('Git address or full folder path').fill('/skills');
   await page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => window.calls.find(c=>c.method==='integrations.skills.add').params.source), '/skills');
-  await page.getByRole('button', { name: 'Choose account', exact: true }).click();
+  await page.getByRole('button', { name: 'Pick an account', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: /Gemini/ }).click();
-  await page.getByText('Not supported for this CLI yet.').first().waitFor();
+  await page.getByText('This agent does not support this feature.').first().waitFor();
   assert.equal(await page.getByRole('button', { name: 'Add connector', exact: true }).count(), 0);
 });
 test('each row wears the logo of what is behind it', async () => {
-  await page.getByRole('button', { name: 'Choose account', exact: true }).click();
+  await page.getByRole('button', { name: 'Pick an account', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: /Codex on why/ }).click();
   await page.getByText('node_repl', { exact: true }).waitFor();
   const logos = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.integrations .rows .row')].map((r) => [r.querySelector('.rt-text')?.textContent, r.querySelector('.clogo')?.getAttribute('data-logo')]).filter(([n]) => n)));

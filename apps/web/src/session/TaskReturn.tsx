@@ -34,16 +34,16 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
       : returned ? `Task returned to ${transfer.machineName}` : conflict ? `Changes need review on ${transfer.machineName}`
         : `Finished changes return to ${transfer.machineName}`}</strong>
     <p className="note">{source
-      ? returned ? 'Your project is updated. Continue in this conversation.'
-        : conflict ? `Your local edits are preserved. The complete returned project is at ${transfer.folder}.`
+      ? returned ? 'Your project is updated. Continue in this chat.'
+        : conflict ? `Your edits stay. Find the returned project at ${transfer.folder}.`
           : 'Changes come back here when the task finishes.'
       : returned || conflict || transfer.status === 'returning' ? 'Continue from the original machine.'
         : 'This task keeps running here.'}</p>
     {source && conflict && <>
       <p className="note">{transfer.conflicts?.slice(0, 8).join(', ')}</p>
       <div className="transfer-actions">
-        <button className="linkish" disabled={busy} onClick={() => recheck()}>Recheck resolved changes</button>
-        <button className="linkish" disabled={busy} onClick={() => recheck(true)}>Keep my conflicting edits</button>
+        <button className="linkish" disabled={busy} onClick={() => recheck()}>Check changes again</button>
+        <button className="linkish" disabled={busy} onClick={() => recheck(true)}>Keep my edits where changes conflict</button>
       </div>
     </>}
     {!source && (returned || conflict) && original && onOpenSession &&

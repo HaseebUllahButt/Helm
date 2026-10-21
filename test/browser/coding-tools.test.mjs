@@ -65,13 +65,13 @@ test('the Updates screen lists each machine’s coding tools, updates now and sa
 
     const laptop = page.locator('.rows.plain', { has: page.getByText('Pi') });
     const text = await laptop.innerText();
-    assert.match(text, /Claude Code[\s\S]*2\.1\.296[\s\S]*updated 2h ago \(2\.1\.290 → 2\.1\.296\)/);
-    assert.match(text, /Codex[\s\S]*up to date · checked 40m ago/);
-    assert.match(text, /Pi[\s\S]*0\.99\.1 · 1\.1\.0 is out/);
-    assert.match(text, /Cursor[\s\S]*update failed 5h ago - could not reach the update server/);
+    assert.match(text, /Claude Code[\s\S]*2\.1\.296[\s\S]*Helm updated this tool 2h ago\. \(2\.1\.290 → 2\.1\.296\)/);
+    assert.match(text, /Codex[\s\S]*The tool is up to date\. Helm checked it 40m ago\./);
+    assert.match(text, /Pi[\s\S]*0\.99\.1 · 1\.1\.0 is available/);
+    assert.match(text, /Cursor[\s\S]*The update failed 5h ago\. - could not reach the update server/);
     const why = await page.locator('.rows.plain', { has: page.getByText('Gemini') }).innerText();
-    assert.match(why, /Claude Code[\s\S]*2\.1\.280[\s\S]*can’t update: installed by the system/);
-    assert.match(why, /Gemini[\s\S]*can’t update: installed with npm in a folder this user can not write to/);
+    assert.match(why, /Claude Code[\s\S]*2\.1\.280[\s\S]*Helm cannot update this tool: installed by the system/);
+    assert.match(why, /Gemini[\s\S]*Helm cannot update this tool: installed with npm in a folder this user can not write to/);
     assert.doesNotMatch(await page.locator('body').innerText(), /HomePC[\s\S]*Coding tools/, 'offline machines are not asked');
 
     // One switch per machine, on by default on one and saved when changed.
@@ -90,11 +90,11 @@ test('the Updates screen lists each machine’s coding tools, updates now and sa
     // "Update now" is asked of that machine only, shows progress, then the result.
     const button = page.getByRole('button', { name: 'Update coding tools on laptop' });
     await button.click();
-    await page.getByRole('button', { name: 'Updating on laptop…' }).waitFor();
-    await page.getByText('updating…').first().waitFor();
+    await page.getByRole('button', { name: 'Helm is updating tools on laptop.' }).waitFor();
+    await page.getByText('Helm is updating this tool.').first().waitFor();
     await capture(page, 'coding-tools-updating-390.png');
     await page.getByRole('button', { name: 'Update coding tools on laptop' }).waitFor({ timeout: 10_000 });
-    assert.match(await laptop.innerText(), /Codex[\s\S]*0\.162\.0[\s\S]*updated just now \(0\.161\.0 → 0\.162\.0\)/);
+    assert.match(await laptop.innerText(), /Codex[\s\S]*0\.162\.0[\s\S]*Helm updated this tool just now\. \(0\.161\.0 → 0\.162\.0\)/);
     const updates = await page.evaluate(() => window.calls.filter((c) => c.method === 'cli.update'));
     assert.deepEqual(updates, [{ env: 'laptop', method: 'cli.update', params: {} }]);
     // Nothing can be updated on a machine where everything is the system's.

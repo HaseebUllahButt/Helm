@@ -97,7 +97,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
             <i className="sdot blocked" />
             <span className="ask-kind">{ASK_LABEL[p.kind]}</span>
             {p.tool && p.kind !== 'plan' && p.kind !== 'command' && p.tool.toLowerCase() !== p.kind && <span className="tag">{p.tool}</span>}
-            {p.parentId && <span className="tag">subagent</span>}
+            {p.parentId && <span className="tag">Helper</span>}
             {p.at && <span className="q-wait">{waitingSince(p.at, now)}</span>}
           </div>
           <div className="sheet-title">
@@ -111,7 +111,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
             <i className="sdot blocked" />
             <b>{p.title}</b>
             {p.tool && p.kind !== 'plan' && <span className="tag">{p.tool}</span>}
-            {p.parentId && <span className="tag">subagent</span>}
+            {p.parentId && <span className="tag">Helper</span>}
             {p.at && <span className="tag waiting">waiting {waitingSince(p.at, now)}</span>}
           </div>
           {p.reason && <div className="sheet-reason">{p.reason}</div>}
@@ -136,11 +136,11 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
         <div className="sheet-links">
           {editable && !editing && (
             <button className="sheet-editlink" onClick={() => { setEdited(original); setEditing(true); }}>
-              edit before {p.kind === 'plan' ? 'approving' : 'allowing'}
+              {p.kind === 'plan' ? 'Edit plan' : 'Edit command'}
             </button>
           )}
           {editing && (
-            <button className="sheet-editlink" onClick={() => setEditing(false)}>back to the original</button>
+            <button className="sheet-editlink" onClick={() => setEditing(false)}>Restore original</button>
           )}
           {banner && !noting && (
             <button className="sheet-editlink" onClick={() => setNoting(true)}>add a note</button>
@@ -366,7 +366,7 @@ function QuestionSheet({ permission: p, onAnswer, busy, variant, onHandle }: {
       </div>
       <div className="sheet-body">
         <div className="q-text">{q.question}</div>
-        {q.multiSelect && <div className="q-hint">Pick any that apply</div>}
+        {q.multiSelect && <div className="q-hint">Select all that apply</div>}
         <div className="q-options" role={q.multiSelect ? 'group' : 'radiogroup'} aria-label={q.question}>
           {q.options.map((o, i) => {
             const on = chosen.includes(o.label);
@@ -389,7 +389,7 @@ function QuestionSheet({ permission: p, onAnswer, busy, variant, onHandle }: {
         {typeInline && <div className={`q-free${free.trim() ? ' on' : ''}`}>
           <input
             type={q.secret ? 'password' : 'text'} value={free}
-            placeholder={q.options.length ? 'Or type your own answer' : 'Type your answer'}
+            placeholder={q.options.length ? 'Type another answer' : 'Type your answer'}
             aria-label="Your own answer"
             onChange={(e) => type(q, e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirm(); } }}

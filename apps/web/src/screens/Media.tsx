@@ -73,7 +73,7 @@ export function MediaView({ client, env, onBack }: {
           { direct: false }),
       });
     } else {
-      setError(`this browser cannot play ${playing?.entry.name ?? 'that file'}`);
+      setError(`This browser cannot play ${playing?.entry.name ?? 'that file'}.`);
     }
   };
 
@@ -120,10 +120,10 @@ export function MediaView({ client, env, onBack }: {
               </button>
             ))}
             {roots === null
-              ? <div className="empty quiet">asking {env.name}…</div>
+              ? <div className="empty quiet">Loading folders from {env.name}…</div>
               : !roots.length && !error && (
                 <div className="empty quiet">
-                  nothing shared yet — on {env.name}: helm nas add ~/Movies
+                  No folders are shared. Run helm nas add ~/Movies on {env.name}.
                 </div>
               )}
           </div>
@@ -132,7 +132,7 @@ export function MediaView({ client, env, onBack }: {
             {path && (
               <button className="row" onClick={() => setPath(path.split('/').slice(0, -1).join('/'))}>
                 <span className="glyph"><Icon name="back" size={16} /></span>
-                <span className="grow"><span className="rt">up a folder</span></span>
+                <span className="grow"><span className="rt">Open parent folder</span></span>
               </button>
             )}
             {(entries ?? []).map((e) => (
@@ -150,8 +150,8 @@ export function MediaView({ client, env, onBack }: {
                 {e.dir && <span className="chev"><Icon name="forward" size={15} /></span>}
               </button>
             ))}
-            {entries === null && !error && <div className="empty quiet">listing…</div>}
-            {entries?.length === 0 && <div className="empty quiet">empty</div>}
+            {entries === null && !error && <div className="empty quiet">Loading files…</div>}
+            {entries?.length === 0 && <div className="empty quiet">This folder is empty.</div>}
           </div>
         )}
         {error && <div className="error">{error}</div>}

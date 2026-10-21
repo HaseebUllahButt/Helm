@@ -12,21 +12,21 @@ type Kind = 'limited' | 'error' | 'interrupted' | 'restart';
 
 const RULES: [RegExp, string][] = [
   [/model .*not supported|does not offer|model .*not available/i,
-    'This model is unavailable for this account. Choose another model, then try again.'],
+    'This account cannot use this model. Select another model. Try again.'],
   [/an internal error occurred/i,
-    'The AI service could not complete this response. Try again, or choose another model if it keeps failing.'],
+    'The AI service did not finish this reply. Try again. Select another model if it fails again.'],
   [/no conversation found|session .*not found|could not resume/i,
-    'The saved history for this chat is gone from this machine, so it could not carry on. Sending again starts it fresh.'],
+    'This machine no longer has the chat history. Send a message to start again.'],
   [/\b401\b|unauthori[sz]ed|not logged in|log ?in again|invalid api key|authentication|oauth token .*expired|credentials/i,
-    'This account is signed out on this machine. Sign in again there, then try again.'],
+    'This account is signed out on this machine. Sign in there. Try again.'],
   [/overloaded|\b529\b|\b5\d\d\b.*(error|server)|internal server error|service unavailable/i,
-    'The AI service is busy right now. Try again in a moment.'],
+    'The AI service is busy. Try again soon.'],
   [/econnreset|etimedout|enotfound|eai_again|fetch failed|network|socket hang up|timed? ?out/i,
-    'The machine could not reach the AI service. Check its internet, then try again.'],
+    'The machine cannot reach the AI service. Check its internet connection. Try again.'],
   [/context (window|length)|prompt is too long|too many tokens|maximum context/i,
-    'This chat has grown too long for the model. Start a new chat, or compact this one.'],
+    'This chat is too long for the model. Start a new chat or summarize this chat.'],
   [/command not found|enoent|spawn .* failed|no such file/i,
-    'The agent could not be started on this machine. Check that it is installed.'],
+    'Helm cannot start the agent on this machine. Check that the agent is installed.'],
 ];
 
 /** The bit worth reading out of a raw line: no ids, no "x exited with code 1:" prefix. */
@@ -53,7 +53,7 @@ export function plainError(message: string): string {
   for (const [rule, text] of RULES) if (rule.test(message)) return text;
   // "claude exited with code 143" and nothing after it says only that it died.
   const t = tidy(message);
-  if (!t || /exited with code|exited unexpectedly|^(killed|terminated)$|sig(term|kill)/i.test(t)) return 'The agent closed in the middle of the task.';
+  if (!t || /exited with code|exited unexpectedly|^(killed|terminated)$|sig(term|kill)/i.test(t)) return 'The agent stopped before the task finished.';
   return t;
 }
 
@@ -61,7 +61,7 @@ export function plainProblem(kind: Kind, message: string): Problem {
   const raw = message?.trim() || undefined;
   if (kind === 'restart') return {
     title: 'Response interrupted', action: 'Continue',
-    text: 'The agent stopped before this response finished. Continue from the saved conversation.',
+    text: 'The agent stopped before this reply finished. Continue from the saved chat.',
   };
   if (kind === 'interrupted') return {
     title: 'Task stopped', action: 'Continue',
@@ -71,7 +71,7 @@ export function plainProblem(kind: Kind, message: string): Problem {
     const when = resetTime(message ?? '');
     return {
       title: 'Usage limit reached', action: 'Resume', raw,
-      text: when ? `This account's limit resets at ${when}. Your queued messages wait until you resume.` : 'This account hit its usage limit. Your queued messages wait until you resume.',
+      text: when ? `This account’s limit resets at ${when}. Waiting messages stay until you continue.` : 'This account reached its usage limit. Waiting messages stay until you continue.',
     };
   }
   const text = plainError(message ?? '');

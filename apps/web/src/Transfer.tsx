@@ -149,7 +149,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
     try {
       if (task) {
         setLocked(true);
-        setStep(session ? `pausing this task and sending it to ${target.name}` : `sending the task to ${target.name}`);
+        setStep(session ? `Helm is pausing this task. Helm will send it to ${target.name}.` : `Helm is sending the task to ${target.name}.`);
         const request = {
           handoffId, folder, sessionId: session?.id, targetMachineId: target.id,
           targetFolder: targetFolder.trim() || undefined, profileId, model: model || undefined,
@@ -162,9 +162,9 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
           const p = sent.progress;
           const percent = p?.percent ?? (p?.total ? Math.min(100, Math.round(p.bytes / p.total * 100)) : null);
           const rate = typeof p?.rate === 'number' ? `${bytes(p.rate)}/s` : p?.rate;
-          setStep(p?.phase === 'pausing' ? 'pausing this task'
-            : p?.phase === 'starting' ? `starting the agent on ${target.name}`
-            : `copying to ${target.name}: ${percent === null ? `${bytes(p?.bytes ?? 0)} sent` : `${percent}%`}${p?.total ? ` of ${bytes(p.total)}` : ''}${rate ? ` · ${rate}` : ''}`);
+          setStep(p?.phase === 'pausing' ? 'Helm is pausing this task.'
+            : p?.phase === 'starting' ? `Helm is starting the agent on ${target.name}.`
+            : `Helm is copying files to ${target.name}: ${percent === null ? `${bytes(p?.bytes ?? 0)} sent` : `${percent}%`}${p?.total ? ` of ${bytes(p.total)}` : ''}${rate ? ` · ${rate}` : ''}`);
           await new Promise((resolve) => setTimeout(resolve, 1500));
           sent = await client.rpc<TaskTransferResult>(source.id, 'task.send', request, 360_000);
         }
@@ -172,7 +172,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
           setLocked(false);
           setPreview((now) => now ? { ...now, preflight: sent.preflight } : now);
           setAck(false);
-          setError('Review what stays behind, then confirm it.');
+          setError('Review the files that stay here. Confirm your choice.');
           return;
         }
         setTaskResult(sent);
@@ -250,19 +250,19 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
               <span className="grow">
                 <span className="done-title">{taskResult.status === 'running' ? 'Running' : 'Queued'} on {taskResult.targetName}</span>
                 <span className="done-sub">{taskResult.status === 'running'
-                  ? 'The destination took the task. You can close this laptop.'
-                  : 'It goes out when the destination reconnects.'}</span>
+                  ? 'The other machine has the task. You can close this laptop.'
+                  : 'Helm will send the task when the other machine reconnects.'}</span>
               </span>
             </div>
-            {taskResult.receipt && <p className="note" title={taskResult.route === 'direct' ? 'Sent direct' : 'Sent through home'}>{bulk ? `${bulk.files ?? ''} files and history · ${bytes(bulk.bytes)}` : `${taskResult.receipt.files} files · ${bytes(taskResult.receipt.bytes)}`}<br />{taskResult.receipt.folder}</p>}
-            <p className="note">Its progress and questions show in the new chat there.</p>
+            {taskResult.receipt && <p className="note" title={taskResult.route === 'direct' ? 'Sent directly' : 'Sent through home'}>{bulk ? `${bulk.files ?? ''} files and history · ${bytes(bulk.bytes)}` : `${taskResult.receipt.files} files · ${bytes(taskResult.receipt.bytes)}`}<br />{taskResult.receipt.folder}</p>}
+            <p className="note">Open the new chat there to see progress and questions.</p>
             {!bulk && <TaskReturn client={client} envId={source.id} transfer={{ ...returnState, handoffId, role: 'source',
               machineId: taskResult.targetMachineId!, machineName: taskResult.targetName! }} />}
             {taskResult.warning && <div className="banner">{taskResult.warning}</div>}
             {error && <div className="error">{error}</div>}
             <div className="transfer-actions">
               {taskResult.receipt && <button className="primary big" disabled={busy} onClick={openTask}>Open task there</button>}
-              {taskResult.status === 'queued' && <button className="primary big" disabled={busy} onClick={send}>Check / retry delivery</button>}
+              {taskResult.status === 'queued' && <button className="primary big" disabled={busy} onClick={send}>Check or retry delivery</button>}
               <button className="linkish" onClick={onBack}>Done</button>
             </div>
           </>
@@ -289,20 +289,20 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             </div>
 
             {receipt.repository && <div className="field">
-              <label className="field-label">Git origin
+              <label className="field-label">Git source address
                 <input className="custom" value={receipt.repository.remote} readOnly onFocus={(e) => e.target.select()} />
               </label>
               <p className="note">{receipt.repository.configured
-                ? 'Origin is set. Pull here with this machine’s GitHub login.'
+                ? 'The Git source address is set. Get updates with this machine’s GitHub login.'
                 : receipt.repository.error}</p>
             </div>}
 
             {readiness && (
               <>
                 <div className="section">
-                  target readiness
+                  Machine setup
                   <span className={`transfer-status ${readiness.status}`}>
-                    {readiness.status === 'needs-setup' ? 'needs setup' : 'unverified'}
+                    {readiness.status === 'needs-setup' ? 'needs setup' : 'Not checked'}
                   </span>
                 </div>
                 <Readiness readiness={readiness} />
@@ -310,15 +310,15 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             )}
 
             <p className="note">
-              Files arrived. Nothing was installed or started.
+              The files arrived. Helm did not install or start anything.
             </p>
             {error && <div className="error">{error}</div>}
             <div className="transfer-actions">
               <button className="primary big" disabled={busy} onClick={openTerminal}>
-                {busy ? 'opening…' : 'Open a terminal there'}
+                {busy ? 'Helm is opening the terminal.' : 'Open a terminal there'}
               </button>
               <button className="linkish" disabled={checking} onClick={checkAgain}>
-                {checking ? 'checking…' : 'Check setup again'}
+                {checking ? 'Helm is checking the setup.' : 'Check setup again'}
               </button>
               <button className="linkish" onClick={onBack}>Done</button>
             </div>
@@ -329,7 +329,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
               <div className="transfer-name">{preview?.rootName ?? leaf(folder)}</div>
               <div className="transfer-path">{folder}</div>
               <div className="transfer-stats">
-                {previewing ? <span>inspecting…</span> : (
+                {previewing ? <span>Helm is checking files.</span> : (
                   <>
                     <span><b>{preflight?.files ?? 0}</b> files</span>
                     <span>{bytes(preflight?.bytes ?? 0)}</span>
@@ -343,22 +343,22 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             {!session && <label className="check-row">
               <input type="checkbox" checked={task} disabled={busy || locked}
                 onChange={(event) => { setTask(event.target.checked); }} />
-              <span>Send a task with this project<small>Start an agent on the destination and keep working there.</small></span>
+              <span>Send a task with this project<small>Start an agent on the other machine. Continue the work there.</small></span>
             </label>}
             {task && <>
               <div className="field"><label className="field-label">{session ? 'Instructions for continuing' : 'Task'}
                 <textarea className="custom" value={prompt} disabled={busy || locked} maxLength={32000} rows={4}
-                  placeholder={session ? 'Continue where this conversation left off' : 'What should the agent do?'}
+                  placeholder={session ? 'Continue this chat’s work' : 'Describe the task'}
                   onChange={(event) => setPrompt(event.target.value)} />
               </label></div>
-              {session && <p className="note">This pauses this chat, copies its files and recent messages, and continues on the destination.</p>}
+              {session && <p className="note">Helm pauses this chat. Helm copies its files and recent messages. The chat continues on the other machine.</p>}
               {session && <button className="linkish" disabled={busy || locked} onClick={() => setTask(false)}>Send files only</button>}
             </>}
             {!task && preview?.git?.remote && <div className="field">
-              <label className="field-label">Git origin
+              <label className="field-label">Git source address
                 <input className="custom" value={preview.git.remote} readOnly onFocus={(e) => e.target.select()} />
               </label>
-              <p className="note">Pull on the target with its GitHub login.</p>
+              <p className="note">Get updates on the other machine with its GitHub login.</p>
             </div>}
             <div className="section">send to</div>
             <div className="rows">
@@ -378,15 +378,15 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
                 </button>
               ))}
               {!targets.length && (
-                <div className="empty quiet">no other machines are online right now</div>
+                <div className="empty quiet">No other machines are online.</div>
               )}
             </div>
 
-            <details open={task ? undefined : true}><summary>Agent and destination options</summary>
-            {task && <div className="field"><label className="field-label">Agent account on the destination
+            <details open={task ? undefined : true}><summary>Agent and machine options</summary>
+            {task && <div className="field"><label className="field-label">Agent account on the other machine
               <select className="custom" value={profileId} disabled={busy || locked || agentsLoading}
                 onChange={(event) => setProfileId(event.target.value)}>
-                {!agents.length && <option value="">{agentsLoading ? 'Loading accounts…' : 'No available agent accounts'}</option>}
+                {!agents.length && <option value="">{agentsLoading ? 'Loading accounts…' : 'No agent accounts available'}</option>}
                 {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.label || agent.id}</option>)}
               </select>
             </label></div>}
@@ -407,17 +407,17 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
                 Include .env files
                 <small>
                   {envCount
-                    ? `${envCount} found. Encrypted in transit${bulk ? ' and copied with their file permissions' : ' and written owner-only'} on ${target?.name ?? 'the target'}.`
+                    ? `${envCount} found. Helm encrypts these files to protect them during sending. ${bulk ? 'File access rules stay the same' : 'Only the file owner can read them'} on ${target?.name ?? 'the other machine'}.`
                     : preflight?.skipped
-                      ? 'Check to include any .env files that exist.'
-                      : 'No .env files were found.'}
+                      ? 'Select this option to include .env files.'
+                      : 'Helm found no .env files.'}
                 </small>
               </span>
             </label>
 
             <div className="field">
               <label className="field-label">
-                Folder on the target <span className="quiet">optional</span>
+                Folder on the other machine <span className="quiet">optional</span>
                 <input
                   className="custom" value={targetFolder} disabled={busy || locked}
                   placeholder={bulk && task ? `~/${preview?.rootName ?? leaf(folder)}` : `~/.helm/transfers/${preview?.rootName ?? leaf(folder)}`}
@@ -428,9 +428,9 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             </div>
 
             </details>
-            {task && !bulk && <p className="note">Project files and .env go encrypted. Finished changes come back here; your local edits are kept.</p>}
-            {task && bulk && <p className="note">This project is big, so it goes with its git history and resumes if the connection drops. The work stays on the destination in git.</p>}
-            {!task && bulk && <div className="banner">This project is too big to send alone. Turn on “Send a task with this project” to send it with its history.</div>}
+            {task && !bulk && <p className="note">Helm encrypts project files and .env files to protect them during sending. Finished changes return here. Helm keeps your edits here.</p>}
+            {task && bulk && <p className="note">Helm sends this large project with its Git history. Sending continues after connection loss. Git keeps the work on the other machine.</p>}
+            {!task && bulk && <div className="banner">This project needs its history. Select “Send a task with this project” to send both.</div>}
 
             {warnings.length > 0 && (
               <>
@@ -446,15 +446,15 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
                     </div>
                   ))}
                   {warnings.length > shownWarnings.length && (
-                    <div className="note">+ {warnings.length - shownWarnings.length} more omission{warnings.length - shownWarnings.length === 1 ? '' : 's'}</div>
+                    <div className="note">+ {warnings.length - shownWarnings.length} more skipped item{warnings.length - shownWarnings.length === 1 ? '' : 's'}</div>
                   )}
                 </div>
                 {needsAck && (
                   <label className="check-row ack">
                     <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
                     <span>
-                      I understand what stays behind
-                      <small>Secrets, symlinks and sensitive files stay behind unless the .env option covers them.</small>
+                      I understand which files stay here
+                      <small>Private files and file links stay here unless the .env option includes them.</small>
                     </span>
                   </label>
                 )}
@@ -464,11 +464,11 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             <p className="note">
               {task
                 ? 'Logins stay on each machine. Wait until the task is running before you close this laptop.'
-                : `Nothing on ${target?.name ?? 'the target'} is overwritten. Project commands do not run.`}
+                : `Helm keeps existing files on ${target?.name ?? 'the other machine'}. Helm does not run project commands.`}
             </p>
-            {busy && <div className="banner">{step || 'working…'}</div>}
+            {busy && <div className="banner">{step || 'Helm is sending the task.'}</div>}
             {error && <div className="error">{error}</div>}
-            {task && locked && error && <p className="note" title={handoffId}>Retry continues the same send. The chat may already be paused.</p>}
+            {task && locked && error && <p className="note" title={handoffId}>Retry continues the same send. Check whether the chat has paused.</p>}
           </>
         )}
       </div></div>
@@ -476,7 +476,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
       {!receipt && !taskResult && preview && (
         <div className="startbar">
           <button className="primary big" disabled={!canSend} onClick={send}>
-            {busy ? 'sending…' : target ? `${locked ? 'Retry' : task ? 'Send task' : 'Send'} to ${target.name}` : 'Send'}
+            {busy ? 'Helm is sending the task.' : target ? `${locked ? 'Retry' : task ? 'Send task' : 'Send'} to ${target.name}` : 'Send'}
           </button>
         </div>
       )}
@@ -531,28 +531,28 @@ export function VerifyView({ client, env, folder, onBack, onOpenSession }: {
           <div className="transfer-name">{leaf(folder)}</div>
           <div className="transfer-path">{folder}</div>
         </div>
-        {checking && !readiness && <div className="empty quiet">inspecting…</div>}
+        {checking && !readiness && <div className="empty quiet">Helm is checking files.</div>}
         {readiness && (
           <>
             <div className="section">
-              readiness
+              Machine setup
               <span className={`transfer-status ${readiness.status}`}>
-                {readiness.status === 'needs-setup' ? 'needs setup' : 'unverified'}
+                {readiness.status === 'needs-setup' ? 'needs setup' : 'Not checked'}
               </span>
             </div>
             <Readiness readiness={readiness} />
           </>
         )}
         <p className="note">
-          This only reads project files. Nothing was installed or started.
+          Helm only reads project files. Helm did not install or start anything.
         </p>
         {error && <div className="error">{error}</div>}
         <div className="transfer-actions">
           <button className="primary big" disabled={busy || !env.online} onClick={openTerminal}>
-            {busy ? 'opening…' : 'Open a terminal here'}
+            {busy ? 'Helm is opening the terminal.' : 'Open a terminal here'}
           </button>
           <button className="linkish" disabled={checking || !env.online} onClick={load}>
-            {checking ? 'checking…' : 'Check again'}
+            {checking ? 'Helm is checking the setup.' : 'Check again'}
           </button>
           <button className="linkish" onClick={onBack}>Done</button>
         </div>

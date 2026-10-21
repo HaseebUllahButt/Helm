@@ -65,9 +65,9 @@ export function TodoCard({ item }: { item: Item }) {
   if (!todos.length) return null;
   const done = todos.filter((t) => t.state === 'completed').length;
   return (
-    <div className="todos" role="group" aria-label="To-do list">
+    <div className="todos" role="group" aria-label="Task list">
       <div className="todos-head">
-        <span className="todos-title">To-do</span>
+        <span className="todos-title">Tasks</span>
         <span className="todos-count">{done} of {todos.length} done</span>
       </div>
       <div className="todos-bar" role="progressbar" aria-valuemin={0} aria-valuemax={todos.length} aria-valuenow={done}>
@@ -83,7 +83,7 @@ export function TodoCard({ item }: { item: Item }) {
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
               </span>
               <span className="todo-text">{t.text}</span>
-              <span className="todo-sr">{t.state === 'completed' ? ' (done)' : t.state === 'in_progress' ? ' (in progress)' : ''}</span>
+              <span className="todo-sr">{t.state === 'completed' ? ' (done)' : t.state === 'in_progress' ? ' (working)' : ''}</span>
             </li>
           );
         })}
@@ -140,7 +140,7 @@ export function TodoStrip({ todos }: { todos: Todo[] }) {
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
               </span>
               <span className="todo-text">{t.text}</span>
-              <span className="todo-sr">{t.state === 'completed' ? ' (done)' : t.state === 'in_progress' ? ' (in progress)' : ''}</span>
+              <span className="todo-sr">{t.state === 'completed' ? ' (done)' : t.state === 'in_progress' ? ' (working)' : ''}</span>
             </li>
           ))}
         </ul>

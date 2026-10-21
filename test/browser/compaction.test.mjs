@@ -46,7 +46,7 @@ test('while compacting, the conversation and a counting bar over the composer sa
   await page.evaluate(() => window.render(true));
   const bar = page.locator('.docked.compacting');
   await bar.waitFor();
-  assert.match(await bar.innerText(), /Compacting conversation…\s*0:1\d/);
+  assert.match(await bar.innerText(), /Summarizing chat…\s*0:1\d/);
   assert.equal(await page.locator('.compaction.live').count(), 1);
   assert.equal(await page.locator('.working').count(), 0, 'the compaction line replaces the generic pulse');
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, 'compacting.png') });
@@ -56,7 +56,7 @@ test('once it is done the bar goes and the line says it compacted', async () => 
   await page.evaluate(() => window.render(false));
   await page.locator('.compaction:not(.live)').waitFor();
   assert.equal(await page.locator('.docked.compacting').count(), 0);
-  assert.match(await page.locator('.compaction').innerText(), /Conversation compacted · 9s/);
+  assert.match(await page.locator('.compaction').innerText(), /Chat summarized · 9s/);
 });
 
 test('steps after a compaction land below its line, the way a chat grows', async () => {

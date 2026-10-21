@@ -394,7 +394,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       onAttach={session.nativeChat ? attachImages : undefined} attachments={images}
       onRemoveAttachment={index => setImages(current => current.filter((_, i) => i !== index))}
       canAttach={!!session.nativeChat}
-      onAttachUnsupported={() => setError('This terminal cannot receive images through chat. Open a Claude or Codex chat to attach images.')}
+      onAttachUnsupported={() => setError('This terminal cannot receive images from chat. Open a Claude or Codex chat to attach images.')}
       waiting={status === 'blocked'} engine={eng.label}
       working={status === 'working' || status === 'blocked'}
       onStop={session.nativeCli && session.engine === 'pi' ? stopNative : undefined}
@@ -432,11 +432,11 @@ export function SessionView({ client, env, machines, session, terminals = [], on
             Hiding it here made it look gone. The sheet says when there is no Git. */}
         <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
           onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
-        {!isShell && <button className="iconbtn" title="Canvas: notes and docs (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
+        {!isShell && <button className="iconbtn" title="Open canvas: notes and documents (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
           onClick={() => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); }}><Icon name="canvas" size={17} /></button>}
         {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={() => { if (!browser.open) canvas.setOpen(false); browser.toggle(); }}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
         {!isShell && !isExternal && (
-          <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
+          <button className="iconbtn" title={raw ? 'Show chat' : 'Show terminal'} aria-label={raw ? 'Show chat' : 'Show terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
           </button>
         )}
@@ -461,15 +461,15 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           </div>
         ) : (
           <div className="menu" onClick={() => setMenu(false)}>
-            <button onClick={() => setNaming(true)}>Rename thread</button>
+            <button onClick={() => setNaming(true)}>Rename chat</button>
             {session.nativeChat && <>
               <button disabled={settingBusy || sending || status === 'blocked' || !env.online} onClick={() => void nativeCommand('/permissions')}>Claude permissions</button>
               <button disabled={settingBusy || sending || status === 'blocked' || !env.online} onClick={() => void nativeCommand('/config')}>Claude settings</button>
             </>}
             {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
             {!isExternal && onSendTask && <button disabled={!env.online} onClick={onSendTask}>Send task to another machine</button>}
-            <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
-            <button className="destructive" onClick={() => setKilling(true)}>{session.nativeCli ? 'End session' : 'Delete thread'}</button>
+            <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
+            <button className="destructive" onClick={() => setKilling(true)}>{session.nativeCli ? 'Stop chat' : 'Delete chat'}</button>
           </div>
         ))}
       </div>
@@ -497,7 +497,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
 
       {naming && (
         <TextPrompt
-          title={isShell ? 'Name this terminal' : 'Name this thread'} value={session.title}
+          title={isShell ? 'Name this terminal' : 'Name this chat'} value={session.title}
           onCancel={() => setNaming(false)} onSubmit={renameThread}
         />
       )}
@@ -505,9 +505,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         <Confirm
           title={isShell ? `Close "${session.title}"?` : session.nativeCli ? `End "${session.title}"?` : `Delete "${session.title}"?`}
           body={isShell
-            ? 'Anything still running in it stops.'
-            : session.nativeCli ? 'This stops the same CLI running on your laptop. Closing this view leaves it running.' : 'The agent stops and this chat leaves Helm.'}
-          confirmLabel={isShell ? 'Close' : session.nativeCli ? 'End session' : 'Delete'} danger
+            ? 'All programs in this terminal stop.'
+            : session.nativeCli ? 'This stops the agent program on your laptop. Close this view to leave it running.' : 'The agent stops and this chat leaves Helm.'}
+          confirmLabel={isShell ? 'Close' : session.nativeCli ? 'Stop chat' : 'Delete'} danger
           onCancel={() => setKilling(false)}
           onConfirm={() => { setKilling(false); kill(); }}
         />
@@ -601,12 +601,12 @@ function Chat({ messages, status, compacting = false, readVisual, canvas }: { me
     <div className="chat-wrap">
       <div className="chat" ref={box} onScroll={onScroll}>
         <div className="timeline">
-          {messages === null && <p className="placeholder">Loading the conversation…</p>}
+          {messages === null && <p className="placeholder">Loading chat…</p>}
           {messages?.length === 0 && (
             <p className="placeholder">
               {status === 'blocked' || status === 'working'
-                ? 'No messages yet. The terminal view shows what it is doing.'
-                : 'Send a message to start the conversation.'}
+                ? 'This chat has no messages. Open the terminal view to see the agent’s work.'
+                : 'Send a message to start the chat.'}
             </p>
           )}
           <Visuals.Provider value={readVisual}><CanvasContext.Provider value={canvas}>{messages?.map((m, i) => <Turn key={m.sourceId ?? i} m={m} />)}</CanvasContext.Provider></Visuals.Provider>
@@ -627,7 +627,7 @@ function Turn({ m }: { m: Message }) {
       <div className="turn user">
         <div className="bubble">{!!display.attachments?.length && <div className="turn-images">{display.attachments.map((a, i) => a.data
           ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={`Image #${i + 1}${a.filename ? ` · ${a.filename}` : ''}`} loading="lazy" decoding="async" />
-          : <span key={i} className="turn-image-gone"><Icon name="image" size={14} /> {a.filename} — no longer stored</span>
+          : <span key={i} className="turn-image-gone"><Icon name="image" size={14} /> {a.filename} — Helm no longer stores this image.</span>
         )}</div>}{display.text}</div>
       </div>
     );

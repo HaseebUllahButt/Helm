@@ -116,7 +116,7 @@ test('favorite stars never select a model or change its default; explicit defaul
       assert.equal(await page.getByRole('button',{name:'Model C is the default for new chats'}).getAttribute('aria-pressed'),'true');
       await page.getByRole('checkbox',{name:'Favorite Model B'}).check();
       await page.getByPlaceholder('search all models').fill('Model B');
-      assert.equal(await page.getByText('no matches',{exact:true}).count(),0);
+      assert.equal(await page.getByText('Nothing matches.',{exact:true}).count(),0);
       const bounds = await page.getByRole('checkbox',{name:'Favorite Model B'}).boundingBox();
       assert.ok(bounds.x + bounds.width <= width);
       if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({path:process.env.HELM_TEST_SCREENSHOT_DIR+'/models-'+width+'.png'});
@@ -130,7 +130,7 @@ test('favorite stars never select a model or change its default; explicit defaul
       await page.getByRole('button',{name:'Use Normal by default for new chats'}).click();
       assert.deepEqual(await page.evaluate(()=>window.saved),{kind:'speed',id:''});
       assert.equal(await page.locator('.modesheet').count(),1);
-      await page.getByRole('option',{name:'Normal the usual tier',exact:true}).click();
+      await page.getByRole('option',{name:'Normal Standard speed',exact:true}).click();
       await page.locator('.modesheet').waitFor({state:'detached'});
       await page.locator('button[title^="model:"]').click();
       await page.getByRole('option',{name:'Model B',exact:true}).click();

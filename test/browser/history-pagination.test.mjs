@@ -74,7 +74,7 @@ async function device(t, { width = 390, done = false, text = false, fail = false
 
 for (const done of [false, true]) for (const width of [390, 1280]) test(`loading earlier steps reveals them within the same ${done ? 'completed' : 'working'} turn at ${width}px`, async t => {
   const { page, calls } = await device(t, { done, width });
-  await page.getByRole('button', { name: 'Earlier in this conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'Earlier in this chat', exact: true }).click();
   await page.waitForFunction(() => !window.state.loadingEarlier && !window.state.earlier);
   assert.equal(calls.filter(call => call.before).length, 1);
   const step = page.locator('[data-item-id="step-0"]');
@@ -88,7 +88,7 @@ for (const done of [false, true]) for (const width of [390, 1280]) test(`loading
 
 test('loading the missing beginning of a long answer shows its older text', async t => {
   const { page } = await device(t, { text: true });
-  await page.getByRole('button', { name: 'Earlier in this conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'Earlier in this chat', exact: true }).click();
   await page.waitForFunction(() => !window.state.loadingEarlier && !window.state.earlier);
   const chat = await page.locator('.chat').evaluate(el => ({ top: el.scrollTop, height: el.clientHeight }));
   assert.ok(chat.top < chat.height, 'the older beginning should be visible, rather than staying pinned to the recent ending');
@@ -97,7 +97,7 @@ test('loading the missing beginning of a long answer shows its older text', asyn
 
 test('loading a previous exchange shows the new question at the top', async t => {
   const { page } = await device(t, { previousTurn: true });
-  await page.getByRole('button', { name: 'Earlier in this conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'Earlier in this chat', exact: true }).click();
   await page.waitForFunction(() => !window.state.loadingEarlier && !window.state.earlier);
   assert.equal(await page.locator('.chat').evaluate(el => el.scrollTop), 0);
   assert.match(await page.locator('.turn.user').first().innerText(), /Previous question/);
@@ -105,7 +105,7 @@ test('loading a previous exchange shows the new question at the top', async t =>
 
 test('a failed earlier read can be retried and clears its error after revealing history', async t => {
   const { page, calls } = await device(t, { fail: true });
-  const button = page.getByRole('button', { name: 'Earlier in this conversation', exact: true });
+  const button = page.getByRole('button', { name: 'Earlier in this chat', exact: true });
   await button.click();
   await page.waitForFunction(() => window.state.error === 'History disconnected' && !window.state.loadingEarlier);
   assert.equal(await button.isEnabled(), true);

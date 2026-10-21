@@ -7,7 +7,7 @@ interface Share { name: string; port: number; password: boolean; private?: boole
 
 /** "ends in 2h 10m", or "kept" for a link that stays until stopped. */
 const endsIn = (s: Share) => {
-  if (!s.expiresAt) return 'kept until stopped';
+  if (!s.expiresAt) return 'stays open until you stop it';
   const mins = Math.max(1, Math.round((s.expiresAt - Date.now()) / 60_000));
   return mins >= 60 ? `ends in ${Math.floor(mins / 60)}h ${mins % 60}m` : `ends in ${mins} min`;
 };
@@ -80,11 +80,11 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
     void navigator.clipboard?.writeText(url).then(() => { setCopied(url); setTimeout(() => setCopied(''), 1500); });
   };
 
-  if (!env.online) return <div className="empty quiet">{env.name} is offline</div>;
+  if (!env.online) return <div className="empty quiet">{env.name} is offline.</div>;
   return (
     <div className="links">
-      {shares === null && <div className="empty quiet">looking…</div>}
-      {shares?.length === 0 && !adding && <div className="empty quiet">Nothing shared from {env.name}.</div>}
+      {shares === null && <div className="empty quiet">Helm is loading Spins.</div>}
+      {shares?.length === 0 && !adding && <div className="empty quiet">{env.name} has no Spins.</div>}
       {!!shares?.length && (
         <div className="rows">
           {shares.map((s) => (
@@ -104,7 +104,7 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
       {adding ? (
         <form className="link-form" onSubmit={add}>
           <label>Port<input className="field" inputMode="numeric" placeholder="3000" value={port} autoFocus onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} /></label>
-          <label>Name<input className="field" placeholder="optional, e.g. demo" value={name} autoCapitalize="off" autoCorrect="off" spellCheck={false} onChange={(e) => setName(e.target.value.toLowerCase())} /></label>
+          <label>Name<input className="field" placeholder="Optional. Example: demo" value={name} autoCapitalize="off" autoCorrect="off" spellCheck={false} onChange={(e) => setName(e.target.value.toLowerCase())} /></label>
           {canPrivate && (
             <button type="button" className="row toggle link-private" role="switch" aria-checked={members} onClick={() => setMembers(!members)}>
               <span className="grow">
@@ -116,13 +116,13 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
           {!members && <label>Password<input className="field" type="password" placeholder="optional" value={password} autoComplete="new-password" onChange={(e) => setPassword(e.target.value)} /></label>}
           <div className="link-actions">
             <button type="button" className="ghost" onClick={() => setAdding(false)}>Cancel</button>
-            <button className="primary" disabled={busy || !port}>{busy ? 'Sharing…' : 'Share'}</button>
+            <button className="primary" disabled={busy || !port}>{busy ? 'Helm is creating the Spin.' : 'Create Spin'}</button>
           </div>
         </form>
       ) : (
-        <button className="ghost link-add" onClick={() => setAdding(true)}><Icon name="plus" size={14} /> Share a port</button>
+        <button className="ghost link-add" onClick={() => setAdding(true)}><Icon name="plus" size={14} /> Create a Spin</button>
       )}
-      {shares?.some((s) => !s.url) && <p className="note">No machine has a public address yet, so these links do not open from outside.</p>}
+      {shares?.some((s) => !s.url) && <p className="note">No machine has a public address. These Spins do not open outside your network.</p>}
       {error && <div className="error">{error}</div>}
     </div>
   );

@@ -123,7 +123,7 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: 
   return (
     <>
       <button
-        className="rowend" title="thread actions" aria-label={`actions for ${s.title}`} aria-haspopup="menu" aria-expanded={menu}
+        className="rowend" title="Show chat actions" aria-label={`Show actions for ${s.title}`} aria-haspopup="menu" aria-expanded={menu}
         onClick={(e) => { e.stopPropagation(); setMenu((open) => !open); }}
       ><Icon name="more" size={16} /></button>
       {menu && (
@@ -132,23 +132,23 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: 
             <button onClick={() => { setMenu(false); onContinue(); }}>Continue in a new chat</button>
           )}
           {onRename && !adopted && (
-            <button onClick={() => { setMenu(false); setNaming(true); }}>Rename thread</button>
+            <button onClick={() => { setMenu(false); setNaming(true); }}>Rename chat</button>
           )}
           {onArchive && (
             <button onClick={() => { setMenu(false); onArchive(); }}>
-              {s.archived ? 'Unarchive thread' : 'Archive thread'}
+              {s.archived ? 'Restore chat' : 'Archive chat'}
             </button>
           )}
           {onDelete && (
             <button className="destructive" onClick={() => { setMenu(false); setEnding(true); }}>
-              {found ? 'Remove from helm' : adopted ? 'Close this pane' : 'Delete thread'}
+              {found ? 'Remove from Helm' : adopted ? 'Close this terminal' : 'Delete chat'}
             </button>
           )}
         </div>
       )}
       {naming && onRename && (
         <TextPrompt
-          title="Name this thread" value={s.title}
+          title="Name this chat" value={s.title}
           onCancel={() => setNaming(false)}
           onSubmit={(t) => { setNaming(false); if (t !== s.title) onRename(t); }}
         />
@@ -160,10 +160,10 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: 
           // what it really does. helm never deletes a CLI's own history:
           // that conversation is the owner's, not our record.
           body={found
-            ? `${eng.label} keeps the conversation - helm just stops listing it.`
+            ? `${eng.label} keeps the chat. Helm removes it from the list.`
             : adopted
-              ? 'This ends the program running in that pane, which helm did not start.'
-              : 'This ends the agent and permanently removes the thread from helm.'}
+              ? 'This closes the program in that terminal. Helm did not start it.'
+              : 'This stops the agent. Helm permanently removes the chat.'}
           confirmLabel={found ? 'Remove' : adopted ? 'Close' : 'Delete'} danger
           onCancel={() => setEnding(false)}
           onConfirm={() => { setEnding(false); onDelete(); }}
@@ -219,7 +219,7 @@ export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Sessi
   const dismiss = async () => {
     setDismissing(true); setDismissError('');
     try { await onDismiss(); }
-    catch (error: any) { setDismissError(error?.message || 'Could not dismiss this failure. Try again.'); }
+    catch (error: any) { setDismissError(error?.message || 'Helm cannot clear this failure alert. Try again.'); }
     finally { setDismissing(false); }
   };
   const eng = engineOf(s.engine);
@@ -230,7 +230,7 @@ export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Sessi
     <div className={`need${s.recovery && s.status !== 'blocked' ? ' need-recovery' : ''}`}>
       <button className="need-main" onClick={onOpen} title={problem?.text}>
         <span className="need-k">
-          <i />{s.status === 'blocked' || s.team?.blocked ? 'Needs you' : problem?.title ?? (s.team?.failed ? 'Child task failed' : 'Needs you')}{s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
+          <i />{s.status === 'blocked' || s.team?.blocked ? 'Needs you' : problem?.title ?? (s.team?.failed ? 'Helper task failed' : 'Needs you')}{s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
           {n > 1 && <span className="need-n">{n}</span>}
         </span>
         <span className="need-t">
@@ -241,13 +241,13 @@ export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Sessi
           </span>
         </span>
         {ask?.text && <span className={`need-q${ask.kind === 'command' ? ' mono' : ''}`}>{ask.text}{ask.more ? ` (+${ask.more} more)` : ''}</span>}
-        <span className="need-go">{s.team?.blocked ? `${s.team.blocked} child tasks need approval` : s.team?.failed ? `${s.team.failed} child ${s.team.failed === 1 ? 'task' : 'tasks'} failed` : s.recovery && !ask ? 'View task' : NEED_GO[ask?.kind ?? ''] ?? 'Review and answer'}<Icon name="forward" size={15} /></span>
+        <span className="need-go">{s.team?.blocked ? `${s.team.blocked} helper tasks need approval` : s.team?.failed ? `${s.team.failed} helper ${s.team.failed === 1 ? 'task' : 'tasks'} failed` : s.recovery && !ask ? 'View task' : NEED_GO[ask?.kind ?? ''] ?? 'Review and answer'}<Icon name="forward" size={15} /></span>
       </button>
       <div className={`need-foot${s.team?.failed ? ' has-dismiss' : ''}${choosing ? ' is-choosing' : ''}`}>
         {!choosing ? (
           <>
             {!!s.team?.failed && <button className="need-snooze need-dismiss" disabled={dismissing} onClick={() => void dismiss()}
-              title="Clear the current child failure alert on all devices. Keep its history; new failures will still alert you.">{dismissing ? 'Dismissing…' : s.team.failed === 1 ? 'Dismiss failure' : 'Dismiss failures'}</button>}
+              title="Clear this helper failure alert on all devices. Its history stays. New failures show alerts.">{dismissing ? 'Dismissing…' : s.team.failed === 1 ? 'Dismiss failure' : 'Dismiss failures'}</button>}
             <button className="need-snooze" onClick={() => setChoosing(true)}>Snooze…</button>
           </>
         ) : (
@@ -313,7 +313,7 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
           {/* Stopped by the owner part-way: finished with, but not finished. */}
           {s.recovery?.kind === 'interrupted' && mood !== 'working' ? <span className="chip exited">stopped</span>
             : unknownThread(s) ? <StatusChip status="unknown" />
-            : mood !== 'working' && (s.externalActive || (s.shared && s.alive)) ? <span className="chip">idle</span> : null}
+            : mood !== 'working' && (s.externalActive || (s.shared && s.alive)) ? <span className="chip">Ready</span> : null}
           <EngineMark engine={eng.cls} className="tri-mark" />
         </span>
       </span>
@@ -333,10 +333,10 @@ export function StatusChip({ status, at }: { status: string; at?: number }) {
   const age = ago && ago !== 'just now' ? ` ${ago}` : '';
   if (status === 'blocked') return <span className="chip blocked"><i />waiting{age}</span>;
   if (status === 'working') return <span className="chip working"><i />working{age}</span>;
-  if (status === 'compacting') return <span className="chip working"><i />compacting</span>;
+  if (status === 'compacting') return <span className="chip working"><i />Summarizing chat</span>;
   if (status === 'starting') return <span className="chip working"><i />starting</span>;
   if (status === 'done') return <span className="chip done"><i />done</span>;
   if (status === 'exited') return <span className="chip exited">ended</span>;
-  if (status === 'unknown') return <span className="chip exited" title="The machine could not tell whether this agent is working">status unavailable</span>;
+  if (status === 'unknown') return <span className="chip exited" title="The machine cannot report if this agent is working.">Status unknown</span>;
   return null;
 }

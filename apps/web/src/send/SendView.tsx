@@ -17,8 +17,8 @@ type Props = {
 const leaf = (path: string) => path.replace(/\/+$/, '').split('/').pop() || path;
 const parent = (path: string) => path.replace(/\/[^/]+\/?$/, '') || '/';
 const phaseWords: Record<SendJob['phase'], string> = {
-  preparing: 'Preparing…', sending: 'Sending…', finishing: 'Finishing…', done: 'Sent',
-  failed: 'Send stopped', interrupted: 'Send interrupted', cancelled: 'Cancelled',
+  preparing: 'Helm is preparing the send.', sending: 'Helm is sending files.', finishing: 'Helm is finishing the send.', done: 'Sent',
+  failed: 'The send failed.', interrupted: 'The send stopped early.', cancelled: 'Helm cancelled the send.',
 };
 const count = (n: number) => n.toLocaleString();
 function LeftBehind({ left }: { left: SendJob['left'] }) {
@@ -35,16 +35,16 @@ export function SendProgress({ job }: { job: SendJob }) {
     <h2 className="screen-title" role="status">{phaseWords[job.phase]}</h2>
     <div className="send-progress-line" role="progressbar" aria-label="Files sent"
       aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined}
-      aria-valuetext={percent === null ? 'Total size not known yet' : `${percent}% · ${phaseWords[job.phase]}`}>
+      aria-valuetext={percent === null ? 'Helm does not know the total size yet.' : `${percent}% · ${phaseWords[job.phase]}`}>
       <span style={{ width: percent === null ? '0%' : `${percent}%` }} />
     </div>
     <p className="readout">{bytes(job.bytes.sent)}{job.bytes.total !== null ? ` of ${bytes(job.bytes.total)}` : ' sent'}
       {percent !== null ? ` · ${percent}%` : ''}</p>
     <p className="note">{count(job.files.sent)}{job.files.total !== null ? ` of ${count(job.files.total)}` : ''} files
       {job.rate !== null ? ` · ${bytes(job.rate)}/s` : ''}
-      {job.eta !== null ? ` · ${Math.ceil(job.eta)}s left` : sending(job) ? ' · Estimating time…' : ''}</p>
+      {job.eta !== null ? ` · ${Math.ceil(job.eta)}s left` : sending(job) ? ' · Helm is estimating the time.' : ''}</p>
     {job.again && <p className="note">{job.changed
-      ? `${count(job.changed.files)} changed files · ${bytes(job.changed.bytes)}` : 'Only changes are being sent.'}</p>}
+      ? `${count(job.changed.files)} changed files · ${bytes(job.changed.bytes)}` : 'Helm is sending only changes.'}</p>}
   </div>;
 }
 export function SendView({ client, source, folder, jobId: initialJobId, onBack, onJob, onAgain, onOpenFolder, onStartChat, initialIncludeEnv = true, preferredTargetId, onTask }: Props) {
@@ -87,7 +87,7 @@ export function SendView({ client, source, folder, jobId: initialJobId, onBack, 
       if (!live) return;
       setPlan(reply);
       setTargetId(reply.targets.some(item => item.machineId === preferredTargetId) ? preferredTargetId! : reply.defaultTarget ?? reply.targets.find(item => item.online)?.machineId ?? reply.targets[0]?.machineId ?? '');
-    }).catch(() => { if (live) setError(`Couldn't check ${leaf(folder)} on ${source.name}. Try again.`); })
+    }).catch(() => { if (live) setError(`Helm cannot check ${leaf(folder)} on ${source.name}. Try again.`); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [client, source.id, folder, attempt, jobId, !!job, preferredTargetId]);
@@ -105,7 +105,7 @@ export function SendView({ client, source, folder, jobId: initialJobId, onBack, 
       remember(job);
     } catch {
       // An unacknowledged start may already be running. Discover it; never automatically start a second job.
-      setUncertain(true); setError(`Couldn't confirm the send. Check its status before sending again.`);
+      setUncertain(true); setError(`Helm cannot confirm the send. Check its status before you send again.`);
       await store.refresh(source.id);
     } finally { mutating.current = false; setBusy(''); }
   };
@@ -115,7 +115,7 @@ export function SendView({ client, source, folder, jobId: initialJobId, onBack, 
     try {
       const { job: next } = await (kind === 'cancel' ? client.sendCancel(source.id, job.id) : client.sendRetry(source.id, job.id));
       remember(next);
-    } catch { setError(`Couldn't ${kind === 'cancel' ? 'stop' : 'resume'} the send. Check the connection and try again.`); }
+    } catch { setError(`Helm cannot ${kind === 'cancel' ? 'stop' : 'resume'} the send. Check the connection. Try again.`); }
     finally { mutating.current = false; setBusy(''); }
   };
   const sendAgain = () => {
@@ -150,38 +150,38 @@ export function SendView({ client, source, folder, jobId: initialJobId, onBack, 
         </> : <>
           <SendProgress job={job} />
           {job.error && <p className="error" role="alert">{job.error}</p>}
-          {job.phase === 'cancelled' && <p className="note">The send stopped. Retry to continue to the same place.</p>}
-          {job.phase === 'interrupted' && <p className="note">The source stopped before the send finished. Retry to continue.</p>}
+          {job.phase === 'cancelled' && <p className="note">The send stopped. Select Retry to continue to the same folder.</p>}
+          {job.phase === 'interrupted' && <p className="note">The sending machine stopped before the send finished. Select Retry to continue.</p>}
           {sending(job) ? <button className="linkish send-stop" disabled={!!busy} onClick={() => void action('cancel')}>
             {busy === 'cancel' ? 'Stopping…' : 'Cancel send'}</button>
             : <button className="primary big" disabled={!!busy || !source.online} onClick={() => void action('retry')}>
               {busy === 'retry' ? 'Resuming…' : 'Retry'}</button>}
-          <p className="note">You can leave this screen. {job.source.name} needs to stay on.</p>
+          <p className="note">You can leave this screen. Keep {job.source.name} on.</p>
         </>}
         {errors[source.id] && <p className="note" role="status">{errors[source.id]}</p>}
         <LeftBehind left={job.left} />
-      </> : busy === 'start' ? <div className="send-progress" role="status"><h2 className="screen-title">Preparing…</h2>
-        <p className="note">To {target?.name} · {target?.destination}</p><p className="note">You can leave this screen. {source.name} needs to stay on.</p></div>
-      : initialJobId ? <><p role="status">{errors[source.id] || 'Getting send status…'}</p>
+      </> : busy === 'start' ? <div className="send-progress" role="status"><h2 className="screen-title">Helm is preparing the send.</h2>
+        <p className="note">To {target?.name} · {target?.destination}</p><p className="note">You can leave this screen. Keep {source.name} on.</p></div>
+      : initialJobId ? <><p role="status">{errors[source.id] || 'Helm is checking send progress.'}</p>
         <button className="linkish" onClick={() => void store.status(source.id, initialJobId)}>Check status</button></>
       : <>
-        {loading ? <p role="status" className="note">Checking what to send…</p> : plan && <>
+        {loading ? <p role="status" className="note">Helm is checking the files to send.</p> : plan && <>
           <div className="send-destination"><div className="section"><span className="send-path">To {target?.name ?? 'another machine'}</span><span className="spacer" />
             {plan.targets.length > 1 && <button className="linkish" disabled={uncertain} aria-expanded={choosing} onClick={() => setChoosing(value => !value)}>Change</button>}</div>
-            <p className="note send-path">{target?.destination ?? 'No other machines yet.'}</p>
+            <p className="note send-path">{target?.destination ?? 'You have no other machines yet.'}</p>
             {choosing && <div className="rows plain">{plan.targets.map(item => <button className="row" key={item.machineId}
               disabled={uncertain} aria-pressed={item.machineId === targetId} onClick={() => { setTargetId(item.machineId); setChoosing(false); }}>
               <span className="grow"><span className="rt">{item.name}{item.online ? '' : ' · Offline'}</span>
                 <span className="rm send-path">{item.destination}</span></span></button>)}</div>}
           </div>
-          {again ? <p className="readout">Only changes will be sent.</p> : <p className="readout">{plan.estimate ? 'About ' : ''}{count(plan.files)} {plan.kind === 'file' ? 'file' : 'files'} · {bytes(plan.bytes)}</p>}
-          {plan.git && !again && <p className="note">Project files and history included.</p>}
+          {again ? <p className="readout">Helm will send only changes.</p> : <p className="readout">{plan.estimate ? 'About ' : ''}{count(plan.files)} {plan.kind === 'file' ? 'file' : 'files'} · {bytes(plan.bytes)}</p>}
+          {plan.git && !again && <p className="note">Helm includes project files and history.</p>}
           {!!plan.envFiles.length && <label className="send-env"><input type="checkbox" disabled={uncertain} checked={includeEnv} onChange={event => setIncludeEnv(event.target.checked)} />
-            <span>{plan.envFiles.length} environment {plan.envFiles.length === 1 ? 'file' : 'files'} {includeEnv ? 'included' : 'staying here'}</span></label>}
+            <span>{plan.envFiles.length} .env {plan.envFiles.length === 1 ? 'file' : 'files'} {includeEnv ? 'included' : 'staying here'}</span></label>}
           <p className="note">Files stay on {source.name}.</p>
           <LeftBehind left={plan.left} />
           {onTask && <details className="send-details"><summary>Options</summary><button className="linkish" disabled={uncertain || !target?.online || !source.online} onClick={() => target && onTask({ targetMachineId: target.machineId, includeEnv })}>Send a task with these files</button></details>}
-          {target && !target.online && <p className="note" role="status">{target.name} is offline. Try again when it is back.</p>}
+          {target && !target.online && <p className="note" role="status">{target.name} is offline. Try again when it is online.</p>}
           <div className="send-actions"><button className="primary big" disabled={!target?.online || !source.online || uncertain}
             onClick={() => void start()}>{again ? `Send again to ${target?.name ?? 'machine'}` : `Send to ${target?.name ?? 'machine'}`}</button></div>
         </>}

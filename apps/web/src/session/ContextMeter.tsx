@@ -17,17 +17,17 @@ const CIRCLE = 2 * Math.PI * R;
 export function ContextMeter({ used, window, onPress, open, compacted = false }: { used: number; window: number; onPress?: () => void; open?: boolean; compacted?: boolean }) {
   if (!(window > 0) || !(used > 0 || compacted)) return null;
   const pct = compacted ? 0 : Math.min(100, Math.round((used / window) * 100));
-  const title = compacted ? `Compacted · the new size shows after the next reply` : `${size(used)} of ${size(window)} used`;
+  const title = compacted ? `Chat summarized. The new size shows after the next reply.` : `${size(used)} of ${size(window)} used`;
   const cls = `ctx-meter${pct >= 95 ? ' bad' : pct >= 80 ? ' warn' : ''}`;
   const body = <>
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
       <circle className="ctx-ring-bg" cx="8" cy="8" r={R} />
       <circle className="ctx-ring" cx="8" cy="8" r={R} strokeDasharray={`${(CIRCLE * pct) / 100} ${CIRCLE}`} transform="rotate(-90 8 8)" />
     </svg>
-    <span className="ctx-pct">{compacted ? 'compacted' : `${pct}%`}</span>
+    <span className="ctx-pct">{compacted ? 'summarized' : `${pct}%`}</span>
   </>;
   return onPress
-    ? <button type="button" className={`${cls} press`} title={`${title} · change when it compacts`} aria-label={`Context ${title}${compacted ? '' : `, ${pct}%`}. Change when it compacts`}
+    ? <button type="button" className={`${cls} press`} title={`${title} · Change when Helm summarizes the chat`} aria-label={`Chat memory: ${title}${compacted ? '' : `, ${pct}%`}. Change when Helm summarizes the chat`}
       aria-haspopup="menu" aria-expanded={!!open} onClick={onPress}>{body}</button>
-    : <span className={cls} role="img" title={title} aria-label={`Context ${title}${compacted ? '' : `, ${pct}%`}`}>{body}</span>;
+    : <span className={cls} role="img" title={title} aria-label={`Chat memory: ${title}${compacted ? '' : `, ${pct}%`}`}>{body}</span>;
 }
