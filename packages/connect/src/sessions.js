@@ -27,7 +27,7 @@ import { opencodeServiceSessions } from './opencode-service.js';
 import { claudeLiveSessions, claudeLiveStatus, descendsFrom, dedupeNativeConversations } from './external-process.js';
 import { readProcess } from './takeover.js';
 import { startHookServer } from './claude-hooks.js';
-import { gitBranch } from './git-head.js';
+import { gitBranch, worktreeHome } from './git-head.js';
 import { AccountLimits } from './account-limits.js';
 import { CLAUDE_NATIVE_COMMANDS } from './commands.js';
 import { validateVisual } from './visual.js';
@@ -843,7 +843,13 @@ export class Sessions extends EventEmitter {
       .map((s) => s.delegations ? { ...s, delegations: this.#delegation.visibleDelegations(s) } : s)
       .map((s) => (s.delegation && this.#delegation.unhomedDelegation(s) ? { ...s, unhomed: true } : s))
       // The branch each thread's folder is on, for the sidebar's third line.
-      .map((s) => (s.cwd && !s.quick && !this.#preparing(s) ? { ...s, branch: gitBranch(s.cwd) } : s))
+      // A chat in a worktree also says where the repo it came from is, so a
+      // new chat "here" starts there (the new-chat keys).
+      .map((s) => {
+        if (!s.cwd || s.quick || this.#preparing(s)) return s;
+        const home = worktreeHome(s.cwd);
+        return { ...s, branch: gitBranch(s.cwd), ...(home ? { worktreeHome: home } : {}) };
+      })
       .sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 

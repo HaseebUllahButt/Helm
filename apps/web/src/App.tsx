@@ -786,7 +786,7 @@ function Shell({ client, conn, onSignOut }: {
   const inQuick = !!viewSession?.quick || (view.kind === 'start' && !!view.quick);
   // A chat in its own worktree: "here" is the repo the worktree came from.
   const currentFolder = inQuick ? undefined
-    : viewSession ? viewSession.chatWorktree?.repo ?? viewSession.cwd
+    : viewSession ? viewSession.chatWorktree?.repo ?? viewSession.worktreeHome ?? viewSession.cwd
     : view.kind === 'start' || view.kind === 'transfer' ? view.cwd
     : view.kind === 'verify' ? view.path
     : view.kind === 'new' || view.kind === 'browse' || view.kind === 'transfer-browse' ? view.path ?? '~'
@@ -795,7 +795,8 @@ function Shell({ client, conn, onSignOut }: {
   useEffect(() => {
     if (selected && currentFolder) rememberChatFolder(selected, currentFolder);
   }, [selected, currentFolder, rememberChatFolder]);
-  worktreeRepo.current = selected && viewSession?.chatWorktree?.repo ? { envId: selected, folder: viewSession.chatWorktree.repo } : null;
+  const worktreeHome = !inQuick && (viewSession?.chatWorktree?.repo ?? viewSession?.worktreeHome);
+  worktreeRepo.current = selected && worktreeHome ? { envId: selected, folder: worktreeHome } : null;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
