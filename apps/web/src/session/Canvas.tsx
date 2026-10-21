@@ -215,6 +215,8 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
   const [problem, setProblem] = useState('');
   const [savedAt, setSavedAt] = useState(0);
   const area = useRef<HTMLTextAreaElement>(null);
+  const savingNow = useRef(false);
+  const revision = useRef(0);
 
   const loaded = typeof file === 'object' && 'text' in file && file.text != null ? file : null;
   const dirty = draft != null && loaded != null && draft !== loaded.text;
@@ -229,9 +231,10 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
   useEffect(() => {
     let alive = true;
     if (hidden) { setFile({ path, hidden: true }); return; }
+    const at = revision.current;
     client.rpc<FileText>(env.id, 'git.file', { cwd, path }, 30_000)
       .then((f) => {
-        if (!alive) return;
+        if (!alive || at !== revision.current) return;
         const kept = drafts.get(dkey);
         if (kept && kept.base.hash !== f.hash) setTheirs(f);
         else setFile(f);
@@ -247,12 +250,13 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
     let alive = true, busy = false;
     const tick = async () => {
       const f = live.current.file;
-      if (busy || document.visibilityState !== 'visible' || typeof f !== 'object' || !('hash' in f) || !f.hash) return;
+      if (busy || savingNow.current || document.visibilityState !== 'visible' || typeof f !== 'object' || !('hash' in f) || !f.hash) return;
       busy = true;
       try {
+        const at = revision.current;
         const since = live.current.theirs?.hash ?? f.hash;
         const next = await client.rpc<FileText>(env.id, 'git.file', { cwd, path, since }, 15_000);
-        if (!alive || next.same || !next.hash) return;
+        if (!alive || at !== revision.current || savingNow.current || next.same || !next.hash) return;
         if (live.current.dirty) setTheirs((t) => (t?.hash === next.hash ? t : next));
         else { setFile(next); setDraftRaw((d) => (d == null ? d : next.text ?? '')); }
       } catch { /* offline for a moment: the next tick tries again */ }
@@ -263,7 +267,8 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
   }, [client, env.id, cwd, path, hidden]);
 
   const save = async (over?: FileText) => {
-    if (!loaded || draft == null || saving) return;
+    if (!loaded || draft == null || savingNow.current) return;
+    savingNow.current = true; revision.current++;
     setSaving(true); setProblem('');
     try {
       const baseHash = over?.hash ?? loaded.hash ?? '';
@@ -274,11 +279,15 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
         setTheirs(now);
         return;
       }
-      setFile({ ...loaded, text: draft, hash: r.hash, size: r.size });
-      drafts.delete(dkey); setTheirs(null); setSavedAt(Date.now());
+      const saved = { ...loaded, text: draft, hash: r.hash, size: r.size };
+      setFile(saved);
+      const kept = drafts.get(dkey);
+      if (kept && kept.text !== draft) drafts.set(dkey, { text: kept.text, base: saved });
+      else { drafts.delete(dkey); setSavedAt(Date.now()); }
+      setTheirs(null);
     } catch (e: any) {
       setProblem(/unknown|not supported/i.test(e?.message ?? '') ? 'Update Helm on this machine to save from the canvas.' : e?.message || 'Could not save.');
-    } finally { setSaving(false); }
+    } finally { savingNow.current = false; revision.current++; setSaving(false); }
   };
   useEffect(() => { if (!savedAt) return; const t = setTimeout(() => setSavedAt(0), 1600); return () => clearTimeout(t); }, [savedAt]);
 
