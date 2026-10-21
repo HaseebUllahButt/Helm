@@ -1869,6 +1869,18 @@ export class Sessions extends EventEmitter {
   }
 
   /**
+   * The models the owner's own chats on this engine used last, newest first:
+   * the model picker puts them at the top. Helpers pick their own, so they
+   * do not count.
+   */
+  recentModels(engine, count = 3) {
+    const chats = [...this.#index.values()]
+      .filter((s) => s.engine === engine && typeof s.model === 'string' && s.model && !s.delegation)
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    return [...new Set(chats.map((s) => s.model))].slice(0, count);
+  }
+
+  /**
    * A session record for an id.
    *
    * Ids prefixed `pane:` refer to work helm did not start - an agent you

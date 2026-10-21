@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import type { Client, Mode, ModelList, ModelNote, Session, NativeControl } from '../client';
 import { Icon, type IconName } from '../Icon';
 import { modelRing, nextInRing } from './chatKeys';
-import { foldTiers, levelsOf, providerOf, shelve, variantFor } from './modelShelf';
+import { foldTiers, levelsOf, prettyName, providerOf, shelve, variantFor } from './modelShelf';
 import { fadeWhenCut } from '../fadeWhenCut';
 
 /** One thing you can change while the agent is running. */
@@ -239,30 +239,43 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
   const savedVariant = variants?.find((v) => v.id === savedModel);
 
   if (options.models.length || options.more?.length) {
-    const name = (m: string) => fold?.names[m] ?? labels[m] ?? m;
     const unique = (ids: string[]) => [...new Set(ids.map(toBase))];
     let ids = unique(options.models);
     let more = unique(options.more ?? []).filter((m) => !ids.includes(m));
     const current = toBase(model);
+    // Every row reads as a name; one brand on every row ("Claude") is said
+    // once by the chip, not on each row.
+    const named = Object.fromEntries([...ids, ...more, current].filter(Boolean).map((m) => [m, prettyName(m, fold?.names[m] ?? labels[m])]));
+    const brand = /^(Claude|Gemini|Grok) [A-Za-z]/.exec(named[ids[0] ?? more[0]] ?? '')?.[1];
+    const name = (m: string) => {
+      const n = named[m] ?? m;
+      return brand && Object.values(named).every((v) => v.startsWith(`${brand} `) && /^[A-Za-z]/.test(v.slice(brand.length + 1))) ? n.slice(brand.length + 1) : n;
+    };
+    // What the owner's own chats used last comes first.
+    const recent = [...new Set((options.recent ?? []).map(toBase))].filter((m) => ids.includes(m) || more.includes(m)).slice(0, 3);
     // An approved list is the owner's own short list. Without one, the
     // picker makes it: the newest of each line, the rest one tap away
     // under "older" and the like.
     let heading: ((m: string) => string) | undefined;
     if (!options.prefs?.approved?.length) {
-      const shelf = shelve(ids, Object.fromEntries(ids.map((m) => [m, name(m)])), [current, savedModel ? toBase(savedModel) : '']);
+      const shelf = shelve(ids, Object.fromEntries(ids.map((m) => [m, named[m]])), [current, ...recent]);
       heading = (m) => ({ newest: 'latest', older: 'older', 'fusion pairs': 'fusion pairs' })[shelf.shelf(m)] ?? 'others';
       ids = shelf.main;
       more = [...shelf.rest, ...more];
-    }
+    } else ids = [...new Set([...recent.filter((m) => more.includes(m)), ...ids])];
+    more = more.filter((m) => !ids.includes(m));
+    ids = [...recent.filter((m) => ids.includes(m)), ...ids.filter((m) => !recent.includes(m))];
     // opencode and pi reach many providers: each gets a heading, and the
     // row drops the "(Antigravity)" its heading already says.
     const providers = [...new Set([...ids, ...more].map(providerOf))];
     const sectioned = providers.length > 1;
     if (sectioned) more = providers.flatMap((p) => more.filter((m) => providerOf(m) === p));
     const choice = (m: string, folded = false): Choice => {
-      const section = sectioned ? providerOf(m) || undefined : folded ? heading?.(m) : undefined;
+      const section = recent.length && !folded && recent.includes(m) ? 'recent'
+        : sectioned ? providerOf(m) || undefined
+        : folded ? heading?.(m) : recent.length ? 'latest' : undefined;
       const label = name(m);
-      return { id: m, label: sectioned && section ? label.replace(`${section}/`, '').replace(/\s*\(([^)]*)\)$/, (all, p) => p.toLowerCase() === section.toLowerCase() ? '' : all) : label, section };
+      return { id: m, label: sectioned && section !== 'recent' && section ? label.replace(/\s*\(([^)]*)\)$/, (all, p) => p.toLowerCase() === section.toLowerCase() ? '' : all) : label, section };
     };
     const choices = ids.map((m) => choice(m));
     const rest = more.map((m) => choice(m, true));
@@ -278,7 +291,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       choices,
       more: rest,
       current,
-      currentLabel: current ? shortModel(current, fold ? { ...labels, ...fold.names } : labels, session.engine) : 'model',
+      currentLabel: current ? shortModel(current, { ...labels, ...named }, session.engine) : 'model',
       saved: savedModel ? toBase(savedModel) : null,
       favs: options.favs && [...new Set(options.favs.map(toBase))],
       pick: fold ? (m) => {
@@ -564,10 +577,7 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
       {headed(main)}
       {rest.length > 0 && (q || expanded ? headed(rest, main.at(-1)?.section) : (
         <button type="button" className="moderow more" onClick={() => setExpanded(true)}>
-          <span className="grow">
-            <span className="rt">{rest.length} more</span>
-            <span className="rm">{rest.length > 40 ? 'search them, or show them all' : 'older versions and the rest'}</span>
-          </span>
+          <span className="grow"><span className="rt">{rest.length} more</span></span>
           <span className="chev">›</span>
         </button>
       ))}

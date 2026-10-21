@@ -44,11 +44,11 @@ test('Claude picker selects Opus 5.5 immediately and receives later catalog addi
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
     await page.locator('button[title^="model:"]').click();
-    await page.getByRole('option', { name: 'Claude Opus 5.5', exact: true }).click();
+    await page.getByRole('option', { name: 'Opus 5.5', exact: true }).click();
     assert.equal(await page.evaluate(() => window.picked), 'claude-opus-5-5');
     await page.evaluate(() => window.completeCatalog());
     await page.locator('button[title^="model:"]').click();
-    await page.getByRole('option', { name: 'Claude Sonnet 5.5', exact: true }).click();
+    await page.getByRole('option', { name: 'Sonnet 5.5', exact: true }).click();
     assert.equal(await page.evaluate(() => window.picked), 'claude-sonnet-5-5');
   } finally { await browser.close(); }
 });
@@ -234,5 +234,31 @@ test('devin shows each model once; its thinking and speed chips pick the matchin
     assert.deepEqual(await page.getByRole('option').allTextContents(), ['low', 'high']);
     await page.getByRole('option',{name:'low',exact:true}).click();
     assert.deepEqual(await page.evaluate(()=>window.picked), ['model','claude-opus-5-5-low-fast']);
+  } finally { await browser.close(); }
+});
+
+test('Claude with bare ids: the newest four, recent first, an old default waits behind more', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Controls } from './apps/web/src/session/Controls';
+    function Picker() {
+      const controls = Controls({ options:{ models:['claude-haiku-5-5','claude-sonnet-5-5','claude-opus-5-5','claude-fable-5-1','claude-opus-5','claude-sonnet-5'],
+        default:'claude-sonnet-5', prefs:{default:'claude-sonnet-5', approved:[]}, recent:['claude-fable-5-1','claude-opus-4-8'], favs:[] },
+        session:{ engine:'claude', model:'claude-opus-5-5' }, onFavs:()=>{}, onPick:()=>{}, onDefault:()=>{} });
+      return <>{controls.chips}{controls.sheet}</>;
+    }
+    createRoot(document.getElementById('root')).render(<Picker />);
+  `, resolveDir:process.cwd(), loader:'tsx' }, bundle:true,write:false,format:'iife',jsx:'automatic' });
+  const browser = await chromium.launch({headless:true,...(process.env.HELM_TEST_CHROMIUM ? {executablePath:process.env.HELM_TEST_CHROMIUM} : {})});
+  try {
+    const page = await browser.newPage({ viewport:{width:390,height:844} });
+    await page.setContent('<div class="session"><div id="root"></div></div>');
+    await page.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
+    await page.addScriptTag({content:bundle.outputFiles[0].text});
+    await page.locator('button[title="model: Opus 5.5"]').click();
+    assert.deepEqual(await page.getByRole('option').allTextContents(), ['Fable 5.1', 'Haiku 5.5', 'Sonnet 5.5', 'Opus 5.5']);
+    assert.deepEqual(await page.locator('.modesheet-label').allTextContents(), ['recent', 'latest']);
+    assert.equal(await page.locator('.moderow.more').innerText(), '2 more\n›');
   } finally { await browser.close(); }
 });

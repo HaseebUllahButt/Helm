@@ -1897,7 +1897,7 @@ export class Daemon {
             // the terminal button already shows.
             nativeControls: nativeControls(native.engine).filter(kind => kind !== 'settings' &&
               !(kind === 'model' && (filtered.models?.length || filtered.more?.length)) && !(kind === 'effort' && hasEffort)),
-            favs: pickerPrefs().favs[native.engine] ?? [],
+            favs: pickerPrefs().favs[native.engine] ?? [], recent: this.sessions.recentModels?.(native.engine) ?? [],
             ...(account ? { prefs, defaults: startPrefs(account), account: accountKey(account), profileId: account.id } : { defaults: {} }) };
         }
         if (native?.nativeChat && native.engine === 'claude') {
@@ -1915,7 +1915,7 @@ export class Daemon {
           // the chips show what Claude reports, and `default`/`effort` stay
           // empty so they never stand in for it.
           return { ...filtered, default: null, effort: null, modes: modesFor('claude'), defaultMode: null,
-            favs: pickerPrefs().favs.claude ?? [],
+            favs: pickerPrefs().favs.claude ?? [], recent: this.sessions.recentModels?.('claude') ?? [],
             ...(account ? { prefs, defaults: startPrefs(account), account: accountKey(account), profileId: account.id, ...modelWatch(account) } : { defaults: {} }) };
         }
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
@@ -1967,7 +1967,7 @@ export class Daemon {
         // picker can show and change both without a second round trip.
         return {
           ...filtered, prefs, modes: engine?.driver ? live?.modes ?? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine),
-          favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile), subagentDefaults: subagentPrefs(profile), account: accountKey(profile),
+          favs: pickerPrefs().favs[profile.engine] ?? [], recent: this.sessions.recentModels?.(profile.engine) ?? [], defaults: startPrefs(profile), subagentDefaults: subagentPrefs(profile), account: accountKey(profile),
           ...modelWatch(profile),
         };
       }

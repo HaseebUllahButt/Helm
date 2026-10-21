@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 
 const bundle = await build({ entryPoints: ['apps/web/src/session/modelShelf.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
-const { shelve, foldTiers, variantFor, levelsOf } = await import('data:text/javascript;base64,' + Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+const { shelve, foldTiers, variantFor, levelsOf, prettyName } = await import('data:text/javascript;base64,' + Buffer.from(bundle.outputFiles[0].text).toString('base64'));
 
 test('Claude shows the newest of each line; older and dated copies wait behind more', () => {
   const labels = {
@@ -13,7 +13,8 @@ test('Claude shows the newest of each line; older and dated copies wait behind m
   };
   const { main, rest } = shelve(Object.keys(labels), labels, []);
   assert.deepEqual(main, ['claude-haiku-5-5', 'claude-opus-5-5', 'claude-fable-5-1']);
-  assert.deepEqual(rest, ['claude-opus-4-8', 'claude-fable-5', 'claude-opus-4-5', 'claude-opus-4-5-20251101']);
+  // The dated copy of Opus 4.5 is the same model: it shows once.
+  assert.deepEqual(rest, ['claude-opus-4-8', 'claude-fable-5', 'claude-opus-4-5']);
   // The model in use and the default always show, however old.
   assert.ok(shelve(Object.keys(labels), labels, ['claude-opus-4-8']).main.includes('claude-opus-4-8'));
 });
@@ -56,4 +57,16 @@ test('devin fusion pairs never show first', () => {
   assert.deepEqual(main, ['swe-2']);
   assert.deepEqual(rest, ['fusion-a-sidekick-b']);
   assert.equal(shelf('fusion-a-sidekick-b'), 'fusion pairs');
+});
+
+test('bare ids and hyphen-joined labels read as names', () => {
+  assert.equal(prettyName('claude-haiku-5-5'), 'Claude Haiku 5.5');
+  assert.equal(prettyName('gpt-6.1-sol'), 'GPT-6.1 Sol');
+  assert.equal(prettyName('gpt-6.1-sol', 'GPT-6.1-Sol'), 'GPT-6.1 Sol');
+  assert.equal(prettyName('devin/claude-opus-5-5-high'), 'Claude Opus 5.5 High');
+  assert.equal(prettyName('claude-opus-5-5', 'Claude Opus 5.5'), 'Claude Opus 5.5');
+  // Names with no version are names already.
+  assert.equal(prettyName('claude-opus-4-5', 'Claude Opus 4.5 (latest)'), 'Claude Opus 4.5');
+  assert.equal(prettyName('sonnet'), 'sonnet');
+  assert.equal(prettyName('big-pickle', 'Big Pickle'), 'Big Pickle');
 });

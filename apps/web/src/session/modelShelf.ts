@@ -21,6 +21,27 @@ export const providerOf = (id: string) => {
   return slash > 0 ? id.slice(0, slash) : '';
 };
 
+const UPPER = new Set(['gpt', 'glm', 'oss', 'swe', 'ai']);
+
+/**
+ * A name worth reading: "claude-haiku-5-5" -> "Claude Haiku 5.5",
+ * "GPT-6.1-Sol" -> "GPT-6.1 Sol". A CLI that names its models well keeps
+ * its names; only bare ids and hyphen-joined labels change, and only when
+ * they carry a version - "sonnet" or "big-pickle" is a name already.
+ */
+export function prettyName(id: string, label?: string) {
+  // Claude's "Opus 4.5 (latest)" is the same model as its dated copy.
+  label = label?.replace(/\s*\(latest\)$/i, '');
+  if (label && (/\s/.test(label) || !/\d/.test(label))) return label;
+  if (label) return label.replace(/-(?!\d)/g, ' ');
+  if (!/\d/.test(id)) return id;
+  const provider = providerOf(id);
+  const words = id.slice(provider ? provider.length + 1 : 0).replace(/(\d)-(?=\d)/g, '$1.').split(/[-_]+/).filter(Boolean)
+    .map((w) => UPPER.has(w.toLowerCase()) ? w.toUpperCase() : /^[a-z]/.test(w) ? w[0].toUpperCase() + w.slice(1) : w);
+  // "GPT 6.1" reads as the vendors write it: "GPT-6.1".
+  return words.join(' ').replace(/^GPT (?=\d)/, 'GPT-');
+}
+
 /** A model's line and version: "Claude Opus 4.5" -> "claude opus #", [4, 5]. */
 function lineOf(id: string, labels: Record<string, string>) {
   const provider = providerOf(id);
@@ -49,8 +70,9 @@ const newer = (a: number[], b: number[]) => {
  * to 5.5) and of its brand's newest generation ("GPT-5.6 Terra" loses to
  * the GPT-6 lines), up to SHORT_MAX in the CLI's own order. A list from
  * many providers that is still too long shows only `keep` (the model in
- * use, the default): it is for searching. `rest` puts what would have shown first, then
+ * use, the recent ones): it is for searching. `rest` puts what would have shown first, then
  * older models, then devin's fusion pairs, each under its own heading.
+ * Two ids for one model ("claude-opus-4-5" and its dated copy) show once.
  */
 export function shelve(ids: string[], labels: Record<string, string>, keep: string[]) {
   const lines = new Map(ids.map((id) => [id, lineOf(id, labels)]));
@@ -62,6 +84,14 @@ export function shelve(ids: string[], labels: Record<string, string>, keep: stri
     const brand = key.split('#')[0];
     if (version.length) major.set(brand, Math.max(major.get(brand) ?? 0, version[0]));
   }
+  const seen = new Map<string, string>();
+  for (const id of ids) {
+    const { key, version } = lines.get(id)!;
+    const same = `${key}@${version.join('.')}`;
+    const first = seen.get(same);
+    if (!first || /-\d{8}$/.test(first) && !/-\d{8}$/.test(id)) seen.set(same, id);
+  }
+  const twin = (id: string) => { const { key, version } = lines.get(id)!; return seen.get(`${key}@${version.join('.')}`) !== id; };
   const shelf = new Map(ids.map((id) => {
     const { key, version } = lines.get(id)!;
     if (/^fusion\b/i.test(labels[id] ?? id)) return [id, 'fusion pairs'];
@@ -72,7 +102,7 @@ export function shelve(ids: string[], labels: Record<string, string>, keep: stri
   if (main.length > SHORT_MAX) main = new Set(ids.map(providerOf)).size > 1 ? [] : main.slice(0, SHORT_MAX);
   for (const id of keep) if (id && ids.includes(id) && !main.includes(id)) main.push(id);
   main = ids.filter((id) => main.includes(id));
-  const rest = ['newest', 'older', 'fusion pairs'].flatMap((name) => ids.filter((id) => shelf.get(id) === name && !main.includes(id)));
+  const rest = ['newest', 'older', 'fusion pairs'].flatMap((name) => ids.filter((id) => shelf.get(id) === name && !main.includes(id) && !twin(id)));
   return { main, rest, shelf: (id: string) => shelf.get(id)! };
 }
 

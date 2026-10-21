@@ -1450,7 +1450,8 @@ pre.snippet {
 .moderow.danger .rt { color: var(--amber-text); }
 .moderow.armed { background: color-mix(in srgb, var(--amber) 12%, transparent); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .moderow.armed .rm { color: var(--amber-text); }
-.moderow.more .rt { color: var(--mutedfg); font-size: var(--t-body); }
+.moderow.more { padding-block: 5px; }
+.moderow.more .rt { color: var(--mutedfg); font-size: var(--t-meta); }
 .moderow .chev { color: var(--icon); font-size: 15px; flex: none; }
 
 /* The model sheet's search box: sits inside the sheet, quieter than a form input. */

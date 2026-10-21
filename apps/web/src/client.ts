@@ -268,6 +268,8 @@ export interface ModelList {
   defaultMode?: string | null;
   /** Models starred for this engine on this machine, shared by every device. */
   favs?: string[];
+  /** Models this machine's own chats on this engine used last, newest first. */
+  recent?: string[];
   /** What a new chat on this account starts with, besides the model. */
   defaults?: { effort?: string; mode?: string; speed?: string } | null;
   subagentDefaults?: SubagentDefaults;
