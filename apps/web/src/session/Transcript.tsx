@@ -766,16 +766,13 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           name and first line, the rest a tap away. Never the owner's bubble. */}
       {head && helper && (
         <details className="turn helper-msg">
-          {/* Its name over its words: a helper's name is its whole task, and
-              on one line with the message neither could be read. */}
+          {/* One quiet line of text: the helper's short name, its words cut
+              to fit, the time. A tap shows the whole message. */}
           <summary>
-            <span className="helper-head">
-              <Icon name="subagents" size={13} />
-              <span className="helper-name" ref={fadeWhenCut}>{helperName(helper.from)}</span>
-              {helper.status && helper.status !== 'done' && <span className="helper-status">{helper.status}</span>}
-              <span className="helper-time">{clock(turn.at)}</span>
-            </span>
+            <span className="helper-name" ref={fadeWhenCut}>{helperName(helper.from)}</span>
+            {helper.status && helper.status !== 'done' && <span className="helper-status">{helper.status}</span>}
             <span className="helper-line">{helper.text.trim()}</span>
+            <span className="helper-time">{clock(turn.at)}</span>
           </summary>
           <Markdown text={helper.text} className="prose" />
         </details>

@@ -3703,22 +3703,19 @@ details.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
   .bar button, .bar a, .bar input, .bar select, .bar textarea, .bar [role="button"] { app-region: no-drag; -webkit-app-region: no-drag; }
 }
 
-/* Another agent's message in the chat: its name and time on a quiet line,
-   up to three lines of what it said under that, all of it a tap away. Left
-   aligned with a thin rule, like a teammate in Claude Code - not the
-   owner's bubble. */
-.turn.helper-msg { display: block; margin: 12px 0 16px; padding: 1px 0 1px 12px; border-left: 2px solid color-mix(in srgb, var(--primary-q) 45%, transparent); color: var(--text-dim); }
-.turn.helper-msg summary { display: block; cursor: pointer; list-style: none; min-width: 0; }
+/* Another agent's message in the chat: one plain line of quiet text - its
+   short name, its words cut to fit, the time - with nothing around it. A tap
+   shows the whole message under it. Never the owner's bubble. */
+.turn.helper-msg { display: block; margin: 4px 0 8px; font-size: var(--t-meta); color: var(--mutedfg); }
+.turn.helper-msg summary { display: flex; align-items: baseline; gap: 6px; min-width: 0; cursor: pointer; list-style: none; }
 .turn.helper-msg summary::-webkit-details-marker { display: none; }
-.helper-head { display: flex; align-items: center; gap: 6px; min-width: 0; margin-bottom: 3px; font-size: var(--t-meta); color: var(--mutedfg); }
-.helper-head svg { flex: none; }
-.helper-name { min-width: 0; overflow: hidden; white-space: nowrap; font-weight: 600; color: var(--text-dim); }
-.helper-name[data-more] { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+.helper-name { flex: none; max-width: 35%; overflow: hidden; white-space: nowrap; font-weight: 600; color: var(--text-dim); }
+.helper-name[data-more] { mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
 .helper-status { flex: none; font-size: var(--t-micro); }
-.helper-time { flex: none; margin-left: auto; padding-left: 8px; font-size: var(--t-micro); }
-.helper-line { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: var(--t-body); line-height: 1.55; }
-.turn.helper-msg[open] .helper-line { display: none; }
-.turn.helper-msg > .prose { font-size: var(--t-body); }
+.helper-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.helper-time { flex: none; font-size: var(--t-micro); }
+.turn.helper-msg[open] .helper-line { visibility: hidden; }
+.turn.helper-msg > .prose { margin-top: 4px; font-size: var(--t-meta); color: var(--text-dim); }
 /* Helpers' waiting messages: one line, opened to read. */
 .helper-inbox summary { cursor: pointer; list-style: none; justify-content: flex-start; }
 .helper-inbox summary::-webkit-details-marker { display: none; }
