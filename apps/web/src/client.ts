@@ -329,6 +329,19 @@ export interface UsageReport {
 }
 
 /** The share of input tokens that came back out of the prompt cache. */
+/**
+ * The folder a chat is about, as the owner chose it. A chat with its own
+ * worktree runs in a copy named `<repo>-chat-<id>`; this names the repo
+ * instead, keeping any subfolder the chat was started in.
+ */
+export const chatFolder = (s: Pick<Session, 'cwd' | 'chatWorktree'>) => {
+  const wt = s.chatWorktree;
+  if (!wt || !s.cwd) return s.cwd;
+  const copy = '/' + (wt.path.replace(/\/+$/, '').split('/').pop() ?? '');
+  const at = s.cwd.lastIndexOf(copy);
+  return at < 0 ? wt.repo : wt.repo.replace(/\/+$/, '') + s.cwd.slice(at + copy.length);
+};
+
 export const hitRate = (t: Pick<UsageTotals, 'input' | 'cacheRead'>) => {
   const denom = (t.input || 0) + (t.cacheRead || 0);
   return denom ? t.cacheRead / denom : 0;

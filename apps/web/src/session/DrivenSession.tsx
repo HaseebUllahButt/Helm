@@ -1,6 +1,6 @@
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
-import { Client, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
+import { Client, chatFolder, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
 import { useNow, waitingSince } from '../useNow';
 import { LiveComposer, createLiveDraft } from './liveDraft';
 import { prepareAttachment } from './image';
@@ -551,7 +551,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     const next = nameDraft.trim();
     if (save && next) void rename(next);
   };
-  const folder = !session.brain && !session.quick && session.cwd ? session.cwd.replace(/\/+$/, '').split('/').pop() || '~' : '';
+  const folder = !session.brain && !session.quick && session.cwd ? chatFolder(session).replace(/\/+$/, '').split('/').pop() || '~' : '';
 
   // "Ping me when it finishes": one ring, once, the next time the thread
   // settles. New sessions start enabled; the owner can silence this thread.
@@ -695,7 +695,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <div className="crumb">
             <EngineMark engine={session.engine} />
             {folder && <>
-              <span className="crumb-folder" title={session.cwd}>{folder}</span>
+              <span className="crumb-folder" title={chatFolder(session)}>{folder}</span>
               <span className="crumb-sep" aria-hidden="true">/</span>
             </>}
             {renaming ? (
@@ -722,7 +722,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
               <span key={part}><span className="sep"> · </span>{part}</span>
             ))}
             {/* On a phone the folder leaves the title line to the title. */}
-            {folder && <span className="sub-folder" title={session.cwd}><span className="sep"> · </span>{folder}</span>}
+            {folder && <span className="sub-folder" title={chatFolder(session)}><span className="sep"> · </span>{folder}</span>}
             {log.loaded && (logError || (!env.online && syncing))
               ? <span className="offline" role="status"> · Saved chat · reconnecting…</span>
               : syncing && !(cameUpEmpty && !log.loaded) && <span role="status"> · Syncing chat…</span>}
@@ -782,7 +782,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       <ExternalSessionNotice session={session}
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       <span ref={dockAnchor} hidden />
-      {firstMessage && <EmptyChat cwd={session.cwd} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={options?.labels?.[modelNow] ?? modelNow} still={cameUpEmpty} />}
+      {firstMessage && <EmptyChat cwd={chatFolder(session)} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={options?.labels?.[modelNow] ?? modelNow} still={cameUpEmpty} />}
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
         readVisual={readVisual} openAgent={openAgent}
