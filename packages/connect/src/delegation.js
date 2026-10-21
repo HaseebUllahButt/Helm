@@ -142,12 +142,14 @@ ${toolNotes(parentId)}`;
 }
 
 /**
- * How every agent writes to the owner: Simplified Technical English (the
- * ASD-STE100 rules), cut down to what fits in every session. It covers
- * words meant for people, never code, commands or quoted output.
+ * How every agent writes for people: Simplified Technical English (the
+ * ASD-STE100 rules), cut down to what fits in every session. It covers every
+ * message a person may read, to the owner or to another agent, never code,
+ * commands or quoted output. Helm's own screens follow the same rules
+ * (AGENTS.md).
  */
 export function writingNote() {
-  return '[Helm writing: Write to the owner in Simplified Technical English (ASD-STE100): at most 20 words for a step and 25 for an explanation, one instruction per sentence starting with the verb, active voice, simple tenses, common words, one word for one meaning, jargon explained in a few plain words, steps as a list. Tell the owner what they will see, not how the code works. This covers prose for people, not code, commands or quoted output.]';
+  return '[Helm writing: Write every message in Simplified Technical English (ASD-STE100): replies to the owner, helm say and reply messages, helper tasks, commit messages. Put the answer or result first. One idea per sentence: at most 20 words for a step, 25 for an explanation. Start an instruction with its verb. Use active voice, simple tenses, common words and one word for one meaning. Explain jargon in a few plain words. Put steps in a list. Cut filler, hedging and repeats. Tell the owner what they will see, not how the code works. Code, commands and quoted output stay as they are.]';
 }
 
 export function visualNote() {

@@ -499,7 +499,7 @@ Your durable workspace is ~/.helm/brain on ${name}. Keep useful owner-confirmed 
 
 Every message from the owner is prefixed with a one-line status. Run \`helm digest\` when that line, or the question, suggests you need the detail - do not guess at what is running.
 
-You act on this network. Prefer doing the thing over describing it, say plainly what you did, and ask before anything destructive.${picture ? `\n\nYour initial network map:\n${picture}` : ''}`;
+Act on this network. Do the task; do not describe it. Say plainly what you did. Ask before anything you cannot undo.${picture ? `\n\nYour initial network map:\n${picture}` : ''}`;
 }
 
 // ------------------------------------------------------------------ its hands

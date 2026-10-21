@@ -49,6 +49,10 @@ chat with `helm render`. Say what you could not check.
   step, then resume.
 - Every shortcut needs Ctrl/Cmd. Never bind a bare letter.
 - Borrow freely from T3 Code's code and ideas.
+- Every word Helm shows a person (screens, tooltips, errors, notices, CLI help
+  and output) uses Simplified Technical English, the same rules agents get in
+  `writingNote` (delegation.js). Short, direct, verb first, no jargon. A chat
+  is a "chat", never a thread or session.
 
 ## Traps that keep coming back
 
