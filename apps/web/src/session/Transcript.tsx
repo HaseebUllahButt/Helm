@@ -1,5 +1,5 @@
 import { useCopySelection } from '../useCopySelection';
-import { createContext, useContext, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, Fragment, useContext, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Markdown } from '../Markdown';
 import type { Change, Item, Turn, Permission } from './types';
 import { seconds } from '../format';
@@ -712,30 +712,46 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
     // "Worked for" row: show what is left instead.
     else if (d.status === 'ok') { answer = [...pre, ...answer]; pre = []; }
   }
-  // A picture the agent drew (helm render, its own or a helper's) is part of
-  // the reply, never a step: one followed by more work used to fold into
-  // "Worked for" the moment the turn ended. Keep it out in the open, in order.
-  const drawn = pre.filter((it) => it.kind === 'visual');
-  if (drawn.length) { pre = pre.filter((it) => it.kind !== 'visual'); answer = [...drawn, ...answer]; }
-  const work = pre.filter((it) => !isApart(it));
-  const outside = pre.filter(isApart);
+  // A picture the agent drew (helm render, its own or a helper's), an error
+  // and a compaction line stay out in the open, in order: the steps around
+  // them split into one block before and one after, so newer steps land
+  // below them like the rest of a chat instead of piling up above.
+  const pinned = (it: Item) => it.kind === 'visual' || isApart(it);
+  const work = pre.filter((it) => !pinned(it));
+  const blocks: { work: Item[]; after: Item[] }[] = [{ work: [], after: [] }];
+  for (const it of pre) {
+    const block = blocks[blocks.length - 1];
+    // What it said just before a picture introduces it, so it stays in view too.
+    if (pinned(it) && !block.after.length) while (block.work.length && block.work[block.work.length - 1].kind === 'text') block.after.unshift(block.work.pop()!);
+    if (pinned(it)) block.after.push(it);
+    else if (block.after.length) blocks.push({ work: [it], after: [] });
+    else block.work.push(it);
+  }
   // A chat read from another CLI's history has no streaming steps and no end.
   const live = !d && (list.some((it) => it.status === 'streaming') || (tail && !!working));
-  const answerNodes: ReactNode[] = [];
-  for (let i = 0; i < answer.length;) {
-    if (isApart(answer[i])) { answerNodes.push(<ItemView key={answer[i].id} item={answer[i]} byParent={byParent} commandOutput={commandOutput} />); i += 1; continue; }
-    let j = i;
-    while (j < answer.length && !isApart(answer[j])) j += 1;
-    const group = answer.slice(i, j);
-    answerNodes.push(<div key={`final-${group[0].id}`} className="final">{group.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}</div>);
-    i = j;
-  }
+  const outLoud = (items: Item[]) => {
+    const nodes: ReactNode[] = [];
+    for (let i = 0; i < items.length;) {
+      if (isApart(items[i])) { nodes.push(<ItemView key={items[i].id} item={items[i]} byParent={byParent} commandOutput={commandOutput} />); i += 1; continue; }
+      let j = i;
+      while (j < items.length && !isApart(items[j])) j += 1;
+      const group = items.slice(i, j);
+      nodes.push(<div key={`final-${group[0].id}`} className="final">{group.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}</div>);
+      i = j;
+    }
+    return nodes;
+  };
+  const answerNodes = outLoud(answer);
   const answerText = answer.filter((it) => it.kind === 'text' && it.text).map((it) => it.text.trim()).join('\n\n');
   const files = tail && d ? changedFiles(list) : [];
-  const took = d?.durationMs || workSpan(turn, work, tail);
-  const workLabel = d?.status === 'interrupted'
-    ? (took ? `You stopped after ${seconds(took)}` : 'You stopped')
-    : (took ? `Worked for ${seconds(took)}` : 'Worked');
+  const lastBlock = blocks.length - 1;
+  const workLabel = (i: number) => {
+    const split = lastBlock > 0;
+    const took = (!split && d?.durationMs) || workSpan(turn, blocks[i].work, tail && i === 0);
+    return d?.status === 'interrupted' && i === lastBlock
+      ? (took ? `You stopped after ${seconds(took)}` : 'You stopped')
+      : (took ? `Worked for ${seconds(took)}` : 'Worked');
+  };
   return (
     <>
       {head && display.printed && !!said.text && <div className="turn assistant command-note"><Markdown text={said.text} className="prose" /></div>}
@@ -788,10 +804,15 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
         </div></div>
       )}
       <div className={`turn assistant${note ? ' command-note' : ''}`}>
-        {work.length > 0 && (
-          <Work key={`work-${turn.id}`} turn={turn} items={work} byParent={byParent} live={live} label={workLabel} blocked={blocked} />
-        )}
-        {outside.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}
+        {blocks.map((block, i) => (
+          <Fragment key={i ? `block-${block.work[0].id}` : 'block-0'}>
+            {block.work.length > 0 && (
+              <Work key={i ? `work-${block.work[0].id}` : `work-${turn.id}`} turn={turn} items={block.work} byParent={byParent}
+                live={live && i === lastBlock} label={workLabel(i)} blocked={blocked} />
+            )}
+            {outLoud(block.after)}
+          </Fragment>
+        ))}
         {answerNodes}
         {tail && !d && working && work.length === 0 && !turn.items.some((it) => it.status === 'streaming' && (it.kind === 'text' || isCompaction(it))) && (
           <WorkingLine turn={turn} blocked={blocked} />
