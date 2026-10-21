@@ -595,11 +595,11 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     : step === 'cli' ? accounts === null
     : step === 'github' ? gh === null
     : step === 'into' ? (searching ? hits === null : home === null) : false;
-  const placeholder = step === 'machine' ? 'Pick a machine'
-    : step === 'folder' ? `Pick a folder on ${machine?.name}`
+  const placeholder = step === 'machine' ? 'Search machines'
+    : step === 'folder' ? `Search folders on ${machine?.name}`
     : step === 'github' ? 'Search GitHub projects'
     : step === 'into' ? 'Search folders, or type a path'
-    : viewHidden ? 'Pick a hidden agent' : 'Pick an agent';
+    : viewHidden ? 'Search hidden agents' : 'Search agents';
 
   return (
     <div className="modal-back palette-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
