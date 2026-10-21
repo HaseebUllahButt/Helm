@@ -240,14 +240,13 @@ export class ClaudeDriver extends Driver {
 
     let pipe = null;
     if (this.procId && this.procHost) {
-      try {
-        await this.procHost.openProc(this.procId, {
-          cmd: this.cmd, args: this.args, cwd: this.cwd, env: this.env,
-        });
-        pipe = this.procHost.procPipe(this.procId);
-      } catch (e) {
-        this.log(`${this.engine}: no proc host (${e.message}); running under the daemon`);
-      }
+      // No fallback to a child of the daemon: it would die with the next
+      // update, taking its turn and questions along.
+      await this.procHost.openProc(this.procId, {
+        cmd: this.cmd, args: this.args, cwd: this.cwd, env: this.env,
+      });
+      pipe = this.procHost.procPipe(this.procId);
+      if (!pipe) throw new Error(`${this.engine}: the process host lost Claude before Helm could connect`);
     }
     this.#hosted = !!pipe;
     if (!pipe) {

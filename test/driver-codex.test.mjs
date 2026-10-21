@@ -40,6 +40,19 @@ test('a pending Codex thread keeps the shared server alive when another detaches
   assert.equal(ended, 1);
 });
 
+test('a Codex chat fails rather than run under the daemon when the process host cannot hold it', async () => {
+  for (const host of [
+    { hasProc: () => false, openProc: async () => { throw new Error('host down'); }, procPipe: () => null },
+    { hasProc: () => false, openProc: async () => ({}), procPipe: () => null },
+  ]) {
+    const { fake, driver } = make('plain', { procHost: host });
+    try {
+      await assert.rejects(driver.start());
+      assert.deepEqual(fake.stdinLines(), [], 'no app-server may start under the daemon');
+    } finally { rmSync(fake.dir, { recursive: true, force: true }); }
+  }
+});
+
 test('Codex startup does not wait for the advisory version command', { timeout: 5000 }, async () => {
   const { fake, driver } = make('plain');
   const script = readFileSync(fake.cmd, 'utf8');

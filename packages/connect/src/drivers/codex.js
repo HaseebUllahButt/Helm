@@ -238,6 +238,12 @@ export class CodexServer {
   #aliases = new Map();
   #starting = null;
   #socket = null;
+  /**
+   * threadId -> server requests (and their `serverRequest/resolved`) that
+   * reached a hosted server before any driver held their thread: the replay
+   * after a restart reaches the first driver to bind, not every thread.
+   */
+  #held = new Map();
 
   constructor(cmd, env, log, procHost, nativeSocket = null) {
     Object.assign(this, { cmd, env, log, procHost, nativeSocket });
@@ -260,6 +266,7 @@ export class CodexServer {
     // thread. Several chats can be starting before any has an id.
     for (const [threadId, existing] of this.#drivers) if (existing === driver) this.#drivers.delete(threadId);
     this.#drivers.set(driver.threadId ?? driver, driver);
+    if (driver.threadId) this.#release(driver.threadId, driver);
   }
   detach(driver, { stop = true } = {}) {
     for (const [key, existing] of this.#drivers) if (existing === driver) this.#drivers.delete(key);
@@ -287,8 +294,27 @@ export class CodexServer {
   }
 
   /** Route a spawned agent's thread to the driver that spawned it. */
-  alias(threadId, driver) { this.#aliases.set(threadId, driver); }
+  alias(threadId, driver) { this.#aliases.set(threadId, driver); this.#release(threadId, driver); }
   #route(threadId) { return this.#drivers.get(threadId) ?? this.#aliases.get(threadId); }
+
+  #hold(threadId, m) {
+    const held = this.#held.get(threadId) ?? [];
+    // Answered elsewhere while held: neither needs delivering.
+    const asked = m.method === 'serverRequest/resolved'
+      ? held.findIndex((x) => x.id !== undefined && String(x.id) === String(m.params?.requestId)) : -1;
+    if (asked >= 0) held.splice(asked, 1); else held.push(m);
+    if (held.length) this.#held.set(threadId, held); else this.#held.delete(threadId);
+  }
+
+  #release(threadId, driver) {
+    const held = this.#held.get(threadId);
+    if (!held) return;
+    this.#held.delete(threadId);
+    for (const m of held) {
+      if (m.id !== undefined) driver.onServerRequest(m);
+      else driver.onNotification(m.method, m.params);
+    }
+  }
 
   async ensure() {
     if (this.#starting) return this.#starting;
@@ -329,27 +355,23 @@ export class CodexServer {
       // The server exits if its home does not exist yet.
       if (this.env.CODEX_HOME) mkdirSync(expand(this.env.CODEX_HOME), { recursive: true });
       if (this.procHost) {
-        try {
-          const adopted = this.procHost.hasProc(this.procId);
-          if (!adopted) {
-            await this.procHost.openProc(this.procId, {
-              cmd: this.cmd, args: ['app-server', '--stdio'], cwd: undefined, env: serverEnv(this.env),
-            });
-          }
-          const pipe = this.procHost.procPipe(this.procId);
-          if (pipe) {
-            this.#hosted = true;
-            this.#adopted = adopted;
-            this.#bindPipe(pipe);
-            if (this.#adopted) return true;
-            // A newly opened hosted proc still needs the normal app-server
-            // handshake; only an already-running proc has been initialized.
-          }
-        } catch (e) {
-          this.log(`codex: no proc host (${e.message}); running under the daemon`);
+        // No fallback to a child of the daemon: it would die with the next
+        // update, taking its turns and questions along.
+        const adopted = this.procHost.hasProc(this.procId);
+        if (!adopted) {
+          await this.procHost.openProc(this.procId, {
+            cmd: this.cmd, args: ['app-server', '--stdio'], cwd: undefined, env: serverEnv(this.env),
+          });
         }
-      }
-      if (!this.#pipe) {
+        const pipe = this.procHost.procPipe(this.procId);
+        if (!pipe) throw new Error('codex: the process host lost the app-server before Helm could connect');
+        this.#hosted = true;
+        this.#adopted = adopted;
+        this.#bindPipe(pipe);
+        // A newly opened hosted proc still needs the normal app-server
+        // handshake; only an already-running proc has been initialized.
+        if (this.#adopted) return true;
+      } else {
         const child = spawn(this.cmd, ['app-server', '--stdio'], {
           env: serverEnv({ ...process.env, ...this.env }),
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -425,6 +447,7 @@ export class CodexServer {
     this.#pipe = pipe;
     pipe.onExit(({ code, stderr }) => {
       this.#pipe = null;
+      this.#held.clear();
       for (const resolve of this.#calls.values()) resolve({ error: { message: 'codex exited' } });
       this.#calls.clear();
       for (const d of this.#drivers.values()) d.serverExited(code, stderr);
@@ -447,6 +470,8 @@ export class CodexServer {
       // The server is asking us something (an approval).
       const d = this.#route(m.params?.threadId);
       if (d) d.onServerRequest(m);
+      // Whoever drives this thread next answers it; the server outlives us.
+      else if (this.#hosted && m.params?.threadId) this.#hold(m.params.threadId, m);
       else if (!this.nativeSocket) this.respond(m.id, { decision: 'decline' });
       return;
     }
@@ -457,8 +482,10 @@ export class CodexServer {
     }
     if (m.method) {
       const threadId = m.params?.threadId;
-      if (threadId) this.#route(threadId)?.onNotification(m.method, m.params);
-      else if (m.method === 'account/rateLimits/updated') {
+      const d = threadId && this.#route(threadId);
+      if (d) d.onNotification(m.method, m.params);
+      else if (threadId && this.#hosted && m.method === 'serverRequest/resolved') this.#hold(threadId, m);
+      else if (!threadId && m.method === 'account/rateLimits/updated') {
         for (const d of this.#drivers.values()) d.onRateLimits(m.params?.rateLimits);
       }
     }
@@ -530,6 +557,28 @@ export async function codexTurnOutcome(path, turnId) {
 
 // -------------------------------------------------------------- the driver
 
+/** What answering a server request needs from it, kept on its card in the log. */
+const savedParams = (p) => ({
+  ...(p.availableDecisions ? { availableDecisions: p.availableDecisions } : {}),
+  ...(p.permissions ? { permissions: p.permissions } : {}),
+  ...(p.questions ? { questions: p.questions.map((q) => ({ id: q.id, question: q.question })) } : {}),
+});
+
+/**
+ * The server request behind a saved card. Cards saved before they carried
+ * it are rebuilt from what they show, so an update does not strand them.
+ */
+function savedRequest(e) {
+  if (e.codex) return e.codex;
+  const id = /^\d+$/.test(e.requestId) ? Number(e.requestId) : e.requestId;
+  if (e.kind === 'question') return { id, method: 'item/tool/requestUserInput', params: { questions: e.questions ?? [] } };
+  const params = {};
+  if (e.tool === 'permissions') {
+    try { params.permissions = JSON.parse(e.detail).permissions ?? {}; } catch { params.permissions = {}; }
+  }
+  return { id, method: `item/${e.tool}/requestApproval`, params };
+}
+
 /**
  * What a child agent's item should be called on its parent's trail.
  *
@@ -590,6 +639,8 @@ export class CodexDriver extends Driver {
   #lastSpawn = null;
   /** server request id -> { method, params } */
   #requests = new Map();
+  /** Questions taken from the log, not yet confirmed by the server holding them. */
+  #restored = new Set();
   /** { clientId, inputId, turnId, text } handed to the running turn that Codex has not used yet. */
   #steers = [];
   #nativeTurnStarts = new Set();
@@ -659,6 +710,14 @@ export class CodexDriver extends Driver {
       }
       if (state.error) throw new Error(`codex live thread read failed: ${state.error.message}`);
       const thread = state.result.thread;
+      // Settled during the gap, while another thread took the replay: the
+      // thread no longer waits on anyone. A helper's questions wait on its
+      // own thread, so only this one's are judged here.
+      const flags = thread.status?.activeFlags;
+      if (thread.status && (thread.status.type !== 'active' || Array.isArray(flags))
+        && !flags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput')) {
+        this.#dropRestored((e) => !e.parentId);
+      }
       await this.#restoreAgents(thread.turns);
       this.#rolloutState = await codexSessionState(this.transcript);
       this.#usage = this.#rolloutState.usage ?? this.#usage;
@@ -765,6 +824,8 @@ export class CodexDriver extends Driver {
   async #connectOnly() {
     if (this.#server) return this.#server;
     const server = CodexServer.for(this.cmd, this.env, this.log, this.procHost, this.nativeSocket);
+    // Before the replay below can settle one of them.
+    if (this.procHost && !this.nativeSocket && this.threadId) this.#restorePending();
     // Register before binding the pipe: ensure() synchronously replays the
     // host's buffered notifications, including completions during downtime.
     server.attach(this);
@@ -775,7 +836,34 @@ export class CodexDriver extends Driver {
       server.detach(this, { stop: false });
       throw err;
     }
+    // A server this daemon started never asked them: whoever did is gone.
+    if (!this.#serverAdopted) this.#dropRestored(() => true);
     return server;
+  }
+
+  /**
+   * Questions the log still holds open. The app-server that asked them
+   * outlived the daemon on the same pipe and is still waiting, so the
+   * saved request id answers it.
+   */
+  #restorePending() {
+    for (const e of this.pendingEvents?.() ?? []) {
+      if (this.pending.has(e.requestId)) continue;
+      this.#requests.set(e.requestId, savedRequest(e));
+      this.pending.set(e.requestId, e);
+      this.#restored.add(e.requestId);
+    }
+  }
+
+  #dropRestored(stale) {
+    for (const requestId of [...this.#restored]) {
+      const e = this.pending.get(requestId);
+      if (e && !stale(e)) continue;
+      this.#restored.delete(requestId);
+      if (!e) continue;
+      this.#requests.delete(requestId);
+      this.push('permission.resolved', { requestId, decision: 'cancelled' });
+    }
   }
 
   /** Called after Sessions has safely released the external writer. */
@@ -1667,6 +1755,17 @@ export class CodexDriver extends Driver {
     const p = m.params ?? {};
     if (this.nativeSocket && p.turnId) this.#turnId = p.turnId;
     this.#requests.set(requestId, { id: m.id, method: m.method, params: p });
+    const saved = this.pending.get(requestId);
+    if (saved) {
+      this.#restored.delete(requestId);
+      // The card the log already shows for this very request.
+      if (savedRequest(saved).method === m.method && saved.itemId === p.itemId) {
+        if (p.isBlocking !== false) this.push('status', { status: 'blocked' });
+        return;
+      }
+      // A new server reuses ids; the old question died with the old one.
+      this.push('permission.resolved', { requestId, decision: 'cancelled' });
+    }
     const known = this.#items.get(p.itemId) ?? {};
     let kind, title, detail, questions;
     const options = [{ id: 'allow', role: 'allow', label: 'Allow' }];
@@ -1714,6 +1813,7 @@ export class CodexDriver extends Driver {
       requestId, itemId: p.itemId, kind, tool: m.method.split('/')[1], title, detail,
       parentId: p.threadId && p.threadId !== this.threadId ? this.#subagentThreads.get(p.threadId) : undefined,
       reason: p.reason ?? undefined, questions, options, defaultTo: 'allow', allowEdit: false,
+      codex: { id: m.id, method: m.method, params: savedParams(p) },
     });
   }
 }
