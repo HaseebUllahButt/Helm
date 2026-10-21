@@ -311,3 +311,17 @@ test('canvas links inside the repo keep secret and git-folder protections', asyn
   assert.ok((await write(dir, 'safe.md', 'safe', safe.hash)).hash);
   assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'safe');
 });
+
+
+test('simultaneous canvas saves accept only one version, including through a link', async () => {
+  const dir = repo();
+  writeFileSync(join(dir, 'shared.md'), 'x'.repeat(390000));
+  symlinkSync('shared.md', join(dir, 'alias.md'));
+  const original = await file(dir, 'shared.md');
+  const results = await Promise.all(Array.from({ length: 8 }, (_, i) =>
+    write(dir, i % 2 ? 'alias.md' : 'shared.md', String(i).repeat(390000), original.hash)));
+  assert.equal(results.filter(r => !r.conflict).length, 1);
+  assert.equal(results.filter(r => r.conflict).length, 7);
+  const current = await file(dir, 'shared.md');
+  assert.ok((await write(dir, 'shared.md', 'next', current.hash)).hash, 'the file is released after saving');
+});

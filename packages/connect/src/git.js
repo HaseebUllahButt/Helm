@@ -265,7 +265,22 @@ export async function file(cwd, path, since) {
  * `{ conflict: true }` comes back. `base: null` makes a new file and refuses
  * one that exists. Secrets and git's own folder are never written.
  */
+const saves = new Map();
 export async function write(cwd, path, text, base) {
+  const dir = await folder(cwd);
+  const root = await toplevel(dir);
+  if (!root) throw new Error('not a git repository');
+  const target = join(root, inside(path));
+  // Compare and write together, including when two tabs name the same link.
+  const key = await realpath(target).catch(() => target);
+  const previous = saves.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => {}).then(() => writeChecked(cwd, path, text, base));
+  saves.set(key, next);
+  try { return await next; }
+  finally { if (saves.get(key) === next) saves.delete(key); }
+}
+
+async function writeChecked(cwd, path, text, base) {
   const dir = await folder(cwd);
   const rel = inside(path);
   if (typeof text !== 'string') throw new Error('nothing to save');
