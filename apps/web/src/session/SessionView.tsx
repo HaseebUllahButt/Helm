@@ -29,7 +29,7 @@ import type { Decision } from './types';
 import { EngineMark } from '../EngineMark';
 import { BackIcon, Icon, toolKind } from '../Icon';
 import { Route } from '../Route';
-import { Client, type Environment, type Session, type Message, type ModelList, type NativeControl, type NativeAgent } from '../client';
+import { Client, chatFolder, type Environment, type Session, type Message, type ModelList, type NativeControl, type NativeAgent } from '../client';
 import { followModelRefresh } from '../modelRefresh';
 import { loadMessages, saveMessages } from './logCache';
 import { engineOf } from '../engines';
@@ -414,7 +414,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           <h1>{session.title}</h1>
           <span className="sub">
             <EngineMark engine={eng.cls} />
-            <Route machine={env.name} folder={session.cwd} quick={session.quick} />
+            <Route machine={env.name} folder={chatFolder(session)} quick={session.quick} />
             <span className="sep"> · </span>{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''}
             {!isShell && messages && (readError || !env.online) && <span className="offline" role="status"> · Saved chat · reconnecting…</span>}
           </span>
