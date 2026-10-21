@@ -529,15 +529,28 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
       if (opener?.isConnected && (!left || left === document.body || !left.isConnected)) opener.focus();
     };
   }, []);
+  // Esc closes the sheet wherever focus is - the message box, the page, a
+  // tapped star - and only the sheet, not a dialog it sits in. A dialog
+  // opened on top of it keeps its own Esc.
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const onEsc = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing || !sheet.current) return;
+      const top = [...document.querySelectorAll('[aria-modal="true"]')].at(-1);
+      if (top && !top.contains(sheet.current)) return;
+      e.preventDefault(); e.stopPropagation(); close.current();
+    };
+    window.addEventListener('keydown', onEsc, true);
+    return () => window.removeEventListener('keydown', onEsc, true);
+  }, []);
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const box = sheet.current;
     if (!box || e.nativeEvent.isComposing) return;
     const inFilter = e.target === filter.current;
     const rows = [...box.querySelectorAll<HTMLElement>('button.moderow:not(:disabled)')];
     const at = rows.indexOf(document.activeElement as HTMLElement);
-    if (e.key === 'Escape') {
-      e.preventDefault(); e.stopPropagation(); onClose();
-    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       if (!rows.length) return;
       e.preventDefault(); e.stopPropagation();
       const down = e.key === 'ArrowDown';

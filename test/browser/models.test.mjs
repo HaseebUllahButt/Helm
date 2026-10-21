@@ -262,3 +262,29 @@ test('Claude with bare ids: the newest four, recent first, an old default waits 
     assert.equal(await page.locator('.moderow.more').innerText(), '2 more\n›');
   } finally { await browser.close(); }
 });
+
+test('Esc closes the picker wherever focus is', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Controls } from './apps/web/src/session/Controls';
+    function Picker() {
+      const controls = Controls({ options:{ models:['claude-opus-5-5','claude-sonnet-5-5'], favs:[] },
+        session:{ engine:'claude', model:'claude-opus-5-5' }, onFavs:()=>{}, onPick:()=>{} });
+      return <><textarea aria-label="message" />{controls.chips}{controls.sheet}</>;
+    }
+    createRoot(document.getElementById('root')).render(<Picker />);
+  `, resolveDir:process.cwd(), loader:'tsx' }, bundle:true,write:false,format:'iife',jsx:'automatic' });
+  const browser = await chromium.launch({headless:true,...(process.env.HELM_TEST_CHROMIUM ? {executablePath:process.env.HELM_TEST_CHROMIUM} : {})});
+  try {
+    const page = await browser.newPage({ viewport:{width:390,height:844}, hasTouch:true, isMobile:true });
+    await page.setContent('<div class="session"><div id="root"></div></div>');
+    await page.addScriptTag({content:bundle.outputFiles[0].text});
+    await page.locator('button[title^="model:"]').click();
+    await page.locator('.modesheet').waitFor();
+    // Focus left in the message box, as after tapping a chip on a phone.
+    await page.getByLabel('message').focus();
+    await page.keyboard.press('Escape');
+    await page.locator('.modesheet').waitFor({ state:'detached' });
+  } finally { await browser.close(); }
+});
