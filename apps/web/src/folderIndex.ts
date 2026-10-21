@@ -63,7 +63,7 @@ export async function fetchFolders(client: Client, env: string, { refresh = fals
     memory.set(env, index);
     return index;
   }
-  if (!r.names || !r.parents) throw new Error('the machine sent no folder list');
+  if (!r.names || !r.parents) throw new Error('The machine sent no folder list.');
   const rec: Stored = { stamp: r.stamp, at: r.at, count: r.count, names: r.names, parents: r.parents, repos: r.repos ?? [] };
   const index = unpack(rec);
   memory.set(env, index);

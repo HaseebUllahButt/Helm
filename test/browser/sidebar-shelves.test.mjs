@@ -83,7 +83,7 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   await page.evaluate(mount);
   const sidebar = page.locator('.sidebar');
   await shelf(page, 'Settled').waitFor();
-  assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Working', 'Settled', 'Machines']);
+  assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Running', 'Settled', 'Machines']);
 
   // Needs you: only shown when something waits, with an amber count.
   const needs = shelf(page, 'Needs you');
@@ -92,7 +92,7 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   assert.notEqual(await needs.locator('.count').evaluate(e => getComputedStyle(e).backgroundColor), 'rgba(0, 0, 0, 0)');
 
   // Working: a ticker since the turn began, and background work steps back.
-  const working = shelf(page, 'Working');
+  const working = shelf(page, 'Running');
   assert.deepEqual((await titlesIn(working)).sort(), ['Fix flaky login test', 'Rebuild the sidebar shelves']);
   const busy = working.locator('.tri-row').filter({ hasText: 'Rebuild the sidebar shelves' });
   assert.match(await busy.locator('.tstat.working').innerText(), /^2m 0[5-9]s$/);
@@ -111,7 +111,7 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   assert.equal(settledTitles.length, 10, 'ten to start with');
   assert.deepEqual(settledTitles.slice(0, 3), ['Write the release notes', 'Tidy the settings page', 'Investigate slow startup']);
   const fresh = settled.locator('.tri-row').filter({ hasText: 'Write the release notes' });
-  assert.match(await fresh.locator('.slim-when').innerText(), /^(wrapped up )?5m ago$/);
+  assert.match(await fresh.locator('.slim-when').innerText(), /^(finished )?5m ago$/);
   assert.equal(await settled.locator('.tstat.unread').count(), 1, 'only the unopened one');
   assert.equal(await fresh.locator('.tstat.unread').count(), 1);
   assert.ok(await settled.locator('.row.slim').first().evaluate(e => e.getBoundingClientRect().height < 46), 'slim rows are one line');
@@ -172,7 +172,7 @@ test('the row menu still opens above its neighbours on a stepped-back working ro
   const { page, boot } = await pageFor(t, { width: 1280, height: 900 });
   await boot();
   await page.evaluate(mount);
-  const row = shelf(page, 'Working').locator('.tri-row').filter({ hasText: 'Fix flaky login test' });
+  const row = shelf(page, 'Running').locator('.tri-row').filter({ hasText: 'Fix flaky login test' });
   await row.hover();
   await row.getByRole('button', { name: 'actions for Fix flaky login test' }).click();
   const menu = row.locator('.row-menu');
@@ -207,7 +207,7 @@ test('Working folds to a count and still shows the chat you are in', async t => 
   const { page, boot } = await pageFor(t, { width: 1280, height: 900 });
   await boot();
   await page.evaluate(mount);
-  const working = shelf(page, 'Working');
+  const working = shelf(page, 'Running');
   await working.locator('.tri-row').first().waitFor();
   await working.locator('.tri-row').filter({ hasText: 'Fix flaky login test' }).locator('.thread-row').click();
   assert.equal(await working.locator('.tri-row.active.recede').count(), 0, 'the chat you are in is not dimmed');
@@ -223,7 +223,7 @@ test('reduced motion stills the spinner; the light theme keeps every status read
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await boot();
   await page.evaluate(mount);
-  await shelf(page, 'Working').locator('.tspin').first().waitFor();
+  await shelf(page, 'Running').locator('.tspin').first().waitFor();
   assert.equal(await page.locator('.tspin').first().evaluate(e => getComputedStyle(e).animationName), 'none');
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await page.waitForTimeout(500);

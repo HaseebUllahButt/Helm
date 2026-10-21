@@ -10,8 +10,8 @@ export function askAction(ask: Session['ask']): string {
     case 'question': return 'has a question';
     case 'command': return 'wants to run a command';
     case 'edit': return 'wants to change a file';
-    case 'plan': return 'has a plan for you';
-    case 'tool': return 'needs your OK';
+    case 'plan': return 'has a plan';
+    case 'tool': return 'needs your approval';
     default: return 'needs you';
   }
 }
@@ -49,7 +49,7 @@ export function NotificationToast({ session, machine, onOpen, onDismiss }: {
     <button className="toast-open" onClick={onOpen} aria-label={`Open ${chat}: ${who} ${askAction(ask)}${text ? `, ${text}` : ''}`}>
       <EngineMark engine={session.engine} />
       <span className="toast-copy">
-        <span className="toast-kind"><i />{who} {askAction(ask)}</span>
+        <span className="toast-kind"><i />{who} {askAction(ask)}.</span>
         {text
           ? <b className={ask?.kind === 'command' ? 'mono' : undefined}>{text}{more && <span className="toast-more">{more}</span>}</b>
           : <b>{chat}</b>}

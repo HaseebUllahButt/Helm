@@ -103,9 +103,9 @@ export const Markdown = memo(function Markdown({ text, className = '', live = fa
       const btn = (ev.target as HTMLElement).closest('button[data-copy]') as HTMLButtonElement | null;
       if (!btn) return;
       const code = btn.closest('.codeblock')?.querySelector('code')?.textContent ?? '';
-      try { await navigator.clipboard.writeText(code); btn.textContent = 'copied'; }
-      catch { btn.textContent = 'failed'; }
-      setTimeout(() => { btn.textContent = 'copy'; }, 1500);
+      try { await navigator.clipboard.writeText(code); btn.textContent = 'Copied'; }
+      catch { btn.textContent = 'Copy failed'; }
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
     };
     el.addEventListener('click', onClick);
     return () => el.removeEventListener('click', onClick);

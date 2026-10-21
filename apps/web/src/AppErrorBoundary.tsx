@@ -18,9 +18,9 @@ export class AppErrorBoundary extends Component<{
       <div className="auth-card">
         <div className="auth-brand">
           <img src="/icon.svg" alt="" />
-          <h1>{missingFile ? 'Helm needs a refresh' : 'Helm couldn’t open this screen'}</h1>
+          <h1>{missingFile ? 'Reload Helm' : 'Helm cannot open this screen.'}</h1>
           <p>{missingFile
-            ? 'An app file could not be loaded. Reload to get the current version.'
+            ? 'Helm cannot load an app file. Reload Helm to get the latest version.'
             : 'Reload Helm to try again.'}</p>
         </div>
         <button className="primary" onClick={this.props.reload ?? reloadApp}>Reload Helm</button>

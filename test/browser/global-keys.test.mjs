@@ -72,7 +72,7 @@ test('Ctrl+Shift+S opens Settings and Ctrl+Shift+4 ($) opens Usage from anywhere
   await page.keyboard.press('Control+Shift+s');
   await page.getByRole('heading',{name:'Settings'}).first().waitFor();
   await page.keyboard.press('Control+Shift+Digit4');
-  await page.getByLabel('Environment').waitFor({timeout:10000});
+  await page.getByLabel('Machine', {exact:true}).waitFor({timeout:10000});
 });
 
 test('Ctrl+Shift+E opens a terminal in the open chat\'s folder, and goes back from it', async t => {
@@ -93,8 +93,8 @@ test('the shortcuts list names both keys', async t => {
   await page.keyboard.press('Control+Slash');
   const text = await page.locator('.shortcuts').innerText();
   assert.match(text, /Settings/);
-  assert.match(text, /Usage, limits and cost/);
-  assert.match(text, /Terminal/);
+  assert.match(text, /Show usage, limits, and cost/);
+  assert.match(text, /Open a terminal/);
 });
 
 test('bare keys open nothing: every shortcut needs Ctrl/Cmd', async t => {

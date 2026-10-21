@@ -91,7 +91,7 @@ for(const size of [{width:390,height:844},{width:1280,height:800}]){
     try{
       await home(page);
       await page.keyboard.press('Control+k');
-      await page.getByRole('combobox',{name:'Search threads, machines, actions',exact:true}).fill('Send a project from Laptop');
+      await page.getByRole('combobox',{name:'Search chats, machines, and actions',exact:true}).fill('Send a project from Laptop');
       await page.getByRole('option').filter({hasText:'Send a project from Laptop'}).click();
       await page.locator('.main').getByRole('button',{name:'project',exact:true}).click();await confirmed(page);
       await home(page);

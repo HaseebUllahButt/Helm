@@ -123,7 +123,7 @@ test('Send task includes env, keeps a retry identity, and opens the destination 
     assert.equal(await page.getByLabel('Include .env files').isDisabled(),true);
     assert.equal(await page.getByLabel('Instructions for continuing').isDisabled(),true);
     await page.getByRole('button',{name:'Retry to VM',exact:true}).click();
-    await page.getByText('copying to VM: 40% of 1000 B · 200 B/s',{exact:true}).waitFor();
+    await page.getByText('Helm is copying files to VM: 40% of 1000 B · 200 B/s',{exact:true}).waitFor();
     await page.getByText('Running on VM',{exact:true}).waitFor();
     const attempts = await page.evaluate(()=>window.attempts);
     assert.equal(attempts.length,3);
@@ -165,7 +165,7 @@ test('Send task honors the env choice at phone and desktop widths', async () => 
       await page.setContent('<div class="main showing" style="height:100vh;width:100%;display:flex;flex-direction:column"><div id="root" style="flex:1;display:flex;flex-direction:column;min-height:0"></div></div>');
       await page.addStyleTag({content:readFileSync('apps/web/src/styles.css','utf8').replace(/^@import[^;]+;/gm,'')});
       await page.addScriptTag({content:bundle.outputFiles[0].text});
-      await page.getByText('Agent and destination options',{exact:true}).click();
+      await page.getByText('Agent and machine options',{exact:true}).click();
       const checkbox=page.getByLabel('Include .env files');
       await checkbox.waitFor();
       assert.equal(await checkbox.isChecked(),true);

@@ -137,7 +137,7 @@ test('reverse entry starts at the last running chat and dialogs keep focus', asy
   await page.keyboard.press('Control+Shift+Tab');
   await expectChat(page, 'vm', 'Third');
   await page.keyboard.press('Control+k');
-  const dialog = page.getByRole('dialog', { name: 'Command palette' });
+  const dialog = page.getByRole('dialog', { name: 'Search and actions' });
   await dialog.waitFor();
   await page.keyboard.press('Control+Tab');
   await expectChat(page, 'vm', 'Third');

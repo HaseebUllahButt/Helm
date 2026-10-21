@@ -68,17 +68,17 @@ test('Usage shows reported allowance, expired and missing reports, and model-spe
   // The allowance, its pace and what it is worth are one account row: the
   // weekly meter is drawn once, not again in a separate plan card.
   const accounts = page.getByRole('region',{name:'Accounts'});
-  await accounts.getByText('runs out before the reset at this pace',{exact:true}).waitFor();
+  await accounts.getByText('Usage will reach the limit before the reset.',{exact:true}).waitFor();
   assert.equal(await accounts.getByText('$16.50',{exact:true}).count(),1);
   assert.equal(await accounts.getByRole('meter',{name:'claude work 7d remaining'}).count(),1);
   assert.equal(await page.getByRole('region',{name:'Plan value'}).count(),0);
   await accounts.getByText('Add plan price',{exact:true}).click();
-  await accounts.getByPlaceholder('e.g. 200').fill('200');
+  await accounts.getByPlaceholder('Example: 200').fill('200');
   await accounts.getByText('0.2×',{exact:true}).waitFor();
   await accounts.getByText('Plan $200/month',{exact:true}).waitFor();
-  assert.equal(await page.getByText('Awaiting report',{exact:true}).count(),1);
-  assert.equal(await page.getByText('No limit report yet',{exact:true}).count(),1);
-  await page.getByText('No limits from VM',{exact:true}).waitFor();
+  assert.equal(await page.getByText('Waiting for a report',{exact:true}).count(),1);
+  assert.equal(await page.getByText('Helm has no limit report yet.',{exact:true}).count(),1);
+  await page.getByText('Helm has no limit reports from VM.',{exact:true}).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({path:'/tmp/helm-usage-mobile.png',fullPage:true});
   await page.getByRole('button',{name:/^claude-opus-5,/}).click();
@@ -100,11 +100,11 @@ test('Usage shows reported allowance, expired and missing reports, and model-spe
 
 test('Usage ignores a late response from the previous date range', async t => {
   const page = await setup(t,1280,true);
-  await page.getByLabel('Environment').selectOption('vm');
-  await page.getByText('No machine sent usage yet.',{exact:true}).waitFor();
+  await page.getByLabel('Machine').selectOption('vm');
+  await page.getByText('No machine has sent a usage report.',{exact:true}).waitFor();
   assert.equal(await page.locator('.usage-hero').count(),0, 'missing reports must not appear as zero cost');
   await page.getByRole('button',{name:'All',exact:true}).click();
-  await page.getByLabel('Environment').selectOption('laptop');
+  await page.getByLabel('Machine').selectOption('laptop');
   await page.locator('.usage-hero-fig').filter({hasText:'$20.00'}).waitFor();
   await page.evaluate(() => window.releaseOld());
   await page.waitForTimeout(50);
@@ -117,7 +117,7 @@ test('model detail refuses an unfiltered answer from an older daemon', async t =
   await page.evaluate(() => window.oldDaemon=true);
   await page.getByRole('button',{name:/^claude-opus-5,/}).click();
   const detail = page.getByRole('dialog');
-  await detail.getByText('Model history unavailable. The machines may be offline or need an update.',{exact:true}).waitFor();
+  await detail.getByText('Helm cannot get model history. Check machine connections and updates.',{exact:true}).waitFor();
   assert.equal(await detail.locator('.usage-hero').count(),0);
 });
 
@@ -179,7 +179,7 @@ test('one credential read on two machines is one row that keeps both report time
   assert.equal(await accounts.getByRole('meter').count(),1);
   assert.match(await row.locator('.usage-account-name small').innerText(), /^Laptop 2m ago · VM 3h ago$/);
   // Pace is measured from the newer reading: 30% at half the week is 60%.
-  await accounts.getByText(/on pace for 60% of the week/).waitFor();
+  await accounts.getByText(/estimated weekly usage: 60%/).waitFor();
 });
 
 test('the same account on two machines is one row showing the newest reading of each allowance', async t => {

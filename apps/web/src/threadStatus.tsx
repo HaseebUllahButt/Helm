@@ -140,7 +140,7 @@ export const compactAge = (ts: number | undefined, now: number) => {
 /** "wrapped up 2h ago", split so a phone can drop the lead-in. */
 export const wrappedUp = (ts: number | undefined, now: number): { lead: string; rest: string } => {
   const text = waitingSince(ts, now);
-  return !text ? { lead: '', rest: '' } : text === 'just now' ? { lead: 'wrapped up ', rest: 'just now' } : { lead: 'wrapped up ', rest: `${text} ago` };
+  return !text ? { lead: '', rest: '' } : text === 'just now' ? { lead: 'finished ', rest: 'just now' } : { lead: 'finished ', rest: `${text} ago` };
 };
 
 export function ThreadStatus({ s, mood, now, label }: { s: Thread; mood: ThreadMood; now: number; label?: string }) {
@@ -156,17 +156,17 @@ export function ThreadStatus({ s, mood, now, label }: { s: Thread; mood: ThreadM
   }
   if (mood === 'working') {
     // "starting" and "compacting" are not the turn's work yet; the word says so.
-    const word = s.clone?.state === 'cloning' ? `cloning ${s.clone.percent ?? 0}%`
+    const word = s.clone?.state === 'cloning' ? `copying from GitHub ${s.clone.percent ?? 0}%`
       : s.chatWorktree?.setup === 'running' ? 'setting up' : busyWord(s.status, s.compacting);
     return (
       <span className="tstat working" data-mood="working">
         <Icon name="think" size={13} className="tspin" />
-        <span className="tclock">{word === 'working' ? clock(tick - turnStart(s, tick)) : word}</span>
+        <span className="tclock">{word === 'working' ? clock(tick - turnStart(s, tick)) : word === 'compacting' ? 'shortening chat history' : word}</span>
       </span>
     );
   }
   if (mood === 'unread') {
-    return <span className="tstat unread" data-mood="unread" role="img" aria-label="Finished, not opened yet" title="Finished - you have not opened it yet"><Icon name="check" size={14} /></span>;
+    return <span className="tstat unread" data-mood="unread" role="img" aria-label="Finished. You have not opened this chat." title="Finished. You have not opened this chat."><Icon name="check" size={14} /></span>;
   }
   const age = label ?? compactAge(s.updatedAt, now);
   return age ? <span className="tstat quiet" data-mood="quiet">{age}</span> : null;

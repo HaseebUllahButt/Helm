@@ -24,7 +24,7 @@ const codeBlock = ({ text, lang }: { text: string; lang?: string }) => {
   const colored = text.length <= 40_000 ? highlighting?.highlight(text, language) : null;
   const body = colored ?? escapeHtml(text);
   return `<div class="codeblock"><div class="codehead"><span>${escapeHtml(language || 'text')}</span>` +
-    `<button type="button" class="copy" data-copy>copy</button></div>` +
+    `<button type="button" class="copy" data-copy>Copy</button></div>` +
     `<pre><code class="hljs${colored != null ? ` language-${language}` : ''}">${body}</code></pre></div>`;
 };
 // Only our renderer may create controls or style classes. Raw HTML from a

@@ -181,6 +181,6 @@ test('palette fits a phone viewport and can close without a keyboard', async () 
   const bounds = await page.getByRole('dialog').boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390);
   assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= 844);
-  await page.getByRole('button', { name: 'Close command palette' }).click();
+  await page.getByRole('button', { name: 'Close search and actions' }).click();
   await page.getByRole('dialog').waitFor({ state: 'detached' });
 });

@@ -515,8 +515,8 @@ test('Shell back history leaves parent and child chats without cycling between t
       await view.goto('http://helm-history-test/');
       await view.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
       await view.addScriptTag({content:bundle.outputFiles[0].text});
-      await view.locator('.sidebar').getByRole('button',{name:'Search threads, machines and folders'}).click();
-      const palette = view.getByRole('dialog',{name:'Command palette'});
+      await view.locator('.sidebar').getByRole('button',{name:'Search chats, machines, and folders'}).click();
+      const palette = view.getByRole('dialog',{name:'Search and actions'});
       await palette.getByRole('combobox').fill('Parent history chat');
       await palette.getByRole('option',{name:/Parent history chat/}).click();
       const heading = title=>view.locator('.session-bar h1').filter({hasText:new RegExp('^'+title+'$')});

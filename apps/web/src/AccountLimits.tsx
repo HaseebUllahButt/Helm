@@ -162,13 +162,13 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
           <EngineMark engine={a.engine} className="usage-share-mark" />
           <b>{a.engine} <span>{nameOf(a)}</span></b>
           <small title={a.aliases.join(', ')}>
-            {row.shared ? (row.shared.length ? `Shared by ${row.shared.join(', ')}` : 'No account report')
+            {row.shared ? (row.shared.length ? `Shared by ${row.shared.join(', ')}` : 'Helm has no account report.')
               : row.machines.map(({ env: m, at }, i) => <span key={m.id} title={at ? new Date(at).toLocaleString() : undefined}>
                 {i > 0 && ' · '}{m.name}{failed[m.id] ? ' (unavailable)' : ''}{at ? `${row.machines.length > 1 ? '' : ' · reported'} ${age(at, now)} ago` : ''}
               </span>)}
           </small>
         </div>
-        {!row.shared && !row.windows.length && <p className="usage-limits-note">No limit report yet</p>}
+        {!row.shared && !row.windows.length && <p className="usage-limits-note">Helm has no limit report yet.</p>}
         {row.windows.length > 0 && <div className="usage-account-windows">
           {row.windows.map(w => {
             const expired = !!w.resetsAt && w.resetsAt * 1000 <= now;
@@ -183,10 +183,10 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
               <span className="usage-window">{WINDOW_NAMES[w.label] ?? w.label}</span>
               {expired ? <span className="usage-window-meter" /> : <div className="usage-meter" role="meter" aria-label={`${a.engine} ${nameOf(a)} ${w.label} remaining`}
                 aria-valuemin={0} aria-valuemax={100} aria-valuenow={left}><span style={{ width: `${left}%` }} /></div>}
-              <b>{expired ? 'Awaiting report' : `${left}% left`}</b>
+              <b>{expired ? 'Waiting for a report' : `${left}% left`}</b>
               <small>
-                {expired ? 'Reset time passed' : resetPhrase(w.resetsAt, now) || 'Reset time unavailable'}
-                {pace > 100 ? <> · <em>runs out before the reset at this pace</em></> : pace > 0 ? ` · on pace for ${Math.round(pace)}% of the week` : ''}
+                {expired ? 'The reset time passed.' : resetPhrase(w.resetsAt, now) || 'Helm has no reset time.'}
+                {pace > 100 ? <> · <em>Usage will reach the limit before the reset.</em></> : pace > 0 ? ` · estimated weekly usage: ${Math.round(pace)}%` : ''}
               </small>
             </div>;
           })}
@@ -200,14 +200,14 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
           const price = plans[s.key];
           const weeklyPrice = price ? (price * 12) / 52 : null;
           return <div className="usage-value" key={s.key}>
-            <span><b>{money(s.costUsd)}{s.unpriced ? '+' : ''}</b> at API prices{weekly !== null && win !== '7d' ? ` · ≈ ${money(weekly)} a week` : ''}</span>
-            {worth !== null && <span>a full week ≈ <b>{money(worth)}</b></span>}
+            <span><b>{money(s.costUsd)}{s.unpriced ? '+' : ''}</b> at pay-per-use prices{weekly !== null && win !== '7d' ? ` · ≈ ${money(weekly)} a week` : ''}</span>
+            {worth !== null && <span>Full weekly allowance ≈ <b>{money(worth)}</b></span>}
             {weekly !== null && weeklyPrice && <span><b className="usage-plan-mult">{(weekly / weeklyPrice).toFixed(1)}×</b> the plan price</span>}
             <details className="usage-plan">
               <summary>{price ? `Plan $${price}/month` : 'Add plan price'}</summary>
               <label className="usage-plan-price">
                 <span>Plan price per month, in dollars</span>
-                <input type="number" inputMode="decimal" min="0" step="1" placeholder="e.g. 200"
+                <input type="number" inputMode="decimal" min="0" step="1" placeholder="Example: 200"
                   value={price ?? ''} onChange={(e) => setPlan(s.key, e.target.value)} />
               </label>
             </details>
@@ -218,9 +218,9 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
     {all.length > 5 && <button className="linkish" onClick={() => setExpanded(!expanded)}>{expanded ? 'Show fewer accounts' : `Show all ${all.length} accounts`}</button>}
     {/* One line for the machines that did not answer, not a line each.
         Accounts whose CLI never reports limits are simply not listed. */}
-    {reading && <p className="usage-limits-note">Reading limits…</p>}
-    {silent.length > 0 && <p className="usage-limits-note">No limits from {silent.join(', ')}</p>}
-    {!all.length && targets.every(e => reports[e.id]) && <p className="usage-limits-note">No Claude or Codex accounts configured.</p>}
+    {reading && <p className="usage-limits-note">Helm is reading limits.</p>}
+    {silent.length > 0 && <p className="usage-limits-note">Helm has no limit reports from {silent.join(', ')}.</p>}
+    {!all.length && targets.every(e => reports[e.id]) && <p className="usage-limits-note">No Claude or Codex accounts are set up.</p>}
   </section>;
 }
 

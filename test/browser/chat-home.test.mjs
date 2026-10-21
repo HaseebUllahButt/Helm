@@ -196,6 +196,6 @@ for (const width of [1280,390]) test(`a machine's home asks what to build, lists
 
   await main.getByRole('button',{name:'New chat',exact:true}).click();
   await page.getByRole('dialog',{name:'New chat'}).waitFor();
-  assert.match(await page.locator('.newchat-greeting').innerText(),/^What should we build on/);
+  assert.match(await page.locator('.newchat-greeting').innerText(),/^Pick a folder on/);
   await shot(page,`new-chat-picker-${width}.png`);
 });

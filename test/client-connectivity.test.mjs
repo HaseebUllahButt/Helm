@@ -228,7 +228,7 @@ test('a slow route still falls back within its bounded latency budget without re
   const read = h.client.rpc('vm', 'session.list', {}, 20000);
   await h.advance(5060); assert.equal((await read).fresh, true);
   const write = h.client.rpc('vm', 'session.input', { id: 'thread', data: 'once' }, 20000);
-  const rejected = assert.rejects(write, /client closed|disconnected/);
+  const rejected = assert.rejects(write, /Helm closed the connection\.|Helm lost the connection\./);
   await h.advance(10000);
   assert.equal(h.sockets[0].frames.filter(f => f.method === 'session.input').length, 1);
   h.client.close(); await rejected;
@@ -532,7 +532,7 @@ test('cold connection accepts slow healthy hubs and does not misclassify a slow 
 test('a stalled WebSocket upgrade has a deadline and retries without browser close events', async () => {
   const h = harness({ socket: 'hang' });
   const connection = h.start(); await h.advance(20600);
-  assert.match(await connection, /timed out/);
+  assert.match(await connection, /Helm took too long to connect\./);
   assert.equal(h.sockets[0].readyState, 3);
   assert.equal(h.sockets.length, 2);
   h.client.close();
@@ -566,7 +566,7 @@ test('the first slow success opens without waiting for an unreachable endpoint t
 test('an open but silent relay is replaced, while slow responding relays stay connected', async () => {
   const dead = harness({ pong: false }); dead.start(); await dead.advance(26000);
   assert.equal(dead.sockets.length, 2);
-  assert.ok(dead.events.some(e => e.payload.error === 'connection stopped responding'));
+  assert.ok(dead.events.some(e => e.payload.error === 'The connection stopped responding.'));
   dead.client.close();
   const alive = harness({ pong: 12000 }); alive.start(); await alive.advance(61000);
   assert.equal(alive.sockets.length, 1); assert.equal(alive.client.connected, true);
@@ -648,7 +648,7 @@ test('a dropped socket recovers pending project reads but never replays project 
   setup.start(); await setup.advance(10);
   const request = setup.client.rpc('vm', 'project.list', {}, 20000);
   const write = setup.client.rpc('vm', 'project.save', { path: '~/project' });
-  const failed = assert.rejects(write, /disconnected/);
+  const failed = assert.rejects(write, /Helm lost the connection\./);
   setup.sockets[0].close();
   await setup.advance(10);
   assert.equal((await request).fresh, true);
@@ -738,7 +738,7 @@ test('HTTP fallback never sends mutations and respects the read deadline', async
   assert.equal(h.requests.length, 0);
   const request = h.client.rpc('machine', 'session.events', {}, 250).catch(e => e.message);
   await h.advance(251);
-  assert.match(await request, /timed out/);
+  assert.match(await request, /The machine took too long to answer/);
   h.client.close();
 });
 
@@ -798,7 +798,7 @@ test('closing a client cancels HTTP reads and prevents staggered requests after 
   const h = harness({ endpoints: ['http://old', 'http://good'], delays: { 'http://old': Infinity } });
   const request = h.client.rpc('machine', 'session.events').catch(error => error.message);
   await h.advance(100); h.client.close();
-  assert.equal(await request, 'client closed');
+  assert.equal(await request, 'Helm closed the connection.');
   await h.advance(1000);
   assert.equal(h.requests.length, 1); assert.equal(h.requests[0].init.signal.aborted, true);
 });

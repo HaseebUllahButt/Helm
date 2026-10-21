@@ -70,9 +70,9 @@ async function pageFor(t) {
 }
 
 async function openFromSearch(page, title) {
-  await page.locator('.sidebar').getByRole('button', { name: 'Search threads, machines and folders' }).click();
-  const palette = page.getByRole('dialog', { name: 'Command palette' });
-  await palette.getByRole('combobox', { name: 'Search threads, machines, actions' }).fill(title);
+  await page.locator('.sidebar').getByRole('button', { name: 'Search chats, machines, and folders' }).click();
+  const palette = page.getByRole('dialog', { name: 'Search and actions' });
+  await palette.getByRole('combobox', { name: 'Search chats, machines, and actions' }).fill(title);
   await palette.getByRole('option', { name: new RegExp(`^${title}.*offline`) }).click();
   await palette.waitFor({ state: 'hidden' });
 }
@@ -427,7 +427,7 @@ test('resuming on HTTP clears the saved-workspace disconnect notice without wait
     };
     window.mount();
   });
-  await page.getByText('Saved workspace · reconnecting…',{exact:true}).waitFor();
+  await page.getByText('Helm shows saved chats and is reconnecting.',{exact:true}).waitFor();
   assert.equal(await page.locator('.sidebar .error').count(),0);
   await page.evaluate(()=>{window.failed=false;window.dispatchEvent(new Event('focus'));});
   await page.waitForFunction(()=>!document.querySelector('.sidebar').textContent.includes('Saved workspace · reconnecting'));

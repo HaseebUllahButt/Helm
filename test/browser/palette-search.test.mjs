@@ -108,6 +108,6 @@ test('while the machines are looking, the box says so instead of "No matches"', 
   const input = page.locator('.palette-input');
   await input.waitFor();
   await input.pressSequentially('zz');
-  await page.getByText('Looking for those words in your chats…').waitFor();
+  await page.getByText('Helm is searching your chats.').waitFor();
   await page.getByText('No matches').waitFor();
 });

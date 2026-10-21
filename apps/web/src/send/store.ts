@@ -75,7 +75,7 @@ export class SendStore {
       const first = !this.listed.has(env);
       for (const job of jobs) this.accept(job, !first || this.snapshot.jobs.some(item => item.id === job.id && sending(item)));
       this.listed.add(env); this.error(env);
-    } catch { this.error(env, 'Send updates are unavailable. Reconnecting…'); }
+    } catch { this.error(env, 'Helm cannot get send progress. Helm is reconnecting.'); }
     finally { this.busy.delete(key); }
   };
   status = async (env: string, id: string) => {
@@ -83,7 +83,7 @@ export class SendStore {
     if (this.busy.has(key)) return;
     this.busy.add(key);
     try { const { job } = await this.client.sendStatus(env, id); this.accept(job); this.error(env); }
-    catch { this.error(env, 'Send updates are unavailable. Reconnecting…'); }
+    catch { this.error(env, 'Helm cannot get send progress. Helm is reconnecting.'); }
     finally { this.busy.delete(key); }
   };
   private wake = () => {

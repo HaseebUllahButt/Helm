@@ -71,7 +71,7 @@ function ViewLoading({ title, onBack }: { title: string; onBack: () => void }) {
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <b>{title}</b>
       </div>
-      <div className="scroll"><div className="pad"><div className="empty quiet">loading…</div></div></div>
+      <div className="scroll"><div className="pad"><div className="empty quiet">Helm is loading.</div></div></div>
     </>
   );
 }
@@ -106,7 +106,7 @@ export function App() {
       if (kind === 'unauthorized') {
         forgetWorkspace(workspaceScope(auth.token));
         clearAuth();
-        setNotice('This device is no longer in the network. Pair it again with a fresh link from `helm link`.');
+        setNotice('This device is no longer in the network. Pair it again with a new link from `helm link`.');
         setAuth(null); setClient(null);
       }
     });
@@ -705,7 +705,7 @@ function Shell({ client, conn, onSignOut }: {
     items.push({ id: 'a:new', group: 'action', title: 'New chat', keywords: 'start create agent session', run: () => setNewChat({}) });
     // A chat in no folder, on the machine on screen (or asked, when that one is not there).
     items.push({
-      id: 'a:quick', group: 'action', title: 'Quick chat', sub: 'no folder, for a small question', keywords: 'start new agent question scratch',
+      id: 'a:quick', group: 'action', title: 'Quick chat', sub: 'Ask a short question without a folder.', keywords: 'start new agent question scratch',
       run: () => setNewChat({ envId: envs.find((e) => e.id === selected && e.online)?.id, quick: true }),
     });
     const go = (id: string, title: string, keywords: string, stack: MainView[]) =>
@@ -714,9 +714,9 @@ function Shell({ client, conn, onSignOut }: {
     go('a:owner', 'Your preferences', 'owner plain english keeper agents', [{ kind: 'app-settings' }, { kind: 'owner' }]);
     go('a:updates', 'Updates', 'version upgrade machines', [{ kind: 'app-settings' }, { kind: 'updates' }]);
     go('a:devices', 'Devices & pairing', 'phone key link', [{ kind: 'app-settings' }, { kind: 'devices' }]);
-    go('a:cost', 'What it has cost', 'usage tokens spend', [{ kind: 'usage' }]);
-    go('a:defaults', 'CLI defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
-    go('a:links', 'Public links', 'share spin private forward port', [{ kind: 'app-settings' }, { kind: 'links' }]);
+    go('a:cost', 'Cost', 'usage tokens spend', [{ kind: 'usage' }]);
+    go('a:defaults', 'Agent defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
+    go('a:links', 'Spins', 'share spin private forward port', [{ kind: 'app-settings' }, { kind: 'links' }]);
     for (const t of ['light', 'dark', 'system'] as Theme[]) {
       items.push({
         id: `theme:${t}`, group: 'action', title: `Theme: ${t[0].toUpperCase()}${t.slice(1)}`, keywords: 'appearance colour',
@@ -981,7 +981,7 @@ function Shell({ client, conn, onSignOut }: {
       loadSessions(envId);
       navigate([...nav.current.stack, { kind: 'session', session: r.session }], envId);
     } catch (e: any) {
-      setError(`could not continue that thread: ${e.message}`);
+      setError(`Helm cannot continue that chat: ${e.message}`);
     } finally { setResuming(null); }
   };
 
@@ -1026,9 +1026,9 @@ function Shell({ client, conn, onSignOut }: {
         try {
           const r = await client.rpc<{ text: string }>(e.id, 'voice.transcribe', { audio: data, mime }, 60_000);
           return r.text;
-        } catch (err: any) { last = err?.message ?? 'transcription failed'; }
+        } catch (err: any) { last = err?.message ?? 'Helm cannot convert the recording to text.'; }
       }
-      throw new Error(last || 'no machine could transcribe that');
+      throw new Error(last || 'No machine can convert this recording to text.');
     };
     // While you speak: fetch the key if this device has none yet, and time
     // the machines in case the direct call has to fall back.
@@ -1083,7 +1083,7 @@ function Shell({ client, conn, onSignOut }: {
       rememberBrain(brainEnv.id, r.session);
       loadSessions(brainEnv.id);
       navigate([{ kind: 'session', session: r.session }], brainEnv.id);
-    } catch (e: any) { setError(`Could not open the Helm brain: ${e.message}`); }
+    } catch (e: any) { setError(`Helm cannot open its brain: ${e.message}`); }
     finally { setBrainOpening(false); }
   };
   const rememberBrain = (envId: string, s: Session) => {
@@ -1307,8 +1307,8 @@ function Shell({ client, conn, onSignOut }: {
             ><Gear /></button>
             <button
               className="iconbtn collapse-toggle"
-              title={sidebarCollapsed ? 'expand sidebar' : 'collapse sidebar'}
-              aria-label={sidebarCollapsed ? 'expand sidebar' : 'collapse sidebar'}
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               onClick={() => collapseSidebar(!sidebarCollapsed)}
             ><Icon name="sidebar" size={17} /></button>
           </span>
@@ -1348,15 +1348,15 @@ function Shell({ client, conn, onSignOut }: {
               }} />)}
             {status === 'offline' && (
               <div className="banner error">
-                No machine answers. Check the VM and this device's internet.
+                No machine answers. Check the VM (virtual machine). Check this device’s internet connection.
               </div>
             )}
 
             <div className="side-actions">
             <button
               type="button" className="home-search" onClick={() => setPalette(true)}
-              aria-label="Search threads, machines and folders" aria-keyshortcuts="/ Control+K Meta+K"
-              title="Search threads, machines and folders"
+              aria-label="Search chats, machines, and folders" aria-keyshortcuts="/ Control+K Meta+K"
+              title="Search chats, machines, and folders"
             >
               <Icon name="search" size={15} />
               <span className="grow">Search anything</span>
@@ -1378,7 +1378,7 @@ function Shell({ client, conn, onSignOut }: {
                     <span className="grow">
                       <span className="rt"><span className="rt-text">Helm brain</span>{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
                       <span className="rm">
-                        {brainEnv.name} · {s ? engineOf(s.engine).label : 'Choose an account'}{!brainEnv.online ? ' · offline' : ''}
+                        {brainEnv.name} · {s ? engineOf(s.engine).label : 'Pick an account'}{!brainEnv.online ? ' · offline' : ''}
                       </span>
                     </span>
                     {brainOpening ? <span className="chip working"><i />opening</span>
@@ -1388,7 +1388,7 @@ function Shell({ client, conn, onSignOut }: {
                   </button>;
                 })() : <button className="row tall" disabled>
                   <EngineMark />
-                  <span className="grow"><span className="rt">Helm brain</span><span className="rm">Add a VM to start</span></span>
+                  <span className="grow"><span className="rt">Helm brain</span><span className="rm">Add a VM (a virtual machine) to start.</span></span>
                 </button>}
             </div>
 
@@ -1420,7 +1420,7 @@ function Shell({ client, conn, onSignOut }: {
 
             {runningNow.length > 0 && (
               <Fold
-                shelf defaultOpen title="Working" count={runningNow.length} remember="sidebar:working"
+                shelf defaultOpen title="Running" count={runningNow.length} remember="sidebar:working"
                 peek={runningNow.some(isOpen) ? <div className="rows plain">{runningNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
               >
                 <div className="rows plain">{runningNow.map((x) => homeRow(x))}</div>
@@ -1446,8 +1446,8 @@ function Shell({ client, conn, onSignOut }: {
             {everyone.length === 0 && envs.some((e) => e.online && (liveListsSeen.current.has(e.id) || e.id in sessions)) && (
               <div className="rows plain">
                 <div className="empty quiet" role="status">
-                  No chats yet
-                  <div className="note">Tap New chat to start one.</div>
+                  You have no chats yet.
+                  <div className="note">Select New chat to start.</div>
                 </div>
               </div>
             )}
@@ -1483,8 +1483,8 @@ function Shell({ client, conn, onSignOut }: {
                 })}
                 {!envs.length && !error && (
                   <div className="empty quiet">
-                    No machines yet
-                    <div className="note">Run <code>helm add pc</code> on a machine that is already in your network.</div>
+                    You have no machines yet.
+                    <div className="note">Run <code>helm add pc</code> on a machine in your network.</div>
                   </div>
                 )}
               </div>
@@ -1494,7 +1494,7 @@ function Shell({ client, conn, onSignOut }: {
                 gear up top. The home screen is just the machines and what
                 is running on them. */}
             {error && <div className="error">{error}</div>}
-            {envError && <p className="note" role="status">{envs.length ? 'Saved workspace · reconnecting…' : 'Connecting to your machines…'}</p>}
+            {envError && <p className="note" role="status">{envs.length ? 'Helm shows saved chats and is reconnecting.' : 'Helm is connecting to your machines.'}</p>}
           </div>
         </div>
       </aside>
@@ -1563,7 +1563,7 @@ function Shell({ client, conn, onSignOut }: {
                         <span className="rt"><span className="rt-text">{e.name}</span></span>
                         <span className="rm">
                           {e.online
-                            ? activityOn(e, 'Nothing running')
+                            ? activityOn(e, 'No chats are running.')
                             : e.lastSeen ? `Offline · seen ${ago(e.lastSeen)}` : 'Never connected'}
                         </span>
                       </span>
@@ -1575,8 +1575,8 @@ function Shell({ client, conn, onSignOut }: {
               </div>
             ) : (
               <div className="empty quiet">
-                {envError ? 'The hub did not answer' : 'No machines yet'}
-                {!error && <div className="note">Run <code>helm add pc</code> on a machine that is already in your network.</div>}
+                {envError ? 'The connecting machine did not answer.' : 'You have no machines yet.'}
+                {!error && <div className="note">Run <code>helm add pc</code> on a machine in your network.</div>}
               </div>
             )}
           </div></div>
@@ -1637,7 +1637,7 @@ function Shell({ client, conn, onSignOut }: {
         ) : view.kind === 'new' ? (
           <Browse
             client={client} env={env} path={view.path} onBack={back}
-            title="New session" action="Choose this folder"
+            title="New chat" action="Pick this folder"
             onInto={(path) => push({ kind: 'new', path })}
             onPick={(cwd) => push({ kind: 'start', cwd })}
             onQuick={() => push({ kind: 'start', cwd: '', quick: true })}
@@ -1751,7 +1751,7 @@ function Shell({ client, conn, onSignOut }: {
 
       {snoozeUndo && (
         <div className="undo" role="status">
-          <span className="undo-text">Snoozed <b>{snoozeUndo.title}</b> {snoozeUndo.until === NEVER_SNOOZE ? 'indefinitely' : `until ${when(snoozeUndo.until)}`}</span>
+          <span className="undo-text">Snoozed <b>{snoozeUndo.title}</b> {snoozeUndo.until === NEVER_SNOOZE ? 'until you restore it' : `until ${when(snoozeUndo.until)}`}</span>
           <button onClick={() => { setSnooze(snoozeUndo.key, null); setSnoozeUndo(null); }}>Undo</button>
         </div>
       )}
@@ -1765,7 +1765,7 @@ function Shell({ client, conn, onSignOut }: {
         </div>
       )}
       {palette && <Palette items={paletteItems()} search={searchSaid} onClose={() => setPalette(false)} engineOf={engineOf} />}
-      {terminalPicker && <Palette heading="Open a terminal" placeholder="Pick a device" engineOf={engineOf}
+      {terminalPicker && <Palette heading="Open a terminal" placeholder="Pick a machine" engineOf={engineOf}
         onClose={() => setTerminalPicker(false)}
         items={envs.filter((e) => e.online).map((e) => {
           const open = (sessions[e.id] ?? []).filter(ownTerminal).length;
@@ -1787,7 +1787,7 @@ function Shell({ client, conn, onSignOut }: {
       {unpairing && (
         <Confirm
           title="Unpair this device?"
-          body="You will need a fresh link from `helm link` to sign back in."
+          body="Use a new link from `helm link` to sign in again."
           confirmLabel="Unpair" danger
           onCancel={() => setUnpairing(false)}
           onConfirm={() => { setUnpairing(false); onSignOut(); }}

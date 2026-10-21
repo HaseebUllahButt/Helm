@@ -82,14 +82,14 @@ async function pageFor(t, saved, { machines, ...options } = {}) {
 test('one machine online skips the machine step and asks for a folder straight away',async t=>{
   const page=await pageFor(t,null,{machines:['laptop']});
   await page.keyboard.press('Control+Shift+o');
-  await page.getByRole('combobox',{name:'Which folder on laptop?'}).waitFor();
-  assert.equal(await page.getByRole('combobox',{name:'Which machine?'}).count(),0);
+  await page.getByRole('combobox',{name:'Pick a folder on laptop'}).waitFor();
+  assert.equal(await page.getByRole('combobox',{name:'Pick a machine'}).count(),0);
   await page.getByRole('option').filter({hasText:'No folder'}).click();
   await startPickedChat(page,{envId:'laptop',folder:undefined});
 });
 
 async function startPickedChat(page, expected) {
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   await page.getByRole('option').filter({hasText:'Claude'}).click();
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.start'));
   const call = await page.evaluate(()=>window.calls.find(c=>c.method==='session.start'));
@@ -115,9 +115,9 @@ test('Ctrl+Shift+N remembers a browsed directory and its machine after leaving i
   await page.waitForFunction(()=>JSON.parse(localStorage.getItem('helm.last-folder:network:device'))?.folder==='/work/browsed');
   // A generic new-chat picker already open must switch to the contextual picker.
   await page.keyboard.press('Control+Shift+o');
-  await page.getByRole('combobox',{name:'Which machine?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick a machine'}).waitFor();
   await page.keyboard.press('Control+Shift+n');
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   await page.keyboard.press('Escape');
   await page.evaluate(()=>window.visit('laptop',{kind:'app-settings'}));
   await page.keyboard.press('Control+Shift+n');
@@ -133,8 +133,8 @@ test('Ctrl+Shift+N restores the last directory on a fresh app open',async t=>{
 test('Ctrl+Shift+N without any previous directory opens the normal picker',async t=>{
   const page=await pageFor(t);
   await page.keyboard.press('Control+Shift+n');
-  await page.getByRole('combobox',{name:'Which machine?'}).waitFor();
-  assert.equal(await page.getByRole('combobox',{name:'Which CLI?'}).count(),0);
+  await page.getByRole('combobox',{name:'Pick a machine'}).waitFor();
+  assert.equal(await page.getByRole('combobox',{name:'Pick an agent'}).count(),0);
 });
 
 test('Ctrl+Shift+N remembers a folder chosen in the new-chat picker',async t=>{
@@ -142,7 +142,7 @@ test('Ctrl+Shift+N remembers a folder chosen in the new-chat picker',async t=>{
   await page.keyboard.press('Control+Shift+o');
   await page.getByRole('option').filter({hasText:'vm'}).click();
   await page.getByRole('option').filter({hasText:'project'}).click();
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+Shift+n');
   await startPickedChat(page,{envId:'vm',folder:'/work/project'});
@@ -152,7 +152,7 @@ test('Ctrl+Shift+N remembers a folder chosen in the new-chat picker',async t=>{
 async function folderStep(page) {
   await page.keyboard.press('Control+Shift+o');
   await page.getByRole('option').filter({hasText:'vm'}).click();
-  const box=page.getByRole('combobox',{name:'Which folder on vm?'});
+  const box=page.getByRole('combobox',{name:'Pick a folder on vm'});
   await box.waitFor();
   await page.getByRole('option').filter({hasText:'project'}).waitFor();
   return box;
@@ -164,11 +164,11 @@ test('a new chat opens at once while its agent starts, and what you send then go
   await page.evaluate(()=>{ window.startGate=()=>new Promise((ok,fail)=>{ window.release=ok; window.refuse=fail; }); });
   await folderStep(page);
   await page.getByRole('option').filter({hasText:'project'}).click();
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   await page.keyboard.press('Enter');
   // The picker is gone and the chat is there, saying it is starting.
   await page.locator('.chip.working').filter({hasText:'starting'}).waitFor();
-  assert.equal(await page.getByRole('combobox',{name:'Which CLI?'}).count(),0);
+  assert.equal(await page.getByRole('combobox',{name:'Pick an agent'}).count(),0);
   assert.match(await page.locator('.session-bar').innerText(),/project/);
   const box=page.getByRole('textbox',{name:/^Message /});
   await box.fill('hello there');
@@ -189,7 +189,7 @@ test('a new chat stays on one steady empty page from starting to ready',async t=
   await page.evaluate(()=>{ window.startGate=()=>new Promise(ok=>{ window.release=ok; }); window.startAs={driver:'claude',engine:'claude',title:'project'}; });
   await folderStep(page);
   await page.getByRole('option').filter({hasText:'project'}).click();
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   await page.keyboard.press('Enter');
   await page.locator('[data-empty-chat]').waitFor();
   // The row under the box that the live chat has, so the box does not move.
@@ -224,7 +224,7 @@ test('an agent that fails to start says why, keeps what you wrote, and can be tr
   await page.evaluate(()=>{ window.startGate=()=>new Promise((ok,fail)=>{ window.release=ok; window.refuse=fail; }); });
   await folderStep(page);
   await page.getByRole('option').filter({hasText:'project'}).click();
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   await page.keyboard.press('Enter');
   const box=page.getByRole('textbox',{name:/^Message /});
   await box.fill('keep me');
@@ -248,8 +248,8 @@ test('the folder step starts with a quick-chat row, and Enter on it skips the fo
   assert.equal(await first.locator('.palette-title').innerText(),'No folder · quick chat');
   assert.equal(await first.getAttribute('aria-selected'),'true');
   await page.keyboard.press('Enter');
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
-  assert.equal(await page.locator('.newchat-steps .on').innerText(),'CLI');
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
+  assert.equal(await page.locator('.newchat-steps .on').innerText(),'Agent');
   assert.match(await page.locator('.newchat-steps').innerText(),/Quick chat/);
   await page.keyboard.press('Enter');
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.start'));
@@ -262,18 +262,18 @@ test('the folder step starts with a quick-chat row, and Enter on it skips the fo
 test('Ctrl+Enter at the folder step is a quick chat; at the machine step it does nothing',async t=>{
   const page=await pageFor(t);
   await page.keyboard.press('Control+Shift+o');
-  await page.getByRole('combobox',{name:'Which machine?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick a machine'}).waitFor();
   await page.keyboard.press('Control+Enter');
   await page.keyboard.press('Control+Shift+Enter');
-  assert.equal(await page.getByRole('combobox',{name:'Which machine?'}).count(),1);
+  assert.equal(await page.getByRole('combobox',{name:'Pick a machine'}).count(),1);
   await page.keyboard.press('Escape');
   const box=await folderStep(page);
   await box.fill('pro');
   await page.keyboard.press('Control+Enter');
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   // Back lands on the folder step again, with what was typed still there.
   await page.keyboard.press('Backspace');
-  await page.getByRole('combobox',{name:'Which folder on vm?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick a folder on vm'}).waitFor();
   assert.equal(await box.inputValue(),'pro');
   await box.fill('');
   await page.getByRole('option').filter({hasText:'project'}).click();
@@ -286,7 +286,7 @@ test('a typed name that is not a folder offers a new-folder row that makes it an
   const box=await folderStep(page);
   await box.fill('fresh');
   const make=page.getByRole('option').last();
-  await make.filter({hasText:'New folder "fresh" in home'}).waitFor();
+  await make.filter({hasText:'Create folder "fresh" in home'}).waitFor();
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
   if (process.env.HELM_TEST_SCREENSHOT_DIR) for (const width of [1280,390]) {
     await page.setViewportSize({width,height:844});
@@ -296,7 +296,7 @@ test('a typed name that is not a folder offers a new-folder row that makes it an
   await page.keyboard.press('ArrowDown');
   assert.equal(await make.getAttribute('aria-selected'),'true');
   await page.keyboard.press('Enter');
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   const mkdir=await page.evaluate(()=>window.calls.find(c=>c.method==='fs.mkdir'));
   assert.deepEqual(mkdir,{env:'vm',method:'fs.mkdir',params:{path:'~',name:'fresh'}});
   assert.match(await page.locator('.newchat-steps').innerText(),/fresh/);
@@ -315,7 +315,7 @@ test('Ctrl+Shift+Enter makes the folder beside the highlighted one, or inside it
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await box.fill('beside');
-  await page.getByRole('option').filter({hasText:'New folder "beside" in work'}).waitFor();
+  await page.getByRole('option').filter({hasText:'Create folder "beside" in work'}).waitFor();
   assert.equal(await page.getByRole('option').last().locator('.palette-sub').innerText(),'/work/beside');
   // Opened with →: inside it.
   await box.fill('');
@@ -323,9 +323,9 @@ test('Ctrl+Shift+Enter makes the folder beside the highlighted one, or inside it
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowRight');
   await box.fill('inner');
-  await page.getByRole('option').filter({hasText:'New folder "inner" in project'}).waitFor();
+  await page.getByRole('option').filter({hasText:'Create folder "inner" in project'}).waitFor();
   await page.keyboard.press('Control+Shift+Enter');
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   const mkdir=await page.evaluate(()=>window.calls.filter(c=>c.method==='fs.mkdir'));
   assert.deepEqual(mkdir.map(c=>c.params),[{path:'/work/project',name:'inner'}]);
   await startPickedChat(page,{envId:'vm',folder:'/work/project/inner'});
@@ -335,10 +335,10 @@ test('a name the machine refuses is explained in the box and nothing starts',asy
   const page=await pageFor(t);
   const box=await folderStep(page);
   await box.fill('a/b');
-  await page.getByRole('option').filter({hasText:'New folder "a/b"'}).waitFor();
+  await page.getByRole('option').filter({hasText:'Create folder "a/b"'}).waitFor();
   await page.keyboard.press('Control+Shift+Enter');
   await page.locator('.newchat .error').filter({hasText:'folder name cannot contain a path separator'}).waitFor();
-  assert.equal(await page.getByRole('combobox',{name:'Which folder on vm?'}).count(),1);
+  assert.equal(await page.getByRole('combobox',{name:'Pick a folder on vm'}).count(),1);
   // Not offered for a folder that is already there.
   await box.fill('');
   await page.keyboard.press('ArrowDown');
@@ -354,8 +354,8 @@ test('the palette opens a quick chat on the machine on screen',async t=>{
   const page=await pageFor(t);
   await page.keyboard.press('Control+k');
   await page.getByRole('combobox').fill('Quick chat');
-  await page.getByRole('option').filter({hasText:'no folder, for a small question'}).click();
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('option').filter({hasText:'Ask a short question without a folder.'}).click();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   await page.keyboard.press('Enter');
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.start'));
   const call=await startCall(page);
@@ -420,15 +420,15 @@ test('New folder is always offered below the list, and on each folder row as a +
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='fs.mkdir').length),0);
   // The + on a folder row aims inside that folder, even deep in the tree.
   await page.getByRole('option').filter({hasText:/^project$/}).hover();
-  await page.getByRole('button',{name:'New folder inside project'}).click();
+  await page.getByRole('button',{name:'Create a folder inside project'}).click();
   await page.getByRole('option').filter({hasText:/^existing$/}).waitFor();
   await page.getByRole('option').filter({hasText:/^existing$/}).hover();
-  await page.getByRole('button',{name:'New folder inside existing'}).click();
+  await page.getByRole('button',{name:'Create a folder inside existing'}).click();
   const deep=page.getByRole('textbox',{name:'New folder name, in /work/project/existing'});
   await deep.fill('deeper');
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({path:`${process.env.HELM_TEST_SCREENSHOT_DIR}/new-chat-create-deep.png`});
   await deep.press('Enter');
-  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.getByRole('combobox',{name:'Pick an agent'}).waitFor();
   const mkdir=await page.evaluate(()=>window.calls.filter(c=>c.method==='fs.mkdir').map(c=>c.params));
   assert.deepEqual(mkdir,[{path:'/work/project/existing',name:'deeper'}]);
   await startPickedChat(page,{envId:'vm',folder:'/work/project/existing/deeper'});
@@ -449,8 +449,8 @@ async function hiddenPicker(page, { local = false, all = false } = {}) {
     if (local) localStorage.setItem('helm.prefs', JSON.stringify({ vm: { hidden, account: 'visible' } }));
   }, { local, all });
   await page.keyboard.press('Control+Shift+n');
-  await page.getByRole('combobox', { name: 'Which CLI?' }).waitFor();
-  await page.getByRole('option', { name: /^Show \d+ hidden CLIs/ }).waitFor();
+  await page.getByRole('combobox', { name: 'Pick an agent' }).waitFor();
+  await page.getByRole('option', { name: /^Show \d+ hidden agents/ }).waitFor();
 }
 
 for (const width of [1280, 390]) test(`hidden CLIs can be used once without unhiding them at ${width}px`, async t => {
@@ -466,8 +466,8 @@ for (const width of [1280, 390]) test(`hidden CLIs can be used once without unhi
     await page.screenshot({ path: `${process.env.HELM_TEST_SCREENSHOT_DIR}/shown-cli-light-${width}.png` });
     await page.evaluate(() => delete document.documentElement.dataset.theme);
   }
-  await page.getByRole('option', { name: 'Show 2 hidden CLIs', exact: true }).click();
-  await page.getByText('Hidden CLIs', { exact: true }).waitFor();
+  await page.getByRole('option', { name: 'Show 2 hidden agents', exact: true }).click();
+  await page.getByText('Hidden agents', { exact: true }).waitFor();
   assert.equal(await page.getByRole('option').count(), 3);
   assert.equal(await page.getByRole('option').filter({ hasText: 'Codex' }).count(), 0);
   const chosen = page.getByRole('option').filter({ hasText: 'personal' });
@@ -485,20 +485,20 @@ for (const width of [1280, 390]) test(`hidden CLIs can be used once without unhi
   const changes = await page.evaluate(() => window.calls.filter(call => call.method === 'picker.prefs').map(call => call.params));
   assert.deepEqual(changes, []);
   await page.keyboard.press('Control+Shift+n');
-  await page.getByRole('option', { name: 'Show 2 hidden CLIs', exact: true }).waitFor();
+  await page.getByRole('option', { name: 'Show 2 hidden agents', exact: true }).waitFor();
   assert.equal(await page.getByRole('option').filter({ hasText: 'personal' }).count(), 0, 'a fresh picker returns to shown CLIs');
 });
 
 test('the hidden view keeps the search and supports keyboard launch', async t => {
   const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
   await hiddenPicker(page);
-  const input = page.getByRole('combobox', { name: 'Which CLI?' });
+  const input = page.getByRole('combobox', { name: 'Pick an agent' });
   await input.fill('grok');
   const toggle = page.getByRole('option', { name: 'Show 1 hidden match', exact: true, selected: true });
   await toggle.waitFor();
-  assert.equal(await page.getByText('No CLI matches.', { exact: true }).count(), 0);
+  assert.equal(await page.getByText('No agent matches.', { exact: true }).count(), 0);
   await input.press('Enter');
-  const hiddenInput = page.getByRole('combobox', { name: 'Which hidden CLI?' });
+  const hiddenInput = page.getByRole('combobox', { name: 'Pick a hidden agent' });
   assert.equal(await hiddenInput.inputValue(), 'grok');
   assert.equal(await hiddenInput.evaluate(el => el === document.activeElement), true);
   await page.getByRole('option').filter({ hasText: 'Grok' }).waitFor();
@@ -514,11 +514,11 @@ test('all-hidden and legacy local preferences still offer a way to use a hidden 
   const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
   await hiddenPicker(page, { local: true, all: true });
   assert.equal(await page.getByRole('option').count(), 1);
-  await page.getByRole('option', { name: 'Show 3 hidden CLIs', exact: true }).click();
+  await page.getByRole('option', { name: 'Show 3 hidden agents', exact: true }).click();
   assert.equal(await page.getByRole('option').count(), 4);
-  await page.getByRole('option', { name: 'Back to shown CLIs', exact: true }).click();
+  await page.getByRole('option', { name: 'Show visible agents', exact: true }).click();
   assert.equal(await page.getByRole('option').count(), 1);
-  await page.getByRole('option', { name: 'Show 3 hidden CLIs', exact: true }).click();
+  await page.getByRole('option', { name: 'Show 3 hidden agents', exact: true }).click();
   await page.getByRole('option').filter({ hasText: 'Grok' }).click();
   await page.waitForFunction(() => window.calls.some(call => call.method === 'session.start'));
   assert.equal((await startCall(page)).params.profileId, 'grok');
@@ -528,16 +528,16 @@ test('all-hidden and legacy local preferences still offer a way to use a hidden 
 test('arrows reach the quiet row and Backspace returns through hidden, shown, then folders', async t => {
   const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
   await hiddenPicker(page);
-  const input = page.getByRole('combobox', { name: 'Which CLI?' });
+  const input = page.getByRole('combobox', { name: 'Pick an agent' });
   assert.match(await page.getByRole('option', { selected: true }).innerText(), /Codex/);
   await input.press('ArrowDown');
-  const toggle = page.getByRole('option', { name: 'Show 2 hidden CLIs', selected: true });
+  const toggle = page.getByRole('option', { name: 'Show 2 hidden agents', selected: true });
   await toggle.waitFor();
   assert.equal(await input.getAttribute('aria-activedescendant'), await toggle.getAttribute('id'));
   await input.press('Enter');
-  const hidden = page.getByRole('combobox', { name: 'Which hidden CLI?' });
+  const hidden = page.getByRole('combobox', { name: 'Pick a hidden agent' });
   await hidden.press('ArrowUp');
-  await page.getByRole('option', { name: 'Back to shown CLIs', selected: true }).waitFor();
+  await page.getByRole('option', { name: 'Show visible agents', selected: true }).waitFor();
   await hidden.press('Enter');
   await input.press('ArrowUp');
   await input.press('Enter');
@@ -545,33 +545,33 @@ test('arrows reach the quiet row and Backspace returns through hidden, shown, th
   await input.waitFor();
   assert.match(await page.getByRole('option', { selected: true }).innerText(), /Codex/);
   await input.press('Backspace');
-  await page.getByRole('combobox', { name: 'Which folder on vm?' }).waitFor();
+  await page.getByRole('combobox', { name: 'Pick a folder on vm' }).waitFor();
   assert.equal(await page.evaluate(() => window.calls.some(call => call.method === 'session.start')), false);
 });
 
 test('search counts hidden matches and keeps a return row when the hidden list is empty', async t => {
   const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
   await hiddenPicker(page);
-  const input = page.getByRole('combobox', { name: 'Which CLI?' });
+  const input = page.getByRole('combobox', { name: 'Pick an agent' });
   await input.fill('o');
   await page.getByRole('option', { name: 'Show 2 hidden matches' }).waitFor();
   await input.fill('missing');
-  await page.getByText('No CLI matches.', { exact: true }).waitFor();
+  await page.getByText('No agent matches.', { exact: true }).waitFor();
   assert.equal(await page.getByRole('option').count(), 0);
   await input.fill('claude');
   await page.getByRole('option', { name: 'Show 1 hidden match' }).click();
-  const hidden = page.getByRole('combobox', { name: 'Which hidden CLI?' });
+  const hidden = page.getByRole('combobox', { name: 'Pick a hidden agent' });
   await hidden.fill('missing');
-  await page.getByText('No hidden CLI matches.', { exact: true }).waitFor();
-  await page.getByRole('option', { name: 'Back to shown CLIs' }).click();
+  await page.getByText('No hidden agent matches.', { exact: true }).waitFor();
+  await page.getByRole('option', { name: 'Show visible agents' }).click();
   assert.equal(await input.inputValue(), 'missing');
-  await page.getByText('No CLI matches.', { exact: true }).waitFor();
+  await page.getByText('No agent matches.', { exact: true }).waitFor();
 });
 
 test('Enter still launches the shown default and remembers it', async t => {
   const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
   await hiddenPicker(page);
-  await page.getByRole('combobox', { name: 'Which CLI?' }).press('Enter');
+  await page.getByRole('combobox', { name: 'Pick an agent' }).press('Enter');
   await page.waitForFunction(() => window.calls.some(call => call.method === 'session.start'));
   assert.equal((await startCall(page)).params.profileId, 'codex');
   assert.deepEqual(await page.evaluate(() => window.calls.filter(call => call.method === 'picker.prefs').map(call => call.params)), [{ last: 'visible' }]);
@@ -582,7 +582,7 @@ test('the quiet row has a mobile tap target and pointer selection changes its ap
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
   await hiddenPicker(page);
-  const toggle = page.getByRole('option', { name: 'Show 2 hidden CLIs' });
+  const toggle = page.getByRole('option', { name: 'Show 2 hidden agents' });
   const before = await toggle.evaluate(el => getComputedStyle(el).backgroundColor);
   await toggle.hover();
   assert.equal(await toggle.getAttribute('aria-selected'), 'true');

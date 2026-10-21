@@ -51,7 +51,7 @@ test('a missing screen chunk shows recovery without clearing pairing or saved dr
   await page.evaluate(() => localStorage.setItem('helm.auth', 'test-membership'));
   await page.getByLabel('Draft').fill('keep my unsent message');
   await page.getByRole('button', { name: 'Open screen', exact: true }).click();
-  await page.getByRole('heading', { name: 'Helm needs a refresh' }).waitFor();
+  await page.getByRole('heading', { name: 'Reload Helm' }).waitFor();
   assert.equal(await page.evaluate(() => window.reloads), 0, 'no reload loop');
   await page.getByRole('button', { name: 'Reload Helm' }).click();
   assert.equal(await page.evaluate(() => window.reloads), 1);
@@ -62,7 +62,7 @@ test('a missing screen chunk shows recovery without clearing pairing or saved dr
 test('a render error leaves a readable recovery screen and error details', async t => {
   const page = await pageFor(t);
   await page.getByRole('button', { name: 'Open broken chat' }).click();
-  await page.getByRole('heading', { name: 'Helm couldn’t open this screen' }).waitFor();
+  await page.getByRole('heading', { name: 'Helm cannot open this screen.' }).waitFor();
   await page.getByText('Error details', { exact: true }).click();
   assert.equal(await page.getByText('Cannot render this chat', { exact: true }).isVisible(), true);
 });
