@@ -235,11 +235,16 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
     client.rpc<FileText>(env.id, 'git.file', { cwd, path }, 30_000)
       .then((f) => {
         if (!alive || at !== revision.current) return;
+        revision.current++;
         const kept = drafts.get(dkey);
         if (kept && kept.base.hash !== f.hash) setTheirs(f);
         else setFile(f);
       })
-      .catch((e: any) => { if (alive) setFile({ error: e?.message || 'Could not open this file.' }); });
+      .catch((e: any) => {
+        if (!alive || at !== revision.current) return;
+        if (drafts.has(dkey)) setProblem(e?.message || 'Could not open this file.');
+        else setFile({ error: e?.message || 'Could not open this file.' });
+      });
     return () => { alive = false; };
   }, [client, env.id, cwd, path, hidden]);
 
@@ -250,16 +255,21 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
     let alive = true, busy = false;
     const tick = async () => {
       const f = live.current.file;
-      if (busy || savingNow.current || document.visibilityState !== 'visible' || typeof f !== 'object' || !('hash' in f) || !f.hash) return;
+      if (busy || savingNow.current || document.visibilityState !== 'visible' || typeof f !== 'object') return;
       busy = true;
       try {
         const at = revision.current;
-        const since = live.current.theirs?.hash ?? f.hash;
+        const since = live.current.theirs?.hash ?? ('hash' in f ? f.hash : undefined);
         const next = await client.rpc<FileText>(env.id, 'git.file', { cwd, path, since }, 15_000);
-        if (!alive || at !== revision.current || savingNow.current || next.same || !next.hash) return;
-        if (live.current.dirty) setTheirs((t) => (t?.hash === next.hash ? t : next));
+        if (!alive || at !== revision.current || savingNow.current) return;
+        setProblem('');
+        if (next.same) return;
+        revision.current++;
+        if (live.current.dirty) setTheirs(next);
         else { setFile(next); setDraftRaw((d) => (d == null ? d : next.text ?? '')); }
-      } catch { /* offline for a moment: the next tick tries again */ }
+      } catch (e: any) {
+        if (alive && /no such file|not a file/i.test(e?.message ?? '')) setProblem('This file was deleted or moved. Your text stays here until you leave.');
+      }
       finally { busy = false; }
     };
     const timer = setInterval(() => void tick(), WATCH_MS);
