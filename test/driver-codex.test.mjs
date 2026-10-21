@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { writeFileSync, readFileSync, chmodSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
-import { CodexDriver, CodexServer, CODEX_COMMANDS, formatAccountUsage, formatRateLimits } from '../packages/connect/src/drivers/codex.js';
+
+// Hosted servers save what they hold under HELM_DIR: never the owner's.
+const helmDir = mkdtempSync(join(tmpdir(), 'helm-driver-codex-'));
+process.env.HELM_DIR = helmDir;
+test.after(() => rmSync(helmDir, { recursive: true, force: true }));
+const { CodexDriver, CodexServer, CODEX_COMMANDS, formatAccountUsage, formatRateLimits } = await import('../packages/connect/src/drivers/codex.js');
 
 // One app-server is shared per account home; every test gets its own so the
 // fake replays the right recording.

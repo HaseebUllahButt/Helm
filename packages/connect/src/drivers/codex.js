@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
@@ -9,7 +9,7 @@ import { codexProcId } from '../hosted-process.js';
 import { stageCodexRewind } from './rewind.js';
 import { Driver, readJsonLines, checkVersion } from './index.js';
 import { modeFor } from '../modes.js';
-import { expand } from '../paths.js';
+import { HELM_DIR, expand } from '../paths.js';
 import { codexSessionState } from '../transcript.js';
 import { formatReset, planName, quotaBar, windowLabel } from '../quota.js';
 
@@ -242,6 +242,7 @@ export class CodexServer {
    * threadId -> server requests (and their `serverRequest/resolved`) that
    * reached a hosted server before any driver held their thread: the replay
    * after a restart reaches the first driver to bind, not every thread.
+   * Saved to disk, as the server outlives this daemon and the next one too.
    */
   #held = new Map();
 
@@ -288,6 +289,8 @@ export class CodexServer {
     if (this.#hosted && this.#pipe) {
       this.#pipe.detach();
       this.#pipe = null;
+      // Saved already: the next daemon to bind reads them from disk.
+      this.#held.clear();
       return;
     }
     this.#stop();
@@ -304,16 +307,56 @@ export class CodexServer {
       ? held.findIndex((x) => x.id !== undefined && String(x.id) === String(m.params?.requestId)) : -1;
     if (asked >= 0) held.splice(asked, 1); else held.push(m);
     if (held.length) this.#held.set(threadId, held); else this.#held.delete(threadId);
+    this.#saveHeld();
   }
 
   #release(threadId, driver) {
     const held = this.#held.get(threadId);
     if (!held) return;
-    this.#held.delete(threadId);
-    for (const m of held) {
+    // Forgotten only once the driver has put each one in its chat's log.
+    while (held.length) {
+      const m = held[0];
       if (m.id !== undefined) driver.onServerRequest(m);
       else driver.onNotification(m.method, m.params);
+      held.shift();
     }
+    this.#held.delete(threadId);
+    this.#saveHeld();
+  }
+
+  get #heldFile() { return join(HELM_DIR, 'codex-held', `${this.procId}.json`); }
+
+  #saveHeld() {
+    if (!this.#hosted) return;
+    const file = this.#heldFile;
+    try {
+      if (!this.#held.size) { unlinkSync(file); return; }
+      mkdirSync(join(HELM_DIR, 'codex-held'), { recursive: true });
+      writeFileSync(`${file}.tmp`, JSON.stringify(Object.fromEntries(this.#held)), { mode: 0o600 });
+      renameSync(`${file}.tmp`, file);
+    } catch (err) { if (err.code !== 'ENOENT') this.log(`codex: could not save held questions: ${err.message}`); }
+  }
+
+  /** What an earlier daemon held for this same app-server, handed to whoever is already here. */
+  #loadHeld() {
+    let saved = null;
+    try { saved = JSON.parse(readFileSync(this.#heldFile, 'utf8')); } catch { return; }
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return;
+    for (const [threadId, messages] of Object.entries(saved)) {
+      if (!Array.isArray(messages)) continue;
+      const valid = messages.filter((m) => m && typeof m.method === 'string');
+      if (valid.length) this.#held.set(threadId, [...valid, ...(this.#held.get(threadId) ?? [])]);
+    }
+    for (const threadId of [...this.#held.keys()]) {
+      const driver = this.#route(threadId);
+      if (driver) this.#release(threadId, driver);
+    }
+  }
+
+  /** A fresh app-server asked none of them; request ids start over in it. */
+  #forgetHeld() {
+    this.#held.clear();
+    try { unlinkSync(this.#heldFile); } catch { /* none */ }
   }
 
   async ensure() {
@@ -359,6 +402,7 @@ export class CodexServer {
         // update, taking its turns and questions along.
         const adopted = this.procHost.hasProc(this.procId);
         if (!adopted) {
+          this.#forgetHeld();
           await this.procHost.openProc(this.procId, {
             cmd: this.cmd, args: ['app-server', '--stdio'], cwd: undefined, env: serverEnv(this.env),
           });
@@ -367,6 +411,8 @@ export class CodexServer {
         if (!pipe) throw new Error('codex: the process host lost the app-server before Helm could connect');
         this.#hosted = true;
         this.#adopted = adopted;
+        // Older than anything the replay below brings.
+        if (adopted) this.#loadHeld();
         this.#bindPipe(pipe);
         // A newly opened hosted proc still needs the normal app-server
         // handshake; only an already-running proc has been initialized.
@@ -447,7 +493,7 @@ export class CodexServer {
     this.#pipe = pipe;
     pipe.onExit(({ code, stderr }) => {
       this.#pipe = null;
-      this.#held.clear();
+      this.#forgetHeld();
       for (const resolve of this.#calls.values()) resolve({ error: { message: 'codex exited' } });
       this.#calls.clear();
       for (const d of this.#drivers.values()) d.serverExited(code, stderr);

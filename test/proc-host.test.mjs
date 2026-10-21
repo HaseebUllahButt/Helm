@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, existsSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -361,6 +361,46 @@ test('a Codex approval asked during the restart waits for its own chat', async (
   const done = await log2.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
   await other.suspend();
+  await d2.kill();
+});
+
+test('a Codex approval held for its chat survives a second restart before the chat binds', async (t) => {
+  const fake = fakeCli('codex', 'command');
+  const env = { CODEX_HOME: join(fake.dir, 'home'), FAKE_EVENT_MS: '40' };
+  const daemon = async () => {
+    const host = procHost();
+    t.after(() => host.detach());
+    assert.equal(await host.ensure(), true);
+    return host;
+  };
+  const first = await daemon();
+  const d1 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', procHost: first });
+  const log1 = collect(d1);
+  await d1.send('Run the shell command `echo helm-test`');
+  const turnId = log1.of('turn.start')[0]?.turnId;
+  const threadId = d1.threadId;
+  await d1.suspend();
+  first.detach();
+  await new Promise((r) => setTimeout(r, 1500));
+  // Another chat binds first and takes the replay, then Helm restarts again.
+  const second = await daemon();
+  const other = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask',
+    engineSessionId: '00000000-0000-0000-0000-000000000000', procHost: second });
+  await other.start();
+  await other.suspend();
+  second.detach();
+  const third = await daemon();
+  const d2 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', engineSessionId: threadId,
+    procHost: third, openTurn: () => turnId, pendingEvents: () => [] });
+  const log2 = collect(d2);
+  await d2.start();
+  const ask = await log2.until((e) => e.type === 'permission.request');
+  assert.equal(log2.of('permission.request').length, 1);
+  assert.equal(fake.stdinLines().some((l) => String(l.id) === ask.requestId && l.result), false, 'nobody may decline it meanwhile');
+  await d2.answer(ask.requestId, { option: 'allow' });
+  const done = await log2.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.equal(existsSync(join(dir, 'codex-held')) && readdirSync(join(dir, 'codex-held')).length, 0, 'nothing stays held');
   await d2.kill();
 });
 
