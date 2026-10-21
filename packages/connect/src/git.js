@@ -220,7 +220,7 @@ export async function files(cwd) {
   const realDir = await realpath(dir).catch(() => dir);
   const start = realDir.startsWith(realRoot + '/') ? realDir.slice(realRoot.length + 1) : '';
   return {
-    root: collapse(root), start, truncated: all.length > TREE_LIMIT,
+    root: collapse(root), absoluteRoot: root, start, truncated: all.length > TREE_LIMIT,
     files: all.slice(0, TREE_LIMIT), secret: all.slice(0, TREE_LIMIT).filter(isSecretPath),
   };
 }

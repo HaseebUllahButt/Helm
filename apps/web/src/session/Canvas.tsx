@@ -13,7 +13,7 @@ import { SideDock, readLocal, writeLocal } from './SideDock';
  * change it did not see. Edits not saved yet stay while the app is open.
  */
 
-interface Tree { root: string; start: string; files: string[]; secret: string[]; truncated: boolean }
+interface Tree { root: string; absoluteRoot?: string; start: string; files: string[]; secret: string[]; truncated: boolean }
 interface FileText { path: string; size?: number; text?: string; hash?: string; truncated?: boolean; binary?: boolean; hidden?: boolean; same?: boolean }
 type Saved = { path: string; hash?: string; size?: number; conflict?: boolean; gone?: boolean; exists?: boolean };
 
@@ -99,9 +99,11 @@ export function Canvas({ client, env, cwd, changed, path, onPath, onClose }: {
   const shown = useMemo(() => {
     if (!path || !/^[/~]/.test(path)) return path;
     if (!tree) return null;
-    let best = '';
-    for (const f of tree.files) if (path.endsWith(`/${f}`) && f.length > best.length) best = f;
-    return best || undefined;
+    const root = path.startsWith('~/') ? tree.root : tree.absoluteRoot ?? tree.root;
+    const prefix = `${root.replace(/\/+$/, '')}/`;
+    if (!path.startsWith(prefix)) return undefined;
+    const rel = path.slice(prefix.length);
+    return tree.files.includes(rel) ? rel : undefined;
   }, [path, tree]);
   useEffect(() => { if (shown && shown !== path) onPath(shown); }, [shown, path, onPath]);
 
