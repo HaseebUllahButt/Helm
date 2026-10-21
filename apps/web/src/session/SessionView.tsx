@@ -16,6 +16,7 @@ import { VisualReply, Visuals, type VisualReader } from './VisualReply';
 import { useChatKeys } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
 import { Canvas, useCanvas } from './Canvas';
+import { useExclusiveDocks } from './SideDock';
 import { prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
 import { loadDraft, saveDraft } from '../draftStore';
@@ -73,6 +74,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const browser = useBrowserDock(client, env, session, !isShell);
   // The canvas and the browser panel share the column beside the chat: one at a time.
   const canvas = useCanvas(env, session, !isShell);
+  useExclusiveDocks(canvas, browser);
   const [status, setStatus] = useState(session.status);
   const [compacting, setCompacting] = useState(session.compacting || false);
   // When it entered the status it is in, for "working 14m" beside the word.

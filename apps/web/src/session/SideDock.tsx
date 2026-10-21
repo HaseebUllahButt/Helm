@@ -13,6 +13,18 @@ export function useWide() {
   return wide;
 }
 
+/** The panel just opened takes the shared column, including keyboard and file links. */
+export function useExclusiveDocks(canvas: { open: boolean; setOpen: (open: boolean) => void }, browser: { open: boolean; setOpen: (open: boolean) => void }) {
+  const previous = useRef({ canvas: false, browser: false });
+  useEffect(() => {
+    const before = previous.current;
+    previous.current = { canvas: canvas.open, browser: browser.open };
+    if (!canvas.open || !browser.open) return;
+    if (!before.canvas) browser.setOpen(false);
+    else canvas.setOpen(false);
+  }, [canvas.open, browser.open]);
+}
+
 /**
  * A column beside the chat on a wide screen, the whole screen on a phone: the
  * browser and the canvas both open in one. Its width is dragged from the left

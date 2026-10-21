@@ -43,6 +43,7 @@ import { useAccountLimits } from './useAccountLimits';
 import { useChatKeys } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
 import { Canvas, useCanvas } from './Canvas';
+import { useExclusiveDocks } from './SideDock';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
 
 const ENGINE_LABEL: Record<string, string> = {
@@ -133,6 +134,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const browser = useBrowserDock(client, env, session);
   // The canvas and the browser panel share the column beside the chat: one at a time.
   const canvas = useCanvas(env, session);
+  useExclusiveDocks(canvas, browser);
   useEffect(() => { if (reviewChildren) setDetails('agents'); }, [reviewChildren]);
   const [reviewNative, setReviewNative] = useState(false);
   const [focusItem, setFocusItem] = useState<{ id: string; visit: number }>();

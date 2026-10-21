@@ -54,7 +54,7 @@ export function useCanvas(env: Environment, session: Session, enabled = true) {
       e.preventDefault();
       if (e.repeat) return;
       const modal = [...document.querySelectorAll('[aria-modal="true"]')].at(-1);
-      if (modal && !modal.matches('.canvas')) return;
+      if (modal && !modal.matches('.side-dock')) return;
       set({ ...now.current, open: !now.current.open });
     };
     const onOpen = (e: Event) => { const path = (e as CustomEvent).detail?.path; if (typeof path === 'string' && path) set({ open: true, path }); };

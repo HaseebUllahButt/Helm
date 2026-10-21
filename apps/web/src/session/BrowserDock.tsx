@@ -42,7 +42,7 @@ export function useBrowserDock(client: Client, env: Environment, session: Sessio
       e.preventDefault();
       if (e.repeat) return;
       const modal = [...document.querySelectorAll('[aria-modal="true"]')].at(-1);
-      if (modal && !modal.matches('.browser-dock')) return;
+      if (modal && !modal.matches('.side-dock')) return;
       setOpen(!isOpen.current);
     };
     window.addEventListener('keydown', onKey);
