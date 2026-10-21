@@ -72,6 +72,7 @@ const USAGE = `helm - control your coding agents from anywhere
   helm machines                     machines in this network
   helm redesignate [machine] <kind> what a machine is for: pc, vm or nas
   helm nas [machine] [add|remove <folder>]   what a nas shares
+  helm spin <port> [options]         same as helm share; make a public link
   helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
     a short-lived link: ends after 3 hours unless --keep
                                   a public https link to a port here, served by your VM
@@ -107,6 +108,8 @@ const USAGE = `helm - control your coding agents from anywhere
   helm say <id> <text...>           send a named message from this agent (a prompt outside a chat)
   helm reply <message-id> <text...> reply to an agent message
   helm messages [chat-id] [--json]  read exchanges in this chat and its Agents
+  helm canvas <file | https://…> [--title <text>] [--session <id>]
+                                    open a project file, saved visual or live page beside chat
   helm render <file.html | picture.png> [--title <text>] [--height <px>] [--session <id>]
                                     save a visual or a screenshot inside this chat
   helm preview <file.html> [--output <file.png>] [--width <px>] [--appearance dark|light]
@@ -2073,6 +2076,7 @@ try {
       await nasCmd();
       break;
 
+    case 'spin':
     case 'share':
       await shareCmd();
       break;
@@ -2397,6 +2401,7 @@ try {
       await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession });
       break;
     }
+    case 'canvas':
     case 'render':
     case 'preview': {
       const { runVisualCommand } = await import('../src/visual-cli.js');

@@ -2,7 +2,9 @@
 
 The owner calls these "spins": a public https link to a port on one of
 their machines, served by the VM. It ends by itself after 3 hours unless
-kept.
+kept. `helm spin` is an alias of `helm share`. An agent can open a link
+beside chat with `helm canvas <spin-url>`. The new-tab link remains available
+for websites that cannot run inside a frame.
 
 ## Share a port
 - **Prove (driven 2026-10-15):**

@@ -3,14 +3,23 @@
 
 /* Saved visual replies: controls belong to Helm; the page stays isolated. */
 .visual-reply { position: relative; margin: 12px 0; border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.visual-corner { position: absolute; top: 6px; right: 6px; z-index: 1; display: flex; gap: 4px; }
 .visual-open {
-  position: absolute; top: 6px; right: 6px; z-index: 1; display: grid; place-items: center; width: 30px; height: 30px;
+  display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
   border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--card) 88%, transparent);
   color: var(--text-dim); opacity: 0; transition: opacity 0.15s var(--ease); cursor: pointer;
 }
 .visual-reply:hover .visual-open, .visual-open:focus-visible { opacity: 1; }
 .visual-open:hover { color: var(--text); }
 @media (hover: none) { .visual-open { opacity: 0.85; } }
+.visual-open[aria-pressed="true"] { opacity: 1; color: var(--primary); }
+/* A live page is a card in the chat; it runs only in the canvas or its own tab. */
+.visual-link { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; background: var(--card); }
+.visual-link-text { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.visual-link-text small { font: var(--t-micro) var(--mono, monospace); color: var(--mutedfg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.visual-link .visual-actions a { padding: 7px 9px; color: var(--text-dim); font-size: 12px; text-decoration: none; border-radius: 6px; }
+.visual-link .visual-actions a:hover { color: var(--text); background: var(--hover); }
+.visual-link .visual-actions button[aria-pressed="true"] { color: var(--primary); }
 .visual-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; padding: 9px 12px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 12px; }
 .visual-bar strong { flex: 1; min-width: 100px; font-weight: 550; overflow-wrap: anywhere; }
 .visual-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
@@ -3741,6 +3750,8 @@ details.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
 .files-chip.canvas-save-btn { color: var(--text); border-color: var(--line-2); background: var(--raised); }
 .canvas-clash { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent); border-radius: var(--radius-md); font-size: var(--t-meta); }
 .canvas-clash > span { flex: 1 1 220px; }
+.canvas-page .visual-frame { flex: 1; min-height: 0; border-top: 1px solid var(--line); }
+a.files-chip { text-decoration: none; }
 .canvas-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 20px 40px; border-top: 1px solid var(--line); }
 .canvas-md { max-width: 48rem; margin: 0 auto; padding-top: 10px; }
 .canvas-body .cv { margin: 10px -20px 0; }

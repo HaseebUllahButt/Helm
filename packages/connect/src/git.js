@@ -226,6 +226,19 @@ export async function files(cwd) {
   };
 }
 
+/** Resolve an agent's file against its chat folder, using the same read guards as Canvas. */
+export async function canvasPath(cwd, path) {
+  if (typeof path !== 'string' || !path.trim() || path.includes('\0')) throw new Error('canvas needs a file path');
+  const dir = await folder(cwd);
+  const root = await toplevel(dir);
+  if (!root) throw new Error('the file canvas needs a Git project');
+  const rel = relative(root, resolve(dir, expand(path)));
+  const result = await file(cwd, rel);
+  if (result.hidden) throw new Error('this file may hold passwords or keys');
+  if (rel.split('/')[0] === '.git') throw new Error('that is git’s own folder');
+  return rel;
+}
+
 /** What a save compares against, so it never overwrites a change it did not see. */
 const hashOf = (buf) => createHash('sha256').update(buf).digest('hex');
 
