@@ -227,8 +227,6 @@ function Shell({ client, conn, onSignOut }: {
   /** "thread X needs you" while a different session is on screen. */
   const [toast, setToast] = useState<Toast | null>(null);
   const [palette, setPalette] = useState(false);
-  /** The repo behind the chat on screen, when that chat has its own worktree. */
-  const worktreeRepo = useRef<{ envId: string; folder: string } | null>(null);
   /** The keyboard new-chat box; a folder skips straight to the agent picker. */
   const [newChat, setNewChat] = useState<{ envId?: string; folder?: string; quick?: boolean; draft?: string } | null>(null);
   const [lastFolder, setLastFolder] = useState<{ envId: string; folder: string } | null>(() => {
@@ -652,8 +650,8 @@ function Shell({ client, conn, onSignOut }: {
       if (mod && !e.altKey && (e.key === '/' || e.key === '?') && !el?.closest?.('.xterm')) { e.preventDefault(); setPalette(false); setHelp((v) => !v); return; }
       // A terminal keeps Ctrl+N: it is "next line" to a shell.
       const ctrlN = !e.shiftKey && (e.key === 'n' || e.key === 'N') && !el?.closest?.('.xterm');
-      // From a chat in its own worktree, a new chat belongs to the repo it came from.
-      if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat(worktreeRepo.current ?? {}); return; }
+      // A new chat from the start: machine first. "In this folder" is Ctrl+Shift+N.
+      if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       // Settings and usage from anywhere. Letters with Ctrl/Cmd+Shift that
@@ -795,8 +793,6 @@ function Shell({ client, conn, onSignOut }: {
   useEffect(() => {
     if (selected && currentFolder) rememberChatFolder(selected, currentFolder);
   }, [selected, currentFolder, rememberChatFolder]);
-  const worktreeHome = !inQuick && (viewSession?.chatWorktree?.repo ?? viewSession?.worktreeHome);
-  worktreeRepo.current = selected && worktreeHome ? { envId: selected, folder: worktreeHome } : null;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
