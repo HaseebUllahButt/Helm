@@ -1,15 +1,11 @@
 import { execFile } from 'node:child_process';
-import { hasActiveTransfers } from '@helm/protocol/transfer-activity';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync, watch } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { HOME, HELM_DIR } from './paths.js';
-import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
 import { systemdArg } from './service.js';
-import { getProfiles, materialize } from './profiles.js';
-import { hostedProcId } from './hosted-process.js';
 
 const exec = promisify(execFile);
 const binPath = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
@@ -57,46 +53,12 @@ export async function currentVersion(dir = ROOT) {
 const unitActive = (unit) =>
   exec('systemctl', ['--user', 'is-active', '--quiet', unit]).then(() => true).catch(() => false);
 
-/** Hosted processes can survive replacement; other busy agents must finish first. */
-export function unsafeRestartSessions(sessions, hasProc, profiles = []) {
-  return sessions.filter((s) => {
-    // Native Claude approval replies live on a socket in this daemon too.
-    if (s.nativeChat && s.status === 'blocked') return true;
-    if (!s.driver || s.external || !['working', 'blocked'].includes(s.status)) return false;
-    // Codex's outstanding approval RPCs are daemon-local. Keep the old
-    // daemon until those are answered rather than lose an answerable prompt.
-    if (s.driver === 'codex' && s.status === 'blocked') return true;
-    const profile = s.driver === 'codex' && profiles.find((p) => p.id === s.profileId);
-    const id = hostedProcId(s, profile ? materialize(profile) : null);
-    return !id || !hasProc(id);
-  });
-}
-
-async function restartBlockers(host) {
-  await host.ensure({ spawn: false });
-  const file = join(HELM_DIR, 'sessions.json');
-  if (!existsSync(file)) return [];
-  const stored = JSON.parse(readFileSync(file, 'utf8'));
-  if (!Array.isArray(stored.sessions)) throw new Error('cannot verify active sessions before update restart');
-  return unsafeRestartSessions(stored.sessions, (id) => !!id && host.hasProc(id), await getProfiles());
-}
-
-/** Runs outside the daemon, so waiting never interrupts the thread requesting an update. */
-export async function restartWhenSafe(units) {
+/** Queue replacement now. Agent and terminal hosts outlive the daemon. */
+export async function restartServices(units) {
   if (!units.length || units.some((unit) => !DAEMON_UNITS.includes(unit))) throw new Error('invalid Helm restart service');
-  const host = new TerminalHost({ socketPath: PROC_SOCKET_PATH, unit: 'helm-procs' });
-  try {
-    let waiting = false;
-    while ((await restartBlockers(host)).length || hasActiveTransfers()) {
-      if (!waiting) say('waiting for active transfers or agents that cannot survive a restart');
-      waiting = true;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-    // A second socket client must not consume output during the handover:
-    // with no clients the host keeps the backlog for the replacement daemon.
-    host.detach();
-    await exec('systemctl', ['--user', 'restart', ...units]);
-  } finally { host.detach(); }
+  // systemd owns the job: it continues even when this caller is the daemon
+  // being replaced. No worker needs to wait for chats or open connections.
+  await exec('systemctl', ['--user', '--no-block', 'restart', ...units]);
 }
 
 /**
@@ -301,23 +263,23 @@ async function requestRestart() {
   const restarting = [];
   const failed = [];
   // macOS: the LaunchAgent restarts it. Asked from a separate process group
-  // a few seconds out, so this reply - and the restart's own caller - finish.
+  // so replacement continues when the calling daemon exits.
   if (platform() === 'darwin') {
     const label = `gui/${process.getuid?.()}/dev.helm.serve`;
     if (!(await exec('launchctl', ['print', label]).then(() => true, () => false))) return { restarting, failed };
     const { spawn } = await import('node:child_process');
-    spawn('/bin/sh', ['-c', `sleep 5; launchctl kickstart -k ${label}`], { detached: true, stdio: 'ignore' }).unref();
+    spawn('/bin/sh', ['-c', `exec launchctl kickstart -k ${label}`], { detached: true, stdio: 'ignore' }).unref();
     return { restarting: ['dev.helm.serve'], failed };
   }
   for (const unit of DAEMON_UNITS) if (await unitActive(unit)) restarting.push(unit);
   if (restarting.length) {
     try {
-      // One worker handles both services and drains any unhosted active turn.
-      // Hosted conversations continue in the process host while we reconnect.
-      if (!(await unitActive('helm-self-restart.service')) && !(await unitActive('helm-self-restart.timer'))) {
-        await exec('systemd-run', ['--user', '--collect', '--on-active=5', '--unit=helm-self-restart', `--setenv=HELM_DIR=${HELM_DIR}`,
-          process.execPath, binPath, 'restart-services', ...restarting]);
+      // Retire waiters created by older versions. They must neither block
+      // this update nor restart it a second time after an old chat finishes.
+      for (const unit of ['helm-self-restart.timer', 'helm-self-restart.service']) {
+        if (await unitActive(unit)) await exec('systemctl', ['--user', 'stop', unit]);
       }
+      await restartServices(restarting);
     } catch {
       failed.push(...restarting);
       restarting.length = 0;

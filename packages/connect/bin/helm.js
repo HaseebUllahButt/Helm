@@ -2138,14 +2138,14 @@ try {
       if (!r.updated) { console.log(`  not updated - ${r.reason}`); break; }
       if (r.backup) console.log(`  your changes are kept on branch ${r.backup}`);
       console.log(r.restarting?.length
-        ? `  updated - ${r.restarting.join(', ')} will restart safely; active threads are preserved`
+        ? `  updated - ${r.restarting.join(', ')} restarting now; active threads are preserved`
         : '  updated - restart helm to pick it up');
       break;
     }
 
     case 'restart-services': {
-      const { restartWhenSafe } = await import('../src/update.js');
-      await restartWhenSafe(rest);
+      const { restartServices } = await import('../src/update.js');
+      await restartServices(rest);
       break;
     }
 
