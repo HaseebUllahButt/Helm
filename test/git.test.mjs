@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync, symlinkSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
  * status says what changed and by how much, a diff is only ever of a file
  * inside the folder, and a worktree is a new folder on a new derived branch.
  */
-const { status, diff, addWorktree, graph, commit, files, file } = await import('../packages/connect/src/git.js');
+const { status, diff, addWorktree, graph, commit, files, file, write } = await import('../packages/connect/src/git.js');
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
 const repo = () => {
@@ -271,4 +271,27 @@ test('the file viewer reads text, but never secrets, binaries or anything outsid
   await assert.rejects(file(dir, '../proj/a.txt'), /not a path inside/);
   await assert.rejects(file(dir, '/etc/passwd'), /not a path inside/);
   await assert.rejects(file(dir, 'out'), /no such file/);
+});
+
+test('the canvas saves only over the version it read, and never outside the repo', async () => {
+  const dir = repo();
+  const read = await file(dir, 'a.txt');
+  assert.deepEqual(await file(dir, 'a.txt', read.hash), { path: 'a.txt', same: true });
+  const saved = await write(dir, 'a.txt', 'mine\n', read.hash);
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'mine\n');
+  assert.equal((await file(dir, 'a.txt')).hash, saved.hash);
+  // The agent wrote since: the old hash no longer saves.
+  writeFileSync(join(dir, 'a.txt'), 'agent\n');
+  assert.equal((await write(dir, 'a.txt', 'late\n', saved.hash)).conflict, true);
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'agent\n');
+  // New files: made with their folders, never over one that exists.
+  assert.ok((await write(dir, 'notes/today.md', '# hi\n', null)).hash);
+  assert.equal((await write(dir, 'notes/today.md', 'x', null)).exists, true);
+  const outside = mkdtempSync(join(tmpdir(), 'helm-out-'));
+  symlinkSync(outside, join(dir, 'out'));
+  await assert.rejects(write(dir, 'out/deep/x.md', 'x', null), /not a path inside/);
+  assert.equal(existsSync(join(outside, 'deep')), false);
+  await assert.rejects(write(dir, '.env', 'x', null), /passwords or keys/);
+  await assert.rejects(write(dir, '.git/config', 'x', null), /git’s own folder/);
+  await assert.rejects(write(dir, '../x.md', 'x', null), /not a path inside/);
 });
