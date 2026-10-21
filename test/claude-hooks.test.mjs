@@ -44,16 +44,36 @@ test('chat hooks retain explicit settings and existing hooks, including a relati
   }
 });
 
-test('closing the hook server releases a waiting permission and its socket', async () => {
-  let received;
-  const ready = new Promise((r) => { received = r; });
-  const h = await startHookServer((_native, _event, reply) => { received(); }, path);
-  const waiting = sendHook('native-1', { hook_event_name: 'PermissionRequest' }, { path });
-  await ready;
-  const closed = new Promise((r) => h.server.once('close', r));
+test('a question outlives Helm restarts and asks each next Helm under the same id', async () => {
+  const asks = [];
+  let answeredElsewhere = false, received;
+  const serve = () => {
+    const asked = new Promise((r) => { received = r; });
+    return startHookServer((_native, _event, reply) => {
+      asks.push(reply.ask);
+      reply.onClose(() => { answeredElsewhere = true; });
+      received(reply);
+    }, path).then((h) => ({ h, asked }));
+  };
+  let { h, asked } = await serve();
+  const waiting = sendHook('native-1', { hook_event_name: 'PermissionRequest' }, { path, retryMs: 20 });
+  await asked;
+  for (let restart = 0; restart < 2; restart++) {
+    // Closing releases the socket, and is not an answer from the terminal.
+    const closed = new Promise((r) => h.server.once('close', r));
+    h.close();
+    await closed;
+    ({ h, asked } = await serve());
+    await asked;
+  }
+  const out = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
+  (await asked)(out);
+  assert.deepEqual(await waiting, out);
   h.close();
-  assert.equal(await waiting, null);
-  await closed;
+  assert.equal(answeredElsewhere, false);
+  assert.equal(asks.length, 3);
+  assert.match(asks[0], /^[\w-]+$/);
+  assert.equal(new Set(asks).size, 1);
 });
 
 test('the settings add Helm to each hook Claude has, waiting long only for a question', () => {
@@ -98,8 +118,13 @@ test('a hook that goes away tells Helm the question was answered elsewhere', asy
   } finally { h.close(); }
 });
 
-test('no Helm listening: the hook says nothing and Claude carries on', async () => {
-  assert.equal(await sendHook('native-1', { hook_event_name: 'PermissionRequest' }, { path: join(root, 'none.sock') }), null);
+test('no Helm listening: a notice says nothing; a question waits for the next Helm', async () => {
+  const later = join(root, 'later.sock');
+  assert.equal(await sendHook('native-1', { hook_event_name: 'Stop' }, { path: later }), null);
+  const waiting = sendHook('native-1', { hook_event_name: 'PermissionRequest' }, { path: later, retryMs: 20 });
+  await new Promise((r) => setTimeout(r, 100));
+  const h = await startHookServer((_native, _event, reply) => reply({ ok: true }), later);
+  try { assert.deepEqual(await waiting, { ok: true }); } finally { h.close(); }
 });
 
 test('native launches enable the YOLO choice without selecting bypass or duplicating flags', () => {

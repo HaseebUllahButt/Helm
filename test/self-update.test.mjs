@@ -13,8 +13,7 @@ import { execFileSync } from 'node:child_process';
  */
 // The update lock lives in HELM_DIR; never the real one from a test.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-update-dir-'));
-const { selfUpdate, unsafeRestartSessions, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, watchCheckout } = await import('../packages/connect/src/update.js');
-const { codexProcId } = await import('../packages/connect/src/hosted-process.js');
+const { selfUpdate, restartServices, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, watchCheckout } = await import('../packages/connect/src/update.js');
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
@@ -39,30 +38,65 @@ const commit = (remote, text) => {
 
 const update = (dir) => selfUpdate(dir, { rebuild: false, restart: false });
 
-test('update restart waits for busy unhosted agents while hosted threads continue', () => {
-  const sessions = [
-    { id: 'hosted', driver: 'claude', status: 'working' },
+// These fake service commands never reach the owner's service manager.
+function fakeServices(t, failRestart = false) {
+  const bin = mkdtempSync(join(tmpdir(), 'helm-update-services-'));
+  const calls = join(bin, 'calls');
+  const command = join(bin, 'systemctl');
+  writeFileSync(command, `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
+if (${failRestart} && args.includes('restart')) process.exit(1);
+`);
+  chmodSync(command, 0o755);
+  const previous = process.env.PATH;
+  process.env.PATH = `${bin}:${previous}`;
+  t.after(() => { process.env.PATH = previous; });
+  return () => existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse) : [];
+}
+
+test('restart is immediate with busy chats and an active transfer', async (t) => {
+  const calls = fakeServices(t);
+  const { beginTransferActivity } = await import('../packages/protocol/transfer-activity.js');
+  const release = beginTransferActivity();
+  t.after(release);
+  writeFileSync(join(process.env.HELM_DIR, 'sessions.json'), JSON.stringify({ sessions: [
     { id: 'working', driver: 'agy', status: 'working' },
-    { id: 'question', driver: 'claude', status: 'blocked' },
-    { id: 'idle', driver: 'claude', status: 'idle' },
-    { id: 'shell', pty: true, status: 'shell' },
-    { id: 'external', driver: 'codex', external: true, status: 'working' },
-    { id: 'native-question', nativeCli: true, nativeChat: true, status: 'blocked' },
-    { id: 'native-working', nativeCli: true, nativeChat: true, status: 'working' },
-  ];
-  assert.deepEqual(unsafeRestartSessions(sessions, (id) => id === 'hosted').map((s) => s.id), ['working', 'question', 'native-question']);
-  assert.deepEqual(unsafeRestartSessions(sessions.map((s) => ({ ...s, status: 'idle' })), () => false), []);
+    { id: 'approval', driver: 'codex', status: 'blocked' },
+    { id: 'native-approval', nativeChat: true, status: 'blocked' },
+  ] }));
+  await restartServices(['helm-serve.service']);
+  assert.deepEqual(calls(), [['--user', '--no-block', 'restart', 'helm-serve.service']]);
+  await assert.rejects(restartServices(['unrelated.service']), /invalid Helm restart service/);
+  await assert.rejects(restartServices([]), /invalid Helm restart service/);
+  assert.equal(calls().length, 1);
 });
 
-test('restart guard recognizes Codex threads in their shared account process', () => {
-  const profiles = [{ id: 'codex', engine: 'codex', cmd: '/usr/bin/codex', env: { CODEX_HOME: '/tmp/account' } }];
-  const sessions = [{ id: 'thread', profileId: 'codex', driver: 'codex', status: 'working' }];
-  const procId = codexProcId('/usr/bin/codex', profiles[0].env);
-  assert.deepEqual(unsafeRestartSessions(sessions, (id) => id === procId, profiles), []);
-  assert.deepEqual(unsafeRestartSessions(sessions, () => false, profiles), sessions);
-  assert.deepEqual(unsafeRestartSessions(sessions, () => false), sessions);
-  const blocked = sessions.map((s) => ({ ...s, status: 'blocked' }));
-  assert.deepEqual(unsafeRestartSessions(blocked, (id) => id === procId, profiles), blocked);
+test('an update retires old waiters and immediately queues daemon replacement', async (t) => {
+  const calls = fakeServices(t);
+  const { remote, installed } = make();
+  commit(remote, 'two');
+  const result = await selfUpdate(installed, { rebuild: false });
+  assert.deepEqual(result.restarting, ['helm-serve.service', 'helm-agent.service']);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(calls().filter(a => !a.includes('is-active')), [
+    ['--user', 'stop', 'helm-self-restart.timer'],
+    ['--user', 'stop', 'helm-self-restart.service'],
+    ['--user', '--no-block', 'restart', 'helm-serve.service', 'helm-agent.service'],
+  ]);
+});
+
+test('a refused restart is reported and remains retryable', async (t) => {
+  fakeServices(t, true);
+  const { remote, installed } = make();
+  commit(remote, 'two');
+  const result = await selfUpdate(installed, { rebuild: false });
+  assert.deepEqual(result.restarting, []);
+  assert.deepEqual(result.failed, ['helm-serve.service', 'helm-agent.service']);
+  const retry = await selfUpdate(installed, { rebuild: false });
+  assert.equal(retry.updated, true);
+  assert.deepEqual(retry.failed, result.failed);
 });
 
 test('a current checkout is a no-op', async () => {

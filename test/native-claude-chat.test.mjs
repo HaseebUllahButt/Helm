@@ -115,6 +115,31 @@ test('native question answers round trip, block messages, and disappear when the
   } finally { await sessions.stop(); }
 });
 
+test('a native approval keeps its one card through Helm restarts and is answered after them', async () => {
+  let sessions = create();
+  await sessions.hooks;
+  const waiting = sendHook('native-test', { hook_event_name: 'PermissionRequest', tool_name: 'Write', tool_input: { file_path: '/tmp/x' } });
+  await until(() => sessions.events.pending('native-test').length === 1);
+  const { requestId } = sessions.events.pending('native-test')[0];
+  try {
+    for (let restart = 0; restart < 2; restart++) {
+      await sessions.stop();
+      sessions = create();
+      assert.deepEqual(sessions.events.pending('native-test').map((p) => p.requestId), [requestId]);
+      await sessions.hooks;
+    }
+    const end = Date.now() + 3000;
+    for (;;) {
+      try { await sessions.answer('native-test', requestId, { option: 'allow' }); break; }
+      catch (err) { if (Date.now() > end) throw err; await new Promise((r) => setTimeout(r, 50)); }
+    }
+    assert.equal((await waiting).hookSpecificOutput.decision.behavior, 'allow');
+    assert.equal(sessions.events.pending('native-test').length, 0);
+    const cards = sessions.events.tail('native-test', 0).filter((e) => e.requestId === requestId);
+    assert.deepEqual(cards.map((e) => e.type), ['permission.request', 'permission.resolved']);
+  } finally { await sessions.stop(); }
+});
+
 test('a restart clears an orphaned native approval card', async () => {
   const first = create();
   await first.hooks;

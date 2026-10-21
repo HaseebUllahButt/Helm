@@ -18,8 +18,8 @@ the code, `git log` or `helm help` shows is not repeated here.
 ## Production state
 
 The owner's ~/.helm is production. Tests run in a private copy, never touch the
-owner's machine network, and never restart the real Helm. Updates use the safe
-restart, so running chats survive.
+owner's machine network. Every update restarts Helm immediately. Agents must
+survive the restart; fix interruptions instead of waiting for chats or transfers.
 
 ## Proving it works
 

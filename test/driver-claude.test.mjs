@@ -45,6 +45,19 @@ const switchHook = (over = {}) => ({ type: 'control_request', request_id: 'hook-
     to_model: 'claude-sonnet-5-5', requested_model: 'sonnet', source: 'sdk', context_tokens: 300008,
     prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0.75, pricing: 'catalog', ...over } } });
 
+test('a Claude chat fails rather than run under the daemon when the process host cannot hold it', async () => {
+  for (const host of [
+    { hasProc: () => false, openProc: async () => { throw new Error('host down'); }, procPipe: () => null },
+    { hasProc: () => false, openProc: async () => ({}), procPipe: () => null },
+  ]) {
+    const { fake, driver } = make('plain', { procHost: host, procId: 'hosted' });
+    try {
+      await assert.rejects(driver.start());
+      assert.deepEqual(fake.stdinLines(), [], 'no Claude may start under the daemon');
+    } finally { rmSync(fake.dir, { recursive: true, force: true }); }
+  }
+});
+
 test('a model the owner picked over a warm cache waits for the owner, with Claude\'s own figures', async t => {
   const { driver, writes, send, reply } = await modelControl(t);
   assert.equal(driver.modelSwitchSignal, true);
