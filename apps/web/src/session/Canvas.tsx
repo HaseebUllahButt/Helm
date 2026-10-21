@@ -26,7 +26,7 @@ const WATCH_MS = 2000;
 const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 const isMarkdown = (p: string) => /\.(md|mdx|markdown)$/i.test(p);
 /** Unsaved edits, by machine, folder and file, for as long as the app is open. */
-const drafts = new Map<string, string>();
+const drafts = new Map<string, { text: string; base: FileText }>();
 const draftKey = (env: string, cwd: string, path: string) => `${env}\0${cwd}\0${path}`;
 
 /** Ctrl/Cmd+Shift+D: D for document. */
@@ -206,8 +206,8 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
   client: Client; env: Environment; cwd: string; path: string; hidden: boolean; onBack: () => void; onClose: () => void;
 }) {
   const dkey = draftKey(env.id, cwd, path);
-  const [file, setFile] = useState<FileText | 'loading' | { error: string }>('loading');
-  const [draft, setDraftRaw] = useState<string | null>(() => drafts.get(dkey) ?? null);
+  const [file, setFile] = useState<FileText | 'loading' | { error: string }>(() => drafts.get(dkey)?.base ?? 'loading');
+  const [draft, setDraftRaw] = useState<string | null>(() => drafts.get(dkey)?.text ?? null);
   const [editing, setEditing] = useState(() => drafts.has(dkey));
   // The file as it now is on disk, when that moved on under unsaved edits.
   const [theirs, setTheirs] = useState<FileText | null>(null);
@@ -220,7 +220,8 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
   const dirty = draft != null && loaded != null && draft !== loaded.text;
   const setDraft = (text: string | null) => {
     setDraftRaw(text);
-    if (text == null || (loaded && text === loaded.text)) drafts.delete(dkey); else drafts.set(dkey, text);
+    if (text == null || (loaded && text === loaded.text)) drafts.delete(dkey);
+    else if (loaded) drafts.set(dkey, { text, base: loaded });
   };
   const live = useRef({ file, dirty, theirs }); live.current = { file, dirty, theirs };
 
@@ -228,7 +229,12 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
     let alive = true;
     if (hidden) { setFile({ path, hidden: true }); return; }
     client.rpc<FileText>(env.id, 'git.file', { cwd, path }, 30_000)
-      .then((f) => { if (alive) setFile(f); })
+      .then((f) => {
+        if (!alive) return;
+        const kept = drafts.get(dkey);
+        if (kept && kept.base.hash !== f.hash) setTheirs(f);
+        else setFile(f);
+      })
       .catch((e: any) => { if (alive) setFile({ error: e?.message || 'Could not open this file.' }); });
     return () => { alive = false; };
   }, [client, env.id, cwd, path, hidden]);
