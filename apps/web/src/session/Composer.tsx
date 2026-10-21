@@ -46,14 +46,14 @@ function CompactingBar({ since }: { since?: number }) {
   const took = since ? Math.max(0, Math.round((now - since) / 1000)) : 0;
   return (
     <div className="docked compacting" role="status" aria-live="polite">
-      <span className="docked-text"><span className="shine">Compacting conversation…</span></span>
+      <span className="docked-text"><span className="shine">Summarizing chat…</span></span>
       {since ? <span className="docked-meta">{fmtSeconds(took)}</span> : null}
       <i className="compact-progress" aria-hidden="true" />
     </div>
   );
 }
 
-export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After current response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After this response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   /** The agent's pending question or approval, as the top of the card. */
   banner?: React.ReactNode;
@@ -138,8 +138,8 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
   const sameTiming = queued.length > 0 && queued.every((item) => !item.delivered && timing(item.turn) === timing(queued[0].turn))
     ? timing(queued[0].turn).toLowerCase() : '';
   const hints = [onReference && referenceOptions.length ? (narrow ? '@ chats' : '@ to attach a chat') : '', commands?.length ? (narrow ? '/ commands' : '/ for commands') : ''].filter(Boolean);
-  const placeholder = ask === 'question' ? (narrow ? 'Answer above, or type your own' : 'Answer the question above, or type your own answer')
-    : ask === 'approval' ? (narrow ? 'Decide above, or reply instead' : 'Decide above, or tell the agent what to do instead')
+  const placeholder = ask === 'question' ? (narrow ? 'Answer above or type an answer' : 'Answer the question above or type an answer')
+    : ask === 'approval' ? (narrow ? 'Select an answer above or reply' : 'Select an answer above or tell the agent what to do')
     : waiting ? 'Reply to the agent…'
     : ['Ask anything', ...hints].join(', ');
   const historyAt = useRef<number | null>(null);
@@ -359,7 +359,7 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
         {!!compacting && !waiting && <CompactingBar since={typeof compacting === 'number' ? compacting : undefined} />}
         {waiting && withKeys && onKey && (
           <div className="docked warn">
-            <span className="docked-text"><i className="sdot blocked" />Waiting on you</span>
+            <span className="docked-text"><i className="sdot blocked" />Waiting for you</span>
             <span className="docked-actions">
               {QUICK.slice(0, 4).map((q) => <button key={q.key} onClick={() => onKey(q.key)}>{q.label}</button>)}
             </span>
@@ -374,10 +374,10 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
           onDrop={(e) => { setDragging(false); if (take(e.dataTransfer?.files)) e.preventDefault(); }}
         >
           {banner}
-          {!!referenceMatches.length && <div className="palette" role="listbox" aria-label="Attach thread context">
-            {referenceMatches.map((item, index) => <button key={item.id} role="option" aria-selected={index === referencePick} onClick={() => addReference(item.id)} onMouseEnter={() => setReferencePick(index)}><span>@{item.title}</span><small>Attach context</small></button>)}
+          {!!referenceMatches.length && <div className="palette" role="listbox" aria-label="Attach chat details">
+            {referenceMatches.map((item, index) => <button key={item.id} role="option" aria-selected={index === referencePick} onClick={() => addReference(item.id)} onMouseEnter={() => setReferencePick(index)}><span>@{item.title}</span><small>Attach chat details</small></button>)}
           </div>}
-          {!!references.length && <div className="thread-reference-chips">{references.map((item) => <button key={item.id} onClick={() => onRemoveReference?.(item.id)} aria-label={`Remove context: ${item.title}`}>@{item.title}<span aria-hidden="true"> ×</span></button>)}</div>}
+          {!!references.length && <div className="thread-reference-chips">{references.map((item) => <button key={item.id} onClick={() => onRemoveReference?.(item.id)} aria-label={`Remove chat details: ${item.title}`}>@{item.title}<span aria-hidden="true"> ×</span></button>)}</div>}
           {open && (
             <div className="palette" role="listbox" ref={paletteRef}>
               {matches.map((c, i) => (
@@ -433,13 +433,13 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
                     {/* Once the CLI has it there is no taking it back -
                         no CLI can - so the buttons go. Edit covers
                         taking it back; arrows only when there is an order. */}
-                    {item.delivered ? <span className="queued-sent">Sent to CLI</span> : <div className="queue-actions">
+                    {item.delivered ? <span className="queued-sent">Sent to agent</span> : <div className="queue-actions">
                       {onEditQueued
-                        ? <button disabled={busy} aria-label={`Edit queued message: ${name}`} onClick={() => onEditQueued(item.turn)}>Edit</button>
-                        : onWithdrawQueued && <button disabled={busy} onClick={() => onWithdrawQueued(item.turn)} title={`take back into the draft: ${name}`} aria-label={`withdraw queued message: ${name}`}>withdraw</button>}
+                        ? <button disabled={busy} aria-label={`Edit waiting message: ${name}`} onClick={() => onEditQueued(item.turn)}>Edit</button>
+                        : onWithdrawQueued && <button disabled={busy} onClick={() => onWithdrawQueued(item.turn)} title={`Return to draft: ${name}`} aria-label={`Return waiting message to draft: ${name}`}>Return to draft</button>}
                       {onMoveQueued && queued.length > 1 && <><button disabled={busy || index === 0 || queued[index - 1]?.delivered} aria-label={`Move up: ${name}`} onClick={() => onMoveQueued(item.turn, -1)}>↑</button><button disabled={busy || index === queued.length - 1} aria-label={`Move down: ${name}`} onClick={() => onMoveQueued(item.turn, 1)}>↓</button></>}
                       {onSendQueued && <button disabled={busy} onClick={() => onSendQueued(item.turn)}>Send now</button>}
-                      {onRemoveQueued && <button className="queue-remove" disabled={busy} title="Remove" aria-label={`Remove queued message: ${name}`} onClick={() => onRemoveQueued(item.turn)}><Icon name="close" size={12} /></button>}
+                      {onRemoveQueued && <button className="queue-remove" disabled={busy} title="Remove" aria-label={`Remove waiting message: ${name}`} onClick={() => onRemoveQueued(item.turn)}><Icon name="close" size={12} /></button>}
                     </div>}
                   </div>
                 );
@@ -456,7 +456,7 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z" /><path d="M14 3v5h5" /></svg>
                       <span className="attach-file-name">{a.name}</span>
                     </span>}
-                    <button onClick={() => removeAttachment(i)} title={`remove ${label}`} aria-label={`remove ${label}`}><Icon name="close" size={12} /></button>
+                    <button onClick={() => removeAttachment(i)} title={`Remove ${label}`} aria-label={`Remove ${label}`}><Icon name="close" size={12} /></button>
                   </span>
                 );
               })}
@@ -538,10 +538,10 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
                 style={dictation.state === 'recording' ? { '--lvl': Math.min(1, dictation.level * 6) } as React.CSSProperties : undefined}
                 onClick={dictation.toggle}
                 disabled={dictation.state === 'working'}
-                title={dictation.state === 'recording' ? `recording ${fmtSeconds(dictation.seconds)} · tap to stop`
-                  : dictation.state === 'working' ? 'transcribing…' : 'speak a prompt (ctrl+shift+space)'}
-                aria-label={dictation.state === 'recording' ? `stop recording, ${fmtSeconds(dictation.seconds)}`
-                  : dictation.state === 'working' ? 'transcribing' : 'speak a prompt'}
+                title={dictation.state === 'recording' ? `Recording ${fmtSeconds(dictation.seconds)}. Select to stop.`
+                  : dictation.state === 'working' ? 'Converting speech to text…' : 'Speak a message (ctrl+shift+space)'}
+                aria-label={dictation.state === 'recording' ? `Stop recording, ${fmtSeconds(dictation.seconds)}`
+                  : dictation.state === 'working' ? 'transcribing' : 'Speak a message'}
                 aria-pressed={dictation.state === 'recording'}
               >
                 {dictation.state === 'recording' && <span className="mic-wave" aria-hidden="true" />}
@@ -553,10 +553,10 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
               </button>
             )}
             {dictation.error && (
-              <button className="attach-status bad" onClick={dictation.clearError} title="dismiss">{dictation.error}</button>
+              <button className="attach-status bad" onClick={dictation.clearError} title="Dismiss">{dictation.error}</button>
             )}
             {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>keys</button>}
-            {preparing && <span className="attach-status">compressing…</span>}
+            {preparing && <span className="attach-status">Making images smaller…</span>}
             {/* The pickers share the row the buttons are on: a second row of
                 chips under the box cost a line of screen on every visit to
                 say what never changes between messages. */}

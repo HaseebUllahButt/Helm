@@ -110,12 +110,12 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       await view.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
       await view.addScriptTag({content:bundle.outputFiles[0].text});
       await view.getByRole('button',{name:'New task'}).click();
-      await view.getByRole('button',{name:'CLI account: Parent account'}).waitFor();
+      await view.getByRole('button',{name:'Agent account: Parent account'}).waitFor();
       await view.getByLabel('Task',{exact:true}).fill('Inspect this task');
       assert.equal(await view.evaluate(()=>window.calls.find(c=>c.method==='agent.list').params.models),false);
-      assert.equal(await view.getByRole('button',{name:'Start subagent'}).isEnabled(),true);
+      assert.equal(await view.getByRole('button',{name:'Start helper'}).isEnabled(),true);
       // Only what new chats offer here, with this chat's own alias in place of its account's usual row.
-      await view.getByRole('button',{name:'CLI account: Parent account'}).click();
+      await view.getByRole('button',{name:'Agent account: Parent account'}).click();
       assert.deepEqual(await view.getByRole('option').evaluateAll(rows=>rows.map(row=>row.textContent.split(' · ')[0])),
         ['Other account','Parent account']);
       await view.getByRole('button',{name:'close',exact:true}).click();
@@ -141,7 +141,7 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       await view.getByLabel('Search model').fill('');
       await capture(view, 'dispatch-models-'+width+'.png');
       assert.ok(await view.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-      await view.getByRole('button',{name:'Close subagents'}).click();
+      await view.getByRole('button',{name:'Close helpers'}).click();
       await view.evaluate(()=>window.mount());
       await view.getByRole('button',{name:'New task'}).click();
       await view.getByRole('button',{name:'model: model'}).waitFor();
@@ -162,7 +162,7 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       await view.getByRole('button',{name:'high is the default for subagents'}).waitFor();
       await view.getByRole('button',{name:'close',exact:true}).click();
       await view.getByLabel('Task',{exact:true}).fill('Launch on the machine default');
-      await view.getByRole('button',{name:'Start subagent'}).click();
+      await view.getByRole('button',{name:'Start helper'}).click();
       assert.deepEqual(await view.evaluate(()=>JSON.parse(JSON.stringify(window.calls.find(c=>c.method==='session.delegate').params))),
         {id:'parent',profileId:'parent-account',model:'normal-model',task:'Launch on the machine default'});
     } finally { await view.close(); }
@@ -222,7 +222,7 @@ test('main task click opens the full child conversation and Back returns to its 
       await view.getByRole('dialog', {name:'Agents',exact:true}).waitFor();
       await view.getByRole('button', {name:/Inspect child conversation/}).click();
       await view.getByRole('heading', {name:'Inspect child conversation',exact:true}).waitFor();
-      await view.getByRole('dialog', {name:'Subagents'}).waitFor({state:'detached'});
+      await view.getByRole('dialog', {name:'Helpers'}).waitFor({state:'detached'});
       await view.locator('.turn.user .bubble').filter({hasText:'child original request'}).waitFor();
       await view.getByText('child full conversation response', {exact:true}).waitFor();
       assert.equal(await view.getByText('parent full conversation response', {exact:true}).count(), 0);
@@ -231,14 +231,14 @@ test('main task click opens the full child conversation and Back returns to its 
       await view.waitForFunction(() => window.calls.some(c=>c.method==='session.input'&&c.params.id==='child'));
       assert.equal(await view.evaluate(() => window.calls.some(c=>c.method==='session.delegation-result')), false);
       await view.evaluate(() => { window.failParent = true; });
-      await view.getByRole('button', {name:'Back to parent thread',exact:true}).click();
+      await view.getByRole('button', {name:'Back to main chat',exact:true}).click();
       await view.getByRole('alert').filter({hasText:'Parent temporarily unavailable'}).waitFor();
       assert.equal(await view.getByRole('heading', {name:'Inspect child conversation',exact:true}).count(), 1);
       await view.evaluate(() => { window.failParent = false; });
-      await view.getByRole('button', {name:'Back to parent thread',exact:true}).click();
+      await view.getByRole('button', {name:'Back to main chat',exact:true}).click();
       await view.getByRole('heading', {name:'Parent chat',exact:true}).waitFor();
       await view.getByText('parent full conversation response', {exact:true}).waitFor();
-      assert.equal(await view.getByRole('dialog', {name:'Subagents'}).count(), 0);
+      assert.equal(await view.getByRole('dialog', {name:'Helpers'}).count(), 0);
       assert.equal(await view.evaluate(() => window.backToList), undefined);
       await view.getByRole('button', {name:'Back',exact:true}).click();
       assert.equal(await view.evaluate(() => window.backToList), true);
@@ -298,13 +298,13 @@ test('desktop and phone headers open unified details with accessible Git navigat
       await dialog.getByRole('tabpanel', {name:'Graph',exact:true}).waitFor();
       assert.deepEqual(await dialog.getByRole('tab').evaluateAll(tabs => tabs.map(tab => [tab.textContent.trim(), tab.getAttribute('aria-selected'),
         !tab.hasAttribute('aria-controls') || !!document.getElementById(tab.getAttribute('aria-controls'))])),
-        [['Graph', 'true', true], ['Changes 2', 'false', true], ['Files', 'false', true], ['CI / CD', 'false', true]], 'every tab points only at a panel that exists');
+        [['Graph', 'true', true], ['Changes 2', 'false', true], ['Files', 'false', true], ['Build checks', 'false', true]], 'every tab points only at a panel that exists');
       await dialog.getByRole('tab', {name:'Graph',exact:true}).press('ArrowRight');
       await dialog.getByRole('tabpanel', {name:/^Changes/}).waitFor();
       assert.equal(await view.getByRole('dialog').count(), 1);
       await view.screenshot({ path:`/tmp/helm-git-dialog-${phone ? 'phone' : 'desktop'}-${width}.png` });
       await capture(view, `thread-details-${width}.png`);
-      await dialog.getByRole('button', {name:'Back to the conversation'}).click();
+      await dialog.getByRole('button', {name:'Back to chat'}).click();
       await dialog.waitFor({ state:'detached' });
       assert.equal(await bar.getByRole('button', {name:'Prompt cache',exact:true}).count(), 0);
     } finally { await view.close(); }
@@ -323,18 +323,18 @@ test('launch options stay folded until asked for, then create a linked child and
   await taskBox.waitFor();
   assert.equal(await isFocused(taskBox), true, 'opening it goes straight to the task');
   // The message box's own chips: account, then model and permissions.
-  const accountChip = page.getByRole('button', {name:/^CLI account:/});
-  await page.getByRole('button', {name:'CLI account: Codex personal'}).waitFor();
+  const accountChip = page.getByRole('button', {name:/^Agent account:/});
+  await page.getByRole('button', {name:'Agent account: Codex personal'}).waitFor();
   assert.equal(await page.getByRole('listbox').count(), 0, 'no sheet is open until a chip is tapped');
   await capture(page, 'subagents-desktop-launch-collapsed.png');
   await accountChip.click();
-  const accounts = page.getByRole('listbox', {name:'CLI account on Laptop'});
+  const accounts = page.getByRole('listbox', {name:'Agent account on Laptop'});
   await accounts.waitFor();
   await accounts.getByRole('option', {name:/Claude work/}).filter({hasText:'signed out'}).waitFor();
   assert.equal(await accounts.locator('.moderow .mark').count(), await accounts.getByRole('option').count(), 'each account shows its CLI logo');
   await capture(page, 'subagents-desktop-accounts.png');
   await accounts.getByRole('option', {name:/Claude personal/}).click();
-  await page.getByRole('button', {name:'CLI account: Claude personal'}).waitFor();
+  await page.getByRole('button', {name:'Agent account: Claude personal'}).waitFor();
   await page.getByRole('button', {name:/^permissions:/}).click();
   const perms = page.getByRole('listbox', {name:'permissions'});
   assert.equal(await perms.getByRole('option', {name:/Plan first/}).count(), 0);
@@ -349,7 +349,7 @@ test('launch options stay folded until asked for, then create a linked child and
   const startsBeforeComposition = await page.evaluate(() => window.calls.filter((call) => call.method === 'session.delegate').length);
   await taskBox.dispatchEvent('keydown', {key:'Enter',ctrlKey:true,isComposing:true});
   assert.equal(await page.evaluate(() => window.calls.filter((call) => call.method === 'session.delegate').length), startsBeforeComposition);
-  await page.getByRole('button', {name:'Start subagent'}).click();
+  await page.getByRole('button', {name:'Start helper'}).click();
   await page.getByText('Read the diff', {exact:true}).waitFor();
   assert.equal(await page.getByLabel('Task', {exact:true}).count(), 0, 'the launch form folds once the task starts');
   await page.getByRole('button', {name:'New task'}).waitFor();
@@ -370,17 +370,17 @@ test('launch options stay folded until asked for, then create a linked child and
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.list'&&c.params.parentId==='parent')));
   await page.getByRole('button',{name:'Deny',exact:true}).click();
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.answer'&&c.params.id==='child'&&c.params.decision.option==='deny')));
-  await page.getByLabel('Message subagent').fill('Keep the security checks intact');
+  await page.getByLabel('Message helper').fill('Keep the security checks intact');
   const messagesBeforeComposition = await page.evaluate(() => window.calls.filter((call) => call.method === 'session.agent-send').length);
-  await page.getByLabel('Message subagent').dispatchEvent('keydown', {key:'Enter',metaKey:true,isComposing:true});
+  await page.getByLabel('Message helper').dispatchEvent('keydown', {key:'Enter',metaKey:true,isComposing:true});
   assert.equal(await page.evaluate(() => window.calls.filter((call) => call.method === 'session.agent-send').length), messagesBeforeComposition);
   await page.getByRole('button',{name:'Send message',exact:true}).click();
-  await page.getByRole('status').filter({hasText:'Message sent.'}).waitFor();
+  await page.getByRole('status').filter({hasText:'Helm sent the message.'}).waitFor();
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.agent-send'&&c.params.id==='parent'&&c.params.to.id==='child'&&c.params.asUser===true&&c.params.text==='Keep the security checks intact')));
   assert.equal(await page.evaluate(()=>window.opened),undefined);
-  await page.getByRole('button',{name:'Open conversation',exact:true}).click();
+  await page.getByRole('button',{name:'Open chat',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.opened),'child');
-  await page.getByRole('button',{name:'Close subagents'}).click();
+  await page.getByRole('button',{name:'Close helpers'}).click();
   await page.getByRole('dialog').waitFor({state:'detached'});
 });
 
@@ -401,8 +401,8 @@ test('subagents fit a phone, open only the selected task, trap focus, stop a tas
   await newTask.click();
   assert.equal(await isFocused(page.getByLabel('Task', {exact:true})), true);
   await capture(page, 'subagents-phone-launch-collapsed.png');
-  await page.getByRole('button', {name:/^CLI account:/}).click();
-  await page.getByRole('listbox', {name:/^CLI account on/}).waitFor();
+  await page.getByRole('button', {name:/^Agent account:/}).click();
+  await page.getByRole('listbox', {name:/^Agent account on/}).waitFor();
   await capture(page, 'subagents-phone-launch-expanded.png');
   await page.getByRole('button',{name:'Cancel'}).click();
   assert.equal(await isFocused(page.getByRole('button',{name:'New task'})), true);
@@ -414,8 +414,8 @@ test('subagents fit a phone, open only the selected task, trap focus, stop a tas
   await toggle.click();
   assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
   await page.getByText('Read the diff', {exact:true}).waitFor();
-  await page.getByRole('button',{name:'Stop subagent'}).click();
-  await page.getByRole('status').filter({hasText:'Stop requested.'}).waitFor();
+  await page.getByRole('button',{name:'Stop helper'}).click();
+  await page.getByRole('status').filter({hasText:'Helm sent the stop request.'}).waitFor();
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.interrupt'&&c.params.id==='child')));
   assert.ok(await page.locator('.delegation-body').evaluate(body => body.scrollWidth <= body.clientWidth), 'nothing scrolls sideways on a phone');
   await capture(page, 'subagents-phone.png');
@@ -439,7 +439,7 @@ test('a failed task moves to Finished and retries with the same account, model, 
   assert.equal(await page.locator('.delegation-group.active').count(), 0);
   await page.getByRole('button',{name:'Failed, details'}).click();
   await page.getByText('CLI crashed', {exact:true}).waitFor();
-  assert.equal(await page.getByRole('button',{name:'Stop subagent'}).count(), 0);
+  assert.equal(await page.getByRole('button',{name:'Stop helper'}).count(), 0);
   const before = await page.evaluate(() => window.calls.filter((call)=>call.method==='session.delegate').length);
   await page.evaluate(() => {
     window.nextChild = {...window.child, id:'retry', status:'starting', delegation:{...window.child.delegation, status:'starting'}};
@@ -451,15 +451,15 @@ test('a failed task moves to Finished and retries with the same account, model, 
   assert.equal(retried.length, before + 1);
   assert.deepEqual(retried.at(-1).params, {id:'parent',profileId:'claude-main',model:'opus',effort:'high',task:'Review the vulnerability'});
   assert.equal(await page.evaluate(()=>document.activeElement?.dataset.task), 'retry');
-  await page.getByText('No reply yet.', {exact:true}).waitFor();
-  await page.getByRole('button',{name:'Stop subagent'}).waitFor();
+  await page.getByText('The agent has not replied yet.', {exact:true}).waitFor();
+  await page.getByRole('button',{name:'Stop helper'}).waitFor();
   assert.equal(await page.locator('.delegation-detail').count(), 1, 'only the selected task is expanded');
   await page.evaluate(() => window.sendSessionUpdate('local', {...window.nextChild, status:'working', delegation:{...window.nextChild.delegation,status:'working'}}));
   const workingToggle = page.getByRole('button', {name:'Working, details'});
   await workingToggle.waitFor();
   assert.ok((await workingToggle.boundingBox()).height >= 44, 'working tasks retain a full touch target');
   await page.evaluate(() => { window.nextChild = undefined; window.results = undefined; });
-  await page.getByRole('button', { name:'Close subagents' }).click();
+  await page.getByRole('button', { name:'Close helpers' }).click();
   await page.getByRole('dialog').waitFor({state:'detached'});
 });
 
@@ -476,11 +476,11 @@ test('only this parent and machine contribute tasks, including live updates', as
   await page.evaluate(() => { window.childDone = true; });
   await page.getByRole('button', { name:'Needs approval, details' }).click();
   await page.getByRole('button', { name:'Hide task' }).click();
-  await page.getByText('No tasks yet.', {exact:true}).waitFor();
+  await page.getByText('This chat has no helper tasks.', {exact:true}).waitFor();
   assert.equal(await page.locator('.delegation-branch').count(), 0);
   assert.equal(await isFocused(page.getByRole('button',{name:'New task'})), true);
   assert.ok(await page.evaluate(() => window.calls.some(c=>c.method==='session.archive'&&c.params.id==='child'&&c.params.archived)));
-  await page.getByRole('button', { name:'Close subagents' }).click();
+  await page.getByRole('button', { name:'Close helpers' }).click();
 });
 
 test('Shell back history leaves parent and child chats without cycling between them', async () => {
@@ -530,9 +530,9 @@ test('Shell back history leaves parent and child chats without cycling between t
       const parentDepth = await view.evaluate(()=>history.state.depth);
       await openChild('Child history chat');
       await openChild('Grandchild history chat');
-      await view.getByRole('button',{name:'Back to parent thread',exact:true}).click();
+      await view.getByRole('button',{name:'Back to main chat',exact:true}).click();
       await heading('Child history chat').waitFor();
-      await view.getByRole('button',{name:'Back to parent thread',exact:true}).click();
+      await view.getByRole('button',{name:'Back to main chat',exact:true}).click();
       await heading('Parent history chat').waitFor();
       assert.equal(await view.evaluate(()=>history.state.depth),parentDepth,'returning pops history instead of appending the parent');
       await openChild('Child history chat');
@@ -604,7 +604,7 @@ test('a CLI\'s own subagents show beside delegated tasks, looking the same', asy
       // The chat says one waits on an approval: one card, first, saying so.
       assert.deepEqual(await active.locator('.delegation-status').allInnerTexts(), ['Needs approval', 'Working']);
       await active.getByRole('button', {name:'Needs approval, details'}).click();
-      await view.locator('#task-detail-native-a3').getByText('Waiting for your approval in the chat.', {exact:true}).waitFor();
+      await view.locator('#task-detail-native-a3').getByText('Approve the request in the chat.', {exact:true}).waitFor();
       await active.getByRole('button', {name:'Needs approval, details'}).click();
       assert.match(await active.locator('.delegation-task small').nth(1).innerText(), /general-purpose · claude-opus-test · worktree-agent-a1/i);
       assert.equal(await finished.locator('.delegation-branch').count(), 2);
@@ -651,10 +651,10 @@ test('a terminal thread lists its CLI\'s subagents without a task form', async (
     await view.setContent('<div id="root"></div>');
     await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
     await view.addScriptTag({ content:bundle.outputFiles[0].text });
-    const dialog = view.getByRole('dialog', {name:'Subagents'});
+    const dialog = view.getByRole('dialog', {name:'Helpers'});
     await dialog.locator('.delegation-group.finished .delegation-branch').waitFor();
     await dialog.getByRole('button', {name:'Stopped, details'}).click();
-    await dialog.getByText('Finished without a written reply.', {exact:true}).waitFor();
+    await dialog.getByText('The agent finished without a written reply.', {exact:true}).waitFor();
     assert.equal(await dialog.getByRole('button', {name:/New task/}).count(), 0);
     assert.equal(await dialog.locator('form').count(), 0);
     assert.equal(await view.evaluate(() => window.calls.some(c => c.method === 'agent.list')), false);
@@ -774,7 +774,7 @@ test('a subagent whose parent can pass messages on takes one from its chat', asy
       await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
       await view.addScriptTag({ content:bundle.outputFiles[0].text });
       await view.getByText('Saves twice.').waitFor();
-      await view.getByText('Goes straight to this helper').waitFor();
+      await view.getByText('Send directly to this helper').waitFor();
       assert.equal(await view.locator('.native-foot').count(), 0);
       const box = view.locator('textarea');
       await box.fill('Check the quote path too');

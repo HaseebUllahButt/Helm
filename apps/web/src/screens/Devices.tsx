@@ -110,7 +110,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
     const results = await Promise.allSettled(others.map((d) => client.removeDevice(d.id)));
     const failed = results.filter((r) => r.status === 'rejected').length;
     setBusy(false); setSigningOut(false);
-    if (failed) setError(`${failed} of ${others.length} could not be removed - try again`);
+    if (failed) setError(`Helm did not remove ${failed} of ${others.length} devices. Try again.`);
     load();
   };
 
@@ -143,21 +143,20 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
             <b>{arrived.label}</b> paired with your link.{' '}
             {arrived.closed
               ? 'The link is closed.'
-              : 'The link still works until it expires. Was this you?'}
+              : 'The link still works until it expires. Did you add this device?'}
           </div>
         )}
         {invite ? (
           <div className="setup-open">
             {expired ? (
-              <p className="note">This link has expired.</p>
+              <p className="note">This link expired.</p>
             ) : (<>
               <Suspense fallback={<div className="qr-wait" aria-hidden="true" />}>
-                <QrCode value={invite.link} label="Pairing code: scan with the phone you are adding" />
+                <QrCode value={invite.link} label="Scan this code with the new phone." />
               </Suspense>
               <p className="note">
-                Scan it with the phone camera, or open the link on the new
-                device. Keep it secret: it ends in about {minutesLeft} min or
-                after one use.
+                Scan the code with your phone camera or open the link on the new device.
+                Keep the link secret. It expires in about {minutesLeft} minutes or after one use.
               </p>
             </>)}
             {!expired && <pre className="snippet">{invite.link}</pre>}
@@ -165,7 +164,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
               {!expired && (
                 <button className="row" onClick={async () => {
                   try { await navigator.clipboard.writeText(invite.link); setCopied(true); }
-                  catch { setError('could not copy - long-press the link instead'); }
+                  catch { setError('Helm cannot copy the link. Press and hold the link to copy it.'); }
                 }}>
                   <span className="grow"><span className="rt"><span className="rt-text">{copied ? 'copied' : 'Copy link'}</span></span></span>
                 </button>
@@ -183,9 +182,9 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
 
         <div className="rows"><AddMachine client={client} /></div>
 
-        <div className="section">paired</div>
+        <div className="section">Paired devices</div>
         <div className="rows">
-          {devices === null && !error && <div className="empty quiet">asking the hub…</div>}
+          {devices === null && !error && <div className="empty quiet">Loading devices…</div>}
           {ordered.map((d) => (
             <div key={d.id} className="row tall rowx">
               <div className="rowmain">
@@ -194,7 +193,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
                   <span className="rt">
                     {d.label}{d.self && <span className="tag">this device</span>}
                     {!d.online && !d.self && d.lastSeen != null && now - d.lastSeen > STALE_MS
-                      && <span className="tag">not seen 30d+</span>}
+                      && <span className="tag">Last seen over 30 days ago</span>}
                   </span>
                   <span className="rm" title={`paired ${ago(d.addedAt)}`}>
                     {d.online || d.self ? 'online' : d.lastSeen != null ? `last seen ${ago(d.lastSeen)}` : 'not seen lately'}
@@ -205,7 +204,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
                 onClick={() => setRemoving(d)}><Icon name="close" size={15} /></button>
             </div>
           ))}
-          {devices?.length === 0 && <div className="empty quiet">no devices paired</div>}
+          {devices?.length === 0 && <div className="empty quiet">No devices are paired.</div>}
         </div>
         {others.length > 0 && (
           <button className="action danger" disabled={busy} onClick={() => setSigningOut(true)}>
@@ -219,8 +218,8 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
         <Confirm
           title={removing.self ? 'Remove this device?' : `Remove ${removing.label}?`}
           body={removing.self
-            ? 'This is the device you are holding. You will need a fresh link from `helm link` to sign back in.'
-            : 'Its key stops working at once, on every machine.'}
+            ? 'This device will sign out. Run `helm link` to get a new link and sign in again.'
+            : 'This device loses access to every machine at once.'}
           confirmLabel="Remove" danger busy={busy}
           onCancel={() => setRemoving(null)}
           onConfirm={remove}
@@ -229,7 +228,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
       {signingOut && (
         <Confirm
           title={others.length === 1 ? 'Sign out the other device?' : `Sign out ${others.length} other devices?`}
-          body="Their keys stop working at once, on every machine. This device stays signed in."
+          body="These devices lose access to every machine at once. This device stays signed in."
           confirmLabel="Sign out" danger busy={busy}
           onCancel={() => setSigningOut(false)}
           onConfirm={signOutOthers}

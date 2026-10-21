@@ -128,10 +128,10 @@ test('the sidebar rows have the same ⋯ menu as the machine screen: rename, arc
   // Settled is open to begin with; its first rows are on show.
   const row = page.locator('.sidebar .tri-row').filter({hasText:'Yesterday work'});
   await row.waitFor({timeout:5000});
-  await row.getByRole('button',{name:'actions for Yesterday work'}).click({force:true});
-  await page.getByRole('button',{name:'Archive thread'}).waitFor();
-  assert.equal(await page.getByRole('button',{name:'Rename thread'}).count(),1);
-  await page.getByRole('button',{name:'Delete thread'}).click();
+  await row.getByRole('button',{name:'Show actions for Yesterday work'}).click({force:true});
+  await page.getByRole('button',{name:'Archive chat'}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Rename chat'}).count(),1);
+  await page.getByRole('button',{name:'Delete chat'}).click();
   await page.getByRole('button',{name:'Delete',exact:true}).click();
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.kill'&&c.params.id==='done1'));
 });

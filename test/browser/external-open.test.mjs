@@ -94,6 +94,6 @@ test('a V2 service chat opens as a live monitor without a shared-service takeove
   assert.equal(await page.locator('.sidebar .chip').getByText('idle',{exact:true}).count(),0, 'a live service chat must not also say idle');
   await page.getByText('Saved outside opencode2',{exact:true}).first().click();
   await page.getByText('Running in OpenCode 2',{exact:true}).waitFor();
-  assert.equal(await page.getByRole('button',{name:'Take over',exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Take control',exact:true}).count(),0);
   assert.ok(await page.getByText('Wait for the current step to finish, then send here.',{exact:true}).isVisible());
 });

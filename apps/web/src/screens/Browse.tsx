@@ -7,7 +7,7 @@ import { Route } from '../Route';
 import { Client, type Environment, type DirEntry } from '../client';
 import { shortPath } from './common';
 
-export function Browse({ client, env, path, title = 'Where?', action = 'Start here', onBack, onInto, onPick, onQuick, sendFiles = false, onSend }: {
+export function Browse({ client, env, path, title = 'Pick a folder', action = 'Start here', onBack, onInto, onPick, onQuick, sendFiles = false, onSend }: {
   client: Client; env: Environment; path?: string; title?: string; action?: string; sendFiles?: boolean; onSend?: (path: string) => void;
   onBack: () => void; onInto: (p: string) => void; onPick: (p: string) => void | Promise<void>;
   /** Offered on the way in: a chat that needs no folder at all. */
@@ -105,7 +105,7 @@ export function Browse({ client, env, path, title = 'Where?', action = 'Start he
         <div className="filterbar">
           <input
             className="sheetfilter grow" value={query}
-            placeholder={`search folders on ${env.name}`}
+            placeholder={`Search folders on ${env.name}`}
             autoCapitalize="off" autoCorrect="off" autoComplete="off"
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -125,7 +125,7 @@ export function Browse({ client, env, path, title = 'Where?', action = 'Start he
             ))}
             {hits === null
               ? <div className="empty quiet">searching…</div>
-              : !hits.length && <div className="empty quiet">nothing matches{indexed ? ` · ${indexed} folders indexed` : ''}</div>}
+              : !hits.length && <div className="empty quiet">No folders match.{indexed ? ` · ${indexed} folders searched` : ''}</div>}
           </div>
         ) : (
           <>
@@ -134,8 +134,8 @@ export function Browse({ client, env, path, title = 'Where?', action = 'Start he
                 <button className="row" onClick={onQuick}>
                   <span className="glyph"><Icon name="bolt" size={16} /></span>
                   <span className="grow">
-                    <span className="rt"><span className="rt-text">No folder · quick chat</span></span>
-                    <span className="rm">a small question, in no folder</span>
+                    <span className="rt"><span className="rt-text">Start without a folder</span></span>
+                    <span className="rm">Ask a question without a project folder.</span>
                   </span>
                   <span className="chev"><Icon name="forward" size={15} /></span>
                 </button>
@@ -195,7 +195,7 @@ export function Browse({ client, env, path, title = 'Where?', action = 'Start he
                   <span className="chev"><Icon name="forward" size={15} /></span>
                 </button>
               ))}
-              {loading ? <div className="empty quiet" role="status">Loading folders…</div> : !entries.length && !error && <div className="empty quiet">no subfolders</div>}
+              {loading ? <div className="empty quiet" role="status">Loading folders…</div> : !entries.length && !error && <div className="empty quiet">This folder has no subfolders.</div>}
             </div>
           </>
         )}

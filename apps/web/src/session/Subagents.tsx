@@ -282,7 +282,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
         messageAttempt.current = null;
       }
       setMessage('');
-      setNotice(result?.complete ? 'Message sent.' : 'Message sent. It reaches the agent on its next turn.');
+      setNotice(result?.complete ? 'Helm sent the message.' : 'Helm sent the message. The agent receives it when it next starts work.');
       bump();
     } catch (failure: any) { fail(selected)(failure); }
     finally { setSending(false); }
@@ -298,7 +298,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   };
   const stop = (child: Session) => act('stop', async () => {
     await client.rpc(env.id, 'session.interrupt', { id: child.id });
-    setNotice('Stop requested.');
+    setNotice('Helm sent the stop request.');
     bump();
   });
   const retry = (child: Session) => act('retry', async () => {
@@ -328,26 +328,26 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
       {permissions.map((permission) => <PermissionSheet key={permission.requestId} permission={permission} busy={sending}
         onAnswer={(decision) => void answer(permission, decision)} />)}
       {result?.pending && !permissions.length && <p className="note">Needs approval: {result.pending.title || result.pending.kind}</p>}
-      {!result ? <p className="note" role="status">Reading result…</p>
+      {!result ? <p className="note" role="status">Loading result…</p>
         : result.output ? <div className="delegation-output"><Markdown text={result.output} live={!result.complete} /></div>
-        : !result.error && <p className="note">{result.complete ? 'Finished without a written reply.' : 'No reply yet.'}</p>}
+        : !result.error && <p className="note">{result.complete ? 'The agent finished without a written reply.' : 'The agent has not replied yet.'}</p>}
       {result?.error && <p className="error">{result.error}</p>}
       {result?.truncated && <p className="note">Showing the most recent output.</p>}
       <form className="delegation-follow" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-        <label htmlFor={`message-${child.id}`} className="vh">Message subagent</label>
+        <label htmlFor={`message-${child.id}`} className="vh">Message helper</label>
         <textarea id={`message-${child.id}`} rows={2} maxLength={32000} value={message} disabled={sending}
-          placeholder={complete ? 'Give a follow-up task…' : 'Clarify or redirect…'} onChange={(event) => setMessage(event.target.value)}
+          placeholder={complete ? 'Enter the next task' : 'Give more instructions'} onChange={(event) => setMessage(event.target.value)}
           onKeyDown={submitOnShortcut(() => void sendMessage())} />
         <button className="primary" disabled={sending || !message.trim()}>{sending ? 'Sending…' : 'Send message'}</button>
       </form>
       <div className="delegation-actions">
-        {onOpen && <button type="button" className="ghost" onClick={() => onOpen(child)}>Open conversation</button>}
+        {onOpen && <button type="button" className="ghost" onClick={() => onOpen(child)}>Open chat</button>}
         {complete ? <>
           {['error', 'interrupted'].includes(state) && <button type="button" className="ghost" disabled={!!acting} onClick={() => void retry(child)}>
             {acting === 'retry' ? 'Retrying…' : 'Retry task'}</button>}
           <button type="button" className="ghost" disabled={!!acting} onClick={() => void hide(child)}>{acting === 'hide' ? 'Hiding…' : 'Hide task'}</button>
         </> : <button type="button" className="ghost destructive" disabled={!!acting} onClick={() => void stop(child)}>
-          {acting === 'stop' ? 'Stopping…' : 'Stop subagent'}</button>}
+          {acting === 'stop' ? 'Stopping…' : 'Stop helper'}</button>}
       </div>
       {notice && <p className="note" role="status">{notice}</p>}
       {errorBox(child.id)}
@@ -361,10 +361,10 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     const toggle = () => select(open ? '' : child.id);
     return <li key={child.id} className={`delegation-branch${open ? ' selected' : ''}`}>
       <div className="delegation-row">
-        <button type="button" className="delegation-task" title={onOpen ? 'Open subagent conversation' : undefined}
+        <button type="button" className="delegation-task" title={onOpen ? 'Open helper chat' : undefined}
           onClick={() => onOpen ? onOpen(child) : toggle()}>
           <EngineMark engine={child.engine} />
-          <span className="grow"><b>{child.title}</b><small>{child.profileId} · {child.model || child.engineModel || 'CLI default'}</small></span>
+          <span className="grow"><b>{child.title}</b><small>{child.profileId} · {child.model || child.engineModel || 'Agent default'}</small></span>
         </button>
         <button type="button" className={`delegation-status state-${state}`} data-task={child.id} aria-label={`${label}, details`}
           aria-expanded={open} aria-controls={`task-detail-${child.id}`} onClick={toggle}>
@@ -383,12 +383,12 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     const detail = open && nativeDetail?.id === agent.id ? nativeDetail : null;
     return <li key={key} className={`delegation-branch${open ? ' selected' : ''}`}>
       <div className="delegation-row">
-        <button type="button" className="delegation-task" title={onOpenNative ? 'Open subagent conversation' : undefined}
+        <button type="button" className="delegation-task" title={onOpenNative ? 'Open helper chat' : undefined}
           aria-expanded={onOpenNative ? undefined : open} aria-controls={onOpenNative ? undefined : `task-detail-${key}`}
           onClick={() => onOpenNative ? onOpenNative(agent) : toggle()}>
           <EngineMark engine={agent.engine ?? parent.engine} />
           <span className="grow"><b>{agent.title}</b>
-            <small>{[agent.agentType || 'subagent', agent.model || 'CLI default', agent.branch].filter(Boolean).join(' · ')}</small></span>
+            <small>{[agent.agentType || 'subagent', agent.model || 'Agent default', agent.branch].filter(Boolean).join(' · ')}</small></span>
         </button>
         <button type="button" className={`delegation-status state-${agent.status}`} data-task={key} aria-label={`${label}, details`}
           aria-expanded={open} aria-controls={`task-detail-${key}`} onClick={toggle}>
@@ -397,16 +397,16 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
       </div>
       {open && <div className="delegation-detail" id={`task-detail-${key}`}>
         {detail?.task && detail.task !== agent.title && <p className="delegation-request">{detail.task}</p>}
-        {!detail ? (agent.last ? <p className="note">{agent.last}</p> : <p className="note" role="status">Reading result…</p>)
+        {!detail ? (agent.last ? <p className="note">{agent.last}</p> : <p className="note" role="status">Loading result…</p>)
           : detail.result ? <div className="delegation-output"><Markdown text={detail.result} live={ACTIVE.includes(agent.status)} /></div>
-          : <p className="note">{ACTIVE.includes(agent.status) ? 'No reply yet.' : 'Finished without a written reply.'}</p>}
-        {agent.status === 'blocked' && <p className="note">Waiting for your approval in the chat.</p>}
+          : <p className="note">{ACTIVE.includes(agent.status) ? 'The agent has not replied yet.' : 'The agent finished without a written reply.'}</p>}
+        {agent.status === 'blocked' && <p className="note">Approve the request in the chat.</p>}
         {!!detail?.activity.length && <details className="native-activity">
           <summary>Recent activity</summary>
           <ol>{detail.activity.map((line, index) => <li key={index}>{line}</li>)}</ol>
         </details>}
         {onOpenNative && <div className="delegation-actions">
-          <button type="button" className="ghost" onClick={() => onOpenNative(agent)}>{agent.canMessage ? 'Open and message' : 'Open conversation'}</button>
+          <button type="button" className="ghost" onClick={() => onOpenNative(agent)}>{agent.canMessage ? 'Open and message' : 'Open chat'}</button>
         </div>}
         {errorBox(`native:${agent.id}`)}
       </div>}
@@ -420,22 +420,22 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     </section>;
 
   return <div className={embedded ? 'embedded-agents' : 'modal-back'} onClick={(event) => { if (!embedded && event.target === event.currentTarget && !busy) onClose(); }}>
-    <div className={`${embedded ? '' : 'modal '}delegation-panel`} ref={ref} role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : true} aria-label="Subagents" tabIndex={-1}>
+    <div className={`${embedded ? '' : 'modal '}delegation-panel`} ref={ref} role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : true} aria-label="Helpers" tabIndex={-1}>
       {/* Inside the Agents panel its own heading already names the chat. */}
       {!embedded && <div className="delegation-heading">
-        <div><h2>Subagents</h2><p>{env.name} · {parent.title}</p></div>
-        <button className="iconbtn" aria-label="Close subagents" disabled={busy} onClick={onClose}><Icon name="close" size={18} /></button>
+        <div><h2>Helpers</h2><p>{env.name} · {parent.title}</p></div>
+        <button className="iconbtn" aria-label="Close helpers" disabled={busy} onClick={onClose}><Icon name="close" size={18} /></button>
       </div>}
       <div className="delegation-body">
         {errorBox('')}
         {nativeOnly ? null : composing ? <form className="delegation-form" aria-label="New task" onSubmit={(event) => { event.preventDefault(); void start(); }}>
           <label htmlFor="delegate-task">Task</label>
-          <textarea id="delegate-task" rows={3} maxLength={32000} autoFocus placeholder="Describe a specific, bounded task…"
+          <textarea id="delegate-task" rows={3} maxLength={32000} autoFocus placeholder="Describe one task"
             value={task} disabled={busy} onChange={(event) => setTask(event.target.value)} onKeyDown={submitOnShortcut(() => void start())} />
           <div className="delegation-chips">
             <span className="chips">
               <button type="button" className={`chip-pick account${choosingAccount ? ' on' : ''}`} disabled={busy || (loading && !agents.length)}
-                aria-label={`CLI account: ${agent ? accountName(agent) : loading ? 'finding accounts' : 'none available'}`}
+                aria-label={`Agent account: ${agent ? accountName(agent) : loading ? 'finding accounts' : 'none available'}`}
                 onClick={() => { controls.close(); setChoosingAccount(!choosingAccount); }}>
                 {agent && <EngineMark engine={agent.engine} />}
                 <span className="chip-label">{agent ? accountName(agent) : loading ? 'Finding accounts…' : 'No account'}</span>
@@ -443,7 +443,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
               {agent?.available && <span className="delegation-chip-rest" onClickCapture={() => setChoosingAccount(false)}>{controls.chips}</span>}
             </span>
           </div>
-          {choosingAccount ? <ChoiceSheet title={`CLI account on ${env.name}`} current={account} busy={busy}
+          {choosingAccount ? <ChoiceSheet title={`Agent account on ${env.name}`} current={account} busy={busy}
             choices={offered.map((candidate) => ({ id: candidate.id, label: `${accountName(candidate)} · ${candidate.engine}`,
               icon: <EngineMark engine={candidate.engine} />,
               hint: candidate.auth === 'authenticated' ? 'signed in' : candidate.auth === 'unauthenticated' ? 'signed out' : 'sign-in not checked' }))}
@@ -455,14 +455,14 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
           {errorBox('form')}
           <div className="delegation-start">
             <button type="button" className="ghost" disabled={busy} onClick={() => { setComposing(false); setFocus('new'); }}>Cancel</button>
-            <button className="primary" disabled={busy || loading || !agent?.available || !task.trim()}>{busy ? 'Starting…' : 'Start subagent'}</button>
+            <button className="primary" disabled={busy || loading || !agent?.available || !task.trim()}>{busy ? 'Starting…' : 'Start helper'}</button>
           </div>
         </form>
           : <button type="button" className="delegation-new" onClick={() => setComposing(true)}><Icon name="plus" size={16} />New task</button>}
         {!nativeOnly && env.info?.agentMessages === true && <AgentMessages client={client} envId={env.id} parent={parent} children={children} />}
-        <div className="delegation-branches" aria-label="Delegated tasks">
+        <div className="delegation-branches" aria-label="Helper tasks">
           {!listed ? <p className="note" role="status">Loading tasks…</p>
-            : !children.length && !natives.length && !composing && <p className="note">No tasks yet.</p>}
+            : !children.length && !natives.length && !composing && <p className="note">This chat has no helper tasks.</p>}
           {group('active', 'Active', active, nativeActive)}
           {group('finished', 'Finished', finished, nativeFinished)}
         </div>

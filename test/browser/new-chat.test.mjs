@@ -380,7 +380,7 @@ for (const width of [1280,390]) test(`a quick chat says "quick chat" where the f
   assert.equal(await page.evaluate(()=>window.calls.some(c=>c.method==='git.status')),false);
   await bar.getByRole('button',{name:'more'}).click();
   assert.equal(await page.getByRole('button',{name:'Send to another machine'}).count(),0);
-  assert.equal(await page.getByRole('button',{name:'Rename thread'}).count(),1);
+  assert.equal(await page.getByRole('button',{name:'Rename chat'}).count(),1);
 });
 
 test('with the machine\'s folder list, typing searches on the device and shows how fresh it is',async t=>{

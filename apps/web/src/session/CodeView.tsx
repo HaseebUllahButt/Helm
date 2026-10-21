@@ -107,7 +107,7 @@ export function DiffView({ text, path, wrap, trim = wrap }: { text: string; path
     const n = Math.min(...rows.filter((r) => r.kind !== 'hunk').map((r) => indentOf(r.text)));
     return Number.isFinite(n) ? n : 0;
   }, [rows, trim]);
-  if (!rows.length) return <div className="cv-empty">No text changes.</div>;
+  if (!rows.length) return <div className="cv-empty">The text did not change.</div>;
   const digits = String(Math.max(...rows.map((r) => r.n), 1)).length;
   return (
     <div className={`cv diff-view${wrap ? ' wrap' : ''}`} style={{ '--cv-digits': `${digits}ch` } as CSSProperties}>

@@ -38,15 +38,15 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
           <button className="row" onClick={() => onOpen({ kind: 'devices' })}>
-            <span className="grow"><span className="rt">Devices & pairing</span></span>
+            <span className="grow"><span className="rt">Devices</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
           <button className="row" onClick={() => onOpen({ kind: 'network-settings' })}>
-            <span className="grow"><span className="rt">CLI defaults</span></span>
+            <span className="grow"><span className="rt">Agent defaults</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
           <button className="row" onClick={() => onOpen({ kind: 'links' })}>
-            <span className="grow"><span className="rt">Public links</span></span>
+            <span className="grow"><span className="rt">Spins</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
           <button className="row" onClick={() => onOpen({ kind: 'usage' })}>
@@ -59,7 +59,7 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
           </button>
         </div>
 
-        <div className="section">dictation</div>
+        <div className="section">Speech input</div>
         <DictationKey client={client} envs={envs} onSaved={onVoice} />
 
         <div className="section">appearance</div>
@@ -74,9 +74,9 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
         <details className="note">
           <summary>Connection details</summary>
           <p>App address: {location.origin}</p>
-          <p>App build: {document.querySelector<HTMLScriptElement>('script[type="module"]')?.src.split('/').at(-1) ?? 'development'}</p>
-          <p>Hub: {client.relay}</p>
-          <p>Socket: {client.connected ? 'connected' : 'reconnecting'}</p>
+          <p>App version: {document.querySelector<HTMLScriptElement>('script[type="module"]')?.src.split('/').at(-1) ?? 'development'}</p>
+          <p>Helm home: {client.relay}</p>
+          <p>Connection: {client.connected ? 'connected' : 'reconnecting'}</p>
           {client.lastError && <p>Last connection error: {client.lastError}</p>}
           {envs.map(env => {
             const direct = client.directStatus(env.id);
@@ -87,7 +87,7 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
         </details>
         <div className="rows">
           <button className="row destructive" onClick={onUnpair}>
-            <span className="grow"><span className="rt">Unpair this device</span></span>
+            <span className="grow"><span className="rt">Sign out this device</span></span>
           </button>
         </div>
       </div></div>
@@ -105,11 +105,11 @@ export function LinksView({ client, envs, onBack }: { client: Client; envs: Envi
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <div className="titles"><h1>Public links</h1><span className="sub">all machines</span></div>
+        <div className="titles"><h1>Spins</h1><span className="sub">all machines</span></div>
       </div>
       <div className="scroll"><div className="pad column">
         <p className="note">
-          Links end after 3 hours unless kept. Private links open only on your devices.
+          Spins are public links. They expire after 3 hours unless you keep them. Private links open only on your devices.
         </p>
         {envs.map((env) => (
           <div key={env.id}>
@@ -143,7 +143,7 @@ export function NetworkSettings({ client, envs, onBack, onOpen }: {
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <div className="titles"><h1>CLI defaults</h1><span className="sub">all machines</span></div>
+        <div className="titles"><h1>Agent defaults</h1><span className="sub">all machines</span></div>
       </div>
       <div className="scroll"><div className="pad column">
         {envs.map((env) => {
@@ -157,9 +157,9 @@ export function NetworkSettings({ client, envs, onBack, onOpen }: {
                 ) : errors[env.id] ? (
                   <div className="empty quiet">{errors[env.id]}</div>
                 ) : !list ? (
-                  <div className="empty quiet">looking for agents…</div>
+                  <div className="empty quiet">Finding agents…</div>
                 ) : list.length === 0 ? (
-                  <div className="empty quiet">no supported CLIs found</div>
+                  <div className="empty quiet">Helm found no supported agent programs.</div>
                 ) : list.map((a) => (
                   <button key={a.key} className="row tall" onClick={() => onOpen(env.id, a)}>
                     <EngineMark engine={engineOf(a.engine).cls} />

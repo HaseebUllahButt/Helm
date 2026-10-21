@@ -29,16 +29,16 @@ export function RecoveryCard({ recovery, busy, offline, onRetry, autoResume, onA
         <div className="recovery-copy">
           <b>{p.title}</b>
           <p>{recovery.kind === 'limited' && recovery.resetAt ? `Limit resets ${new Date(recovery.resetAt).toLocaleString()}.${autoResume && !recovery.autoResumeCancelled ? ' Helm continues then.' : ''}` : p.text}</p>
-          {recovery.autoResumeError && <p className="error">Could not continue: {recovery.autoResumeError}</p>}
+          {recovery.autoResumeError && <p className="error">Helm cannot continue: {recovery.autoResumeError}</p>}
         </div>
         <button className="recovery-x" aria-label="Hide" onClick={() => setHiddenAt(recovery.at)}><Icon name="close" size={14} /></button>
       </div>
-      {recovery.kind === 'limited' && onAutoResume && <label className="automation-option"><input type="checkbox" checked={!!autoResume} disabled={busy || offline} onChange={event => onAutoResume(event.target.checked)} /> Continue automatically at reset</label>}
+      {recovery.kind === 'limited' && onAutoResume && <label className="automation-option"><input type="checkbox" checked={!!autoResume} disabled={busy || offline} onChange={event => onAutoResume(event.target.checked)} /> Continue when the limit resets</label>}
       {details && p.raw && <pre className="recovery-raw">{p.raw}</pre>}
       {(p.raw || onRetry) && (
         <div className="recovery-actions">
           {p.raw && <button className="ghost" aria-expanded={details} onClick={() => setDetails(!details)}>{details ? 'Hide details' : 'Details'}</button>}
-          {onRetry && <button className="primary" disabled={busy || offline} title={offline ? 'The machine is offline' : undefined} onClick={onRetry}>{p.action}</button>}
+          {onRetry && <button className="primary" disabled={busy || offline} title={offline ? 'The machine is offline.' : undefined} onClick={onRetry}>{p.action}</button>}
         </div>
       )}
     </div>

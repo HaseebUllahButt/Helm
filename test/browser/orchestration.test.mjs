@@ -99,9 +99,9 @@ test('composer selects thread references and sends without a delivery selector',
   await page.evaluate(() => window.showComposer());
   const input = page.getByLabel('Message Claude', {exact:true});
   await input.fill('Check @des');
-  await page.getByRole('listbox', { name: 'Attach thread context' }).waitFor();
+  await page.getByRole('listbox', { name: 'Attach chat details' }).waitFor();
   await input.press('Enter');
-  await page.getByRole('button', { name: 'Remove context: Design review' }).waitFor();
+  await page.getByRole('button', { name: 'Remove chat details: Design review' }).waitFor();
   assert.equal(await input.inputValue(), 'Check ');
   assert.equal(await page.getByLabel('Message delivery').count(), 0);
   assert.equal(await page.getByText('After this task', { exact: true }).count(), 0);
@@ -109,7 +109,7 @@ test('composer selects thread references and sends without a delivery selector',
   assert.deepEqual(await page.evaluate(() => window.sent), { draft: 'Check ', references: [{ id: 'design', title: 'Design review' }] });
   await page.getByRole('button', { name: 'Move up: Second task' }).click();
   assert.deepEqual(await page.evaluate(() => window.action), ['move', 'two', -1]);
-  await page.getByRole('button', { name: 'Remove queued message: First task' }).click();
+  await page.getByRole('button', { name: 'Remove waiting message: First task' }).click();
   assert.deepEqual(await page.evaluate(() => window.action), ['remove', 'one']);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await capture(page, 'orchestration-composer-phone.png');
@@ -122,7 +122,7 @@ test('waiting messages say when the CLI reads them, and Send now is offered on e
   await row('Follows the CLI').getByText('After current response', { exact: true }).waitFor();
   await row('A scheduled prompt').getByText('After this task', { exact: true }).waitFor();
   const sent = row('Already with the CLI');
-  await sent.getByText('Sent to CLI', { exact: true }).waitFor();
+  await sent.getByText('Sent to agent', { exact: true }).waitFor();
   assert.equal(await sent.getByRole('button').count(), 0, 'what the CLI has cannot be edited or taken back');
   assert.equal(await sent.locator('.queued-timing').count(), 0);
   await row('Follows the CLI').getByRole('button', { name: 'Send now', exact: true }).click();
@@ -151,7 +151,7 @@ test('pasted images are labelled where the cursor was and renumbered when one go
   await page.waitForFunction(() => window.imageDraft() === 'Compare [Image #1] with [Image #2] [Image #3] ');
   assert.equal(await page.locator('.attach-preview').nth(1).getAttribute('title'), '[Image #2] b.png');
   await page.screenshot({ path: '/tmp/helm-image-labels.png' });
-  await page.getByRole('button', { name: 'remove Image #1' }).dispatchEvent('click');
+  await page.getByRole('button', { name: 'Remove Image #1' }).dispatchEvent('click');
   await page.waitForFunction(() => window.imageDraft() === 'Compare with [Image #1] [Image #2] ');
   assert.equal(await page.locator('.attach-preview').count(), 2);
 });

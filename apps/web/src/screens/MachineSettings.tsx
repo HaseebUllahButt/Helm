@@ -64,12 +64,12 @@ function MachineName({ client, env, onRenamed }: {
       </button>
       {!env.online && (
         <div className="banner warn">
-          This machine is offline. Rename it when it is back.
+          This machine is offline. Rename it when it connects again.
         </div>
       )}
       <p className="note">
         {changed && !ok
-          ? `A name is ${MACHINE_NAME_RULE}.`
+          ? `Use ${MACHINE_NAME_RULE} for the name.`
           // "Renamed" under "this machine is offline" is two answers to the
           // same question; the banner is the one that matters now.
           : done && env.online
@@ -78,8 +78,8 @@ function MachineName({ client, env, onRenamed }: {
             // apostrophe in it keeps that name - nothing rewrites a record
             // behind its owner's back - but ssh cannot reach it under one.
             : !validMachineName(env.name)
-              ? `ssh cannot use this name. Use ${MACHINE_NAME_RULE}.`
-              : <>For ssh: <code>ssh {env.name}</code></>}
+              ? `SSH cannot use this name. Use ${MACHINE_NAME_RULE}.`
+              : <>Connect with SSH: <code>ssh {env.name}</code></>}
       </p>
       {error && <div className="error">{error}</div>}
     </form>
@@ -101,9 +101,9 @@ function MachineKind({ client, env, onChanged }: {
   client: Client; env: Environment; onChanged: () => void;
 }) {
   const KINDS = [
-    { id: 'pc' as const, label: 'Computer', hint: 'runs agents, and controls others' },
-    { id: 'vm' as const, label: 'Always-on server', hint: 'others connect to it; it gets an https address' },
-    { id: 'nas' as const, label: 'Storage', hint: 'keeps files for the network' },
+    { id: 'pc' as const, label: 'Computer', hint: 'Runs agents and controls other machines.' },
+    { id: 'vm' as const, label: 'Always-on server', hint: 'Other machines connect here. It has an HTTPS address.' },
+    { id: 'nas' as const, label: 'Storage', hint: 'Stores files for your machines.' },
   ];
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -138,7 +138,7 @@ function MachineKind({ client, env, onChanged }: {
       </div>
       {!env.online && (
         <div className="banner warn">
-          This machine is offline. Change it when it is back.
+          This machine is offline. Change it when it connects again.
         </div>
       )}
       {error && <div className="error">{error}</div>}
@@ -175,15 +175,15 @@ export function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
         <div className="section">name</div>
         <MachineName client={client} env={env} onRenamed={onRenamed} />
 
-        <div className="section">kind</div>
+        <div className="section">Machine type</div>
         <MachineKind client={client} env={env} onChanged={onRenamed} />
 
-        <div className="section">public links</div>
+        <div className="section">Spins</div>
         <PublicLinks client={client} env={env} />
 
-        <div className="section">CLI accounts</div>
-        {accounts === null && !error && <div className="empty quiet">looking for agents…</div>}
-        {accounts?.length === 0 && <div className="empty quiet">no agents on {env.name}</div>}
+        <div className="section">Agent accounts</div>
+        {accounts === null && !error && <div className="empty quiet">Finding agents…</div>}
+        {accounts?.length === 0 && <div className="empty quiet">{env.name} has no agents.</div>}
         <div className="rows">
           {accounts?.map((a) => {
             const e = engineOf(a.engine);

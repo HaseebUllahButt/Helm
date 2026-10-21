@@ -45,7 +45,7 @@ test('real Chromium sends imported cookies; login menu copies, sets a default, r
     if (width === 390) { await page.getByRole('button', { name: 'Logins', exact: true }).focus(); await page.keyboard.press('Enter'); } else await page.getByRole('button', { name: 'Logins', exact: true }).click();
     await page.getByLabel('Login profile').selectOption('chromium:Default');
     await page.getByRole('button', { name: 'Use for all new chats', exact: true }).click();
-    await page.getByRole('status').filter({ hasText: 'Copied logins for 1 site.' }).waitFor();
+    await page.getByRole('status').filter({ hasText: 'Helm copied logins for 1 site.' }).waitFor();
     await page.getByRole('button', { name: 'Clear default', exact: true }).waitFor();
     assert.deepEqual(await manager.loginDefault('viewer'), { profileKey: 'chromium:Default' });
     const seeded = await manager.open(`new-${width}`, { url });

@@ -26,7 +26,7 @@ test('task return review preserves local choices and offers the original convers
     const page = await browser.newPage();
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({content:bundle.outputFiles[0].text});
-    await page.getByRole('button',{name:'Keep my conflicting edits',exact:true}).click();
+    await page.getByRole('button',{name:'Keep my edits where changes conflict',exact:true}).click();
     assert.deepEqual(await page.evaluate(()=>window.request),{env:'source',method:'task.retry-return',params:{handoffId:'handoff',keepLocal:['app.js']}});
     await page.evaluate(()=>window.renderReturn(true));
     await page.getByRole('button',{name:'Continue on original machine',exact:true}).click();

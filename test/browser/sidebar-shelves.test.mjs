@@ -174,10 +174,10 @@ test('the row menu still opens above its neighbours on a stepped-back working ro
   await page.evaluate(mount);
   const row = shelf(page, 'Working').locator('.tri-row').filter({ hasText: 'Fix flaky login test' });
   await row.hover();
-  await row.getByRole('button', { name: 'actions for Fix flaky login test' }).click();
+  await row.getByRole('button', { name: 'Show actions for Fix flaky login test' }).click();
   const menu = row.locator('.row-menu');
   await menu.waitFor();
-  const onTop = await menu.getByRole('button', { name: 'Archive thread' }).evaluate(e => {
+  const onTop = await menu.getByRole('button', { name: 'Archive chat' }).evaluate(e => {
     const r = e.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
     return e === hit || e.contains(hit);
   });
@@ -250,8 +250,8 @@ test('archiving from Home says so, and Undo brings the chat back', async t => {
       ? (window.archived.push(params), Promise.resolve({ ok: true })) : rpc(env, method, params);
     window.mount(client);
   });
-  await page.getByRole('button', { name: 'actions for Write the release notes' }).click();
-  await page.getByRole('button', { name: 'Archive thread' }).click();
+  await page.getByRole('button', { name: 'Show actions for Write the release notes' }).click();
+  await page.getByRole('button', { name: 'Archive chat' }).click();
   const notice = page.getByRole('status').filter({ hasText: 'Archived Write the release notes' });
   await notice.waitFor();
   await notice.getByRole('button', { name: 'Undo' }).click();

@@ -394,8 +394,8 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
                 back; that is worth saying, the ordinary same-wifi case is not. */}
             {env.online
               ? (direct
-                ? (route && !(route.local === 'host' && route.remote === 'host') ? 'direct, over the internet' : 'direct')
-                : 'via home')
+                ? (route && !(route.local === 'host' && route.remote === 'host') ? 'Direct connection over the internet' : 'direct')
+                : 'Through Helm home')
               : 'offline'}
             {env.online && ping != null && (
               // The number matters because the two routes differ by two
@@ -409,20 +409,20 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         {/* The media view only exists on a machine that is a nas: elsewhere
             the button would be an offer the daemon has to refuse. */}
         {env.kind === 'nas' && (
-          <button className="iconbtn" title={`media on ${env.name}`} aria-label={`media on ${env.name}`} onClick={onMedia}><Play /></button>
+          <button className="iconbtn" title={`Open media on ${env.name}`} aria-label={`Open media on ${env.name}`} onClick={onMedia}><Play /></button>
         )}
         <button
           className="iconbtn mono"
           // A machine with no pty falls back to sampling a herdr pane's
           // screen, which is slow enough to be worth saying before you open
           // one and wonder what is wrong with it.
-          title={env.info.terminals === 'panes' ? 'terminal (slow: no pty on this machine)' : 'terminal'}
-          aria-label={env.info.terminals === 'panes' ? 'terminal (slow: no pty on this machine)' : 'terminal'}
+          title={env.info.terminals === 'panes' ? 'Open terminal (slow on this machine)' : 'terminal'}
+          aria-label={env.info.terminals === 'panes' ? 'Open terminal (slow on this machine)' : 'terminal'}
           disabled={!env.online || opening}
           onClick={openTerminal}
         ><Icon name="terminal" size={18} />{env.info.terminals === 'panes' && <b className="slowmark" aria-hidden="true">!</b>}</button>
-        <button className="iconbtn" title={`what ${env.name} has cost`} aria-label={`what ${env.name} has cost`} onClick={onUsage}><Meter /></button>
-        <button className="iconbtn" title={`${env.name} settings`} aria-label={`${env.name} settings`} onClick={onSettings}><Gear /></button>
+        <button className="iconbtn" title={`Show costs on ${env.name}`} aria-label={`Show costs on ${env.name}`} onClick={onUsage}><Meter /></button>
+        <button className="iconbtn" title={`Open settings for ${env.name}`} aria-label={`Open settings for ${env.name}`} onClick={onSettings}><Gear /></button>
       </div>
 
       <div
@@ -442,12 +442,12 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
       ><div className="pad column">
         {pull > 0 && (
           <div className="pull" style={{ height: pull }}>
-            {pull > 70 ? 'release to refresh' : ''}
+            {pull > 70 ? 'Release to refresh' : ''}
           </div>
         )}
         {!env.online && (
           <div className="banner warn">
-            Offline{env.lastSeen ? ` · last seen ${ago(env.lastSeen)}` : ''}. Threads open again when it is back.
+            Offline{env.lastSeen ? ` · last seen ${ago(env.lastSeen)}` : ''}. Chats open when the machine connects again.
           </div>
         )}
 
@@ -483,7 +483,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         {searchable && (
           <div className="filterbar">
             <input
-              className="sheetfilter grow" value={query} placeholder={`search ${env.name}`}
+              className="sheetfilter grow" value={query} placeholder={`Search ${env.name}`}
               autoCapitalize="off" autoCorrect="off" autoComplete="off"
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -498,10 +498,10 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
 
         {selecting && (
           <div className="selbar">
-            <span>{marked.size ? `${marked.size} picked` : 'tap threads to pick them'}</span>
+            <span>{marked.size ? `${marked.size} picked` : 'Select chats'}</span>
             <span className="spacer" />
             <button className="linkish" disabled={!marked.size} onClick={archiveMarked}>
-              archive {marked.size || ''}
+              Archive chats {marked.size || ''}
             </button>
           </div>
         )}
@@ -518,7 +518,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         )}
         {working.length > 0 && (
           <div>
-            <div className="section">running here</div>
+            <div className="section">Running</div>
             <div className="rows plain">{working.map(row)}</div>
           </div>
         )}
@@ -557,10 +557,10 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
               <div className="rows plain">{list.map(row)}</div>
             ) : (
               <div className="empty quiet folder-empty">
-                {above ? `The latest thread in ${p.title} is under recent` : `No threads in ${p.title} yet`}
+                {above ? `Find the latest chat in ${p.title} under Recent.` : `No chats are in ${p.title}.`}
                 <div className="note">
                   <button className="linkish" disabled={!env.online} onClick={() => onStart(p.path)}>
-                    Start one here
+                    Start a chat here
                   </button>
                 </div>
               </div>
@@ -572,7 +572,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
             a CLI run by hand in a scratch directory. Worth keeping, not worth
             a project of its own. */}
         <Fold
-          title="elsewhere" count={strays.length}
+          title="Other folders" count={strays.length}
           openWhen={!!q}
           remember={`${env.id}:~elsewhere`}
         >
@@ -586,7 +586,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         <Fold title="older" count={older.length} openWhen={!!q} remember={`${env.id}:~older`}>
           <div className="rows plain">{older.map(row)}</div>
         </Fold>
-        <Fold title="archived" count={filed.length} openWhen={!!q} remember={`${env.id}:~archived`}>
+        <Fold title="Archived" count={filed.length} openWhen={!!q} remember={`${env.id}:~archived`}>
           <div className="rows plain">{filed.map(row)}</div>
         </Fold>
 
@@ -601,7 +601,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         {!env.online && (remembered?.length ?? 0) > 0 && (
           <>
             <div className="section">
-              last known{rememberedAt ? ` · seen ${waitingSince(rememberedAt, now)} ago` : ''}
+              Last seen{rememberedAt ? ` · seen ${waitingSince(rememberedAt, now)} ago` : ''}
             </div>
             <div className="rows plain stale">
               {remembered!.map((s) => (
@@ -616,7 +616,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
                       </span>
                     </span>
                     {runningThread(s) && !attention(s)
-                      ? <span className="chip exited">was {busyWord(s.status, s.compacting)}</span>
+                      ? <span className="chip exited">Last status: {busyWord(s.status, s.compacting)}</span>
                       : <StatusChip status={s.status === 'working' && s.compacting ? 'compacting' : s.status} at={s.updatedAt} />}
                   </div>
                 </button>
@@ -631,10 +631,10 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         {!blocked.length && !working.length && !recent.length && !projectFolds.length && !strays.length &&
           !(q && (filed.length || older.length)) && (
           <div className="empty quiet">
-            {q ? `Nothing on ${env.name} matches “${query.trim()}”` : `Nothing running on ${env.name}`}
+            {q ? `No chats on ${env.name} match “${query.trim()}”.` : `No chats are running on ${env.name}.`}
             {!q && !older.length && !filed.length && env.online && (
               <div className="note">
-                <button className="linkish" onClick={onNewSession}>Start a session</button>
+                <button className="linkish" onClick={onNewSession}>Start a chat</button>
               </div>
             )}
           </div>
@@ -669,7 +669,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
       {removing && (
         <Confirm
           title={`Remove "${removing.title}"?`}
-          body="Empty it of threads first. Files are not deleted."
+          body="Remove its chats first. Your files stay."
           confirmLabel="Remove" danger busy={projectBusy}
           onCancel={() => setRemoving(null)}
           onConfirm={removeProject}
@@ -689,12 +689,12 @@ function ProjectActions({ title, online, sendLabel = 'Send', onStart, onSend, on
     <>
       <button
         type="button" className="foldbtn"
-        title={`new thread in ${title}`} aria-label={`new thread in ${title}`}
+        title={`Start a chat in ${title}`} aria-label={`Start a chat in ${title}`}
         onClick={onStart}
       ><Icon name="plus" size={16} /></button>
       <button
         type="button" className="foldbtn"
-        title={`actions for ${title}`} aria-label={`actions for ${title}`} aria-haspopup="menu" aria-expanded={menu}
+        title={`Show actions for ${title}`} aria-label={`Show actions for ${title}`} aria-haspopup="menu" aria-expanded={menu}
         onClick={() => setMenu((v) => !v)}
       ><Icon name="more" size={16} /></button>
       {menu && (
@@ -752,7 +752,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
             <span className="rt">
               <span className="rt-text">{s.title}</span>
               {adopted && !found && <span className="tag">external</span>}
-              {s.archived && <span className="tag">archived</span>}
+              {s.archived && <span className="tag">Archived</span>}
             </span>
             <span className="rm">
               {/* A thread waiting on you says what it is asking, which is
@@ -764,7 +764,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
           </span>
           {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
           {busy ? <span className="chip working"><i />opening</span>
-            : offline && runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? <span className="chip exited">was {busyWord(s.status, s.compacting)}</span>
+            : offline && runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? <span className="chip exited">Last status: {busyWord(s.status, s.compacting)}</span>
             : <StatusChip status={runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? busyWord(s.status, s.compacting) : s.status} at={s.updatedAt} />}
         </Main>
         {!selecting && managed && <ThreadActions s={s} onRename={onRename} onArchive={onArchive} onDelete={onDelete} />}

@@ -115,7 +115,7 @@ test('attention cards distinguish failures, limits, and actual questions on mobi
     window.mount(window.makeClient([{ id: 'vm', name: 'VM', online: true, info: {} }], { vm: sessions }));
   });
   const sidebar = page.locator('.sidebar');
-  for (const title of ['Task failed', 'Usage limit reached', 'Child task failed', 'Needs you']) {
+  for (const title of ['Task failed', 'Usage limit reached', 'Helper task failed', 'Needs you']) {
     await sidebar.locator('.need-k').filter({ hasText: new RegExp(`^${title}`) }).waitFor();
   }
   assert.equal(await sidebar.locator('.need-k').filter({ hasText: /Task paused|Helm restarted/ }).count(), 0);
@@ -200,9 +200,9 @@ for (const width of [1280, 390]) test(`native Claude channel opens as a Helm cha
   assert.deepEqual(calls.find(c => c.method === 'session.input').params, { id: 'native-chat', data: 'Hello from Helm\n' });
   assert.equal(calls.some(c => c.method === 'session.attach'), false);
   assert.equal(await page.locator('.slab .quick').count(), 0);
-  await page.getByRole('button', { name: 'show the terminal', exact: true }).click();
+  await page.getByRole('button', { name: 'Show terminal', exact: true }).click();
   await page.locator('.xterm-helper-textarea').waitFor({ state: 'attached' });
-  await page.getByRole('button', { name: 'show the conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'Show chat', exact: true }).click();
   await page.getByText('Your message reached the same Claude session.', { exact: true }).waitFor();
   await page.screenshot({ path: `/tmp/helm-native-chat-${width}.png` });
 });
@@ -246,8 +246,8 @@ test('settings expose the app route and build without exposing pairing credentia
   });
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByText('Connection details', { exact: true }).click();
-  await page.getByText('Hub: https://hub.example', { exact: true }).waitFor();
-  await page.getByText('App build: development', { exact: true }).waitFor();
+  await page.getByText('Helm home: https://hub.example', { exact: true }).waitFor();
+  await page.getByText('App version: development', { exact: true }).waitFor();
   await page.getByText('Last connection error: connection stopped responding', { exact: true }).waitFor();
   // The app reloads itself when a new build lands; no button for it.
   assert.equal(await page.getByRole('button', { name: /^Reload app/ }).count(), 0);
@@ -526,7 +526,7 @@ for (const width of [1280, 390]) test(`one VM brain stays the entry point while 
   assert.match(await entry.innerText(),/VM.*offline/s);
   await entry.click();
   await page.getByRole('heading',{name:'Brain',exact:true}).waitFor();
-  assert.equal(await page.getByText('Choose its account',{exact:true}).count(),0,'a cold offline open retains the VM conversation');
+  assert.equal(await page.getByText('Select an account',{exact:true}).count(),0,'a cold offline open retains the VM conversation');
   assert.match(await page.locator('.main .bar .sub').innerText(),/VM/);
 });
 
@@ -627,7 +627,7 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
   // The machine screen sorts the same threads the same way.
   await laptop.click();
   const main = page.locator('.main');
-  const working = main.locator('div.section', { hasText: /^running here$/ }).locator('xpath=following-sibling::div[1]');
+  const working = main.locator('div.section', { hasText: /^Running$/ }).locator('xpath=following-sibling::div[1]');
   await working.locator('.rowx').first().waitFor();
   assert.equal(await working.locator('.rowx').count(), n * 3 + 1, 'machine screen counts the same running threads as the sidebar');
   assert.equal(await working.locator('.rowx').filter({ hasText: 'claude children' }).locator('.chip').textContent(), 'working');
@@ -637,7 +637,7 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
   for (const engine of PROVIDERS) {
     const unknown = main.locator('.rowx').filter({ hasText: `${engine} unknown` });
     await unknown.waitFor();
-    assert.equal(await unknown.locator('.chip').textContent(), 'status unavailable', `${engine} unknown says so on the machine screen`);
+    assert.equal(await unknown.locator('.chip').textContent(), 'Status unknown', `${engine} unknown says so on the machine screen`);
   }
   await page.screenshot({ path: `/tmp/helm-machine-unknown-${width}.png` });
   await main.getByPlaceholder('search Laptop').fill('exited');
@@ -726,8 +726,8 @@ for (const width of [1280, 390]) test(`an offline machine's last known work is n
   const main = page.locator('.main');
   const row = main.locator('.rowx').filter({ hasText: 'Was busy' });
   await row.waitFor();
-  assert.equal(await main.locator('div.section', { hasText: /^running here$/ }).count(), 0, 'no working section on a machine that cannot answer');
-  assert.equal(await row.locator('.chip').textContent(), 'was working');
+  assert.equal(await main.locator('div.section', { hasText: /^Running$/ }).count(), 0, 'no working section on a machine that cannot answer');
+  assert.equal(await row.locator('.chip').textContent(), 'Last status: working');
   await page.screenshot({ path: `/tmp/helm-offline-machine-${width}.png` });
 });
 
@@ -779,10 +779,10 @@ for (const width of [1280, 390]) for (const childState of ['error', 'blocked']) 
   if (width < 500) await page.locator('.session-bar').getByRole('button', { name: 'Back', exact: true }).click();
   await card.locator('.need-main').click();
   await details.locator('.delegation-branch.selected').waitFor();
-  await details.getByRole('button', { name: 'Open conversation' }).click();
+  await details.getByRole('button', { name: 'Open chat' }).click();
   await page.locator('.session-bar').getByText('Fix scenery', { exact: true }).waitFor();
   assert.equal(await details.count(), 0);
-  await page.locator('.session-bar').getByRole('button', { name: 'Back to parent thread', exact: true }).click();
+  await page.locator('.session-bar').getByRole('button', { name: 'Back to main chat', exact: true }).click();
   await page.locator('.session-bar').getByText('Game task', { exact: true }).waitFor();
 });
 
@@ -904,7 +904,7 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   await mount();
   const card = page.locator('.sidebar .need');
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).waitFor();
-  assert.equal(await card.locator('.need-go').innerText(), '1 child task failed');
+  assert.equal(await card.locator('.need-go').innerText(), '1 helper task failed');
   const dismissBounds = await card.getByRole('button', { name: 'Dismiss failure', exact: true }).boundingBox();
   const reviewBounds = await card.locator('.need-go').boundingBox();
   assert.ok(dismissBounds.y >= reviewBounds.y + reviewBounds.height, 'dismiss and snooze do not overlap the review action');

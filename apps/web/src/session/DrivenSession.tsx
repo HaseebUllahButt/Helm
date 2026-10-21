@@ -219,7 +219,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       setReviewNative(false);
     } else if (earlier && !loadingEarlier) void loadEarlier();
     else if (!earlier && !loadingEarlier) {
-      setError('The child task details are no longer available in this conversation.');
+      setError('Helper task details are no longer available in this chat.');
       setReviewNative(false);
     }
   }, [reviewNative, log, logError, earlier, loadingEarlier, loadEarlier, reviewChildren, reviewRequest]);
@@ -320,7 +320,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         try {
           next.push(await prepareAttachment(f));
         } catch (e: any) {
-          failures.push(`${f.name}: ${e?.message || 'it could not be read'}`);
+          failures.push(`${f.name}: ${e?.message || 'Helm cannot read the file.'}`);
         }
       }
       if (next.length) await setAttachments((current) => [...current, ...next]);
@@ -433,7 +433,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     try {
       const result: any = await client.rpc(env.id, method, { id: session.id, turnId: turn.id, ...params }, method === 'session.send-now' ? 70_000 : undefined);
       // Too late to take back: the agent has it. Say so rather than do nothing.
-      if (method === 'session.dequeue' && result?.found === false && !result.removed) setError('This message already went to the agent, so it cannot be taken back.');
+      if (method === 'session.dequeue' && result?.found === false && !result.removed) setError('The agent received this message. You cannot take it back.');
       return true;
     }
     catch (failure: any) { setError(failure.message); return false; }
@@ -616,12 +616,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     const ago = age && age !== 'just now' ? ` ${age}` : '';
     return s === 'blocked' ? <span className="chip blocked"><i />waiting{ago}</span>
       : s === 'starting' ? <span className="chip working"><i />starting</span>
-      : s === 'working' && compacting ? <span className="chip working"><i />compacting</span>
+      : s === 'working' && compacting ? <span className="chip working"><i />Summarizing chat</span>
       : s === 'working' ? <span className="chip working"><i />working{ago}{rate ? ` · ${rate} tok/s` : ''}</span>
       // Its own turn is over, but child tasks are not: the sidebar calls
       // this working, so the open chat must not look finished.
-      : childrenWorking ? <span className="chip working" title="Child tasks are still working"><i />working</span>
-      : s === 'unknown' ? <span className="chip exited" title="The machine could not tell whether this agent is working">status unavailable</span>
+      : childrenWorking ? <span className="chip working" title="Helpers are still working"><i />working</span>
+      : s === 'unknown' ? <span className="chip exited" title="The machine cannot report if this agent is working.">Status unknown</span>
       : null;
   };
 
@@ -647,7 +647,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // every device, until it is changed again.
   const [notice, setNotice] = useState('');
   const saveAsDefaults = () => call(async () => {
-    if (!options) throw new Error('Still reading this chat\'s settings - try again in a moment.');
+    if (!options) throw new Error('Helm is loading chat settings. Try again soon.');
     // What the model chip shows is what this chat runs with.
     const model = session.model || session.engineModel || options.default || '';
     const effort = session.effort || session.engineEffort || '';
@@ -706,7 +706,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   return (
     <>
       <div className="bar session-bar">
-        <button className="iconbtn back" aria-label={parentThread && onOpenSession ? 'Back to parent thread' : 'Back'}
+        <button className="iconbtn back" aria-label={parentThread && onOpenSession ? 'Back to main chat' : 'Back'}
           onClick={parentThread && onOpenSession ? openParent : onBack}><BackIcon /></button>
         <div className="titles">
           <div className="crumb">
@@ -717,7 +717,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             </>}
             {renaming ? (
               <input
-                className="crumb-edit" aria-label="Thread name" value={nameDraft} maxLength={200}
+                className="crumb-edit" aria-label="Chat name" value={nameDraft} maxLength={200}
                 autoFocus onFocus={(e) => e.currentTarget.select()}
                 onChange={(e) => setNameDraft(e.target.value)}
                 onBlur={() => finishRename(true)}
@@ -734,7 +734,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           </div>
           <span className="sub">
             <Route machine={env.name} quick={session.quick} />
-            {session.nativeCodex && <span> · Live CLI</span>}
+            {session.nativeCodex && <span> · Live agent program</span>}
             {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
               <span key={part}><span className="sep"> · </span>{part}</span>
             ))}
@@ -749,7 +749,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             )}
           </span>
         </div>
-        {cloning ? <span className="chip working" role="status"><i />cloning {session.clone!.percent}%</span>
+        {cloning ? <span className="chip working" role="status"><i />Copying project {session.clone!.percent}%</span>
           : settingUp ? <span className="chip working" role="status"><i />setting up</span> : chip(status)}
         {/* Git gets its own button with the count of changed files: it is
             the thing most often checked. The other opens agents and repeats.
@@ -761,14 +761,14 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         )}
         <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents"
           onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
-        {!session.brain && <button className="iconbtn" title="Canvas: notes and docs (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
+        {!session.brain && <button className="iconbtn" title="Open canvas: notes and documents (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
           onClick={() => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); }}><Icon name="canvas" size={17} /></button>}
         <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={() => { if (!browser.open) canvas.setOpen(false); browser.toggle(); }}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
         {session.brain && onSettings && (
-          <button className="iconbtn" title="what this brain is made of" aria-label="brain settings" onClick={onSettings}>
+          <button className="iconbtn" title="Open brain settings" aria-label="Open brain settings" onClick={onSettings}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
               <circle cx="12" cy="12" r="3.2" />
@@ -780,7 +780,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         {/* Only what the buttons beside it do not already reach. */}
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
-            <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
+            <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename chat</button>
             {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
             {!session.brain && onSendTask && !session.external && (
               <button disabled={!env.online} onClick={onSendTask}>Send to another machine</button>
@@ -789,9 +789,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             <button aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
               {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
             </button>
-            {parentThread && onOpenSession && <button onClick={openParent}>Open parent thread</button>}
-            <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
-            <button className="destructive" onClick={kill}>{session.nativeCodex ? 'Remove from Helm' : 'Delete thread'}</button>
+            {parentThread && onOpenSession && <button onClick={openParent}>Open main chat</button>}
+            <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
+            <button className="destructive" onClick={kill}>{session.nativeCodex ? 'Remove from Helm' : 'Delete chat'}</button>
           </div>
         )}
       </div>
@@ -815,13 +815,13 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           });
         } : undefined}
         onBranch={session.engine === 'claude' && onOpenSession ? setBranching : undefined}
-        empty={preparing ? '' : session.alive === false ? 'This conversation resumes with your next message.' : sentFirst ? 'Waiting for the agent…' : undefined}
+        empty={preparing ? '' : session.alive === false ? 'Your next message continues this chat.' : sentFirst ? 'Waiting for the agent…' : undefined}
       /></CanvasContext.Provider>
 
       {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
         <strong>Send not confirmed</strong>
         <p className="failed-send-text">{failed.body}</p>
-        <p>{failed.error} — check the conversation before retrying</p>
+        <p>{failed.error} — Check the chat before you try again.</p>
       </div>
         <span className="failed-send-actions">
           <button disabled={failed.retrying} onClick={() => void retryFailedSend(failed)}>{failed.retrying ? 'Sending…' : 'Retry send'}</button>
@@ -837,7 +837,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         danger={mode?.danger} compacting={compacting || undefined}
         foot={controls.chips} statusLine={account || limits.length > 0 || session.context ? <LimitsLine windows={limits} account={account} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
-        onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
+        onAttachUnsupported={() => setError(`${engine} cannot receive images in this chat.`)}
         commands={commands}
         referenceOptions={referenceOptions} references={references}
         onReference={(id) => { const item = referenceOptions.find((option) => option.id === id); if (item) setReferences((current) => [...current, item].slice(0, 3)); }}
@@ -852,7 +852,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         onRemoveQueued={(turn) => void queueAction(turn, 'session.dequeue')}
         onMoveQueued={moveQueued}
         onSendQueued={preparing ? undefined : (turn) => void queueAction(turn, 'session.send-now')}
-        pendingLabel={settingUp ? 'Once setup is done' : preparing ? 'Once the repo is in' : messageDelivery(session.engine).pending}
+        pendingLabel={settingUp ? 'After setup finishes' : preparing ? 'When the project is ready' : messageDelivery(session.engine).pending}
         queueBusy={queueBusy}
         history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
       >
@@ -871,12 +871,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} autoResume={session.autoResumeLimited}
             onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(e.message)); }} />
         )}
-        {childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Subagents waiting for you">
+        {childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Helpers need your answer">
           {childrenWaiting.map(({ session: child }) => <button key={child.id} disabled={!onOpenSession} onClick={() => onOpenSession?.(child)}>
             <Icon name="subagents" size={15} /><span><b>{child.title}</b><small>{child.ask?.kind === 'question' ? 'Answer question' : 'Review request'}{child.ask?.text ? ` · ${child.ask.text}` : ''}</small></span><Icon name="forward" size={14} />
           </button>)}
         </div>}
-        {log.pending.length > 1 && <div className="child-requests" role="group" aria-label="Other requests waiting for you">
+        {log.pending.length > 1 && <div className="child-requests" role="group" aria-label="Other requests need your answer">
           {log.pending.filter(request => request.requestId !== pending?.requestId).map(request => <button key={request.requestId} onClick={() => reviewRequest(request.requestId)}>
             <Icon name="forward" size={14} /><span>{request.title}</span>
           </button>)}
@@ -897,10 +897,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       {rewinding && <Sheet label="Edit from here" onClose={() => { if (!busy) setRewinding(null); }}>
         <div className="modal-title">Edit from here?</div>
         <div className="modal-body">
-          <p>This message and the replies after it will be removed. The message returns to your draft. The old history stays saved on the machine.</p>
-          {(live.get().trim() || attachments.length > 0) && <p>Your current draft will be replaced.</p>}
-          <label className="rewind-files"><input type="checkbox" checked={rewinding.restore} disabled={!rewinding.allowed || busy} onChange={event => setRewinding({ ...rewinding, restore: event.target.checked })} />Put files back as they were before this message</label>
-          <p>{rewinding.allowed ? 'This includes staged and new files. Ignored files stay.' : rewinding.reason}</p>
+          <p>Helm removes this message and later replies. It returns the message to your draft. The machine keeps the old history.</p>
+          {(live.get().trim() || attachments.length > 0) && <p>This replaces your draft.</p>}
+          <label className="rewind-files"><input type="checkbox" checked={rewinding.restore} disabled={!rewinding.allowed || busy} onChange={event => setRewinding({ ...rewinding, restore: event.target.checked })} />Restore files to before this message</label>
+          <p>{rewinding.allowed ? 'This includes new files and files selected for commit. Files that Git ignores stay unchanged.' : rewinding.reason}</p>
           {error && <p role="alert" className="error">{error}</p>}
         </div>
         <div className="modal-actions">
@@ -911,21 +911,21 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
               const result = await client.rpc<{ session: Session; draft: { text: string; attachments: { filename: string; mime: string; data: string }[]; references: string[] } }>(env.id, 'session.rewind', { id: session.id, turnId: choice.turn.id, restoreFiles: choice.restore }, 120_000);
               setDraft(splitNote(result.draft.text).text ?? result.draft.text);
               await setAttachments(result.draft.attachments.map(image => ({ name: image.filename || 'image', mime: image.mime, data: image.data, url: `data:${image.mime};base64,${image.data}` })));
-              setReferences(result.draft.references.map(id => ({ id, title: referenceOptions.find(option => option.id === id)?.title ?? 'Thread' })));
+              setReferences(result.draft.references.map(id => ({ id, title: referenceOptions.find(option => option.id === id)?.title ?? 'Chat' })));
               onSession(result.session);
               setRewinding(null);
               await refresh();
-              setNotice('Conversation rewound. Edit your draft and send when ready.');
+              setNotice('Chat restored. Edit your draft and send it.');
             });
-          }}>{busy ? 'Rewinding…' : 'Edit from here'}</button>
+          }}>{busy ? 'Restoring…' : 'Edit from here'}</button>
         </div>
       </Sheet>}
 
       {branching && (
         <Confirm
-          title="Branch from here?"
-          body="A new thread that starts as this conversation was before that message, so you can ask it differently. This one stays as it is, and so do your files - the branch sees them as they are now."
-          confirmLabel="Branch" busy={busy}
+          title="Start a chat from here?"
+          body="Start a chat from before this message. This chat and your files stay unchanged. The new chat uses your current files."
+          confirmLabel="Start chat" busy={busy}
           onCancel={() => setBranching(null)}
           onConfirm={async () => {
             const turn = branching;
@@ -952,7 +952,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       )}
       {ask === 'rename' && (
         <TextPrompt
-          title="Name this thread" value={session.title} submitLabel="Rename" busy={busy}
+          title="Name this chat" value={session.title} submitLabel="Rename" busy={busy}
           onCancel={() => setAsk(null)}
           onSubmit={async (v) => { setAsk(null); await rename(v); }}
         />

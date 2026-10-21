@@ -111,7 +111,7 @@ export async function groqDirect(v: DirectVoice, audio: Blob, mime: string): Pro
   form.append('prompt', v.prompt);
   const res = await fetch(v.endpoint, { method: 'POST', headers: { authorization: `Bearer ${v.key}` }, body: form, signal: AbortSignal.timeout(45_000) });
   const body = await res.json().catch(() => null);
-  if (!res.ok) throw Object.assign(new Error(body?.error?.message || `Groq answered ${res.status}`), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(body?.error?.message || `Groq returned error ${res.status}.`), { status: res.status });
   // Whisper answers silence with a stray "." - not something a person said.
   const text = String(body?.text ?? '').trim();
   return /[\p{L}\p{N}]/u.test(text) ? text : '';
@@ -163,8 +163,8 @@ export function useDictation({ transcribe, onText }: {
       // A refused microphone is a decision, not a fault, and it cannot be
       // re-asked from inside the page - so say which of the two it was.
       setError(e?.name === 'NotAllowedError'
-        ? 'microphone blocked for this site'
-        : e?.name === 'NotFoundError' ? 'no microphone here' : e?.message || 'could not open the microphone');
+        ? 'The browser blocks the microphone for this site.'
+        : e?.name === 'NotFoundError' ? 'This device has no microphone.' : e?.message || 'Helm cannot use the microphone.');
       return;
     }
     const mime = pickFormat();
@@ -173,7 +173,7 @@ export function useDictation({ transcribe, onText }: {
     // a short note hundreds of kilobytes to push up a phone link before Groq
     // even saw it. Whisper hears 16 kHz; 32 kbps loses nothing it uses.
     try { r = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), audioBitsPerSecond: 32_000 }); }
-    catch { stream.getTracks().forEach((t) => t.stop()); setError('this browser cannot record audio'); return; }
+    catch { stream.getTracks().forEach((t) => t.stop()); setError('This browser cannot record sound.'); return; }
 
     // Watch the loudness of the stream as it records. An AudioContext that
     // cannot be created (an old browser, an autoplay policy) simply leaves
@@ -213,19 +213,19 @@ export function useDictation({ transcribe, onText }: {
       cool.current = null;
       release();
       try {
-        if (!blob.size) { setState('idle'); setError('nothing was recorded'); return; }
+        if (!blob.size) { setState('idle'); setError('Helm recorded no sound.'); return; }
         if (measured && heard < SILENCE_RMS) {
           setState('idle');
-          setError('nothing was said — is the microphone muted?');
+          setError('Helm heard no speech. Check that the microphone is on.');
           return;
         }
-        if (blob.size > MAX_AUDIO_BYTES) { setState('idle'); setError('that recording is too long'); return; }
+        if (blob.size > MAX_AUDIO_BYTES) { setState('idle'); setError('The recording is too long.'); return; }
         setState('working');
         try {
           const text = (await transcribe(blob, type)).trim();
-          if (text) onText(text); else setError('nothing was said');
+          if (text) onText(text); else setError('Helm heard no speech.');
         } catch (e: any) {
-          setError(e?.message || 'could not transcribe that');
+          setError(e?.message || 'Helm cannot convert the speech to text.');
         } finally { setState('idle'); }
       } finally { stopTiming?.(); }
     };

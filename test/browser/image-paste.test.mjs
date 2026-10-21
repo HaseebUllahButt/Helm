@@ -74,7 +74,7 @@ for(const mode of ['Native','Driven']){
     await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===9);
     assert.deepEqual(await p.locator('.attach-preview img').evaluateAll(images=>images.map(image=>image.src)),sources);
     assert.match(await p.locator('textarea').inputValue(),/Image #9/);
-    await p.getByRole('button',{name:'remove Image #2',exact:true}).click();
+    await p.getByRole('button',{name:'Remove Image #2',exact:true}).click();
     await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===8);
     await reload(p,mode);
     await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===8);
@@ -168,7 +168,7 @@ for(const mode of ['Native','Driven'])test(`${mode} documents dropped anywhere o
   // A second picture is still Image #2: files do not take picture numbers.
   await paste(p);
   await p.waitForFunction(()=>document.querySelector('textarea').value.includes('[Image #2]'));
-  await p.getByRole('button',{name:'remove Image #1',exact:true}).click();
+  await p.getByRole('button',{name:'Remove Image #1',exact:true}).click();
   await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===2);
   assert.match(await p.locator('textarea').inputValue(),/^\[File: notes\.pdf\] \[Image #1\]/);
   await p.getByRole('button',{name:'send',exact:true}).click();
@@ -182,7 +182,7 @@ test('removing a file chip takes its label out of the draft',async t=>{
   await p.locator('input[type=file]').setInputFiles({name:'data.csv',mimeType:'text/csv',buffer:Buffer.from('a,b\n1,2\n')});
   await p.locator('.attach-preview.file').waitFor();
   assert.equal(await p.locator('textarea').inputValue(),'[File: data.csv] ');
-  await p.getByRole('button',{name:'remove data.csv',exact:true}).click();
+  await p.getByRole('button',{name:'Remove data.csv',exact:true}).click();
   await p.waitForFunction(()=>!document.querySelector('.attach-preview'));
   assert.equal(await p.locator('textarea').inputValue(),'');
 });

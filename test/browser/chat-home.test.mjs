@@ -152,7 +152,7 @@ test('double-clicking the title renames the thread; Escape leaves it alone',asyn
   await page.evaluate(()=>window.open('long'));
   const bar=page.locator('.session-bar');
   await bar.locator('h1').dblclick();
-  const box=bar.getByRole('textbox',{name:'Thread name'});
+  const box=bar.getByRole('textbox',{name:'Chat name'});
   await box.fill('Something else');
   await box.press('Escape');
   await bar.locator('h1').waitFor();
@@ -162,7 +162,7 @@ test('double-clicking the title renames the thread; Escape leaves it alone',asyn
   await box.press('Enter');
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.title'&&c.params.title==='Calmer title'&&c.params.id==='long'));
   await bar.getByRole('button',{name:'more',exact:true}).click();
-  await page.getByRole('button',{name:'Rename thread'}).waitFor();
+  await page.getByRole('button',{name:'Rename chat'}).waitFor();
 });
 
 for (const width of [1280,390]) test(`a machine's home asks what to build, lists what runs here and what was recent, and files projects by last activity, at ${width}px`,async t=>{
@@ -178,7 +178,7 @@ for (const width of [1280,390]) test(`a machine's home asks what to build, lists
   await main.getByRole('button',{name:'Send a project',exact:true}).waitFor();
   await main.getByRole('button',{name:/Connectors & skills/}).waitFor();
 
-  const running=main.locator('div.section',{hasText:/^running here$/}).locator('xpath=following-sibling::div[1]');
+  const running=main.locator('div.section',{hasText:/^Running$/}).locator('xpath=following-sibling::div[1]');
   assert.deepEqual((await running.locator('.rt').allInnerTexts()).sort(),['Fix the sidebar scroll','Port the importer']);
   const recent=main.locator('div.section',{hasText:/^recent$/}).locator('xpath=following-sibling::div[1]');
   assert.equal(await recent.locator('.rowx').count(),5,'five recent chats');

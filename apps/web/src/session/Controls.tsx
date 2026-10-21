@@ -105,16 +105,16 @@ export function Controls({ options, session, busy, pending, onPick, onFavs, onDe
           if (!value) return null;
           const title = kind === 'effort' ? 'thinking' : kind === 'mode' ? 'permissions' : kind;
           const label = kind === 'model' ? shortModel(value, options?.labels, session.engine) : value;
-          return <span key={`reported:${kind}`} className="chip-pick" title={`${title}: ${value} (reported by the CLI)`}><span className="chip-label">{label}</span></span>;
+          return <span key={`reported:${kind}`} className="chip-pick" title={`${title}: ${value} (from the agent program)`}><span className="chip-label">{label}</span></span>;
         })}
-        {session.permissionControl === 'none' && <span className="chip-pick" title="This CLI has no built-in permission modes. Tool approvals belong to its extensions."><i className="cg mode"><Icon name="shield" size={13} /></i><span className="chip-label">extensions</span></span>}
+        {session.permissionControl === 'none' && <span className="chip-pick" title="This agent program uses extensions (added tools) to ask for approval."><i className="cg mode"><Icon name="shield" size={13} /></i><span className="chip-label">extensions</span></span>}
         {(options?.nativeControls ?? []).filter(kind => !groups.some(g => g.kind === kind)).map(kind => {
           const title = kind === 'effort' ? 'thinking' : kind === 'mode' ? 'permissions' : kind;
           const glyph: IconName = kind === 'model' ? 'model' : kind === 'effort' ? 'effort' : kind === 'mode' ? 'shield' : kind === 'speed' ? 'bolt' : 'terminal';
           const value = kind === 'model' ? session.engineModel : kind === 'effort' ? session.engineEffort : kind === 'mode' ? session.mode : null;
           const label = kind === 'model' && value ? shortModel(value, options?.labels, session.engine) : value || title;
           return <button type="button" key={`native:${kind}`} className="chip-pick" disabled={busy}
-            title={`Open ${title} in the CLI`} aria-label={`${title}: ${value ? `${label}; ` : ''}open CLI picker`}
+            title={`Open ${title} in the agent program`} aria-label={`Open ${title} in the agent program${value ? `: ${label}` : ''}`}
             onClick={() => onNativeControl?.(kind)}><i className={`cg ${kind}`}><Icon name={glyph} size={13} /></i><span className="chip-label">{label}</span></button>;
         })}
       </span>
@@ -309,7 +309,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
         kind: 'effort',
         title: 'thinking',
         glyph: 'effort',
-        note: 'How long it reasons before answering. More is slower and costs more.',
+        note: 'Set how long the model thinks before it answers. More thinking takes longer and costs more.',
         choices: levels.map((e) => ({ id: e, label: e === 'none' ? 'off' : e })),
         current: now?.effort ?? '',
         currentLabel: now?.effort || 'think',
@@ -325,8 +325,8 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
         title: 'speed',
         glyph: 'bolt',
         choices: [
-          { id: '', label: 'Normal', hint: 'the usual speed' },
-          ...speeds.map((s) => ({ id: s, label: fast(s), hint: 'sooner, costs more' })),
+          { id: '', label: 'Normal', hint: 'Standard speed' },
+          ...speeds.map((s) => ({ id: s, label: fast(s), hint: 'Faster replies cost more.' })),
         ],
         current: now?.speed ?? '',
         currentLabel: now?.speed ? fast(now.speed) : 'normal',
@@ -348,8 +348,8 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       title: 'thinking',
       glyph: 'effort',
       note: session.nativeChat && session.engine === 'claude'
-        ? "How long it reasons before answering. Claude also saves this as the model's default for future chats."
-        : 'How long it reasons before answering. More is slower and costs more.',
+        ? "Set how long Claude thinks before it answers. Claude saves this model setting for new chats."
+        : 'Set how long the model thinks before it answers. More thinking takes longer and costs more.',
       choices: efforts.map((e) => ({ id: e, label: e })),
       current: effort,
       currentLabel: effort || 'think',
@@ -385,8 +385,8 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       title: 'speed',
       glyph: 'bolt',
       choices: [
-        { id: '', label: 'Normal', hint: 'the usual tier' },
-        ...speeds.map((s) => ({ id: s, label: cap(s), hint: 'sooner, more plan usage' })),
+        { id: '', label: 'Normal', hint: 'Standard speed' },
+        ...speeds.map((s) => ({ id: s, label: cap(s), hint: 'Faster replies use more of your plan.' })),
       ],
       current: session.speed || '',
       currentLabel: session.speed ? cap(session.speed) : 'normal',
@@ -594,7 +594,7 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
           <span className="chev">›</span>
         </button>
       ))}
-      {q && !favorites.length && !main.length && !rest.length && <div className="modesheet-note">no matches</div>}
+      {q && !favorites.length && !main.length && !rest.length && <div className="modesheet-note">Nothing matches.</div>}
       {saveError && <div className="error" role="alert">{saveError}</div>}
       {footer}
     </div>

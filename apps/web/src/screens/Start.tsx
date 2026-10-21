@@ -135,19 +135,19 @@ export function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <div className="titles"><h1>{quick ? 'Quick chat' : 'New session'}</h1><span className="sub"><Route machine={env.name} folder={cwd} quick={quick} /></span></div>
+        <div className="titles"><h1>{quick ? 'Quick chat' : 'New chat'}</h1><span className="sub"><Route machine={env.name} folder={cwd} quick={quick} /></span></div>
         {(accounts?.length ?? 0) > 0 && (
           <button
-            className="iconbtn" title="choose which agents show" aria-label="choose which agents show"
+            className="iconbtn" title="Select agents to show" aria-label="Select agents to show"
             onClick={() => setChoosing(true)}
           ><Sliders /></button>
         )}
       </div>
       <div className="scroll"><div className="pad column">
         <div className="section">agent</div>
-        {accounts === null && <div className="empty quiet">{env.online ? 'looking for agents…' : `${env.name} cannot be reached right now`}</div>}
+        {accounts === null && <div className="empty quiet">{env.online ? 'Finding agents…' : `Helm cannot reach ${env.name}.`}</div>}
         {shown?.length === 0 && (accounts?.length ?? 0) > 0 && (
-          <div className="empty quiet">all agents are hidden — tap the sliders above</div>
+          <div className="empty quiet">All agents are hidden. Select the controls above to show agents.</div>
         )}
         <div className="rows">
           {shown?.map((a) => {
@@ -170,13 +170,13 @@ export function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
         </div>
         {account && onMachine.current && account.key !== preferred && (
           <button className="linkbtn makedefault" onClick={() => { setPreferred(account.key); savePicker({ agent: account.key }); }}>
-            Make {engineOf(account.engine).label} · {accountName(account)} the default on {env.name}
+            Set {engineOf(account.engine).label} · {accountName(account)} the default on {env.name}
           </button>
         )}
         {accounts?.length === 0 && (
           <div className="empty quiet">
-            no agents on {env.name}
-            <div className="note" style={{ marginTop: 6 }}>install an agent CLI there, then run <code>helm profiles --refresh</code></div>
+            {env.name} has no agents.
+            <div className="note" style={{ marginTop: 6 }}>Install an agent program there. Run <code>helm profiles --refresh</code></div>
           </div>
         )}
 
@@ -197,10 +197,10 @@ export function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
         </div>
       )}
       {choosing && (
-        <Sheet onClose={() => setChoosing(false)} label="Choose which agents show">
+        <Sheet onClose={() => setChoosing(false)} label="Select agents to show">
           <div className="modal-title">Agents on this screen</div>
           <div className="modal-body">
-            Checked agents show on every device. Hidden ones stay installed.
+            Selected agents show on every device. Hidden agents stay installed.
           </div>
           <div className="sheetlist"><div className="rows">
             {(accounts ?? []).map((a) => {

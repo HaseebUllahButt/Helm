@@ -116,14 +116,14 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
   const [reload, setReload] = useState(0);
   useEffect(() => {
     setTree(null);
-    if (!cwd) { setError('This quick chat has no folder yet.'); return; }
+    if (!cwd) { setError('This chat has no folder.'); return; }
     let live = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
     setError('');
     client.rpc<Tree>(env.id, 'git.files', { cwd }, 30_000)
       .then((t) => {
         if (!live) return;
-        if (!Array.isArray(t?.files)) { setError('This machine cannot list files yet. Update Helm on it.'); return; }
+        if (!Array.isArray(t?.files)) { setError('Update Helm on this machine to show files.'); return; }
         setTree(t);
       })
       .catch((e: any) => {
@@ -131,7 +131,7 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
         if (/not connected|disconnected/i.test(e?.message ?? '')) {
           setError('Waiting for this machine…');
           retry = setTimeout(() => setReload((n) => n + 1), WATCH_MS);
-        } else setError(/not a git/i.test(e?.message ?? '') ? 'The canvas works in Git projects. This folder is not one.' : e?.message || 'Could not list the files.');
+        } else setError(/not a git/i.test(e?.message ?? '') ? 'Open a Git project to use the canvas.' : e?.message || 'Helm cannot list the files.');
       });
     return () => { live = false; clearTimeout(retry); };
   }, [client, env.id, cwd, reload]);
@@ -151,7 +151,7 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
   return <SideDock label="Canvas" widthKey={WIDTH_KEY} className="canvas" share={0.5} onClose={onClose}>
     {visual ? <CanvasPage key={visual.ref} visual={visual} read={read} onBack={() => onVisual?.(null)} onClose={onClose} />
       : shown === undefined
-      ? <div className="canvas-pad"><CanvasHead title="Not in this project" sub={path ?? ''} onBack={() => onPath(null)} onClose={onClose} /><div className="git-state">This file is outside the chat’s project, so the canvas cannot open it.</div></div>
+      ? <div className="canvas-pad"><CanvasHead title="Not in this project" sub={path ?? ''} onBack={() => onPath(null)} onClose={onClose} /><div className="git-state">The canvas cannot open files outside this chat’s project.</div></div>
       : shown
         ? <CanvasFile key={shown} client={client} env={env} cwd={cwd} path={shown} hidden={!!tree?.secret.includes(shown)} onBack={() => { onPath(null); setReload((n) => n + 1); }} onClose={onClose} />
         : <CanvasPicker env={env} cwd={cwd} tree={tree} error={error} changed={changed} client={client}
@@ -229,7 +229,7 @@ function CanvasPicker({ client, env, cwd, tree, error, changed, onOpen, onCreate
       const r = await client.rpc<Saved>(env.id, 'git.write', { cwd, path: rel, text: '', base: null }, 30_000);
       if (r.exists) { setNaming(null); onOpen(rel); return; }
       setNaming(null); onCreated(rel);
-    } catch (e: any) { setProblem(/unknown|not supported/i.test(e?.message ?? '') ? 'Update Helm on this machine to make files here.' : e?.message || 'Could not make the file.'); }
+    } catch (e: any) { setProblem(/unknown|not supported/i.test(e?.message ?? '') ? 'Update Helm on this machine to create files here.' : e?.message || 'Helm cannot create the file.'); }
     finally { setBusy(false); }
   };
 
@@ -245,7 +245,7 @@ function CanvasPicker({ client, env, cwd, tree, error, changed, onOpen, onCreate
 
   return <div className="canvas-pad">
     <CanvasHead title="Canvas" sub={tree ? `${env.name} · ${tree.root}` : env.name} onClose={onClose}>
-      {tree && <button className="files-chip" onClick={() => setNaming(naming === null ? (tree.start ? `${tree.start}/` : '') : null)}><Icon name="plus" size={13} />New</button>}
+      {tree && <button className="files-chip" onClick={() => setNaming(naming === null ? (tree.start ? `${tree.start}/` : '') : null)}><Icon name="plus" size={13} />Create file</button>}
     </CanvasHead>
     {error ? <div className="git-state bad" role="status">{error}</div>
       : !tree ? <div className="git-state" role="status">Listing files…</div>
@@ -253,7 +253,7 @@ function CanvasPicker({ client, env, cwd, tree, error, changed, onOpen, onCreate
         {naming !== null && <form className="canvas-new" onSubmit={(e) => { e.preventDefault(); void create(naming); }}>
           <input autoFocus aria-label="New file name" placeholder="notes/plan.md" value={naming} disabled={busy}
             onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setNaming(null); } }} />
-          <button type="submit" className="files-chip" disabled={busy || !naming.trim()}>{busy ? 'Making…' : 'Make'}</button>
+          <button type="submit" className="files-chip" disabled={busy || !naming.trim()}>{busy ? 'Creating…' : 'Create'}</button>
         </form>}
         {problem && <div className="git-state bad" role="alert">{problem}</div>}
         <label className="files-search">
@@ -263,9 +263,9 @@ function CanvasPicker({ client, env, cwd, tree, error, changed, onOpen, onCreate
         {found ? <div className="files-list">
           {found.length ? found.map(row) : <div className="git-state">No file matches “{query.trim()}”.</div>}
         </div> : <>
-          <div className="canvas-label">Notes and docs</div>
+          <div className="canvas-label">Notes and documents</div>
           <div className="files-list">
-            {docs.length ? docs.slice(0, LIMIT).map(row) : <div className="git-state">No markdown files here yet. Make one with New.</div>}
+            {docs.length ? docs.slice(0, LIMIT).map(row) : <div className="git-state">This folder has no Markdown text files. Select New to create one.</div>}
           </div>
           {docs.length > LIMIT && <div className="note git-tail">{(docs.length - LIMIT).toLocaleString()} more. Search to find them.</div>}
         </>}
@@ -313,8 +313,8 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
       })
       .catch((e: any) => {
         if (!alive || at !== revision.current) return;
-        if (drafts.has(dkey)) setProblem(e?.message || 'Could not open this file.');
-        else setFile({ error: e?.message || 'Could not open this file.' });
+        if (drafts.has(dkey)) setProblem(e?.message || 'Helm cannot open this file.');
+        else setFile({ error: e?.message || 'Helm cannot open this file.' });
       });
     return () => { alive = false; };
   }, [client, env.id, cwd, path, hidden]);
@@ -367,7 +367,7 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
       else { drafts.delete(dkey); setSavedAt(Date.now()); }
       setTheirs(null);
     } catch (e: any) {
-      setProblem(/unknown|not supported/i.test(e?.message ?? '') ? 'Update Helm on this machine to save from the canvas.' : e?.message || 'Could not save.');
+      setProblem(/unknown|not supported/i.test(e?.message ?? '') ? 'Update Helm on this machine to save files here.' : e?.message || 'Helm cannot save the file.');
     } finally { savingNow.current = false; revision.current++; setSaving(false); }
   };
   useEffect(() => { if (!savedAt) return; const t = setTimeout(() => setSavedAt(0), 1600); return () => clearTimeout(t); }, [savedAt]);
@@ -422,14 +422,14 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
         </>}
       </div>}
       {theirs && dirty && <div className="canvas-clash" role="alert">
-        <span>The file changed on the machine since you started editing.</span>
+        <span>The file changed on the machine after you started editing.</span>
         <button className="files-chip" onClick={() => { setFile(theirs); setDraft(null); setTheirs(null); }}>Use the new file</button>
         <button className="files-chip" disabled={saving} onClick={() => void save(theirs)}>Save mine over it</button>
       </div>}
     </div>
     {file === 'loading' ? <div className="git-state" role="status">Opening…</div>
       : 'error' in file ? <div className="git-state bad" role="status">{file.error}</div>
-      : file.hidden ? <div className="git-state">Hidden: this file may hold passwords or keys.</div>
+      : file.hidden ? <div className="git-state">Helm hides files that can contain passwords or keys.</div>
       : file.binary ? <div className="git-state">This is not a text file.</div>
       : editing && canEdit
         ? <textarea ref={area} className="canvas-edit" spellCheck={md} value={text} placeholder="Start writing…" aria-label={`Edit ${base(path)}`}
@@ -445,7 +445,7 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
             }} />
         : <div className="canvas-body" onDoubleClick={md && canEdit ? startEdit : undefined}>
             {md ? <Markdown text={text} className="canvas-md" /> : <FileView text={text} path={path} wrap />}
-            {loaded?.truncated && <div className="git-state">The rest is too long to show here, so this file cannot be edited from the canvas.</div>}
+            {loaded?.truncated && <div className="git-state">This file is too large to edit in the canvas. Helm shows only part of it.</div>}
           </div>}
   </div>;
 }

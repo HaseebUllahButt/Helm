@@ -60,7 +60,7 @@ async function pageFor(t, show) {
 }
 
 test('usage recovery opt-in sends a preference and keeps manual resume available', { timeout: 15000 }, async t => {
-  const page = await pageFor(t, 'showRecovery'); await page.getByLabel('Continue automatically at reset', { exact: true }).check();
+  const page = await pageFor(t, 'showRecovery'); await page.getByLabel('Continue when the limit resets', { exact: true }).check();
   assert.equal(await page.evaluate(() => window.calls.at(-1).params.on), true);
   await page.getByRole('button', { name: 'Resume', exact: true }).click(); assert.equal(await page.evaluate(() => window.retried), true);
 });
@@ -79,16 +79,16 @@ test('PR actions send comments, head-bound reviews and an explicitly confirmed m
 });
 
 test('publishing sends selected files and complete PR metadata', { timeout: 15000 }, async t => {
-  const page = await pageFor(t, 'showPRs'); await page.locator('details.pull-requests > summary').click(); await page.getByRole('button', { name: 'Commit / push / create PR', exact: true }).click();
+  const page = await pageFor(t, 'showPRs'); await page.locator('details.pull-requests > summary').click(); await page.getByRole('button', { name: 'Commit / push / create pull request', exact: true }).click();
   await page.getByLabel('Commit message', { exact: true }).fill('Add feature'); await page.getByLabel('App.tsx', { exact: true }).check();
-  await page.getByLabel('PR title', { exact: true }).fill('Feature PR'); await page.getByLabel('Description', { exact: true }).fill('Feature details');
-  await page.getByRole('button', { name: 'Commit, push and create PR', exact: true }).click(); await page.waitForFunction(() => window.calls.some(c => c.method === 'git.publish'));
+  await page.getByLabel('Pull request title', { exact: true }).fill('Feature PR'); await page.getByLabel('Description', { exact: true }).fill('Feature details');
+  await page.getByRole('button', { name: 'Commit, push and create pull request', exact: true }).click(); await page.waitForFunction(() => window.calls.some(c => c.method === 'git.publish'));
   const params = await page.evaluate(() => window.calls.find(c => c.method === 'git.publish').params); assert.deepEqual(params.paths, ['App.tsx']); assert.equal(params.action, 'publish'); assert.equal(params.title, 'Feature PR');
 });
 
 test('agent wake and notification controls toggle independently', { timeout: 15000 }, async t => {
   const page = await pageFor(t, 'showPipeline'); await page.locator('.pipeline > details.fold > summary', { hasText: 'Settings' }).click(); await page.getByRole('switch', { name: 'Wake agent on GitHub changes', exact: true }).click();
-  await page.waitForFunction(() => window.agentEnabled); assert.equal(await page.getByRole('switch', { name: 'Notify this thread about CI / CD', exact: true }).getAttribute('aria-checked'), 'false');
-  await page.getByRole('switch', { name: 'Notify this thread about CI / CD', exact: true }).click(); await page.waitForFunction(() => window.notifyEnabled);
+  await page.waitForFunction(() => window.agentEnabled); assert.equal(await page.getByRole('switch', { name: 'Notify this chat about build checks', exact: true }).getAttribute('aria-checked'), 'false');
+  await page.getByRole('switch', { name: 'Notify this chat about build checks', exact: true }).click(); await page.waitForFunction(() => window.notifyEnabled);
   assert.equal(await page.getByRole('switch', { name: 'Wake agent on GitHub changes', exact: true }).getAttribute('aria-checked'), 'true');
 });

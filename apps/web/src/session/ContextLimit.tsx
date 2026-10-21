@@ -71,13 +71,13 @@ export function ContextLimit({ client, env, machines, session }: {
       const offline = results.filter((r) => r.state === 'offline').length;
       const failed = results.filter((r) => r.state === 'failed').map((r) => r.m.name);
       const warn = [
-        offline ? `${offline} offline - they'll keep their old limit` : '',
-        failed.length ? `Couldn't reach ${failed.join(', ')}` : '',
+        offline ? `${offline} offline. Their limits stay the same` : '',
+        failed.length ? `Helm cannot reach ${failed.join(', ')}` : '',
       ].filter(Boolean).join('. ');
       setNote({ ok: `Saved on ${saved} machine${saved === 1 ? '' : 's'}`, warn: warn || undefined });
     } catch (e: any) {
       setChosen(undefined);
-      setNote({ ok: '', warn: e?.message || "Couldn't save that" });
+      setNote({ ok: '', warn: e?.message || "Helm cannot save this limit." });
     } finally { setBusy(false); }
   };
 
@@ -91,14 +91,14 @@ export function ContextLimit({ client, env, machines, session }: {
     <span className="ctx-slot" ref={slot}>
       <ContextMeter used={ctx.used} window={ctx.window} compacted={ctx.compacted} open={open} onPress={() => { setDown((slot.current?.getBoundingClientRect().top ?? 999) < 360); setOpen((v) => !v); setNote(null); }} />
       {open && (
-        <div className={`menu ctx-menu${down ? ' down' : ''}`} role="menu" aria-label="Compact at">
-          <div className="ctx-menu-title">Compact at</div>
+        <div className={`menu ctx-menu${down ? ' down' : ''}`} role="menu" aria-label="Summarize at">
+          <div className="ctx-menu-title">Summarize at</div>
           {row(full ? `Full (${size(full)})` : 'Full', null, now === null)}
           {sizes.map((n) => row(size(n), n, now === n))}
           <div className="ctx-menu-note" role="status">
             {note?.ok && <span>{note.ok}</span>}
             {note?.warn && <span className="warn">{note.warn}</span>}
-            {!note && <span>For every chat on this account, on every machine.</span>}
+            {!note && <span>This limit applies to every chat on this account, on every machine.</span>}
           </div>
         </div>
       )}

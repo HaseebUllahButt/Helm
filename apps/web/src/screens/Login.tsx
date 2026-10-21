@@ -144,8 +144,8 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!endpoint) { setError('paste the link printed by `helm link`'); return; }
-    if (!secret) { setError('enter the pairing code'); return; }
+    if (!endpoint) { setError('Paste the link from `helm link`.'); return; }
+    if (!secret) { setError('Enter the pairing code.'); return; }
     await connect(endpoint, secret);
   };
 
@@ -169,7 +169,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
         <div className="auth-brand">
           <img src="/icon.svg" alt="" />
           <h1>helm</h1>
-          <p>every coding agent, one place</p>
+          <p>All coding agents in one place</p>
         </div>
 
         <form onSubmit={submit}>
@@ -204,15 +204,15 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
 
           {isCleartext(endpoint) && <div className="banner warn">{CLEARTEXT_NOTE}</div>}
           <button className="primary" disabled={busy || !endpoint || !secret}>
-            {busy ? 'pairing…' : 'pair this device'}
+            {busy ? 'pairing…' : 'Pair this device'}
           </button>
           {error && <div className="error">{error}</div>}
           <p className="note" style={{ marginTop: 14, textAlign: 'center' }}>
-            Get a link from Devices on a paired device, or run <code>helm link</code> on a joined computer.
+            Open Devices on a paired device to get a link. Or run <code>helm link</code> on a joined computer.
           </p>
           {!isLocal && !/Android|iPhone|iPad|iPod/.test(navigator.userAgent) && (
             <p className="note" style={{ textAlign: 'center' }}>
-              Already ran <code>helm join</code> here?{' '}
+              Did you run <code>helm join</code> here?{' '}
               <a href="http://127.0.0.1:8787/" target="_self">Open this computer's Helm</a>.
             </p>
           )}
@@ -246,24 +246,24 @@ export function AddMachine({ client }: { client: Client }) {
       <div className="row">
         <span className="grow">
           <span className="rt">Add a computer</span>
-          <span className="rm">install Helm there, then run the join command</span>
+          <span className="rm">Install Helm there. Run the join command.</span>
         </span>
       </div>
       <select aria-label="Computer kind" value={role} onChange={(e) => { setRole(e.target.value as typeof role); setInvite(null); }}>
         <option value="pc">Laptop or desktop</option>
-        <option value="vm">Always-on VM</option>
-        <option value="nas">NAS</option>
+        <option value="vm">Server (virtual machine)</option>
+        <option value="nas">File storage</option>
       </select>
       <button className="row" disabled={busy} onClick={makeInvite}>
-        <span className="grow"><span className="rt">{busy ? 'making a command…' : 'Make join command'}</span></span>
+        <span className="grow"><span className="rt">{busy ? 'making a command…' : 'Create join command'}</span></span>
       </button>
-      {invite && (now >= invite.expiresAt ? <p className="note">This invite expired. Make a new command.</p> : <>
+      {invite && (now >= invite.expiresAt ? <p className="note">This invite expired. Create a new command.</p> : <>
         <pre className="snippet">{command}</pre>
         <button className="row" onClick={async () => {
           try { await navigator.clipboard.writeText(command); setCopied(true); }
-          catch { setError('could not copy - select the command instead'); }
+          catch { setError('Helm cannot copy the command. Select the command to copy it.'); }
         }}><span className="grow"><span className="rt">{copied ? 'copied' : 'Copy join command'}</span></span></button>
-        <p className="note">Single use. It ends in 10 minutes.</p>
+        <p className="note">Use this command once. It expires in 10 minutes.</p>
       </>)}
       {error && <div className="error">{error}</div>}
     </>
