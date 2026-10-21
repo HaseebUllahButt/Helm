@@ -3270,11 +3270,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   .turn.user { padding-bottom: 22px; }
   .turn.user .bubble { position: relative; }
   .turn.user:not(.queued) .bubble-meta { position: absolute; top: 100%; right: 4px; margin: 3px 0 0; white-space: nowrap; }
-  /* Copy and cost of an older reply hang in the gap below it, on the left,
-     away from the next message's bubble on the right: a row of their own
-     under every reply cost the chat a line each. The last reply keeps its row. */
+  /* Copy and cost of a reply hang in the gap below it, on the left, away
+     from the owner's next bubble on the right: a row of their own under
+     every reply cost the chat a line each. Anything else next - another
+     reply, a helper note, the end of the chat - starts on the left too,
+     so there the row stays in the flow. */
   .turn.assistant { position: relative; }
-  .turn.assistant:not(:nth-last-child(1 of .turn.assistant)) > .final-meta { position: absolute; top: calc(100% - 8px); left: 4px; }
+  .turn.assistant:has(+ .turn.user) > .final-meta { position: absolute; top: calc(100% - 8px); left: 4px; }
 }
 /* A touch screen has no hover to reveal the time, so it stays in the bubble:
    at the end of the last line when it fits, the way messaging apps do, so a
