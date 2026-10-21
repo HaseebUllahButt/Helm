@@ -102,7 +102,7 @@ export function Notifications({ client }: { client: Client }) {
     <>
       {state === 'blocked' ? (
         <p className="note setup-open">
-          Allow notifications in the browser settings. Reload the page.
+          The browser blocks notifications. Allow them in the browser settings, then reload the page.
         </p>
       ) : (
         <button className="row" disabled={busy} onClick={state === 'on' ? disable : enable}>

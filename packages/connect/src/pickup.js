@@ -174,7 +174,7 @@ export function gitState(cwd, chats, { git = run, since = null } = {}) {
 
 // A machine its snapshot saw this recently is up but slow, not asleep.
 const LATELY_MS = 2 * 60_000;
-const silence = (at, now) => (now - at < LATELY_MS ? `not answering just now, seen ${ago(at, now)}` : `offline, last seen ${ago(at, now)}`);
+const silence = (at, now) => (now - at < LATELY_MS ? `not answering, last seen ${ago(at, now)}` : `offline, last seen ${ago(at, now)}`);
 
 /** Where a chat is: this machine, another one now, or one seen a while ago. */
 const where = ({ machine, offlineAt }, now) => (offlineAt ? `${machine} (${silence(offlineAt, now)})` : machine);
@@ -182,24 +182,24 @@ const where = ({ machine, offlineAt }, now) => (offlineAt ? `${machine} (${silen
 /** The page an agent reads. Short on purpose: it lands in its context. */
 export function renderPickup({ chats, running, git, unchecked = [], now = Date.now() }) {
   const out = [];
-  if (!chats.length) out.push('No earlier chat in this project. `helm pickup <chat-id>` reads a named one.');
+  if (!chats.length) out.push('This project has no earlier chats. Run `helm pickup <chat-id>` to read a specific chat.');
   for (const c of chats) {
     const { session: s, summary } = c;
     out.push(`Chat ${shortId(s.id)} on ${where(c, now)}: ${s.title || 'untitled'} (${s.engine}, ${s.status}, ${ago(s.updatedAt, now)}) in ${s.cwd}`);
     if (!summary) {
       // An offline machine's chat: only the line its digest saved.
       if (s.last) out.push(`  Last seen doing: ${cap(flat(s.last), 300)}`);
-      out.push(`  Its replies are on ${c.machine}; \`helm pickup ${shortId(s.id)}\` reads them when it is back.`);
+      out.push(`  Read replies with \`helm pickup ${shortId(s.id)}\` when ${c.machine} is online.`);
       out.push('');
       continue;
     }
     if (summary.asked) out.push(`  Asked: ${summary.asked}`);
     if (summary.lastAsked) out.push(`  Last asked: ${summary.lastAsked}`);
-    if (summary.ended) out.push(`  Its last turn ended: ${summary.ended}.`);
+    if (summary.ended) out.push(`  Its last reply ended: ${summary.ended}.`);
     if (summary.left) {
       out.push(summary.found ? '  Its final reply says what is left:' : '  The end of its final reply:');
       for (const l of summary.left.split('\n')) out.push(`    ${l}`);
-    } else out.push(summary.unread ? `  Could not read it from ${c.machine} just now.` : '  It never replied.');
+    } else out.push(summary.unread ? `  Helm did not read this chat from ${c.machine}.` : '  It never replied.');
     out.push('');
   }
   if (git.log) {
@@ -207,18 +207,18 @@ export function renderPickup({ chats, running, git, unchecked = [], now = Date.n
     for (const l of git.log) out.push(`  ${l}`);
   }
   for (const f of git.folders) {
-    const at = f.own ? `This checkout (${f.branch})` : `${f.dir} (${f.branch})`;
+    const at = f.own ? `This project copy (${f.branch})` : `${f.dir} (${f.branch})`;
     if (f.unmerged.length) {
       out.push(`${at} has commits not in this one:`);
       for (const l of f.unmerged) out.push(`  ${l}`);
     }
     if (f.dirty.length) {
-      out.push(`${at}, uncommitted (may belong to a running chat):`);
+      out.push(`${at} has changes without commits. Check Running chats before editing:`);
       for (const l of f.dirty) out.push(`  ${l}`);
-    } else if (f.own) out.push(`${at}: nothing uncommitted.`);
+    } else if (f.own) out.push(`${at} has no changes without commits.`);
   }
   if (running.length) {
-    out.push('Running now - do not edit the same files; `helm say <id>` asks them:');
+    out.push('Check Running chats before editing the same files. Ask them with `helm say <id>`:');
     for (const r of running) {
       const state = r.offlineAt ? `${r.session.status} when last seen` : r.session.status;
       out.push(`  ${shortId(r.session.id)}  ${r.session.title || 'untitled'} (${state}) on ${where(r, now)} in ${r.session.cwd}`);
@@ -226,8 +226,8 @@ export function renderPickup({ chats, running, git, unchecked = [], now = Date.n
   }
   const away = [...new Set([...chats, ...running].filter((c) => !c.here).map((c) => c.machine))];
   if (away.length) {
-    out.push(`Not shown: commits not pushed, or files not committed, on ${away.join(', ')}.`
-      + ' `helm exec <machine> --cwd <folder> -- git status` shows them.');
+    out.push(`Helm does not show commits without pushes or files without commits on ${away.join(', ')}.`
+      + ' Run `helm exec <machine> --cwd <folder> -- git status` to check them.');
   }
   const why = new Map();
   for (const u of unchecked) why.set(u.why, [...(why.get(u.why) ?? []), u.seen ? `${u.machine} (${u.seen})` : u.machine]);
@@ -235,7 +235,7 @@ export function renderPickup({ chats, running, git, unchecked = [], now = Date.n
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 
-const OLD_HELM = 'an older Helm there cannot say which project a folder holds';
+const OLD_HELM = 'the older Helm cannot identify the project in each folder';
 
 /**
  * One machine's chats in this project.

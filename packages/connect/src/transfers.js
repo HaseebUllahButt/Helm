@@ -319,7 +319,7 @@ export class Transfers {
         checks: [{
           code: 'inspection-failed',
           status: 'warning',
-          message: 'Readiness inspection failed; run helm verify on the target.',
+          message: 'Run helm verify on the receiving machine. Helm did not finish its setup check.',
         }],
       }));
       const result = {

@@ -971,8 +971,8 @@ export class Daemon {
     const underService = Boolean(process.env.INVOCATION_ID);
     const reinstall = (args) => {
       if (!underService) {
-        notes.push('not running as the installed service - ' +
-          'restart `helm up` with the new flags to keep the change');
+        notes.push('Helm runs outside the installed service. ' +
+          'Restart `helm up` with the new flags to keep this change.');
         return;
       }
       setTimeout(async () => {
@@ -1000,7 +1000,7 @@ export class Daemon {
       if (!this.extra.includes(home)) this.extra.push(home);
       // --host 127.0.0.1: behind Caddy only this machine itself should answer.
       reinstall(['--advertise', home, '--host', '127.0.0.1']);
-      notes.push(`serving ${home} as a home for the network`);
+      notes.push(`This machine serves the network at ${home}.`);
     } else if (from === 'vm') {
       // The advertised https address is what made it the home. Tunnels and
       // LAN addresses stay - they are still true of a pc or a nas.
@@ -1008,7 +1008,7 @@ export class Daemon {
       this.advertised = this.advertised.filter((e) => !drop.has(e));
       this.extra = this.extra.filter((e) => !drop.has(e));
       reinstall(['--host', '0.0.0.0']);
-      notes.push('its Caddy site can be removed by hand: ' +
+      notes.push('Remove its Caddy site with: ' +
         'sudo rm /etc/caddy/helm.caddy && sudo systemctl reload caddy');
     }
 

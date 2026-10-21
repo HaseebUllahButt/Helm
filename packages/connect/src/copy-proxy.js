@@ -185,7 +185,7 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
         if (msg.t !== T.TUNNEL_READY) return;
         if (msg.copy === undefined) {
           return fail(Object.assign(new Error(
-            'the target answered without a signed copy proof - update the target and relay for signed copies, or use --ssh with an SSH server',
+            'The target answered without a signed copy proof - update the target and relay for signed copies, or use --ssh with an SSH server.',
           ), { permanent: true }));
         }
         try {
@@ -197,7 +197,7 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
           onProof?.(proof);
         } catch {
           return fail(Object.assign(new Error(
-            'the target did not prove it holds its signing key - refusing to send data',
+            'The target did not prove it holds its signing key - refusing to send data.',
           ), { permanent: true }));
         }
         timing('signed-ready');

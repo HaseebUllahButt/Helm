@@ -25,22 +25,22 @@ import { ENGINES } from './engines.js';
  * never reaches the CLI: the app opens its model picker instead.
  */
 export const BUILT_IN = [
-  { name: 'compact', description: 'Summarise the conversation into a fresh context', source: 'helm' },
-  { name: 'model', description: 'Choose a model', source: 'helm' },
+  { name: 'compact', description: 'Shorten the chat history', source: 'helm' },
+  { name: 'model', description: 'Pick a model', source: 'helm' },
 ];
 
 /** Common native Claude commands; the terminal remains the full live menu. */
 export const CLAUDE_NATIVE_COMMANDS = [
-  ['model', 'Choose a model'], ['effort', 'Adjust thinking effort'],
+  ['model', 'Pick a model'], ['effort', 'Set thinking effort'],
   ['permissions', 'Manage tool permissions'], ['config', 'Change Claude settings'],
-  ['compact', 'Summarise the conversation'], ['context', 'Show context usage'],
-  ['status', 'Show session status'], ['usage', 'Show account usage'],
-  ['cost', 'Show session cost'], ['mcp', 'Manage MCP connections'],
+  ['compact', 'Shorten the chat history'], ['context', 'Show context usage'],
+  ['status', 'Show chat status'], ['usage', 'Show account usage'],
+  ['cost', 'Show chat cost'], ['mcp', 'Manage tool connections (MCP)'],
   ['memory', 'Manage project memory'], ['help', 'Show all available commands'],
 ].map(([name, description]) => ({ name, description, source: 'claude' }));
 
 const DEVIN_BUILT_IN = [
-  { name: 'usage', description: 'Show account quota and usage', source: 'devin' },
+  { name: 'usage', description: 'Show account limits and usage', source: 'devin' },
 ];
 
 /**

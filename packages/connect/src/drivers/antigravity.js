@@ -79,8 +79,8 @@ export class AntigravityDriver extends AcpDriver {
           kind: 'auth',
           message:
             `Antigravity needs a Google sign-in.\n\n` +
-            `Open this link in a browser **on this machine** and it finishes on its own:\n${pending.authorizationUrl}\n\n` +
-            `On a phone the last page will not load - copy its address (it starts http://127.0.0.1) and send it back here.`,
+            `Open this link in a browser **on this machine** to finish signing in:\n${pending.authorizationUrl}\n\n` +
+            `On a phone, the last page does not load. Copy its address (it starts http://127.0.0.1) and send it here.`,
         });
         return true;
       },

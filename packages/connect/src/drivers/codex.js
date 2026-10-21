@@ -47,18 +47,18 @@ export const CODEX_COMMANDS = [
   { name: 'help', description: 'Show the commands available in this chat', source: 'codex' },
   { name: 'model', description: 'List models, or switch with /model <id>', source: 'codex' },
   { name: 'permissions', description: 'Show permissions, or switch ask, edit, full, or readonly', source: 'codex' },
-  { name: 'fast', description: 'Toggle fast mode, or use /fast on|off', source: 'codex' },
+  { name: 'fast', description: 'Turn fast mode on or off with /fast on|off', source: 'codex' },
   { name: 'review', description: 'Review uncommitted changes, or add custom instructions', source: 'codex' },
-  { name: 'rename', description: 'Rename this conversation with /rename <title>', source: 'codex' },
-  { name: 'status', description: 'Show session settings and account quota', source: 'codex' },
-  { name: 'usage', description: 'Show account quota and token activity; accepts daily, weekly, or cumulative', source: 'codex' },
-  { name: 'diff', description: 'Show uncommitted changes in this workspace', source: 'codex' },
-  { name: 'skills', description: 'List skills available in this workspace', source: 'codex' },
-  { name: 'mcp', description: 'List configured MCP servers and their status', source: 'codex' },
+  { name: 'rename', description: 'Rename this chat with /rename <title>', source: 'codex' },
+  { name: 'status', description: 'Show chat settings and account limits', source: 'codex' },
+  { name: 'usage', description: 'Show account limits and text usage for a day, week or all time', source: 'codex' },
+  { name: 'diff', description: 'Show project changes without commits', source: 'codex' },
+  { name: 'skills', description: 'List skills for this project', source: 'codex' },
+  { name: 'mcp', description: 'List tool connections (MCP) and their status', source: 'codex' },
   { name: 'apps', description: 'List apps available to Codex', source: 'codex' },
   { name: 'plugins', description: 'List installed Codex plugins', source: 'codex' },
-  { name: 'pwd', description: 'Show the current working directory', source: 'codex' },
-  { name: 'cwd', description: 'Show the current working directory', source: 'codex' },
+  { name: 'pwd', description: 'Show the current folder', source: 'codex' },
+  { name: 'cwd', description: 'Show the current folder', source: 'codex' },
 ];
 
 const commandNames = new Set(CODEX_COMMANDS.map((c) => c.name));
@@ -170,8 +170,8 @@ export function formatAccountUsage(result, view = '', rateLimits = null) {
 
   if (view === 'daily') {
     return recent.length
-      ? `### Daily token activity\n\n| Date | Tokens |\n| --- | --- |\n${recent.map((x) => `| ${x.startDate} | ${number(x.tokens)} |`).join('\n')}`
-      : 'Daily token activity is unavailable.';
+      ? `### Daily tokens (text units)\n\n| Date | Tokens |\n| --- | --- |\n${recent.map((x) => `| ${x.startDate} | ${number(x.tokens)} |`).join('\n')}`
+      : 'Daily token usage is not available.';
   }
   if (view === 'weekly') {
     const weeks = new Map();
@@ -184,15 +184,15 @@ export function formatAccountUsage(result, view = '', rateLimits = null) {
     }
     const rows = [...weeks].slice(-12);
     return rows.length
-      ? `### Weekly token activity\n\n| Week starting | Tokens |\n| --- | --- |\n${rows.map(([date, tokens]) => `| ${date} | ${number(tokens)} |`).join('\n')}`
-      : 'Weekly token activity is unavailable.';
+      ? `### Weekly tokens (text units)\n\n| Week starting | Tokens |\n| --- | --- |\n${rows.map(([date, tokens]) => `| ${date} | ${number(tokens)} |`).join('\n')}`
+      : 'Weekly token usage is not available.';
   }
   if (view === 'cumulative') {
-    return `### Cumulative usage\n\n${[
-      `**Lifetime tokens:** ${summary.lifetimeTokens == null ? 'unavailable' : number(summary.lifetimeTokens)}`,
-      `**Peak day:** ${summary.peakDailyTokens == null ? 'unavailable' : number(summary.peakDailyTokens)}`,
-      `**Current streak:** ${summary.currentStreakDays == null ? 'unavailable' : `${number(summary.currentStreakDays)} days`}`,
-      `**Longest streak:** ${summary.longestStreakDays == null ? 'unavailable' : `${number(summary.longestStreakDays)} days`}`,
+    return `### All-time usage\n\n${[
+      `**All-time tokens (text units):** ${summary.lifetimeTokens == null ? 'unavailable' : number(summary.lifetimeTokens)}`,
+      `**Highest daily usage:** ${summary.peakDailyTokens == null ? 'unavailable' : number(summary.peakDailyTokens)}`,
+      `**Consecutive days so far:** ${summary.currentStreakDays == null ? 'unavailable' : `${number(summary.currentStreakDays)} days`}`,
+      `**Most consecutive days:** ${summary.longestStreakDays == null ? 'unavailable' : `${number(summary.longestStreakDays)} days`}`,
     ].join('  \n')}`;
   }
   // Quota first: that is what /usage means in the TUI. The token activity
@@ -960,7 +960,7 @@ export class CodexDriver extends Driver {
           CODEX_COMMANDS.map((c) => `${mdCode(`/${c.name}`)} — ${mdEscape(c.description)}`));
       case 'pwd':
       case 'cwd':
-        return `**Current directory:** ${mdCode(this.cwd)}`;
+        return `**Current folder:** ${mdCode(this.cwd)}`;
       case 'status': {
         // Refresh the rollout in case the external CLI wrote another token
         // count immediately before releasing its writer lock.
@@ -972,7 +972,7 @@ export class CodexDriver extends Driver {
         const window = this.#usage?.modelContextWindow;
         const context = last?.totalTokens != null && window
           ? `${number(last.totalTokens)} / ${number(window)} tokens (${Math.max(0, Math.round((1 - last.totalTokens / window) * 100))}% left)`
-          : 'unavailable until the first model turn';
+          : 'available after the first agent reply';
         // Live account reads are what the TUI's status card shows - quota
         // and the signed-in account. Older app-servers may lack them, and
         // the rollout's snapshot is the fallback either way.
@@ -989,20 +989,20 @@ export class CodexDriver extends Driver {
             ? `${mdEscape(acct.email ?? 'ChatGPT')}${acct.planType ? ` (${mdEscape(planName(acct.planType))})` : ''}`
             : acct.type === 'apiKey' ? 'API key' : mdEscape(acct.type);
         return [
-          '### Session status',
+          '### Chat status',
           '',
           [
             `**Model:** ${mdEscape(this.model || this.info?.model || settings.model || 'default')}`,
             `**Thinking:** ${mdEscape(this.effort || this.info?.effort || settings.effort || 'default')}`,
             `**Permissions:** ${mdEscape(this.mode || settings.permissionProfile?.name || settings.approvalPolicy || 'ask')}`,
-            `**Sandbox:** ${mdEscape(sandboxName(this.info?.sandbox ?? settings.sandboxPolicy))}`,
+            `**File access limits:** ${mdEscape(sandboxName(this.info?.sandbox ?? settings.sandboxPolicy))}`,
             `**Speed:** ${mdEscape(this.speed || settings.serviceTier || 'normal')}`,
             `**Folder:** ${mdCode(this.cwd || settings.cwd)}`,
-            `**Thread:** ${mdCode(this.threadId)}`,
+            `**Chat:** ${mdCode(this.threadId)}`,
             ...(accountLine ? [`**Account:** ${accountLine}`] : []),
             ...(this.info?.cliVersion ? [`**Codex:** ${mdEscape(this.info.cliVersion)}`] : []),
-            `**Context:** ${context}`,
-            ...(total?.totalTokens != null ? [`**Turn tokens:** ${number(total.totalTokens)}`] : []),
+            `**Chat history:** ${context}`,
+            ...(total?.totalTokens != null ? [`**Reply tokens (text units):** ${number(total.totalTokens)}`] : []),
           ].join('  \n'),
           ...(limits ? ['', limits] : []),
         ].join('\n');
@@ -1016,7 +1016,7 @@ export class CodexDriver extends Driver {
         const result = await this.#call('model/list', {});
         const models = (result.data ?? []).map((m) =>
           `${mdCode(m.id)}${m.isDefault ? ' **default**' : ''} — ${mdEscape(m.description || m.displayName)}`);
-        return models.length ? mdLines('Models', models) : 'No models reported.';
+        return models.length ? mdLines('Models', models) : 'The agent reported no models.';
       }
       case 'permissions': {
         const modes = ['ask', 'edit', 'full', 'readonly'];
@@ -1046,7 +1046,7 @@ export class CodexDriver extends Driver {
         const skills = (result.data ?? []).flatMap((entry) => entry.skills ?? []);
         return skills.length
           ? mdLines('Skills', skills.map((s) => `**${mdEscape(s.name)}** ${s.enabled ? 'enabled' : 'disabled'} — ${mdEscape(s.description)}`))
-          : 'No skills found.';
+          : 'Helm found no skills.';
       }
       case 'mcp': {
         const result = await this.#call('mcpServerStatus/list', { threadId: this.threadId });
@@ -1054,20 +1054,20 @@ export class CodexDriver extends Driver {
           const state = typeof s.runtimeStatus === 'string' ? s.runtimeStatus : (s.runtimeStatus?.type ?? (s.toolsError ? 'error' : 'configured'));
           return `**${mdEscape(s.name)}** — ${mdEscape(state)}${s.toolsError ? `: ${mdEscape(s.toolsError)}` : ''}`;
         });
-        return rows.length ? mdLines('MCP servers', rows) : 'No MCP servers configured.';
+        return rows.length ? mdLines('Tool connections (MCP)', rows) : 'No tool connections (MCP) are set up.';
       }
       case 'apps': {
         const result = await this.#call('app/list', { threadId: this.threadId });
         const rows = (result.data ?? []).map((a) =>
           `**${mdEscape(a.name || a.displayName || a.id)}**${a.description ? ` — ${mdEscape(a.description)}` : ''}`);
-        return rows.length ? mdLines('Apps', rows) : 'No apps available.';
+        return rows.length ? mdLines('Apps', rows) : 'No apps are available.';
       }
       case 'plugins': {
         const result = await this.#call('plugin/list', { cwds: [this.cwd] });
         const plugins = (result.marketplaces ?? []).flatMap((m) => m.plugins ?? []).filter((p) => p.installed);
         return plugins.length
           ? mdLines('Plugins', plugins.map((p) => `**${mdEscape(p.name || p.id)}**${p.version ? ` ${mdEscape(p.version)}` : ''}`))
-          : 'No plugins installed.';
+          : 'Helm found no installed plugins.';
       }
       case 'usage': {
         const view = args.toLowerCase();
@@ -1089,7 +1089,7 @@ export class CodexDriver extends Driver {
           status.stdout.trim() && `### Status\n\n${fence('text', status.stdout.trim())}`,
           diff.stdout.trim() && `### Diff\n\n${fence('diff', diff.stdout.trim())}`,
         ].filter(Boolean);
-        return clip(parts.join('\n\n') || 'Working tree clean.');
+        return clip(parts.join('\n\n') || 'The project has no changes without commits.');
       }
       default:
         throw new Error(`Unsupported Codex command: /${name}`);

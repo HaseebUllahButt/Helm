@@ -3,7 +3,7 @@ import { activeTurnFromEvents } from './events.js';
 import { hostedProcId } from './hosted-process.js';
 
 /** How a recovery note says the agent's state could not be checked. */
-const RECONNECT_FAILED = 'Could not reconnect to the agent:';
+const RECONNECT_FAILED = 'Helm did not reconnect to the agent:';
 
 /** Run async jobs at most `n` at a time: `slot(() => work())` returns the job's promise. */
 const limiter = (n) => {

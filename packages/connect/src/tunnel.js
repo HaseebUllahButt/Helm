@@ -65,20 +65,21 @@ export function ngrokAuthed() {
   return false;
 }
 
-export const SIGNUP_HELP = `A public address needs one of these:
+export const SIGNUP_HELP = `Pick a public address:
 
-  A permanent link  (free, about two minutes)
-    1. sign up:   https://ngrok.com/signup
-    2. on this machine:
+  Fixed link (free, about two minutes)
+    1. Sign up at https://ngrok.com/signup.
+    2. Run this on this machine:
          ngrok config add-authtoken <your token>
-    3. claim your free domain in the ngrok dashboard
-    4. helm up --tunnel --domain <that domain>
-    Same link forever - safe to add to a phone home screen.
+    3. Claim a free domain in the ngrok dashboard.
+    4. Run helm up --tunnel --domain <that domain>.
+    The link stays the same. Add it to your phone home screen.
 
-  A link right now  (no account, no signup)
+  Temporary link (no account)
          helm up --tunnel --temporary
-    Works in seconds. The link CHANGES every restart, so do not
-    add it to a home screen - use it to reach this machine today.`;
+    The link works in seconds and changes each time Helm starts.
+    Use it for access today.
+    Do not add it to a home screen.`;
 
 // --------------------------------------------------------------- cloudflared
 
@@ -109,7 +110,7 @@ async function ensureCloudflared() {
   }
   if (asset.endsWith('.tgz')) {
     throw new Error(
-      'on macOS install cloudflared first:  brew install cloudflared'
+      'On macOS install cloudflared first:  brew install cloudflared.'
     );
   }
 
@@ -261,8 +262,8 @@ export async function openTunnel({ port, provider = 'auto', domain, temporary = 
     child.kill();
     throw new Error(
       `${error || 'cloudflared did not report a public address'}\n` +
-      "    Cloudflare's quick tunnels fail intermittently; running it again\n" +
-      '    usually works. For a link that does not depend on them, see\n' +
+      "    Cloudflare temporary links sometimes fail.\n" +
+      '    Run this command for a fixed ngrok link:\n' +
       '    helm up --tunnel --domain <your ngrok domain>'
     );
   }

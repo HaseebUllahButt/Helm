@@ -136,7 +136,7 @@ test('steps are said in plain words, in both tenses', async (t) => {
   assert.equal(words.list.past, 'Listed src/');
   assert.equal(words.readTool.past, 'Read App.tsx');
   assert.equal(words.grepTool.past, 'Searched for useTheme');
-  assert.equal(words.web.past, 'Fetched example.com');
+  assert.equal(words.web.past, 'Loaded example.com');
   assert.deepEqual(words.edit, { now: 'Editing App.tsx', past: 'Edited App.tsx' });
   assert.equal(words.write.past, 'Created New.ts');
   assert.equal(words.thought.past, 'Thought for 8s');

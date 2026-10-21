@@ -109,7 +109,7 @@ export function bulkWarnings(plan, includeEnv) {
     ? 'Big project: the folder is copied with its full git history and resumes if the connection drops. Files git ignores (build output, caches) stay here.'
     : 'Big project: the folder is copied except dependency and cache folders and resumes if the connection drops.' },
   ...(!includeEnv && plan.git ? [{ code: 'env-history', message:
-    'Working .env files stay here. Full Git history is included and may contain previously committed .env files.' }] : [])];
+    'Working .env files stay here. The transfer includes all Git history, including any .env files in earlier commits.' }] : [])];
 }
 
 /**

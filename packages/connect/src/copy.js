@@ -202,7 +202,7 @@ export async function runCopy(options, deps = {}) {
     checkRsync();
     const who = options.mode === 'ssh' ? `${spec.peer.name} over SSH` : `${spec.peer.name} over Helm`;
     stdout.write(`Copying ${options.source ?? options.folder} to ${who}:${spec.targetFolder}...\n`);
-    stdout.write('Includes hidden files; existing matching files may be replaced. No destination files are deleted.\n');
+    stdout.write('This includes hidden files. Matching files at the destination can change. Helm deletes no destination files.\n');
     const attempts = 1 + options.retries;
     for (let attempt = 0; attempt < attempts; attempt++) {
       const { code, signal, tail } = await runOnce(spec, spawnProcess, stdout, stderr, deps.signal);
@@ -218,7 +218,7 @@ export async function runCopy(options, deps = {}) {
           : '';
         throw new Error(`helm copy: copy stopped (${signal || `exit ${code}`})${hint}; rerun the same command to resume from its partial state`);
       }
-      stderr.write(`helm copy: connection dropped (rsync ${code}); resuming attempt ${attempt + 2} of ${attempts}\n`);
+      stderr.write(`helm copy: The connection closed (rsync ${code}). Resuming copy ${attempt + 2} of ${attempts}.\n`);
       await sleep(1000 * Math.min(attempt + 1, 2));
     }
     return 0;

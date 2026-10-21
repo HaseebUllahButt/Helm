@@ -724,10 +724,10 @@ export async function sessionSnapshot({ engine, path, sessionId, cwd, monitored 
   const esc = (v) => String(v ?? '').replace(/([\\`*_{}\[\]()<>#+.!|])/g, '\\$1');
   const code = (v) => `\`${String(v ?? '').replace(/`/g, '\\`')}\``;
   const lines = [
-    `**Provider:** ${esc(engine)}`,
-    `**Session:** ${esc(sessionId)}`,
-    `**Directory:** ${code(cwd)}`,
-    monitored ? '**State:** running outside Helm (live monitor)' : '**State:** resumed in Helm',
+    `**Agent:** ${esc(engine)}`,
+    `**Chat:** ${esc(sessionId)}`,
+    `**Folder:** ${code(cwd)}`,
+    monitored ? '**State:** running outside Helm (Helm watches it)' : '**State:** continued in Helm',
   ];
   let usage = null;
   try {
@@ -802,7 +802,7 @@ export async function sessionSnapshot({ engine, path, sessionId, cwd, monitored 
       } catch { /* no summary */ }
     }
   } catch { /* status remains useful even if a provider changes its schema */ }
-  let out = `### Session status\n\n${lines.join('  \n')}`;
+  let out = `### Chat status\n\n${lines.join('  \n')}`;
   if (usage) {
     const usageLines = [
       `**Input:** ${fmt(usage.input)}`,
@@ -810,7 +810,7 @@ export async function sessionSnapshot({ engine, path, sessionId, cwd, monitored 
       `**Output:** ${fmt(usage.output)}`,
       ...(usage.cost != null ? [`**Cost:** $${Number(usage.cost).toFixed(4)}`] : []),
     ];
-    out += `\n\n### Session usage\n\n${usageLines.join('  \n')}`;
+    out += `\n\n### Chat usage\n\n${usageLines.join('  \n')}`;
   }
   return out;
 }

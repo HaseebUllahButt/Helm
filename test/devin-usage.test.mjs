@@ -138,8 +138,8 @@ test('formatDevinUsage draws the quota card the TUI draws', () => {
   assert.match(card, /\*\*Daily\*\* `█░{19}` 5% used · resets in \d+h \d+m/);
   assert.match(card, /\*\*Weekly\*\* `████░{16}` 21% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-][\d:]+\)/);
   assert.match(card, /\*\*Plan:\*\* Pro/);
-  assert.match(card, /\*\*Org:\*\* My Team/);
-  assert.match(card, /\*No quota consumed yet in this session\.\*/);
+  assert.match(card, /\*\*Organization:\*\* My Team/);
+  assert.match(card, /\*This chat used no quota\.\*/);
 });
 
 test('a Devin Max plan shows its one number as the weekly line', () => {
@@ -164,11 +164,11 @@ test('session consumption names the spend when dimensions carry it', () => {
       dailyQuotaResetAtUnix: String(now / 1000 + 3600),
     },
   }, ['1.5 credits', '2 ACUs'], { now });
-  assert.match(card, /\*\*Consumed this session:\*\* 1\\\.5 credits · 2 ACUs/);
+  assert.match(card, /\*\*Used in this chat:\*\* 1\\\.5 credits · 2 ACUs/);
 });
 
 test('no quota fields and no plan is the CLI\'s own empty answer', () => {
-  assert.equal(formatDevinUsage({}), '*No quota data available.*');
+  assert.equal(formatDevinUsage({}), '*Account limits are not available.*');
 });
 
 test('devinSessionConsumption sums cost dimensions per message, once', () => {
@@ -208,5 +208,5 @@ test('devinUsageReport ties credentials, quota and session spend together', asyn
     }),
   });
   assert.match(card, /\*\*Weekly\*\* `████░{16}` 21% used/);
-  assert.match(card, /\*\*Consumed this session:\*\* 3 ACUs/);
+  assert.match(card, /\*\*Used in this chat:\*\* 3 ACUs/);
 });

@@ -360,7 +360,7 @@ test('stopping a parent cascades and late child results cannot restart it', asyn
   await sessions.interrupt(parent.id);
   assert.equal(sessions.get(child.id).delegation.status, 'interrupted');
   assert.equal(sessions.get(grandchild.id).delegation.status, 'interrupted');
-  assert.equal(parent.recovery.message, 'Stopped by you. Its helper was stopped too.');
+  assert.equal(parent.recovery.message, 'You stopped this chat. Helm also stopped its helper.');
   assert.equal(sessions.get(grandchild.id).recovery.message, 'Stopped by you.', 'no helpers of its own: none are mentioned');
   assert.deepEqual(parent.team, { working: 0, blocked: 0, failed: 0 });
   await sessions.input(parent.id, 'A new user request');
@@ -777,7 +777,7 @@ test('delegation instructions keep only rules; the details live in helm delegate
   assert.match(note, /test chats \(helm delete\)/);
   assert.doesNotMatch(note, /--heavy|slot|--worktree|--cwd/, 'flags are looked up, not carried');
   const help = commandHelp('delegate', '  helm delegate <account> -- "<task>"\n');
-  for (const want of [/same = this chat's account/, /--cwd <folder>/, /--worktree/, /context for an hour/, /helm delete <id>/]) assert.match(help, want);
+  for (const want of [/Use same for this chat's account/, /--cwd <folder>/, /--worktree/, /context for an hour/, /helm delete <id>/]) assert.match(help, want);
 });
 
 test('no account by that name lists the accounts that do exist', () => {
@@ -798,7 +798,7 @@ test('helm help <command> prints that command and its relatives, and --help befo
   assert.match(exec, /helm exec <machine>/);
   assert.match(exec, /--env NAME=value/);
   assert.match(exec, /helm exec-status/);
-  assert.match(exec, /never rerun it/);
+  assert.match(exec, /Do not rerun a command/);
   assert.doesNotMatch(exec, /execute-not|helm say/);
   assert.equal(commandHelp('nosuch', usage), null);
   assert.equal(commandHelp('', usage), null);

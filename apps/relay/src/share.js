@@ -65,7 +65,7 @@ button,a.b{display:block;width:100%;font:inherit;font-weight:600;padding:11px;bo
 }
 
 const signIn = (res, name, next, error = '', status = 401) => page(res, status, `${name} - password`, `
-<h1>This link has a password</h1><p>Ask whoever sent you <b>${esc(name)}</b> for it.</p>
+<h1>Enter the link password</h1><p>Ask the sender of <b>${esc(name)}</b> for the password.</p>
 <form method="post" action="/.helm-share/unlock"><input type="hidden" name="next" value="${esc(next)}">
 <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password" aria-label="Password">
 ${error ? `<div class="e">${esc(error)}</div>` : ''}<button>Open</button></form>`);
@@ -198,7 +198,7 @@ export function createShareRoute({ online, callEnv, openTcp }) {
   const privatePage = (res, share, base, next, why = '') => {
     const hop = appHop(base, share.name, next);
     page(res, 401, `${share.name} - private`, `
-<h1>Private to your Helm</h1><p>Only devices signed in to the Helm that shares <b>${esc(share.name)}</b> can open it.</p>
+<h1>Sign in to open this link</h1><p>Only devices signed in to the Helm that shares <b>${esc(share.name)}</b> can open it.</p>
 ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${esc(hop)}">Sign in with Helm</a>` : ''}`);
   };
 
@@ -215,12 +215,12 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
   /** The app's grant, swapped for this link's own cookie. */
   async function enter(req, res, share, base) {
     let form;
-    try { form = await readForm(req); } catch { return privatePage(res, share, base, '/', 'That did not arrive. Try again.'); }
+    try { form = await readForm(req); } catch { return privatePage(res, share, base, '/', 'The request did not arrive. Try again.'); }
     const next = safeSharePath(form.get('next'));
     const net = loadNetwork();
     const grant = checkShareGrant(net, form.get('grant'), { name: share.name, host: base });
     if (!grant || !spend(grant.j, grant.e)) {
-      return privatePage(res, share, base, next, 'That sign-in ran out or was already used. Try again.');
+      return privatePage(res, share, base, next, 'This sign-in expired or someone used it. Sign in again.');
     }
     const expiresAt = Date.now() + MEMBER_TTL_MS;
     const value = memberCookie(net, { name: share.name, host: base, sub: grant.s, expiresAt });
@@ -258,14 +258,14 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     const now = Date.now();
     const seen = tries.get(key);
     if (seen && seen.until > now && seen.n >= 8) {
-      return signIn(res, share.name, '/', 'Too many tries. Wait a few minutes and try again.', 429);
+      return signIn(res, share.name, '/', 'Wait a few minutes before trying again.', 429);
     }
     let form;
-    try { form = await readForm(req); } catch { return signIn(res, share.name, '/', 'That did not arrive. Try again.', 400); }
+    try { form = await readForm(req); } catch { return signIn(res, share.name, '/', 'The request did not arrive. Try again.', 400); }
     const safeNext = safeSharePath(form.get('next'));
     if (!checkSharePassword(form.get('password') || '', share.lock)) {
       tries.set(key, { n: (seen && seen.until > now ? seen.n : 0) + 1, until: now + 10 * 60_000 });
-      return signIn(res, share.name, safeNext, 'That is not the password.');
+      return signIn(res, share.name, safeNext, 'The password is incorrect.');
     }
     tries.delete(key);
     const expiresAt = now + COOKIE_DAYS * 86_400_000;
@@ -279,7 +279,7 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
   const offline = (res, share, err) => page(res, 502, `${share.name} - not reachable`, `
 <h1>Not reachable right now</h1><p>${/not connected|offline/i.test(err?.message || '')
     ? 'The computer sharing this link is offline.'
-    : `Nothing answered on that computer's port ${share.port}. Is the app still running?`}</p>`);
+    : `Nothing answered on that computer's port ${share.port}. Check that the app is running.`}</p>`);
 
   /** Handle a request if it is for a share. Returns false when it is not. */
   async function route(req, res) {
@@ -287,7 +287,7 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     if (!name) return false;
     const share = await lookup(name);
     if (!share) {
-      page(res, 404, 'No such link', `<h1>No link called “${esc(name)}”</h1><p>It may have been stopped, or the computer sharing it is offline.</p>`);
+      page(res, 404, 'Link not found', `<h1>No link called “${esc(name)}”</h1><p>Check that the computer is online and still shares this link.</p>`);
       return true;
     }
     const path = req.url || '/';

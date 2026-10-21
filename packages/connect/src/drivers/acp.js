@@ -327,7 +327,7 @@ export class AcpDriver extends Driver {
     if (!methodId) return false;
     this.authPending = true;
     this.push('error', {
-      message: `${this.spec.label ?? this.engine} needs a sign-in before it can start a session.`,
+      message: `Sign in to ${this.spec.label ?? this.engine} before starting a chat.`,
       kind: 'auth',
     });
     // A message waiting on this start is waiting on the owner now, not on

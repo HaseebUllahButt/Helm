@@ -38,33 +38,33 @@ const rest = leadingFlag ? [first, ...others] : others;
 
 const die = (msg) => { console.error(`helm: ${msg}`); exit(1); };
 
-const USAGE = `helm - control your coding agents from anywhere
+const USAGE = `helm - Control your coding agents from anywhere
 
-  helm setup [https-url]             make this always-on VM your Helm home
-  helm open                          open the app here, signed in (no link needed)
-  helm app [--remove]                put helm in this desktop's applications
+  helm setup [https-url]             Set up this VM as your Helm home
+  helm open                          Open the app here, signed in
+  helm app [--remove]                Add Helm to this desktop's applications
 
-  helm add controller                a phone or browser: controls, runs nothing
-  helm add pc                        a laptop or desktop: runs agents, controls others
-  helm add vm                        another always-on machine, dialled by the rest
-  helm add nas                       storage for the network: a machine that stays reachable
-  helm join                          paste a private join link to join its network
-  helm join <private-link>           join directly with the copied link
-  helm start                         start Helm in the background (installer does this)
+  helm add controller                Add a phone or browser to control machines
+  helm add pc                        Add a computer to run agents and control machines
+  helm add vm                        Add a VM that other machines connect to
+  helm add nas                       Add a machine to store shared files
+  helm join                          Paste a private link to join a network
+  helm join <private-link>           Join a network with the copied link
+  helm start                         Start Helm in the background
 
-  helm join <CODE> <home-url> --foreground   ...run in this terminal instead
-  helm status                        show the network and runtime
-  helm network-repair                enable persistent TCP packet-size recovery on Linux
+  helm join <CODE> <home-url> --foreground   Run Helm in this terminal
+  helm status                        Show the network and agent software
+  helm network-repair                Keep connections working when large network packets fail on Linux
 
-  helm up [--port N] [--tunnel]      run in the foreground
-  helm up --tunnel --domain <d>     permanent public link (needs a free ngrok account)
-  helm up --tunnel --temporary      public link right now, no account (link changes)
-  helm up --advertise <url>         public address others should reach me at
-  helm up --host <address>          local listen address (default 0.0.0.0)
-  helm up --install                 keep it running across reboots
+  helm up [--port N] [--tunnel]      Run Helm in this terminal
+  helm up --tunnel --domain <d>     Make a fixed public link (needs a free ngrok account)
+  helm up --tunnel --temporary      Make a temporary public link without an account
+  helm up --advertise <url>         Set the public address for this machine
+  helm up --host <address>          Set the local address (default 0.0.0.0)
+  helm up --install                 Start Helm each time this machine starts
 
-  helm link [minutes]               same as 'helm add controller'
-  helm join <CODE> --at <url>       long form of 'helm join CODE url'
+  helm link [minutes]               Add a phone or browser, like 'helm add controller'
+  helm join <CODE> --at <url>       Join a network, like 'helm join CODE url'
 
   helm devices                      controllers that can drive this network
   helm browser open <url>            browse with your agent (Chromium or --engine bowser)
@@ -74,44 +74,44 @@ const USAGE = `helm - control your coding agents from anywhere
   helm nas [machine] [add|remove <folder>]   what a nas shares
   helm spin <port> [options]         same as helm share; make a public link
   helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
-    a short-lived link: ends after 3 hours unless --keep
-                                  a public https link to a port here, served by your VM
-    --private                     only devices signed in to your Helm can open it
-  helm share list | stop <name>   what is shared, and stopping it
-  helm share setup                once, on the VM: let it serve the links
+    Make a Spin, a public link that ends after 3 hours unless you use --keep.
+                                  The link opens a port on this machine through your VM.
+    --private                     Limit access to devices signed in to your Helm
+  helm share list | stop <name>   List or stop Spins
+  helm share setup                Set up the VM to serve Spins
   helm forward <machine> <port> [--local <port>]
-                                  open a port another machine shared on this one's localhost
-  helm remove <id>                  remove a controller or machine, permanently
-  helm leave                        remove this machine from its network
+                                  Open another machine's shared port on this machine's localhost
+  helm remove <id>                  Remove a device or machine permanently
+  helm leave                        Remove this machine from its network
 
-  helm login [minutes]              new short-lived password for signing in a device
-  helm status                       membership, links and runtime
-  helm profiles [--refresh]         the agent profiles found here
-  helm agents [--json] [--refresh]  CLI accounts, sign-in status and model IDs
-  helm run -- <command> [args]      run a command here under Helm
+  helm login [minutes]              Make a temporary password to sign in a device
+  helm status                       Show machines, links and agent software
+  helm profiles [--refresh]         List agent accounts on this machine
+  helm agents [--json] [--refresh]  List command line accounts, sign-in status and model IDs
+  helm run -- <command> [args]      Run a command here through Helm
   helm exec <machine> [--cwd <path>] -- <command> [args]
-                                    execute through Helm's managed connection
-    --env NAME=value               explicit remote environment (repeatable)
-    --timeout <milliseconds>       command time limit (default 15 minutes)
+                                    Run a command on another machine through Helm
+    --env NAME=value               Set a command environment value (repeat this flag for more values)
+    --timeout <milliseconds>       Set the command time limit (default 15 minutes)
   helm exec-status <machine> <id> [--wait] [--json]
-                                    read a command after a connection loss
-  helm exec-cancel <machine> <id>   stop a command started earlier
-  helm antigravity [install|login|status|remove]   the managed Google ACP agent
+                                    Read command output after a connection loss
+  helm exec-cancel <machine> <id>   Stop a command started earlier
+  helm antigravity [install|login|status|remove]   Install or manage the Google Antigravity agent
 
-  helm brain                       open the network's brain on the VM
-  helm digest [--json]              every machine, folder and running session
-  helm search <words...> [--json]   chats on every machine where those words were said, newest first
-  helm thread <id> [-n 40]          the recent conversation of one session
-  helm delete <id>                  delete a chat, such as one you started only to test something
-  helm pickup [chat-id] [-n 3]      where earlier chats in this project stopped, on every machine:
-                                    their ask, what their final reply left, commits, uncommitted files
-  helm say <id> <text...>           send a named message from this agent (a prompt outside a chat)
-  helm reply <message-id> <text...> reply to an agent message
-  helm messages [chat-id] [--json]  read exchanges in this chat and its Agents
+  helm brain                       Open the Helm brain on the VM
+  helm digest [--json]              Show every machine, folder and running chat
+  helm search <words...> [--json]   Find chats with these words on every machine, newest first
+  helm thread <id> [-n 40]          Read recent messages from a chat
+  helm delete <id>                  Delete a chat
+  helm pickup [chat-id] [-n 3]      Show where earlier project chats stopped on every machine
+                                    Show requests, unfinished work, commits and unsaved changes
+  helm say <id> <text...>           Send a message from this agent (a plain prompt outside a chat)
+  helm reply <message-id> <text...> Reply to an agent message
+  helm messages [chat-id] [--json]  Read messages in this chat and its Agents
   helm canvas <file | https://…> [--title <text>] [--session <id>]
-                                    open a project file, saved visual or live page beside chat
+                                    Open a project file, saved picture or live page beside the chat
   helm render <file.html | picture.png> [--title <text>] [--height <px>] [--session <id>]
-                                    save a visual or a screenshot inside this chat
+                                    Save a picture, HTML page or screenshot in this chat
   helm preview <file.html> [--output <file.png>] [--width <px>] [--appearance dark|light]
                                     screenshot a visual and report JavaScript errors
   helm chat <account> [-- text]    share a live agent between this terminal and the app
@@ -123,39 +123,40 @@ const USAGE = `helm - control your coding agents from anywhere
   helm spawn <machine> - <account> <text...>          the same, as a quick chat with no folder
     --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
   helm delegate <account> --model <id> --wait --json -- "<task>"
-                                    run a CLI subagent in the current folder
-  helm delegate-result <id> [--wait] [--json]   read its result or pending approval
-  helm handoff <machine> [text...]  move code and this task to another machine
-    --handoff-id <id>               resume an interrupted handoff instead of starting a new one
-  helm dispatch <machine> [text...]  queue this folder and task on another machine
-  helm dispatch-status <id>         where a queued handoff got to
-  helm send-task <machine> --account <id> [text...]  send files, .env and a task directly
-    --no-env --allow-skipped --handoff-id <id>       environment, omissions and retry options
-  helm receive <source> [minutes]   grant this machine one incoming folder from <source>
+                                    Start a helper in this folder
+  helm delegate-result <id> [--wait] [--json]   Read the helper result or approval request
+  helm handoff <machine> [text...]  Move code and this task to another machine
+    --handoff-id <id>               Continue a stopped task move with the same ID
+  helm dispatch <machine> [text...]  Send this folder and task when the other machine connects
+  helm dispatch-status <id>         Show progress for a task sent to another machine
+  helm send-task <machine> --account <id> [text...]  Send files, .env and a task directly
+    --no-env --allow-skipped --handoff-id <id>       Control .env files, skipped files and retries
+  helm receive <source> [minutes]   Allow this machine to receive one folder from <source>
   helm send <machine> [folder] --grant <token>
-                                  send a folder to a machine that granted it
-    --target-folder <folder>        where it lands on the target
-    --include-env                   carry .env files too, written owner-only there
-    --dry-run                       report what a send would carry - no grant needed
-    --allow-skipped                 send even though some files stay behind
+                                  Send a folder with the receiving machine's permission
+    --target-folder <folder>        Set the folder on the receiving machine
+    --include-env                   Include .env files with access for the receiving user only
+    --dry-run                       Preview files to send without permission from the receiving machine
+    --allow-skipped                 Send files and allow skipped files
   helm copy <machine> <file-or-folder> [--target-folder <path>]
-                                  resumable copy over Helm; needs rsync 3.2.3+ on both ends
-    --target-folder <path>          where it lands (default: the same place; ~ is their home)
-    --exclude <pattern>             omit caches or dependencies (repeatable)
-    --dry-run                       preview the copy, including hidden files
-    --direct | --relay | --ssh      choose a route (default: automatic Helm routing)
-    --retries <0-5>                 connection-drop retries (default: 2)
-  helm verify <folder> [-- cmd...]  inspect what a received folder still needs
+                                  Copy through Helm and resume if stopped (needs rsync 3.2.3+ on both machines)
+    --target-folder <path>          Set the destination (default: same path; ~ means the other machine's home folder)
+    --exclude <pattern>             Skip matching files (repeat this flag for more patterns)
+    --dry-run                       Preview the copy, including hidden files
+    --direct | --relay | --ssh      Pick a connection (default: Helm picks one)
+    --retries <0-5>                 Set retries after connection loss (default: 2)
+  helm verify <folder> [-- cmd...]  Check what a received folder still needs
 
-  helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
-  helm proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
-  helm self-update                  pull the newest helm to this machine and restart
-  helm service install|uninstall    background service
+  helm dictate [--to <id>]          Start recording; run again to stop and turn speech into text
+  helm proxy <host>                 Connect through SSH ProxyCommand (used by ~/.ssh/config)
+  helm self-update                  Get the newest Helm and restart it on this machine
+  helm service install|uninstall    Install or remove the background service
 
-Add from Settings on any paired device, or use 'helm add' on a joined machine.
-Computer invites contain a private link to paste into 'helm join'. A controller stays signed in
-until you remove it - passwords are only for adding one, and expire in minutes.
-Details for one command: helm help <command>, or helm <command> --help.
+Add devices from Settings, or run 'helm add' on a joined machine.
+Paste a computer's private join link into 'helm join'.
+A control device stays signed in until you remove it.
+Passwords add devices and expire in minutes.
+Run helm help <command> or helm <command> --help for details.
 `;
 const usage = () => console.log(USAGE);
 
@@ -232,11 +233,11 @@ async function printDeviceLink(args = rest) {
   const pairUrl = `${base}/#pair=${encodeURIComponent(value.password)}`;
   const valid = Math.max(1, Math.round((value.expiresAt - Date.now()) / 60_000));
   const { terminalQr } = await import('../src/qr-terminal.js');
-  console.log(`\n  Scan this with the phone you are adding, or open the link on it:\n`);
+  console.log(`\n  Scan this code with the phone you want to add, or open the link on it:\n`);
   console.log(terminalQr(pairUrl).split('\n').map((line) => `    ${line}`).join('\n'));
   console.log(`\n    ${pairUrl}\n`);
   console.log(`  It expires in ${valid} minute${valid === 1 ? '' : 's'}.`);
-  console.log('  Once paired, that device stays signed in until you remove it.\n');
+  console.log('  The device stays signed in until you remove it.\n');
 }
 
 /**
@@ -281,10 +282,10 @@ const ago = (t) => {
  */
 function checkHome(home) {
   let url;
-  try { url = new URL(home); } catch { die(`invalid home address: ${home}`); }
-  if (url.protocol !== 'https:') die('the Helm home address must start with https://');
+  try { url = new URL(home); } catch { die(`The home address is not valid: ${home}`); }
+  if (url.protocol !== 'https:') die('Start the Helm home address with https://.');
   if (url.pathname !== '/' || url.search || url.hash) {
-    die('use the home origin only, for example https://helm.example.com');
+    die('Use an address without a path, such as https://helm.example.com.');
   }
 }
 
@@ -294,9 +295,9 @@ async function up() {
     const args = rest.filter((a) => a !== '--install');
     const { installed, unit } = await installService({ mode: 'serve', args });
     if (installed) {
-      console.log(`\n  installed ${unit} - helm now starts on boot.`);
-      console.log('  watch it with:  journalctl --user -u helm-serve -f');
-      console.log('  stop it with:   helm service uninstall --serve\n');
+      console.log(`\n  Helm installed ${unit}. Helm starts when this machine starts.`);
+      console.log('  Read logs with: journalctl --user -u helm-serve -f');
+      console.log('  Stop it with: helm service uninstall --serve\n');
     }
     return;
   }
@@ -359,11 +360,11 @@ async function add() {
   if (CONTROLLER_WORDS.includes(what)) return printDeviceLink(rest.slice(1));
   if (MACHINE_WORDS[what]) return inviteMachine(MACHINE_WORDS[what]);
 
-  console.log('\n  What are you adding?\n');
-  console.log('    helm add controller    a phone or browser - controls machines, runs nothing');
-  console.log('    helm add pc            a laptop or desktop - runs agents, and controls others');
-  console.log('    helm add vm            an always-on machine - runs agents, and others dial it');
-  console.log('    helm add nas           storage for the network - a machine that stays reachable\n');
+  console.log('\n  Pick a device to add.\n');
+  console.log('    helm add controller    Add a phone or browser to control machines.');
+  console.log('    helm add pc            Add a computer to run agents and control machines.');
+  console.log('    helm add vm            Add a VM to run agents and accept connections.');
+  console.log('    helm add nas           Add a machine to store shared files.\n');
   if (what) console.log(`  ("${what}" is none of those.)\n`);
 }
 
@@ -371,29 +372,29 @@ async function inviteMachine(role) {
   const net = requireNetwork();
   const { base: where, value } = await postToHome(net, '/api/invite', { role });
   const { code } = value;
-  console.log(`\n  On the ${role === 'vm' ? 'VM' : role === 'nas' ? 'NAS' : 'computer'} you are adding, run:\n`);
+  console.log(`\n  Run this on the ${role === 'vm' ? 'VM' : role === 'nas' ? 'NAS' : 'computer'} you want to add:\n`);
   const link = `${where}/#join=${encodeURIComponent(code)}`;
   console.log('    helm join');
-  console.log(`    then paste: ${link}\n`);
+  console.log(`    Paste this link: ${link}\n`);
   console.log(`  Or run: helm join '${link}'\n`);
   if (role === 'vm') {
-    console.log('  It will take its own https address and start serving, so other');
-    console.log('  machines can dial it as well as this one.');
+    console.log('  This machine gets its own HTTPS address.');
+    console.log('  Other machines can connect to it and this home.');
   } else if (role === 'nas') {
-    console.log('  It will dial this home like a pc - it needs no https address of');
-    console.log('  its own. The rest of the network will see it flagged as the');
-    console.log('  network\'s storage: a machine that stays reachable.');
+    console.log('  This machine connects to this Helm home.');
+    console.log('  It does not need its own HTTPS address.');
+    console.log('  Other machines see it as shared storage.');
   } else {
-    console.log('  It will dial this home; it needs no address of its own.');
+    console.log('  This machine connects to this Helm home without its own address.');
   }
-  console.log('  The invite is single-use and expires in 10 minutes.');
-  console.log('  It carries the network key, so treat it like a password.\n');
+  console.log('  The invitation works once and expires in 10 minutes.');
+  console.log('  Keep the invitation private. It contains the network key.\n');
 }
 
 async function joinCmd() {
   let input = rest[0]?.startsWith('--') ? undefined : rest[0];
   if (!input) {
-    if (!process.stdin.isTTY) die('paste the private link as an argument: helm join \'https://home.example/#join=…\'');
+    if (!process.stdin.isTTY) die('Paste the private link as an argument: helm join \'https://home.example/#join=…\'.');
     const { createInterface } = await import('node:readline/promises');
     const prompt = createInterface({ input: process.stdin, output: process.stdout });
     try { input = (await prompt.question('Private join link: ')).trim(); }
@@ -405,19 +406,19 @@ async function joinCmd() {
     const link = new URL(input);
     code = new URLSearchParams(link.hash.replace(/^#\/?/, '')).get('join');
     if (!code || link.username || link.password || link.pathname !== '/' || link.search) {
-      die('use the private computer invite link with #join= in it');
+      die('Use the private computer invite link with #join= in it.');
     }
     linkAt = link.origin;
   }
-  if (!code) die('a private join link is required');
+  if (!code) die('Enter a private join link.');
   const codeIndex = rest.indexOf(input);
   const positionalAt = rest[codeIndex + 1]?.startsWith('--') ? null : rest[codeIndex + 1];
   const at = linkAt || strFlag('at', positionalAt || process.env.HELM_AT);
-  if (!at) die('where should I join? pass --at https://host.example (or http://127.0.0.1:8787 on the same machine)');
+  if (!at) die('Set --at to https://host.example, or http://127.0.0.1:8787 for this machine.');
 
   // Check the runtime before joining, so a machine that cannot actually run
   // agents never shows up in the app as one that can.
-  process.stdout.write('checking session runtime... ');
+  process.stdout.write('Checking agent software... ');
   try {
     const { createRuntime } = await import('../src/runtime/index.js');
     const rt = await createRuntime();
@@ -429,14 +430,14 @@ async function joinCmd() {
     die(`${err.message}\n  install it with: curl -fsSL https://herdr.dev/install.sh | sh`);
   }
 
-  process.stdout.write('discovering agent profiles... ');
+  process.stdout.write('Finding agent accounts... ');
   const { refreshProfiles } = await import('../src/profiles.js');
   const { profiles } = await refreshProfiles();
   console.log(`${profiles.length} found`);
 
   const previous = loadNetwork();
   if (previous && (!previous.provisional || Object.keys(previous.machines).length !== 1)) {
-    die('this machine is already in a network - run `helm leave` first');
+    die('This machine already belongs to a network. Run `helm leave` first.');
   }
   const localPort = Number(strFlag('port', previous?.port ?? 8787));
   const { pauseServices, resumeServices } = await import('../src/service.js');
@@ -450,13 +451,13 @@ async function joinCmd() {
     await resumeServices(paused);
     throw err;
   }
-  console.log(`\n  joined. ${Object.keys(net.machines).length} machines in this network.`);
+  console.log(`\n  This machine joined the network. The network has ${Object.keys(net.machines).length} machines.`);
 
   // An invite made with `helm add vm` says so, and a vm is a home: it needs an
   // address of its own and https in front of it, which is the rest of what
   // `helm setup` does. Nobody has to remember a second command for it.
   if (net.role === 'vm') {
-    console.log('  invited as a vm, so this machine becomes a home as well.\n');
+    console.log('  This machine joins as a VM and becomes a Helm home.\n');
     await setup({ alreadyJoined: true });
     return;
   }
@@ -483,23 +484,23 @@ async function joinCmd() {
     ];
     const { installed, unit } = await installService({ mode: 'serve', args });
     if (installed) {
-      console.log(`  installed ${unit} - this machine stays in the network across reboots.`);
+      console.log(`  Helm installed ${unit}. This machine stays in the network after restarts.`);
       await waitForLocal(net);
       if (host === '0.0.0.0') {
-        console.log('  it listens on every interface, so a phone on the same wifi reaches');
-        console.log('  it directly. On an untrusted network, reinstall with:');
+        console.log('  Phones on the same Wi-Fi can connect directly to this machine.');
+        console.log('  Reinstall with this command on a network you do not trust:');
         console.log('    helm up --install --host 127.0.0.1');
       }
       await installLocalApp(net);
-      console.log('\n  This computer and its web app are joined. No pairing link is needed.');
-      console.log(`  Open here: http://127.0.0.1:${localPort}/  (or run helm open)`);
-      console.log('  Check with:     helm status');
-      console.log('  Watch logs:     journalctl --user -u helm-serve -f');
-      console.log('  Run in front:   helm up  (stop the service first)\n');
+      console.log('\n  This computer and its web app joined the network.');
+      console.log(`  Open http://127.0.0.1:${localPort}/ or run helm open.`);
+      console.log('  Check status with: helm status');
+      console.log('  Read logs with: journalctl --user -u helm-serve -f');
+      console.log('  Stop the service, then run helm up to use this terminal.\n');
       return;
     }
   }
-  console.log('  bringing this machine up...\n');
+  console.log('  Starting Helm on this machine...\n');
   await up();
 }
 
@@ -509,7 +510,7 @@ async function installLocalApp(net) {
   try {
     installApp({ url: `http://127.0.0.1:${net.port ?? 8787}/` });
     console.log('  Helm is in your applications, already signed in.');
-  } catch (err) { console.log(`  Could not add the app launcher: ${err.message}`); }
+  } catch (err) { console.log(`  Helm did not add the app launcher: ${err.message}`); }
 }
 
 async function startInstalled() {
@@ -526,7 +527,7 @@ async function startInstalled() {
   localKey();
   const { startService } = await import('../src/service.js');
   const { installed } = await startService({ port: net.port ?? 8787 });
-  if (!installed) die('could not start the background service on this platform');
+  if (!installed) die('Helm cannot start the background service on this platform.');
   await waitForLocal(net);
   await installLocalApp(net);
   console.log('\n  Helm is active. Run helm join, then paste your private join link.\n');
@@ -561,7 +562,7 @@ async function setup({ alreadyJoined = false } = {}) {
   }
   const joinAt = joinCode ? cleanEndpoint(strFlag('at', process.env.HELM_AT)) : null;
   if (joinCode && !joinAt) {
-    die('where should I join? pass --at https://your-existing-home');
+    die('Set --at to https://your-existing-home.');
   }
 
   // The only bare positional setup takes is THIS machine's own https address.
@@ -583,9 +584,9 @@ async function setup({ alreadyJoined = false } = {}) {
     const { claimFreeHttps } = await import('../src/caddy.js');
     home = await claimFreeHttps(port(), {
       found: (hostname) => {
-        console.log(`using free address: https://${hostname}`);
-        console.log('no website, domain purchase, or DNS setup is needed.');
-        console.log('configuring HTTPS with Caddy (sudo may ask for your password)...');
+        console.log(`Using free address: https://${hostname}`);
+        console.log('You do not need a website, paid domain or DNS setup.');
+        console.log('Setting up HTTPS with Caddy. Enter your password if sudo asks.');
       },
     });
   }
@@ -597,10 +598,10 @@ async function setup({ alreadyJoined = false } = {}) {
   if (joinCode) {
     const existing = loadNetwork();
     if (existing && !existing.provisional) {
-      console.log(`already in a network (${existing.id}); re-advertising ${home}.`);
-      console.log('to move this machine to a different mesh, run `helm leave` first.');
+      console.log(`This machine already belongs to network ${existing.id}. Helm is sharing its address again: ${home}.`);
+      console.log('Run `helm leave` before joining another network.');
     } else {
-      process.stdout.write(`joining the mesh at ${joinAt}... `);
+      process.stdout.write(`Joining the network at ${joinAt}... `);
       const { pauseServices, resumeServices } = await import('../src/service.js');
       const paused = await pauseServices();
       try {
@@ -625,7 +626,7 @@ async function setup({ alreadyJoined = false } = {}) {
   });
   if (!result.installed) return;
 
-  process.stdout.write('waiting for your Helm home... ');
+  process.stdout.write('Waiting for your Helm home... ');
   let ready = false;
   for (let i = 0; i < 60; i++) {
     try {
@@ -640,7 +641,7 @@ async function setup({ alreadyJoined = false } = {}) {
   }
   if (!ready) {
     console.log('not reachable');
-    die(`nothing answered at ${home}\n` +
+    die(`Nothing answered at ${home}\n` +
         '  helm:   journalctl --user -u helm-serve -n 50\n' +
         '  https:  sudo journalctl -u caddy -n 50   (ports 80 and 443 must be open)');
   }
@@ -662,10 +663,10 @@ async function setup({ alreadyJoined = false } = {}) {
   if (joinCode) {
     const net = loadNetwork();
     const count = net ? Object.keys(net.machines).length : 0;
-    console.log(`\n  This VM is now part of the mesh at ${home}.`);
-    console.log(`  ${count} machine${count === 1 ? '' : 's'} in the network; devices already`);
-    console.log('  paired anywhere can reach it, and fail over to it if another');
-    console.log('  home goes down. No new pairing link is needed.\n');
+    console.log(`\n  This VM joined the network at ${home}.`);
+    console.log(`  The network has ${count} machine${count === 1 ? '' : 's'}.`);
+    console.log('  Devices signed in to this network can reach this VM.');
+    console.log('  Devices can use this VM if another home stops working.\n');
     return;
   }
   await printDeviceLink();
@@ -675,7 +676,7 @@ function listDevices() {
   const net = requireNetwork();
   const devices = Object.values(net.devices);
   if (!devices.length) {
-    console.log('no devices yet - run `helm login` and sign in from a phone');
+    console.log('Run `helm login` and sign in from a phone. This network has no control devices.');
     return;
   }
   for (const d of devices) {
@@ -738,7 +739,7 @@ async function transcribeSomewhere(audio, mime) {
       return { text: r.text, via: net.machines[id]?.name ?? id };
     } catch (err) { failures.push(`${net.machines[id]?.name ?? id}: ${err.message}`); }
   }
-  die(`no machine could transcribe that:\n  ${failures.join('\n  ')}`);
+  die(`No machine turned that speech into text:\n  ${failures.join('\n  ')}`);
 }
 
 /**
@@ -767,7 +768,7 @@ async function dictate() {
 
     let audio;
     try { audio = readFileSync(DICTATE_WAV); } catch { audio = null; }
-    if (!audio?.length) { notify('nothing was recorded', true); die('nothing was recorded'); }
+    if (!audio?.length) { notify('Helm recorded no sound.', true); die('Helm recorded no sound.'); }
 
     // Nothing reached the microphone: say so here rather than paying Groq to
     // hallucinate a "Thank you." into the owner's prompt.
@@ -775,8 +776,8 @@ async function dictate() {
     const level = levelOfWav(audio);
     if (level && level.rms < SILENCE_RMS) {
       rmSync(DICTATE_WAV, { force: true });
-      notify('nothing was said - is the microphone muted?', true);
-      die(`nothing was said (loudness ${level.rms.toFixed(4)}, silence is under ${SILENCE_RMS}) - is the microphone muted, or the wrong input selected?`);
+      notify('Helm heard no speech. Check that the microphone is on.', true);
+      die(`Nothing was said (loudness ${level.rms.toFixed(4)}, silence is under ${SILENCE_RMS}) - is the microphone muted, or the wrong input selected?`);
     }
 
     notify('transcribing…');
@@ -788,7 +789,7 @@ async function dictate() {
     const { audio: body, mime } = compress(audio);
     const { text, via } = await transcribeSomewhere(body.toString('base64'), mime);
     rmSync(DICTATE_WAV, { force: true });
-    if (!text) { notify('nothing was said', true); die('nothing was said'); }
+    if (!text) { notify('Helm heard no speech.', true); die('Helm heard no speech.'); }
 
     if (to) {
       const { env, machine, session } = await findSession(to);
@@ -806,13 +807,13 @@ async function dictate() {
   }
 
   const rec = recorder();
-  if (!rec) die('no recorder here - install pipewire (pw-record) or alsa-utils (arecord)');
+  if (!rec) die('Install pipewire (pw-record) or alsa-utils (arecord) to record sound.');
   rmSync(DICTATE_WAV, { force: true });
   const child = spawn(rec.cmd, rec.args, { stdio: 'ignore', detached: true });
   child.unref();
   writeFileSync(DICTATE_PID, String(child.pid));
   notify(to ? `recording for ${to}… press the key again to send` : 'recording… press the key again to transcribe');
-  console.log(`recording (${rec.cmd}); run \`helm dictate${to ? ` --to ${to}` : ''}\` again to stop`);
+  console.log(`Recording with ${rec.cmd}. Run \`helm dictate${to ? ` --to ${to}` : ''}\` again to stop.`);
 }
 
 // ------------------------------------------------------------------- brain
@@ -862,7 +863,7 @@ function machineId(who) {
     || all.find((m) => m.name.toLowerCase() === want)
     || all.find((m) => m.id.startsWith(want))
     || all.find((m) => m.name.toLowerCase().startsWith(want));
-  if (!hit) die(`no machine called "${who}" - try: ${all.map((m) => m.name).join(', ')}`);
+  if (!hit) die(`No machine called "${who}" - try: ${all.map((m) => m.name).join(', ')}.`);
   return hit.id;
 }
 
@@ -870,8 +871,8 @@ function machineId(who) {
 function brainHome() {
   const net = requireNetwork();
   const vm = brainHost(net.machines);
-  if (!vm) die('the Helm brain needs a VM in the network; designate one with `helm redesignate <machine> vm`');
-  if (flagOf('on') && machineId(flagOf('on')) !== vm.id) die(`the Helm brain lives on ${vm.name}; use \`helm spawn\` for work on another machine`);
+  if (!vm) die('The Helm brain needs a VM in the network. Set one with `helm redesignate <machine> vm`.');
+  if (flagOf('on') && machineId(flagOf('on')) !== vm.id) die(`The Helm brain lives on ${vm.name}. Use \`helm spawn\` for work on another machine.`);
   return vm.id;
 }
 
@@ -914,14 +915,14 @@ async function printSearch() {
   }));
   results.sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
   if (json) { console.log(JSON.stringify({ query, results, offline }, null, 2)); return; }
-  if (!results.length) console.log(`Nothing said about "${query}"${offline.length ? ` on the machines that answered` : ''}.`);
+  if (!results.length) console.log(`No chats match "${query}"${offline.length ? ` on the machines that answered` : ''}.`);
   for (const hit of results) {
     const where = hit.quick ? 'quick chat' : hit.cwd.replace(/^\/(home|Users)\/[^/]+/, '~');
     const who = hit.who === 'you' ? 'you' : hit.who === 'agent' ? 'agent' : 'title';
-    console.log(`${hit.id.slice(0, 6)}  ${hit.machine}  ${where}  ${hit.title}${hit.archived ? '  (archived)' : ''}`);
+    console.log(`${hit.id.slice(0, 6)}  ${hit.machine}  ${where}  ${hit.title}${hit.archived ? '  (Settled)' : ''}`);
     if (hit.snippet) console.log(`        ${who}: ${hit.snippet}`);
   }
-  if (offline.length) console.log(`\nNot asked (offline): ${offline.join(', ')}`);
+  if (offline.length) console.log(`\nMachines offline: ${offline.join(', ')}`);
 }
 
 async function printDigest() {
@@ -974,7 +975,7 @@ async function printThread() {
   console.log('');
   for (const line of readThread(r.events ?? [], { limit: Math.max(1, n) })) console.log(line);
   const open = (r.pending ?? []).length;
-  if (open) console.log(`\n${open} permission request${open === 1 ? '' : 's'} waiting - answer in the app, or with \`helm say\` if it takes words.`);
+  if (open) console.log(`\nAnswer ${open} approval request${open === 1 ? '' : 's'}. Answer in the app, or use \`helm say\` for text answers.`);
 }
 
 async function say() {
@@ -984,21 +985,21 @@ async function say() {
   }
   const [id, ...words] = rest.filter((x) => !x.startsWith('--'));
   const text = words.join(' ');
-  if (!text) die('what should it say? `helm say <id> <text>`');
+  if (!text) die('Enter a message with `helm say <id> <text>`.');
   const { env, machine, session } = await findSession(id);
   await reliableInput((method, params, timeout) => hubRpc(requireNetwork(), env, method, params,
     { timeout, budget: timeout }), { id: session.id, data: text }, { onRetry: () => waitingFor(machine) });
-  console.log(`sent to ${machine} ${shortId(session.id)} (${session.title})`);
+  console.log(`Sent to ${machine} ${shortId(session.id)} (${session.title}).`);
 }
 
 async function deleteChat() {
   const id = rest.find((x) => !x.startsWith('-'));
-  if (!id) die('which chat? `helm delete <id>` (helm digest lists them)');
+  if (!id) die('Pick a chat: `helm delete <id>`. Run helm digest to list chats.');
   const { env, machine, session } = await findSession(id);
   const own = process.env.HELM_SESSION_ID;
   if (own && session.id.startsWith(own)) die('that is the chat you are running in');
   await brainRpc(env, M.SESSION_KILL, { id: session.id }, 20_000);
-  console.log(`deleted ${machine} ${shortId(session.id)} (${session.title})`);
+  console.log(`Deleted ${machine} ${shortId(session.id)} (${session.title}).`);
 }
 
 async function spawn_() {
@@ -1039,7 +1040,7 @@ async function handoff() {
 
   const net = requireNetwork();
   const target = machineId(who);
-  if (target === net.self) die('the handoff target is this machine');
+  if (target === net.self) die('The task move target is this machine.');
 
   // Inside a Helm-managed session the source session's context and parent
   // link travel with the work. Outside one there is nothing to link back
@@ -1050,7 +1051,7 @@ async function handoff() {
   const sourceFolder = strFlag('source-folder', process.env.HELM_CWD || process.cwd());
   const handoffId = strFlag('handoff-id', randomBytes(12).toString('hex'));
   if (!/^[a-f0-9]{24}$/.test(handoffId)) {
-    die('--handoff-id must be 24 lowercase hexadecimal characters');
+    die('Set --handoff-id to 24 characters: 0–9 and a–f.');
   }
   const requestedTargetFolder = strFlag('target-folder', strFlag('folder', ''));
   const sourceName = net.machines[net.self]?.name ?? 'the source machine';
@@ -1063,7 +1064,7 @@ async function handoff() {
   let profileId;
   if (explicitAccount) {
     profileId = strFlag('account', '');
-    if (!profileId) die('--account needs a profile id');
+    if (!profileId) die('Set --account to an account ID.');
   } else if (sourceId) {
     const account = strFlag('account', process.env.HELM_PROFILE_ID || '');
     let targetProfiles = null;
@@ -1072,7 +1073,7 @@ async function handoff() {
     } catch (err) {
       if (!/offline|not connected|reach|timed out|ECONN|socket|closed/i.test(err.message)) throw err;
       if (!process.env.HELM_PROFILE_ID) {
-        die(`${targetName} is unreachable; pass --account <target-profile-id>`);
+        die(`${targetName} is unreachable. Pass --account <target-profile-id>.`);
       }
       console.error(`helm: warning: ${targetName} is unreachable; the profile is used as-is and the target validates it when it connects`);
       profileId = process.env.HELM_PROFILE_ID;
@@ -1085,13 +1086,13 @@ async function handoff() {
         || (prefixHits.length === 1 ? prefixHits[0] : null);
       if (!profile) {
         die(prefixHits.length > 1
-          ? `"${account}" matches ${prefixHits.length} accounts on ${targetName}; pass --account <profile>`
-          : `no matching authenticated account on ${targetName}; pass --account <profile>`);
+          ? `"${account}" matches ${prefixHits.length} accounts on ${targetName}. Pass --account <profile>.`
+          : `No matching authenticated account on ${targetName}. Pass --account <profile>.`);
       }
       profileId = profile.id;
     }
   } else {
-    die('outside a Helm-managed session, pass --account <target-profile-id>');
+    die('Use --account <target-profile-id> outside a Helm chat.');
   }
 
   // Read the source session first: it is where the inherited mode comes
@@ -1111,7 +1112,7 @@ async function handoff() {
   // pinned key - but an answer that proves the wrong key stops the handoff.
   const advertisedCodeKey = net.machines[target]?.codePubkey;
   if (!advertisedCodeKey) {
-    die(`${targetName} has no code-transfer key yet; restart Helm on that machine and try again`);
+    die(`${targetName} has no code-transfer key yet. Restart Helm on that machine and try again.`);
   }
   let proof = null;
   try {
@@ -1128,7 +1129,7 @@ async function handoff() {
     try {
       verifyCodeKeyProof(advertisedCodeKey, proof.challenge.secret, proof.response);
     } catch (err) {
-      die(`the code-transfer key for ${targetName} could not be verified; refresh the machine roster and retry (${err.message})`);
+      die(`Helm did not verify the code transfer key for ${targetName}. Refresh the machine list and retry (${err.message}).`);
     }
   }
 
@@ -1232,10 +1233,10 @@ async function handoff() {
         console.error(`helm: warning: the target session is running but the source could not record the link (${err.message})`);
       }
     }
-    console.log(`handoff ${handoffId} is running on ${targetName}:`);
+    console.log(`Task ${handoffId} runs on ${targetName}:`);
     console.log(`  ${shortId(accepted.sessionId)}  ${sessionTitle}  (${profile?.engine ?? profileId} on ${targetName}, ${accepted.folder})`);
     const entries = (accepted.skippedEntries ?? []).slice(0, 10);
-    console.log(`  handed off ${accepted.files} code files; ${accepted.skipped} entr${accepted.skipped === 1 ? 'y' : 'ies'} skipped${entries.length ? ':' : '.'}`);
+    console.log(`  Sent ${accepted.files} code files. Skipped ${accepted.skipped} item${accepted.skipped === 1 ? '' : 's'}${entries.length ? ':' : '.'}`);
     for (const e of entries) console.log(`    - ${e.path} (${e.reason})`);
     const omitted = (accepted.skipped ?? 0) - entries.length;
     if (omitted > 0) console.log(`    - … and ${omitted} more`);
@@ -1270,7 +1271,7 @@ async function sendTask() {
   if (options.json) console.log(JSON.stringify(result));
   if (!result.sent) {
     if (!options.json) for (const warning of result.preflight.warnings) console.error(`  ${warning.path || ''}: ${warning.message}`);
-    die('review omitted files and retry with --allow-skipped');
+    die('Review skipped files and retry with --allow-skipped.');
   }
   if (!options.json) {
     console.log(`Task ${handoffId} ${result.status} on ${result.targetName}.`);
@@ -1305,13 +1306,13 @@ async function send() {
     const { scanSend } = await import('../src/send-plan.js');
     const plan = await scanSend(path, { includeEnv });
     console.log(`${plan.files} file${plan.files === 1 ? '' : 's'} · ${plan.bytes} bytes to ${positional[0]}:${destination ?? '~/' + plan.name}`);
-    console.log(`${plan.envFiles.length} .env file${plan.envFiles.length === 1 ? '' : 's'} ${includeEnv ? 'included; use --no-env to leave them here' : 'excluded'}`);
+    console.log(`${plan.envFiles.length} .env file${plan.envFiles.length === 1 ? '' : 's'} ${includeEnv ? 'included. Use --no-env to leave them here.' : 'excluded'}`);
     for (const item of plan.left) console.log(`  ${item.path}: ${item.why}`);
     return;
   }
   const net = requireNetwork(), targetMachineId = machineId(positional[0]);
   let { job } = await brainRpc(net.self, M.SEND_START, { path, targetMachineId, destination, includeEnv });
-  console.log(`Send ${job.id} to ${job.target.name}. Ctrl-C cancels; retry with send.retry {jobId}.`);
+  console.log(`Sending ${job.id} to ${job.target.name}. Press Ctrl-C to cancel. Retry with send.retry {jobId}.`);
   let cancelling = false;
   const cancel = () => { cancelling = true; void brainRpc(net.self, M.SEND_CANCEL, { jobId: job.id }).catch(e => console.error(e.message)); };
   process.once('SIGINT', cancel);
@@ -1347,7 +1348,7 @@ async function legacySend() {
     if (!a.startsWith('-')) { args.push(a); continue; }
     if (boolFlags.has(a)) continue;
     if (valueFlags.has(a)) {
-      if (seen.has(a)) die(`${a} was given more than once`);
+      if (seen.has(a)) die(`Use ${a} once.`);
       seen.add(a);
       const v = rest[i + 1];
       if (v === undefined || v === '' || v.startsWith('-')) die(`${a} needs a value`);
@@ -1372,7 +1373,7 @@ async function legacySend() {
   for (const line of preflightLines(preflight)) console.log(line);
   if (dryRun) return;
   if (preflight.requiresAcknowledgement && !rest.includes('--allow-skipped')) {
-    die('some files will stay behind - rerun with --allow-skipped to send anyway'
+    die('Some files will stay here. Run again with --allow-skipped to send the other files.'
       + (preflight.warnings.some((w) => w.code === 'env-omitted')
         ? ', or --include-env to carry the .env files' : ''));
   }
@@ -1383,20 +1384,20 @@ async function legacySend() {
 
   const grant = decodeTransferGrant(grantToken);
   if (grant.targetMachineId !== target) {
-    die(`that grant is for a different machine, not ${targetName}`);
+    die(`That grant is for a different machine, not ${targetName}.`);
   }
   if (grant.sourceMachineId !== net.self) {
-    die('that grant is for a different source machine, not this one');
+    die('That grant is for a different source machine, not this one.');
   }
   if (grant.expiresAt <= Date.now()) {
-    die('that grant has expired - run `helm receive` again on the target');
+    die('This transfer permission expired. Run `helm receive` again on the receiving machine.');
   }
   const signPubkey = net.machines[target]?.codeSignPubkey;
   if (!signPubkey) {
-    die(`${targetName} has no pinned signing key yet; refresh the roster and retry`);
+    die(`${targetName} has no saved signing key yet. Refresh the member list and retry.`);
   }
   if (!verifyHandoffSignature(signPubkey, transferGrantDigest(grant), grant.signature)) {
-    die(`the grant did not verify against ${targetName}'s pinned signing key`);
+    die(`The grant did not verify against ${targetName}'s saved signing key.`);
   }
 
   const transferId = randomBytes(12).toString('hex');
@@ -1421,7 +1422,7 @@ async function legacySend() {
     (receipt.skipped ? `; ${receipt.skipped} skipped` : ''));
   if (includeEnv) {
     const secrets = snapshot.files.filter((f) => f.secret).length;
-    console.log(`  ${secrets} .env file${secrets === 1 ? '' : 's'} included, written owner-only on the target`);
+    console.log(`  ${secrets} .env file${secrets === 1 ? '' : 's'} included. Only the receiving user can read them.`);
   }
   if (receipt.repository) {
     console.log(`  origin: ${receipt.repository.remote}`);
@@ -1432,7 +1433,7 @@ async function legacySend() {
   if (receipt?.readiness && Array.isArray(receipt.readiness.checks)) {
     for (const line of readinessLines(receipt.readiness)) console.log(line);
   } else {
-    console.log('  the receiver did not report readiness; run `helm verify` on the target');
+    console.log('  Run `helm verify` on the receiving machine. It did not report its setup status.');
   }
 }
 
@@ -1460,7 +1461,7 @@ async function verifyFolder() {
   });
   for (const line of readinessLines(readiness)) console.log(line);
   if (marker?.malformed) {
-    console.log('  the handoff manifest could not be read; skipped-file history is unknown');
+    console.log('  Helm did not read the task move file list. Helm cannot show which files it skipped.');
   }
   if (runArgs === null) return;
 
@@ -1472,9 +1473,9 @@ async function verifyFolder() {
     child.on('close', (status) => settle(status));
   });
   if (code === 0) {
-    console.log('  explicit check passed');
+    console.log('  The requested check passed.');
     if (readiness.status === 'needs-setup') {
-      console.log('  setup gaps remain - see the checks above');
+      console.log('  Finish setup with the checks above.');
     }
     return;
   }
@@ -1495,7 +1496,7 @@ async function receive() {
     ttlMs: Number.isFinite(minutes) ? minutes * 60_000 : undefined,
   });
   console.log(`\n  ${grant}\n`);
-  console.log(`  good for one transfer in the next ${Math.max(1, Math.round((expiresAt - Date.now()) / 60000))} minutes`);
+  console.log(`  Use this permission for one transfer within ${Math.max(1, Math.round((expiresAt - Date.now()) / 60000))} minutes.`);
   console.log(`  on ${args[0]}:  helm send ${net.machines[net.self]?.name ?? net.self} [folder] --grant <token>\n`);
 }
 
@@ -1508,11 +1509,11 @@ async function dispatchStatus() {
   // wins, so a hub that only ever queued it cannot hide a finished one.
   const { successes } = await hubBroadcastRpc(net, net.self, M.DISPATCH_STATUS, { handoffId: id });
   const row = mergeQueueReceipts(successes.map((s) => s.value));
-  if (!row) die('no hub answered');
+  if (!row) die('No Helm home answered.');
   const targetName = net.machines[row.targetMachineId]?.name ?? row.targetMachineId;
   console.log(`handoff ${row.handoffId} for ${targetName}: ${row.status}`);
   if (row.receipt?.sessionId) {
-    console.log(`  session ${row.receipt.sessionId}${row.receipt.folder ? ` in ${row.receipt.folder}` : ''}`);
+    console.log(`  Chat ${row.receipt.sessionId}${row.receipt.folder ? ` in ${row.receipt.folder}` : ''}`);
   }
   if (row.error) console.log(`  error: ${row.error}`);
 }
@@ -1528,7 +1529,7 @@ async function openBrain() {
       profileId: account, model: flagOf('model'), mode: flagOf('mode'),
     }, 60_000);
     console.log(`${created ? 'started' : 'resumed'} the brain on ${name}: ${shortId(session.id)} (${session.engine}${session.model ? `, ${session.model}` : ''})`);
-    console.log('open "Helm brain" in the app, or talk to it here:');
+    console.log('Open "Helm brain" in the app, or send a message here:');
     console.log(`  helm say ${shortId(session.id)} "what is waiting on me?"`);
   } catch (err) {
     if (!/needs a profileId/.test(err.message)) throw err;
@@ -1647,11 +1648,11 @@ function reportKind(name, r) {
 /** Claim this machine's free https address, saying so before sudo asks. */
 async function claimFreeHome() {
   const { claimFreeHttps } = await import('../src/caddy.js');
-  console.log('\n  claiming a free https address for this machine...');
+  console.log('\n  Getting a free HTTPS address for this machine...');
   return claimFreeHttps(port(), {
     found: (hostname) => {
-      console.log(`  using free address: https://${hostname}`);
-      console.log('  configuring HTTPS with Caddy (sudo may ask for your password)...');
+      console.log(`  Using free address: https://${hostname}`);
+      console.log('  Setting up HTTPS with Caddy. Enter your password if sudo asks.');
     },
   });
 }
@@ -1682,15 +1683,15 @@ async function redesignateLocally(net, kind, { from, home }) {
     const r = await installService({
       mode: 'serve', args: ['--advertise', home, '--host', '127.0.0.1'],
     });
-    console.log(`\n  this machine is now a vm, serving ${home}.`);
+    console.log(`\n  This machine is now a VM at ${home}.`);
     if (!r.installed) {
-      console.log('  (no service was installed - `helm up --install` keeps it across reboots)');
+      console.log('  Run `helm up --install` to start Helm after this machine restarts.');
     }
   } else {
     if (from === 'vm') {
       await installService({ mode: 'serve', args: ['--host', '0.0.0.0'] });
-      console.log('\n  the old https address is no longer advertised; its Caddy site');
-      console.log('  can be removed by hand:');
+      console.log('\n  Helm no longer shares the old HTTPS address.');
+      console.log('  Remove its Caddy site with:');
       console.log('    sudo rm /etc/caddy/helm.caddy && sudo systemctl reload caddy');
     }
     console.log(`\n  this machine is now a ${kind}.`);
@@ -1745,9 +1746,9 @@ async function shareCmd() {
     const { configureShareHttps } = await import('../src/caddy.js');
     const own = (net.machines[net.self]?.endpoints ?? []).map((u) => { try { return new URL(u); } catch { return null; } })
       .find((u) => u?.protocol === 'https:');
-    if (!own) die('run this on the machine with the public https address (your VM)');
+    if (!own) die('Run this on the machine with the public https address (your VM).');
     await configureShareHttps(own.hostname, net.port || 8787);
-    console.log(`\n  links can now be served as https://<name>.${own.hostname}\n`);
+    console.log(`\n  Spins now use https://<name>.${own.hostname}.\n`);
     return;
   }
 
@@ -1761,7 +1762,7 @@ async function shareCmd() {
       } catch { return []; }
     }));
     const all = rows.flat();
-    if (!all.length) { console.log('\n  nothing shared.  helm share <port> [--name <name>] [--password <pw>]\n'); return; }
+    if (!all.length) { console.log('\n  No Spins are open. Run helm share <port> [--name <name>] [--password <pw>].\n'); return; }
     console.log('');
     for (const x of all) {
       const left = x.expiresAt ? `  ends in ${Math.max(1, Math.round((x.expiresAt - Date.now()) / 60_000))} min` : '  kept';
@@ -1775,14 +1776,14 @@ async function shareCmd() {
     const name = args[0];
     if (!name) die('usage: helm share stop <name> [--on <machine>]');
     const { removed } = await call(M.SHARE_REMOVE, { name });
-    console.log(removed ? `\n  stopped ${link(name)}\n` : `\n  ${where} is not sharing "${name}"\n`);
+    console.log(removed ? `\n  Stopped ${link(name)}.\n` : `\n  ${where} is not sharing "${name}"\n`);
     return;
   }
 
   if (verb !== 'add') die('usage: helm share <port> [--name <name>] [--password [pw]] [--private] [--for <hours>] [--keep] [--on <machine>] | list | stop <name> | setup');
   const port = Number(args[0]);
   const members = !!flagOf('private');
-  if (members && flagOf('password') !== undefined) die('a private link opens only for your own Helm devices; it takes no password');
+  if (members && flagOf('password') !== undefined) die('Open private links from devices signed in to your Helm. Private links do not use passwords.');
   // An older machine would read "private" as nothing and make the link
   // public, so ask first whether it knows the word. This machine too: the
   // list is written here, but it is the running daemon (maybe older than
@@ -1797,18 +1798,18 @@ async function shareCmd() {
   // `--password` with nothing after it: make one up and say what it is.
   if (password === true) password = shareLib.randomShareName() + shareLib.randomShareName();
   const name = strFlag('name');
-  if (name && !shareLib.shareName(name)) die(`a link name is ${shareLib.NAME_RULE}`);
+  if (name && !shareLib.shareName(name)) die(`Use ${shareLib.NAME_RULE} for the link name.`);
   // A name is the whole address, so it must be free across the network.
   if (name) {
     const others = Object.values(net.machines).filter((m) => m.id !== target && !net.revoked?.[m.id]);
     const clash = (await Promise.all(others.map((m) => hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 4000 })
       .then(({ shares }) => shares.some((x) => x.name === name.toLowerCase()) ? m.name : null).catch(() => null)))).find(Boolean);
-    if (clash) die(`"${name}" is already shared from ${clash}; pick another name`);
+    if (clash) die(`"${name}" is already shared from ${clash}. Pick another name.`);
   }
   // Links end after 3 hours unless --keep says otherwise; --for <hours> picks another length.
   const keep = !!flagOf('keep');
   const hours = Number(strFlag('for'));
-  if (strFlag('for') !== undefined && !(hours > 0)) die('--for takes a number of hours, e.g. --for 8');
+  if (strFlag('for') !== undefined && !(hours > 0)) die('--for takes a number of hours, e.g. --for 8.');
   const ttlMs = hours > 0 ? hours * 3_600_000 : undefined;
   const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true, ...(members ? { private: true } : {}) });
   const url = link(share.name);
@@ -1818,15 +1819,15 @@ async function shareCmd() {
     const machine = net.machines[target]?.name ?? 'this-machine';
     console.log(`  private: only devices signed in to your Helm can open it\n  from another of your machines: helm forward ${machine} ${share.port}`);
   }
-  if (!host) { console.log('\n  No machine in this network has a public https address, so nobody can open it yet.\n'); return; }
+  if (!host) { console.log('\n  Add a public HTTPS address to a machine in this network before opening this link.\n'); return; }
   // The first visit is when the certificate is made; do it now, so the
   // person you send it to does not wait - and so a problem shows up here.
   try {
     const r = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
-    console.log(r.status === 502 ? `\n  The link works, but nothing answered on port ${share.port} here yet.\n`
+    console.log(r.status === 502 ? `\n  The link works. Nothing answered on port ${share.port} here.\n`
       : `\n  Live. Stop it with: helm share stop ${share.name}${on ? ` --on ${on}` : ''}\n`);
   } catch (err) {
-    console.log(`\n  Saved, but the link did not answer yet (${err.cause?.code || err.message}).\n  If this is new, run \`helm share setup\` once on your VM.\n`);
+    console.log(`\n  Helm saved the link. It did not answer: ${err.cause?.code || err.message}.\n  Run \`helm share setup\` once on your VM for a new link.\n`);
   }
 }
 
@@ -1845,13 +1846,13 @@ async function forwardCmd() {
   if (!Number.isInteger(port) || port < 1 || port > 65535) die(usage);
   const wanted = strFlag('local');
   const localPort = wanted === undefined ? port : Number(wanted);
-  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) die('--local takes a port, e.g. --local 3001');
-  if (target === net.self) die(`that is this machine; open http://localhost:${port}`);
+  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) die('--local takes a port, e.g. --local 3001.');
+  if (target === net.self) die(`That is this machine. Open http://localhost:${port}.`);
   // Only what that machine shared on purpose. It checks again itself on
   // every connection; asking here just gives a clear answer up front.
   let shared;
   try { ({ shares: shared } = await hubRpc(net, target, M.SHARE_LIST, {}, { timeout: 15_000 })); }
-  catch (err) { die(`could not ask ${where} what it shares: ${err.message}`); }
+  catch (err) { die(`Helm did not ask ${where} what it shares: ${err.message}`); }
   if (!shared?.some((s) => s.port === port)) {
     die(`${where} is not sharing port ${port}.\n  share it there first: helm share ${port} --private --on ${where}`);
   }
@@ -1859,10 +1860,10 @@ async function forwardCmd() {
   let refusedOnce = false;
   const fwd = await startForward(net, {
     target, port, localPort, exact: wanted !== undefined,
-    onRefused: () => { if (!refusedOnce) { refusedOnce = true; console.log(`\n  ${where} stopped sharing port ${port}; new connections are refused.`); } },
+    onRefused: () => { if (!refusedOnce) { refusedOnce = true; console.log(`\n  ${where} stopped sharing port ${port}. It blocks new connections.`); } },
     onError: (err) => console.error(`  ${err.message}`),
-  }).catch((err) => die(err.code === 'EADDRINUSE' ? `port ${localPort} is already in use here; pick another with --local` : err.message));
-  console.log(`\n  http://localhost:${fwd.port}  ->  ${where}, port ${port}\n  Ctrl+C stops it.\n`);
+  }).catch((err) => die(err.code === 'EADDRINUSE' ? `Port ${localPort} is already in use here. Pick another with --local.` : err.message));
+  console.log(`\n  http://localhost:${fwd.port}  ->  ${where}, port ${port}\n  Press Ctrl+C to stop.\n`);
   await new Promise((resolve) => {
     const stop = () => { fwd.close().then(resolve); };
     process.once('SIGINT', stop);
@@ -1895,15 +1896,15 @@ async function nasCmd() {
     const { roots } = target === net.self && !await reachable(net, target)
       ? { roots: nas.mediaRoots() }
       : await hubRpc(net, target, M.MEDIA_ROOTS);
-    if (!roots.length) console.log('\n  nothing shared yet:  helm nas add <folder>');
+    if (!roots.length) console.log('\n  This machine shares no folders. Run helm nas add <folder>.');
     for (const r of roots) console.log(`  [${r.id}] ${r.path}`);
     console.log('');
     return;
   }
 
   if (kind !== 'nas') {
-    die(`${record?.name ?? 'this machine'} is not a nas - run ` +
-      `\`helm redesignate ${who ?? ''} nas\` first`);
+    die(`${record?.name ?? 'this machine'} is not a NAS. Run ` +
+      `\`helm redesignate ${who ?? ''} nas\` first.`);
   }
   if (!folder) die(`usage: helm nas ${who ? `${who} ` : ''}${verb} <folder>`);
   const method = verb === 'add' ? M.MEDIA_ROOT_ADD : M.MEDIA_ROOT_REMOVE;
@@ -1938,31 +1939,31 @@ async function reachable(net, target) {
 function remove() {
   const net = requireNetwork();
   const prefix = rest.find((a) => !a.startsWith('--'));
-  if (!prefix) die('which one? run `helm devices` or `helm machines` for ids');
+  if (!prefix) die('Pick an ID from `helm devices` or `helm machines`.');
 
   const all = { ...net.devices, ...net.machines };
   const hits = Object.keys(all).filter((id) => id.startsWith(prefix));
-  if (!hits.length) die(`no device or machine starts with "${prefix}"`);
-  if (hits.length > 1) die(`"${prefix}" matches ${hits.length} members - be more specific`);
+  if (!hits.length) die(`No device or machine starts with "${prefix}".`);
+  if (hits.length > 1) die(`"${prefix}" matches ${hits.length} members - be more specific.`);
 
   const [id] = hits;
   if (id === net.self) {
-    die('that is this machine - use `helm leave` to take it out of the network');
+    die('Run `helm leave` to remove this machine from the network.');
   }
   const label = net.devices[id]?.label ?? net.machines[id]?.name ?? id;
   revoke(net, id);
   console.log(`removed ${label} (${short(id)}).`);
-  console.log('it is revoked everywhere as soon as each machine next syncs.');
+  console.log('Each machine blocks it when it gets the updated member list.');
 }
 
 async function leave() {
   const net = loadNetwork();
-  if (!net) { console.log('this machine is not in a network'); return; }
+  if (!net) { console.log('This machine has not joined a network.'); return; }
   if (!rest.includes('--yes')) {
-    console.log(`this will remove "${net.machines[net.self]?.name}" from its network,`);
-    console.log('delete this machine\'s copy of the roster and its key, and stop');
-    console.log('the helm background service if one is installed.');
-    console.log('\nre-run with --yes to confirm.');
+    console.log(`This removes "${net.machines[net.self]?.name}" from its network.`);
+    console.log('This deletes the network member list and key from this machine.');
+    console.log('This stops the Helm background service if installed.');
+    console.log('\nRun again with --yes to confirm.');
     return;
   }
   // Stop the background service first: left running, it would restart and
@@ -1977,8 +1978,8 @@ async function leave() {
   rmSync(join(HELM_DIR, 'local-relay.sqlite'), { force: true });
   rmSync(join(HELM_DIR, 'config.json'), { force: true });
   rmSync(join(HELM_DIR, 'local.json'), { force: true });
-  console.log('left the network. `helm up` will start a fresh one.');
-  console.log('other machines will drop this one as they sync.');
+  console.log('This machine left the network. Run `helm up` to start a new network.');
+  console.log('Other machines remove this one when they get the updated member list.');
 }
 
 // ---------------------------------------------------------------- dispatch
@@ -1992,7 +1993,7 @@ const helpFor = cmd === 'help' || cmd === '--help' || cmd === '-h' ? rest[0]
 try {
   if (helpFor) {
     const text = commandHelp(helpFor, USAGE);
-    if (!text) die(`no command "${helpFor}" - helm help lists them all`);
+    if (!text) die(`No command "${helpFor}" - helm help lists them all.`);
     console.log(text);
     exit(0);
   }
@@ -2040,19 +2041,19 @@ try {
       if (rest.includes('--remove') || rest.includes('remove')) {
         const { removed, icons } = removeApp();
         console.log(removed
-          ? `\n  removed the helm desktop entry and ${icons} icon${icons === 1 ? '' : 's'}.\n`
-          : '\n  there was no helm desktop entry here.\n');
+          ? `\n  Helm removed the app shortcut and ${icons} icon${icons === 1 ? '' : 's'}.\n`
+          : '\n  This machine had no Helm app shortcut.\n');
         break;
       }
       const net = requireNetwork();
       const at = `http://127.0.0.1:${net.port ?? 8787}/`;
       const pick = rest[rest.indexOf('--browser') + 1];
       const r = installApp({ url: at, browser: rest.includes('--browser') ? pick : undefined });
-      console.log(`\n  helm is in your applications, opening ${r.url}`);
+      console.log(`\n  Helm is in your applications. Opening ${r.url}.`);
       console.log(r.windowed
-        ? `  its own window, through ${r.browser}. It signs itself in; there is nothing to type.`
-        : '  no chromium-family browser found, so it opens in your default one.');
-      console.log('  remove it again with:  helm app --remove\n');
+        ? `  Helm opens in a separate ${r.browser} window and signs in automatically.`
+        : '  Helm opens in your default browser because this machine has no Chromium browser.');
+      console.log('  Remove it with: helm app --remove\n');
       break;
     }
 
@@ -2110,8 +2111,8 @@ try {
         null, Number.isFinite(mins) && mins > 0 ? mins * 60_000 : PASSWORD_TTL_MS
       );
       console.log(`\n  password: ${password}`);
-      console.log(`  valid for ${Math.round((expiresAt - Date.now()) / 60000)} minutes`);
-      console.log('  devices already signed in are unaffected.\n');
+      console.log(`  This password expires in ${Math.round((expiresAt - Date.now()) / 60000)} minutes.`);
+      console.log('  Signed-in devices stay signed in.\n');
       break;
     }
 
@@ -2138,8 +2139,8 @@ try {
       if (!r.updated) { console.log(`  not updated - ${r.reason}`); break; }
       if (r.backup) console.log(`  your changes are kept on branch ${r.backup}`);
       console.log(r.restarting?.length
-        ? `  updated - ${r.restarting.join(', ')} will restart safely; active threads are preserved`
-        : '  updated - restart helm to pick it up');
+        ? `  Helm updated. ${r.restarting.join(', ')} will restart safely and keep active chats.`
+        : '  Helm updated. Restart Helm to use the update.');
       break;
     }
 
@@ -2156,17 +2157,17 @@ try {
         let reported = -1;
         const r = await ag.installAntigravity({
           onProgress: (phase, done, total) => {
-            if (phase === 'extract') { process.stdout.write('\n  verifying and unpacking…'); return; }
+            if (phase === 'extract') { process.stdout.write('\n  Checking and unpacking files…'); return; }
             if (phase !== 'download') return;
             const pct = Math.floor((done / total) * 100);
             if (pct !== reported && pct % 5 === 0) {
               reported = pct;
-              process.stdout.write(`\r  downloading antigravity runtime… ${pct}%`);
+              process.stdout.write(`\r  Downloading Antigravity… ${pct}%`);
             }
           },
         });
-        console.log(`\n\n  antigravity ${r.version ?? ''} installed.`);
-        console.log('  next: helm antigravity login   (or start a session - it signs in there too)\n');
+        console.log(`\n\n  Antigravity ${r.version ?? ''} is installed.`);
+        console.log('  Run helm antigravity login, or start a chat to sign in.\n');
         // The profile cache predates the install; discovery adds the engine now.
         try { await (await import('../src/profiles.js')).refreshProfiles(); } catch { /* the next discovery pass gets it */ }
       } else if (sub === 'login') {
@@ -2176,19 +2177,19 @@ try {
         if (process.env.GEMINI_API_KEY) env.GEMINI_API_KEY = process.env.GEMINI_API_KEY;
         const r = await ag.antigravityLogin({
           env,
-          onUrl: (u) => console.log(`\n  open this link to sign in to Antigravity:\n\n  ${u}\n\n  (waiting for Google to finish…)`),
+          onUrl: (u) => console.log(`\n  Open this link to sign in to Antigravity:\n\n  ${u}\n\n  Waiting for Google to finish…`),
         });
         console.log(r.alreadySignedIn
-          ? '\n  already signed in - Antigravity sessions can start.\n'
-          : '\n  signed in - Antigravity sessions can start.\n');
+          ? '\n  Antigravity is already signed in. Start a chat.\n'
+          : '\n  Antigravity is signed in. Start a chat.\n');
       } else if (sub === 'remove' || sub === 'uninstall') {
         await ag.uninstallAntigravity();
-        console.log('\n  removed the Antigravity runtime. Google sign-ins live under each profile home.\n');
+        console.log('\n  Helm removed Antigravity. Google sign-ins stay in each account folder.\n');
       } else {
         const s = ag.antigravityStatus();
         console.log(s.installed
           ? `\n  antigravity ${s.version ?? ''} installed\n  ${s.exe}\n`
-          : '\n  the Antigravity runtime is not installed.\n  run: helm antigravity install\n');
+          : '\n  Antigravity is not installed.\n  Run helm antigravity install.\n');
       }
       break;
     }
@@ -2222,7 +2223,7 @@ try {
 
     case 'status': {
       const net = loadNetwork();
-      if (!net) { console.log('not in a network - run `helm up`'); break; }
+      if (!net) { console.log('This machine has not joined a network. Run `helm up`.'); break; }
       const me = net.machines[net.self];
       // What this machine is for: the roster record's word for it, falling
       // back to the local note a join left behind before records had one.
@@ -2231,7 +2232,7 @@ try {
       console.log(`machine:  ${me?.name} (${short(net.self)}${kind ? `, ${kind}` : ''})`);
       console.log(`members:  ${Object.keys(net.machines).length} machines, ` +
                   `${Object.keys(net.devices).length} controllers`);
-      console.log(`reachable at: ${(me?.endpoints ?? []).join(' ') || '(not advertised yet)'}`);
+      console.log(`reachable at: ${(me?.endpoints ?? []).join(' ') || '(no address shared yet)'}`);
 
       // A full-tunnel VPN leaves the LAN address on the interface but routes
       // the subnet into the tunnel, so the address helm advertises is one it
@@ -2242,16 +2243,17 @@ try {
       const lan = await lanIsRoutable();
       if (lan && !lan.ok) {
         console.log(`
-  ! ${lan.address} is advertised for this network, but traffic to it leaves
-    over ${lan.via} rather than ${lan.expected}. A device on the same wifi
-    cannot reach this machine directly, so sessions relay through your Helm
-    home - which is slower, often by a lot.
+  ! Helm shares ${lan.address} for this network.
+    Traffic uses ${lan.via} instead of ${lan.expected}.
+    Devices on the same Wi-Fi cannot connect directly.
+    Chats use your Helm home, which slows them.
 
-    Usually a VPN carrying everything. With Tailscale:
+    Check your VPN settings.
+    For Tailscale, run:
       tailscale set --exit-node-allow-lan-access=true`);
       }
       const peers = allEndpoints(net).filter((e) => !(me?.endpoints ?? []).includes(e));
-      if (peers.length) console.log(`other hubs:   ${peers.join(' ')}`);
+      if (peers.length) console.log(`Other Helm homes:   ${peers.join(' ')}`);
 
       // Which way each machine is reached from here, and how long a round
       // trip takes - asked of this machine's running daemon, which is the
@@ -2260,8 +2262,8 @@ try {
         const report = await hubRpc(net, net.self, M.NET_ROUTES, {}, { timeout: 5000, budget: 8000 });
         if (report.recovery?.supported) {
           console.log(report.recovery.repair
-            ? `packet recovery: needs setup - run ${report.recovery.repair}`
-            : 'packet recovery: enabled, saved for reboot');
+            ? `Fix large network packet failures with: ${report.recovery.repair}`
+            : 'Large network packet recovery stays on after restarts.');
         }
         const { routeLines } = await import('../src/hub-mesh.js');
         console.log('routes:');
@@ -2296,7 +2298,7 @@ try {
         console.log(`terminals: own pty${up ? `, host running (${open} open)` : ', host idle'}`);
       } else {
         console.log(`terminals: herdr panes (slow) - no pty: ${ptyUnavailable()}`);
-        console.log('           build one with a compiler installed, then re-run install.sh');
+        console.log('           Install a compiler, then run install.sh again to add fast terminal support.');
       }
       break;
     }
@@ -2414,7 +2416,7 @@ try {
       const off = rest.includes('--remove');
       const commands = off ? removeNativeLaunchers() : integrateNativeCommands({ enable: true });
       if (off) console.log(commands.length ? `Turned off for: ${commands.join(', ')}. Open a new terminal.` : 'Already off.');
-      else console.log(commands.length ? `On for: ${commands.join(', ')}. Open a new terminal, then use them as normal.` : 'No supported CLI found on PATH.');
+      else console.log(commands.length ? `On for: ${commands.join(', ')}. Open a new terminal, then use them as normal.` : 'Helm found no supported command line app on PATH.');
       break;
     }
     case 'chat': {

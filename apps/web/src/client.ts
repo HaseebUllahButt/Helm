@@ -754,7 +754,7 @@ export class Client {
     for (const env of [...this.peers.keys()]) this.dropDirect(env);
     this.connectVersion++;
     for (const cleanup of this.socketCleanups) cleanup();
-    this.disconnectSocket?.('The network changed.', false);
+    this.disconnectSocket?.('network changed', false);
     this.connecting = false;
     this.connect().catch(() => {});
   };
@@ -763,7 +763,7 @@ export class Client {
     this.connectVersion++;
     for (const cleanup of this.socketCleanups) cleanup();
     for (const env of [...this.peers.keys()]) this.dropDirect(env);
-    this.disconnectSocket?.('The network is offline.', false);
+    this.disconnectSocket?.('network offline', false);
     this.connecting = false;
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
     this.emit('', 'connection', { online: false, reachable: false, hub: this.relay });
@@ -1017,7 +1017,7 @@ export class Client {
       for (const cleanup of this.socketCleanups) cleanup();
       this.connecting = false;
     }
-    if (this.ws) this.disconnectSocket?.('The connection closed without a notice.', false);
+    if (this.ws) this.disconnectSocket?.('connection closed without notification', false);
     if (!immediate && this.reconnectTimer) return;
     if (immediate) this.backoff = 500;
     void this.connect().catch(() => {});
@@ -1027,7 +1027,7 @@ export class Client {
     const ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/ws`, ['helm', this.token]);
     let cancel!: () => void;
     const ready = new Promise<WebSocket>((resolve, reject) => {
-      const timer = setTimeout(() => finish(new Error('Helm took too long to connect.')), 20_000);
+      const timer = setTimeout(() => finish(new Error('socket connection timed out')), 20_000);
       const finish = (error?: Error) => {
         clearTimeout(timer);
         this.socketCleanups.delete(cancel);
@@ -1035,10 +1035,10 @@ export class Client {
         if (error) { try { ws.close(); } catch {} reject(error); }
         else resolve(ws);
       };
-      cancel = () => finish(new Error('Helm started another connection.'));
+      cancel = () => finish(new Error('connection superseded'));
       this.socketCleanups.add(cancel);
       ws.onopen = () => finish();
-      ws.onerror = ws.onclose = () => finish(new Error('Helm cannot reach the connecting machine.'));
+      ws.onerror = ws.onclose = () => finish(new Error('could not reach the hub'));
     });
     return { ws, ready, cancel };
   }
@@ -1128,14 +1128,14 @@ export class Client {
           this.closed = true;
           this.emit('', 'unauthorized', {});
         } else {
-          this.lastError = 'No connecting machine answered.';
+          this.lastError = 'no hub answered';
           this.emit('', 'connection', { online: false, reachable: false });
           this.scheduleReconnect();
         }
       }
     }
     if (version !== this.connectVersion) { prepared?.cancel(); return; }
-    if (!hub) throw new Error('Helm cannot reach any machine in this network.');
+    if (!hub) throw new Error('no machine in this network is reachable right now');
     if (this.closed) { prepared?.cancel(); this.connecting = false; return; }
     if (!migrating) this.relay = hub;
 
@@ -1172,7 +1172,7 @@ export class Client {
             if (pending.direct?.ready || pending.routes?.has('http')) continue;
             if (!this.closed && pending.recover) { pending.recover(); continue; }
             this.pending.delete(id);
-            pending.reject(new Error('Helm lost the connection.'));
+            pending.reject(new Error('disconnected'));
           }
           if (!this.closed) {
             this.emit('', 'connection', { online: false, reachable: true, hub, error: reason });
@@ -1189,19 +1189,19 @@ export class Client {
       };
       // Browsers may leave an upgrade CONNECTING for minutes. HTTP having
       // worked does not prove WebSocket upgrades work on this network.
-      const handshake = setTimeout(() => stop('Helm took too long to connect.'), 20_000);
-      const cleanup = () => stop('Helm started another connection.', false);
+      const handshake = setTimeout(() => stop('socket connection timed out'), 20_000);
+      const cleanup = () => stop('connection superseded', false);
       this.socketCleanups.add(cleanup);
       if (!migrating) this.disconnectSocket = stop;
       const beat = (force = false) => {
         if (stopped || !this.connected || (!force && document.hidden)) return;
         const idle = Date.now() - lastReceived;
-        if (awaiting && idle >= 15_000) { stop('The connection stopped responding.'); return; }
+        if (awaiting && idle >= 15_000) { stop('connection stopped responding'); return; }
         if (!awaiting && (force || idle >= 10_000)) {
           awaiting = true;
           // Measure the grace from the ping, not from the preceding idle gap.
           lastReceived = Date.now();
-          try { ws.send(JSON.stringify({ t: 'ping' })); } catch { stop('The connection stopped responding.'); }
+          try { ws.send(JSON.stringify({ t: 'ping' })); } catch { stop('connection stopped responding'); }
         }
       };
       const probeSocket = (reset = false) => {
@@ -1211,7 +1211,7 @@ export class Client {
         beat(true);
       };
       ws.onopen = () => {
-        if (stopped || this.closed || version !== this.connectVersion) { stop('Helm started another connection.', false); return; }
+        if (stopped || this.closed || version !== this.connectVersion) { stop('connection superseded', false); return; }
         clearTimeout(handshake);
         const retire = this.retireSocket;
         this.ws = ws;
@@ -1256,8 +1256,8 @@ export class Client {
         if (msg.t === 'presence') this.emit(msg.env, 'presence', msg);
         if (msg.t === 'signal') this.onSignal(msg.env, msg.payload).catch(() => {});
       };
-      ws.onerror = () => stop('Helm cannot reach any machine.');
-      ws.onclose = (ev) => stop(`The connection closed (${ev.code}${ev.reason ? ` ${ev.reason}` : ''}).`);
+      ws.onerror = () => stop('could not reach any machine');
+      ws.onclose = (ev) => stop(`socket closed (${ev.code}${ev.reason ? ` ${ev.reason}` : ''})`);
       if (ws.readyState === WebSocket.OPEN) ws.onopen({} as Event);
     });
 
@@ -1329,9 +1329,9 @@ export class Client {
     for (const cleanup of this.socketCleanups) cleanup();
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
     clearInterval(this.recoveryTimer); this.recoveryTimer = undefined;
-    this.disconnectSocket?.('Helm closed the connection.', false);
+    this.disconnectSocket?.('client closed', false);
     for (const cancel of this.httpReads) cancel();
-    for (const p of this.pending.values()) p.reject(new Error('Helm closed the connection.'));
+    for (const p of this.pending.values()) p.reject(new Error('client closed'));
     this.pending.clear();
     this.stopPresencePoll();
     if (this.reachPoll) clearInterval(this.reachPoll);
@@ -1423,7 +1423,7 @@ export class Client {
     // Watching an open chat includes restored tabs and deep links, which
     // never visit the machine screen that originally started direct links.
     if (method === 'session.watch') void this.openDirect(env).catch(() => {});
-    if (this.closed) return Promise.reject(new Error('Helm closed the connection.'));
+    if (this.closed) return Promise.reject(new Error('client closed'));
     const peer = this.peers.get(env);
     // Tiny persistent settings writes should use the acknowledged hub route
     // when available. An apparently open peer can stop answering after a
@@ -1442,7 +1442,7 @@ export class Client {
     if (!direct && !this.connected) {
       return HTTP_READ_METHODS.has(method)
         ? this.readHttp<T>(env, method, params, timeout)
-        : Promise.reject(new Error('Helm is not connected.'));
+        : Promise.reject(new Error('not connected'));
     }
 
     const id = `w${++this.seq}`;
@@ -1470,7 +1470,7 @@ export class Client {
         if (pending) { pending.direct = undefined; pending.routes = new Set(['relay']); if (pending.sentAt) pending.sentAt = { relay: started }; }
         if (!this.connected) {
           this.pending.delete(id);
-          reject(new Error('Helm is not connected.'));
+          reject(new Error('not connected'));
           return;
         }
         try {
@@ -1530,16 +1530,16 @@ export class Client {
       }
       deadline = setTimeout(() => {
         clear();
-        if (this.pending.delete(id)) reject(new Error(`The machine took too long to answer ${method}.`));
+        if (this.pending.delete(id)) reject(new Error(`${method} timed out`));
         if (sent && peer) this.dropDirect(env, peer);
       }, timeout);
     });
   }
 
   private async readHttp<T>(env: string, method: string, params: any, timeout: number): Promise<T> {
-    if (this.closed) throw new Error('Helm closed the connection.');
+    if (this.closed) throw new Error('client closed');
     const bases = [...new Set([this.relay, ...this.endpoints])].filter(Boolean).filter(reachableFromHere);
-    if (!bases.length) throw new Error('Helm is not connected.');
+    if (!bases.length) throw new Error('not connected');
     const body = JSON.stringify({ env, method, params });
     // A reconnect may find another hub while this read is already waiting on
     // an obsolete relay. Race known, eligible endpoints with a short head
@@ -1547,7 +1547,7 @@ export class Client {
     // identical. Errors from one hub cannot defeat another hub's success.
     return new Promise<T>((resolve, reject) => {
       let settled = false, next = 0, active = 0;
-      let lastError: Error = new Error('Helm is not connected.');
+      let lastError: Error = new Error('not connected');
       let stagger: ReturnType<typeof setTimeout> | undefined;
       let deadline: ReturnType<typeof setTimeout> | undefined;
       const controllers = new Set<AbortController>();
@@ -1559,7 +1559,7 @@ export class Client {
         for (const controller of controllers) controller.abort();
         error ? reject(error) : resolve(result as T);
       };
-      const cancel = () => done(new Error('Helm closed the connection.'));
+      const cancel = () => done(new Error('client closed'));
       this.httpReads.add(cancel);
       const launch = () => {
         clearTimeout(stagger); stagger = undefined;
@@ -1579,7 +1579,7 @@ export class Client {
         });
         if (next < bases.length) stagger = setTimeout(launch, Math.min(400, Math.max(1, timeout / 2)));
       };
-      deadline = setTimeout(() => done(new Error(`The machine took too long to answer ${method}.`)), timeout);
+      deadline = setTimeout(() => done(new Error(`${method} timed out`)), timeout);
       launch();
     });
   }
@@ -1603,7 +1603,7 @@ export class Client {
       if (this.readDurations.size > 128) this.readDurations.delete(this.readDurations.keys().next().value!);
     }
     this.pending.delete(msg.id);
-    msg.ok ? pending.resolve(msg.result) : pending.reject(Object.assign(new Error(msg.error?.message ?? 'The request failed.'), { code: msg.error?.code }));
+    msg.ok ? pending.resolve(msg.result) : pending.reject(Object.assign(new Error(msg.error?.message ?? 'failed'), { code: msg.error?.code }));
     // Retire the unresponsive peer after its fallback succeeds, so the next
     // chat does not pay the same hedge delay again.
     if (msg.ok && route !== 'direct' && pending.hedged && pending.env && pending.direct) {
@@ -1680,7 +1680,7 @@ export class Client {
       try { channel = pc.createDataChannel('helm', { ordered: true }); }
       catch (error) { pc.close(); throw error; }
     } catch {
-      this.directErrors.set(env, 'This browser cannot connect directly to the machine.');
+      this.directErrors.set(env, 'This browser could not start the direct link.');
       this.retryDirect(env);
       return;
     }
@@ -1692,8 +1692,8 @@ export class Client {
     // Failed signalling can leave the browser's peer in "new" forever,
     // which otherwise blocks every retry because peers.has(env) stays true.
     peer.deadline = setTimeout(() => this.dropDirect(env, peer, peer.remoteReady
-      ? 'The machines exchanged addresses. They did not connect directly.'
-      : 'The machine did not answer the request to connect directly.'), 15_000);
+      ? 'The machines exchanged addresses, but the direct link did not open.'
+      : 'The machine did not answer the direct connection request.'), 15_000);
 
     pc.onicecandidate = ({ candidate }) => {
       if (!candidate || this.peers.get(env) !== peer) return;
@@ -1739,7 +1739,7 @@ export class Client {
         for (const candidate of localCandidates) this.signal(env, { type: 'candidate', candidate, negotiation });
         localCandidates.length = 0;
       }
-    } catch { this.dropDirect(env, peer, 'This browser cannot connect directly to the machine.'); }
+    } catch { this.dropDirect(env, peer, 'This browser could not start the direct link.'); }
   }
 
   /** Ids of events already handed on, so the second copy is ignored. */
@@ -1782,7 +1782,7 @@ export class Client {
         if (this.peers.get(env) !== peer) return;
         peer.remoteReady = true;
         for (const candidate of peer.candidates.splice(0)) await peer.pc.addIceCandidate(candidate).catch(() => {});
-      } catch { this.dropDirect(env, peer, 'Helm cannot read the reply for the direct connection.'); }
+      } catch { this.dropDirect(env, peer, 'The direct connection reply could not be read.'); }
     } else if (payload?.type === 'candidate' && payload.candidate) {
       if (peer.remoteReady) await peer.pc.addIceCandidate(payload.candidate).catch(() => {});
       else if (peer.candidates.length < 128) peer.candidates.push(payload.candidate);
@@ -1890,7 +1890,7 @@ export class Client {
     // be redeemed on another computer; mint at a public home and carry that
     // same address, rather than replacing it with a different hub's address.
     const homes = [...new Set([this.relay, ...this.endpoints])].filter((base) => base.startsWith('https://'));
-    if (!homes.length) throw new Error('Helm needs a home machine with a secure web address. Run helm setup on its always-on VM first.');
+    if (!homes.length) throw new Error('This network needs a reachable HTTPS home. Run helm setup on its always-on VM first.');
     let last: unknown;
     for (const base of homes) {
       try {
@@ -1920,7 +1920,7 @@ export class Client {
         return { ...invite, base, knownDeviceIds: current.devices.map((device) => device.id) };
       } catch (error) { last = error; }
     }
-    throw last ?? new Error('Other devices cannot reach these addresses. Run helm setup on your home machine first.');
+    throw last ?? new Error('No address is reachable from another device. Run helm setup on your home first.');
   }
 
   /**
@@ -2103,7 +2103,7 @@ export async function login(endpoint: string, password: string, local?: string) 
   if (!res.ok) {
     const body = await res.json().catch(() => ({} as any));
     throw new Error(
-      body.error ?? (res.status === 401 ? 'The password is incorrect.' : `The machine returned error ${res.status}.`)
+      body.error ?? (res.status === 401 ? 'wrong password' : `the machine returned ${res.status}`)
     );
   }
   const { token, deviceId, endpoints } = await res.json();

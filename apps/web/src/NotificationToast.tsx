@@ -49,7 +49,7 @@ export function NotificationToast({ session, machine, onOpen, onDismiss }: {
     <button className="toast-open" onClick={onOpen} aria-label={`Open ${chat}: ${who} ${askAction(ask)}${text ? `, ${text}` : ''}`}>
       <EngineMark engine={session.engine} />
       <span className="toast-copy">
-        <span className="toast-kind"><i />{who} {askAction(ask)}.</span>
+        <span className="toast-kind"><i />{who} {askAction(ask)}</span>
         {text
           ? <b className={ask?.kind === 'command' ? 'mono' : undefined}>{text}{more && <span className="toast-more">{more}</span>}</b>
           : <b>{chat}</b>}
