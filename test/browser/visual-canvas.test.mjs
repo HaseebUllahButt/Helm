@@ -63,7 +63,7 @@ async function open(t, width) {
   t.after(() => page.close());
   page.setDefaultTimeout(5000);
   page.on('pageerror', error => t.diagnostic(error.stack));
-  await page.route('http://live.test/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Live site</h1><script>try{parent.document.title="owned"}catch{document.body.dataset.isolated="yes"}</script>' }));
+  await page.route('http://live.test/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Live site</h1><script>try{parent.document.title="owned"}catch{document.body.dataset.isolated="yes"};localStorage.setItem("live-storage","works");document.body.dataset.storage=localStorage.getItem("live-storage")</script>' }));
   await page.route('http://helm.test/**', route => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/helm/visual-frame') return route.fulfill({ headers: VISUAL_FRAME_HEADERS, body: visualHostDocument() });
@@ -101,12 +101,18 @@ test('a visual moves into a column beside the chat, and the composer stays usabl
   assert.equal(await card.getByRole('link', { name: 'Open in new tab' }).getAttribute('href'), 'http://live.test/');
   await card.getByRole('button', { name: 'Open in canvas' }).click();
   const live = canvas(page).locator('iframe.canvas-live');
-  assert.equal(await live.getAttribute('sandbox'), 'allow-scripts allow-forms allow-popups');
+  assert.equal(await live.getAttribute('sandbox'), 'allow-scripts allow-forms allow-popups allow-same-origin');
   assert.equal(await live.getAttribute('src'), 'http://live.test/');
   await page.frameLocator('.canvas-live').locator('body[data-isolated="yes"]').waitFor();
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, 'canvas-wide.png') });
   assert.notEqual(await page.title(), 'owned');
+  assert.equal(await page.frameLocator('.canvas-live').locator('body').getAttribute('data-storage'), 'works');
+  assert.equal(await page.evaluate(() => localStorage.getItem('live-storage')), null, 'the live site cannot write Helm storage');
   assert.equal(await canvas(page).getByRole('link', { name: 'Open in new tab' }).getAttribute('href'), 'http://live.test/');
+  await request(page, 'a', { requestId: 'same-origin', visual: { ...agentBoard.visual, url: 'http://helm.test/' } });
+  await canvas(page).getByText('Open this Helm address in a new tab.').waitFor();
+  assert.equal(await canvas(page).locator('iframe').count(), 0);
+
 });
 
 test('the agent opens the canvas once per request, a closed canvas stays closed, and chats stay apart', async t => {

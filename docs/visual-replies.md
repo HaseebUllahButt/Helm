@@ -44,9 +44,11 @@ saved HTML reaches it through the parent after a signed-in read. External
 scripts, network fetches, nested frames, forms and plugins are blocked.
 Visuals are removed when their chat is deleted.
 
-Live canvas URLs use a separate frame that allows scripts, forms and popups,
-but keeps an opaque origin. They never inherit the saved HTML policy or
-Helm's origin. Sites needing storage, cookies, or permission to be framed
-use the visible new-tab link. URLs are never fetched by the daemon.
+Live canvas URLs use a separate frame that allows scripts, forms, popups
+and the site's own origin so storage and JavaScript modules work. The UI
+refuses to frame Helm's own origin; Helm's response policy also blocks
+embedding its pages after a redirect. Saved HTML keeps its opaque origin
+and stricter policy. Sites blocking frames or needing a separate login use
+the visible new-tab link. URLs are never fetched by the daemon.
 Project files use the existing Canvas read and save guards; opening a file
 never changes provider work or starts an agent.

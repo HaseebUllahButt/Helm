@@ -166,6 +166,8 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
  */
 function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: VisualReader; onBack: () => void; onClose: () => void }) {
   const live = visual.url !== undefined, url = liveUrl(visual);
+  // Live apps need their own storage and module origin, never Helm's origin.
+  const separateOrigin = url && new URL(url).origin !== location.origin;
   const { html, error, retry } = useVisualHtml(read, visual.ref, !live);
   return <div className="canvas-file canvas-page">
     <div className="canvas-pad canvas-top">
@@ -175,8 +177,8 @@ function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: 
       </CanvasHead>
     </div>
     {live
-      ? url ? <iframe key={url} className="visual-frame canvas-live" title={visual.title} src={url} sandbox="allow-scripts allow-forms allow-popups" referrerPolicy="no-referrer" />
-        : <div className="git-state bad" role="alert">This page address is not allowed.</div>
+      ? url && separateOrigin ? <iframe key={url} className="visual-frame canvas-live" title={visual.title} src={url} sandbox="allow-scripts allow-forms allow-popups allow-same-origin" referrerPolicy="no-referrer" />
+        : <div className="git-state bad" role="alert">{url ? 'Open this Helm address in a new tab.' : 'This page address is not allowed.'}</div>
       : html ? <VisualFrame html={html} title={visual.title} expanded onEscape={onClose} />
       : <div className={`git-state${error ? ' bad' : ''}`} role={error ? 'alert' : 'status'}>
         {error ? <>{error} <button className="files-chip" onClick={retry}>Retry</button></> : 'Loading visual…'}

@@ -55,7 +55,7 @@ const DETAILS = {
   again after changing them to show the new version.
   An http/https spin URL shows a live website. Use the public spin address:
   localhost means the viewer's machine. Sites that block frames or require
-  cookies/storage can use Open in new tab.
+  a separate login can use Open in new tab.
   Supports --title, --height, --session and --render-id like helm render.
   See helm render --help for snapshot limits and security.`,
 
