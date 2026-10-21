@@ -21,13 +21,25 @@ machines with care.
   `hub-authz`, `roster-trust`.
 
 ## Send a project or a task to another machine
-- **Not yet driven;** needs two machines.
-- **Traps:** both machines need this Helm version (update the VM first). A
-  snapshot is capped at 32 MB, 16 MB a file, 20,000 files; use `helm copy`
-  past that. It does not use GitHub; the new agent rebuilds dependencies.
+- **Prove (driven 2026-10-21):** use two private Helm copies, each with its
+  own home and sockets, paired only with each other. Open the source machine,
+  choose **Send a project**, choose a folder, then **Send to** the target.
+  Slow the test sender to observe progress, choose **Cancel send**, then
+  **Retry**. Check the received files after **Sent** appears.
+- **Proof:** a 36 MB file resumed with the same job and destination. Its
+  SHA-256 matched, an executable kept mode 0751, and its symlink survived.
+  Interrupted-job and signed-receipt recovery are also covered by the tests.
+- **Traps:** current Send streams files without the old snapshot size or
+  file-count caps. It keeps source files. Sending again keeps files created
+  on the target.
+  Older targets show a compatibility message: their copy has no atomic
+  publication or signed completion receipt. A lost start reply needs **Check
+  status**, not another send. A stopped send's **Retry** uses its original
+  destination. Git history travels with current Send; dependencies and caches
+  stay behind. It does not use GitHub; a new agent rebuilds dependencies.
 - **Tests:** `test/transfers`, `task-transfer`, `transfer-cli`,
   `transfer-check`, `transfer-activity`, `code-transfer`, `handoffs`,
-  `send-engine`; `test/browser/transfers`.
+  `send-engine`, `send-recovery`; `test/browser/transfers`, `send-v2`.
 
 ## `helm exec` and `helm copy`
 - **Not yet driven** against the copy. `$V rpc exec.start
