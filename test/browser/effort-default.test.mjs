@@ -20,7 +20,7 @@ test('thinking picker omits the CLI default sentinel from rows, favorites and ke
       };
       const controls = Controls({options,session,
         onPick:(kind,id)=>{ window.picked=id; setSession(s=>({...s,[kind]:id})); },
-        onDefault:(kind,id)=>{ window.saved={kind,id}; },onEffortFavs:()=>{} });
+        onDefault:(kind,id)=>{ window.saved={kind,id}; } });
       window.stepThinking = () => controls.step('effort');
       return <>{controls.chips}{controls.sheet}</>;
     }

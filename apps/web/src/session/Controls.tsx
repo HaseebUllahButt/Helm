@@ -245,22 +245,27 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     let more = unique(options.more ?? []).filter((m) => !ids.includes(m));
     const current = toBase(model);
     // An approved list is the owner's own short list. Without one, the
-    // picker makes it: the newest of each line, the rest one tap away.
+    // picker makes it: the newest of each line, the rest one tap away
+    // under "older" and the like.
+    let heading: ((m: string) => string) | undefined;
     if (!options.prefs?.approved?.length) {
       const shelf = shelve(ids, Object.fromEntries(ids.map((m) => [m, name(m)])), [current, savedModel ? toBase(savedModel) : '']);
+      heading = (m) => ({ newest: 'latest', older: 'older', 'fusion pairs': 'fusion pairs' })[shelf.shelf(m)] ?? 'others';
       ids = shelf.main;
       more = [...shelf.rest, ...more];
     }
     // opencode and pi reach many providers: each gets a heading, and the
     // row drops the "(Antigravity)" its heading already says.
-    const sectioned = new Set([...ids, ...more].map(providerOf)).size > 1;
-    const choice = (m: string): Choice => {
-      const section = sectioned ? providerOf(m) || undefined : undefined;
+    const providers = [...new Set([...ids, ...more].map(providerOf))];
+    const sectioned = providers.length > 1;
+    if (sectioned) more = providers.flatMap((p) => more.filter((m) => providerOf(m) === p));
+    const choice = (m: string, folded = false): Choice => {
+      const section = sectioned ? providerOf(m) || undefined : folded ? heading?.(m) : undefined;
       const label = name(m);
-      return { id: m, label: section ? label.replace(/\s*\(([^)]*)\)$/, (all, p) => p.toLowerCase() === section.toLowerCase() ? '' : all) : label, section };
+      return { id: m, label: sectioned && section ? label.replace(`${section}/`, '').replace(/\s*\(([^)]*)\)$/, (all, p) => p.toLowerCase() === section.toLowerCase() ? '' : all) : label, section };
     };
-    const choices = ids.map(choice);
-    const rest = more.map(choice);
+    const choices = ids.map((m) => choice(m));
+    const rest = more.map((m) => choice(m, true));
     // A model the CLI reported but that is in neither list is still the one
     // in use, so it belongs in the list rather than being unselectable.
     if (current && !choices.some((c) => c.id === current) && !rest.some((c) => c.id === current)) {
@@ -472,20 +477,19 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
     return (
       <div className="rowfav" key={c.id || 'normal'}>
         {button}
-        {favKey && c.id && <label className={`favorite-toggle${fav ? ' on' : ''}`} title={fav ? 'Remove favorite' : 'Add favorite'} onClick={(e) => e.stopPropagation()}>
-          <input type="checkbox" checked={fav}
-            aria-label={`Favorite ${c.label}`} onChange={() => toggleFav(c.id)} />
-          <Icon name={fav ? 'star-on' : 'star'} size={17} />
-        </label>}
-        {onDefault && !on && !isDefault && <span className="picker-default" aria-hidden="true" />}
-        {onDefault && (on || isDefault) && <button type="button"
-          className={`picker-default${isDefault ? ' on' : ''}`} aria-pressed={isDefault}
+        {onDefault && <button type="button"
+          className={`picker-default${isDefault ? ' on' : ''}${on ? ' here' : ''}`} aria-pressed={isDefault}
           aria-label={isDefault ? `${c.label} is the default for ${defaultsFor}` : `Use ${c.label} by default for ${defaultsFor}`}
           title={isDefault ? `Default for ${defaultsFor}` : `Set as default for ${defaultsFor}`}
           disabled={saving !== null}
           aria-busy={saving === c.id}
           onClick={(e) => { e.stopPropagation(); void makeDefault(c.id); }}
         >{isDefault ? 'Default' : 'Set default'}</button>}
+        {favKey && c.id && <label className={`favorite-toggle${fav ? ' on' : ''}`} title={fav ? 'Remove favorite' : 'Add favorite'} onClick={(e) => e.stopPropagation()}>
+          <input type="checkbox" checked={fav}
+            aria-label={`Favorite ${c.label}`} onChange={() => toggleFav(c.id)} />
+          <Icon name={fav ? 'star-on' : 'star'} size={17} />
+        </label>}
       </div>
     );
   };
@@ -562,7 +566,7 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
         <button type="button" className="moderow more" onClick={() => setExpanded(true)}>
           <span className="grow">
             <span className="rt">{rest.length} more</span>
-            <span className="rm">{main.length || favorites.length ? 'older versions and the rest' : 'search, or show them all'}</span>
+            <span className="rm">{rest.length > 40 ? 'search them, or show them all' : 'older versions and the rest'}</span>
           </span>
           <span className="chev">›</span>
         </button>
