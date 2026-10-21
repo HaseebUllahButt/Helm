@@ -879,7 +879,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       </LiveComposer>
 
       {canvas.open && !session.brain
-        ? <Canvas client={client} env={env} cwd={gitCwd || session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath} onClose={() => canvas.setOpen(false)} />
+        ? <Canvas client={client} env={env} cwd={gitCwd || (session.quick ? '' : session.cwd)} changed={changedPaths} path={canvas.path} onPath={canvas.setPath} onClose={() => canvas.setOpen(false)} />
         : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
       {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined}
