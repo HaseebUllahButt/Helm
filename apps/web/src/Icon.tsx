@@ -14,7 +14,7 @@ export type IconName =
   | 'star' | 'star-on' | 'bolt' | 'model' | 'effort' | 'shield' | 'key'
   | 'read' | 'edit' | 'run' | 'search' | 'web' | 'tool' | 'ask' | 'plan' | 'think' | 'alert'
   | 'folder' | 'repo' | 'machine' | 'transfer' | 'image' | 'sidebar' | 'canvas' | 'jump' | 'stop'
-  | 'tag' | 'cloud' | 'copy' | 'github' | 'lock';
+  | 'tag' | 'cloud' | 'copy' | 'github' | 'lock' | 'eye' | 'eye-off';
 
 const PATHS: Record<IconName, JSX.Element> = {
   back: <path d="M15 5l-7 7 7 7" />,
@@ -71,6 +71,8 @@ const PATHS: Record<IconName, JSX.Element> = {
   copy: <><rect x="8.5" y="8.5" width="11" height="11" rx="2" /><path d="M15.5 8.5V6.5a2 2 0 00-2-2h-7a2 2 0 00-2 2v7a2 2 0 002 2h2" /></>,
   github: <><path d="M15 21v-3.5a3.6 3.6 0 00-1-2.8c3.2-.4 6.5-1.6 6.5-7a5.4 5.4 0 00-1.5-3.8 5 5 0 00-.1-3.7s-1.2-.4-3.9 1.4a13.4 13.4 0 00-7 0C5.3 1.8 4.1 2.2 4.1 2.2a5 5 0 00-.1 3.7 5.4 5.4 0 00-1.5 3.8c0 5.4 3.3 6.6 6.5 7a3.6 3.6 0 00-1 2.8V21" /><path d="M8 18.5c-3 .9-3-1.6-4.5-2" /></>,
   lock: <><rect x="5" y="10.5" width="14" height="9.5" rx="2" /><path d="M8.5 10.5V7.5a3.5 3.5 0 017 0v3" /></>,
+  eye: <><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="3" /></>,
+  'eye-off': <><path d="M10 5.8a9.6 9.6 0 012-.3c6 0 9.5 6.5 9.5 6.5a17 17 0 01-2.6 3.4M6.6 6.6C3.9 8.4 2.5 12 2.5 12S6 18.5 12 18.5a9 9 0 005.4-1.9" /><path d="M9.9 9.9a3 3 0 004.2 4.2M3 3l18 18" /></>,
 };
 
 // Icons sit in every row and header, and take only plain values: they skip

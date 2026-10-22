@@ -2193,7 +2193,7 @@ export class Sessions extends EventEmitter {
   }
 
   /** Remove a chat's worktree now if its work is merged back (tests, and the sweep's own check). */
-  worktreeTidy(id) { return this.#worktrees.tidy(this.get(id)); }
+  worktreeTidy(id, now) { return this.#worktrees.tidy(this.get(id), now); }
 
   /** The chat's title changed: its worktree branch may take the name. */
   titled(s) { if (s.chatWorktree) void this.#worktrees.titled(s); }

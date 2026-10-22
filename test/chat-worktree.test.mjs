@@ -19,6 +19,7 @@ writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
 
 const { linkCheckout, worktreePlan, worktreeNote, keepReason } = await import('../packages/connect/src/chat-worktree.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
+const { UNUSED_MS } = await import('../packages/connect/src/session-worktrees.js');
 const { EventLog } = await import('../packages/connect/src/events.js');
 
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -228,6 +229,24 @@ test('a merged, idle chat loses its worktree; unmerged or uncommitted work keeps
   // Its old work is in the base already, so the rebuilt branch is not "merged".
   assert.equal(await s.worktreeTidy(chat.id), false);
   assert.ok(existsSync(chat.cwd), 'a rebuilt worktree stays until new work is merged');
+  await s.stop();
+});
+
+test('a chat quiet for an hour loses a worktree it never committed to', async () => {
+  const dir = repo();
+  const { sessions: s } = sessions();
+  const chat = await s.start({ cwd: dir, profileId: 'claudea' });
+  const later = s.get(chat.id).updatedAt + UNUSED_MS;
+  assert.equal(await s.worktreeTidy(chat.id, later - 1000), false, 'a chat just used keeps it');
+  writeFileSync(join(chat.cwd, 'draft.txt'), 'half done\n');
+  assert.equal(await s.worktreeTidy(chat.id, later), false, 'uncommitted work keeps it');
+  rmSync(join(chat.cwd, 'draft.txt'));
+  assert.equal(await s.worktreeTidy(chat.id, later), true);
+  assert.ok(!existsSync(chat.cwd), 'the folder is gone');
+
+  const busy = await s.start({ cwd: dir, profileId: 'claudea' });
+  git(busy.cwd, 'commit', '-q', '--allow-empty', '-m', 'mine');
+  assert.equal(await s.worktreeTidy(busy.id, s.get(busy.id).updatedAt + UNUSED_MS), false, 'unmerged commits keep it');
   await s.stop();
 });
 

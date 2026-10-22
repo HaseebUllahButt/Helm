@@ -221,7 +221,10 @@ test('unsigned browser channels still work and cannot request hub-only share sec
   const phone = N.issueDevice(net, 'browser');
   writeFileSync(join(process.env.HELM_DIR, 'config.json'), '{}');
   const daemon = new Daemon();
-  await daemon.dispatch(M.SHARE_ADD, { name: 'review-share', port: 12345, password: 'fixture-password' }, phone.id);
+  // Stored fixture: this test checks access to its password hash, not a
+  // running app or the port check performed when publishing a new spin.
+  const { addShare } = await import('../packages/connect/src/shares.js');
+  addShare({ name: 'review-share', port: 12345, password: 'fixture-password' });
   let sender;
   const frames = [];
   daemon.peers = new PeerHub((_id, payload) => void sender.receive(payload),
