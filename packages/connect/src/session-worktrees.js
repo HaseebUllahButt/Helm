@@ -4,6 +4,11 @@ import { keepReason, makeChatWorktree, removeChatWorktree, renameChatBranch, res
 
 /** How often idle chats are checked for a branch merged back. */
 const SWEEP_MS = 2 * 60_000;
+/**
+ * A chat quiet this long loses a worktree it never committed to: one never
+ * sent a message, or one whose work was outside the repo, kept it forever.
+ */
+export const UNUSED_MS = 60 * 60_000;
 
 /**
  * A chat's own worktree (chat-worktree.js) over its life: made before its
@@ -100,21 +105,23 @@ export class SessionWorktrees {
   /**
    * An idle chat whose branch is merged into its base loses its folder and
    * branch. Uncommitted changes, unmerged commits, or a branch with no work
-   * of its own (the chat may still be starting on it) keep them.
+   * of its own (the chat may still be starting on it) keep them; the last
+   * only until the chat has been quiet for UNUSED_MS.
    */
-  async tidy(s) {
+  async tidy(s, now = Date.now()) {
     // A branch of the chat (a fork) works in the same folder: all of them idle.
     const idle = () => this.#sharing(s).every((o) => this.#core.index.get(o.id) === o && this.#sessions.canReturnTask(o.id));
     if (this.#busy.has(s.id) || !s.chatWorktree || !idle()) return false;
+    const merged = !this.#sharing(s).every((o) => now - (o.updatedAt || o.createdAt || now) >= UNUSED_MS);
     this.#busy.add(s.id);
     try {
-      if (await keepReason(s.chatWorktree)) return false;
+      if (await keepReason(s.chatWorktree, { merged })) return false;
       // The agent's process sits in that folder: let it go first. Its
       // conversation stays, and the next message rebuilds the folder.
       for (const o of this.#sharing(s)) await this.#sessions.release(o.id);
-      if (this.#core.index.get(s.id) !== s || !idle() || await keepReason(s.chatWorktree)) return false;
+      if (this.#core.index.get(s.id) !== s || !idle() || await keepReason(s.chatWorktree, { merged })) return false;
       await removeChatWorktree(s.chatWorktree);
-      this.#sessions.log(`[${s.id}] removed merged worktree ${s.chatWorktree.path} (${s.chatWorktree.branch})`);
+      this.#sessions.log(`[${s.id}] removed ${merged ? 'merged' : 'unused'} worktree ${s.chatWorktree.path} (${s.chatWorktree.branch})`);
       for (const o of this.#sharing(s)) this.#sessions.emit('session', o);
       return true;
     } catch (err) {
