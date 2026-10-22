@@ -16,6 +16,7 @@ test.after(() => rmSync(root, { recursive: true, force: true }));
 
 async function fixture(t, handler, extra = {}) {
   const sockets = new Set();
+  let opened = 0;
   const app = http.createServer(handler);
   app.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   app.listen(0, '127.0.0.1'); await once(app, 'listening');
@@ -23,7 +24,11 @@ async function fixture(t, handler, extra = {}) {
   const route = createShareRoute({ online: new Map([['machine', {}]]),
     callEnv: async () => ({ shares: [share] }),
     openTcp: () => new Promise((resolve, reject) => {
+      opened++;
       const socket = connect(share.port, '127.0.0.1');
+      // openTcp returns a Duplex whose setTimeout is deliberately a no-op.
+      // A real net.Socket would hide a missing idle timer in the share pool.
+      socket.setTimeout = () => socket;
       socket.once('connect', () => resolve(socket)); socket.once('error', reject);
     }) });
   const hub = http.createServer((req, res) => route.route(req, res).catch(error => res.destroy(error)));
@@ -35,8 +40,45 @@ async function fixture(t, handler, extra = {}) {
   });
   const request = (options = {}) => http.request({ host: '127.0.0.1', port: hub.address().port,
     headers: { host: 'app.recovery.test' }, ...options });
-  return { request, share, sockets };
+  return { request, share, sockets, get opened() { return opened; } };
 }
+
+test('the pool drops idle tunnels before the app keep-alive deadline', { timeout: 5000 }, async t => {
+  const f = await fixture(t, (_req, res) => {
+    res.setHeader('keep-alive', 'timeout=2');
+    res.end('shared');
+  });
+  const req = f.request(); req.end();
+  const [res] = await once(req, 'response');
+  res.resume(); await once(res, 'end');
+  assert.equal(f.sockets.size, 1);
+  const deadline = Date.now() + 1500;
+  while (f.sockets.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(f.sockets.size, 0, 'an idle tunnel must not wait for the remote close to cross the network');
+  const next = f.request(); next.end();
+  const [answer] = await once(next, 'response');
+  answer.resume(); await once(answer, 'end');
+  assert.equal(answer.statusCode, 200);
+});
+
+test('reusing a tunnel clears its idle timer while a response is active', { timeout: 5000 }, async t => {
+  let calls = 0;
+  const f = await fixture(t, (_req, res) => {
+    res.setHeader('keep-alive', 'timeout=2');
+    if (++calls === 1) res.end('warm');
+    else setTimeout(() => res.end('slow answer'), 1300);
+  });
+  const first = f.request(); first.end();
+  const [warm] = await once(first, 'response');
+  warm.resume(); await once(warm, 'end');
+  const next = f.request(); next.end();
+  const [answer] = await once(next, 'response');
+  let body = ''; for await (const part of answer) body += part;
+  assert.equal(answer.statusCode, 200);
+  assert.equal(body, 'slow answer');
+  assert.equal(calls, 2);
+  assert.equal(f.opened, 1, 'the slow request must use the same tunnel');
+});
 
 test('a cut-short public download closes the visitor and the next request recovers', { timeout: 5000 }, async t => {
   let calls = 0;

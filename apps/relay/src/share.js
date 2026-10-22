@@ -145,16 +145,41 @@ export function createShareRoute({ online, callEnv, openTcp }) {
   // One connection pool per shared port. Opening a tunnel is a round trip
   // to the machine; a page with thirty files paid it thirty times.
   const agents = new Map();
+  const idleTimers = new WeakMap();
+  const clearIdle = (stream) => {
+    clearTimeout(idleTimers.get(stream));
+    idleTimers.delete(stream);
+  };
   function agentFor(share) {
     const key = `${share.env}:${share.port}`;
     let agent = agents.get(key);
     if (agent) return agent;
     agent = new http.Agent({ keepAlive: true, maxSockets: 8, maxFreeSockets: 4, timeout: 30_000 });
+    // openTcp's Duplex ignores setTimeout (media streams can idle). The
+    // HTTP agent therefore cannot retire a pooled tunnel with its socket
+    // timer. Close idle HTTP tunnels here, before the app's advertised
+    // deadline, rather than borrow one while its remote close is in flight.
+    agent.keepSocketAlive = (stream) => {
+      if (!http.Agent.prototype.keepSocketAlive.call(agent, stream)) return false;
+      clearIdle(stream);
+      const hint = /^timeout=(\d+)/.exec(stream._httpMessage?.res?.headers['keep-alive'] || '')?.[1];
+      const timeout = hint == null ? 30_000 : Math.min(30_000, Number(hint) * 1000 - 1000);
+      if (timeout <= 0) return false;
+      const timer = setTimeout(() => stream.destroy(), timeout);
+      timer.unref();
+      idleTimers.set(stream, timer);
+      return true;
+    };
+    agent.reuseSocket = (stream, req) => {
+      clearIdle(stream);
+      http.Agent.prototype.reuseSocket.call(agent, stream, req);
+    };
     agent.createConnection = (_options, done) => {
       openTcp(share.env, share.port).then((stream) => {
         // The machine closing its end must free the slot, or the pool would
         // hand the next request a tunnel nobody is reading.
         stream.once('end', () => stream.destroy());
+        stream.once('close', () => clearIdle(stream));
         done(null, stream);
       }, (err) => done(err));
     };
