@@ -13,8 +13,9 @@
   and the "[Image #1]" labels that open a message are hidden. A text file
   shows as "[File: note.txt]".
 - **Rule:** a tag in the message box is one piece. A delete that cuts into
-  "[Image #N]", "[File: …]" or a pasted-text tag removes all of it, and the
-  picture or file behind it goes too; later image labels move up. Read from
+  "[Image #N]", "[File: …]" or a pasted-text tag, or into the space right
+  after one, removes all of it, and the picture or file behind it goes
+  too; later image labels move up. Read from
   the text change, not the key: phone keyboards do not report Backspace.
   Live tags get a tint from a see-through copy of the text behind the box
   (`.composer-marks`); its padding, font and wrapping must match the box.

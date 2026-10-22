@@ -25,6 +25,12 @@ export function wholeTagEdit(before: string, after: string, live: (tag: string) 
   // Only a pure deletion: nothing typed in place of what went.
   if (head + tail !== after.length) return null;
   let from = head, to = before.length - tail;
+  // The space a tag was written with goes with the tag: one Backspace, not two.
+  let spaceAfter = false;
+  if (to - from === 1 && before[from] === ' ') {
+    const tag = [...before.slice(0, from).matchAll(TAG)].at(-1);
+    if (tag && tag.index! + tag[0].length === from && live(tag[0])) { from = tag.index!; spaceAfter = true; }
+  }
   const removed: string[] = [];
   let touched = false;
   for (const m of before.matchAll(TAG)) {
@@ -39,7 +45,7 @@ export function wholeTagEdit(before: string, after: string, live: (tag: string) 
   // A whole tag deleted by selection is already gone; it still takes its attachment.
   if (!removed.length) return null;
   // The space written after a tag leaves with it, unless it separates words.
-  if (touched && before[to] === ' ' && (from === 0 || /\s/.test(before[from - 1]))) to++;
+  if (touched && !spaceAfter && before[to] === ' ' && (from === 0 || /\s/.test(before[from - 1]))) to++;
   return { text: before.slice(0, from) + before.slice(to), caret: from, removed };
 }
 

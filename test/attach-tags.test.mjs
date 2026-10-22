@@ -14,6 +14,14 @@ test('one backspace at the end of a tag removes the whole tag', () => {
   assert.deepEqual(edit, { text: 'look ', caret: 5, removed: ['[Image #1]'] });
 });
 
+test('backspace on the space after a tag takes the tag too', () => {
+  assert.deepEqual(wholeTagEdit('[Image #1] hi', '[Image #1]hi'), { text: 'hi', caret: 0, removed: ['[Image #1]'] });
+  assert.deepEqual(wholeTagEdit('[Image #1] [Image #2] ', '[Image #1] [Image #2]'), { text: '[Image #1] ', caret: 11, removed: ['[Image #2]'] });
+  // A space after words, or after a hand-written label, is only a space.
+  assert.equal(wholeTagEdit('hi there', 'hithere'), null);
+  assert.equal(wholeTagEdit('[Image #9] x', '[Image #9]x', (tag) => tag !== '[Image #9]'), null);
+});
+
 test('a delete from inside or in front of a tag takes all of it and its space', () => {
   assert.deepEqual(wholeTagEdit('[Image #1] hi', 'Image #1] hi'), { text: 'hi', caret: 0, removed: ['[Image #1]'] });
   assert.deepEqual(wholeTagEdit('a [File: n.pdf] b', 'a [File: npdf] b'), { text: 'a b', caret: 2, removed: ['[File: n.pdf]'] });
