@@ -4,6 +4,7 @@ import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
 import { useDictation, type Transcribe } from './voice';
 import type { Turn } from './types';
 import { isBigPaste, stashPaste } from './pasteStore';
+import { renumberImages, wholeTagEdit } from './attachTags';
 import { Icon } from '../Icon';
 
 const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -209,6 +210,37 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
       .replace(new RegExp(`\\[Image #${gone}\\] ?`, 'g'), '')
       .replace(/\[Image #(\d+)\]/g, (label, n) => Number(n) > gone ? `[Image #${Number(n) - 1}]` : label));
     onRemoveAttachment?.(index);
+  };
+  /**
+   * A delete that cuts into a tag takes the whole tag, and the attachment
+   * behind it goes too. True when it handled the change.
+   */
+  const deleteTags = (el: HTMLTextAreaElement, value: string) => {
+    const list = attachments ?? [];
+    const images = list.filter(isImageAttachment);
+    const edit = wholeTagEdit(draftNow.current, value, (tag) => {
+      const n = /^\[Image #(\d+)\]$/.exec(tag)?.[1];
+      if (n) return Number(n) >= 1 && Number(n) <= images.length;
+      const file = /^\[File: (.+)\]$/.exec(tag)?.[1];
+      return file == null || list.some((a) => !isImageAttachment(a) && a.name === file);
+    });
+    if (!edit) return false;
+    const gone = new Set<number>();
+    const goneImages: number[] = [];
+    for (const tag of edit.removed) {
+      const n = /^\[Image #(\d+)\]$/.exec(tag)?.[1];
+      const file = /^\[File: (.+)\]$/.exec(tag)?.[1];
+      const index = n ? list.indexOf(images[Number(n) - 1])
+        : file != null ? list.findIndex((a, i) => !gone.has(i) && !isImageAttachment(a) && a.name === file) : -1;
+      if (index < 0 || gone.has(index)) continue;
+      gone.add(index);
+      if (n) goneImages.push(Number(n));
+    }
+    setDraft(renumberImages(edit.text, goneImages));
+    // Highest first, so each index still points at the same attachment.
+    [...gone].sort((a, b) => b - a).forEach((i) => onRemoveAttachment?.(i));
+    requestAnimationFrame(() => el.setSelectionRange(edit.caret, edit.caret));
+    return true;
   };
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -466,7 +498,10 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
             ref={ref} rows={1} value={draft} autoFocus={!touch}
             enterKeyHint={touch ? 'enter' : 'send'}
             placeholder={placeholder} aria-label={`Message ${engine}`} data-composer=""
-            onChange={(e) => { historyAt.current = null; setDraft(e.target.value); }}
+            onChange={(e) => {
+              historyAt.current = null;
+              if (!deleteTags(e.currentTarget, e.target.value)) setDraft(e.target.value);
+            }}
             onPaste={(e) => {
               if (take(clipboardFiles(e.clipboardData))) { e.preventDefault(); return; }
               // A wall of text goes in as a token, not into the box.

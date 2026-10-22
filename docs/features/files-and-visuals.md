@@ -12,8 +12,16 @@
   `$V upload a.jpg b.jpg`, type, send. The pictures show above the words,
   and the "[Image #1]" labels that open a message are hidden. A text file
   shows as "[File: note.txt]".
+- **Rule:** a tag in the message box is one piece. A delete that cuts into
+  "[Image #N]", "[File: …]" or a pasted-text tag removes all of it, and the
+  picture or file behind it goes too; later image labels move up. Read from
+  the text change, not the key: phone keyboards do not report Backspace.
+- **Prove the tag delete (driven 2026-10-22):** with **fake-pics** upload
+  two pictures, put the cursor after "[Image #1]" with `eval`
+  (`setSelectionRange(10,10)`), `$V key Backspace`. Proof: the box reads
+  "[Image #1] …" with one preview left, the second picture.
 - **Tests:** `test/browser/image-paste`; `test/paste-store`,
-  `retain-assets`.
+  `attach-tags`, `retain-assets`.
 
 ## Canvas (notes and docs beside the chat)
 - **Reach:** the canvas button in a chat's header, or Ctrl/⌘ Shift D. A wide
