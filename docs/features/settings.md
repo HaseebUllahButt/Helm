@@ -50,6 +50,11 @@
   from the real repo. Machines sync the newest committed version between
   themselves; GitHub pulls happen only from the explicit button. Mac and
   Windows do not auto-update. Open apps reload at a quiet moment.
+  Daemons restart immediately after an update. Agent hosts stay running;
+  chats and open transfers never postpone replacement.
+- **Prove restart:** start a private `fake-slow` chat, run `$V restart`,
+  and confirm it finishes. Repeat with `fake-ask`: approve after restart
+  and confirm the same request completes.
 - **Tests:** `test/browser/app-update`, `coding-tools`; `test/self-update`,
   `version-sync`, `cli-updates`.
 

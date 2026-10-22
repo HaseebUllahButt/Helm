@@ -40,7 +40,7 @@ function save(list) {
  * A `private` one opens only for this network's own signed-in devices, and
  * takes no password: knowing a password is not being one of them.
  */
-export function addShare({ name, port, password, keep, ttlMs, private: members } = {}) {
+export function addShare({ name, port, password, keep, ttlMs, private: members, preserveHost } = {}) {
   const wanted = Number(port);
   if (!Number.isInteger(wanted) || wanted < 1 || wanted > 65535) throw new Error('give the local port to share, e.g. 3000');
   const picked = name == null || name === '' ? randomShareName() : shareName(name);
@@ -53,6 +53,7 @@ export function addShare({ name, port, password, keep, ttlMs, private: members }
     ...(keep ? {} : { expiresAt: now + length }),
     ...(password ? { lock: hashSharePassword(password) } : {}),
     ...(members ? { private: true } : {}),
+    ...(preserveHost ? { preserveHost: true } : {}),
   };
   save([...listShares().filter((s) => s.name !== picked), share]);
   return share;

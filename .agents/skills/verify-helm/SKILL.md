@@ -26,6 +26,8 @@ $V errors                   # page and console errors seen so far
 $V down                     # stops only what this copy started, deletes it
 ```
 
+Use `$V restart` to replace only the private daemon while its agents keep running.
+
 Also: `text`, `key <key>`, `upload <file>...`, `eval <js>`, `size <w> <h>`,
 `open '#open=<machine>/<chat>'` or `open '#devices'`, `open --desktop`
 (1280x800, mouse and hover; `open --phone` goes back - each starts a fresh

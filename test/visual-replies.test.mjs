@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -72,15 +73,27 @@ test('a visual persists across daemon restarts without owning provider work; ret
   assert.equal(state.turns[0].items[0].status, 'ok');
   assert.equal(state.turns[0].local, true);
   assert.equal(state.turns[0].done.status, 'ok');
-  sessions.renderVisual('native1', params(3));
+  const canvas = sessions.renderVisual('native1', params(3, { placement: 'canvas' }));
+  assert.equal(canvas.visual.placement, 'canvas');
+  assert.equal(sessions.get('native1').canvas.requestId, params(3).renderId);
+  assert.deepEqual(sessions.renderVisual('native1', params(3, { placement: 'canvas' })), canvas);
+  assert.throws(() => sessions.renderVisual('native1', params(3)), /different visual/);
+  assert.throws(() => sessions.renderVisual('native1', params(6, { placement: 'bad' })), /invalid visual placement/);
   const native = await sessions.messages('native1');
   assert.equal(native.messages[0].visual.title, 'Saved diagram');
+  assert.equal(native.messages[0].visual.placement, 'canvas');
   assert.equal(sessions.get('native1').status, 'idle');
   assert.throws(() => sessions.readVisual('native1', result.visual.ref + '/../bad'), /no such visual/);
+  const live = sessions.renderVisual('native1', params(7, { placement: 'canvas', url: 'https://demo.example/?x=1&y=2' }));
+  assert.equal(live.visual.url, 'https://demo.example/?x=1&y=2');
+  assert.match(sessions.readVisual('native1', live.visual.ref).html, /x=1&amp;y=2/);
+  assert.throws(() => sessions.renderVisual('native1', params(7, { placement: 'canvas', url: 'https://other.example/' })), /different visual/);
   const privateVisual = sessions.renderVisual('managed1', params(5, { html: '<h1>Only this chat</h1>' }));
   assert.throws(() => sessions.readVisual('native1', privateVisual.visual.ref), /no such visual/);
   sessions.stop();
   sessions = make();
+  assert.equal(sessions.get('native1').canvas.visual.url, 'https://demo.example/?x=1&y=2');
+  assert.equal(sessions.history('native1', { tail: 50 }).events.find(e => e.visual).visual.placement, 'canvas');
   assert.match(sessions.readVisual('managed1', result.visual.ref).html, /<h1>Diagram/);
   sessions.events.append('managed1', { type: 'turn.start', turnId: 'provider-turn', text: 'Working' });
   sessions.get('managed1').status = 'working';
@@ -118,6 +131,19 @@ test('CLI resolves explicit remote sessions and native session environments with
   assert.equal(call[0], 'remote'); assert.equal(call[2].id, 'short-full'); assert.equal(call[2].title, 'Title');
   await assert.rejects(runVisualCommand('render', [file('cli.html')], { ...options, env: {} }), /inside an agent chat/);
   await assert.rejects(runVisualCommand('render', [file('cli.html'), '--bogus', 'value'], options), /invalid visual option/);
+  await runVisualCommand('canvas', [file('cli.html'), '--session', 'short', '--title', 'Side canvas'], options);
+  assert.equal(call[0], 'remote');
+  assert.equal(call[2].id, 'short-full');
+  assert.equal(call[2].placement, 'canvas');
+  assert.equal(call[2].title, 'Side canvas');
+  await runVisualCommand('canvas', ['https://demo.example/', '--session', 'short'], options);
+  assert.equal(call[2].url, 'https://demo.example/');
+  assert.equal(call[2].placement, 'canvas');
+  await runVisualCommand('canvas', ['notes.md', '--session', 'short'], options);
+  assert.equal(call[1], 'session.canvas');
+  assert.equal(call[2].path, 'notes.md');
+  assert.equal(call[2].id, 'short-full');
+  assert.match(helmBrief({}), /helm canvas/);
   assert.match(helmBrief({}), /helm preview/);
 });
 
@@ -126,4 +152,46 @@ test('native visuals sit between the messages surrounding publication, not at th
   const events = [{ type: 'item.start', kind: 'visual', at: Date.parse('2026-10-12T12:00:01Z'), visual: { title: 'V' }, id: 'v' }];
   assert.deepEqual(withVisualMessages(messages, events).map(m => m.visual?.title ?? m.role), ['user', 'V', 'assistant']);
   assert.equal(messages.length, 2);
+});
+
+test('live canvas accepts only web URLs without credentials and keeps saved HTML separate', () => {
+  for (const url of ['javascript:alert(1)', 'data:text/html,hello', 'file:///etc/passwd', 'https://user:secret@example.com/', 'not a URL']) {
+    assert.throws(() => validateVisual(params(8, { placement: 'canvas', url })), /canvas URL/);
+  }
+  assert.throws(() => validateVisual(params(8, { url: 'https://example.com/' })), /must open in canvas/);
+  const live = validateVisual(params(8, { placement: 'canvas', url: 'https://example.com/?q=<script>' }));
+  assert.equal(live.url, 'https://example.com/?q=%3Cscript%3E');
+  assert.ok(!live.html.includes('<script>'));
+});
+
+test('agents open project files beside chat with guarded paths, saved selection and unchanged work', async t => {
+  const repo = file('canvas-repo');
+  mkdirSync(join(repo, 'docs'), { recursive: true });
+  execFileSync('git', ['init', '-q', repo]);
+  writeFileSync(join(repo, 'docs', 'notes.md'), '# Project notes');
+  writeFileSync(join(repo, '.env'), 'SECRET=private');
+  writeFileSync(file('sessions.json'), JSON.stringify({ version: 1, sessions: [
+    { id: 'file1', engine: 'codex', driver: 'codex', status: 'working', cwd: join(repo, 'docs') },
+    { id: 'quick1', engine: 'codex', driver: 'codex', status: 'idle', cwd: repo, quick: true },
+  ] }));
+  const make = () => new Sessions(new EventEmitter(), { makeDriver: () => { throw new Error('must not start a provider'); } });
+  let sessions = make();
+  t.after(() => sessions.stop());
+  const pushed = [];
+  sessions.on('session', s => pushed.push(s.canvas));
+  const request = { path: 'notes.md', requestId: params(9).renderId };
+  const result = await sessions.openCanvas('file1', request);
+  assert.equal(result.canvas.path, 'docs/notes.md');
+  assert.equal(pushed.length, 1);
+  assert.equal(sessions.get('file1').status, 'working');
+  assert.deepEqual(await sessions.openCanvas('file1', request), result);
+  assert.equal(pushed.length, 1, 'retry does not reopen a closed panel');
+  await assert.rejects(sessions.openCanvas('file1', { ...request, path: '../../outside.md' }), /inside the folder/);
+  await assert.rejects(sessions.openCanvas('file1', { ...request, path: '../.env' }), /passwords or keys/);
+  await assert.rejects(sessions.openCanvas('quick1', request), /no project folder/);
+  sessions.stop(); sessions = make();
+  assert.deepEqual(sessions.get('file1').canvas, result.canvas);
+  const changed = await sessions.openCanvas('file1', { path: join(repo, 'docs', 'notes.md'), requestId: params(10).renderId });
+  assert.equal(changed.canvas.path, 'docs/notes.md');
+  assert.notEqual(changed.canvas.requestId, result.canvas.requestId);
 });

@@ -12,7 +12,7 @@ import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { nativeConversation } from './nativeView';
 import { CompactionLine } from './Transcript';
-import { VisualReply, Visuals, type VisualReader } from './VisualReply';
+import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
 import { useChatKeys } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
 import { Canvas, useCanvas } from './Canvas';
@@ -75,6 +75,8 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   // The canvas and the browser panel share the column beside the chat: one at a time.
   const canvas = useCanvas(env, session, !isShell);
   useExclusiveDocks(canvas, browser);
+  const canvasVisuals = useMemo(() => isShell ? undefined : { shown: canvas.open ? canvas.visual?.ref : undefined, show: canvas.showVisual },
+    [isShell, canvas.open, canvas.visual?.ref, canvas.showVisual]);
   const [status, setStatus] = useState(session.status);
   const [compacting, setCompacting] = useState(session.compacting || false);
   // When it entered the status it is in, for "working 14m" beside the word.
@@ -476,7 +478,8 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         git={git.status} gitCwd={session.quick ? '' : session.cwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
       {!isShell && (canvas.open
-        ? <Canvas client={client} env={env} cwd={session.quick ? '' : session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath} onClose={() => canvas.setOpen(false)} />
+        ? <Canvas client={client} env={env} cwd={session.quick ? '' : session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}
+          visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)} />
         : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />)}
 
       {/* Every open terminal on this machine, one tap apart. */}
@@ -516,7 +519,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         ? <Suspense fallback={<div className="xterm-host" />}>
             <Terminal client={client} env={env.id} sessionId={session.id} />
           </Suspense>
-        : <Chat messages={messages} status={status} compacting={compacting} readVisual={readVisual} />}
+        : <Chat messages={messages} status={status} compacting={compacting} readVisual={readVisual} canvas={canvasVisuals} />}
 
       {session.nativeChat && raw && !session.nativeCli && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
       {session.nativeChat && !raw && nativeNotice && (
@@ -570,7 +573,7 @@ function NativeClaudeApprovals({ client, env, sessionId, handle, children }: {
   </div></div>;
 }
 
-function Chat({ messages, status, compacting = false, readVisual }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader }) {
+function Chat({ messages, status, compacting = false, readVisual, canvas }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader; canvas?: CanvasVisuals }) {
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
@@ -606,7 +609,7 @@ function Chat({ messages, status, compacting = false, readVisual }: { messages: 
                 : 'Send a message to start the conversation.'}
             </p>
           )}
-          <Visuals.Provider value={readVisual}>{messages?.map((m, i) => <Turn key={m.sourceId ?? i} m={m} />)}</Visuals.Provider>
+          <Visuals.Provider value={readVisual}><CanvasContext.Provider value={canvas}>{messages?.map((m, i) => <Turn key={m.sourceId ?? i} m={m} />)}</CanvasContext.Provider></Visuals.Provider>
           {compacting ? <CompactionLine live />
             : status === 'working' && <div className="working"><span className="shine">Working…</span></div>}
         </div>

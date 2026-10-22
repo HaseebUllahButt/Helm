@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import { createHash } from 'node:crypto';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { hostname, platform, arch, release, homedir } from 'node:os';
-import { connect as tcpConnect } from 'node:net';
+import { connectLoopback, checkSharePort } from './loopback.js';
 import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -354,7 +354,7 @@ export class Daemon {
       const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
         syncFromBundle, net, id: this.id, rpc: hubRpc });
       this.syncNote = r.note ?? null;
-      if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting when safe'); }
+      if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting now'); }
     } catch (err) {
       console.error('[helm] version sync:', err?.message || err);
     } finally {
@@ -1539,7 +1539,7 @@ export class Daemon {
       return link.send(T.TUNNEL_CLOSE, { sid, reason: 'port not allowed' });
     }
     const key = this.#key(link, sid);
-    const sock = tcpConnect({ host: '127.0.0.1', port: wanted });
+    const sock = connectLoopback(wanted);
     const tunnel = { sock, link, release: beginTransferActivity() };
     this.#tunnels.set(key, tunnel);
     const end = reason => {
@@ -1673,7 +1673,7 @@ export class Daemon {
       // own changes on a backup branch and then uses GitHub's.
       case M.ENV_UPDATE: {
         const r = await selfUpdate(undefined, { replace: !!p.replace });
-        // The restart is on a five second timer, so this reply gets out first.
+        // Replacement is already queued; reconnect reads the new version.
         return { ...r, version: r.updated ? null : this.version };
       }
 
@@ -1767,6 +1767,7 @@ export class Daemon {
       case M.SHARE_ADD: {
         const taken = (p.replace ? [] : listShares()).find((x) => x.name === String(p.name ?? '').toLowerCase());
         if (taken) throw new Error(`"${taken.name}" is already shared from here (port ${taken.port}); use replace`);
+        await checkSharePort(Number(p.port));
         return { share: this.#shareView(addShare(p)) };
       }
       case M.SHARE_REMOVE:
@@ -2056,6 +2057,7 @@ export class Daemon {
       case M.SESSION_REWIND_CHECK: return this.sessions.rewindCheck(p.id, p.turnId);
 
       // Headless agent sessions.
+      case M.SESSION_CANVAS: return this.sessions.openCanvas(p.id, p);
       case M.SESSION_RENDER: return this.sessions.renderVisual(p.id, p);
       case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref);
       case M.SESSION_EVENTS:

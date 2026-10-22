@@ -4,6 +4,8 @@ import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
 import { FileView } from './CodeView';
 import { SideDock, readLocal, writeLocal } from './SideDock';
+import { liveUrl, saveVisual, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
+import type { Visual } from './types';
 
 /**
  * The canvas: a column beside the chat for the project's notes and docs. It
@@ -11,6 +13,8 @@ import { SideDock, readLocal, writeLocal } from './SideDock';
  * The agent and the owner can both change a file: the canvas follows the
  * agent's edits while the owner has none, and a save never overwrites a
  * change it did not see. Edits not saved yet stay while the app is open.
+ * It also shows pages: a visual the owner moves here, or one the agent sends
+ * with `helm canvas`, saved or live.
  */
 
 interface Tree { root: string; absoluteRoot?: string; start: string; files: string[]; secret: string[]; truncated: boolean }
@@ -37,15 +41,38 @@ export function isCanvasKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey'
 /** Ask the chat on screen to show a file in its canvas: a file name in the chat does this. */
 export const openInCanvas = (path: string) => window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { path } }));
 
-/** Whether the canvas is open and on which file, remembered per chat on this device. */
+/**
+ * What the canvas shows: one file or one page, never both. `seen` is the
+ * agent's last canvas request already acted on, so a canvas the owner closed
+ * stays closed until the agent asks again.
+ */
+type CanvasState = { open: boolean; path: string | null; visual: Visual | null; seen?: string };
+const isVisual = (v: any): v is Visual => !!v && typeof v.ref === 'string' && typeof v.title === 'string';
+function loadCanvas(key: string): CanvasState {
+  try {
+    const v = JSON.parse(readLocal(key) || '');
+    return { open: !!v.open, path: typeof v.path === 'string' ? v.path : null, visual: isVisual(v.visual) ? v.visual : null, seen: typeof v.seen === 'string' ? v.seen : undefined };
+  } catch { return { open: false, path: null, visual: null }; }
+}
+
+/** Whether the canvas is open and on what, remembered per chat on this device. */
 export function useCanvas(env: Environment, session: Session, enabled = true) {
   const key = openKey(env.id, session.id);
-  const [state, setStateRaw] = useState<{ open: boolean; path: string | null }>(() => {
-    try { const v = JSON.parse(readLocal(key) || ''); return { open: !!v.open, path: typeof v.path === 'string' ? v.path : null }; }
-    catch { return { open: false, path: null }; }
-  });
+  const [held, setStateRaw] = useState(() => ({ key, ...loadCanvas(key) }));
+  // Another chat in the same screen starts from its own canvas, never this one's.
+  let state: CanvasState = held;
+  if (held.key !== key) { state = loadCanvas(key); setStateRaw({ key, ...state }); }
   const now = useRef(state); now.current = state;
-  const set = useCallback((next: { open: boolean; path: string | null }) => { now.current = next; setStateRaw(next); writeLocal(key, JSON.stringify(next)); }, [key]);
+  const set = useCallback((next: CanvasState) => { now.current = next; setStateRaw({ key, ...next }); writeLocal(key, JSON.stringify(next)); }, [key]);
+  // The agent asked to show something: it opens, closed or not, once per ask.
+  const request = enabled ? session.canvas : undefined;
+  useEffect(() => {
+    if (!request?.requestId || request.requestId === now.current.seen) return;
+    const seen = request.requestId;
+    if (isVisual(request.visual)) set({ open: true, path: null, visual: request.visual, seen });
+    else if (typeof request.path === 'string' && request.path) set({ open: true, path: request.path, visual: null, seen });
+    else set({ ...now.current, seen });
+  }, [request?.requestId, set]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
@@ -57,26 +84,32 @@ export function useCanvas(env: Environment, session: Session, enabled = true) {
       if (modal && !modal.matches('.side-dock')) return;
       set({ ...now.current, open: !now.current.open });
     };
-    const onOpen = (e: Event) => { const path = (e as CustomEvent).detail?.path; if (typeof path === 'string' && path) set({ open: true, path }); };
+    const onOpen = (e: Event) => { const path = (e as CustomEvent).detail?.path; if (typeof path === 'string' && path) set({ ...now.current, open: true, path, visual: null }); };
     window.addEventListener('keydown', onKey);
     window.addEventListener(OPEN_EVENT, onOpen);
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener(OPEN_EVENT, onOpen); };
   }, [enabled, set]);
+  const showVisual = useCallback((visual: Visual) => set({ ...now.current, open: true, path: null, visual }), [set]);
   return {
-    open: state.open, path: state.path,
+    open: state.open, path: state.path, visual: state.visual,
     setOpen: (open: boolean) => set({ ...now.current, open }),
     toggle: () => set({ ...now.current, open: !now.current.open }),
-    setPath: (path: string | null) => set({ ...now.current, path }),
+    setPath: (path: string | null) => set({ ...now.current, path, visual: null }),
+    showVisual,
+    setVisual: (visual: Visual | null) => set({ ...now.current, path: null, visual }),
   };
 }
 
-export function Canvas({ client, env, cwd, changed, path, onPath, onClose }: {
+export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisual, read, onClose }: {
   client: Client; env: Environment;
   /** The chat's folder; '' for a quick chat that has none. */
   cwd: string;
   /** Files git says are changed, relative to the project's top folder. */
   changed: string[];
-  path: string | null; onPath: (path: string | null) => void; onClose: () => void;
+  path: string | null; onPath: (path: string | null) => void;
+  /** A page shown instead of a file; it reads saved pages through `read`. */
+  visual?: Visual | null; onVisual?: (visual: Visual | null) => void; read?: VisualReader;
+  onClose: () => void;
 }) {
   const [tree, setTree] = useState<Tree | null>(null);
   const [error, setError] = useState('');
@@ -116,13 +149,41 @@ export function Canvas({ client, env, cwd, changed, path, onPath, onClose }: {
   useEffect(() => { if (shown && shown !== path) onPath(shown); }, [shown, path, onPath]);
 
   return <SideDock label="Canvas" widthKey={WIDTH_KEY} className="canvas" share={0.5} onClose={onClose}>
-    {shown === undefined
+    {visual ? <CanvasPage key={visual.ref} visual={visual} read={read} onBack={() => onVisual?.(null)} onClose={onClose} />
+      : shown === undefined
       ? <div className="canvas-pad"><CanvasHead title="Not in this project" sub={path ?? ''} onBack={() => onPath(null)} onClose={onClose} /><div className="git-state">This file is outside the chat’s project, so the canvas cannot open it.</div></div>
       : shown
         ? <CanvasFile key={shown} client={client} env={env} cwd={cwd} path={shown} hidden={!!tree?.secret.includes(shown)} onBack={() => { onPath(null); setReload((n) => n + 1); }} onClose={onClose} />
         : <CanvasPicker env={env} cwd={cwd} tree={tree} error={error} changed={changed} client={client}
             onOpen={onPath} onCreated={(p) => { setReload((n) => n + 1); onPath(p); }} onClose={onClose} />}
   </SideDock>;
+}
+
+/**
+ * A page in the canvas. A saved one runs in the same sealed frame as in the
+ * chat. A live one is the site itself in its own sandbox, with no access to
+ * Helm; sites that refuse to be framed still open in a new tab.
+ */
+function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: VisualReader; onBack: () => void; onClose: () => void }) {
+  const live = visual.url !== undefined, url = liveUrl(visual);
+  // Live apps need their own storage and module origin, never Helm's origin.
+  const separateOrigin = url && new URL(url).origin !== location.origin;
+  const { html, error, retry } = useVisualHtml(read, visual.ref, !live);
+  return <div className="canvas-file canvas-page">
+    <div className="canvas-pad canvas-top">
+      <CanvasHead title={visual.title} sub={live ? url ?? visual.url ?? '' : 'Page from the agent'} onBack={onBack} onClose={onClose}>
+        {url && <a className="files-chip" href={url} target="_blank" rel="noopener noreferrer">Open in new tab</a>}
+        {html && <button className="files-chip" onClick={() => saveVisual(html, visual.title)}>Save</button>}
+      </CanvasHead>
+    </div>
+    {live
+      ? url && separateOrigin ? <iframe key={url} className="visual-frame canvas-live" title={visual.title} src={url} sandbox="allow-scripts allow-forms allow-popups allow-same-origin" referrerPolicy="no-referrer" />
+        : <div className="git-state bad" role="alert">{url ? 'Open this Helm address in a new tab.' : 'This page address is not allowed.'}</div>
+      : html ? <VisualFrame html={html} title={visual.title} expanded onEscape={onClose} />
+      : <div className={`git-state${error ? ' bad' : ''}`} role={error ? 'alert' : 'status'}>
+        {error ? <>{error} <button className="files-chip" onClick={retry}>Retry</button></> : 'Loading visual…'}
+      </div>}
+  </div>;
 }
 
 function CanvasHead({ title, sub, onBack, onClose, children }: { title: string; sub: string; onBack?: () => void; onClose: () => void; children?: ReactNode }) {

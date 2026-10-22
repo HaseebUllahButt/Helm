@@ -30,6 +30,7 @@ import { startHookServer } from './claude-hooks.js';
 import { gitBranch, worktreeHome } from './git-head.js';
 import { AccountLimits } from './account-limits.js';
 import { CLAUDE_NATIVE_COMMANDS } from './commands.js';
+import { canvasPath } from './git.js';
 import { validateVisual } from './visual.js';
 import { DRIVERS, pendingSummary, wire } from './session-wire.js';
 import { driverTakesImages } from './session-attachments.js';
@@ -221,11 +222,11 @@ export class Sessions extends EventEmitter {
     // The journal moves on only once the index it describes is on disk.
     if (recovered.length) { this.#save(); this.flush(); this.checkpoints.finishRecovery(recovered); }
     this.#dropNonAgentTasks();
-    // A daemon killed abruptly cannot answer its old hook sockets. Leave the
-    // terminal's own prompt available, without showing an unanswerable card.
+    // Old hook sockets died with the last daemon. A hook that asks again keeps
+    // its card; any other is unanswerable here, and the terminal still asks.
     for (const s of this.#index.values()) if (s.nativeCli) {
       for (const pending of this.events.pending(s.id)) {
-        this.events.append(s.id, { type: 'permission.resolved', requestId: pending.requestId });
+        if (!pending.reasks) this.events.append(s.id, { type: 'permission.resolved', requestId: pending.requestId });
       }
     }
     runtime.on('status', (e) => this.#onStatus(e));
@@ -1572,20 +1573,39 @@ export class Sessions extends EventEmitter {
     };
   }
 
+  /** An agent can select a project file without needing a browser click. */
+  async openCanvas(id, { path, requestId }) {
+    const s = this.get(id);
+    if (!this.#index.has(id) || s.engine === 'shell') throw new Error('canvas needs a saved agent chat');
+    if (s.quick || !s.cwd) throw new Error('this quick chat has no project folder; use an HTML file or a spin URL');
+    if (!/^[a-f0-9]{24}$/.test(requestId ?? '')) throw new Error('invalid canvas request ID');
+    const selected = await canvasPath(s.cwd, path);
+    if (s.canvas?.requestId === requestId) {
+      if (s.canvas.path !== selected) throw new Error('canvas request ID already used for another file');
+      return { canvas: s.canvas };
+    }
+    // The read above can yield; deletion must not resurrect a removed chat.
+    if (!this.#index.has(id)) throw new Error('no such saved agent chat');
+    s.canvas = { path: selected, requestId };
+    this.#save();
+    this.emit('session', s);
+    return { canvas: s.canvas };
+  }
+
   /** Save a page independently of provider lifetime or background tasks. */
   renderVisual(id, params) {
     const s = this.get(id);
     if (!this.#index.has(id) || s.engine === 'shell') throw new Error('visual replies need a saved agent chat');
-    const { html, title, height, renderId } = validateVisual(params);
+    const { html, title, height, renderId, placement, url } = validateVisual(params);
     const itemId = `visual-${renderId}`;
     const ref = createHash('sha256').update(html).digest('hex').slice(0, 32);
     const prior = this.events.tail(id, 0).find(e => e.type === 'item.start' && e.id === itemId);
     if (prior) {
-      if (prior.visual?.ref !== ref || prior.visual.title !== title || prior.visual.height !== height) throw new Error('render ID already used for a different visual');
+      if (prior.visual?.ref !== ref || prior.visual.title !== title || prior.visual.height !== height || prior.visual.placement !== placement || prior.visual.url !== url) throw new Error('render ID already used for a different visual');
       return { visual: prior.visual };
     }
     const stored = this.events.putAttachment(id, { filename: `${renderId}.html`, mime: 'text/html', data: Buffer.from(html).toString('base64') });
-    const visual = { ref: stored.ref, title, height, bytes: stored.bytes };
+    const visual = { ref: stored.ref, title, height, bytes: stored.bytes, ...(placement ? { placement } : {}), ...(url ? { url } : {}) };
     const active = s.driver && !s.external ? this.events.activeTurn(id) : null;
     const turnId = active?.turnId ?? `local-visual-${renderId}`;
     const append = event => {
@@ -1597,7 +1617,9 @@ export class Sessions extends EventEmitter {
     append({ type: 'item.start', turnId, id: itemId, kind: 'visual', visual });
     append({ type: 'item.done', turnId, id: itemId, status: 'ok' });
     if (!active) append({ type: 'turn.done', turnId, status: 'ok', local: true });
+    if (placement === 'canvas') s.canvas = { requestId: renderId, visual };
     this.#save();
+    if (placement === 'canvas') this.emit('session', s);
     this.emit('transcript', { id });
     return { visual };
   }

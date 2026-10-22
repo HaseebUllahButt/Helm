@@ -50,6 +50,23 @@
   `$V logs`. A tone gives no words.
 - **Tests:** `test/voice`, `voice-key`.
 
+## Agent-opened Canvas
+- **Prove (driven 2026-10-21):** Create a Git project in the private copy's
+  work folder, add `docs/notes.md`, and start a fake chat there. Run
+  `$H canvas docs/notes.md --session <chat-id>`. Open that chat on a phone,
+  close the canvas, then run `$H canvas /path/to/page.html --session <chat-id>`.
+  Resize to 1280×800 and type into the chat with the canvas still open.
+  Run `$H canvas http://127.0.0.1:<fixture-port>/ --session <chat-id>` for a
+  local test website. Close it and send a new file request.
+- **Proof:** The phone shows the selected file or page. The desktop shows
+  chat and canvas together, with the draft intact. A new request replaces
+  the selection and opens a closed canvas. The live page has a new-tab link.
+- **Traps:** Project files need a Git folder; HTML, images and URLs also work
+  in quick chats. Public spin routing needs a VM; the private copy proves
+  the live frame with a local website and `spin` create/list/stop only.
+- **Tests:** `test/visual-replies`, `test/browser/visual-canvas`,
+  `test/browser/visual-replies`.
+
 ## Visuals in a chat
 - **Prove (driven):**
   ```sh

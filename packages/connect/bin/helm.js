@@ -72,10 +72,12 @@ const USAGE = `helm - control your coding agents from anywhere
   helm machines                     machines in this network
   helm redesignate [machine] <kind> what a machine is for: pc, vm or nas
   helm nas [machine] [add|remove <folder>]   what a nas shares
+  helm spin <port> [options]         same as helm share; make a public link
   helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
     a short-lived link: ends after 3 hours unless --keep
                                   a public https link to a port here, served by your VM
     --private                     only devices signed in to your Helm can open it
+    --preserve-host               send the spin host to the app instead of localhost
   helm share list | stop <name>   what is shared, and stopping it
   helm share setup                once, on the VM: let it serve the links
   helm forward <machine> <port> [--local <port>]
@@ -107,6 +109,8 @@ const USAGE = `helm - control your coding agents from anywhere
   helm say <id> <text...>           send a named message from this agent (a prompt outside a chat)
   helm reply <message-id> <text...> reply to an agent message
   helm messages [chat-id] [--json]  read exchanges in this chat and its Agents
+  helm canvas <file | https://…> [--title <text>] [--session <id>]
+                                    open a project file, saved visual or live page beside chat
   helm render <file.html | picture.png> [--title <text>] [--height <px>] [--session <id>]
                                     save a visual or a screenshot inside this chat
   helm preview <file.html> [--output <file.png>] [--width <px>] [--appearance dark|light]
@@ -1725,6 +1729,7 @@ async function shareCmd() {
   const net = requireNetwork();
   const shareLib = await import('@helm/protocol/share');
   const local = await import('../src/shares.js');
+  const { checkSharePort } = await import('../src/loopback.js');
   const args = rest.filter((a, i) => !a.startsWith('--') && !['--name', '--password', '--on', '--for'].includes(rest[i - 1]));
   const verb = /^\d+$/.test(args[0] ?? '') ? 'add' : (args.shift() ?? 'list');
   const on = strFlag('on');
@@ -1732,8 +1737,8 @@ async function shareCmd() {
   const where = net.machines[target]?.name ?? 'this machine';
   const host = shareLib.publicHosts(net)[0];
   const link = (name) => host ? `https://${name}.${host}` : `(no public address: ${name})`;
-  const call = (method, params) => target === net.self
-    ? Promise.resolve(method === M.SHARE_LIST ? { shares: local.listShares().map(local.publicShare) }
+  const call = async (method, params) => target === net.self
+    ? (method === M.SHARE_LIST ? { shares: local.listShares().map(local.publicShare) }
       : method === M.SHARE_REMOVE ? { removed: local.removeShare(params.name) }
       : { share: local.publicShare(local.addShare(params)) })
     : hubRpc(net, target, method, params, { timeout: 15_000 });
@@ -1778,6 +1783,7 @@ async function shareCmd() {
 
   if (verb !== 'add') die('usage: helm share <port> [--name <name>] [--password [pw]] [--private] [--for <hours>] [--keep] [--on <machine>] | list | stop <name> | setup');
   const port = Number(args[0]);
+  if (target === net.self) await checkSharePort(port);
   const members = !!flagOf('private');
   if (members && flagOf('password') !== undefined) die('a private link opens only for your own Helm devices; it takes no password');
   // An older machine would read "private" as nothing and make the link
@@ -1807,7 +1813,7 @@ async function shareCmd() {
   const hours = Number(strFlag('for'));
   if (strFlag('for') !== undefined && !(hours > 0)) die('--for takes a number of hours, e.g. --for 8');
   const ttlMs = hours > 0 ? hours * 3_600_000 : undefined;
-  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true, ...(members ? { private: true } : {}) });
+  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true, ...(members ? { private: true } : {}), ...(flagOf('preserve-host') ? { preserveHost: true } : {}) });
   const url = link(share.name);
   const ends = share.expiresAt ? `ends ${new Date(share.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (add --keep to keep it)` : 'kept until you stop it';
   console.log(`\n  ${url}\n  -> ${where}, port ${share.port}, ${ends}${share.password ? `\n  password: ${password}` : ''}`);
@@ -2073,6 +2079,7 @@ try {
       await nasCmd();
       break;
 
+    case 'spin':
     case 'share':
       await shareCmd();
       break;
@@ -2134,14 +2141,14 @@ try {
       if (!r.updated) { console.log(`  not updated - ${r.reason}`); break; }
       if (r.backup) console.log(`  your changes are kept on branch ${r.backup}`);
       console.log(r.restarting?.length
-        ? `  updated - ${r.restarting.join(', ')} will restart safely; active threads are preserved`
+        ? `  updated - ${r.restarting.join(', ')} restarting now; active threads are preserved`
         : '  updated - restart helm to pick it up');
       break;
     }
 
     case 'restart-services': {
-      const { restartWhenSafe } = await import('../src/update.js');
-      await restartWhenSafe(rest);
+      const { restartServices } = await import('../src/update.js');
+      await restartServices(rest);
       break;
     }
 
@@ -2397,6 +2404,7 @@ try {
       await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession });
       break;
     }
+    case 'canvas':
     case 'render':
     case 'preview': {
       const { runVisualCommand } = await import('../src/visual-cli.js');

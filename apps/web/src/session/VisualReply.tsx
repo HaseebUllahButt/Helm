@@ -6,15 +6,27 @@ import type { Visual } from './types';
 
 export type VisualReader = (ref: string) => Promise<{ html: string }>;
 export const Visuals = createContext<VisualReader | undefined>(undefined);
+/** The chat's canvas, when it has one: which page it shows, and how to show another. */
+export interface CanvasVisuals { shown?: string; show: (visual: Visual) => void }
+export const CanvasContext = createContext<CanvasVisuals | undefined>(undefined);
 
-function currentTheme() {
+/** A live page is only ever a plain web address: never `javascript:` or a login inside it. */
+export function liveUrl(visual: Visual) {
+  if (!visual.url) return undefined;
+  try {
+    const url = new URL(visual.url);
+    return /^https?:$/.test(url.protocol) && !url.username && !url.password ? url.href : undefined;
+  } catch { return undefined; }
+}
+
+export function currentTheme() {
   const style = getComputedStyle(document.documentElement);
   const theme: Record<string, string> = { scheme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark' };
   for (const key of ['--bg', '--card', '--raised', '--text', '--text-dim', '--mutedfg', '--line', '--primary', '--primary-q', '--amber', '--amber-text', '--sky', '--emerald', '--red']) theme[key] = style.getPropertyValue(key).trim();
   return theme;
 }
 
-function VisualFrame({ html, title, height = 420, expanded = false, onEscape }: { html: string; title: string; height?: number; expanded?: boolean; onEscape?: () => void }) {
+export function VisualFrame({ html, title, height = 420, expanded = false, onEscape }: { html: string; title: string; height?: number; expanded?: boolean; onEscape?: () => void }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const token = useMemo(() => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, []);
   const [measured, setMeasured] = useState(height);
@@ -48,42 +60,65 @@ function VisualDialog({ html, visual, onClose, onSave }: { html: string; visual:
   </div>;
 }
 
-/** Lazy snapshot reads keep pages out of the chat's event/cache payloads. */
-export function VisualReply({ visual, read: supplied }: { visual: Visual; read?: VisualReader }) {
-  const context = useContext(Visuals), read = supplied ?? context;
-  const ref = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
+/** Reads a saved page once `active`; Retry asks again. */
+export function useVisualHtml(read: VisualReader | undefined, ref: string, active: boolean) {
   const [html, setHtml] = useState<string>();
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    let stale = false;
+    setHtml(undefined); setError('');
+    if (!read) { setError('Connect to the chat’s machine to load this visual.'); return; }
+    read(ref).then(result => { if (!stale) setHtml(result.html); }).catch(err => { if (!stale) setError(err.message || 'Could not load this visual.'); });
+    return () => { stale = true; };
+  }, [active, read, ref, retry]);
+  return { html, error, retry: () => setRetry(value => value + 1) };
+}
+
+export function saveVisual(html: string, title: string) {
+  const url = URL.createObjectURL(new Blob([visualDocument(html, { theme: currentTheme() })], { type: 'text/html;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url; link.download = `${title.replace(/[^\p{L}\p{N} _.-]/gu, '').slice(0, 80) || 'visual'}.html`;
+  link.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+/** Lazy snapshot reads keep pages out of the chat's event/cache payloads. */
+export function VisualReply({ visual, read: supplied }: { visual: Visual; read?: VisualReader }) {
+  const context = useContext(Visuals), read = supplied ?? context;
+  const canvas = useContext(CanvasContext);
+  const live = visual.url !== undefined, url = liveUrl(visual);
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  const { html, error, retry } = useVisualHtml(read, visual.ref, visible && !live);
   const [open, setOpen] = useState(false);
   useEffect(() => {
     const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { setVisible(true); observer.disconnect(); } }, { rootMargin: '300px' });
     if (ref.current) observer.observe(ref.current);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => {
-    if (!visible) return;
-    let stale = false;
-    setHtml(undefined); setError('');
-    if (!read) { setError('Connect to the chat’s machine to load this visual.'); return; }
-    read(visual.ref).then(result => { if (!stale) setHtml(result.html); }).catch(err => { if (!stale) setError(err.message || 'Could not load this visual.'); });
-    return () => { stale = true; };
-  }, [visible, read, visual.ref, retry]);
-  const save = () => {
-    if (!html) return;
-    const url = URL.createObjectURL(new Blob([visualDocument(html, { theme: currentTheme() })], { type: 'text/html;charset=utf-8' }));
-    const link = document.createElement('a');
-    link.href = url; link.download = `${visual.title.replace(/[^\p{L}\p{N} _.-]/gu, '').slice(0, 80) || 'visual'}.html`;
-    link.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000);
-  };
+  const inCanvas = canvas?.shown === visual.ref;
+  const toCanvas = canvas && <button className="visual-open" aria-label={`Open ${visual.title} in canvas`} title={inCanvas ? 'In canvas' : 'Open in canvas'} aria-pressed={inCanvas}
+    onClick={() => canvas.show(visual)}><Icon name="canvas" size={14} /></button>;
+  // A live page runs only in the canvas or its own tab: a running site in
+  // the middle of the conversation would load and play for every reader.
+  if (live) return <div ref={ref} className="visual-reply visual-link">
+    <span className="visual-link-text"><strong>{visual.title}</strong>{url ? <small>{url}</small> : <small role="alert">This page address is not allowed.</small>}</span>
+    <span className="visual-actions">
+      {url && <a href={url} target="_blank" rel="noopener noreferrer">Open in new tab</a>}
+      {url && canvas && <button aria-pressed={inCanvas} onClick={() => canvas.show(visual)}>{inCanvas ? 'In canvas' : 'Open in canvas'}</button>}
+    </span>
+  </div>;
   return <div ref={ref} className="visual-reply">
-    {/* No title bar: the picture is the reply. One small corner button
-        opens it full size, where its source and Save live. */}
-    {html && <button className="visual-open" aria-label={`Expand ${visual.title}`} title="Expand" onClick={() => setOpen(true)}><Icon name="popout" size={14} /></button>}
+    {/* No title bar: the picture is the reply. Small corner buttons put it
+        in the canvas or open it full size, where its source and Save live. */}
+    {html && <span className="visual-corner">
+      {toCanvas}
+      <button className="visual-open" aria-label={`Expand ${visual.title}`} title="Expand" onClick={() => setOpen(true)}><Icon name="popout" size={14} /></button>
+    </span>}
     {html ? <VisualFrame html={html} title={visual.title} height={visual.height} /> : <div className="visual-placeholder" style={{ minHeight: Math.min(visual.height, 420) }} role={error ? 'alert' : 'status'}>
-      {error ? <><span>{error}</span><button onClick={() => setRetry(value => value + 1)}>Retry</button></> : 'Loading visual…'}
+      {error ? <><span>{error}</span><button onClick={retry}>Retry</button></> : 'Loading visual…'}
     </div>}
-    {open && html && <VisualDialog html={html} visual={visual} onClose={() => setOpen(false)} onSave={save} />}
+    {open && html && <VisualDialog html={html} visual={visual} onClose={() => setOpen(false)} onSave={() => saveVisual(html, visual.title)} />}
   </div>;
 }

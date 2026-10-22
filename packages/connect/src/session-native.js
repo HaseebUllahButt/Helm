@@ -111,13 +111,16 @@ export class NativeSessions {
       this.#sessions.emit('session', { ...wire(s), alive: this.#sessions.nativeTerminals.has(s.id), ...pendingSummary(this.#sessions.events.pending(s.id)) });
     };
     if (name === 'PermissionRequest') {
-      const requestId = `hook-${randomBytes(6).toString('hex')}`;
+      const requestId = `hook-${reply.ask ?? randomBytes(6).toString('hex')}`;
       const card = permissionCard(event.tool_name, event.tool_input ?? {}, { permission_suggestions: event.permission_suggestions });
       this.hookAsks.set(requestId, { id: s.id, reply, raw: card.raw, kind: card.kind });
       // Answered on the terminal instead: Claude ends this hook's wait.
       reply.onClose(() => this.closeHookAsk(requestId));
-      const pending = this.#sessions.events.append(s.id, { type: 'permission.request', requestId, ...card });
-      this.#sessions.emit('event', { id: s.id, event: pending });
+      // Asked again after a restart: the card the phone shows is this one.
+      if (!this.#sessions.events.pending(s.id).some((p) => p.requestId === requestId)) {
+        const pending = this.#sessions.events.append(s.id, { type: 'permission.request', requestId, ...card, ...(reply.ask ? { reasks: true } : {}) });
+        this.#sessions.emit('event', { id: s.id, event: pending });
+      }
       setStatus('blocked');
       return;
     }
@@ -161,6 +164,11 @@ export class NativeSessions {
     // Anything that only happens after the question was settled settles it.
     if (['UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd'].includes(name)) {
       for (const [requestId, ask] of this.hookAsks) if (ask.id === s.id) this.closeHookAsk(requestId);
+      // A card whose hook never came back after a restart was answered on the terminal.
+      for (const p of this.#sessions.events.pending(s.id)) if (p.requestId?.startsWith('hook-')) {
+        const event = this.#sessions.events.append(s.id, { type: 'permission.resolved', requestId: p.requestId });
+        this.#sessions.emit('event', { id: s.id, event });
+      }
     }
     if (name === 'UserPromptSubmit' || name === 'PostToolUse') setStatus('working');
     else if (name === 'Stop' || (name === 'Notification' && event.notification_type === 'idle_prompt')) setStatus('idle');

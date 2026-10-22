@@ -14,7 +14,8 @@ import { TodoCard, isTodoItem, parseTodos } from './Todos';
 import { parseContextUsage } from './contextUsage';
 import { Reveal, WorkingLine, ChangedFiles, changedFiles, testResult } from './TurnPulse';
 import { stepWords, thoughtBody, thoughtTitle, toolSummary, tryParse, rawCommand, toolChanges, changesOf, changeStats, unifiedDiff, diffCounts } from './stepWords';
-import { money } from '../format';
+import { money, shownTitle } from '../format';
+import { fadeWhenCut } from '../fadeWhenCut';
 
 /** The session is still working, so an open compaction is really running. */
 const Busy = createContext(false);
@@ -598,6 +599,12 @@ export function splitNote(text?: string): { note?: string; text?: string } {
   return note ? { note, text: shown.text } : shown;
 }
 
+/** A helper is named after its task; the first sentence says who it is. */
+function helperName(from: string) {
+  const name = shownTitle(from).text;
+  return name.split(/(?<=[.!?])\s/)[0].replace(/[.!?]$/, '') || name;
+}
+
 /** How long ago a bubble was sent, in the transcript's own quiet type. */
 function clock(ts?: number) {
   if (!ts) return '';
@@ -759,10 +766,12 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           name and first line, the rest a tap away. Never the owner's bubble. */}
       {head && helper && (
         <details className="turn helper-msg">
+          {/* One quiet line of text: the helper's short name, its words cut
+              to fit, the time. A tap shows the whole message. */}
           <summary>
-            <span className="helper-name">{helper.from}</span>
+            <span className="helper-name" ref={fadeWhenCut}>{helperName(helper.from)}</span>
             {helper.status && helper.status !== 'done' && <span className="helper-status">{helper.status}</span>}
-            <span className="helper-line">{helper.text.trim().split('\n')[0]}</span>
+            <span className="helper-line">{helper.text.trim()}</span>
             <span className="helper-time">{clock(turn.at)}</span>
           </summary>
           <Markdown text={helper.text} className="prose" />

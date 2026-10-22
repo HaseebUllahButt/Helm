@@ -43,6 +43,7 @@ import { useAccountLimits } from './useAccountLimits';
 import { useChatKeys } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
 import { Canvas, useCanvas } from './Canvas';
+import { CanvasContext } from './VisualReply';
 import { useExclusiveDocks } from './SideDock';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
 
@@ -133,8 +134,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [details, setDetails] = useState<DetailsTab | null>(reviewChildren ? 'agents' : null);
   const browser = useBrowserDock(client, env, session);
   // The canvas and the browser panel share the column beside the chat: one at a time.
-  const canvas = useCanvas(env, session);
+  const canvas = useCanvas(env, session, !session.brain);
   useExclusiveDocks(canvas, browser);
+  const canvasVisuals = useMemo(() => session.brain ? undefined : { shown: canvas.open ? canvas.visual?.ref : undefined, show: canvas.showVisual },
+    [session.brain, canvas.open, canvas.visual?.ref, canvas.showVisual]);
   useEffect(() => { if (reviewChildren) setDetails('agents'); }, [reviewChildren]);
   const [reviewNative, setReviewNative] = useState(false);
   const [focusItem, setFocusItem] = useState<{ id: string; visit: number }>();
@@ -799,7 +802,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       <span ref={dockAnchor} hidden />
       {firstMessage && <EmptyChat cwd={chatFolder(session)} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={options?.labels?.[modelNow] ?? modelNow} still={cameUpEmpty} />}
-      <Transcript
+      <CanvasContext.Provider value={canvasVisuals}><Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
         readVisual={readVisual} openAgent={openAgent}
         pending={log.pending} onReviewRequest={reviewRequest} focusItem={focusItem}
@@ -813,7 +816,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         } : undefined}
         onBranch={session.engine === 'claude' && onOpenSession ? setBranching : undefined}
         empty={preparing ? '' : session.alive === false ? 'This conversation resumes with your next message.' : sentFirst ? 'Waiting for the agent…' : undefined}
-      />
+      /></CanvasContext.Provider>
 
       {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
         <strong>Send not confirmed</strong>
@@ -881,7 +884,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       </LiveComposer>
 
       {canvas.open && !session.brain
-        ? <Canvas client={client} env={env} cwd={gitCwd || (session.quick ? '' : session.cwd)} changed={changedPaths} path={canvas.path} onPath={canvas.setPath} onClose={() => canvas.setOpen(false)} />
+        ? <Canvas client={client} env={env} cwd={gitCwd || (session.quick ? '' : session.cwd)} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}
+          visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)} />
         : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
       {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined}
