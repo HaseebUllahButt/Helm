@@ -20,7 +20,10 @@
   screen gets a third column (shares the browser panel's slot, one at a
   time); a phone gets a full-screen sheet. Open state and file are kept per
   chat on the device. A file name in a turn's "changed files" opens it there.
-- **Rules:** Git projects only (it lists with `git.files`). Saves go through
+- **Rules:** Notes and docs need a Git project (it lists with `git.files`).
+  Its first screen also lists the chat's pictures and pages, so Back from a
+  page never ends on an error; outside Git it says quietly that notes need
+  Git. Saves go through
   `git.write` with the hash the file was read at: a file the agent changed
   since is never overwritten silently; the owner picks "Use the new file" or
   "Save mine over it". Secrets and `.git/` are never written; a new file
@@ -76,7 +79,9 @@
   $V wait "my visual"; $V shot /tmp/vis.png
   ```
 - **Proof:** "my visual ok" in the chat; "Expand my visual" opens it with
-  Source / Save.
+  Source / Save. A tall picture (`$H render poster.jpg`) is at most 520 px
+  high in the chat and its frame shrinks to it; Expand and the canvas show it
+  whole (driven 2026-10-22).
 - **Traps:** without `HELM_DIR` and `--session`, `render` posts into the
   owner's real chat.
 - **Tests:** `test/visual-replies`; `test/browser/visual-replies`. Design:

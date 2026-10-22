@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { Client, Environment, Session } from '../client';
 import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
+import { ago } from '../screens/common';
 import { FileView } from './CodeView';
 import { SideDock, readLocal, writeLocal } from './SideDock';
 import { liveUrl, saveVisual, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
@@ -14,12 +15,21 @@ import type { Visual } from './types';
  * agent's edits while the owner has none, and a save never overwrites a
  * change it did not see. Edits not saved yet stay while the app is open.
  * It also shows pages: a visual the owner moves here, or one the agent sends
- * with `helm canvas`, saved or live.
+ * with `helm canvas`, saved or live. Its first screen lists the chat's pages
+ * above the notes, so Back from a page always lands somewhere useful, even
+ * in a folder that is not a Git project.
  */
 
 interface Tree { root: string; absoluteRoot?: string; start: string; files: string[]; secret: string[]; truncated: boolean }
 interface FileText { path: string; size?: number; text?: string; hash?: string; truncated?: boolean; binary?: boolean; hidden?: boolean; same?: boolean }
 type Saved = { path: string; hash?: string; size?: number; conflict?: boolean; gone?: boolean; exists?: boolean };
+/** A page the agent showed in this chat, and when. */
+export type CanvasPageItem = { visual: Visual; at: number };
+/** The chat's pages, newest first, each once. */
+export function chatPages(found: (CanvasPageItem | null | undefined)[]): CanvasPageItem[] {
+  const seen = new Set<string>();
+  return found.filter((p): p is CanvasPageItem => !!p).reverse().filter((p) => !seen.has(p.visual.ref) && !!seen.add(p.visual.ref));
+}
 
 const WIDTH_KEY = 'helm.canvas-width';
 const openKey = (env: string, session: string) => `helm.canvas.${env}:${session}`;
@@ -100,7 +110,7 @@ export function useCanvas(env: Environment, session: Session, enabled = true) {
   };
 }
 
-export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisual, read, onClose }: {
+export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisual, read, pages = [], onClose }: {
   client: Client; env: Environment;
   /** The chat's folder; '' for a quick chat that has none. */
   cwd: string;
@@ -109,6 +119,8 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
   path: string | null; onPath: (path: string | null) => void;
   /** A page shown instead of a file; it reads saved pages through `read`. */
   visual?: Visual | null; onVisual?: (visual: Visual | null) => void; read?: VisualReader;
+  /** The chat's pages, listed on the first screen. */
+  pages?: CanvasPageItem[];
   onClose: () => void;
 }) {
   const [tree, setTree] = useState<Tree | null>(null);
@@ -116,7 +128,7 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
   const [reload, setReload] = useState(0);
   useEffect(() => {
     setTree(null);
-    if (!cwd) { setError('This quick chat has no folder yet.'); return; }
+    if (!cwd) { setError(NO_FOLDER); return; }
     let live = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
     setError('');
@@ -131,7 +143,7 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
         if (/not connected|disconnected/i.test(e?.message ?? '')) {
           setError('Waiting for this machine…');
           retry = setTimeout(() => setReload((n) => n + 1), WATCH_MS);
-        } else setError(/not a git/i.test(e?.message ?? '') ? 'The canvas works in Git projects. This folder is not one.' : e?.message || 'Could not list the files.');
+        } else setError(/not a git/i.test(e?.message ?? '') ? NOT_GIT : e?.message || 'Could not list the files.');
       });
     return () => { live = false; clearTimeout(retry); };
   }, [client, env.id, cwd, reload]);
@@ -154,7 +166,7 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
       ? <div className="canvas-pad"><CanvasHead title="Not in this project" sub={path ?? ''} onBack={() => onPath(null)} onClose={onClose} /><div className="git-state">This file is outside the chat’s project, so the canvas cannot open it.</div></div>
       : shown
         ? <CanvasFile key={shown} client={client} env={env} cwd={cwd} path={shown} hidden={!!tree?.secret.includes(shown)} onBack={() => { onPath(null); setReload((n) => n + 1); }} onClose={onClose} />
-        : <CanvasPicker env={env} cwd={cwd} tree={tree} error={error} changed={changed} client={client}
+        : <CanvasPicker env={env} cwd={cwd} tree={tree} error={error} changed={changed} client={client} pages={pages} onPage={(v) => onVisual?.(v)}
             onOpen={onPath} onCreated={(p) => { setReload((n) => n + 1); onPath(p); }} onClose={onClose} />}
   </SideDock>;
 }
@@ -188,15 +200,20 @@ function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: 
 
 function CanvasHead({ title, sub, onBack, onClose, children }: { title: string; sub: string; onBack?: () => void; onClose: () => void; children?: ReactNode }) {
   return <div className="canvas-head">
-    {onBack && <button className="iconbtn" aria-label="Back to the files" title="Back to the files" onClick={onBack}><Icon name="back" size={17} /></button>}
+    {onBack && <button className="iconbtn" aria-label="Back to the canvas list" title="Back" onClick={onBack}><Icon name="back" size={17} /></button>}
     <div className="canvas-titles"><b>{title}</b><small>{sub}</small></div>
     {children}
     <button className="iconbtn" aria-label="Close canvas" title="Close canvas (Ctrl/⌘ Shift D)" onClick={onClose}><Icon name="close" size={17} /></button>
   </div>;
 }
 
-function CanvasPicker({ client, env, cwd, tree, error, changed, onOpen, onCreated, onClose }: {
+/** Not problems, just what this chat's canvas holds: said quietly, never in red. */
+const NO_FOLDER = 'This quick chat has no folder, so there are no notes to show.';
+const NOT_GIT = 'Notes and docs show here when the chat’s folder is a Git project.';
+
+function CanvasPicker({ client, env, cwd, tree, error, changed, pages, onPage, onOpen, onCreated, onClose }: {
   client: Client; env: Environment; cwd: string; tree: Tree | null; error: string; changed: string[];
+  pages: CanvasPageItem[]; onPage: (visual: Visual) => void;
   onOpen: (path: string) => void; onCreated: (path: string) => void; onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
@@ -242,12 +259,23 @@ function CanvasPicker({ client, env, cwd, tree, error, changed, onOpen, onCreate
     </button>;
   };
   const LIMIT = 300;
+  const quiet = error === NO_FOLDER || error === NOT_GIT;
+  const pageList = !found && pages.length > 0 && <>
+    <div className="canvas-label">Pictures and pages</div>
+    <div className="files-list">
+      {pages.map(({ visual, at }) => <button key={visual.ref} className="files-row" onClick={() => onPage(visual)} title={visual.url ?? visual.title}>
+        <span className="files-ic"><Icon name={visual.url ? 'web' : 'image'} size={15} /></span>
+        <span className="files-name">{visual.title}{visual.url && <small>{visual.url}</small>}</span>
+        <span className="files-meta">{ago(at)}</span>
+      </button>)}
+    </div>
+  </>;
 
   return <div className="canvas-pad">
     <CanvasHead title="Canvas" sub={tree ? `${env.name} · ${tree.root}` : env.name} onClose={onClose}>
       {tree && <button className="files-chip" onClick={() => setNaming(naming === null ? (tree.start ? `${tree.start}/` : '') : null)}><Icon name="plus" size={13} />New</button>}
     </CanvasHead>
-    {error ? <div className="git-state bad" role="status">{error}</div>
+    {error ? <>{pageList}<div className={`git-state${quiet ? '' : ' bad'}`} role="status">{error}</div></>
       : !tree ? <div className="git-state" role="status">Listing files…</div>
       : <>
         {naming !== null && <form className="canvas-new" onSubmit={(e) => { e.preventDefault(); void create(naming); }}>
@@ -260,6 +288,7 @@ function CanvasPicker({ client, env, cwd, tree, error, changed, onOpen, onCreate
           <Icon name="search" size={15} />
           <input type="search" placeholder="Find any file" aria-label="Find any file" value={query} onChange={(e) => setQuery(e.target.value)} />
         </label>
+        {pageList}
         {found ? <div className="files-list">
           {found.length ? found.map(row) : <div className="git-state">No file matches “{query.trim()}”.</div>}
         </div> : <>
