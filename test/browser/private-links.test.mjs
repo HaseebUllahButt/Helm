@@ -15,10 +15,14 @@ import { readFile } from 'node:fs/promises';
 const bundle = await build({ stdin: { contents: `
   import React from 'react';
   import { createRoot } from 'react-dom/client';
-  import { ShareHop, shareHopTarget } from './apps/web/src/App';
+  import { App, ShareHop, shareHopTarget } from './apps/web/src/App';
   import { PublicLinks } from './apps/web/src/PublicLinks';
   import { Client } from './apps/web/src/client';
   const root = createRoot(document.getElementById('root'));
+  window.showApp = () => {
+    Client.prototype.connect = async () => {};
+    root.render(<App />);
+  };
   window.showHop = () => {
     const client = new Client([location.origin], 'helm1.device-token');
     root.render(<ShareHop client={client} target={shareHopTarget()} onDone={() => { window.done = true; }} />);
@@ -62,13 +66,15 @@ async function setup(t) {
   await context.route('https://home.test/**', async (route) => {
     const req = route.request();
     const url = new URL(req.url());
+    if (url.pathname === '/api/health') return route.fulfill({ json: { ok: true } });
+    if (url.pathname === '/api/auth/login') return route.fulfill({ json: { token: 'helm1.device-token', deviceId: 'phone', endpoints: ['https://home.test'] } });
     if (url.pathname === '/api/share/grant') {
       grants.push({ auth: req.headers().authorization, body: JSON.parse(req.postData() || '{}') });
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-        action: 'https://secret.home.test/.helm-share/enter', grant: 'PASS-1', next: '/inside',
+        action: 'https://secret.home.test/.helm-share/enter', grant: 'PASS-1', next: JSON.parse(req.postData() || '{}').next,
       }) });
     }
-    return route.fulfill({ status: 200, contentType: 'text/html', body: `<style>${css}</style><div id="root"></div><script>${script}</script>` });
+    return route.fulfill({ status: 200, contentType: 'text/html', body: `<style>${css}</style><div id="root"></div><script>${script}</script><script>if(location.search.includes('app'))window.showApp()</script>` });
   });
   await context.route('https://secret.home.test/**', (route) => {
     const req = route.request();
@@ -93,6 +99,43 @@ test('signed in, the app turns a private link\'s visit into a pass posted back t
   assert.equal(entered[0].method, 'POST', 'the pass travels in a form body, not the address');
   assert.equal(entered[0].path, '/.helm-share/enter');
   assert.deepEqual(Object.fromEntries(new URLSearchParams(entered[0].body)), { grant: 'PASS-1', next: '/inside' });
+});
+
+for (const reload of [false, true]) test(`signing in with a pairing link keeps this tab's exact spin destination (${reload ? 'reload' : 'same tab'})`, async (t) => {
+  const { context, entered, grants } = await setup(t);
+  const page = await context.newPage();
+  const next = '/review/items?tab=cost&item=a%2Fb&item=c';
+  await page.goto(`https://home.test/?app#${new URLSearchParams({ share: 'secret', host: 'home.test', next, source: 'Laptop' })}`);
+  await page.getByText('Sign in to open secret, shared from Laptop.', { exact: true }).first().waitFor();
+  const local = await page.getByRole('link', { name: "Open this computer's Helm" }).getAttribute('href');
+  assert.equal(new URLSearchParams(new URL(local).hash.slice(1)).get('next'), next);
+  // Pairing replaces the fragment, either on this page or on a fresh load.
+  if (reload) {
+    await page.evaluate(() => history.replaceState(null, '', '?app#pair=PAIRING-CODE'));
+    await page.reload();
+  } else await page.goto('https://home.test/?app#pair=PAIRING-CODE');
+  await page.getByText('inside the shared app').waitFor();
+  assert.equal(grants.length, 1);
+  assert.equal(grants[0].body.next, next);
+  assert.equal(new URLSearchParams(entered[0].body).get('next'), next);
+  // Going back to Helm must not reopen the completed spin.
+  await page.goto('https://home.test/');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('helm.pending-spin')), null);
+});
+
+test('a spin fragment arriving in an open signed-in Helm tab opens immediately', async (t) => {
+  const { context, grants } = await setup(t);
+  const page = await context.newPage();
+  await page.goto('https://home.test/');
+  await page.evaluate(() => {
+    localStorage.setItem('helm.auth', JSON.stringify({ token: 'helm1.device-token', endpoints: ['https://home.test'] }));
+    window.showApp();
+  });
+  await page.waitForTimeout(100);
+  await page.evaluate(() => { location.hash = 'share=secret&host=home.test&next=%2Finside%3Fx%3D1'; });
+  await page.getByText('inside the shared app').waitFor();
+  assert.equal(grants.length, 1);
+  assert.equal(grants[0].body.next, '/inside?x=1');
 });
 
 test('the Public links screen offers private links and opens one with a pass', async (t) => {

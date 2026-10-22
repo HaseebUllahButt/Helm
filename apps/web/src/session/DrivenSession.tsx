@@ -42,7 +42,7 @@ import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { useChatKeys } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
-import { Canvas, useCanvas } from './Canvas';
+import { Canvas, chatPages, useCanvas } from './Canvas';
 import { CanvasContext } from './VisualReply';
 import { useExclusiveDocks } from './SideDock';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
@@ -885,7 +885,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
 
       {canvas.open && !session.brain
         ? <Canvas client={client} env={env} cwd={gitCwd || (session.quick ? '' : session.cwd)} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}
-          visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)} />
+          visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)}
+          pages={chatPages(log.turns.flatMap((turn) => turn.items.map((item) => item.visual && { visual: item.visual, at: item.startedAt })))} />
         : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
       {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined}

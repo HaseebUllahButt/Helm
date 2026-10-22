@@ -50,11 +50,13 @@ await new Promise((r) => app.listen(0, '127.0.0.1', r));
 const APP = app.address().port;
 const LOCK = hashSharePassword('open sesame');
 
-const machine = await fakeMachine('aa11bb22cc33', [
+const shared = [
   { name: 'app', port: APP },
   { name: 'locked', port: APP, lock: LOCK },
   { name: 'gone', port: 1 }, // shared, but nothing listens there
-]);
+  { name: 'original-host', port: APP, preserveHost: true },
+];
+const machine = await fakeMachine('aa11bb22cc33', shared);
 
 test.after(() => { machine.close(); app.close(); hub.stop(); rmSync(base, { recursive: true, force: true }); });
 
@@ -98,6 +100,12 @@ test('a page and its files share a few tunnels, and an idle close does not hang 
   app.keepAliveTimeout = 5000;
 });
 
+test('a newly created name opens on its first visit while another spin warms the cache', async () => {
+  await request('app.links.test');
+  shared.push({ name: 'just-created', port: APP });
+  assert.equal((await request('just-created.links.test')).status, 200);
+});
+
 test('an unknown name, or a dead app, says so in words', async () => {
   const missing = await request('nope.links.test');
   assert.equal(missing.status, 404);
@@ -105,14 +113,24 @@ test('an unknown name, or a dead app, says so in words', async () => {
   const dead = await request('gone.links.test');
   assert.equal(dead.status, 502);
   assert.match(dead.text, /Nothing answered/);
+  assert.match(dead.text, /127\.0\.0\.1:1 or \[::1\]:1/);
+  assert.match(dead.text, /Start the app on port 1/);
+  assert.equal(dead.headers.refresh, '3');
   // helm itself is untouched on the bare host.
   assert.equal((await request('127.0.0.1', '/api/version')).headers['content-type'], 'application/json');
+});
+
+test('preserve-host keeps the original host when an app needs it', async () => {
+  const r = await request('original-host.links.test');
+  const seen = JSON.parse(r.text);
+  assert.equal(seen.host, 'original-host.links.test');
+  assert.equal(seen.fwd, 'original-host.links.test');
 });
 
 test('a password share asks first, remembers, and keeps its cookie to itself', async () => {
   const first = await request('locked.links.test', '/inside', { headers: { accept: 'text/html' } });
   assert.equal(first.status, 401);
-  assert.match(first.text, /This link has a password/);
+  assert.match(first.text, /Enter the link password/);
   assert.match(first.text, /name="next" value="\/inside"/);
   const script = await request('locked.links.test', '/api', { headers: { accept: 'application/json' } });
   assert.equal(script.status, 401);
@@ -120,7 +138,7 @@ test('a password share asks first, remembers, and keeps its cookie to itself', a
 
   const wrong = await request('locked.links.test', '/.helm-share/unlock', { method: 'POST', body: 'password=nope&next=%2Finside' });
   assert.equal(wrong.status, 401);
-  assert.match(wrong.text, /not the password/);
+  assert.match(wrong.text, /The password is incorrect/);
 
   const right = await request('locked.links.test', '/.helm-share/unlock', { method: 'POST', body: 'password=open+sesame&next=%2Finside' });
   assert.equal(right.status, 303);

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNow } from '../useNow';
 import type { StoredAuth } from '../store';
 import { Client, login, LOOPBACK_HOST, isCleartext, CLEARTEXT_NOTE } from '../client';
-import { shareHopTarget } from './ShareHop';
+import { shareHopTarget, shareHopHash } from './ShareHop';
 import { InstallPwa } from './Notifications';
 
 export type Auth = StoredAuth;
@@ -39,6 +39,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
   const [network, setNetwork] = useState<string | null>(null);
   const [checking, setChecking] = useState(true);
   const [linkSecretFailed, setLinkSecretFailed] = useState(false);
+  const spin = shareHopTarget();
 
   const finish = (auth: Auth) => {
     // Shell consumes navigation links after sign-in; discard only auth hashes.
@@ -136,6 +137,19 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
     connect(location.origin, target.password);
   }, [selfHosted]);
 
+  useEffect(() => {
+    if (selfHosted !== true) return;
+    const pair = () => {
+      const target = pairingTarget(location.href);
+      if (!target?.password) return;
+      openedWith.current = target;
+      autoStarted.current = true;
+      void connect(location.origin, target.password);
+    };
+    window.addEventListener('hashchange', pair);
+    return () => window.removeEventListener('hashchange', pair);
+  }, [selfHosted]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const pasted = pairingTarget(link);
   const secretFromLink = selfHosted ? openedWith.current?.password : pasted?.password;
   const secretInLink = linkSecretFailed ? '' : secretFromLink;
@@ -169,7 +183,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
         <div className="auth-brand">
           <img src="/icon.svg" alt="" />
           <h1>helm</h1>
-          <p>All coding agents in one place</p>
+          <p>{spin ? `Sign in to open ${spin.name}${spin.source ? `, shared from ${spin.source}` : ''}.` : 'All coding agents in one place'}</p>
         </div>
 
         <form onSubmit={submit}>
@@ -213,7 +227,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
           {!isLocal && !/Android|iPhone|iPad|iPod/.test(navigator.userAgent) && (
             <p className="note" style={{ textAlign: 'center' }}>
               Did you run <code>helm join</code> here?{' '}
-              <a href="http://127.0.0.1:8787/" target="_self">Open this computer's Helm</a>.
+              <a href={`http://127.0.0.1:8787/${spin ? `#${shareHopHash(spin)}` : ''}`} target="_self">Open this computer's Helm</a>.
             </p>
           )}
         </form>

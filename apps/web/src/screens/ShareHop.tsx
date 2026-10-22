@@ -6,12 +6,30 @@ import { Client } from '../client';
  * `#share=<name>&host=<host>&next=<path>`: a private link sent this browser
  * here to sign in (see apps/relay/src/share.js). Nothing secret is in it.
  */
-type ShareHopTarget = { name: string; host: string; next: string };
+type ShareHopTarget = { name: string; host: string; next: string; source?: string };
+const PENDING = 'helm.pending-spin';
+
+export function clearShareHop() {
+  try { sessionStorage.removeItem(PENDING); } catch { /* storage may be unavailable */ }
+}
+
+export function shareHopHash(target: ShareHopTarget) {
+  return new URLSearchParams({ share: target.name, host: target.host, next: target.next,
+    ...(target.source ? { source: target.source } : {}) }).toString();
+}
 
 export function shareHopTarget(): ShareHopTarget | null {
   const p = new URLSearchParams(location.hash.replace(/^#\/?/, ''));
   const name = p.get('share'), host = p.get('host');
-  return name && host ? { name, host, next: p.get('next') || '/' } : null;
+  if (name && host) {
+    const target = { name, host, next: p.get('next') || '/', ...(p.get('source') ? { source: p.get('source')! } : {}) };
+    // Pairing links replace the fragment. Keep this tab's destination until
+    // its pass is ready, including reloads and failed sign-in attempts.
+    try { sessionStorage.setItem(PENDING, JSON.stringify(target)); } catch { /* storage may be unavailable */ }
+    return target;
+  }
+  try { return JSON.parse(sessionStorage.getItem(PENDING) || 'null') as ShareHopTarget | null; }
+  catch { return null; }
 }
 
 /**
@@ -35,6 +53,7 @@ export function ShareHop({ client, target, onDone }: { client: Client; target: S
             if (cancelled) return;
             // Back from the link should land in Helm, not bounce out again.
             history.replaceState(null, '', location.pathname + location.search);
+            clearShareHop();
             openPrivateLink(pass);
             return;
           } catch (err: any) {

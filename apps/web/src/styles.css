@@ -2414,11 +2414,6 @@ button.sheet-editlink:hover { color: var(--text); }
 /* Words found in a chat: two lines, so the reason it matched can be read on a phone. */
 .palette-sub.said { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .pglyph { width: 26px; height: 26px; border-radius: 7px; flex: none; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: var(--icon); font-size: 13px; }
-.palette-foot { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 8px 16px; border-top: 1px solid var(--line); font-size: var(--t-micro); color: var(--mutedfg); }
-.palette-foot span { display: inline-flex; align-items: center; gap: 4px; }
-.palette-foot kbd { font-size: 10.5px; padding: 1px 5px; }
-/* No keys to press on a phone: the hints would be instructions for nothing. */
-@media (pointer: coarse) { .palette-foot { display: none; } }
 
 .shortcuts, .shortcuts section { display: grid; gap: 8px; }
 .shortcuts .palette-group { margin: 0; padding: 8px 0 0; }
@@ -3593,7 +3588,7 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 }
 .newchat-row:hover .newchat-add, .newchat-row:has(.palette-row.on) .newchat-add, .newchat-add:focus-visible { opacity: 1; }
 .newchat-add:hover { background: var(--hover); color: var(--text); }
-@media (pointer: coarse) { .newchat-row:has(.palette-row.on) .newchat-add { opacity: 1; } .newchat-add { width: 40px; height: 40px; } }
+@media (pointer: coarse) { .newchat-row:has(.palette-row.on) .newchat-add, .newchat-hide { opacity: 1; } .newchat-add { width: 40px; height: 40px; } }
 .newchat-bar {
   display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 12px; border-top: 1px solid var(--line);
   font-size: 13px; color: var(--mutedfg); min-width: 0;

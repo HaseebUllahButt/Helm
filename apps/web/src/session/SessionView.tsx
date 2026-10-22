@@ -15,7 +15,7 @@ import { CompactionLine } from './Transcript';
 import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
 import { useChatKeys } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
-import { Canvas, useCanvas } from './Canvas';
+import { Canvas, chatPages, useCanvas } from './Canvas';
 import { useExclusiveDocks } from './SideDock';
 import { prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
@@ -479,7 +479,8 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
       {!isShell && (canvas.open
         ? <Canvas client={client} env={env} cwd={session.quick ? '' : session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}
-          visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)} />
+          visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)}
+          pages={chatPages((messages ?? []).map((m) => m.visual && { visual: m.visual, at: typeof m.at === 'number' ? m.at : Date.parse(m.at ?? '') }))} />
         : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />)}
 
       {/* Every open terminal on this machine, one tap apart. */}

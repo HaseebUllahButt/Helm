@@ -77,6 +77,7 @@ const USAGE = `helm - Control your coding agents from anywhere
     Make a Spin, a public link that ends after 3 hours unless you use --keep.
                                   The link opens a port on this machine through your VM.
     --private                     Limit access to devices signed in to your Helm
+    --preserve-host               Send the Spin host to the app instead of localhost
   helm share list | stop <name>   List or stop Spins
   helm share setup                Set up the VM to serve Spins
   helm forward <machine> <port> [--local <port>]
@@ -1729,6 +1730,7 @@ async function shareCmd() {
   const net = requireNetwork();
   const shareLib = await import('@helm/protocol/share');
   const local = await import('../src/shares.js');
+  const { checkSharePort } = await import('../src/loopback.js');
   const args = rest.filter((a, i) => !a.startsWith('--') && !['--name', '--password', '--on', '--for'].includes(rest[i - 1]));
   const verb = /^\d+$/.test(args[0] ?? '') ? 'add' : (args.shift() ?? 'list');
   const on = strFlag('on');
@@ -1736,8 +1738,8 @@ async function shareCmd() {
   const where = net.machines[target]?.name ?? 'this machine';
   const host = shareLib.publicHosts(net)[0];
   const link = (name) => host ? `https://${name}.${host}` : `(no public address: ${name})`;
-  const call = (method, params) => target === net.self
-    ? Promise.resolve(method === M.SHARE_LIST ? { shares: local.listShares().map(local.publicShare) }
+  const call = async (method, params) => target === net.self
+    ? (method === M.SHARE_LIST ? { shares: local.listShares().map(local.publicShare) }
       : method === M.SHARE_REMOVE ? { removed: local.removeShare(params.name) }
       : { share: local.publicShare(local.addShare(params)) })
     : hubRpc(net, target, method, params, { timeout: 15_000 });
@@ -1782,6 +1784,7 @@ async function shareCmd() {
 
   if (verb !== 'add') die('usage: helm share <port> [--name <name>] [--password [pw]] [--private] [--for <hours>] [--keep] [--on <machine>] | list | stop <name> | setup');
   const port = Number(args[0]);
+  if (target === net.self) await checkSharePort(port);
   const members = !!flagOf('private');
   if (members && flagOf('password') !== undefined) die('Open private links from devices signed in to your Helm. Private links do not use passwords.');
   // An older machine would read "private" as nothing and make the link
@@ -1811,7 +1814,7 @@ async function shareCmd() {
   const hours = Number(strFlag('for'));
   if (strFlag('for') !== undefined && !(hours > 0)) die('--for takes a number of hours, e.g. --for 8.');
   const ttlMs = hours > 0 ? hours * 3_600_000 : undefined;
-  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true, ...(members ? { private: true } : {}) });
+  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true, ...(members ? { private: true } : {}), ...(flagOf('preserve-host') ? { preserveHost: true } : {}) });
   const url = link(share.name);
   const ends = share.expiresAt ? `ends ${new Date(share.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (add --keep to keep it)` : 'kept until you stop it';
   console.log(`\n  ${url}\n  -> ${where}, port ${share.port}, ${ends}${share.password ? `\n  password: ${password}` : ''}`);

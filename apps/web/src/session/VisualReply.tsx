@@ -26,17 +26,20 @@ export function currentTheme() {
   return theme;
 }
 
-export function VisualFrame({ html, title, height = 420, expanded = false, onEscape }: { html: string; title: string; height?: number; expanded?: boolean; onEscape?: () => void }) {
+export function VisualFrame({ html, title, height = 420, expanded = false, onEscape, onPicture }: { html: string; title: string; height?: number; expanded?: boolean; onEscape?: () => void; onPicture?: (width: number) => void }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const token = useMemo(() => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, []);
   const [measured, setMeasured] = useState(height);
   const escape = useRef(onEscape);
   escape.current = onEscape;
-  const doc = useMemo(() => visualDocument(html, { token, theme: currentTheme() }), [html, token]);
+  const picture = useRef(onPicture);
+  picture.current = onPicture;
+  const doc = useMemo(() => visualDocument(html, { token, theme: currentTheme(), expanded }), [html, token, expanded]);
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       if (event.source !== ref.current?.contentWindow || event.data?.type !== 'helm.visual' || event.data.token !== token) return;
       if (typeof event.data.height === 'number' && Number.isFinite(event.data.height)) setMeasured(Math.max(120, Math.min(1200, Math.ceil(event.data.height))));
+      if (typeof event.data.picture === 'number' && Number.isFinite(event.data.picture) && event.data.picture > 0) picture.current?.(Math.ceil(event.data.picture));
       if (event.data.escape) escape.current?.();
       if (typeof event.data.href === 'string' && /^https?:\/\//i.test(event.data.href) && navigator.userActivation?.isActive) window.open(event.data.href, '_blank', 'noopener,noreferrer');
     };
@@ -77,7 +80,7 @@ export function useVisualHtml(read: VisualReader | undefined, ref: string, activ
 }
 
 export function saveVisual(html: string, title: string) {
-  const url = URL.createObjectURL(new Blob([visualDocument(html, { theme: currentTheme() })], { type: 'text/html;charset=utf-8' }));
+  const url = URL.createObjectURL(new Blob([visualDocument(html, { theme: currentTheme(), expanded: true })], { type: 'text/html;charset=utf-8' }));
   const link = document.createElement('a');
   link.href = url; link.download = `${title.replace(/[^\p{L}\p{N} _.-]/gu, '').slice(0, 80) || 'visual'}.html`;
   link.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000);
@@ -92,6 +95,8 @@ export function VisualReply({ visual, read: supplied }: { visual: Visual; read?:
   const [visible, setVisible] = useState(false);
   const { html, error, retry } = useVisualHtml(read, visual.ref, visible && !live);
   const [open, setOpen] = useState(false);
+  // A picture on its own: the frame shrinks to it instead of spanning the chat.
+  const [pictureWidth, setPictureWidth] = useState<number>();
   useEffect(() => {
     const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { setVisible(true); observer.disconnect(); } }, { rootMargin: '300px' });
     if (ref.current) observer.observe(ref.current);
@@ -109,14 +114,14 @@ export function VisualReply({ visual, read: supplied }: { visual: Visual; read?:
       {url && canvas && <button aria-pressed={inCanvas} onClick={() => canvas.show(visual)}>{inCanvas ? 'In canvas' : 'Open in canvas'}</button>}
     </span>
   </div>;
-  return <div ref={ref} className="visual-reply">
+  return <div ref={ref} className="visual-reply" style={pictureWidth ? { maxWidth: pictureWidth + 2 } : undefined}>
     {/* No title bar: the picture is the reply. Small corner buttons put it
         in the canvas or open it full size, where its source and Save live. */}
     {html && <span className="visual-corner">
       {toCanvas}
       <button className="visual-open" aria-label={`Expand ${visual.title}`} title="Expand" onClick={() => setOpen(true)}><Icon name="popout" size={14} /></button>
     </span>}
-    {html ? <VisualFrame html={html} title={visual.title} height={visual.height} /> : <div className="visual-placeholder" style={{ minHeight: Math.min(visual.height, 420) }} role={error ? 'alert' : 'status'}>
+    {html ? <VisualFrame html={html} title={visual.title} height={visual.height} onPicture={setPictureWidth} /> : <div className="visual-placeholder" style={{ minHeight: Math.min(visual.height, 420) }} role={error ? 'alert' : 'status'}>
       {error ? <><span>{error}</span><button onClick={retry}>Retry</button></> : 'Loading visual…'}
     </div>}
     {open && html && <VisualDialog html={html} visual={visual} onClose={() => setOpen(false)} onSave={() => saveVisual(html, visual.title)} />}

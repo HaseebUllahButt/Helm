@@ -14,7 +14,8 @@ import { collapse, expand } from './paths.js';
  * `{"worktrees": "per-chat", "setup": "<shell command>"}`. A new chat there
  * gets a sibling checkout on a new branch from the repo's current branch,
  * made usable at once (dependencies linked, never installed), and its folder
- * is removed again once its branch is merged back and the chat is idle.
+ * is removed again once its branch is merged back and the chat is idle, or
+ * after an hour of quiet when it never committed anything.
  */
 
 const exec = promisify(execFile);
