@@ -43,6 +43,20 @@ export function wholeTagEdit(before: string, after: string, live: (tag: string) 
   return { text: before.slice(0, from) + before.slice(to), caret: from, removed };
 }
 
+/** The text cut at its live tags, so the composer can draw a box behind each one. */
+export function splitTags(text: string, live: (tag: string) => boolean = () => true): { text: string; tag: boolean }[] {
+  const parts: { text: string; tag: boolean }[] = [];
+  let at = 0;
+  for (const m of text.matchAll(TAG)) {
+    if (!live(m[0])) continue;
+    if (m.index! > at) parts.push({ text: text.slice(at, m.index), tag: false });
+    parts.push({ text: m[0], tag: true });
+    at = m.index! + m[0].length;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at), tag: false });
+  return parts;
+}
+
 /**
  * After pictures are removed: any other copy of a gone label leaves too, and
  * the labels after them move up, so "[Image #2]" still names the second one.

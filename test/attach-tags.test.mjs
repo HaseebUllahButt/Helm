@@ -41,3 +41,11 @@ test('labels after a removed picture move up, and its other copies leave', () =>
   assert.equal(renumberImages('[Image #1] again [Image #2] x', [1]), 'again [Image #1] x');
   assert.equal(renumberImages('[Image #4]', [1, 3]), '[Image #2]');
 });
+
+test('the box is cut at live tags only, so only those get a tint', async () => {
+  const { splitTags } = await import('../apps/web/src/session/attachTags.ts');
+  assert.deepEqual(splitTags('see [Image #1] and [Image #9]', (tag) => tag !== '[Image #9]'), [
+    { text: 'see ', tag: false }, { text: '[Image #1]', tag: true }, { text: ' and [Image #9]', tag: false },
+  ]);
+  assert.deepEqual(splitTags(''), []);
+});

@@ -4,7 +4,7 @@ import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
 import { useDictation, type Transcribe } from './voice';
 import type { Turn } from './types';
 import { isBigPaste, stashPaste } from './pasteStore';
-import { renumberImages, wholeTagEdit } from './attachTags';
+import { renumberImages, splitTags, wholeTagEdit } from './attachTags';
 import { Icon } from '../Icon';
 
 const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -176,6 +176,7 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
       ?.scrollIntoView({ block: 'nearest' });
   }, [pick, open]);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const marksRef = useRef<HTMLDivElement>(null);
   const draftNow = useRef(draft);
   draftNow.current = draft;
 
@@ -215,15 +216,18 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
    * A delete that cuts into a tag takes the whole tag, and the attachment
    * behind it goes too. True when it handled the change.
    */
+  /** A tag that stands for an attachment here; "[Image #9]" typed by hand is only letters. */
+  const liveTag = (tag: string) => {
+    const list = attachments ?? [];
+    const n = /^\[Image #(\d+)\]$/.exec(tag)?.[1];
+    if (n) return Number(n) >= 1 && Number(n) <= list.filter(isImageAttachment).length;
+    const file = /^\[File: (.+)\]$/.exec(tag)?.[1];
+    return file == null || list.some((a) => !isImageAttachment(a) && a.name === file);
+  };
   const deleteTags = (el: HTMLTextAreaElement, value: string) => {
     const list = attachments ?? [];
     const images = list.filter(isImageAttachment);
-    const edit = wholeTagEdit(draftNow.current, value, (tag) => {
-      const n = /^\[Image #(\d+)\]$/.exec(tag)?.[1];
-      if (n) return Number(n) >= 1 && Number(n) <= images.length;
-      const file = /^\[File: (.+)\]$/.exec(tag)?.[1];
-      return file == null || list.some((a) => !isImageAttachment(a) && a.name === file);
-    });
+    const edit = wholeTagEdit(draftNow.current, value, liveTag);
     if (!edit) return false;
     const gone = new Set<number>();
     const goneImages: number[] = [];
@@ -494,8 +498,15 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
               })}
             </div>
           )}
+          {/* The same text drawn behind the box, see-through except for a
+              tint behind each tag, so "[Image #1]" reads as one piece. */}
+          <div className="composer-field">
+          <div ref={marksRef} className="composer-marks" aria-hidden="true">
+            {splitTags(draft, liveTag).map((part, i) => part.tag ? <mark key={i}>{part.text}</mark> : part.text)}{'\n'}
+          </div>
           <textarea
             ref={ref} rows={1} value={draft} autoFocus={!touch}
+            onScroll={(e) => { if (marksRef.current) marksRef.current.scrollTop = e.currentTarget.scrollTop; }}
             enterKeyHint={touch ? 'enter' : 'send'}
             placeholder={placeholder} aria-label={`Message ${engine}`} data-composer=""
             onChange={(e) => {
@@ -550,6 +561,7 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
               if (e.key === 'Enter' && !e.shiftKey && !touch) { e.preventDefault(); submit(); }
             }}
           />
+          </div>
           <div className="slab-foot">
             {onAttach && (
               <>

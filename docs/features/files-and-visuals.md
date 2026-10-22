@@ -16,6 +16,8 @@
   "[Image #N]", "[File: …]" or a pasted-text tag removes all of it, and the
   picture or file behind it goes too; later image labels move up. Read from
   the text change, not the key: phone keyboards do not report Backspace.
+  Live tags get a tint from a see-through copy of the text behind the box
+  (`.composer-marks`); its padding, font and wrapping must match the box.
 - **Prove the tag delete (driven 2026-10-22):** with **fake-pics** upload
   two pictures, put the cursor after "[Image #1]" with `eval`
   (`setSelectionRange(10,10)`), `$V key Backspace`. Proof: the box reads
