@@ -258,6 +258,26 @@ test('the file viewer lists tracked and new files, opening in the chat\'s own fo
   assert.deepEqual(t.secret, ['.env']);
 });
 
+test('a folder outside Git still opens in the canvas, with any project inside it listed by Git', async () => {
+  const top = mkdtempSync(join(tmpdir(), 'helm-nogit-'));
+  mkdirSync(join(top, 'notes'));
+  writeFileSync(join(top, 'notes', 'plan.md'), '# plan\n');
+  mkdirSync(join(top, 'node_modules'));
+  writeFileSync(join(top, 'node_modules', 'x.js'), 'x\n');
+  const inner = join(top, 'proj');
+  mkdirSync(inner);
+  git(inner, 'init', '-q');
+  writeFileSync(join(inner, '.gitignore'), 'skip.log\n');
+  writeFileSync(join(inner, 'skip.log'), 'noise\n');
+  writeFileSync(join(inner, 'a.md'), 'a\n');
+  assert.deepEqual((await files(top)).files, ['notes/plan.md', 'proj/.gitignore', 'proj/a.md']);
+  const read = await file(top, 'proj/skip.log');
+  assert.equal(read.text, 'noise\n');
+  assert.ok((await write(top, 'notes/plan.md', '# mine\n', (await file(top, 'notes/plan.md')).hash)).hash);
+  assert.equal(readFileSync(join(top, 'notes', 'plan.md'), 'utf8'), '# mine\n');
+  await assert.rejects(file(top, '../x.md'), /not a path inside/);
+});
+
 test('the file viewer reads text, but never secrets, binaries or anything outside the repo', async () => {
   const dir = repo();
   writeFileSync(join(dir, '.env'), 'SECRET=1\n');

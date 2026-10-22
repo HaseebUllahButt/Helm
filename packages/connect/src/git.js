@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { stat, readFile, realpath, open, writeFile, mkdir } from 'node:fs/promises';
+import { stat, readFile, readdir, realpath, open, writeFile, mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import { existsSync, statSync, readFileSync } from 'node:fs';
@@ -33,6 +33,8 @@ async function folder(cwd) {
 }
 
 const toplevel = (dir) => git(dir, ['rev-parse', '--show-toplevel']).then((s) => s.trim()).catch(() => null);
+/** The canvas's top folder: the Git project, or the chat's own folder when it is in none. */
+const canvasRoot = async (dir) => (await toplevel(dir)) ?? dir;
 
 /** `## main...origin/main [ahead 1, behind 2]`, `## HEAD (no branch)`, `## No commits yet on main`. */
 function branchLine(line) {
@@ -212,11 +214,8 @@ function inside(path) {
  */
 export async function files(cwd) {
   const dir = await folder(cwd);
-  const root = await toplevel(dir);
-  if (!root) throw new Error('not a git repository');
-  const out = await exec('git', ['-C', root, 'ls-files', '-co', '--exclude-standard', '-z'], { ...OPTS, maxBuffer: 64 * 1024 * 1024 })
-    .then((r) => r.stdout);
-  const all = [...new Set(out.split('\0').filter(Boolean))].sort();
+  const root = await canvasRoot(dir);
+  const all = [...new Set(await listed(root))].sort();
   const realRoot = await realpath(root).catch(() => root);
   const realDir = await realpath(dir).catch(() => dir);
   const start = realDir.startsWith(realRoot + '/') ? realDir.slice(realRoot.length + 1) : '';
@@ -226,12 +225,35 @@ export async function files(cwd) {
   };
 }
 
+/** A Git project's files, without the ignored ones. */
+const gitFiles = (root) => exec('git', ['-C', root, 'ls-files', '-co', '--exclude-standard', '-z'], { ...OPTS, maxBuffer: 64 * 1024 * 1024 })
+  .then((r) => r.stdout.split('\0').filter(Boolean));
+
+/**
+ * A folder's files. A folder outside Git is walked by hand, skipping
+ * node_modules; a Git project found inside it lists its own files.
+ */
+async function listed(root, prefix = '', found = []) {
+  if (!prefix && await toplevel(root) === root) return gitFiles(root);
+  const here = join(root, prefix);
+  const entries = await readdir(here, { withFileTypes: true }).catch(() => []);
+  if (prefix && entries.some((e) => e.name === '.git')) {
+    for (const f of await gitFiles(here).catch(() => [])) found.push(prefix + f);
+    return found;
+  }
+  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (found.length > TREE_LIMIT) break;
+    if (e.isDirectory() && e.name !== '.git' && e.name !== 'node_modules') await listed(root, `${prefix}${e.name}/`, found);
+    else if (e.isFile()) found.push(prefix + e.name);
+  }
+  return found;
+}
+
 /** Resolve an agent's file against its chat folder, using the same read guards as Canvas. */
 export async function canvasPath(cwd, path) {
   if (typeof path !== 'string' || !path.trim() || path.includes('\0')) throw new Error('canvas needs a file path');
   const dir = await folder(cwd);
-  const root = await toplevel(dir);
-  if (!root) throw new Error('the file canvas needs a Git project');
+  const root = await canvasRoot(dir);
   const rel = relative(root, resolve(dir, expand(path)));
   const result = await file(cwd, rel);
   if (result.hidden) throw new Error('this file may hold passwords or keys');
@@ -250,8 +272,7 @@ const hashOf = (buf) => createHash('sha256').update(buf).digest('hex');
 export async function file(cwd, path, since) {
   const dir = await folder(cwd);
   const rel = inside(path);
-  const root = await toplevel(dir);
-  if (!root) throw new Error('not a git repository');
+  const root = await canvasRoot(dir);
   if (isSecretPath(rel)) return { path: rel, hidden: true };
   const realRoot = await realpath(root);
   const full = await realpath(join(root, rel)).catch(() => null);
@@ -282,8 +303,7 @@ export async function file(cwd, path, since) {
 const saves = new Map();
 export async function write(cwd, path, text, base) {
   const dir = await folder(cwd);
-  const root = await toplevel(dir);
-  if (!root) throw new Error('not a git repository');
+  const root = await canvasRoot(dir);
   const target = join(root, inside(path));
   // Compare and write together, including when two tabs name the same link.
   const key = await realpath(target).catch(() => target);
@@ -299,8 +319,7 @@ async function writeChecked(cwd, path, text, base) {
   const rel = inside(path);
   if (typeof text !== 'string') throw new Error('nothing to save');
   if (Buffer.byteLength(text) > TEXT_LIMIT) throw new Error('this file is too long to save from here');
-  const root = await toplevel(dir);
-  if (!root) throw new Error('not a git repository');
+  const root = await canvasRoot(dir);
   if (isSecretPath(rel)) throw new Error('this file may hold passwords or keys; it is not saved from here');
   if (rel.split('/')[0] === '.git') throw new Error('that is git’s own folder');
   const realRoot = await realpath(root);

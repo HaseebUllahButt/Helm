@@ -31,10 +31,11 @@
   screen gets a third column (shares the browser panel's slot, one at a
   time); a phone gets a full-screen sheet. Open state and file are kept per
   chat on the device. A file name in a turn's "changed files" opens it there.
-- **Rules:** Notes and docs need a Git project (it lists with `git.files`).
-  Its first screen also lists the chat's pictures and pages, so Back from a
-  page never ends on an error; outside Git it says quietly that notes need
-  Git. Saves go through
+- **Rules:** Notes and docs come from the chat's Git project, or from the
+  chat's own folder when it is in none (`git.files` then walks it, skips
+  node_modules, and lets any Git project inside list its own files). Its
+  first screen also lists the chat's pictures and pages, so Back from a
+  page never ends on an error. Saves go through
   `git.write` with the hash the file was read at: a file the agent changed
   since is never overwritten silently; the owner picks "Use the new file" or
   "Save mine over it". Secrets and `.git/` are never written; a new file

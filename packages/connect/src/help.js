@@ -55,7 +55,7 @@ const DETAILS = {
   canvas: `
   Open Canvas beside the chat on wide screens.
   On phones, Canvas fills the screen and has a Close button.
-  Open Markdown, text and code files from the chat's Git project.
+  Open Markdown, text and code files from the chat's folder.
   Relative paths start from your current folder.
   With --session, paths start from the selected chat's folder.
   Canvas shows file changes and lets the owner edit and save files.

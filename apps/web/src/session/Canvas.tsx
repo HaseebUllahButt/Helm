@@ -16,8 +16,7 @@ import type { Visual } from './types';
  * change it did not see. Edits not saved yet stay while the app is open.
  * It also shows pages: a visual the owner moves here, or one the agent sends
  * with `helm canvas`, saved or live. Its first screen lists the chat's pages
- * above the notes, so Back from a page always lands somewhere useful, even
- * in a folder that is not a Git project.
+ * above the notes, so Back from a page always lands somewhere useful.
  */
 
 interface Tree { root: string; absoluteRoot?: string; start: string; files: string[]; secret: string[]; truncated: boolean }
