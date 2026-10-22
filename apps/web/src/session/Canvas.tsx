@@ -16,7 +16,8 @@ const PageEditor = lazy(() => import('./PageEditor'));
  * opens on the markdown files, shows one as a page, and edits it in place.
  * The agent and the owner can both change a file: the canvas follows the
  * agent's edits while the owner has none, and a save never overwrites a
- * change it did not see. Edits not saved yet stay while the app is open.
+ * change it did not see. Edits save themselves a moment after typing stops
+ * and when the file closes; the canvas speaks up only when a save fails.
  * It also shows pages: a visual the owner moves here, or one the agent sends
  * with `helm canvas`, saved or live. Its first screen lists the chat's pages
  * above the notes, so Back from a page always lands somewhere useful.
@@ -38,6 +39,8 @@ const openKey = (env: string, session: string) => `helm.canvas.${env}:${session}
 const OPEN_EVENT = 'helm:canvas';
 /** How often an open file is checked for the agent's edits. Only a hash travels when nothing changed. */
 const WATCH_MS = 2000;
+/** How long typing must pause before the canvas saves. */
+const AUTOSAVE_MS = 700;
 
 const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 const isMarkdown = (p: string) => /\.(md|mdx|markdown)$/i.test(p);
@@ -315,7 +318,6 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
   const [theirs, setTheirs] = useState<FileText | null>(null);
   const [saving, setSaving] = useState(false);
   const [problem, setProblem] = useState('');
-  const [savedAt, setSavedAt] = useState(0);
   const area = useRef<HTMLTextAreaElement>(null);
   const savingNow = useRef(false);
   const revision = useRef(0);
@@ -395,13 +397,21 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
       setFile(saved);
       const kept = drafts.get(dkey);
       if (kept && kept.text !== draft) drafts.set(dkey, { text: kept.text, base: saved });
-      else { drafts.delete(dkey); setSavedAt(Date.now()); }
+      else drafts.delete(dkey);
       setTheirs(null);
     } catch (e: any) {
       setProblem(/unknown|not supported/i.test(e?.message ?? '') ? 'Update Helm on this machine to save files here.' : e?.message || 'Helm cannot save the file.');
     } finally { savingNow.current = false; revision.current++; setSaving(false); }
   };
-  useEffect(() => { if (!savedAt) return; const t = setTimeout(() => setSavedAt(0), 1600); return () => clearTimeout(t); }, [savedAt]);
+  // Save once typing pauses. A clash or a failed save waits for the owner.
+  useEffect(() => {
+    if (!dirty || theirs || saving || problem) return;
+    const t = setTimeout(() => void save(), AUTOSAVE_MS);
+    return () => clearTimeout(t);
+  }, [draft, dirty, theirs, saving, problem]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Leaving the file (Back, Close, another file) saves what is left.
+  const leave = useRef({ dirty, theirs, save }); leave.current = { dirty, theirs, save };
+  useEffect(() => () => { const l = leave.current; if (l.dirty && !l.theirs) void l.save(); }, []);
 
   // A tab closed with unsaved edits asks first.
   useEffect(() => {
@@ -445,12 +455,9 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
           <button className={editing ? 'on' : ''} aria-pressed={editing} onClick={startEdit}>Edit</button>
         </div>}
       </CanvasHead>
-      {(dirty || saving || savedAt > 0 || problem) && <div className="canvas-save" role="status">
-        {problem ? <span className="bad">{problem}</span> : savedAt ? <span><Icon name="check" size={13} /> Saved</span> : <span>{saving ? 'Saving…' : 'Not saved'}</span>}
-        {dirty && <>
-          <button className="files-chip" disabled={saving} onClick={() => { setDraft(null); setEditing(false); setTheirs(null); }}>Undo my changes</button>
-          <button className="files-chip canvas-save-btn" disabled={saving} onClick={() => void save()} title="Save (Ctrl/⌘ S)">Save</button>
-        </>}
+      {problem && <div className="canvas-save" role="status">
+        <span className="bad">{problem}</span>
+        {dirty && <button className="files-chip canvas-save-btn" disabled={saving} onClick={() => void save()}>Try again</button>}
       </div>}
       {theirs && dirty && <div className="canvas-clash" role="alert">
         <span>The file changed on the machine after you started editing.</span>

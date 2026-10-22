@@ -41,7 +41,9 @@
   since is never overwritten silently; the owner picks "Use the new file" or
   "Save mine over it". Secrets and `.git/` are never written; a new file
   under a link that leads out of the repo is refused before any folder is
-  made. Unsaved edits live in memory while the app is open. A Markdown
+  made. Edits save themselves 0.7 s after typing stops and when the file
+  closes; there is no save bar, only a line when a save fails (with Try
+  again) or the clash card. Ctrl/⌘ Z undoes. A Markdown
   file has one mode: its page, which the owner reads and types into
   (Milkdown, loaded on first use; Ctrl/⌘ click opens a link). It writes the
   file again on each change, in the file's own list, rule and table style.
@@ -49,7 +51,7 @@
   Other text files keep View / Edit.
 - **Prove (driven 2026-10-21):** make a git repo in the copy's work folder,
   `$V rpc session.start '{"cwd":"<repo>","profileId":"fake"}'`, open it at
-  `size 1600 900`, click "Canvas", open a `.md`, click into it, type, Ctrl+S; then
+  `size 1600 900`, click "Canvas", open a `.md`, click into it, type, wait 1 s (the file has the words, no bar shows); then
   append to the file from the shell (the page follows within 2 s) and again
   while editing (the clash card shows).
 - **Traps:** `wait` does not read the edit box; check it with `eval`.
