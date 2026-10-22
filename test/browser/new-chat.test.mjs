@@ -590,6 +590,6 @@ test('the quiet row has a mobile tap target and pointer selection changes its ap
   const geometry = await toggle.boundingBox();
   assert.ok(geometry && geometry.height >= 44, 'touch row is at least 44px tall');
   assert.ok(geometry.x >= 0 && geometry.x + geometry.width <= 390, 'touch row fits the viewport');
-  assert.equal(await page.locator('.palette-foot').isVisible(), false);
+  assert.equal(await page.locator('.palette-foot').count(), 0);
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.HELM_TEST_SCREENSHOT_DIR}/quiet-cli-touch.png` });
 });

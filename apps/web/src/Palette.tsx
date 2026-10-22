@@ -151,7 +151,6 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
             );
           })}
         </div>
-        <div className="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
       </div>
     </div>
   );
