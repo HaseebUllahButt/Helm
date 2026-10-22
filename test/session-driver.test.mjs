@@ -985,19 +985,33 @@ test('images ride the driver when it implements the verb, else a placeholder', a
   assert.match(d3.sent.at(-1), /cannot see images/);
 
   // An ACP agent only answers this in its reply to `initialize`, and the
-  // driver is started lazily - so a driver asked before it is up says "no"
-  // for an agent that would have said yes. Devin did exactly that in the
-  // real app: the clip was there, the picture previewed, and the model was
-  // handed the string `[image: dot.jpg]`.
+  // driver is started lazily - so a driver asked before it is up has no
+  // answer yet. Devin was once handed the string `[image: dot.jpg]` for a
+  // "no" said too early, and OpenCode 2's composer refused the picture.
   class LateDriver extends ImageDriver {
     #up = false;
     async start() { this.#up = true; }
-    acceptsImages() { return this.#up; }
+    acceptsImages() { return this.#up || null; }
   }
   const late = new Sessions(new StubRuntime(), {
     events: new EventLog(join(process.env.HELM_DIR, 'events-late')),
     makeDriver: (engine, opts) => new LateDriver({ engine, ...opts }),
   });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  class SlowDriver extends LateDriver {
+    async start() { await gate; return super.start(); }
+  }
+  const slow = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-slow')),
+    makeDriver: (engine, opts) => new SlowDriver({ engine, ...opts }),
+  });
+  const starting = slow.start({ cwd: '/tmp', profileId: 'claudea' });
+  while (!SlowDriver.made.length) await new Promise((resolve) => setImmediate(resolve));
+  const slowId = SlowDriver.made.at(-1).env.HELM_SESSION_ID;
+  assert.equal(slow.acceptsImages(slowId), null, 'a driver still starting leaves the app on the catalogue');
+  release();
+  await starting;
   const s4 = await late.start({ cwd: '/tmp', profileId: 'claudea' });
   await late.input(s4.id, 'look', { attachments: atts });
   const d4 = LateDriver.made.at(-1);
