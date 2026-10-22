@@ -61,7 +61,6 @@ const ON_GITHUB = 'On GitHub';
 const HOME_ROW = '@home';
 const parentKey = (machineId: string) => `helm.cloneParent.${machineId}`;
 const savedParent = (machineId: string) => { try { return localStorage.getItem(parentKey(machineId)); } catch { return null; } };
-const MOD = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
 
 interface Row {
   id: string;
@@ -75,6 +74,8 @@ interface Row {
   disabled?: boolean;
   /** A folder: how deep in the tree, and whether it is opened. */
   folder?: { path: string; depth: number; open: boolean; parent?: string };
+  /** A CLI: hides it from the list, or shows it again. */
+  hide?: () => void;
   pick: () => void;
 }
 
@@ -388,6 +389,22 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   // of it; it goes back once there is something to type again.
   useEffect(() => { if (!busy) input.current?.focus(); }, [busy]);
 
+  // Kept where the machine keeps it, so every device shows the same list.
+  const toggleHidden = (key: string) => {
+    if (!machine || !picker) return;
+    const before = new Set(picker.hidden);
+    if (before.has(key)) before.delete(key); else before.add(key);
+    const hidden = [...before];
+    setPicker({ ...picker, hidden });
+    if (viewHidden && !accounts?.some((a) => before.has(a.key))) setViewHidden(false);
+    if (picker.onMachine) client.rpc(machine.id, 'picker.prefs', { hidden }, 15_000).catch((e) => setError(e.message));
+    else {
+      const prefs = loadPrefs();
+      savePrefs({ ...prefs, [machine.id]: { ...prefs[machine.id], hidden } });
+    }
+    input.current?.focus();
+  };
+
   const start = async (a: Account) => {
     if (!machine || busy) return;
     setBusy(true); setError('');
@@ -504,6 +521,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
         group: hiddenView ? 'Hidden CLIs' : undefined,
         sub: twins.has(`${a.engine}|${a.account}`) ? `${a.account} (${a.profile.id})` : a.account,
         tag: a.key === picker?.agent ? 'default' : a.key === picker?.last ? 'last used' : undefined,
+        hide: () => toggleHidden(a.key),
         pick: () => void start(a),
       })).filter((r) => matches(r, query));
     };
@@ -719,6 +737,14 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                       {row.sub && <span className="palette-sub">{row.sub}</span>}
                     </span>
                   </button>
+                  {row.hide && (
+                    <button
+                      className="newchat-add newchat-hide" tabIndex={-1}
+                      title={viewHidden ? `Show ${row.title} · ${row.sub} again` : `Hide ${row.title} · ${row.sub}`}
+                      aria-label={viewHidden ? `Show ${row.title} · ${row.sub} again` : `Hide ${row.title} · ${row.sub}`}
+                      onClick={() => { point(i); row.hide!(); }}
+                    ><Icon name={viewHidden ? 'eye' : 'eye-off'} size={14} /></button>
+                  )}
                   {row.folder && !row.disabled && step === 'folder' && (
                     <button
                       className="newchat-add" tabIndex={-1} title={`New folder inside ${row.title}`} aria-label={`New folder inside ${row.title}`}
@@ -776,16 +802,6 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
             <span className="newchat-account"><Icon name="github" size={14} />{intoTarget ? <>Goes to <b>{intoTarget}</b></> : 'Pick the folder it goes in'}</span>
           </div>
         )}
-        {/* Only the keys that do something right now. */}
-        <div className="palette-foot">
-          {!busy && rows.filter((r) => !r.disabled).length > 1 && <span><kbd>↑</kbd><kbd>↓</kbd> move</span>}
-          {!busy && rows.some((r) => !r.disabled) && <span><kbd>Enter</kbd> {step === 'cli' && !rows[selected]?.quiet ? 'start' : 'choose'}</span>}
-          {(step === 'folder' || step === 'into') && !busy && rows.some((r) => r.folder && !r.disabled) && <span><kbd>→</kbd><kbd>←</kbd> open, close</span>}
-          {step === 'folder' && !busy && <span><kbd>{MOD}</kbd><kbd>Enter</kbd> quick chat</span>}
-          {step === 'folder' && !busy && query && <span><kbd>{MOD}</kbd><kbd>Shift</kbd><kbd>Enter</kbd> new folder</span>}
-          {step !== 'machine' && !busy && !q && <span><kbd>⌫</kbd> back</span>}
-          <span><kbd>Esc</kbd> close</span>
-        </div>
       </div>
     </div>
   );

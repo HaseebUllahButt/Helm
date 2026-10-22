@@ -3593,7 +3593,7 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 }
 .newchat-row:hover .newchat-add, .newchat-row:has(.palette-row.on) .newchat-add, .newchat-add:focus-visible { opacity: 1; }
 .newchat-add:hover { background: var(--hover); color: var(--text); }
-@media (pointer: coarse) { .newchat-row:has(.palette-row.on) .newchat-add { opacity: 1; } .newchat-add { width: 40px; height: 40px; } }
+@media (pointer: coarse) { .newchat-row:has(.palette-row.on) .newchat-add, .newchat-hide { opacity: 1; } .newchat-add { width: 40px; height: 40px; } }
 .newchat-bar {
   display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 12px; border-top: 1px solid var(--line);
   font-size: 13px; color: var(--mutedfg); min-width: 0;
