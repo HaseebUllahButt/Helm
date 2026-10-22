@@ -167,18 +167,18 @@ export function formatDevinUsage(userStatus, consumed = [], { now = Date.now() }
   }
   const facts = [];
   if (info.planName) facts.push(`**Plan:** ${mdEscape(info.planName)}`);
-  if (info.devinInfo?.accountDisplayName) facts.push(`**Org:** ${mdEscape(info.devinInfo.accountDisplayName)}`);
+  if (info.devinInfo?.accountDisplayName) facts.push(`**Organization:** ${mdEscape(info.devinInfo.accountDisplayName)}`);
   const credits = Number(plan.availablePromptCredits);
   if (Number.isFinite(credits) && credits >= 0) facts.push(`**Prompt credits:** ${number(credits)}`);
   const acuLimit = Number(plan.acuLimit);
   if (Number.isFinite(acuLimit) && acuLimit > 0) {
     facts.push(`**ACUs:** ${number(plan.acuConsumed ?? 0)} / ${number(acuLimit)} used`);
   }
-  if (!rows.length && !facts.length) return '*No quota data available.*';
+  if (!rows.length && !facts.length) return '*Account limits are not available.*';
   const noun = /quota/i.test(info.billingStrategy ?? '') ? 'quota' : 'credits or ACUs';
   const spent = consumed.length
-    ? `**Consumed this session:** ${consumed.map(mdEscape).join(' · ')}`
-    : `*No ${noun} consumed yet in this session.*`;
+    ? `**Used in this chat:** ${consumed.map(mdEscape).join(' · ')}`
+    : `*This chat used no ${noun}.*`;
   return ['### Usage', '', [...rows, ...facts].join('  \n'), '', spent].join('\n');
 }
 

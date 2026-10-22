@@ -109,7 +109,7 @@ test('opening the website and installed app inherits the terminal join without p
 
   await page.evaluate(() => window.showAdd());
   await page.getByLabel('Computer kind').selectOption('nas');
-  await page.getByRole('button', { name: 'Make join command' }).click();
+  await page.getByRole('button', { name: 'Create join command' }).click();
   await page.locator('pre.snippet').waitFor();
   const command = await page.locator('pre.snippet').innerText();
   assert.ok(command.startsWith(`helm join '${remoteOrigin}/#join=`));

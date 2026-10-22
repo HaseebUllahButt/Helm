@@ -14,13 +14,13 @@ type KeeperStatus = {
 };
 type OwnerState = { record: OwnerRecord; keeper: KeeperStatus };
 
-const changed = (r: OwnerRecord) => r.by === 'seed' ? `${r.why ?? 'Set by Helm'}.`
-  : `Changed ${ago(r.updatedAt)} by ${r.by === 'owner' ? 'you' : 'the keeper'}${r.where ? ` on ${r.where}` : ''}${r.why ? `. ${r.why}.` : '.'}`;
+const changed = (r: OwnerRecord) => r.by === 'seed' ? `${r.why ?? 'Helm set this list'}.`
+  : `${r.by === 'owner' ? 'You' : 'Helm'} changed this list ${ago(r.updatedAt)}${r.where ? ` on ${r.where}` : ''}${r.why ? `. ${r.why}.` : '.'}`;
 
 const lastRun = (k: KeeperStatus) => {
   if (k.running) return 'Reading new chats now…';
-  if (!k.here) return k.name ? `Runs on ${k.name}, which is off` : 'No machine to run on';
-  if (!k.lastRunAt) return 'Not run yet';
+  if (!k.here) return k.name ? `Runs on ${k.name}. That machine is offline.` : 'No machines are available.';
+  if (!k.lastRunAt) return 'Helm has not read your chats yet.';
   const r = k.result ?? '';
   const what = r === 'nothing new' ? 'no new chats' : r === 'no change' ? 'nothing to change'
     : r === 'changed' ? 'it changed the list' : r.startsWith('failed: ') ? `it failed: ${r.slice(8)}` : r;
@@ -76,7 +76,7 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
       take(next, keepText);
       setError('');
     } catch (err: any) {
-      setError(/unknown method/i.test(err?.message ?? '') ? 'This machine needs a Helm update first.' : err?.message || 'Could not read the list');
+      setError(/unknown method/i.test(err?.message ?? '') ? 'Update Helm on this machine first.' : err?.message || 'Helm cannot read the list.');
     }
   }, [client, target, state?.keeper?.machine]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -91,10 +91,10 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
 
   const call = async (method: string, params: Record<string, unknown>) => {
     const env = target(state?.keeper);
-    if (!env) { setError('No machine is on'); return; }
+    if (!env) { setError('No machines are online.'); return; }
     setBusy(true); setError('');
     try { take(await client.rpc<OwnerState>(env.id, method, params), method !== 'owner.set' || params.lines === undefined); }
-    catch (err: any) { setError(err?.message || 'Could not save it'); }
+    catch (err: any) { setError(err?.message || 'Helm cannot save the list.'); }
     finally { setBusy(false); }
   };
 
@@ -109,8 +109,8 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
         <div className="titles"><h1>Your preferences</h1><span className="sub">every chat, every machine</span></div>
       </div>
       <div className="scroll"><div className="pad column">
-        <p className="note">Helm gives this list to every agent it starts. Keep it short: one preference on each line.</p>
-        {!online.length && <div className="empty quiet">No machine is on</div>}
+        <p className="note">Helm gives this list to every agent it starts. Write one short preference on each line.</p>
+        {!online.length && <div className="empty quiet">No machines are online.</div>}
         {online.length > 0 && !record && !error && <div className="empty quiet">Reading the list…</div>}
         {record && (
           <div className="owner-list">
@@ -132,12 +132,12 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
 
         {record && keeper && (
           <>
-            <div className="section">keeper</div>
+            <div className="section">Preference updates</div>
             <div className="rows">
               <div className="row toggle">
                 <span className="grow">
                   <span className="rt">Learn from my chats</span>
-                  <span className="rm wrap">Once a day{keeper.name ? ` on ${keeper.name}` : ''}, with a small model. Reads only new chats and changes only this list.</span>
+                  <span className="rm wrap">Helm reads new chats once a day{keeper.name ? ` on ${keeper.name}` : ''} with a small model. It updates this list.</span>
                 </span>
                 <button className={`switch${record.keeper ? ' on' : ''}`} role="switch" aria-checked={record.keeper}
                   aria-label="Learn from my chats" disabled={busy} onClick={() => call('owner.set', { keeper: !record.keeper })}><i /></button>
@@ -152,7 +152,7 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
             </div>
             {record.learned && (record.learned.added.length > 0 || record.learned.removed.length > 0) && (
               <div className="owner-learned">
-                <span className="note">What the keeper last changed, {ago(record.learned.at)}:</span>
+                <span className="note">Last preference changes, {ago(record.learned.at)}:</span>
                 {record.learned.added.map((l) => <div key={`+${l}`} className="owner-added">+ {l}</div>)}
                 {record.learned.removed.map((l) => <div key={`-${l}`} className="owner-removed">− {l}</div>)}
               </div>

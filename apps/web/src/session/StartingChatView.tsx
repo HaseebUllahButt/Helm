@@ -48,7 +48,7 @@ export function StartingChatView({ client, env, startId, onBack }: {
           <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
           <div className="titles"><h1 className="crumb-title">New chat</h1></div>
         </div>
-        <p className="starting-note">This chat has already opened. Find it in the list.</p>
+        <p className="starting-note">This chat is open. Find it in the list.</p>
       </>
     );
   }
@@ -77,7 +77,7 @@ export function StartingChatView({ client, env, startId, onBack }: {
       </div>
       {failed && (
         <div className="starting-failed" role="alert">
-          <p><b>The agent didn't start.</b> {chat.error}</p>
+          <p><b>The agent did not start.</b> {chat.error}</p>
           <div className="starting-actions">
             <button className="primary" onClick={() => retryChat(client, startId)}><Icon name="refresh" size={14} />Try again</button>
             <button className="ghost" onClick={onBack}>Close</button>

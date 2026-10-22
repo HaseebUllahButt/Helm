@@ -15,7 +15,7 @@ export async function runMessageCommand(command, args, { rpc, self, findSession,
     else {
       for (const m of result.messages.toReversed()) write(`${m.id}  ${m.asUser ? 'You' : m.from.title} → ${m.to.title} (${m.status})${m.replyTo ? ` · reply to ${m.replyTo}` : ''}\n${m.text}`);
       if (!result.messages.length) write('No agent messages yet.');
-      if (result.next) write('Showing the latest messages. Older exchanges are in the Agents panel.');
+      if (result.next) write('This list shows the latest messages. Open Agents for older messages.');
     }
     return;
   }
@@ -33,5 +33,5 @@ export async function runMessageCommand(command, args, { rpc, self, findSession,
   try { result = await rpc(self, 'session.agent-send', { id: senderId, to, text, messageId,
     ...(command === 'reply' ? { replyTo: target } : {}), ...(callerThreadId ? { callerThreadId } : {}) }, 70_000); }
   catch (error) { throw new Error(`${error.message}\nRetry this same message with: helm ${command} ${target} --message-id ${messageId} -- <same text>`); }
-  write(options.json ? JSON.stringify(result) : `Message ${result.message.id ?? messageId} ${result.duplicate ? 'already delivered' : 'delivered'} to ${result.message.to.title}. It will be read after its current step.`);
+  write(options.json ? JSON.stringify(result) : `Message ${result.message.id ?? messageId} ${result.duplicate ? 'already delivered' : 'delivered'} to ${result.message.to.title}. The receiving agent reads it after its current step.`);
 }

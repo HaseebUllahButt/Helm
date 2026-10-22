@@ -422,8 +422,8 @@ export class SessionDelivery {
           this.#sessions.events.append(s.id, {
             type: 'error', kind: 'attachment',
             message: item.images.length === 1
-              ? `${s.engine} cannot be sent images, so ${item.images[0].filename || 'the image'} was named but not attached.`
-              : `${s.engine} cannot be sent images, so ${item.images.length} attachments were named but not sent.`,
+              ? `${s.engine} cannot receive images. Helm sent the name of ${item.images[0].filename || 'the image'} without its image.`
+              : `${s.engine} cannot receive images. Helm sent ${item.images.length} attachment names without the images.`,
           });
         }
         echo = this.#expectEcho(s, d, item, msg);

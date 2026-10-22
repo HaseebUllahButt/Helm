@@ -18,7 +18,7 @@ export function SendActivity({ jobs, onOpen }: { jobs: SendJob[]; onOpen: (job: 
 }
 export function SendNotice({ job, onOpen, onDismiss }: { job: SendJob; onOpen: () => void; onDismiss: () => void }) {
   return <div className="send-notice" role="status">
-    <button className="linkish grow" title={`${sendName(job)} is on ${job.target.name}`} onClick={onOpen}>{sendName(job)} is on {job.target.name} · View</button>
+    <button className="linkish grow" title={`${sendName(job)} is on ${job.target.name}.`} onClick={onOpen}>View {sendName(job)} on {job.target.name}</button>
     <button className="iconbtn" aria-label="Dismiss send notification" onClick={onDismiss}><Icon name="close" size={15} /></button>
   </div>;
 }

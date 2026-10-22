@@ -103,8 +103,8 @@ export const T = {
 // asking should be sure of it.
 export const CONTROLLER_WORDS = ['controller', 'mobile', 'phone', 'browser', 'device'];
 export const CONTROLLER_REFUSAL =
-  'a controller can never be anything else - it runs nothing; ' +
-  'remove it and add a machine instead';
+  'A control device cannot become a machine. It runs no agents. ' +
+  'Remove it, then add a machine.';
 
 export const M = {
   ENV_INFO: 'env.info',            // {} -> { host, os, arch, uptime, engines }

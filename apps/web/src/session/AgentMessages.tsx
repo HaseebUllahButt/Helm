@@ -38,11 +38,11 @@ export function AgentMessages({ client, envId, parent, children }: { client: Cli
     <button className="delegation-new" aria-expanded={open} onClick={() => setOpen(!open)}>Messages between agents</button>
     {open && <div className="agent-exchanges-body">
       {error && <p className="error" role="alert">{error}</p>}
-      {!listing.messages.length && !error && <p className="note">No messages yet.</p>}
+      {!listing.messages.length && !error && <p className="note">This chat has no messages.</p>}
       <ol className="agent-exchange-list">{listing.messages.map(message => <li key={message.id}>
         <b>{message.asUser ? 'You' : `${message.from.title} (${message.from.engine})`} → {message.to.title} ({message.to.engine})</b>
         <small>{new Date(message.at).toLocaleString()} · {message.status === 'delivered' ? 'Delivered' : message.status === 'sending' ? 'Sending' : 'Not confirmed'}{message.replyTo ? ' · Reply' : ''}</small>
-        {message.replyTo && <details><summary>In reply to</summary><p>{listing.messages.find(m => m.id === message.replyTo)?.text ?? `Message ${message.replyTo} · load earlier messages to see it.`}</p></details>}
+        {message.replyTo && <details><summary>In reply to</summary><p>{listing.messages.find(m => m.id === message.replyTo)?.text ?? `Load earlier messages to see message ${message.replyTo}.`}</p></details>}
         <Markdown text={message.text} />
         {message.error && <p className="error">{message.error}</p>}
       </li>)}</ol>

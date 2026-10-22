@@ -54,7 +54,7 @@ async function pageFor(t,width=390){
 test('an idle parent stays working while a helper runs, and a nested question opens its exact conversation',async t=>{
   const page=await pageFor(t);
   await page.locator('.session-bar .chip.working').waitFor();
-  const link=page.getByRole('group',{name:'Subagents waiting for you'}).getByRole('button',{name:/Choose the cache/});
+  const link=page.getByRole('group',{name:'Helpers need your answer'}).getByRole('button',{name:/Choose the cache/});
   await link.click();
   await page.locator('.sheet.question').waitFor();
   assert.equal(await page.evaluate(()=>window.opened),'child');

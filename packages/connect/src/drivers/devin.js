@@ -27,7 +27,7 @@ export const DEVIN_MIN_VERSION = '3000.10.0';
  * GetUserStatus read, so it works while a turn runs; /session-stats stays
  * the real ACP command for the per-session numbers.
  */
-const DEVIN_USAGE = { name: 'usage', description: 'Show account quota and usage', source: 'devin' };
+const DEVIN_USAGE = { name: 'usage', description: 'Show account limits and usage', source: 'devin' };
 
 const FUSION_MODEL = /^(fusion-.+)-(low|medium|high|xhigh|max)(-sidekick-.+)$/;
 
@@ -50,25 +50,25 @@ export function normalizeDevinModel(value, catalog) {
  * Mirrored from the set devin 3000.10.31 advertises.
  */
 export const DEVIN_COMMANDS = [
-  { name: 'login', description: 'Authenticate with an API key', source: 'devin' },
-  { name: 'logout', description: 'Clear authentication', source: 'devin' },
-  { name: 'status', description: 'Check authentication status', source: 'devin' },
-  { name: 'workspace', description: 'List workspace directories', source: 'devin' },
+  { name: 'login', description: 'Sign in with an API key', source: 'devin' },
+  { name: 'logout', description: 'Sign out', source: 'devin' },
+  { name: 'status', description: 'Check sign-in status', source: 'devin' },
+  { name: 'workspace', description: 'List project folders', source: 'devin' },
   { name: 'ask', description: 'Switch to Ask mode (read-only)', source: 'devin' },
   { name: 'plan', description: 'Switch to Plan mode, or plan with a prompt', source: 'devin' },
   { name: 'code', description: 'Switch to Code mode, or run a prompt in it', source: 'devin' },
   { name: 'smart', description: 'Switch to Smart mode, or run a prompt in it', source: 'devin' },
   { name: 'bypass', description: 'Switch to Bypass Permissions mode, or run a prompt under it', source: 'devin' },
-  { name: 'compact', description: 'Force conversation compaction', source: 'devin' },
-  { name: 'context', description: 'Show context window usage', source: 'devin' },
-  { name: 'fast', description: 'Switch to the fastest model available to you, or run a prompt with it', source: 'devin' },
-  { name: 'loop', description: 'Run a prompt then auto-review the diff in a loop', source: 'devin' },
-  { name: 'recap', description: 'Recap the session so far with a short summary', source: 'devin' },
-  { name: 'session-stats', description: 'Show session statistics', source: 'devin' },
+  { name: 'compact', description: 'Shorten the chat history', source: 'devin' },
+  { name: 'context', description: 'Show chat history size', source: 'devin' },
+  { name: 'fast', description: 'Pick the fastest available model or send it a message', source: 'devin' },
+  { name: 'loop', description: 'Run a message and check its changes repeatedly', source: 'devin' },
+  { name: 'recap', description: 'Summarise this chat', source: 'devin' },
+  { name: 'session-stats', description: 'Show chat totals', source: 'devin' },
   DEVIN_USAGE,
-  { name: 'rename', description: 'Rename this session', source: 'devin' },
-  { name: 'share', description: 'Share this conversation with your team on Devin', source: 'devin' },
-  { name: 'mcp', description: 'List configured MCP servers and their status', source: 'devin' },
+  { name: 'rename', description: 'Rename this chat', source: 'devin' },
+  { name: 'share', description: 'Share this chat with your team on Devin', source: 'devin' },
+  { name: 'mcp', description: 'List tool connections (MCP) and their status', source: 'devin' },
   { name: 'bug', description: 'Report a bug to the Devin CLI developers', source: 'devin' },
   { name: 'help', description: 'Show available commands', source: 'devin' },
 ];

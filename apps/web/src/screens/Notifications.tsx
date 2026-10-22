@@ -77,7 +77,7 @@ export function Notifications({ client }: { client: Client }) {
       const sub = await boundSub(client, reg, key) ?? await subscribe(client, reg, key);
       setState(sub ? 'on' : 'off');
     } catch (e: any) {
-      setError(e?.message || 'could not turn notifications on');
+      setError(e?.message || 'Helm cannot turn notifications on.');
     } finally { setBusy(false); }
   };
 
@@ -93,7 +93,7 @@ export function Notifications({ client }: { client: Client }) {
       }
       setState('off');
     } catch (e: any) {
-      setError(e?.message || 'could not turn them off');
+      setError(e?.message || 'Helm cannot turn notifications off.');
     } finally { setBusy(false); }
   };
 
@@ -102,13 +102,13 @@ export function Notifications({ client }: { client: Client }) {
     <>
       {state === 'blocked' ? (
         <p className="note setup-open">
-          Notifications are blocked. Allow them in the browser settings, then reload.
+          The browser blocks notifications. Allow them in the browser settings, then reload the page.
         </p>
       ) : (
         <button className="row" disabled={busy} onClick={state === 'on' ? disable : enable}>
           <span className="grow">
             <span className="rt">Notify this device</span>
-            <span className="rm">when a session needs you or finishes</span>
+            <span className="rm">Receive alerts when a chat needs you or finishes.</span>
           </span>
           <span className={`tag${state === 'on' ? ' key' : ''}`}>
             {busy ? '\u2026' : state === 'on' ? 'on' : 'off'}
@@ -211,12 +211,12 @@ export function InstallPwa() {
         }}>
           <span className="grow">
             <span className="rt">Install Helm app</span>
-            <span className="rm">run it like a native app</span>
+            <span className="rm">Open Helm as an app.</span>
           </span>
           <span className="chev"><Icon name="forward" size={15} /></span>
         </button>
       ) : (
-        <p className="note install-note setup-open">On iPhone or iPad: tap Share, then Add to Home Screen.</p>
+        <p className="note install-note setup-open">Tap Share on your iPhone or iPad. Select Add to Home Screen.</p>
       )}
     </>
   );

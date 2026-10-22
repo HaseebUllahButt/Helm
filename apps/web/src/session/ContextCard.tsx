@@ -17,11 +17,11 @@ export function ContextCard({ usage }: { usage: ContextUsage }) {
   return (
     <div className="ctxcard">
       <div className="ctx-head">
-        <b>Context</b>
+        <b>Chat memory</b>
         <span className="ctx-total">{usage.used} of {usage.size} · {usage.pct}%</span>
       </div>
       {usage.model && <div className="ctx-model">{usage.model}</div>}
-      <div className="ctx-bar" role="img" aria-label={`${usage.pct}% of the context is used`}>
+      <div className="ctx-bar" role="img" aria-label={`Chat memory: ${usage.pct}% used`}>
         {used.map((p, i) => p.pct > 0 && <i key={p.name} style={{ width: `${p.pct}%`, background: shade(i) }} title={`${p.name}: ${p.tokens}`} />)}
         {reserved && reserved.pct > 0 && <i className="reserved" style={{ width: `${reserved.pct}%` }} title={`${reserved.name}: ${reserved.tokens}`} />}
       </div>
@@ -32,7 +32,7 @@ export function ContextCard({ usage }: { usage: ContextUsage }) {
         {reserved && <li className="dim"><i className="reserved" /><span className="grow">{reserved.name}</span><span>{reserved.tokens}</span><span className="pct">{reserved.pct}%</span></li>}
         {free && <li className="dim"><i className="free" /><span className="grow">{free.name}</span><span>{free.tokens}</span><span className="pct">{free.pct}%</span></li>}
         {unloaded.map((p) => (
-          <li key={p.name} className="dim" title="Listed for Claude, but only loaded when used"><i className="free" /><span className="grow">{p.name} · not loaded</span><span>{p.tokens}</span><span className="pct" /></li>
+          <li key={p.name} className="dim" title="Claude loads this item when it uses it."><i className="free" /><span className="grow">{p.name} · not loaded</span><span>{p.tokens}</span><span className="pct" /></li>
         ))}
       </ul>
       {usage.sections.map((s) => (

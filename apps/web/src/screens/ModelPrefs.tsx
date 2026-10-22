@@ -119,7 +119,7 @@ export function ModelPrefsView({ client, env, account, onBack }: {
       <span className="grow">
         <span className="rt"><span className="rt-text">{list?.labels?.[m] ?? m}</span></span>
         {(list?.labels?.[m] && list.labels[m] !== m) && <span className="rm">{m}</span>}
-        {!all.includes(m) && <span className="rm">not offered by the CLI anymore</span>}
+        {!all.includes(m) && <span className="rm">The agent program no longer offers this model.</span>}
       </span>
       {checked && <span className="check"><Icon name="check" size={16} /></span>}
     </button>
@@ -129,10 +129,10 @@ export function ModelPrefsView({ client, env, account, onBack }: {
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <div className="titles"><h1>CLI defaults</h1><span className="sub">{eng.label} · {account.account} · {env.name}</span></div>
+        <div className="titles"><h1>Agent defaults</h1><span className="sub">{eng.label} · {account.account} · {env.name}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
-        {list === null && !error && <div className="empty quiet">asking the CLI for its models…</div>}
+        {list === null && !error && <div className="empty quiet">Loading models…</div>}
 
         {list !== null && (
           <>
@@ -145,15 +145,15 @@ export function ModelPrefsView({ client, env, account, onBack }: {
                 }}>OK</button>
               </div>
             )}
-            <div className="section">start new sessions with</div>
+            <div className="section">Start new chats with</div>
             <select value={def} onChange={(e) => setDef(e.target.value)} disabled={!defaults.length}>
-              <option value="">the CLI's default</option>
+              <option value="">Agent default</option>
               {defaults.map((m) => <option key={m} value={m}>{list.labels?.[m] ?? m}</option>)}
             </select>
             {efforts.length > 0 && (
               <label className="field-label">Thinking
                 <select value={effort} onChange={(e) => setEffort(e.target.value)}>
-                  <option value="">the CLI's default</option>
+                  <option value="">Agent default</option>
                   {efforts.map((x) => <option key={x} value={x}>{x}</option>)}
                 </select>
               </label>
@@ -161,7 +161,7 @@ export function ModelPrefsView({ client, env, account, onBack }: {
             {modes.length > 0 && (
               <label className="field-label">Permissions
                 <select value={mode} onChange={(e) => setMode(e.target.value)}>
-                  <option value="">YOLO (default)</option>
+                  <option value="">Allow all actions (default)</option>
                   {modes.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
                 </select>
               </label>
@@ -175,30 +175,29 @@ export function ModelPrefsView({ client, env, account, onBack }: {
               </label>
             )}
 
-            <div className="section">in the picker</div>
+            <div className="section">Model list</div>
             <input
               value={query} onChange={(e) => setQuery(e.target.value)}
-              placeholder={`filter ${all.length} models`} autoCapitalize="off" autoCorrect="off"
+              placeholder={`Search ${all.length} models`} autoCapitalize="off" autoCorrect="off"
             />
             {on.length > 0 && <div className="rows">{on.map((m) => row(m, true))}</div>}
-            {on.length > 0 && off.length > 0 && <div className="section">everything else</div>}
+            {on.length > 0 && off.length > 0 && <div className="section">Other models</div>}
             <div className="rows">{off.map((m) => row(m, false))}</div>
-            {q && !on.length && !off.length && <div className="empty quiet">no matches</div>}
+            {q && !on.length && !off.length && <div className="empty quiet">Nothing matches.</div>}
 
             <div className="section">new models</div>
             <div className="rows">
               <button className="row tall toggle" role="switch" aria-checked={auto} onClick={() => setAuto(!auto)}>
                 <span className="grow">
                   <span className="rt">Add new models automatically</span>
-                  <span className="rm wrap">New releases join the checked list. A newest default moves up too.</span>
+                  <span className="rm wrap">Helm selects new models. It also updates defaults that follow the newest model.</span>
                 </span>
                 <span className={`switch${auto ? ' on' : ''}`}><i /></span>
               </button>
             </div>
 
             <p className="note">
-              Checked models show first in the picker; the rest are under “more”.
-              Check none to show all.
+              Selected models show first. Find other models under More. Clear all selections to show all models.
             </p>
             <button className="primary big" disabled={busy} onClick={save}>
               {busy ? 'saving…' : 'Save'}

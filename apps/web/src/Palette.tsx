@@ -29,7 +29,7 @@ export interface PaletteItem {
   run: () => void;
 }
 
-const GROUP = { thread: 'Threads', machine: 'Machines', action: 'Actions', said: 'Said in chats' } as const;
+const GROUP = { thread: 'Chats', machine: 'Machines', action: 'Actions', said: 'Said in chats' } as const;
 
 /** Typing pauses this long before the machines are asked what was said. */
 const SAID_AFTER_MS = 250;
@@ -52,7 +52,7 @@ function score(item: PaletteItem, q: string): number {
   return total;
 }
 
-export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhere', placeholder = 'Search threads, machines, actions' }: {
+export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhere', placeholder = 'Search chats, machines, and actions' }: {
   items: PaletteItem[]; onClose: () => void; engineOf: (id?: string) => { cls: string };
   /** Asks the machines which chats said these words; the answers are listed under "Said in chats". */
   search?: (query: string) => Promise<PaletteItem[]>;
@@ -111,8 +111,8 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
 
   return (
     <div className="modal-back palette-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="palette-box" role="dialog" aria-modal="true" aria-label="Command palette" ref={dialog} tabIndex={-1}>
-        <div className="palette-heading"><span>{heading}</span><button className="iconbtn" onClick={onClose} aria-label="Close command palette" title="Close"><Icon name="close" size={16} /></button></div>
+      <div className="palette-box" role="dialog" aria-modal="true" aria-label="Search and actions" ref={dialog} tabIndex={-1}>
+        <div className="palette-heading"><span>{heading}</span><button className="iconbtn" onClick={onClose} aria-label="Close search and actions" title="Close"><Icon name="close" size={16} /></button></div>
         <input
           className="palette-input" value={q} placeholder={placeholder}
           autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
@@ -130,8 +130,8 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
         />
         <div className="palette-list" ref={list} role="listbox" id={listId} aria-label="Search results">
           {shown.length === 0 && (asking
-            ? <div className="empty quiet" role="status">Looking for those words in your chats…</div>
-            : <div className="empty quiet">No matches. Try a machine, folder, chat name, or words said in a chat.</div>)}
+            ? <div className="empty quiet" role="status">Helm is searching your chats.</div>
+            : <div className="empty quiet">No matches. Search for a machine, folder, chat name, or chat text.</div>)}
           {shown.map((item, i) => {
             const head = i === 0 || shown[i - 1].group !== item.group;
             return (
@@ -158,21 +158,21 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
 
 const SHORTCUTS: [string, [string, string][]][] = [
   ['Anywhere', [
-    ['Ctrl/⌘ K', 'Command palette'],
-    ['/', 'Search threads'],
+    ['Ctrl/⌘ K', 'Search and actions'],
+    ['/', 'Search chats'],
     ['Ctrl/⌘ N', 'New chat'],
-    ['Ctrl/⌘ Shift N', 'New chat in current or last folder'],
-    ['Ctrl/⌘ Shift O', 'New chat, in a browser tab'],
+    ['Ctrl/⌘ Shift N', 'Start a chat in the current or last folder'],
+    ['Ctrl/⌘ Shift O', 'Start a chat in a browser tab'],
     ['Ctrl Tab', 'Next running chat'],
     ['Ctrl Shift Tab', 'Previous running chat'],
     ['Ctrl/⌘ [', 'Back'],
     ['Ctrl/⌘ ]', 'Forward'],
     ['Ctrl/⌘ Shift S', 'Settings'],
-    ['Ctrl/⌘ Shift 4', 'Usage, limits and cost (the $ key)'],
-    ['Ctrl/⌘ Shift E', 'Terminal (in a chat: its folder); again to go back'],
-    ['Ctrl/⌘ Shift T', 'Terminal on a device you pick'],
-    ['Ctrl/⌘ Alt T', 'New terminal now, on the machine you are in'],
-    ['Ctrl/⌘ /', 'This list'],
+    ['Ctrl/⌘ Shift 4', 'Show usage, limits, and cost (the $ key)'],
+    ['Ctrl/⌘ Shift E', 'Open a terminal in the chat folder. Press again to go back.'],
+    ['Ctrl/⌘ Shift T', 'Pick a machine for a terminal'],
+    ['Ctrl/⌘ Alt T', 'Open a terminal on the selected machine'],
+    ['Ctrl/⌘ /', 'Show keyboard shortcuts'],
   ]],
   ['In a terminal (the Helm app window)', [
     ['Ctrl/⌘ T', 'New terminal'],
@@ -182,20 +182,20 @@ const SHORTCUTS: [string, [string, string][]][] = [
   ]],
   ['In the new-chat box', [
     ['Ctrl/⌘ Enter', 'Quick chat, no folder'],
-    ['Ctrl/⌘ Shift Enter', 'New folder with the typed name'],
-    ['→ ←', 'Open, close a folder'],
+    ['Ctrl/⌘ Shift Enter', 'Create a folder with the typed name'],
+    ['→ ←', 'Open or close a folder'],
   ]],
   ['In a chat', [
     ['Enter', 'Send a message'],
-    ['Shift Enter', 'New line in a message'],
-    ['↑ ↓', 'Earlier messages, in the box'],
+    ['Shift Enter', 'Add a line to a message'],
+    ['↑ ↓', 'Show earlier messages in the box'],
     ['Ctrl Shift Space', 'Dictate a message'],
-    ['Shift Tab', 'Next permission mode'],
-    ['Ctrl/⌘ Shift Y', 'Next thinking level'],
-    ['Ctrl/⌘ Shift M', 'Next model (favorites first)'],
+    ['Shift Tab', 'Select the next permission mode'],
+    ['Ctrl/⌘ Shift Y', 'Select the next thinking level'],
+    ['Ctrl/⌘ Shift M', 'Select the next model (favorites first)'],
     ['Ctrl/⌘ Shift A', 'Open or close agents'],
     ['Ctrl/⌘ Shift B', 'Open or close the browser'],
-    ['Ctrl/⌘ Shift D', 'Open or close the canvas (notes and docs)'],
+    ['Ctrl/⌘ Shift D', 'Open or close the canvas (notes and documents)'],
     ['↑ ↓ Enter', 'Move and pick in an open list'],
   ]],
 ];

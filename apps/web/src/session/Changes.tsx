@@ -32,7 +32,7 @@ const splitPath = (p: string) => {
   return i < 0 ? { dir: '', name: p } : { dir: p.slice(0, i + 1), name: p.slice(i + 1) };
 };
 
-const STATUS_NAME: Record<GitFile['status'], string> = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', '?': 'Untracked' };
+const STATUS_NAME: Record<GitFile['status'], string> = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', '?': 'New' };
 const TABS = ['graph', 'changes', 'files', 'pipeline'] as const;
 type Tab = typeof TABS[number];
 
@@ -100,7 +100,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
   return (
     <div className={`changes${wrap ? ' wrap-diffs' : ''}`}>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back to the conversation" onClick={onClose}><BackIcon /></button>
+        <button className="iconbtn back" aria-label="Back to chat" onClick={onClose}><BackIcon /></button>
         <div className="titles">
           <h1>Git</h1>
           <span className="sub"><Route machine={env.name} folder={cwd} /></span>
@@ -110,7 +110,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
       </div>
       <div className="git-head"><div className="git-toolbar">
         <div className="git-context">
-          <span className="git-branch" title={status.branch ? `On ${status.branch}${status.upstream ? `, tracking ${status.upstream}` : ''}` : 'Detached HEAD'}>
+          <span className="git-branch" title={status.branch ? `On ${status.branch}${status.upstream ? `, tracking ${status.upstream}` : ''}` : 'No branch selected'}>
             <Icon name="branch" size={14} />
             <b>{status.branch ?? 'detached'}</b>
           </span>
@@ -120,7 +120,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
               {!!status.behind && <span>↓{status.behind}</span>}
             </span>
           )}
-          {status.worktree && <span className="git-wt">worktree</span>}
+          {status.worktree && <span className="git-wt">Separate project copy</span>}
           {pr?.url && (
             <a className="git-pr" href={pr.url} target="_blank" rel="noreferrer" title={`#${pr.number} ${pr.title}`}
               aria-label={`Pull request #${pr.number}, ${prState}: ${pr.title}`}>
@@ -138,13 +138,13 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
         }}>
           {TABS.map((name) => (
             <button key={name} id={`git-${name}-tab`} role="tab" tabIndex={tab === name ? 0 : -1} aria-selected={tab === name}
-              aria-label={name === 'pipeline' ? 'CI / CD' : undefined}
+              aria-label={name === 'pipeline' ? 'Build checks' : undefined}
               // Only the open view's panel is drawn; pointing at the others
               // sent screen readers to an element that does not exist.
               aria-controls={tab === name ? `git-${name}-panel` : undefined} onClick={() => pick(name)}>
-              {name === 'graph' ? 'Graph' : name === 'changes' ? 'Changes' : name === 'files' ? 'Files' : 'CI / CD'}
+              {name === 'graph' ? 'Graph' : name === 'changes' ? 'Changes' : name === 'files' ? 'Files' : 'Build checks'}
               {name === 'changes' && total > 0 && <>{' '}<span className="git-count">{total}</span></>}
-              {name === 'pipeline' && monitor.snapshot?.checksState && ['failure', 'pending'].includes(monitor.snapshot.checksState) && <span className={`pipeline-dot ${monitor.snapshot.checksState}`} aria-label={monitor.snapshot.checksState === 'failure' ? 'checks failed' : 'checks running'} />}
+              {name === 'pipeline' && monitor.snapshot?.checksState && ['failure', 'pending'].includes(monitor.snapshot.checksState) && <span className={`pipeline-dot ${monitor.snapshot.checksState}`} aria-label={monitor.snapshot.checksState === 'failure' ? 'Checks failed' : 'Checks running'} />}
             </button>
           ))}
         </div>
@@ -162,7 +162,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
         {files.length === 0 ? (
           <div className="git-empty">
             <span className="git-empty-icon ok"><Icon name="check" size={18} /></span>
-            <b>No changes</b>
+            <b>No files changed.</b>
             {status.head && <code title={status.head.subject}>{status.head.commit} · {status.head.subject}</code>}
           </div>
         ) : (
@@ -194,21 +194,21 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
                       </button>
                       <button
                         className={`viewedbox${isViewed(f) ? ' on' : ''}`} onClick={() => toggleViewed(f)}
-                        aria-pressed={isViewed(f)} aria-label={`mark ${f.path} as viewed`} title={isViewed(f) ? 'Viewed' : 'Mark as viewed'}
+                        aria-pressed={isViewed(f)} aria-label={`Mark ${f.path} as read`} title={isViewed(f) ? 'Viewed' : 'Mark as read'}
                       ><span>{isViewed(f) && <Icon name="check" size={13} />}</span></button>
                     </div>
                     {shown && (
                       <div className="filediff">
-                        {d === 'loading' || !d ? <div className="git-state" role="status">Reading the diff…</div>
+                        {d === 'loading' || !d ? <div className="git-state" role="status">Loading changes…</div>
                           : d === 'failed' ? <div className="git-state bad" role="status">
-                              Could not read this diff.
+                              Helm cannot read these changes.
                               <button className="linkish" onClick={() => fetchDiff(f.path)}>Try again</button>
                             </div>
                           : <>
                               <DiffView text={d.text} path={f.path} wrap={wrap} />
                               {d.truncated && <div className="git-state">The rest is too long to show here.</div>}
                               {f.status !== 'D' && <button className="files-chip filediff-open" onClick={() => openFile(f.path)}>
-                                <Icon name="read" size={13} />Open whole file
+                                <Icon name="read" size={13} />Open full file
                               </button>}
                             </>}
                       </div>

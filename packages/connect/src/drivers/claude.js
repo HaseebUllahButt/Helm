@@ -584,7 +584,7 @@ export class ClaudeDriver extends Driver {
     if (!pipe) return;
     // A prompt left unanswered blocks the CLI forever; close them out first.
     for (const requestId of [...this.pending.keys()]) {
-      try { await this.answer(requestId, { option: 'deny', message: 'The session was ended.' }); } catch { /* already gone */ }
+      try { await this.answer(requestId, { option: 'deny', message: 'The chat ended.' }); } catch { /* already gone */ }
     }
     try { pipe.end(); } catch { /* closed */ }
     const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
@@ -1016,7 +1016,7 @@ export class ClaudeDriver extends Driver {
     const input = r.input ?? {};
     if (tool === 'EnterPlanMode' || tool === 'ExitPlanMode') {
       this.#write({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id,
-        response: { behavior: 'deny', message: 'Plan mode is disabled in Helm. Execute the assigned task directly; do not request plan approval.' } } });
+        response: { behavior: 'deny', message: 'Helm does not support plan mode. Start the assigned task directly. Do not ask for plan approval.' } } });
       return;
     }
     const kind = permissionKind(tool);

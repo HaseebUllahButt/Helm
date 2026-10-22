@@ -11,8 +11,8 @@ export const Reveal = createContext<(id: string) => void>(() => {});
 // Short and friendly, like the CLI's own. Seven is coprime with twenty, so
 // stepping by seven walks all of them before one comes round again.
 const VERBS = [
-  'Cooking', 'Pondering', 'Untangling', 'Tinkering', 'Mulling it over', 'Sketching', 'Weaving', 'Simmering', 'Polishing', 'Sifting',
-  'Chasing leads', 'Stitching', 'Brewing', 'Whittling', 'Noodling', 'Connecting dots', 'Shaping', 'Wrangling', 'Digging in', 'Assembling',
+  'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working',
+  'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working',
 ];
 const VERB_SECONDS = 5;
 
@@ -89,7 +89,7 @@ export function ChangedFiles({ files }: { files: FileChange[] }) {
       <div className="tf-head">
         <span className="tf-title">{files.length} changed {files.length === 1 ? 'file' : 'files'}</span>
         <Counts add={add} del={del} />
-        <button type="button" className="tf-open" onClick={() => reveal(files[0].itemId)}>Open diff</button>
+        <button type="button" className="tf-open" onClick={() => reveal(files[0].itemId)}>Show changes</button>
       </div>
       <ul className="tf-list">
         {files.slice(0, MAX_FILES).map((f) => (

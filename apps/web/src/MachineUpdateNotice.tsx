@@ -6,7 +6,7 @@ export function MachineUpdateNotice({ envs, onOpen }: { envs: Environment[]; onO
   return <div className="banner warn native-command" role="status">
     <span>Helm cannot update on {blocked.map((e) => e.name).join(', ')}.
       {' '}{blocked[0].info.sync?.reason ?? (blocked[0].info.version?.dirty
-        ? 'It has local changes.' : 'Its changes need combining.')}</span>
+        ? 'This machine has unsaved changes.' : 'Combine its changes before the update.')}</span>
     <button className="ghost" onClick={onOpen}>Review updates</button>
   </div>;
 }

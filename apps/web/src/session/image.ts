@@ -53,11 +53,11 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
  * on the agent's machine for it to read. Its preview is its name.
  */
 export async function prepareFile(file: File): Promise<{ name: string; mime: string; data: string; url: string }> {
-  if (!file.size) throw new Error('the file is empty');
-  if (file.size > MAX_FILE_BYTES) throw new Error(`it is ${(file.size / 1024 / 1024).toFixed(1)} MB; the limit is 20 MB`);
+  if (!file.size) throw new Error('The file is empty.');
+  if (file.size > MAX_FILE_BYTES) throw new Error(`The file is ${(file.size / 1024 / 1024).toFixed(1)} MB. The limit is 20 MB.`);
   const url = await dataUrl(file);
   const comma = url.indexOf(',');
-  if (comma < 0) throw new Error('the file could not be read');
+  if (comma < 0) throw new Error('Helm cannot read the file.');
   const mime = (file.type || 'application/octet-stream').toLowerCase();
   // A file that only looks like an image by its type still goes as a file.
   return { name: file.name || 'file', mime: mime.startsWith('image/') ? 'application/octet-stream' : mime, data: url.slice(comma + 1), url: '' };
@@ -82,8 +82,8 @@ function cannotDecode(file: File): Error {
   // it", which reads like the file is broken when it is not.
   const heic = /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name || '');
   return new Error(heic
-    ? 'this browser cannot read HEIC photos - share it as JPEG'
-    : 'the browser could not decode it');
+    ? 'This browser cannot read HEIC photos. Send a JPEG photo.'
+    : 'The browser cannot read the image.');
 }
 
 /**
@@ -114,7 +114,7 @@ async function loadImage(file: File): Promise<Decoded> {
     image.onload = () => {
       URL.revokeObjectURL(url);
       if (!image.naturalWidth || !image.naturalHeight) {
-        reject(new Error('the image has no usable dimensions'));
+        reject(new Error('The image has no valid width or height.'));
         return;
       }
       resolve({ source: image, width: image.naturalWidth, height: image.naturalHeight });
@@ -131,11 +131,11 @@ function encode(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (!blob) {
-        reject(new Error('the browser could not encode it'));
+        reject(new Error('The browser cannot save the image.'));
         return;
       }
       if (blob.type !== MIME) {
-        reject(new Error('the browser does not support JPEG encoding'));
+        reject(new Error('The browser cannot save JPEG images.'));
         return;
       }
       resolve(blob);
@@ -147,7 +147,7 @@ function dataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error('it could not be read'));
+    reader.onerror = () => reject(new Error('Helm cannot read the file.'));
     reader.readAsDataURL(blob);
   });
 }
@@ -162,8 +162,8 @@ function compressedName(name: string): string {
  * file fallback: a caller either gets a compressed JPEG or an error.
  */
 export async function prepareImage(file: File): Promise<PreparedImage> {
-  if (!looksLikeImage(file)) throw new Error('that is not an image file');
-  if (!file.size) throw new Error('the file is empty');
+  if (!looksLikeImage(file)) throw new Error('This file is not an image.');
+  if (!file.size) throw new Error('The file is empty.');
 
   const image = await loadImage(file);
   const sourceWidth = image.width;
@@ -182,7 +182,7 @@ export async function prepareImage(file: File): Promise<PreparedImage> {
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext('2d');
-    if (!context) throw new Error('the browser could not prepare a canvas');
+    if (!context) throw new Error('The browser cannot prepare the image.');
 
     // JPEG has no alpha channel. A white background keeps transparent PNGs
     // readable instead of turning their transparent areas black.
@@ -208,11 +208,11 @@ export async function prepareImage(file: File): Promise<PreparedImage> {
     image.source.close();
   }
 
-  if (!blob) throw new Error('the image could not be compressed below 4 MB');
+  if (!blob) throw new Error('Helm cannot make the image smaller than 4 MB.');
 
   const url = await dataUrl(blob);
   const comma = url.indexOf(',');
-  if (comma < 0) throw new Error('the compressed image had an invalid data URL');
+  if (comma < 0) throw new Error('The smaller image has an invalid address.');
   return {
     name: compressedName(file.name),
     mime: MIME,

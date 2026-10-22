@@ -15,13 +15,13 @@ const GENERATED_DIRS = new Set([
 ]);
 const SECRET_DIR = /^(?:\.ssh|\.aws|\.azure|\.config|\.docker|\.kube|\.gnupg|\.terraform)$/i;
 const GENERATED_MESSAGES = new Map([
-  ['node_modules', 'dependencies are not transferred; install them on the target'],
-  ['.venv', 'the python environment is not transferred; recreate it on the target'],
-  ['build', 'build output is not transferred; rebuild it on the target'],
-  ['dist', 'build output is not transferred; rebuild it on the target'],
-  ['.next', 'build output is not transferred; rebuild it on the target'],
-  ['target', 'build output is not transferred; rebuild it on the target'],
-  ['.git', 'git history stays on the source; origin is configured on the target when available'],
+  ['node_modules', 'Install the required packages on the receiving machine. Helm does not send them.'],
+  ['.venv', 'Create the Python environment again on the receiving machine. Helm does not send it.'],
+  ['build', 'Build the app on the receiving machine. Helm does not send build output.'],
+  ['dist', 'Build the app on the receiving machine. Helm does not send build output.'],
+  ['.next', 'Build the app on the receiving machine. Helm does not send build output.'],
+  ['target', 'Build the app on the receiving machine. Helm does not send build output.'],
+  ['.git', 'Git history stays on the sending machine. Helm sets the Git source address on the receiving machine when available.'],
 ]);
 
 const MAX_WALK_ENTRIES = 20_000;
@@ -64,7 +64,7 @@ export function transferPreflight(snapshot) {
       case 'secret-dir':
         warnings.push({
           code: 'secret-dir-omitted', path,
-          message: "a sensitive directory's contents stayed on the source, except .env files explicitly included",
+          message: "Helm left private folder contents on the sending machine, except .env files you chose to include.",
         });
         break;
       case 'symlink':
@@ -85,12 +85,12 @@ export function transferPreflight(snapshot) {
   if (omittedEntries > 0) {
     warnings.push({
       code: 'manifest-truncated',
-      message: `${plural(omittedEntries, 'more omitted entry')} could not be listed`,
+      message: `Helm did not list ${plural(omittedEntries, 'more skipped item')}.`,
     });
   }
   warnings.push({
     code: 'filename-policy',
-    message: 'what is left behind is decided by filename policy, not file contents; application dependencies and configuration are not validated',
+    message: 'Helm picks skipped files by name. It does not check file contents, required app packages or settings.',
   });
 
   return {
@@ -376,8 +376,8 @@ export async function inspectTransferReadiness(folder, {
     checks.push({
       code: 'setup-not-checked', status: 'warning',
       message: marker === 'python'
-        ? 'a python project was found; its environment setup is not checked'
-        : 'a rust project was found; its build setup is not checked',
+        ? 'Helm found a Python project. Helm did not check its environment setup.'
+        : 'Helm found a Rust project. Helm did not check its build setup.',
     });
   }
 
@@ -386,13 +386,13 @@ export async function inspectTransferReadiness(folder, {
     checks.push({
       code: 'skipped-sensitive', status: 'warning',
       path: typeof entry.path === 'string' ? entry.path : undefined,
-      message: 'a file stayed on the source; whatever it configured is unresolved',
+      message: 'A file stayed on the sending machine. Check the settings that depend on it.',
     });
   }
   if (skipped > skippedEntries.length) {
     checks.push({
       code: 'skipped-manifest-incomplete', status: 'warning',
-      message: 'the skipped manifest was truncated; some omissions are not listed',
+      message: 'The skipped file list is incomplete. Some skipped files do not appear.',
     });
   }
   checks.push(RUNTIME_NOT_VERIFIED);
@@ -404,7 +404,7 @@ export async function inspectTransferReadiness(folder, {
 
 const RUNTIME_NOT_VERIFIED = {
   code: 'runtime-not-verified', status: 'warning',
-  message: 'nothing was executed; application runtime, databases, services and environment portability are not verified',
+  message: 'Helm ran no commands. It did not check the app, databases, services or settings on this machine.',
 };
 
 export function preflightLines(preflight) {

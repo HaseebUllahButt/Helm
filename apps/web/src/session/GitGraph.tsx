@@ -195,7 +195,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
       try {
         const r = await client.rpc<GitGraphData>(env.id, 'git.graph', { cwd }, 25_000);
         if (!stale) { setData(r); setError(''); }
-      } catch (e: any) { if (!stale) setError(e.message || 'Could not load Git history'); }
+      } catch (e: any) { if (!stale) setError(e.message || 'Helm cannot load Git history.'); }
       finally { inFlight = false; }
     };
     void load();
@@ -220,7 +220,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
     try {
       const r = await client.rpc<{ sessions: Session[] }>(env.id, 'session.list');
       const session = r.sessions.find((s) => s.id === agent.id);
-      if (session) onOpen(session); else setError('This agent has closed. Refresh to update the graph.');
+      if (session) onOpen(session); else setError('This agent stopped. Refresh the graph.');
     } catch (e: any) { setError(e.message); }
   };
 
@@ -235,7 +235,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
       .then((r) => setDetails((d) => ({ ...d, [hash]: r })))
       .catch((e: any) => setDetails((d) => ({
         ...d,
-        [hash]: { error: /unknown|not supported|no handler/i.test(e.message ?? '') ? 'Update helm on this machine to see what a commit changed.' : (e.message || 'Could not read this commit') },
+        [hash]: { error: /unknown|not supported|no handler/i.test(e.message ?? '') ? 'Update Helm on this machine to see commit changes.' : (e.message || 'Helm cannot read this commit.') },
       })));
   };
 
@@ -273,7 +273,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
   };
 
   const refPill = (ref: Ref, colour: number) => (
-    <span key={ref.kind + ref.name} className={`git-ref ${ref.kind} lc-${colour}`} title={ref.synced ? `${ref.name}, same as the remote` : ref.name}>
+    <span key={ref.kind + ref.name} className={`git-ref ${ref.kind} lc-${colour}`} title={ref.synced ? `${ref.name}, same as the shared branch` : ref.name}>
       {ref.kind === 'tag' ? <Icon name="tag" size={11} /> : ref.kind === 'remote' ? <Icon name="cloud" size={11} /> : null}
       {ref.name}{ref.synced && <Icon name="cloud" size={11} />}
     </span>
@@ -290,15 +290,15 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
 
   return (
     <div className="git-graph">
-      {!env.online && empty('machine', 'This machine is offline')}
-      {error && !data && empty('alert', 'Could not load Git history', error, true)}
+      {!env.online && empty('machine', 'This machine is offline.')}
+      {error && !data && empty('alert', 'Helm cannot load Git history.', error, true)}
       {error && data && <div className="error" role="status">{error}</div>}
       {!data && !error && env.online && (
         <div className="git-skeleton" role="status" aria-label="Loading Git history">
           {[0, 1, 2, 3, 4, 5].map((placeholder) => <span key={placeholder}><i /><b /></span>)}
         </div>
       )}
-      {data && !data.repo && empty('folder', 'Not a Git project')}
+      {data && !data.repo && empty('folder', 'This folder is not a Git project.')}
       {data?.repo && <>
         {/* Where things are checked out, and who is working in each: folded
             to one bar so the history comes first. */}
@@ -310,7 +310,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
               <div key={worktree.path} className={`git-checkout${worktree.current ? ' current' : ''}`}>
                 <div className="git-checkout-head">
                   <Icon name="branch" size={14} />
-                  <b>{worktree.branch || (worktree.head ? `detached at ${worktree.head.slice(0, 7)}` : 'no commits yet')}</b>
+                  <b>{worktree.branch || (worktree.head ? `No branch at ${worktree.head.slice(0, 7)}` : 'no commits yet')}</b>
                   <small title={worktree.path}>{folderName(worktree.path)}</small>
                   {worktree.current && <span className="git-here">This chat</span>}
                 </div>
@@ -322,7 +322,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
           </details>
         )}
 
-        {!rows.length && empty('git', 'No commits yet')}
+        {!rows.length && empty('git', 'This project has no commits.')}
         {!!rows.length && <div className="git-history" ref={list} aria-label="Commit history, newest first">
           {rows.map((row) => {
             const { commit } = row;
@@ -367,7 +367,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
                       <div className="git-detail-meta">
                         <span>{d.author}</span>
                         <span>{new Date(d.date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
-                        <button className="git-hash" onClick={() => copy(d.hash)} title="Copy the full hash" aria-label={`Copy commit hash ${d.hash}`}>
+                        <button className="git-hash" onClick={() => copy(d.hash)} title="Copy full commit ID" aria-label={`Copy commit ID ${d.hash}`}>
                           <code>{d.hash.slice(0, 12)}</code>{copied === d.hash ? <span>copied</span> : <Icon name="copy" size={12} />}
                         </button>
                         {d.parents.length > 1 && <span className="git-merge">Merge of {d.parents.map((parent, index) => <span key={parent}>{index ? ' + ' : ''}<button className="git-parent" onClick={() => jump(parent)} aria-label={`Go to parent ${parent.slice(0, 7)}`}>{parent.slice(0, 7)}</button></span>)}</span>}
@@ -375,7 +375,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
                       {hidden.length > 0 && <div className="git-detail-refs">{refs.map((ref) => refPill(ref, row.colour))}</div>}
                       {agents.length > 0 && <div className="git-agents">{agents.map(agentRow)}</div>}
                       {d.files.length === 0
-                        ? <div className="git-state">No file changes.</div>
+                        ? <div className="git-state">No files changed.</div>
                         : <div className="git-files">
                           <div className="git-files-head">
                             {d.files.length} file{d.files.length === 1 ? '' : 's'}
@@ -392,7 +392,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
                               </button>
                               {shown && <div className="filediff">
                                 {fileDiff!.error ? <div className="git-state bad" role="status">{fileDiff!.error}</div>
-                                  : fileDiff!.diff === null ? <div className="git-state" role="status">Reading the diff…</div>
+                                  : fileDiff!.diff === null ? <div className="git-state" role="status">Loading changes…</div>
                                   : <><DiffView text={fileDiff!.diff ?? ''} path={fileDiff!.path} wrap={wrap} />{fileDiff!.truncated && <div className="git-state">The rest is too long to show here.</div>}</>}
                               </div>}
                             </div>;

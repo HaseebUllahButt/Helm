@@ -72,7 +72,7 @@ test('Ctrl+Shift+S opens Settings and Ctrl+Shift+4 ($) opens Usage from anywhere
   await page.keyboard.press('Control+Shift+s');
   await page.getByRole('heading',{name:'Settings'}).first().waitFor();
   await page.keyboard.press('Control+Shift+Digit4');
-  await page.getByLabel('Environment').waitFor({timeout:10000});
+  await page.getByLabel('Machine', {exact:true}).waitFor({timeout:10000});
 });
 
 test('Ctrl+Shift+E opens a terminal in the open chat\'s folder, and goes back from it', async t => {
@@ -93,8 +93,8 @@ test('the shortcuts list names both keys', async t => {
   await page.keyboard.press('Control+Slash');
   const text = await page.locator('.shortcuts').innerText();
   assert.match(text, /Settings/);
-  assert.match(text, /Usage, limits and cost/);
-  assert.match(text, /Terminal/);
+  assert.match(text, /Show usage, limits, and cost/);
+  assert.match(text, /Open a terminal/);
 });
 
 test('bare keys open nothing: every shortcut needs Ctrl/Cmd', async t => {
@@ -128,10 +128,10 @@ test('the sidebar rows have the same ⋯ menu as the machine screen: rename, arc
   // Settled is open to begin with; its first rows are on show.
   const row = page.locator('.sidebar .tri-row').filter({hasText:'Yesterday work'});
   await row.waitFor({timeout:5000});
-  await row.getByRole('button',{name:'actions for Yesterday work'}).click({force:true});
-  await page.getByRole('button',{name:'Archive thread'}).waitFor();
-  assert.equal(await page.getByRole('button',{name:'Rename thread'}).count(),1);
-  await page.getByRole('button',{name:'Delete thread'}).click();
+  await row.getByRole('button',{name:'Show actions for Yesterday work'}).click({force:true});
+  await page.getByRole('button',{name:'Archive chat'}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Rename chat'}).count(),1);
+  await page.getByRole('button',{name:'Delete chat'}).click();
   await page.getByRole('button',{name:'Delete',exact:true}).click();
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.kill'&&c.params.id==='done1'));
 });

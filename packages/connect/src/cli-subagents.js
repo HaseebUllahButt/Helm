@@ -120,7 +120,7 @@ export async function codexSubagents({ home, threadId, now = Date.now() }) {
       const task = r.path ? r.path.split('/').filter(Boolean).at(-1)?.replace(/_/g, ' ') : '';
       out.push({
         id: r.id, native: true, engine: 'codex',
-        title: oneLine(task || r.title || r.prompt, 80) || r.nickname || 'Subagent',
+        title: oneLine(task || r.title || r.prompt, 80) || r.nickname || 'Helper',
         agentType: r.nickname || r.role || null, model: r.model || model || null, status,
         startedAt: Math.round(Number(r.created) || info.birthtimeMs || info.mtimeMs), updatedAt: Math.round(info.mtimeMs),
         branch: null, toolUseId: null, last: oneLine(last, 200),
@@ -172,7 +172,7 @@ export function opencodeSubagents({ dataHome, sessionId, engine = 'opencode2', n
         const configured = json(r.model);
         return {
           id: r.id, native: true, engine,
-          title: oneLine(r.title, 80) || r.agent || 'Subagent', agentType: r.agent || null,
+          title: oneLine(r.title, 80) || r.agent || 'Helper', agentType: r.agent || null,
           model: model || configured?.id || configured?.modelID || (typeof r.model === 'string' && !configured ? r.model : null),
           status: nativeStatus(phase, updated, now),
           startedAt: Number(r.created) || now, updatedAt: updated,
@@ -280,7 +280,7 @@ export function eventSubagents(events, { engine, now = Date.now() } = {}) {
       const task = input.description ?? input.task_name ?? input.prompt ?? input.message ?? '';
       cards.set(e.id, {
         id: e.id, native: true, engine, fromLog: true,
-        title: oneLine(String(task).split('\n')[0], 80) || e.name || 'Subagent',
+        title: oneLine(String(task).split('\n')[0], 80) || e.name || 'Helper',
         agentType: input.subagent_type ?? input.agent_type ?? null, model: input.model ?? null,
         status: 'working', startedAt: e.at ?? now, updatedAt: e.at ?? now, branch: null, toolUseId: e.id, last: '',
         threadId: null, prompt: typeof input.prompt === 'string' ? input.prompt : typeof input.message === 'string' ? input.message : '',

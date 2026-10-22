@@ -75,7 +75,7 @@ test('the context meter opens "Compact at"; a choice is saved on every machine w
       await meter.click();
       const menu = view.locator('.ctx-menu');
       await menu.waitFor();
-      assert.equal(await menu.locator('.ctx-menu-title').textContent(), 'Compact at');
+      assert.equal(await menu.locator('.ctx-menu-title').textContent(), 'Summarize at');
       assert.deepEqual(await menu.locator('button').allTextContents(), ['Full (1M)', '750k', '500k', '383k', '350k', '200k']);
       assert.equal(await menu.locator('button[aria-checked="true"]').textContent(), '383k', 'the size in force is checked');
       // It opens toward the room there is and stays inside the screen.
@@ -86,7 +86,7 @@ test('the context meter opens "Compact at"; a choice is saved on every machine w
 
       await menu.getByRole('menuitemradio', { name: '500k' }).click();
       await menu.getByText('Saved on 3 machines').waitFor();
-      assert.equal(await menu.locator('.warn').textContent(), "1 offline - they'll keep their old limit", 'the other PC never had the account, so it is not counted');
+      assert.equal(await menu.locator('.warn').textContent(), "1 offline. Their limits stay the same", 'the other PC never had the account, so it is not counted');
       const calls = await view.evaluate(() => window.calls);
       assert.deepEqual(calls.map((c) => c.env).sort(), ['desk', 'laptop', 'nas', 'vm'], 'every online machine is asked, offline ones are not');
       const mine = calls.find((c) => c.env === 'laptop');
@@ -107,7 +107,7 @@ test('the context meter opens "Compact at"; a choice is saved on every machine w
       await view.evaluate(() => { window.fail = 'vm'; });
       await menu.getByRole('menuitemradio', { name: '200k' }).click();
       await menu.getByText('Saved on 2 machines').waitFor();
-      assert.match(await menu.locator('.warn').textContent(), /Couldn't reach VM/);
+      assert.match(await menu.locator('.warn').textContent(), /Helm cannot reach VM/);
 
       // Escape and a tap elsewhere close it.
       await view.keyboard.press('Escape');

@@ -18,7 +18,7 @@ export const startSummary = (a: Account) => {
     a.defaults?.mode,
     a.defaults?.speed,
   ].filter(Boolean);
-  return values.length ? `starts ${values.join(' · ')}` : "starts with the CLI's defaults";
+  return values.length ? `Starts with ${values.join(' · ')}` : "Uses agent defaults";
 };
 
 export function ago(ts: number | null | undefined) {

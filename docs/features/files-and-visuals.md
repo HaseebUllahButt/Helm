@@ -12,15 +12,29 @@
   `$V upload a.jpg b.jpg`, type, send. The pictures show above the words,
   and the "[Image #1]" labels that open a message are hidden. A text file
   shows as "[File: note.txt]".
+- **Rule:** a tag in the message box is one piece. A delete that cuts into
+  "[Image #N]", "[File: …]" or a pasted-text tag, or into the space right
+  after one, removes all of it, and the picture or file behind it goes
+  too; later image labels move up. Read from
+  the text change, not the key: phone keyboards do not report Backspace.
+  Live tags get a tint from a see-through copy of the text behind the box
+  (`.composer-marks`); its padding, font and wrapping must match the box.
+- **Prove the tag delete (driven 2026-10-22):** with **fake-pics** upload
+  two pictures, put the cursor after "[Image #1]" with `eval`
+  (`setSelectionRange(10,10)`), `$V key Backspace`. Proof: the box reads
+  "[Image #1] …" with one preview left, the second picture.
 - **Tests:** `test/browser/image-paste`; `test/paste-store`,
-  `retain-assets`.
+  `attach-tags`, `retain-assets`.
 
 ## Canvas (notes and docs beside the chat)
 - **Reach:** the canvas button in a chat's header, or Ctrl/⌘ Shift D. A wide
   screen gets a third column (shares the browser panel's slot, one at a
   time); a phone gets a full-screen sheet. Open state and file are kept per
   chat on the device. A file name in a turn's "changed files" opens it there.
-- **Rules:** Git projects only (it lists with `git.files`). Saves go through
+- **Rules:** Notes and docs need a Git project (it lists with `git.files`).
+  Its first screen also lists the chat's pictures and pages, so Back from a
+  page never ends on an error; outside Git it says quietly that notes need
+  Git. Saves go through
   `git.write` with the hash the file was read at: a file the agent changed
   since is never overwritten silently; the owner picks "Use the new file" or
   "Save mine over it". Secrets and `.git/` are never written; a new file
@@ -76,7 +90,9 @@
   $V wait "my visual"; $V shot /tmp/vis.png
   ```
 - **Proof:** "my visual ok" in the chat; "Expand my visual" opens it with
-  Source / Save.
+  Source / Save. A tall picture (`$H render poster.jpg`) is at most 520 px
+  high in the chat and its frame shrinks to it; Expand and the canvas show it
+  whole (driven 2026-10-22).
 - **Traps:** without `HELM_DIR` and `--session`, `render` posts into the
   owner's real chat.
 - **Tests:** `test/visual-replies`; `test/browser/visual-replies`. Design:

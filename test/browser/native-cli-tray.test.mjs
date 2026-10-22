@@ -57,16 +57,16 @@ for(const engine of Object.values(ENGINES).filter(e=>e.bin&&!e.plain).map(e=>e.i
   if (conversationEngines.includes(engine)) {
     await page.getByText('Existing native conversation', {exact:true}).waitFor();
     assert.equal(await page.getByTestId('terminal').count(),0);
-    await page.getByRole('button',{name:'show the terminal',exact:true}).click();
+    await page.getByRole('button',{name:'Show terminal',exact:true}).click();
   }
   await page.getByTestId('terminal').waitFor();
   await page.locator('.limits-line').getByText('5h 12%',{exact:true}).waitFor();
   assert.equal(await page.locator('.limits-line').getByText('5h 99%',{exact:true}).count(),0);
-  assert.equal(await page.getByRole('button',{name:'settings: open CLI picker',exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Open settings in the agent program',exact:true}).count(),0);
   assert.equal(await page.getByRole('button',{name:'keys',exact:true}).count(),0,'the phone key row belongs to plain terminals');
   for(const kind of nativeControls(engine).filter(k=>k!=='settings')){
     const title=kind==='effort'?'thinking':kind==='mode'?'permissions':kind;
-    await page.getByRole('button',{name:`${title}: open CLI picker`,exact:true}).click();
+    await page.getByRole('button',{name:`Open ${title} in the agent program`,exact:true}).click();
     await page.waitForFunction(kind=>window.calls.some(c=>c.method==='session.control'&&c.params.kind===kind),kind);
   }
   await page.locator('textarea').fill('Hello from the phone');
@@ -74,13 +74,13 @@ for(const engine of Object.values(ENGINES).filter(e=>e.bin&&!e.plain).map(e=>e.i
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.input'));
   assert.equal(await page.locator('textarea').inputValue(),'');
   assert.equal(await page.getByTestId('terminal').count(),1);
-  await page.getByRole('button',{name:'show the conversation',exact:true}).click();
+  await page.getByRole('button',{name:'Show chat',exact:true}).click();
   await page.getByText('Existing native conversation',{exact:true}).waitFor();
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
 });
 for(const status of ['working','blocked'])test(`native controls do not send input while ${status}`,async t=>{
   const page=await open(t,'pi',status);
-  const model=page.getByRole('button',{name:'model: open CLI picker'});await model.waitFor();
+  const model=page.getByRole('button',{name:'Open model in the agent program'});await model.waitFor();
   assert.ok(await model.isDisabled());
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='session.control').length),0);
 });
@@ -94,7 +94,7 @@ test('a working terminal Pi shows a stop button that stops it',async t=>{
 });
 test('provider rejections stay visible beside the native tray',async t=>{
   const page=await open(t,'pi');await page.evaluate(()=>window.rejectControl=true);
-  await page.getByRole('button',{name:'model: open CLI picker'}).click();
+  await page.getByRole('button',{name:'Open model in the agent program'}).click();
   await page.getByRole('alert').getByText('Wait until the CLI finishes its turn').first().waitFor();
 });
 

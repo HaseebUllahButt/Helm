@@ -91,9 +91,9 @@ for (const width of [1280, 390]) test(`an empty Home says there are no chats yet
   const { page, boot } = await pageFor(t, { width, height: 900 });
   await boot();
   await page.evaluate(() => window.mount(window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [] })));
-  const hint = page.getByRole('status').filter({ hasText: 'No chats yet' });
+  const hint = page.getByRole('status').filter({ hasText: 'You have no chats yet.' });
   await hint.waitFor();
-  assert.match(await hint.innerText(), /Tap New chat to start one/);
+  assert.match(await hint.innerText(), /Select New chat to start/);
   await page.evaluate(() => window.mount(window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [
     { id: 'one', title: 'A finished chat', cwd: '/home/me/helm', engine: 'claude', profileId: 'claude', driver: 'claude', turns: 1, status: 'idle', alive: true, updatedAt: Date.now() - 60000 },
   ] })));
@@ -115,7 +115,7 @@ test('attention cards distinguish failures, limits, and actual questions on mobi
     window.mount(window.makeClient([{ id: 'vm', name: 'VM', online: true, info: {} }], { vm: sessions }));
   });
   const sidebar = page.locator('.sidebar');
-  for (const title of ['Task failed', 'Usage limit reached', 'Child task failed', 'Needs you']) {
+  for (const title of ['Task failed', 'Usage limit reached', 'Helper task failed', 'Needs you']) {
     await sidebar.locator('.need-k').filter({ hasText: new RegExp(`^${title}`) }).waitFor();
   }
   assert.equal(await sidebar.locator('.need-k').filter({ hasText: /Task paused|Helm restarted/ }).count(), 0);
@@ -200,9 +200,9 @@ for (const width of [1280, 390]) test(`native Claude channel opens as a Helm cha
   assert.deepEqual(calls.find(c => c.method === 'session.input').params, { id: 'native-chat', data: 'Hello from Helm\n' });
   assert.equal(calls.some(c => c.method === 'session.attach'), false);
   assert.equal(await page.locator('.slab .quick').count(), 0);
-  await page.getByRole('button', { name: 'show the terminal', exact: true }).click();
+  await page.getByRole('button', { name: 'Show terminal', exact: true }).click();
   await page.locator('.xterm-helper-textarea').waitFor({ state: 'attached' });
-  await page.getByRole('button', { name: 'show the conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'Show chat', exact: true }).click();
   await page.getByText('Your message reached the same Claude session.', { exact: true }).waitFor();
   await page.screenshot({ path: `/tmp/helm-native-chat-${width}.png` });
 });
@@ -246,8 +246,8 @@ test('settings expose the app route and build without exposing pairing credentia
   });
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByText('Connection details', { exact: true }).click();
-  await page.getByText('Hub: https://hub.example', { exact: true }).waitFor();
-  await page.getByText('App build: development', { exact: true }).waitFor();
+  await page.getByText('Helm home: https://hub.example', { exact: true }).waitFor();
+  await page.getByText('App version: development', { exact: true }).waitFor();
   await page.getByText('Last connection error: connection stopped responding', { exact: true }).waitFor();
   // The app reloads itself when a new build lands; no button for it.
   assert.equal(await page.getByRole('button', { name: /^Reload app/ }).count(), 0);
@@ -287,9 +287,9 @@ test('Done is newest first across machines, retires at three days, and the foote
   await page.clock.fastForward(30000);
   await done.getByText('Almost retired', { exact: true }).waitFor({ state: 'detached' });
   assert.equal(await done.locator('.tri-title').count(), 34);
-  await sidebar.getByRole('button', { name: 'Search threads, machines and folders' }).click();
-  const palette = page.getByRole('dialog', { name: 'Command palette' });
-  await palette.getByRole('combobox', { name: 'Search threads, machines, actions' }).fill('Almost retired');
+  await sidebar.getByRole('button', { name: 'Search chats, machines, and folders' }).click();
+  const palette = page.getByRole('dialog', { name: 'Search and actions' });
+  await palette.getByRole('combobox', { name: 'Search chats, machines, and actions' }).fill('Almost retired');
   await palette.getByRole('option', { name: /Almost retired/ }).waitFor();
   assert.ok(await palette.getByRole('option', { name: /Almost retired/ }).isVisible(), 'retirement preserves searchable history');
 });
@@ -334,16 +334,16 @@ test('Running counts only working threads and excludes idle native sessions', as
   assert.equal(await laptop.locator('.badge').textContent(), '1');
   assert.equal(await rows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'idle');
   assert.match(await rows.filter({ hasText: 'old' }).locator('.rm').textContent(), /^seen/);
-  const runningSection = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Working$/ }) });
+  const runningSection = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Running$/ }) });
   assert.ok(await runningSection.getByText('Busy', { exact: true }).isVisible());
   assert.equal(await runningSection.getByText('Idle alive', { exact: true }).count(), 0);
   assert.equal(await runningSection.getByText('External idle', { exact: true }).count(), 0);
   assert.equal(await runningSection.getByText('Shared idle', { exact: true }).count(), 0);
   assert.equal(await runningSection.getByText('Shared stopped', { exact: true }).count(), 0);
   assert.equal(await sidebar.getByText('Stale work', { exact: true }).count(), 0, 'a disconnected machine’s cached work is not shown as running');
-  await sidebar.getByRole('button', { name: 'Search threads, machines and folders' }).click();
-  const palette = page.getByRole('dialog', { name: 'Command palette' });
-  await palette.getByRole('combobox', { name: 'Search threads, machines, actions' }).fill('Stale work');
+  await sidebar.getByRole('button', { name: 'Search chats, machines, and folders' }).click();
+  const palette = page.getByRole('dialog', { name: 'Search and actions' });
+  await palette.getByRole('combobox', { name: 'Search chats, machines, and actions' }).fill('Stale work');
   const staleOption = palette.getByRole('option', { name: /^Stale work/ });
   assert.match(await staleOption.textContent(), /old · working · offline/);
   await staleOption.click();
@@ -355,7 +355,7 @@ test('Running counts only working threads and excludes idle native sessions', as
   assert.match(readout, /1 needs you/);
   const chooserRows = page.locator('.main .chooser .row.machine');
   assert.equal(await chooserRows.filter({ hasText: 'laptop' }).locator('.rm').textContent(), '1 running');
-  assert.equal(await chooserRows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'Nothing running');
+  assert.equal(await chooserRows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'No chats are running.');
   const machineSummaries = await rows.locator('.rm').allTextContents();
   const runningTotal = machineSummaries.reduce((total, text) => total + (+(/^(\d+) running$/.exec(text)?.[1] ?? 0)), 0);
   assert.equal(runningTotal, +(/(\d+) running/.exec(readout)[1]), 'sidebar per-machine counts add up to the readout');
@@ -402,12 +402,12 @@ test('One search control opens the palette, keys work, selection has no left bar
     window.mount(window.makeClient([{id:'laptop',name:'laptop',online:true,info:{}}], {laptop:[session('Rocket thread')]}));
   });
   const sidebar = page.locator('.sidebar');
-  const search = sidebar.getByRole('button', { name: 'Search threads, machines and folders' });
+  const search = sidebar.getByRole('button', { name: 'Search chats, machines, and folders' });
   await search.waitFor();
   assert.equal(await sidebar.getByRole('textbox').count(), 0);
   assert.equal(await sidebar.getByRole('button', { name: /Go to/ }).count(), 0);
   assert.equal(await search.count(), 1);
-  assert.equal(await search.getAttribute('title'), 'Search threads, machines and folders');
+  assert.equal(await search.getAttribute('title'), 'Search chats, machines, and folders');
   assert.equal(await search.locator('kbd').count(), 0);
   const label = search.locator('.grow');
   assert.equal(await label.textContent(), 'Search anything');
@@ -418,8 +418,8 @@ test('One search control opens the palette, keys work, selection has no left bar
   const lineBounds = await sidebar.locator('.side-actions').boundingBox();
   const padBounds = await sidebar.locator('.side-pad').boundingBox();
   assert.ok(lineBounds.width >= padBounds.width * 0.9, `search line ${lineBounds.width}px spans the ${padBounds.width}px sidebar pad`);
-  const palette = page.getByRole('dialog', { name: 'Command palette' });
-  const paletteInput = palette.getByRole('combobox', { name: 'Search threads, machines, actions' });
+  const palette = page.getByRole('dialog', { name: 'Search and actions' });
+  const paletteInput = palette.getByRole('combobox', { name: 'Search chats, machines, and actions' });
   await search.click();
   await palette.waitFor();
   await paletteInput.fill('rocket');
@@ -488,9 +488,9 @@ test('The palette searches remembered threads of offline machines, deduped and f
   });
   await page.waitForFunction(() => window.snapshotAt);
   const sidebar = page.locator('.sidebar');
-  const palette = page.getByRole('dialog', { name: 'Command palette' });
-  const paletteInput = palette.getByRole('combobox', { name: 'Search threads, machines, actions' });
-  await sidebar.getByRole('button', { name: 'Search threads, machines and folders' }).click();
+  const palette = page.getByRole('dialog', { name: 'Search and actions' });
+  const paletteInput = palette.getByRole('combobox', { name: 'Search chats, machines, and actions' });
+  await sidebar.getByRole('button', { name: 'Search chats, machines, and folders' }).click();
   await palette.waitFor();
   await paletteInput.fill('archive-tool');
   const snapshotOnly = palette.getByRole('option', { name: /Snapshot only/ });
@@ -526,7 +526,7 @@ for (const width of [1280, 390]) test(`one VM brain stays the entry point while 
   assert.match(await entry.innerText(),/VM.*offline/s);
   await entry.click();
   await page.getByRole('heading',{name:'Brain',exact:true}).waitFor();
-  assert.equal(await page.getByText('Choose its account',{exact:true}).count(),0,'a cold offline open retains the VM conversation');
+  assert.equal(await page.getByText('Select an account',{exact:true}).count(),0,'a cold offline open retains the VM conversation');
   assert.match(await page.locator('.main .bar .sub').innerText(),/VM/);
 });
 
@@ -579,7 +579,7 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
     window.mount(client);
   }, PROVIDERS);
   const sidebar = page.locator('.sidebar');
-  const running = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Working$/ }) });
+  const running = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Running$/ }) });
   const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Settled$/ }) });
   await running.locator('.tri-title').first().waitFor();
   const n = PROVIDERS.length;
@@ -627,7 +627,7 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
   // The machine screen sorts the same threads the same way.
   await laptop.click();
   const main = page.locator('.main');
-  const working = main.locator('div.section', { hasText: /^running here$/ }).locator('xpath=following-sibling::div[1]');
+  const working = main.locator('div.section', { hasText: /^Running$/ }).locator('xpath=following-sibling::div[1]');
   await working.locator('.rowx').first().waitFor();
   assert.equal(await working.locator('.rowx').count(), n * 3 + 1, 'machine screen counts the same running threads as the sidebar');
   assert.equal(await working.locator('.rowx').filter({ hasText: 'claude children' }).locator('.chip').textContent(), 'working');
@@ -637,7 +637,7 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
   for (const engine of PROVIDERS) {
     const unknown = main.locator('.rowx').filter({ hasText: `${engine} unknown` });
     await unknown.waitFor();
-    assert.equal(await unknown.locator('.chip').textContent(), 'status unavailable', `${engine} unknown says so on the machine screen`);
+    assert.equal(await unknown.locator('.chip').textContent(), 'Status unknown', `${engine} unknown says so on the machine screen`);
   }
   await page.screenshot({ path: `/tmp/helm-machine-unknown-${width}.png` });
   await main.getByPlaceholder('search Laptop').fill('exited');
@@ -673,7 +673,7 @@ test('a list read before a live update cannot undo it', async testContext => {
     window.mount(client);
   });
   const sidebar = page.locator('.sidebar');
-  const running = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Working$/ }) });
+  const running = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Running$/ }) });
   const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Settled$/ }) });
   await done.locator('.tri-row').first().waitFor();
   // A list goes out while the thread is idle and takes a while to come back.
@@ -700,7 +700,7 @@ test('a list read before a live update cannot undo it', async testContext => {
   await page.waitForTimeout(600);
   await page.evaluate(() => { window.lists.shift()(); });
   await page.waitForTimeout(100);
-  assert.equal(await sidebar.locator('.fold-title', { hasText: /^Working$/ }).count(), 0, 'the old working list does not bring it back');
+  assert.equal(await sidebar.locator('.fold-title', { hasText: /^Running$/ }).count(), 0, 'the old working list does not bring it back');
 });
 
 for (const width of [1280, 390]) test(`an offline machine's last known work is not shown as working at ${width}px`, async testContext => {
@@ -720,14 +720,14 @@ for (const width of [1280, 390]) test(`an offline machine's last known work is n
   const sidebar = page.locator('.sidebar');
   const machine = sidebar.locator('.row.machine').filter({ hasText: 'HomePC' });
   await machine.waitFor();
-  assert.equal(await sidebar.locator('.fold-title', { hasText: /^Working$/ }).count(), 0);
+  assert.equal(await sidebar.locator('.fold-title', { hasText: /^Running$/ }).count(), 0);
   assert.equal(await sidebar.getByText('Was busy', { exact: true }).count(), 0);
   await machine.click();
   const main = page.locator('.main');
   const row = main.locator('.rowx').filter({ hasText: 'Was busy' });
   await row.waitFor();
-  assert.equal(await main.locator('div.section', { hasText: /^running here$/ }).count(), 0, 'no working section on a machine that cannot answer');
-  assert.equal(await row.locator('.chip').textContent(), 'was working');
+  assert.equal(await main.locator('div.section', { hasText: /^Running$/ }).count(), 0, 'no working section on a machine that cannot answer');
+  assert.equal(await row.locator('.chip').textContent(), 'Last status: working');
   await page.screenshot({ path: `/tmp/helm-offline-machine-${width}.png` });
 });
 
@@ -779,10 +779,10 @@ for (const width of [1280, 390]) for (const childState of ['error', 'blocked']) 
   if (width < 500) await page.locator('.session-bar').getByRole('button', { name: 'Back', exact: true }).click();
   await card.locator('.need-main').click();
   await details.locator('.delegation-branch.selected').waitFor();
-  await details.getByRole('button', { name: 'Open conversation' }).click();
+  await details.getByRole('button', { name: 'Open chat' }).click();
   await page.locator('.session-bar').getByText('Fix scenery', { exact: true }).waitFor();
   assert.equal(await details.count(), 0);
-  await page.locator('.session-bar').getByRole('button', { name: 'Back to parent thread', exact: true }).click();
+  await page.locator('.session-bar').getByRole('button', { name: 'Back to main chat', exact: true }).click();
   await page.locator('.session-bar').getByText('Game task', { exact: true }).waitFor();
 });
 
@@ -904,7 +904,7 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   await mount();
   const card = page.locator('.sidebar .need');
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).waitFor();
-  assert.equal(await card.locator('.need-go').innerText(), '1 child task failed');
+  assert.equal(await card.locator('.need-go').innerText(), '1 helper task failed');
   const dismissBounds = await card.getByRole('button', { name: 'Dismiss failure', exact: true }).boundingBox();
   const reviewBounds = await card.locator('.need-go').boundingBox();
   assert.ok(dismissBounds.y >= reviewBounds.y + reviewBounds.height, 'dismiss and snooze do not overlap the review action');

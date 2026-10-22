@@ -588,7 +588,7 @@ test('legacy ExitPlanMode is denied locally without asking for plan approval', a
   assert.equal(log.of('permission.request').some((e) => e.kind === 'plan'), false);
   const response = fake.stdinLines().find((l) => l.type === 'control_response');
   assert.equal(response.response.response.behavior, 'deny');
-  assert.match(response.response.response.message, /Plan mode is disabled/);
+  assert.match(response.response.response.message, /Helm does not support plan mode/);
   assert.equal(write.tool, 'Write');
   await driver.answer(write.requestId, { option: 'deny', message: 'plan only' });
   const done = await log.until((e) => e.type === 'turn.done');

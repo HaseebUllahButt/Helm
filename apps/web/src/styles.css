@@ -1001,6 +1001,21 @@ pre.snippet {
   padding: 9px 14px 2px; min-height: 36px; max-height: 180px; line-height: 1.5; font-size: 16px; color: var(--text);
 }
 .slab textarea:focus { box-shadow: none; outline: none; }
+/* Tags tinted from behind: the marks layer repeats the box's text in the
+   same place, invisible but for a box under each tag. Padding, font and
+   wrapping must match .slab textarea exactly or the boxes drift. */
+.composer-field { position: relative; }
+.composer-field textarea { position: relative; }
+.composer-marks {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  padding: 9px 14px 2px; line-height: 1.5; font-size: 16px;
+  white-space: pre-wrap; overflow-wrap: break-word; color: transparent;
+}
+.composer-marks mark {
+  color: transparent; border-radius: 4px;
+  background: color-mix(in srgb, var(--primary-q) 24%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-q) 24%, transparent);
+}
 .slab-foot { display: flex; align-items: center; gap: 6px; padding: 2px 6px 6px 8px; min-width: 0; }
 .slab-foot .spacer { flex: 1; }
 .attach-status { color: var(--mutedfg); font-size: var(--t-micro); white-space: nowrap; }

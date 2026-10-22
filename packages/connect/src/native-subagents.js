@@ -180,7 +180,7 @@ export function nativeStatus(phase, mtime, now = Date.now()) {
 
 function entry(id, { meta, parsed, birth, mtime }, now, detail) {
   const status = nativeStatus(parsed.phase, mtime, now);
-  const title = oneLine(meta.description, 80) || oneLine(parsed.prompt.split('\n')[0], 80) || meta.agentType || 'Subagent';
+  const title = oneLine(meta.description, 80) || oneLine(parsed.prompt.split('\n')[0], 80) || meta.agentType || 'Helper';
   const out = {
     id, native: true, title,
     agentType: typeof meta.agentType === 'string' ? meta.agentType : null,

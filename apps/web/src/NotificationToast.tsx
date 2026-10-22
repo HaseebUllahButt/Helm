@@ -10,8 +10,8 @@ export function askAction(ask: Session['ask']): string {
     case 'question': return 'has a question';
     case 'command': return 'wants to run a command';
     case 'edit': return 'wants to change a file';
-    case 'plan': return 'has a plan for you';
-    case 'tool': return 'needs your OK';
+    case 'plan': return 'has a plan';
+    case 'tool': return 'needs your approval';
     default: return 'needs you';
   }
 }

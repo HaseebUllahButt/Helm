@@ -31,11 +31,11 @@ export function ThreadDetails({ client, env, session, tab, git, gitCwd = session
   </div>;
   if (tab === 'changes') return <div className="thread-details-back" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="thread-details" ref={ref} role="dialog" aria-modal="true" aria-label="Git" tabIndex={-1}>
-      <div className="details-heading"><div><h2>Git</h2><p>{env.name} · {session.quick ? 'quick chat' : session.cwd}</p></div><button className="iconbtn" aria-label="Back to the conversation" onClick={onClose}><BackIcon /></button></div>
+      <div className="details-heading"><div><h2>Git</h2><p>{env.name} · {session.quick ? 'quick chat' : session.cwd}</p></div><button className="iconbtn" aria-label="Back to chat" onClick={onClose}><BackIcon /></button></div>
       <div className="details-content">
-        <p className="note">{!gitCwd ? 'This quick chat has no Git folder yet.'
+        <p className="note">{!gitCwd ? 'This chat has no Git project folder.'
           : !env.online ? `${env.name} is offline.`
-          : git?.error ? `Git could not be read: ${git.error}`
+          : git?.error ? `Helm cannot read Git: ${git.error}`
             : !git ? 'Reading Git…'
               : 'This folder is not a Git project.'}</p>
       </div>

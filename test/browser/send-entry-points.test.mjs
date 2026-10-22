@@ -91,13 +91,13 @@ for(const size of [{width:390,height:844},{width:1280,height:800}]){
     try{
       await home(page);
       await page.keyboard.press('Control+k');
-      await page.getByRole('combobox',{name:'Search threads, machines, actions',exact:true}).fill('Send a project from Laptop');
+      await page.getByRole('combobox',{name:'Search chats, machines, and actions',exact:true}).fill('Send a project from Laptop');
       await page.getByRole('option').filter({hasText:'Send a project from Laptop'}).click();
       await page.locator('.main').getByRole('button',{name:'project',exact:true}).click();await confirmed(page);
       await home(page);
       await page.getByRole('button',{name:'Send a project',exact:true}).click();
       await page.locator('.main').getByRole('button',{name:'project',exact:true}).click();await confirmed(page);await shot(page,'plan');
-      await home(page);await page.getByRole('button',{name:'actions for project',exact:true}).click();
+      await home(page);await page.getByRole('button',{name:'Show actions for project',exact:true}).click();
       await page.locator('.main .menu').getByRole('button',{name:'Send to VM',exact:true}).click();await confirmed(page);
       await page.evaluate(()=>window.visit({kind:'browse',path:'~/dev/project'}));
       await page.getByRole('button',{name:'Send this folder',exact:true}).click();await confirmed(page);
@@ -140,7 +140,7 @@ for(const size of [{width:390,height:844},{width:1280,height:800}]){
       await page.getByRole('button',{name:'Start a chat there',exact:true}).click();
       assert.equal(await page.evaluate(()=>history.state.selected),'target');
       assert.equal(await page.evaluate(()=>history.state.stack.at(-1).cwd),'~/project');
-      await home(page);await page.getByRole('button',{name:'actions for project',exact:true}).click();
+      await home(page);await page.getByRole('button',{name:'Show actions for project',exact:true}).click();
       await page.locator('.main .menu').getByRole('button',{name:'Send again to VM',exact:true}).click();
       await page.getByRole('button',{name:'Send again to VM',exact:true}).waitFor();
     }finally{await page.cleanup();}

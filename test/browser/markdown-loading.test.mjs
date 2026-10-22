@@ -62,7 +62,7 @@ test('missing optional chunk never exposes raw fences, including after opening a
   assert.equal(await page.locator('.md li').count(), 2);
   assert.equal(await page.locator('.md a').getAttribute('href'), 'https://example.com');
   if (process.env.HELM_TEST_ARTIFACT_DIR) await page.screenshot({ path: `${process.env.HELM_TEST_ARTIFACT_DIR}/markdown-phone.png` });
-  await page.getByRole('button', { name: 'copy', exact: true }).click();
+  await page.getByRole('button', { name: 'Copy', exact: true }).click();
   assert.equal(await page.evaluate(() => window.copied), 'helm revoke 05d4f2982dc8');
   await page.evaluate(() => window.showMarkdown('Another reply:\n\n```sh\necho readable\n```'));
   assert.equal(await page.locator('pre code').innerText(), 'echo readable');
@@ -92,7 +92,7 @@ test('a delayed highlighter adds colors without changing layout or clipboard tex
   assert.equal(requested, true);
   assert.equal(await page.locator('pre code').innerText(), 'const answer = 42;');
   assert.deepEqual(await page.locator('.codeblock').boundingBox(), before);
-  await page.getByRole('button', { name: 'copy', exact: true }).click();
+  await page.getByRole('button', { name: 'Copy', exact: true }).click();
   assert.equal(await page.evaluate(() => window.copied), 'const answer = 42;');
 });
 

@@ -130,7 +130,7 @@ test('failed native controls stay in chat with the reported model and a visible 
   await page.getByRole('alert').waitFor();
   assert.match(await page.getByRole('alert').innerText(), /no longer running/);
   assert.equal(await page.getByRole('button', {name:'model: opus', exact:true}).count(), 1);
-  assert.equal(await page.getByRole('button', {name:'show the terminal', exact:true}).count(), 1);
+  assert.equal(await page.getByRole('button', {name:'Show terminal', exact:true}).count(), 1);
 });
 
 
@@ -152,9 +152,9 @@ test('a slash command during a reply keeps chat and approvals available in both 
   }]}));
   await page.getByRole('button', {name:'Allow once', exact:true}).waitFor();
   await page.getByRole('button', {name:'View in terminal', exact:true}).click();
-  await page.getByRole('button', {name:'show the conversation', exact:true}).waitFor();
+  await page.getByRole('button', {name:'Show chat', exact:true}).waitFor();
   assert.equal(await page.getByRole('button', {name:'Allow once', exact:true}).count(), 1);
-  await page.getByRole('button', {name:'show the conversation', exact:true}).click();
+  await page.getByRole('button', {name:'Show chat', exact:true}).click();
   assert.equal(await page.getByRole('button', {name:'Allow once', exact:true}).count(), 1);
   assert.equal(await page.locator('textarea').count(), 1);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

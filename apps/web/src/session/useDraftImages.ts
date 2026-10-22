@@ -25,7 +25,7 @@ export function useDraftImages<T extends Image>(env: string, session: string, on
         if (cancelled) return;
         scope.images = (saved ?? []).map(image => ({ ...image, url: `data:${image.mime};base64,${image.data}` }) as T);
       } catch {
-        if (!cancelled) onError('Saved draft images could not be restored on this device.');
+        if (!cancelled) onError('Helm cannot restore saved draft images on this device.');
       }
       if (!cancelled) setState({ scope, images: scope.images, loading: false, saving: scope.pending > 0 });
     })();
@@ -44,7 +44,7 @@ export function useDraftImages<T extends Image>(env: string, session: string, on
         if (saved.length) await txn('kv', 'readwrite', store => store.put(saved, scope.key));
         else await txn('kv', 'readwrite', store => store.delete(scope.key));
       } catch {
-        if (scope.active) onError('Draft images could not be saved on this device. Keep this tab open to avoid losing them.');
+        if (scope.active) onError('Helm cannot save draft images on this device. Keep this tab open to keep the images.');
       }
       scope.pending--;
       // Show added previews after their write commits, so a refresh directly

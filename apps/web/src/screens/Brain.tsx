@@ -85,17 +85,15 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
         {picking ? (
           <>
             <p className="note">
-              One chat for your whole network, on {env.name}. It knows your
-              projects and works on any machine you name. It keeps going when
-              your laptop sleeps.
+              Use one chat for all your machines on {env.name}. It knows your projects. It works on any machine you name. It keeps working when your laptop sleeps.
             </p>
             {replacing && (
               <div className="banner warn">
                 A new brain ends the current brain chat. Its saved notes stay.
               </div>
             )}
-            <div className="section">Choose its account</div>
-            {!accounts && !error && env.online && <div className="empty quiet">asking {env.name}…</div>}
+            <div className="section">Select an account</div>
+            {!accounts && !error && env.online && <div className="empty quiet">Loading accounts from {env.name}…</div>}
             <div className="rows">
               {(accounts ?? []).map((a) => (
                 <button key={a.key} className="row tall" disabled={!!busy} onClick={() => start(a)}>
@@ -110,16 +108,16 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
             </div>
             {accounts && !accounts.length && (
               <div className="empty quiet">
-                no agent accounts on that machine
-                <div className="note" style={{ marginTop: 6 }}>the brain needs a CLI Helm can run in the background</div>
+                This machine has no agent accounts.
+                <div className="note" style={{ marginTop: 6 }}>Install an agent program that Helm can run in the background.</div>
               </div>
             )}
-            {!env.online && <div className="empty quiet">{env.name} is offline</div>}
-            {replacing && <button className="row" onClick={() => setReplacing(false)}><span className="grow"><span className="rt">Keep the brain I have</span></span></button>}
+            {!env.online && <div className="empty quiet">{env.name} is offline.</div>}
+            {replacing && <button className="row" onClick={() => setReplacing(false)}><span className="grow"><span className="rt">Keep this brain</span></span></button>}
           </>
         ) : (
           <>
-            <div className="section">thinking with</div>
+            <div className="section">Model</div>
             <div className="rows">
               {(models?.models ?? []).map((m) => {
                 const current = (brain!.model ?? models?.default) === m;
@@ -132,10 +130,10 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
                   </button>
                 );
               })}
-              {!models && <div className="empty quiet">{env.online ? 'asking the machine…' : `${env.name} is offline`}</div>}
+              {!models && <div className="empty quiet">{env.online ? 'Loading machine details…' : `${env.name} is offline`}</div>}
             </div>
 
-            <div className="section">where it lives</div>
+            <div className="section">Machine and account</div>
             <div className="rows">
               <div className="row">
                 <EngineMark engine={engineOf(brain!.engine).cls} />
@@ -146,12 +144,12 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
               </div>
             </div>
 
-            <div className="section">rarely</div>
+            <div className="section">Other actions</div>
             <div className="rows">
               <button className="row destructive" onClick={() => setReplacing(true)}>
                 <span className="grow">
                   <span className="rt">Start a different brain</span>
-                  <span className="rm">new chat; saved notes stay</span>
+                  <span className="rm">Start a new chat. Saved notes stay.</span>
                 </span>
                 <span className="chev"><Icon name="forward" size={15} /></span>
               </button>

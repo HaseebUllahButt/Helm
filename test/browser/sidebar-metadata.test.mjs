@@ -48,7 +48,7 @@ for(const width of [1280,390])test(`a chat row puts its title and status first, 
   assert.equal(await rows.nth(1).locator('.tstat.quiet').innerText(),'3h','quiet rows show a compact age');
   assert.equal(await rows.nth(2).locator('.tstat.needs').innerText(),'Needs you');
   assert.equal(await rows.nth(3).locator('.tstat.failed').innerText(),'Failed');
-  assert.equal(await rows.nth(4).locator('.tstat.unread').getAttribute('aria-label'),'Finished, not opened yet');
+  assert.equal(await rows.nth(4).locator('.tstat.unread').getAttribute('aria-label'),'Finished. You have not opened this chat.');
   const colours=await page.evaluate(()=>Object.fromEntries([...document.querySelectorAll('.tstat')].map(e=>[e.dataset.mood,getComputedStyle(e).color])));
   assert.equal(new Set(Object.values(colours)).size,5,'each state has its own colour: '+JSON.stringify(colours));
   // Slim: one line, with the age.

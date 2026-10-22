@@ -87,13 +87,13 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
             <EngineMark engine={engine} />
             <h1 className="crumb-title" title={card.title}>{card.title}</h1>
           </div>
-          <span className="sub">{[state, card.agentType || 'subagent', card.model || 'CLI default'].join(' · ')}</span>
+          <span className="sub">{[state, card.agentType || 'helper', card.model || 'Agent default'].join(' · ')}</span>
         </div>
       </div>
       {error && <p className="error native-error" role="alert">{error}</p>}
       <Transcript
         turns={log.turns} status={working ? 'working' : 'idle'} loaded={log.loaded}
-        empty={working ? 'Waiting for the subagent…' : 'This subagent left no messages.'}
+        empty={working ? 'Waiting for the helper…' : 'This helper left no messages.'}
       />
       {more && <p className="native-foot" role="note">Showing the latest part.</p>}
       {canMessage ? (
@@ -101,14 +101,14 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
           draft={draft} setDraft={setDraft} engine={engine} keys={false} canAttach={false} preparing={sending}
           onSend={() => void send()}
           statusLine={<span className="native-foot-line">{engine === 'codex'
-            ? 'Goes straight to this helper'
+            ? 'Send directly to this helper'
             : <>Sent through <b>{parent.title || 'the main chat'}</b></>}</span>}
         />
       ) : (
         <p className="native-foot" role="note">
           {card.fromLog || !parent.driver && !parent.nativeChat
             ? <>Started inside <b>{parent.title || 'its chat'}</b>. Message it from that chat.</>
-            : <>This CLI can't send messages to its helpers.</>}
+            : <>This agent program cannot send messages to its helpers.</>}
         </p>
       )}
     </>

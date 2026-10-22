@@ -26,11 +26,11 @@ export const isCompaction = (it: Item) => it.kind === 'tool' && (it.name === 'co
 /** The line a compaction draws across the conversation, live while it runs. */
 export function CompactionLine({ live, item }: { live: boolean; item?: Item }) {
   const took = item?.doneAt && item.startedAt ? item.doneAt - item.startedAt : 0;
-  const label = live ? 'Compacting conversation…'
-    : item?.status === 'error' ? 'Compaction failed'
-      : item?.status === 'declined' ? 'Compaction stopped'
-        : item?.status === 'streaming' ? 'Compaction interrupted'
-          : `Conversation compacted${took > 2000 ? ` · ${seconds(took)}` : ''}`;
+  const label = live ? 'Summarizing chat…'
+    : item?.status === 'error' ? 'Chat summary failed'
+      : item?.status === 'declined' ? 'Chat summary stopped'
+        : item?.status === 'streaming' ? 'Chat summary interrupted'
+          : `Chat summarized${took > 2000 ? ` · ${seconds(took)}` : ''}`;
   return (
     <div className={`compaction${live ? ' live' : ''}${item?.status === 'error' ? ' bad' : ''}`} title={item?.error || undefined} role={live ? 'status' : undefined}>
       <span className={live ? 'shine' : undefined}>{label}</span>
@@ -791,22 +791,22 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
             // A blob the log has swept past still has its name, and saying
             // so beats a browser's broken-image glyph.
             ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={`Image #${i + 1}${a.filename ? ` · ${a.filename}` : ''}`} loading="lazy" decoding="async" />
-            : <span key={i} className="turn-image-gone" title={a.filename}><Icon name="image" size={14} /> {a.filename || 'image'} — no longer stored</span>
+            : <span key={i} className="turn-image-gone" title={a.filename}><Icon name="image" size={14} /> {a.filename || 'image'} — Helm no longer stores this image.</span>
           ))}</div>}
           {said.text}
           <span className="bubble-meta">
-            {queued && <span className="tag">queued</span>}
+            {queued && <span className="tag">waiting</span>}
             {/* Still on helm's side of the wire: the agent has not seen it,
                 so taking it back is possible - and puts the words back in
                 the composer, the way a CLI lets you pull a queued line up. */}
             {queued && onWithdraw && (
-              <button className="withdraw" onClick={() => onWithdraw(turn)}>withdraw</button>
+              <button className="withdraw" onClick={() => onWithdraw(turn)}>Return to draft</button>
             )}
             {onBranch && !queued && !turn.id.startsWith('local-') && (
-              <button className="branch" onClick={() => onBranch(turn)} title="a new thread from before this message" aria-label="branch from before this message"><Icon name="branch" size={13} />branch</button>
+              <button className="branch" onClick={() => onBranch(turn)} title="Start a chat from before this message" aria-label="Start a chat from before this message"><Icon name="branch" size={13} />Start a chat here</button>
             )}
             {onRewind && turn.checkpoint && !queued && !turn.local && (
-              <button className="branch" onClick={() => onRewind(turn)} title="Edit this message and rewind the conversation">Edit from here</button>
+              <button className="branch" onClick={() => onRewind(turn)} title="Edit this message and restore the chat to this point">Edit from here</button>
             )}
             {clock(turn.at)}
           </span>
@@ -1078,19 +1078,19 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
               for; the rest of it is a tap away rather than a wait. */}
           {loaded && earlier && (
             <button className="earlier" onClick={readEarlier} disabled={loadingEarlier}>
-              {loadingEarlier ? 'reading…' : 'Earlier in this conversation'}
+              {loadingEarlier ? 'Loading…' : 'Earlier in this chat'}
             </button>
           )}
-          {!loaded && <p className="placeholder">Loading the conversation…</p>}
-          {loaded && turns.length === 0 && <p className="placeholder">{empty ?? 'Send a message to start the conversation.'}</p>}
+          {!loaded && <p className="placeholder">Loading chat…</p>}
+          {loaded && turns.length === 0 && <p className="placeholder">{empty ?? 'Send a message to start the chat.'}</p>}
           {flow}
         </div>
       </div>
       {away && <button type="button" className={`jump${unread ? ' fresh' : ''}`} onClick={jump} aria-label="Scroll to the latest message"><Icon name="arrow-down" size={14} />Latest</button>}
       {prompts >= 3 && (
-        <div className="turnnav" role="group" aria-label="jump between your messages">
-          <button onClick={() => step(-1)} aria-label="previous message of yours" title="previous message"><Icon name="up" size={16} /></button>
-          <button onClick={() => step(1)} aria-label="next message of yours" title="next message"><Icon name="down" size={16} /></button>
+        <div className="turnnav" role="group" aria-label="Move between your messages">
+          <button onClick={() => step(-1)} aria-label="Go to your previous message" title="previous message"><Icon name="up" size={16} /></button>
+          <button onClick={() => step(1)} aria-label="Go to your next message" title="next message"><Icon name="down" size={16} /></button>
         </div>
       )}
       {zoom && <Lightbox src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}

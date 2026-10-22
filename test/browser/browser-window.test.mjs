@@ -55,7 +55,7 @@ test('the panel is the window’s remote: it shows the window, drives it from th
 
   // Closing the window by hand leaves the tabs listed, asleep.
   await (await manager.contexts.get('viewer')).close();
-  await page.getByText('· asleep').first().waitFor({ timeout: 8000 });
+  await page.getByText('· paused').first().waitFor({ timeout: 8000 });
   await page.getByRole('button', { name: 'Open window' }).waitFor();
   assert.equal(windows.length, 1, 'the list never reopens the window on its own');
   await page.getByRole('button', { name: 'Open window' }).click();

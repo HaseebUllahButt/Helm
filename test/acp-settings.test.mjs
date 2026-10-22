@@ -105,7 +105,7 @@ test('devin: /usage answers locally - the quota card, not an ACP prompt', async 
   assert.match(body, /### Usage/);
   assert.match(body, /\*\*Daily\*\* `█░{19}` 5% used · resets in \d+h \d+m/);
   assert.match(body, /\*\*Weekly\*\* `████░{16}` 21% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-][\d:]+\)/);
-  assert.match(body, /\*No quota consumed yet in this session\.\*/);
+  assert.match(body, /\*This chat used no quota\.\*/);
   // The whole point: ACP never hears about it - not even the process spawn.
   assert.equal(fake.stdinLines().length, 0);
   await driver.kill();

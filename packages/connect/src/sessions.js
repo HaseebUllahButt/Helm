@@ -88,8 +88,8 @@ const EXTERNAL = /^(pane:|found:)/;
 const SEEN_KEEP_MS = 30 * 86_400_000;
 
 const EXTERNAL_INFO_COMMANDS = [
-  { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
-  { name: 'usage', description: 'Show persisted token usage for this session', source: 'helm' },
+  { name: 'status', description: 'Show chat settings and usage', source: 'helm' },
+  { name: 'usage', description: 'Show saved text usage for this chat', source: 'helm' },
 ];
 
 /**
@@ -1697,7 +1697,7 @@ export class Sessions extends EventEmitter {
       const running = children.filter((child) => !['done', 'error', 'interrupted'].includes(child.delegation?.status));
       session.recovery = {
         kind: 'interrupted', at: Date.now(),
-        message: running.length ? `Stopped by you. ${running.length === 1 ? 'Its helper was' : 'Its helpers were'} stopped too.` : 'Stopped by you.',
+        message: running.length ? `You stopped this chat. Helm also stopped ${running.length === 1 ? 'its helper' : 'its helpers'}.` : 'Stopped by you.',
       };
       if (session.delegation) {
         session.delegation.status = 'interrupted';
@@ -1856,11 +1856,13 @@ export class Sessions extends EventEmitter {
   /**
    * Whether a *running* agent can be sent images, or null when no driver is
    * up to ask. ACP agents only answer this at `initialize`, so a session
-   * that has not started yet leaves the app on the model catalogue's guess.
+   * that has not started yet, or is still starting, leaves the app on the
+   * model catalogue's guess.
    */
   acceptsImages(id) {
     const d = this.#drivers.get(id);
-    return d ? driverTakesImages(d) : null;
+    if (!d || d.acceptsImages?.() === null) return null;
+    return driverTakesImages(d);
   }
 
   /**

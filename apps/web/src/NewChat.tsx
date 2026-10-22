@@ -322,7 +322,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     setBusy(true); setError('');
     try {
       const r = await client.rpc<{ state: 'new' | 'there' | 'other'; path: string; reason?: string }>(machine.id, 'github.check', { repo: chosen, target }, 20_000);
-      if (r.state === 'other') throw new Error(r.reason ?? `${target} is already there, and it is not ${chosen}. Pick another folder.`);
+      if (r.state === 'other') throw new Error(r.reason ?? `${target} already exists. It does not contain ${chosen}. Pick another folder.`);
       setCloneParent(clean);
       try { localStorage.setItem(parentKey(machine.id), clean); } catch { /* only a default */ }
       folderSpot.current = { q, id, step: 'into' };
@@ -455,8 +455,8 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
         out.push({ id, title, sub, tag: own?.tag, icon: repo ? 'repo' : 'folder', folder: { path, depth, open, parent }, pick: () => pickAt(path, id) });
         if (!open) return;
         const kids = inside[path];
-        if (kids === null || kids === undefined) out.push({ id: `${id}>…`, title: 'looking…', disabled: true, folder: { path, depth: depth + 1, open: false, parent: id }, pick: () => {} });
-        else if (!kids.length) out.push({ id: `${id}>…`, title: 'no folders inside', disabled: true, folder: { path, depth: depth + 1, open: false, parent: id }, pick: () => {} });
+        if (kids === null || kids === undefined) out.push({ id: `${id}>…`, title: 'Helm is loading folders.', disabled: true, folder: { path, depth: depth + 1, open: false, parent: id }, pick: () => {} });
+        else if (!kids.length) out.push({ id: `${id}>…`, title: 'This folder has no folders.', disabled: true, folder: { path, depth: depth + 1, open: false, parent: id }, pick: () => {} });
         else for (const k of kids) add(k.path, k.name, k.isRepo, depth + 1, id);
       };
       if (step === 'into') {
@@ -481,14 +481,14 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       }
       else for (const e of home ?? []) add(e.path, e.name, e.isRepo, 0);
       if (step === 'into') return out;
-      const quickRow: Row = { id: QUICK_ROW, title: 'No folder · quick chat', sub: 'for a small question', icon: 'bolt', pick: pickQuick };
-      const githubRow: Row = { id: GITHUB_ROW, title: 'Clone from GitHub', icon: 'github', pick: () => go('github') };
+      const quickRow: Row = { id: QUICK_ROW, title: 'No folder · quick chat', sub: 'Ask a short question.', icon: 'bolt', pick: pickQuick };
+      const githubRow: Row = { id: GITHUB_ROW, title: 'Copy from GitHub', icon: 'github', pick: () => go('github') };
       if (!query || matches(githubRow, query)) out.unshift(githubRow);
       if (!query || matches(quickRow, query)) out.unshift(quickRow);
       // Offered once the typed name is not a folder that is already there.
       const known = [...(hits ?? []), ...(home ?? []), ...(inside[newParent] ?? [])];
       if (query && (!searching || hits !== null) && !known.some((f) => f.path === newPath)) {
-        out.push({ id: NEW_ROW, title: `New folder "${query}" in ${where(newParent)}`, sub: newPath, icon: 'plus', pick: () => void makeFolder() });
+        out.push({ id: NEW_ROW, title: `Create folder "${query}" in ${where(newParent)}`, sub: newPath, icon: 'plus', pick: () => void makeFolder() });
       }
       return out;
     }
@@ -518,7 +518,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       const ordered = first ? [first, ...shown.filter((a) => a !== first)] : shown;
       return ordered.map((a): Row => ({
         id: a.key, engine: a.engine, title: engineOf(a.engine).label,
-        group: hiddenView ? 'Hidden CLIs' : undefined,
+        group: hiddenView ? 'Hidden agents' : undefined,
         sub: twins.has(`${a.engine}|${a.account}`) ? `${a.account} (${a.profile.id})` : a.account,
         tag: a.key === picker?.agent ? 'default' : a.key === picker?.last ? 'last used' : undefined,
         hide: () => toggleHidden(a.key),
@@ -529,9 +529,9 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     const out = viewHidden ? hiddenRows : cliRows(false);
     if (viewHidden || hiddenRows.length) out.push({
       id: HIDDEN_ROW, quiet: true, icon: viewHidden ? 'back' : undefined,
-      title: viewHidden ? 'Back to shown CLIs' : query
+      title: viewHidden ? 'Show visible agents' : query
         ? `Show ${hiddenRows.length} hidden ${hiddenRows.length === 1 ? 'match' : 'matches'}`
-        : `Show ${hiddenRows.length} hidden ${hiddenRows.length === 1 ? 'CLI' : 'CLIs'}`,
+        : `Show ${hiddenRows.length} hidden ${hiddenRows.length === 1 ? 'agent' : 'agents'}`,
       pick: () => { setViewHidden(value => !value); setAt(0); input.current?.focus(); },
     });
     return out;
@@ -613,11 +613,11 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     : step === 'cli' ? accounts === null
     : step === 'github' ? gh === null
     : step === 'into' ? (searching ? hits === null : home === null) : false;
-  const placeholder = step === 'machine' ? 'Which machine?'
-    : step === 'folder' ? `Which folder on ${machine?.name}?`
-    : step === 'github' ? 'Search repos'
+  const placeholder = step === 'machine' ? 'Search machines'
+    : step === 'folder' ? `Search folders on ${machine?.name}`
+    : step === 'github' ? 'Search GitHub projects'
     : step === 'into' ? 'Search folders, or type a path'
-    : viewHidden ? 'Which hidden CLI?' : 'Which CLI?';
+    : viewHidden ? 'Search hidden agents' : 'Search agents';
 
   return (
     <div className="modal-back palette-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -628,20 +628,20 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
             <Icon name="forward" size={12} />
             <span className={step === 'folder' || step === 'github' || step === 'into' ? 'on' : ''}>{step === 'cli' ? quick ? 'Quick chat' : leaf(folder) : step === 'github' || step === 'into' ? 'GitHub' : 'Folder'}</span>
             <Icon name="forward" size={12} />
-            <span className={step === 'cli' ? 'on' : ''}>CLI</span>
+            <span className={step === 'cli' ? 'on' : ''}>Agent</span>
           </span>
           <button className="iconbtn" onClick={onClose} aria-label="Close new chat" title="Close"><Icon name="close" size={16} /></button>
         </div>
         {/* The same question an empty chat asks, one step at a time. */}
         <h2 className="newchat-greeting">
-          {step === 'machine' ? 'Where should we build?'
-            : step === 'folder' ? <>What should we build on <b>{machine?.name}</b>?</>
-            : step === 'github' ? <>Which repo?</>
-            : step === 'into' ? <>Where should <b>{chosen.split('/')[1] ?? chosen}</b> go?</>
-            : quick ? <>Which agent for a <b>quick chat</b>?</>
-            : <>Which agent in <b>{leaf(folder)}</b>?</>}
+          {step === 'machine' ? 'Pick a machine.'
+            : step === 'folder' ? <>Pick a folder on <b>{machine?.name}</b>.</>
+            : step === 'github' ? <>Pick a GitHub project.</>
+            : step === 'into' ? <>Pick a folder for <b>{chosen.split('/')[1] ?? chosen}</b>.</>
+            : quick ? <>Pick an agent for a <b>quick chat</b>.</>
+            : <>Pick an agent in <b>{leaf(folder)}</b>.</>}
         </h2>
-        {step === 'cli' && cloneFrom && <p className="newchat-note">Clones {cloneFrom} into {folder}.</p>}
+        {step === 'cli' && cloneFrom && <p className="newchat-note">Helm will copy {cloneFrom} into {folder}.</p>}
         <input
           ref={input} className="palette-input" value={q} placeholder={placeholder} disabled={busy || (step === 'github' && !!gh && !gh.login)}
           autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
@@ -675,10 +675,10 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
             <div className="newchat-signin">
               <Icon name="github" size={28} />
               {!gh.installed ? <>
-                <p>The GitHub CLI is not on <b>{machine?.name}</b> yet.</p>
+                <p><b>{machine?.name}</b> does not have the GitHub CLI.</p>
                 <a href="https://cli.github.com" target="_blank" rel="noreferrer">cli.github.com</a>
               </> : <>
-                <p>The GitHub CLI on <b>{machine?.name}</b> is not signed in. Run this there:</p>
+                <p>The GitHub CLI on <b>{machine?.name}</b> needs you to sign in. Run this command there:</p>
                 <div className="newchat-signin-acts">
                   <code className="newchat-code">gh auth login</code>
                   <button type="button" className="ghost" title="Copy" aria-label="Copy" onClick={() => void navigator.clipboard?.writeText('gh auth login').catch(() => {})}><Icon name="copy" size={14} /></button>
@@ -687,22 +687,22 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
               <button type="button" className="ghost" onClick={reloadGh}><Icon name="refresh" size={14} />Check again</button>
             </div>
           )}
-          {busy && step !== 'github' && <div className="empty quiet">{step === 'into' ? `Checking where ${chosen.split('/')[1] ?? chosen} goes…` : step === 'folder' ? `Making ${newPath}…` : quick ? `Starting ${rows[selected]?.title} as a quick chat…` : `Starting ${rows[selected]?.title} in ${leaf(folder)}…`}</div>}
-          {!busy && loading && !rows.length && <div className="empty quiet">{step === 'cli' ? 'looking for CLIs…' : step === 'github' ? 'asking GitHub…' : 'looking…'}</div>}
+          {busy && step !== 'github' && <div className="empty quiet">{step === 'into' ? `Helm is checking the folder for ${chosen.split('/')[1] ?? chosen}.` : step === 'folder' ? `Helm is creating ${newPath}.` : quick ? `Helm is starting ${rows[selected]?.title} for a quick chat.` : `Helm is starting ${rows[selected]?.title} in ${leaf(folder)}.`}</div>}
+          {!busy && loading && !rows.length && <div className="empty quiet">{step === 'cli' ? 'Helm is looking for agents.' : step === 'github' ? 'Helm is checking GitHub.' : 'Helm is looking for folders.'}</div>}
           {!busy && !loading && (!rows.length || (viewHidden && rows.every(row => row.quiet))) && step !== 'github' && (
             <div className="empty quiet">
-              {step === 'machine' ? 'No machine matches.' : step === 'folder' ? (searching ? 'No folder matches.' : 'No folders here.')
-                : step === 'into' ? 'No folder matches. Type a path like ~/work.' : viewHidden ? 'No hidden CLI matches.' : 'No CLI matches.'}
+              {step === 'machine' ? 'No machine matches.' : step === 'folder' ? (searching ? 'No folder matches.' : 'This folder has no folders.')
+                : step === 'into' ? 'No folder matches. Type a path like ~/work.' : viewHidden ? 'No hidden agent matches.' : 'No agent matches.'}
             </div>
           )}
           {/* Not in the list: GitHub is asked before anything says it is not there. */}
           {step === 'github' && gh?.login && !rows.length && (query.length < 2 ? (
-            gh.repos.length ? null : <div className="empty quiet">{ghBusy ? 'asking GitHub…' : `No repos for ${gh.login} yet.`}</div>
+            gh.repos.length ? null : <div className="empty quiet">{ghBusy ? 'Helm is checking GitHub.' : `${gh.login} has no GitHub projects.`}</div>
           ) : !finding || finding.state === 'looking' ? (
-            <div className="empty quiet"><Icon name="think" size={12} className="tspin" /> Not in your list. Looking on GitHub…</div>
+            <div className="empty quiet"><Icon name="think" size={12} className="tspin" /> No match in your list. Helm is searching GitHub.</div>
           ) : (
             <div className="empty quiet newchat-missing">
-              <span>{finding.state === 'failed' ? finding.error : <>No repo called “{query}” on GitHub that <b>{gh.login}</b> can see.</>}</span>
+              <span>{finding.state === 'failed' ? finding.error : <><b>{gh.login}</b> cannot find a GitHub project called “{query}”.</>}</span>
               <button type="button" className="ghost" onClick={() => setFindAgain((n) => n + 1)}><Icon name="refresh" size={14} />Look again</button>
             </div>
           ))}
@@ -717,8 +717,8 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                   {row.folder && (row.disabled ? <span className="newchat-twisty" /> : (
                     <button
                       className={`newchat-twisty${row.folder.open ? ' open' : ''}`} tabIndex={-1}
-                      title={row.folder.open ? `close ${row.title}` : `open ${row.title}`}
-                      aria-label={row.folder.open ? `close ${row.title}` : `open ${row.title}`}
+                      title={row.folder.open ? `Close ${row.title}` : `Open ${row.title}`}
+                      aria-label={row.folder.open ? `Close ${row.title}` : `Open ${row.title}`}
                       onClick={() => { point(i); if (row.folder!.open) collapse(row.id); else expand(row.folder!.path, row.id); }}
                     ><Icon name="forward" size={14} /></button>
                   ))}
@@ -747,7 +747,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                   )}
                   {row.folder && !row.disabled && step === 'folder' && (
                     <button
-                      className="newchat-add" tabIndex={-1} title={`New folder inside ${row.title}`} aria-label={`New folder inside ${row.title}`}
+                      className="newchat-add" tabIndex={-1} title={`Create a folder inside ${row.title}`} aria-label={`Create a folder inside ${row.title}`}
                       onClick={() => { point(i); if (!row.folder!.open) expand(row.folder!.path, row.id); createIn(row.folder!.path); }}
                     ><Icon name="plus" size={14} /></button>
                   )}
@@ -768,17 +768,17 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                 onChange={(e) => setCreating({ ...creating, name: e.target.value })}
               />
             </label>
-            <button type="submit" className="primary" disabled={busy || !creating.name.trim()}>{busy ? 'Making…' : 'Create'}</button>
+            <button type="submit" className="primary" disabled={busy || !creating.name.trim()}>{busy ? 'Helm is creating the folder.' : 'Create'}</button>
             <button type="button" className="ghost" disabled={busy} onClick={() => { setCreating(null); input.current?.focus(); }}>Cancel</button>
           </form>
         ) : (
           <div className="newchat-bar">
-            <button type="button" className="newchat-new" onClick={() => createIn(createTarget)} title={`New folder in ${createTarget}`}>
+            <button type="button" className="newchat-new" onClick={() => createIn(createTarget)} title={`Create a folder in ${createTarget}`}>
               <Icon name="plus" size={15} />New folder in <b>{where(createTarget)}</b>
             </button>
             <span className="newchat-index" role="status" title={index && index !== 'remote' ? `${index.count.toLocaleString()} folders` : undefined}>
-              {index && index !== 'remote' ? <>{indexing ? 'checking…' : `checked ${checked(index.at, now)}`}</>
-                : remote ? 'searching on the machine' : 'reading folders…'}
+              {index && index !== 'remote' ? <>{indexing ? 'Helm is checking folders.' : `checked ${checked(index.at, now)}`}</>
+                : remote ? 'Helm is searching the machine.' : 'Helm is reading folders.'}
             </span>
             {!remote && <button type="button" className="iconbtn newchat-refresh" onClick={refreshFolders} disabled={indexing}
               title="Look for new folders now" aria-label="Look for new folders now"><Icon name="refresh" size={15} /></button>}
@@ -792,14 +792,14 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                 <Icon name="github" size={15} /><b>{gh.login}</b><span className="quiet">· switch</span>
               </button>
             ) : <span className="newchat-account" title={`GitHub account ${gh.login}`}><Icon name="github" size={14} />{gh.login}</span>}
-            <span className="newchat-index" role="status" title={`${gh.repos.length.toLocaleString()} repos`}>{ghBusy ? 'checking…' : gh.at ? `checked ${checked(gh.at, now)}` : ''}</span>
+            <span className="newchat-index" role="status" title={`${gh.repos.length.toLocaleString()} GitHub projects`}>{ghBusy ? 'Helm is checking GitHub.' : gh.at ? `checked ${checked(gh.at, now)}` : ''}</span>
             <button type="button" className="iconbtn newchat-refresh" onClick={reloadGh} disabled={ghBusy}
-              title="Look for new repos now" aria-label="Look for new repos now"><Icon name="refresh" size={15} /></button>
+              title="Look for new GitHub projects" aria-label="Look for new GitHub projects"><Icon name="refresh" size={15} /></button>
           </div>
         )}
         {step === 'into' && machine && (
           <div className="newchat-bar">
-            <span className="newchat-account"><Icon name="github" size={14} />{intoTarget ? <>Goes to <b>{intoTarget}</b></> : 'Pick the folder it goes in'}</span>
+            <span className="newchat-account"><Icon name="github" size={14} />{intoTarget ? <>Goes to <b>{intoTarget}</b></> : 'Pick a folder for the project.'}</span>
           </div>
         )}
       </div>

@@ -32,10 +32,10 @@ export function FilesPanel({ client, env, cwd, refreshKey, changed, wrap, open, 
       .then((t) => {
         if (!live) return;
         // An older Helm on that machine answers without a file list.
-        if (!Array.isArray(t?.files)) { setError('This machine cannot list files yet. Update Helm on it.'); return; }
+        if (!Array.isArray(t?.files)) { setError('Update Helm on this machine to show files.'); return; }
         setTree(t); setDir((d) => d ?? t.start);
       })
-      .catch((e: any) => { if (live) setError(e?.message || 'Could not list the files.'); });
+      .catch((e: any) => { if (live) setError(e?.message || 'Helm cannot list the files.'); });
     return () => { live = false; };
   }, [client, env.id, cwd, refreshKey]);
 
@@ -141,7 +141,7 @@ function FileScreen({ client, env, cwd, path, wrap, changed, onBack, onChanges }
     setFile('loading');
     client.rpc<FileText>(env.id, 'git.file', { cwd, path }, 30_000)
       .then((f) => { if (live) setFile(f); })
-      .catch((e: any) => { if (live) setFile({ error: e?.message || 'Could not open this file.' }); });
+      .catch((e: any) => { if (live) setFile({ error: e?.message || 'Helm cannot open this file.' }); });
     return () => { live = false; };
   }, [client, env.id, cwd, path]);
   const copy = () => {
@@ -161,11 +161,11 @@ function FileScreen({ client, env, cwd, path, wrap, changed, onBack, onChanges }
       <div className="files-tools">
         <button className="files-chip" onClick={copy}><Icon name={copied ? 'check' : 'copy'} size={13} />{copied ? 'Copied' : 'Copy path'}</button>
         {changed && <button className="files-chip" onClick={onChanges}><Icon name="git" size={13} />See changes</button>}
-        <span className="files-ro"><Icon name="read" size={13} />Read only</span>
+        <span className="files-ro"><Icon name="read" size={13} />View only</span>
       </div>
       {file === 'loading' ? <div className="git-state" role="status">Opening…</div>
         : 'error' in file ? <div className="git-state bad" role="status">{file.error}</div>
-        : file.hidden ? <div className="git-state">Hidden: this file may hold passwords or keys.</div>
+        : file.hidden ? <div className="git-state">Helm hides files that can contain passwords or keys.</div>
         : file.binary ? <div className="git-state">This is not a text file ({size(file.size)}).</div>
         : <>
             <FileView text={file.text ?? ''} path={path} wrap={wrap} />

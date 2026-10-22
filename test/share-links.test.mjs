@@ -130,7 +130,7 @@ test('preserve-host keeps the original host when an app needs it', async () => {
 test('a password share asks first, remembers, and keeps its cookie to itself', async () => {
   const first = await request('locked.links.test', '/inside', { headers: { accept: 'text/html' } });
   assert.equal(first.status, 401);
-  assert.match(first.text, /This link has a password/);
+  assert.match(first.text, /Enter the link password/);
   assert.match(first.text, /name="next" value="\/inside"/);
   const script = await request('locked.links.test', '/api', { headers: { accept: 'application/json' } });
   assert.equal(script.status, 401);
@@ -138,7 +138,7 @@ test('a password share asks first, remembers, and keeps its cookie to itself', a
 
   const wrong = await request('locked.links.test', '/.helm-share/unlock', { method: 'POST', body: 'password=nope&next=%2Finside' });
   assert.equal(wrong.status, 401);
-  assert.match(wrong.text, /not the password/);
+  assert.match(wrong.text, /The password is incorrect/);
 
   const right = await request('locked.links.test', '/.helm-share/unlock', { method: 'POST', body: 'password=open+sesame&next=%2Finside' });
   assert.equal(right.status, 303);

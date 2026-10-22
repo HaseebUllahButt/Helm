@@ -7,57 +7,66 @@
 
 const DETAILS = {
   exec: `
-  For pipelines: helm exec <machine> --cwd <path> -- sh -lc '<script>'.
-  If it says the command may have started, never rerun it: read it with
-  helm exec-status <machine> <id> --wait, or stop it with helm exec-cancel.`,
+  Run pipelines with: helm exec <machine> --cwd <path> -- sh -lc '<script>'.
+  Do not rerun a command if Helm cannot confirm that it started.
+  Read it with helm exec-status <machine> <id> --wait.
+  Stop it with helm exec-cancel.`,
 
   copy: `
-  The default target is the same path there; ~ is that machine's home.`,
+  The default destination uses the same path on the other machine.
+  ~ means that machine's home folder.`,
 
   delegate: `
-  Starts a helper attached to this chat: it shows as a card the owner can
-  open, message and stop.
-    <account>        same = this chat's account. Others: helm agents (names
-                     differ per machine; on another machine use helm spawn)
-    --model <id>     a model ID, or cheap for the account's small model
-    --wait --json    block, then print the result as JSON
-    --cwd <folder>   run in another folder
-    --worktree       its own checkout of this repo on a new helm/ branch;
-                     merge the branch back yourself, then remove both
-    --mode --effort --timeout <ms>   as the account supports
-  Finished helpers release their runtime after 30 seconds idle and resume the
-  same conversation on a follow-up (Claude keeps its context for an hour).
-  Read a helper later with helm delegate-result <id>; remove one with
-  helm delete <id>.`,
+  Start a helper for this chat.
+  The owner sees a card to open, message or stop the helper.
+    <account>        Use same for this chat's account.
+                     Run helm agents to list accounts on this machine.
+                     Use helm spawn for another machine.
+    --model <id>     Pick a model ID, or cheap for the account's small model.
+    --wait --json    Wait for the result, then print it as JSON.
+    --cwd <folder>   Run in another folder.
+    --worktree       Use a separate project copy on a new helm/ branch.
+                     Merge the branch yourself, then remove the branch and copy.
+    --mode --effort --timeout <ms>   Use options that the account supports.
+  Helm closes helper software after 30 seconds without work.
+  A follow-up message resumes the same chat.
+  Claude keeps its context for an hour.
+  Read a helper with helm delegate-result <id>.
+  Remove a helper with helm delete <id>.`,
 
   spawn: `
-  <account> names differ per machine: helm exec <machine> -- helm agents.`,
+  Account names (<account>) differ between machines.
+  Run helm exec <machine> -- helm agents to list them.`,
 
   say: `
-  Messages wait for the receiver's next turn; they never interrupt work.
-  Inside a chat, the message names you as the sender.`,
+  Messages wait for the receiver's next turn.
+  Messages do not interrupt work.
+  In a chat, the message shows you as the sender.`,
 
   share: `
-  These links are called spins. Use --keep only when the owner asks for a
-  link that stays. helm forward <machine> <port> opens another machine's
-  shared port on this one's localhost.`,
+  Spins are public links.
+  Use --keep only when the owner asks for a link that stays open.
+  Run helm forward <machine> <port> to open another machine's shared port on this machine's localhost.`,
 
   spin: `
-  An alias for helm share. See helm share --help for link options.`,
+  This command runs helm share.
+  Run helm share --help for link options.`,
 
   canvas: `
-  Opens the existing Canvas column beside the chat on wide screens. On
-  phones it opens a full-screen canvas with a Close button.
-  Markdown, text and code files open from the chat's Git project. Relative
-  paths use your current folder, or the target chat's folder with --session.
-  The canvas follows file edits and lets the owner edit and save safely.
-  HTML and pictures are saved snapshots, like helm render. Run the command
-  again after changing them to show the new version.
-  An http/https spin URL shows a live website. Use the public spin address:
-  localhost means the viewer's machine. Sites that block frames or require
-  a separate login can use Open in new tab.
-  Supports --title, --height, --session and --render-id like helm render.
-  See helm render --help for snapshot limits and security.`,
+  Open Canvas beside the chat on wide screens.
+  On phones, Canvas fills the screen and has a Close button.
+  Open Markdown, text and code files from the chat's Git project.
+  Relative paths start from your current folder.
+  With --session, paths start from the selected chat's folder.
+  Canvas shows file changes and lets the owner edit and save files.
+  HTML pages and pictures show a saved copy, like helm render.
+  Run the command again after edits to show the new copy.
+  Use an http/https Spin URL to show a live website.
+  Use the public Spin address.
+  localhost means the viewer's machine.
+  Use Open in new tab if the site blocks frames or needs a separate login.
+  Use --title, --height, --session and --render-id as with helm render.
+  Run helm render --help for saved page limits and access rules.`,
 
   render: `
   A picture file (png, jpg, gif, webp, avif, svg) is shown as it is.
@@ -71,13 +80,16 @@ const DETAILS = {
   Use helm canvas instead to open the visual beside the conversation.`,
 
   browser: `
-  Tabs are Chromium on this machine (localhost reaches your dev servers),
-  shared with the owner: on a machine with a screen they are a real window
-  beside Helm that never takes the owner's keyboard; your steps wait while
-  the owner uses it. --engine bowser uses Bowser Computer Use when installed.
-    look <tab>        page text and numbered elements, no screenshot
-    act <tab> <JSON>  a batch: '{"actions":[{"click":"the Save button"},{"check":"Saved"}]}'
-                      checks use literal page text or targets, not questions.
+  Tabs use Chromium on this machine.
+  localhost reaches your development servers.
+  The owner shares these tabs with you.
+  On machines with a screen, tabs open in a window beside Helm.
+  The window does not take keyboard control.
+  Your actions wait while the owner uses the window.
+  Use --engine bowser for Bowser Computer Use, if installed.
+    look <tab>        Read page text and numbered elements without a screenshot.
+    act <tab> <JSON>  Run actions: '{"actions":[{"click":"the Save button"},{"check":"Saved"}]}'
+                      Use exact page text or targets for checks.
                       Kinds: click, type, goto, check, key, scroll, hover, select,
                       upload/files, evaluate/script, wait/selector, resize,
                       dialog, console, network, back, forward, reload; or
@@ -90,9 +102,9 @@ const DETAILS = {
     profiles / logins copy the owner's browser logins into these tabs`,
 
   delete: `
-  Deletes a chat Helm started: its card, its row and the CLI's copy Helm would
-  list again. A chat Helm only watched stops being watched; its transcript
-  stays. It never deletes the chat you run in.`,
+  Delete a chat that Helm started, including its card, row and command line copy.
+  Helm stops watching chats that it did not start and keeps their saved messages.
+  This command cannot delete the chat you run it in.`,
 };
 
 /** Usage blocks: a `  helm <word>` line and the deeper-indented lines under it. */

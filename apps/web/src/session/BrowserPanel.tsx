@@ -91,11 +91,11 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
         {tabs.map(t => <li key={t.id} className={`bp-item${t.id === chosen ? ' selected' : ''}`}>
           <button className="bp-item-main" aria-current={t.id === chosen} onClick={() => { setChosen(t.id); setPageText(''); if (canWindow && open) void show(t.id); }} title={t.url}>
             <span className="bp-item-title">{t.title || host(t.url) || 'New tab'}</span>
-            <span className="bp-item-host">{t.loading ? 'Loading…' : t.asleep ? `${host(t.url) || 'New tab'} · asleep` : host(t.url)}</span>
+            <span className="bp-item-host">{t.loading ? 'Loading…' : t.asleep ? `${host(t.url) || 'New tab'} · paused` : host(t.url)}</span>
           </button>
           <button className="bp-icon" aria-label={`Close ${t.title || host(t.url) || 'tab'}`} title="Close tab" onClick={() => void closeTab(t.id)}><Icon name="close" size={12} /></button>
         </li>)}
-      </ul> : <p className="note bp-empty">{canWindow === false ? `No tabs yet. Agents on ${env.name} browse here, out of sight.` : `No tabs yet. The window opens on ${env.name}'s screen.`}</p>}
+      </ul> : <p className="note bp-empty">{canWindow === false ? `No tabs are open. Agents on ${env.name} use this hidden browser.` : `No tabs are open. The browser window opens on ${env.name}.`}</p>}
       {tab?.problem && !tab.loading && <div className="bp-problem" role="alert"><p>{tab.problem.message}</p><button onClick={() => void act({ kind: 'navigate', url: tab.problem!.url })}>Try again</button></div>}
       {tab?.dialog && <div className="bp-dialog" role="alertdialog" aria-label="Page message"><p>{tab.dialog.message}</p><span><button onClick={() => void act({ kind: 'dialog', accept: false })}>Dismiss</button><button className="primary" onClick={() => void act({ kind: 'dialog', accept: true })}>OK</button></span></div>}
       {!!tab?.downloads.length && <div className="bp-row">{tab.downloads.map(d => <button key={d.id} disabled={d.status !== 'ready'} onClick={() => void download(d.id)}>{d.name} · {d.status === 'ready' ? 'Save' : d.status}</button>)}</div>}

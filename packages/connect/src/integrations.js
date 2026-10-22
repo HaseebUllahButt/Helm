@@ -27,26 +27,26 @@ export const removeSkill = (p, profiles) => serialize(() => removeSkillUnlocked(
 // Endpoints checked 2026-10-11 against the publishers, not copied from directories.
 const remote = (name, title, description, url, source, setup = '') => ({ name, title, description, transport: 'http', url, source, needsSignIn: true, setup });
 const googleSource = 'https://developers.google.com/workspace/guides/configure-mcp-servers';
-const googleSetup = 'Google Developer Preview membership, an enabled Cloud project and your own OAuth client are required. Follow the setup guide before connecting.';
+const googleSetup = 'Join Google Developer Preview. Enable a Cloud project. Create your own OAuth sign-in client. Follow the setup guide before connecting.';
 export const CONNECTORS = [
   // https://developers.google.com/workspace/guides/configure-mcp-servers
   remote('google-drive', 'Google Drive', 'Files and documents · Google Developer Preview', 'https://drivemcp.googleapis.com/mcp/v1', googleSource, googleSetup),
   remote('google-calendar', 'Google Calendar', 'Events and availability · Google Developer Preview', 'https://calendarmcp.googleapis.com/mcp/v1', googleSource, googleSetup),
   remote('gmail', 'Gmail', 'Email and drafts · Google Developer Preview', 'https://gmailmcp.googleapis.com/mcp/v1', googleSource, googleSetup),
   // https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md
-  remote('github', 'GitHub', 'Repositories, issues and pull requests', 'https://api.githubcopilot.com/mcp/', 'https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md'),
+  remote('github', 'GitHub', 'Git projects, issues and pull requests', 'https://api.githubcopilot.com/mcp/', 'https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md'),
   // https://developers.notion.com/guides/mcp/get-started-with-mcp
-  remote('notion', 'Notion', 'Pages and workspace search', 'https://mcp.notion.com/mcp', 'https://developers.notion.com/guides/mcp/get-started-with-mcp'),
+  remote('notion', 'Notion', 'Pages and search', 'https://mcp.notion.com/mcp', 'https://developers.notion.com/guides/mcp/get-started-with-mcp'),
   // https://linear.app/docs/mcp
   remote('linear', 'Linear', 'Issues and projects', 'https://mcp.linear.app/mcp', 'https://linear.app/docs/mcp'),
   // https://docs.slack.dev/ai/slack-mcp-server/ (no dynamic client registration)
-  remote('slack', 'Slack', 'Messages and channels', 'https://mcp.slack.com/mcp', 'https://docs.slack.dev/ai/slack-mcp-server/', 'Requires a registered Slack OAuth app; follow the setup guide.'),
+  remote('slack', 'Slack', 'Messages and channels', 'https://mcp.slack.com/mcp', 'https://docs.slack.dev/ai/slack-mcp-server/', 'Register a Slack OAuth sign-in app. Follow the setup guide.'),
   // https://mcp.sentry.dev/
   remote('sentry', 'Sentry', 'Errors and debugging', 'https://mcp.sentry.dev/mcp', 'https://mcp.sentry.dev/'),
   // https://github.com/upstash/context7
-  { ...remote('context7', 'Context7', 'Current library documentation', 'https://mcp.context7.com/mcp', 'https://github.com/upstash/context7', 'An API key is recommended for higher limits.'), needsSignIn: false },
+  { ...remote('context7', 'Context7', 'Current library documentation', 'https://mcp.context7.com/mcp', 'https://github.com/upstash/context7', 'Use an API key for higher limits.'), needsSignIn: false },
   // https://github.com/microsoft/playwright-mcp
-  { name: 'playwright', title: 'Playwright', description: 'Browser automation on this machine', transport: 'stdio', command: 'npx', args: ['-y', '@playwright/mcp@latest'], needsSignIn: false, source: 'https://github.com/microsoft/playwright-mcp' },
+  { name: 'playwright', title: 'Playwright', description: 'Control a browser on this machine', transport: 'stdio', command: 'npx', args: ['-y', '@playwright/mcp@latest'], needsSignIn: false, source: 'https://github.com/microsoft/playwright-mcp' },
 ];
 
 export function maskTarget(value) {

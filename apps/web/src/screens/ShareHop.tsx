@@ -57,11 +57,11 @@ export function ShareHop({ client, target, onDone }: { client: Client; target: S
             openPrivateLink(pass);
             return;
           } catch (err: any) {
-            failures.push(`${base ? new URL(base).host : 'this device\u2019s hub'}: ${err?.message || 'no answer'}`);
+            failures.push(`${base ? new URL(base).host : 'this device’s Helm home'}: ${err?.message || 'no answer'}`);
           }
         }
       }
-      if (!cancelled) setError([...new Set(failures)].join('; ') || 'could not open it');
+      if (!cancelled) setError([...new Set(failures)].join('; ') || 'Helm cannot open the link.');
     })();
     return () => { cancelled = true; };
   }, [client, target]);
@@ -71,9 +71,9 @@ export function ShareHop({ client, target, onDone }: { client: Client; target: S
         <div className="auth-brand">
           <img src="/icon.svg" alt="" />
           <h1>helm</h1>
-          <p>{error ? `Could not open ${target.name}: ${error}` : `opening ${target.name}…`}</p>
+          <p>{error ? `Helm cannot open ${target.name}: ${error}` : `Opening ${target.name}…`}</p>
         </div>
-        {error && <button className="primary" onClick={onDone}>go to Helm</button>}
+        {error && <button className="primary" onClick={onDone}>Open Helm</button>}
       </div>
     </div>
   );

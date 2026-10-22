@@ -52,20 +52,20 @@ export function QueueEdit({ turn, busy, onCancel, onSave }: {
   };
 
   return (
-    <Sheet onClose={onCancel} label="Edit queued message">
+    <Sheet onClose={onCancel} label="Edit waiting message">
       <form onSubmit={submit}>
-        <div className="modal-title">Edit queued message</div>
+        <div className="modal-title">Edit waiting message</div>
         {images.length > 0 && (
           <div className="attach-previews">
             {images.map((a, i) => (
               <span key={i} className="attach-preview" title={`[Image #${i + 1}] ${a.filename}`}>
                 <img src={`data:${a.mime};base64,${a.data}`} alt={`Image #${i + 1}`} />
-                <button type="button" onClick={() => remove(i)} aria-label={`remove Image #${i + 1}`}><Icon name="close" size={12} /></button>
+                <button type="button" onClick={() => remove(i)} aria-label={`Remove image #${i + 1}`}><Icon name="close" size={12} /></button>
               </span>
             ))}
           </div>
         )}
-        <textarea ref={box} className="modal-input" aria-label="Edit queued message" value={text} rows={5} maxLength={32000}
+        <textarea ref={box} className="modal-input" aria-label="Edit waiting message" value={text} rows={5} maxLength={32000}
           onChange={(event) => setText(event.target.value)}
           onPaste={(event) => {
             const files = clipboardImages(event.clipboardData);

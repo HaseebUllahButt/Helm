@@ -20,8 +20,8 @@ export function DictationKey({ client, envs, onSaved }: {
   const online = envs.filter((e) => e.online);
   const withKey = envs.filter((e) => e.info.voice);
   const status = withKey.length
-    ? `Works through ${withKey.map((e) => e.name).join(', ')}`
-    : 'No key yet, so the microphone is hidden';
+    ? `Dictation uses ${withKey.map((e) => e.name).join(', ')}.`
+    : 'Add a key to show the microphone.';
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
@@ -36,25 +36,25 @@ export function DictationKey({ client, envs, onSaved }: {
           await client.rpc(env.id, 'voice.key', { key: key.trim() }, 30_000);
           saved.push(env.id);
         } catch (err: any) {
-          const message = err?.message || 'could not save it';
+          const message = err?.message || 'Helm cannot save the key.';
           if (!saved.length && /accept|look like/.test(message)) throw new Error(message);
           failed.push(`${env.name} (${/unknown method|not supported/i.test(message) ? 'needs a Helm update' : message})`);
         }
       }
-      if (!saved.length) throw new Error(failed.length ? `Could not save it: ${failed.join(', ')}` : 'No machine is on to keep it');
+      if (!saved.length) throw new Error(failed.length ? `Helm cannot save the key: ${failed.join(', ')}` : 'No machine is online to save the key.');
       // This device called Groq with the old key; the next dictation asks for the new one.
       keepVoice(null);
       onSaved(saved);
       const names = online.filter((env) => saved.includes(env.id)).map((env) => env.name);
       const off = envs.filter((env) => !env.online).map((env) => env.name);
       setResult([
-        `Saved on ${names.join(', ')}.`,
-        failed.length ? `Not on ${failed.join(', ')}.` : '',
-        off.length ? `${off.join(', ')} ${off.length === 1 ? 'is' : 'are'} off; ${off.length === 1 ? 'it' : 'they'} will dictate through the others.` : '',
+        `Helm saved the key on ${names.join(', ')}.`,
+        failed.length ? `Helm did not save the key on ${failed.join(', ')}.` : '',
+        off.length ? `${off.join(', ')} ${off.length === 1 ? 'is' : 'are'} offline. Dictation will use the other machines.` : '',
       ].filter(Boolean).join(' '));
       setKey(''); setAdding(false);
     } catch (err: any) {
-      setError(err?.message || 'could not save the key');
+      setError(err?.message || 'Helm cannot save the key.');
     } finally { setBusy(false); }
   };
 
@@ -83,12 +83,12 @@ export function DictationKey({ client, envs, onSaved }: {
                    onChange={(e) => setKey(e.target.value)} />
           </label>
           <p className="note" style={{ margin: 0 }}>
-            Get one at console.groq.com/keys. It is kept on your machines, not on this device.
+            Get a key at console.groq.com/keys. Your machines save the key. This device does not save it.
           </p>
           <div className="link-actions">
             <button type="button" className="ghost" onClick={() => { setAdding(false); setKey(''); setError(''); }}>Cancel</button>
             <button className="primary" disabled={busy || !key.trim() || !online.length}>
-              {busy ? 'Checking…' : <><Icon name="check" size={14} /> Save</>}
+              {busy ? 'Helm is checking the key.' : <><Icon name="check" size={14} /> Save</>}
             </button>
           </div>
         </form>

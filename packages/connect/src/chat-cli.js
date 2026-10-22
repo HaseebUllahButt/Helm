@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { M, E } from '@helm/protocol';
 import { parseAgentArgs, chooseAgent } from './delegation.js';
 
-const HELP = '\n/allow [request] · /always [request] · /deny [request]\n/answer [request] <question number> <choice number or text>\n/stop interrupts · /detach leaves the agent running · /end deletes the Helm thread\nOther text and provider slash commands go to the agent.\n';
+const HELP = '\n/allow [request] · /always [request] · /deny [request]\n/answer [request] <question number> <choice number or text>\n/stop: Stop the current step. · /detach: Leave the agent running. · /end: Delete the Helm chat.\nOther text and commands that start with / go to the agent.\n';
 // Provider text is data, not terminal escape sequences.
 const safe = (value) => String(value ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
 
@@ -104,7 +104,7 @@ export class ManagedChat {
       if (request.detail) this.write(`${safe(typeof request.detail === 'string' ? request.detail : JSON.stringify(request.detail, null, 2)).slice(0, 16000)}\n`);
       if (request.kind === 'question') {
         for (const [index, question] of (request.questions ?? []).entries()) {
-          this.write(`${index + 1}. ${safe(question.question)}${question.multiSelect ? ' (multiple choices, separated by commas)' : ''}\n`);
+          this.write(`${index + 1}. ${safe(question.question)}${question.multiSelect ? ' (Separate choices with commas.)' : ''}\n`);
           for (const [choice, option] of (question.options ?? []).entries()) this.write(`   ${choice + 1}) ${safe(option.label)}${option.description ? ` — ${safe(option.description)}` : ''}\n`);
         }
         this.write(`/answer ${safe(request.requestId)} <question number> <choice number or text>\n`);
@@ -203,7 +203,7 @@ export async function runChat(args, { connection, input = process.stdin, output 
   try {
     const opened = await openChat(args, { rpc: connection.rpc.bind(connection) });
     session = opened.session;
-    output.write(`\nHelm ${session.id} · ${safe(session.engine)} · ${session.quick ? 'quick chat' : safe(session.cwd)}\nSame conversation and approvals in the Helm app.\nReconnect: helm chat --attach ${session.id}\n${HELP}`);
+    output.write(`\nHelm ${session.id} · ${safe(session.engine)} · ${session.quick ? 'quick chat' : safe(session.cwd)}\nThe Helm app shows the same chat and approval requests.\nReconnect: helm chat --attach ${session.id}\n${HELP}`);
     chat = new ManagedChat(connection, session.id, { write: (text) => output.write(text), detach: () => finish() });
     await connection.rpc(M.SESSION_WATCH, { id: session.id, watchId });
     await chat.sync();

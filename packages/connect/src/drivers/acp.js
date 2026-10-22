@@ -125,9 +125,11 @@ export class AcpDriver extends Driver {
    * Whether this agent said it can take images in a prompt. ACP agents
    * differ - opencode's answer follows the provider behind the model, Devin
    * answers for itself - so it is read from what the agent advertised at
-   * `initialize` rather than guessed from the engine's name.
+   * `initialize` rather than guessed from the engine's name. Null until it
+   * has answered: a "no" sent while the agent is still starting stuck in
+   * the composer and refused images the agent would have taken.
    */
-  #imagePrompts = false;
+  #imagePrompts = null;
 
   constructor(spec, opts) {
     super({ engine: spec.engine, ...opts });
@@ -324,7 +326,7 @@ export class AcpDriver extends Driver {
     if (!methodId) return false;
     this.authPending = true;
     this.push('error', {
-      message: `${this.spec.label ?? this.engine} needs a sign-in before it can start a session.`,
+      message: `Sign in to ${this.spec.label ?? this.engine} before starting a chat.`,
       kind: 'auth',
     });
     // A message waiting on this start is waiting on the owner now, not on
@@ -782,7 +784,7 @@ export class AcpDriver extends Driver {
     return !!this.spec.localCommand?.(this, text);
   }
 
-  /** What `initialize` advertised; false until the agent has answered. */
+  /** What `initialize` advertised; null until the agent has answered. */
   acceptsImages() { return this.#imagePrompts; }
 
   /**

@@ -101,13 +101,13 @@ before(async () => {
 
 test('a workflow rerun discards cached jobs from the previous attempt', async () => {
   await page.evaluate(()=>{window.monitorAttempt=1;window.showGit()});
-  await page.getByRole('tab',{name:'CI / CD',exact:true}).click();
+  await page.getByRole('tab',{name:'Build checks',exact:true}).click();
   const workflow = page.getByRole('button',{name:/Build and deploy/});
   await workflow.click();
   await page.getByText('Failed step: Compile application',{exact:true}).waitFor();
   const before = await page.evaluate(()=>window.calls.filter(c=>c.method==='git.jobs').length);
   await page.evaluate(()=>{window.monitorAttempt=2});
-  await page.getByRole('button',{name:'Refresh CI / CD',exact:true}).click();
+  await page.getByRole('button',{name:'Refresh build checks',exact:true}).click();
   await page.getByText('attempt 2',{exact:true}).waitFor();
   assert.equal(await workflow.getAttribute('aria-expanded'),'false');
   await workflow.click();
@@ -177,7 +177,7 @@ test('Git tabs remain keyboard accessible and preserve the file diff view', asyn
   await page.keyboard.press('Home');
   assert.equal(await page.getByRole('tab',{name:'Graph',exact:true}).getAttribute('aria-selected'),'true');
   await page.keyboard.press('End');
-  assert.equal(await page.getByRole('tab',{name:'CI / CD',exact:true}).getAttribute('aria-selected'),'true');
+  assert.equal(await page.getByRole('tab',{name:'Build checks',exact:true}).getAttribute('aria-selected'),'true');
   // Files sits between Changes and CI / CD, so one step back from CI / CD lands there.
   await page.keyboard.press('ArrowLeft');
   assert.equal(await page.getByRole('tab',{name:'Files',exact:true}).getAttribute('aria-selected'),'true');
@@ -224,7 +224,7 @@ test('a merge links to its parents, folded refs show in full, and refresh reload
 test('files can be marked viewed, and a failed diff can be retried', async () => {
   await page.evaluate(()=>{localStorage.clear();window.showGit()});
   await page.getByText('0/2 viewed').waitFor();
-  const mark = page.getByRole('button',{name:'mark App.tsx as viewed'});
+  const mark = page.getByRole('button',{name:'Mark App.tsx as read'});
   await mark.click();
   assert.equal(await mark.getAttribute('aria-pressed'),'true');
   await page.getByText('1/2 viewed').waitFor();
@@ -236,7 +236,7 @@ test('files can be marked viewed, and a failed diff can be retried', async () =>
   await page.getByText('0/2 viewed').waitFor();
   await page.evaluate(()=>{window.diffFails = 1});
   await page.locator('.filemain').nth(1).click();
-  await page.getByText('Could not read this diff.').waitFor();
+  await page.getByText('Helm cannot read these changes.').waitFor();
   await page.getByRole('button',{name:'Try again'}).click();
   await addedLine(page,'after').waitFor();
 });
@@ -245,13 +245,13 @@ test('a clean folder and an unreachable history each say what is going on', asyn
   await page.evaluate(()=>{window.graphFails = 1;window.showGit('clean')});
   await page.getByRole('tab',{name:'Graph',exact:true,selected:true}).waitFor();
   assert.equal(await page.getByRole('tab',{name:'Changes',exact:true}).count(),1,'no zero count on a clean folder');
-  await page.getByText('Could not load Git history').waitFor();
+  await page.getByText('Helm cannot load Git history.').waitFor();
   await page.getByText('git is busy').waitFor();
   await page.getByRole('button',{name:'Try again'}).click();
   await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();
   await page.getByRole('tab',{name:'Changes',exact:true}).click();
-  await page.getByText('No changes', { exact: true }).waitFor();
+  await page.getByText('No files changed.', { exact: true }).waitFor();
   await page.getByText('merge · Merge the graph improvements').waitFor();
   await shot('git-desktop-clean.png');
 });
@@ -322,7 +322,7 @@ test('on a phone the Git screen keeps to the width and its controls stay easy to
 test('CI / CD shows PR readiness, failing steps, deployment boundaries, refresh and persistent-watch controls', async () => {
   await page.setViewportSize({width:1280,height:900});
   await page.evaluate(()=>window.showGit());
-  await page.getByRole('tab',{name:'CI / CD',exact:true}).click();
+  await page.getByRole('tab',{name:'Build checks',exact:true}).click();
   await page.getByText('Ready to merge',{exact:true}).waitFor();
   await page.getByText('Approved',{exact:true}).waitFor();
   await page.getByText('Unit tests',{exact:true}).waitFor();
@@ -330,15 +330,15 @@ test('CI / CD shows PR readiness, failing steps, deployment boundaries, refresh 
   await page.getByText('Failed step: Compile application',{exact:true}).waitFor();
   assert.equal(await page.getByRole('link',{name:'Build · logs'}).getAttribute('href'),'https://example.test/job/7');
   await openSettings(page);
-  const toggle = page.getByRole('switch',{name:'Notify this thread about CI / CD'});
+  const toggle = page.getByRole('switch',{name:'Notify this chat about build checks'});
   await toggle.click(); await page.waitForFunction(()=>window.pipelineWatching === true);
   assert.equal(await toggle.getAttribute('aria-checked'),'true');
   const before = await page.evaluate(()=>window.calls.filter(c=>c.method==='git.monitor').length);
-  await page.getByRole('button',{name:'Refresh CI / CD',exact:true}).click();
+  await page.getByRole('button',{name:'Refresh build checks',exact:true}).click();
   await page.waitForFunction(n=>window.calls.filter(c=>c.method==='git.monitor').length>n,before);
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='git.monitor').at(-1).params.force),true);
   await page.evaluate(()=>{window.monitorFails=1});
-  await page.getByRole('button',{name:'Refresh CI / CD',exact:true}).click();
+  await page.getByRole('button',{name:'Refresh build checks',exact:true}).click();
   await page.getByText('GitHub is unreachable',{exact:false}).waitFor();
   assert.equal(await page.getByText('Unit tests',{exact:true}).count(),1,'a failed refresh preserves the previous display');
   await page.getByRole('button',{name:'Try again',exact:true}).click();
@@ -376,6 +376,6 @@ for (const width of [320, 390, 768]) test(`the actual Git dialog fills a ${width
   await shot(`git-dialog-${width}.png`);
   await dialog.getByRole('button',{name:'Refresh Git',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.refreshed),true);
-  await dialog.getByRole('button',{name:'Back to the conversation'}).click();
+  await dialog.getByRole('button',{name:'Back to chat'}).click();
   await dialog.waitFor({state:'detached'});
 });

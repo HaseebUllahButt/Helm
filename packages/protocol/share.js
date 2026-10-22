@@ -11,7 +11,7 @@ import { proofOf, checkProof } from './identity.js';
 
 /** Names become the first label of a hostname: short, lowercase, no dots. */
 export const SHARE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
-export const NAME_RULE = '1-40 letters, digits or dashes (not at either end)';
+export const NAME_RULE = '1–40 letters, numbers or dashes. Start and end with a letter or number';
 /** Labels that would read as helm itself, or as something the host owns. */
 const RESERVED = new Set(['www', 'api', 'helm', 'hub', 'admin', 'mail', 'ws']);
 
