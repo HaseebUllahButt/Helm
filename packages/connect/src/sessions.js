@@ -1856,11 +1856,13 @@ export class Sessions extends EventEmitter {
   /**
    * Whether a *running* agent can be sent images, or null when no driver is
    * up to ask. ACP agents only answer this at `initialize`, so a session
-   * that has not started yet leaves the app on the model catalogue's guess.
+   * that has not started yet, or is still starting, leaves the app on the
+   * model catalogue's guess.
    */
   acceptsImages(id) {
     const d = this.#drivers.get(id);
-    return d ? driverTakesImages(d) : null;
+    if (!d || d.acceptsImages?.() === null) return null;
+    return driverTakesImages(d);
   }
 
   /**
