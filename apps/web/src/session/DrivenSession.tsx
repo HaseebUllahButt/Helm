@@ -134,7 +134,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [details, setDetails] = useState<DetailsTab | null>(reviewChildren ? 'agents' : null);
   const browser = useBrowserDock(client, env, session);
   // The canvas and the browser panel share the column beside the chat: one at a time.
-  const canvas = useCanvas(env, session, !session.brain);
+  const canvas = useCanvas(client, env, session, !session.brain);
   useExclusiveDocks(canvas, browser);
   const canvasVisuals = useMemo(() => session.brain ? undefined : { shown: canvas.open ? canvas.visual?.ref : undefined, show: canvas.showVisual },
     [session.brain, canvas.open, canvas.visual?.ref, canvas.showVisual]);

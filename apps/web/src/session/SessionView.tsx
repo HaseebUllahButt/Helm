@@ -73,7 +73,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const agentCount = team.length + (session.nativeCards?.length ?? 0);
   const browser = useBrowserDock(client, env, session, !isShell);
   // The canvas and the browser panel share the column beside the chat: one at a time.
-  const canvas = useCanvas(env, session, !isShell);
+  const canvas = useCanvas(client, env, session, !isShell);
   useExclusiveDocks(canvas, browser);
   const canvasVisuals = useMemo(() => isShell ? undefined : { shown: canvas.open ? canvas.visual?.ref : undefined, show: canvas.showVisual },
     [isShell, canvas.open, canvas.visual?.ref, canvas.showVisual]);

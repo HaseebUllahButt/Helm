@@ -1592,6 +1592,19 @@ export class Sessions extends EventEmitter {
     return { canvas: s.canvas };
   }
 
+  /**
+   * The owner closed the canvas the agent opened. The chat keeps that, so no
+   * device (another browser, a phone) opens the same ask again.
+   */
+  closeCanvas(id, requestId) {
+    const s = this.get(id);
+    if (!s.canvas || s.canvas.requestId !== requestId || s.canvas.closed) return { canvas: s.canvas ?? null };
+    s.canvas = { ...s.canvas, closed: true };
+    this.#save();
+    this.emit('session', s);
+    return { canvas: s.canvas };
+  }
+
   /** Save a page independently of provider lifetime or background tasks. */
   renderVisual(id, params) {
     const s = this.get(id);

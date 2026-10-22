@@ -97,7 +97,7 @@ export interface Session {
   /** The git branch the folder is on, read by the machine; null outside a repo. */
   branch?: string | null;
   /** The agent's latest ask to show something in the canvas: a project file or a page. */
-  canvas?: { requestId: string; path?: string; visual?: import('./session/types').Visual };
+  canvas?: { requestId: string; path?: string; visual?: import('./session/types').Visual; closed?: boolean };
   engine: string;
   profileId: string;
   status: Status;

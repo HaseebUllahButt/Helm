@@ -194,4 +194,11 @@ test('agents open project files beside chat with guarded paths, saved selection 
   const changed = await sessions.openCanvas('file1', { path: join(repo, 'docs', 'notes.md'), requestId: params(10).renderId });
   assert.equal(changed.canvas.path, 'docs/notes.md');
   assert.notEqual(changed.canvas.requestId, result.canvas.requestId);
+  // Closing on one device is kept on the chat, so no other device reopens it.
+  assert.equal(sessions.closeCanvas('file1', result.canvas.requestId).canvas.closed, undefined, 'an older ask changes nothing');
+  assert.equal(sessions.closeCanvas('file1', changed.canvas.requestId).canvas.closed, true);
+  sessions.stop(); sessions = make();
+  assert.equal(sessions.get('file1').canvas.closed, true);
+  const again = await sessions.openCanvas('file1', { path: 'notes.md', requestId: params(11).renderId });
+  assert.equal(again.canvas.closed, undefined, 'a new ask opens again');
 });

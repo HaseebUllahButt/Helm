@@ -2058,6 +2058,7 @@ export class Daemon {
 
       // Headless agent sessions.
       case M.SESSION_CANVAS: return this.sessions.openCanvas(p.id, p);
+      case M.SESSION_CANVAS_CLOSED: return this.sessions.closeCanvas(p.id, p.requestId);
       case M.SESSION_RENDER: return this.sessions.renderVisual(p.id, p);
       case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref);
       case M.SESSION_EVENTS:

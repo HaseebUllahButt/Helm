@@ -59,7 +59,8 @@ export const openInCanvas = (path: string) => window.dispatchEvent(new CustomEve
 /**
  * What the canvas shows: one file or one page, never both. `seen` is the
  * agent's last canvas request already acted on, so a canvas the owner closed
- * stays closed until the agent asks again.
+ * stays closed until the agent asks again. Closing also tells the chat, so
+ * other devices and browsers do not open that ask either.
  */
 type CanvasState = { open: boolean; path: string | null; visual: Visual | null; seen?: string };
 const isVisual = (v: any): v is Visual => !!v && typeof v.ref === 'string' && typeof v.title === 'string';
@@ -71,20 +72,30 @@ function loadCanvas(key: string): CanvasState {
 }
 
 /** Whether the canvas is open and on what, remembered per chat on this device. */
-export function useCanvas(env: Environment, session: Session, enabled = true) {
+export function useCanvas(client: Client, env: Environment, session: Session, enabled = true) {
   const key = openKey(env.id, session.id);
   const [held, setStateRaw] = useState(() => ({ key, ...loadCanvas(key) }));
   // Another chat in the same screen starts from its own canvas, never this one's.
   let state: CanvasState = held;
   if (held.key !== key) { state = loadCanvas(key); setStateRaw({ key, ...state }); }
   const now = useRef(state); now.current = state;
-  const set = useCallback((next: CanvasState) => { now.current = next; setStateRaw({ key, ...next }); writeLocal(key, JSON.stringify(next)); }, [key]);
-  // The agent asked to show something: it opens, closed or not, once per ask.
   const request = enabled ? session.canvas : undefined;
+  const ask = useRef(request); ask.current = request;
+  const set = useCallback((next: CanvasState) => {
+    const was = now.current;
+    now.current = next; setStateRaw({ key, ...next }); writeLocal(key, JSON.stringify(next));
+    const r = ask.current;
+    if (was.open && !next.open && r?.requestId && !r.closed) {
+      client.rpc(env.id, 'session.canvas-closed', { id: session.id, requestId: r.requestId }, 15_000).catch(() => {});
+    }
+  }, [key, client, env.id, session.id]);
+  // The agent asked to show something: it opens, closed or not, once per ask,
+  // unless the owner already closed that ask on another device.
   useEffect(() => {
     if (!request?.requestId || request.requestId === now.current.seen) return;
     const seen = request.requestId;
-    if (isVisual(request.visual)) set({ open: true, path: null, visual: request.visual, seen });
+    if (request.closed) set({ ...now.current, seen });
+    else if (isVisual(request.visual)) set({ open: true, path: null, visual: request.visual, seen });
     else if (typeof request.path === 'string' && request.path) set({ open: true, path: request.path, visual: null, seen });
     else set({ ...now.current, seen });
   }, [request?.requestId, set]); // eslint-disable-line react-hooks/exhaustive-deps

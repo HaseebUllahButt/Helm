@@ -30,7 +30,9 @@
 - **Reach:** the canvas button in a chat's header, or Ctrl/⌘ Shift D. A wide
   screen gets a third column (shares the browser panel's slot, one at a
   time); a phone gets a full-screen sheet. Open state and file are kept per
-  chat on the device. A file name in a turn's "changed files" opens it there.
+  chat on the device. An agent's `helm canvas` opens it once per ask; closing
+  it marks that ask closed on the chat (`session.canvas-closed`), so no other
+  device or browser opens it again. A file name in a turn's "changed files" opens it there.
 - **Rules:** Notes and docs come from the chat's own folder, Git or not, as
   agents name files from there (`git.files` walks a folder outside Git,
   skips node_modules and hidden folders, and lets any Git project inside
