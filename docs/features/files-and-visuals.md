@@ -31,22 +31,29 @@
   screen gets a third column (shares the browser panel's slot, one at a
   time); a phone gets a full-screen sheet. Open state and file are kept per
   chat on the device. A file name in a turn's "changed files" opens it there.
-- **Rules:** Notes and docs come from the chat's Git project, or from the
-  chat's own folder when it is in none (`git.files` then walks it, skips
-  node_modules, and lets any Git project inside list its own files). Its
+- **Rules:** Notes and docs come from the chat's own folder, Git or not, as
+  agents name files from there (`git.files` walks a folder outside Git,
+  skips node_modules and hidden folders, and lets any Git project inside
+  list its own files). Only a quick chat borrows the Git project it edited. Its
   first screen also lists the chat's pictures and pages, so Back from a
   page never ends on an error. Saves go through
   `git.write` with the hash the file was read at: a file the agent changed
   since is never overwritten silently; the owner picks "Use the new file" or
   "Save mine over it". Secrets and `.git/` are never written; a new file
   under a link that leads out of the repo is refused before any folder is
-  made. Unsaved edits live in memory while the app is open.
+  made. Unsaved edits live in memory while the app is open. Edit on a
+  Markdown file edits the page itself (Milkdown, loaded on first use); it
+  writes the file again on each change, in the file's own list, rule and
+  table style. Opening Edit alone never marks the file unsaved.
 - **Prove (driven 2026-10-21):** make a git repo in the copy's work folder,
   `$V rpc session.start '{"cwd":"<repo>","profileId":"fake"}'`, open it at
   `size 1600 900`, click "Canvas", open a `.md`, Edit, type, Ctrl+S; then
   append to the file from the shell (the page follows within 2 s) and again
   while editing (the clash card shows).
 - **Traps:** `wait` does not read the edit box; check it with `eval`.
+  `click "Edit"` can match another Edit button; click the canvas one with
+  `eval` (`.canvas-mode button`). Diff the saved file against the original:
+  only the typed words may differ.
 
 ## Voice
 - **Decision:** the device calls Groq itself. It asks a machine once for the

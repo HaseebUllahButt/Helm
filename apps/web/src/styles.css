@@ -3773,3 +3773,20 @@ a.files-chip { text-decoration: none; }
   font: 13.5px/1.65 var(--mono); tab-size: 2; outline: none; box-shadow: none;
 }
 .canvas-edit:focus, .canvas-edit:focus-visible { outline: none; box-shadow: none; border-color: var(--line); }
+/* The page editor's base rules (from prosemirror-view's own sheet). */
+.ProseMirror { position: relative; word-wrap: break-word; white-space: pre-wrap; white-space: break-spaces; font-variant-ligatures: none; font-feature-settings: "liga" 0; }
+.ProseMirror pre { white-space: pre-wrap; }
+.ProseMirror li { position: relative; }
+.ProseMirror-hideselection *::selection { background: transparent; }
+.ProseMirror-hideselection { caret-color: transparent; }
+.ProseMirror [draggable][contenteditable=false] { user-select: text; }
+.ProseMirror-selectednode { outline: 2px solid var(--primary); }
+li.ProseMirror-selectednode { outline: none; }
+img.ProseMirror-separator { display: inline !important; border: none !important; margin: 0 !important; }
+.ProseMirror .tableWrapper { overflow-x: auto; }
+.ProseMirror :is(td, th) { vertical-align: top; position: relative; }
+.ProseMirror .selectedCell { background: var(--select); }
+.canvas-page-edit .ProseMirror { min-height: 100%; outline: none; padding-bottom: 40px; cursor: text; }
+.canvas-page-edit .ProseMirror:has(> p:only-child > br:only-child)::before { content: 'Start writing…'; position: absolute; color: var(--mutedfg); pointer-events: none; }
+.canvas-page-edit .ProseMirror table { border-collapse: collapse; }
+.canvas-page-edit .ProseMirror :is(td, th) > p { margin: 0; }

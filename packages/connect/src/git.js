@@ -231,7 +231,7 @@ const gitFiles = (root) => exec('git', ['-C', root, 'ls-files', '-co', '--exclud
 
 /**
  * A folder's files. A folder outside Git is walked by hand, skipping
- * node_modules; a Git project found inside it lists its own files.
+ * node_modules and hidden folders; a Git project inside lists its own files.
  */
 async function listed(root, prefix = '', found = []) {
   if (!prefix && await toplevel(root) === root) return gitFiles(root);
@@ -243,7 +243,7 @@ async function listed(root, prefix = '', found = []) {
   }
   for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (found.length > TREE_LIMIT) break;
-    if (e.isDirectory() && e.name !== '.git' && e.name !== 'node_modules') await listed(root, `${prefix}${e.name}/`, found);
+    if (e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules') await listed(root, `${prefix}${e.name}/`, found);
     else if (e.isFile()) found.push(prefix + e.name);
   }
   return found;

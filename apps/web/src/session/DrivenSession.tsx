@@ -683,6 +683,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const git = !ownGit.status?.repo && otherGit.status?.repo ? otherGit : ownGit;
   // Empty when there is nowhere to read Git: a quick chat that has not edited anything.
   const gitCwd = git === otherGit ? otherGit.status?.root ?? editedDir : session.quick ? editedDir : session.cwd;
+  // The canvas reads the chat's own folder, Git or not: an agent names its
+  // files from there. Only a quick chat, which has none, borrows the Git above.
+  const canvasCwd = session.quick ? gitCwd : session.cwd;
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
   const changedPaths = useMemo(() => git.status?.files?.map((f) => f.path) ?? [], [git.status]);
 
@@ -884,7 +887,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       </LiveComposer>
 
       {canvas.open && !session.brain
-        ? <Canvas client={client} env={env} cwd={gitCwd || (session.quick ? '' : session.cwd)} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}
+        ? <Canvas client={client} env={env} cwd={canvasCwd} changed={canvasCwd === gitCwd ? changedPaths : []} path={canvas.path} onPath={canvas.setPath}
           visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)}
           pages={chatPages(log.turns.flatMap((turn) => turn.items.map((item) => item.visual && { visual: item.visual, at: item.startedAt })))} />
         : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}

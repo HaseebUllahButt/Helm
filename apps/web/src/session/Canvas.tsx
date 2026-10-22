@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Client, Environment, Session } from '../client';
 import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
@@ -7,6 +7,9 @@ import { FileView } from './CodeView';
 import { SideDock, readLocal, writeLocal } from './SideDock';
 import { liveUrl, saveVisual, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
 import type { Visual } from './types';
+
+// The page editor is large; it loads the first time a note is edited.
+const PageEditor = lazy(() => import('./PageEditor'));
 
 /**
  * The canvas: a column beside the chat for the project's notes and docs. It
@@ -459,6 +462,10 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
       : 'error' in file ? <div className="git-state bad" role="status">{file.error}</div>
       : file.hidden ? <div className="git-state">Helm hides files that can contain passwords or keys.</div>
       : file.binary ? <div className="git-state">This is not a text file.</div>
+      : editing && canEdit && md
+        ? <Suspense fallback={<div className="git-state" role="status">Opening…</div>}>
+            <PageEditor text={text} label={`Edit ${base(path)}`} onChange={setDraft} onEscape={() => setEditing(false)} />
+          </Suspense>
       : editing && canEdit
         ? <textarea ref={area} className="canvas-edit" spellCheck={md} value={text} placeholder="Start writing…" aria-label={`Edit ${base(path)}`}
             onChange={(e) => setDraft(e.target.value)}
