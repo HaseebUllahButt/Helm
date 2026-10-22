@@ -149,7 +149,7 @@ ${toolNotes(parentId)}`;
  * (AGENTS.md).
  */
 export function writingNote() {
-  return '[Helm writing: Write every message in Simplified Technical English (ASD-STE100): replies to the owner, helm say and reply messages, helper tasks, commit messages. Put the answer or result first. One idea per sentence: at most 20 words for a step, 25 for an explanation. Start an instruction with its verb. Use active voice, simple tenses, common words and one word for one meaning. Explain jargon in a few plain words. Put steps in a list. Cut filler, hedging and repeats. Tell the owner what they will see, not how the code works. Code, commands and quoted output stay as they are.]';
+  return '[Helm writing: Write every message in Simplified Technical English (ASD-STE100): replies to the owner, helm say and reply messages, helper tasks, commit messages. Put the answer or result first. One idea per sentence: at most 20 words for a step, 25 for an explanation. Start an instruction with its verb. Use active voice, simple tenses, common words and one word for one meaning. Explain jargon in a few plain words. Put steps in a list. Skip preamble and recaps; cut filler, hedging and repeats. Tell the owner what they will see, not how the code works. Code, commands and quoted output stay as they are.]';
 }
 
 export function visualNote() {
