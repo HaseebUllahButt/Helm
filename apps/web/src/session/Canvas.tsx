@@ -440,8 +440,8 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
   return <div className="canvas-file">
     <div className="canvas-pad canvas-top">
       <CanvasHead title={base(path)} sub={slash > 0 ? path.slice(0, slash) : './'} onBack={onBack} onClose={onClose}>
-        {canEdit && <div className="segmented canvas-mode" role="group" aria-label="Show">
-          <button className={!editing ? 'on' : ''} aria-pressed={!editing} onClick={() => setEditing(false)}>{md ? 'Read' : 'View'}</button>
+        {canEdit && !md && <div className="segmented canvas-mode" role="group" aria-label="Show">
+          <button className={!editing ? 'on' : ''} aria-pressed={!editing} onClick={() => setEditing(false)}>View</button>
           <button className={editing ? 'on' : ''} aria-pressed={editing} onClick={startEdit}>Edit</button>
         </div>}
       </CanvasHead>
@@ -462,9 +462,10 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
       : 'error' in file ? <div className="git-state bad" role="status">{file.error}</div>
       : file.hidden ? <div className="git-state">Helm hides files that can contain passwords or keys.</div>
       : file.binary ? <div className="git-state">This is not a text file.</div>
-      : editing && canEdit && md
-        ? <Suspense fallback={<div className="git-state" role="status">Opening…</div>}>
-            <PageEditor text={text} label={`Edit ${base(path)}`} onChange={setDraft} onEscape={() => setEditing(false)} />
+      // A note is one page: read it and type into it, with no mode to switch.
+      : canEdit && md
+        ? <Suspense fallback={<div className="canvas-body"><Markdown text={text} className="canvas-md" /></div>}>
+            <PageEditor text={text} label={base(path)} focus={empty} onChange={setDraft} />
           </Suspense>
       : editing && canEdit
         ? <textarea ref={area} className="canvas-edit" spellCheck={md} value={text} placeholder="Start writing…" aria-label={`Edit ${base(path)}`}
@@ -478,7 +479,7 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
                 setDraft(el.value);
               } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false); }
             }} />
-        : <div className="canvas-body" onDoubleClick={md && canEdit ? startEdit : undefined}>
+        : <div className="canvas-body">
             {md ? <Markdown text={text} className="canvas-md" /> : <FileView text={text} path={path} wrap />}
             {loaded?.truncated && <div className="git-state">This file is too large to edit in the canvas. Helm shows only part of it.</div>}
           </div>}

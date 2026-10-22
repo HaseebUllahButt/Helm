@@ -41,19 +41,20 @@
   since is never overwritten silently; the owner picks "Use the new file" or
   "Save mine over it". Secrets and `.git/` are never written; a new file
   under a link that leads out of the repo is refused before any folder is
-  made. Unsaved edits live in memory while the app is open. Edit on a
-  Markdown file edits the page itself (Milkdown, loaded on first use); it
-  writes the file again on each change, in the file's own list, rule and
-  table style. Opening Edit alone never marks the file unsaved.
+  made. Unsaved edits live in memory while the app is open. A Markdown
+  file has one mode: its page, which the owner reads and types into
+  (Milkdown, loaded on first use; Ctrl/⌘ click opens a link). It writes the
+  file again on each change, in the file's own list, rule and table style.
+  Opening a note never marks it unsaved or takes the cursor from the chat.
+  Other text files keep View / Edit.
 - **Prove (driven 2026-10-21):** make a git repo in the copy's work folder,
   `$V rpc session.start '{"cwd":"<repo>","profileId":"fake"}'`, open it at
-  `size 1600 900`, click "Canvas", open a `.md`, Edit, type, Ctrl+S; then
+  `size 1600 900`, click "Canvas", open a `.md`, click into it, type, Ctrl+S; then
   append to the file from the shell (the page follows within 2 s) and again
   while editing (the clash card shows).
 - **Traps:** `wait` does not read the edit box; check it with `eval`.
-  `click "Edit"` can match another Edit button; click the canvas one with
-  `eval` (`.canvas-mode button`). Diff the saved file against the original:
-  only the typed words may differ.
+  Place the cursor with `eval` (a Range in `.canvas-page-edit .ProseMirror`).
+  Diff the saved file against the original: only the typed words may differ.
 
 ## Voice
 - **Decision:** the device calls Groq itself. It asks a machine once for the

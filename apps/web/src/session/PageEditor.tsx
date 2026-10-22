@@ -11,15 +11,16 @@ import { $prose, getMarkdown, replaceAll } from '@milkdown/kit/utils';
 const tidy = (md: string) => md.replace(/^\|(?: *:?-+:? *\|)+ *$/gm, (row) => row.replace(/-+/g, '---'));
 
 /**
- * A Markdown file edited as the page it makes, the way Read shows it. The
- * editor writes the Markdown again on each change, so a save can tidy small
- * details (spacing, list marks). Until the owner changes something, the file
- * text passes through as it was, so opening Edit alone never marks it unsaved.
+ * A Markdown file shown as its page, which the owner reads and types into.
+ * The editor writes the Markdown again on each change, in the file's own
+ * style. Until the owner changes something, the file text passes through as
+ * it was, so opening a note never marks it unsaved. It takes focus only when
+ * `focus` is set (a new, empty note), so an agent opening a note never pulls
+ * the cursor out of the chat. Ctrl/⌘ click opens a link.
  */
-export default function PageEditor({ text, label, onChange, onEscape }: {
-  text: string; label: string;
+export default function PageEditor({ text, label, focus, onChange }: {
+  text: string; label: string; focus?: boolean;
   onChange: (text: string) => void;
-  onEscape: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<Editor | null>(null);
@@ -27,7 +28,7 @@ export default function PageEditor({ text, label, onChange, onEscape }: {
   const shown = useRef(text);
   const opened = useRef<{ text: string; written: string } | null>(null);
   const replacing = useRef(false);
-  const calls = useRef({ onChange, onEscape }); calls.current = { onChange, onEscape };
+  const calls = useRef({ onChange }); calls.current = { onChange };
   const same = (a: string, b: string) => a.replace(/\r\n/g, '\n') === b.replace(/\r\n/g, '\n');
 
   useEffect(() => {
@@ -62,7 +63,7 @@ export default function PageEditor({ text, label, onChange, onEscape }: {
       if (!alive) { void e.destroy(); return; }
       editor.current = e;
       opened.current = { text: shown.current, written: tidy(e.action(getMarkdown())) };
-      e.action((ctx) => ctx.get(editorViewCtx).focus());
+      if (focus) e.action((ctx) => ctx.get(editorViewCtx).focus());
     });
     return () => { alive = false; void editor.current?.destroy(); editor.current = null; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -80,5 +81,14 @@ export default function PageEditor({ text, label, onChange, onEscape }: {
   }, [text]);
 
   return <div ref={host} className="canvas-body canvas-page-edit"
-    onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); calls.current.onEscape(); } }} />;
+    onClick={(e) => {
+      const link = (e.target as HTMLElement).closest('a');
+      if (!link?.href || !(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      window.open(link.href, '_blank', 'noopener');
+    }}
+    onKeyDown={(e) => {
+      // Escape leaves the page instead of closing the canvas.
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); (document.activeElement as HTMLElement | null)?.blur(); }
+    }} />;
 }
