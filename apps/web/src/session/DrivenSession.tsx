@@ -802,7 +802,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       <span ref={dockAnchor} hidden />
       {firstMessage && <EmptyChat cwd={chatFolder(session)} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={options?.labels?.[modelNow] ?? modelNow} still={cameUpEmpty} />}
-      <CanvasContext.Provider value={canvasVisuals}><Transcript
+      <CanvasContext.Provider value={canvasVisuals}><Transcript place={`${env.id}:${session.id}`}
         turns={transcriptTurns} status={status} loaded={log.loaded}
         readVisual={readVisual} openAgent={openAgent}
         pending={log.pending} onReviewRequest={reviewRequest} focusItem={focusItem}

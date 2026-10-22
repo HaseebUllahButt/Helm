@@ -778,7 +778,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
         </details>
       )}
       {head && !helper && !display.printed && !!(turn.text || turn.attachments?.length) && (
-        <div className={`turn user${queued ? ' queued' : ''}`}><div className="bubble">
+        <div className={`turn user${queued ? ' queued' : ''}`} data-turn-id={turn.id}><div className="bubble">
           {display.to && <span className="turn-note">To {display.to}</span>}
           {said.note && (said.note.length > 160
             // The delegation brief is a paragraph of instructions to the
@@ -812,7 +812,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           </span>
         </div></div>
       )}
-      <div className={`turn assistant${note ? ' command-note' : ''}`}>
+      <div className={`turn assistant${note ? ' command-note' : ''}`} data-turn-id={turn.id}>
         {blocks.map((block, i) => (
           <Fragment key={i ? `block-${block.work[0].id}` : 'block-0'}>
             {block.work.length > 0 && (
@@ -846,7 +846,30 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   );
 });
 
-export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, onRewind, pending = [], onReviewRequest, focusItem, readVisual, openAgent }: {
+/** Where the reader left each chat, by `place`: the first thing on screen
+ * and how far below the top it sat. No entry means at the latest message. */
+const places = new Map<string, { anchors: string[]; offset: number[] }>();
+
+function placeOf(el: HTMLElement) {
+  const top = el.getBoundingClientRect().top;
+  const anchors: string[] = [], offset: number[] = [];
+  // A step inside a fold is hidden when the chat opens again, so its turn
+  // is kept as well.
+  for (const attr of ['data-item-id', 'data-turn-id']) {
+    for (const node of el.querySelectorAll<HTMLElement>(`[${attr}]`)) {
+      const box = node.getBoundingClientRect();
+      if (!box.height || box.bottom <= top) continue;
+      anchors.push(`[${attr}="${CSS.escape(node.getAttribute(attr)!)}"]`);
+      offset.push(box.top - top);
+      break;
+    }
+  }
+  return { anchors, offset };
+}
+
+export function Transcript({ place, turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, onRewind, pending = [], onReviewRequest, focusItem, readVisual, openAgent }: {
+  /** Names this chat: leaving and coming back keeps the reader where they were. */
+  place?: string;
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
   pending?: Permission[]; onReviewRequest?: (requestId: string) => void;
   /** The machine holds more of this conversation than is on screen. */
@@ -876,6 +899,17 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
+  const cameBack = useRef(place ? places.get(place) : undefined);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || !place) return;
+    return () => {
+      // Left before it got back to the old place: that place still stands.
+      if (cameBack.current) places.set(place, cameBack.current);
+      else if (stuck.current) places.delete(place);
+      else places.set(place, placeOf(el));
+    };
+  }, [place]);
   // Away from the bottom: the "Latest" pill shows. `unread` only says there is something new down there.
   const [away, setAway] = useState(false);
   const [unread, setUnread] = useState(false);
@@ -941,6 +975,20 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
       });
       if (item) {
         setRevealed(previous => ({ id: item.id, visit: (previous?.visit ?? 0) + 1, start: true }));
+        return;
+      }
+    }
+    const left = cameBack.current;
+    if (left && loaded && turns.length) {
+      // One try, on the first screen with the conversation in it: a place
+      // found later would yank the chat from under the reader.
+      cameBack.current = undefined;
+      const top = el.getBoundingClientRect().top;
+      const at = left.anchors.findIndex((anchor) => el.querySelector<HTMLElement>(anchor)?.getBoundingClientRect().height);
+      if (at >= 0) {
+        el.scrollTop += el.querySelector<HTMLElement>(left.anchors[at])!.getBoundingClientRect().top - top - left.offset[at];
+        onScroll();
+        seen.current = { h: el.scrollHeight, first };
         return;
       }
     }
