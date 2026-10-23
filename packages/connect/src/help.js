@@ -32,7 +32,7 @@ const DETAILS = {
   A follow-up message resumes the same chat.
   Claude keeps its context for an hour.
   Read a helper with helm delegate-result <id>.
-  Remove a helper with helm delete <id>.`,
+  Keep finished helpers. The owner reads them under this chat.`,
 
   spawn: `
   Account names (<account>) differ between machines.
@@ -104,7 +104,8 @@ const DETAILS = {
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.
   Helm stops watching chats that it did not start and keeps their saved messages.
-  This command cannot delete the chat you run it in.`,
+  This command cannot delete the chat you run it in.
+  An agent cannot delete a helper unless it adds --helper. Add it only when the owner asks.`,
 };
 
 /** Usage blocks: a `  helm <word>` line and the deeper-indented lines under it. */

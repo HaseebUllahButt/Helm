@@ -774,10 +774,11 @@ test('delegation instructions keep only rules; the details live in helm delegate
   assert.match(note, /open, message and stop it/);
   assert.match(note, /never unset HELM_SESSION_ID/);
   assert.match(note, /--model cheap/);
-  assert.match(note, /test chats \(helm delete\)/);
+  assert.match(note, /Keep your helpers/);
+  assert.match(note, /only test chats that are not helpers/);
   assert.doesNotMatch(note, /--heavy|slot|--worktree|--cwd/, 'flags are looked up, not carried');
   const help = commandHelp('delegate', '  helm delegate <account> -- "<task>"\n');
-  for (const want of [/Use same for this chat's account/, /--cwd <folder>/, /--worktree/, /context for an hour/, /helm delete <id>/]) assert.match(help, want);
+  for (const want of [/Use same for this chat's account/, /--cwd <folder>/, /--worktree/, /context for an hour/, /Keep finished helpers/]) assert.match(help, want);
 });
 
 test('no account by that name lists the accounts that do exist', () => {

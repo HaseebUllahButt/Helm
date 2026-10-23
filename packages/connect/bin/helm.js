@@ -999,6 +999,11 @@ async function deleteChat() {
   const { env, machine, session } = await findSession(id);
   const own = process.env.HELM_SESSION_ID;
   if (own && session.id.startsWith(own)) die('that is the chat you are running in');
+  // Agents told to clean up once read their helpers as test chats and
+  // deleted every one, so the owner found the chat's Agents list empty.
+  if (own && session.delegation?.parentId && !rest.includes('--helper')) {
+    die('That chat is a helper. Keep it: the owner reads helpers under their chat. Add --helper only when the owner asks you to delete it.');
+  }
   await brainRpc(env, M.SESSION_KILL, { id: session.id }, 20_000);
   console.log(`Deleted ${machine} ${shortId(session.id)} (${session.title}).`);
 }
