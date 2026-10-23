@@ -66,3 +66,62 @@ test('known appends extend positions without rescanning old payloads', t => {
   assert.equal(indexed.starts, originalStarts, 'the original index was extended in place');
   assert.deepEqual([...indexed.view()], [first, next]);
 });
+
+test('cold opening reuses parsed tail records and releases the scan snapshot', t => {
+  const file = fixture(t);
+  const rows = Array.from({ length: 200 }, (_, n) => ({ seq: n + 1, type: 'item.delta', text: 'اردو 😀 ' + n }));
+  writeFileSync(file, rows.map(line).join(''));
+  const indexed = new EventFile(file);
+  const record = indexed.record;
+  let parsedLast;
+  t.mock.method(indexed, 'record', function(event, ...args) {
+    parsedLast = event;
+    return record.call(this, event, ...args);
+  });
+  const read = t.mock.method(indexed, 'read', () => { throw new Error('A parsed tail must not read again'); });
+  let escaped;
+  indexed.refresh(current => {
+    escaped = current.view();
+    assert.equal(escaped.at(-1), parsedLast, 'the opening reader reuses the object parsed during the scan');
+    assert.deepEqual(escaped.at(-1), rows.at(-1));
+    assert.deepEqual(escaped.at(-2), rows.at(-2));
+    assert.equal(read.mock.callCount(), 0);
+    renameSync(file, file + '.moved');
+    assert.deepEqual(escaped.at(0), rows[0], 'an older record uses the same scan snapshot');
+  }, 2);
+  assert.equal(escaped.at(-1), null, 'an escaped view retains neither parsed tail nor whole-file bytes');
+  assert.equal(indexed.event(0), null, 'the snapshot is released after the callback');
+});
+
+test('a failed opening callback releases scan data before the next request', t => {
+  const file = fixture(t), indexed = new EventFile(file);
+  writeFileSync(file, line({ seq: 1, type: 'turn.start', text: 'Before' }));
+  assert.throws(() => indexed.refresh(current => {
+    assert.equal(current.view().at(0).text, 'Before');
+    throw new Error('Opening failed');
+  }, 2), /Opening failed/);
+  rmSync(file);
+  assert.equal(indexed.event(0), null, 'no parsed record survives the failed callback');
+  assert.equal(indexed.refresh().view().length, 0);
+});
+
+test('page reads reuse byte blocks and discard cached records after the file changes', t => {
+  const file = fixture(t), indexed = new EventFile(file);
+  const rows = Array.from({ length: 900 }, (_, n) => ({ seq: n + 1, type: 'item.delta', text: '日本語 😀 ' + n + 'x'.repeat(30) }));
+  writeFileSync(file, rows.map(line).join(''));
+  indexed.refresh();
+  const original = indexed.read;
+  const read = t.mock.method(indexed, 'read', function(...args) { return original.apply(this, args); });
+  const view = indexed.view();
+  for (let n = 850; n >= 650; n--) assert.deepEqual(view.at(n), rows[n]);
+  assert.ok(read.mock.callCount() < 8, `used ${read.mock.callCount()} reads for 201 records`);
+  const count = read.mock.callCount();
+  assert.deepEqual(view.at(650), rows[650]);
+  assert.equal(read.mock.callCount(), count, 'a repeated record uses its parsed value');
+  rows[650].text = 'Replacement text that changes the byte positions';
+  writeFileSync(file + '.new', rows.map(line).join(''));
+  renameSync(file + '.new', file);
+  indexed.refresh();
+  assert.equal(view.at(650).text, rows[650].text, 'a retained view drops its old block and parsed values');
+  assert.ok(read.mock.callCount() > count);
+});

@@ -263,17 +263,19 @@ export class EventLog {
     log = { seq: 0, events: [], first: 0, diskFirst: 0 };
     const file = this.#file(id);
     if (existsSync(file)) {
-      const indexed = this.#indexed(id), view = indexed.view();
-      log.diskFirst = indexed.first;
-      const from = Math.max(0, view.length - KEEP), tail = [];
-      for (let i = from; i < view.length; i++) { const event = view.at(i); if (event) tail.push(event); }
-      // Retention needs identities and turn records, never old text deltas.
-      // Parse those records once, then share them across retention's passes.
-      const context = [...view.contextBefore(from)].map(e => isTurn(e) ? e : anchor(e)).reverse();
-      const older = function* () { yield* context; };
-      Object.assign(log, retain(tail, older, event => indexed.get(event.seq) ?? event));
-      log.context = log.events.length - tail.length;
-      if (log.events.length) log.seq = log.events[log.events.length - 1].seq;
+      this.#indexed(id, indexed => {
+        const view = indexed.view();
+        log.diskFirst = indexed.first;
+        const from = Math.max(0, view.length - KEEP), tail = [];
+        for (let i = from; i < view.length; i++) { const event = view.at(i); if (event) tail.push(event); }
+        // Retention needs identities and turn records, never old text deltas.
+        // Parse those records once, then share them across retention's passes.
+        const context = [...view.contextBefore(from)].map(e => isTurn(e) ? e : anchor(e)).reverse();
+        const older = function* () { yield* context; };
+        Object.assign(log, retain(tail, older, event => indexed.get(event.seq) ?? event));
+        log.context = log.events.length - tail.length;
+        if (log.events.length) log.seq = log.events[log.events.length - 1].seq;
+      });
     }
     this.#logs.set(id, log);
     const open = new Map();
@@ -500,7 +502,7 @@ export class EventLog {
     };
   }
 
-  #indexed(id) {
+  #indexed(id, visit) {
     let file = this.#files.get(id);
     if (!file) this.#files.set(id, file = new EventFile(this.#file(id), event => {
       // Exact text is needed to settle queued messages against provider echoes.
@@ -510,7 +512,7 @@ export class EventLog {
       }
       return anchor(event);
     }));
-    return file.refresh();
+    return file.refresh(visit, KEEP);
   }
 
   /**
