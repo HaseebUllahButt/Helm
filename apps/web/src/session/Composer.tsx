@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { createContext, memo, useContext, useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useNow } from '../useNow';
 import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
 import { useDictation, type Transcribe } from './voice';
@@ -54,7 +54,7 @@ function CompactingBar({ since }: { since?: number }) {
   );
 }
 
-export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After this response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, danger, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After this response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   /** The agent's pending question or approval, as the top of the card. */
   banner?: React.ReactNode;
@@ -391,7 +391,7 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
   return (
     <div className="composer-wrap">
       <div className="composer-col">
-        {children}
+        <ComposerSlot name="children" />
         {!!compacting && !waiting && <CompactingBar since={typeof compacting === 'number' ? compacting : undefined} />}
         {waiting && withKeys && onKey && (
           <div className="docked warn">
@@ -401,7 +401,7 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
             </span>
           </div>
         )}
-        {shoulder}
+        <ComposerSlot name="shoulder" />
         <div
           ref={slabRef}
           className={`slab${danger ? ' danger' : ''}${dragging ? ' dropping' : ''}`}
@@ -409,7 +409,7 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
           onDrop={(e) => { setDragging(false); if (take(e.dataTransfer?.files)) e.preventDefault(); }}
         >
-          {banner}
+          <ComposerSlot name="banner" />
           {!!referenceMatches.length && <div className="palette" role="listbox" aria-label="Attach chat details">
             {referenceMatches.map((item, index) => <button key={item.id} role="option" aria-selected={index === referencePick} onClick={() => addReference(item.id)} onMouseEnter={() => setReferencePick(index)}><span>@{item.title}</span><small>Attach chat details</small></button>)}
           </div>}
@@ -607,10 +607,10 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
             {/* The pickers share the row the buttons are on: a second row of
                 chips under the box cost a line of screen on every visit to
                 say what never changes between messages. */}
-            {foot ? <div className="slab-controls">{foot}</div> : <span className="spacer" />}
+            <ComposerSlot name="foot" />
             {/* Beside the pickers on a wide box, its own line inside it on a narrow
                 one: a line under the card cost the chat a row on every screen. */}
-            {statusLine && <div className="slab-status">{statusLine}</div>}
+            <ComposerSlot name="statusLine" />
             {working && onStop && (
               <button className="stop" onClick={onStop} title="stop the agent" aria-label="stop the agent">
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>
@@ -629,4 +629,22 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
       </div>
     </div>
   );
+}
+
+type SlotName = 'banner' | 'shoulder' | 'foot' | 'statusLine' | 'children';
+const ComposerSlots = createContext<Partial<Record<SlotName, ReactNode>>>({});
+
+/** Incoming status cards can change without redrawing the message editor. */
+function ComposerSlot({ name }: { name: SlotName }) {
+  const node = useContext(ComposerSlots)[name];
+  if (name === 'foot') return node ? <div className="slab-controls">{node}</div> : <span className="spacer" />;
+  if (name === 'statusLine') return node ? <div className="slab-status">{node}</div> : null;
+  return <>{node}</>;
+}
+
+const MessageEditor = memo(ComposerBody);
+export function Composer({ banner, shoulder, foot, statusLine, children, ...editor }: ComponentProps<typeof ComposerBody>) {
+  return <ComposerSlots.Provider value={{ banner, shoulder, foot, statusLine, children }}>
+    <MessageEditor {...editor} />
+  </ComposerSlots.Provider>;
 }
