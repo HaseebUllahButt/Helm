@@ -1,3 +1,4 @@
+import { createReplayBuffer } from './replay-buffer.js';
 import { EventEmitter } from 'node:events';
 import { connect } from 'node:net';
 import { spawn } from 'node:child_process';
@@ -60,7 +61,7 @@ export const PROC_SOCKET_PATH =
  * somebody is using. The old one leaves once its last terminal ends.
  */
 const hostCode = createHash('sha256');
-for (const file of ['./pty.js', '../bin/helm-terminals.js', './terminals.js']) {
+for (const file of ['./pty.js', '../bin/helm-terminals.js', './terminals.js', './replay-buffer.js']) {
   try { hostCode.update(readFileSync(fileURLToPath(new URL(file, import.meta.url)))); } catch { /* packaged differently */ }
 }
 export const NATIVE_HOST_VERSION = hostCode.digest('hex').slice(0, 8);
@@ -261,13 +262,18 @@ export class TerminalHost extends EventEmitter {
     if (msg.t === 'proc.data') {
       const l = this.#procListeners.get(msg.id);
       if (l?.onData) l.onData(msg.data);
-      else this.#procBacklog.set(msg.id, ((this.#procBacklog.get(msg.id) ?? '') + msg.data).slice(-262144));
+      else {
+        let backlog = this.#procBacklog.get(msg.id);
+        if (!backlog) this.#procBacklog.set(msg.id, backlog = createReplayBuffer(262144, { trimLine: false }));
+        backlog.append(msg.data);
+      }
       return;
     }
     if (msg.t === 'proc.exit') {
       this.#procs.delete(msg.id);
       const l = this.#procListeners.get(msg.id);
       this.#procListeners.delete(msg.id);
+      this.#procBacklog.get(msg.id)?.clear();
       this.#procBacklog.delete(msg.id);
       if (l?.onExit) l.onExit({ code: msg.code, stderr: msg.stderr });
       // With no driver attached, the session itself has to close the turn
@@ -416,7 +422,9 @@ export class TerminalHost extends EventEmitter {
       kill: (signal) => this.#call({ t: 'proc.kill', id, signal }).catch(() => {}),
       onData: (cb) => {
         l.onData = cb;
-        const backlog = this.#procBacklog.get(id) ?? '';
+        const buffer = this.#procBacklog.get(id);
+        const backlog = buffer?.text() ?? '';
+        buffer?.clear();
         this.#procBacklog.delete(id);
         if (backlog) queueMicrotask(() => { if (l.onData === cb) cb(backlog); });
       },

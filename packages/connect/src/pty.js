@@ -1,3 +1,4 @@
+import { createReplayBuffer } from './replay-buffer.js';
 import { EventEmitter } from 'node:events';
 import { homedir } from 'node:os';
 
@@ -74,13 +75,13 @@ export class Terminals extends EventEmitter {
       env: { ...(exactEnv ? {} : process.env), ...env, TERM: env.TERM || 'xterm-256color' },
     });
 
-    const t = { pty: child, ring: '', pending: '', timer: null, views: new Map(), sizes: new Map(), lead: null, lastOut: 0, lastData: Date.now(), cols, rows };
+    const t = { pty: child, ring: createReplayBuffer(RING_BYTES), pending: '', timer: null, views: new Map(), sizes: new Map(), lead: null, lastOut: 0, lastData: Date.now(), cols, rows };
     this.#live.set(id, t);
 
     child.onData((chunk) => {
       // The ring is kept whether or not anyone is looking, so that opening the
       // terminal shows what happened while you were away.
-      t.ring = trim(t.ring + chunk);
+      t.ring.append(chunk);
       t.lastData = Date.now();
       if (!this.#viewed(t)) return;
       t.pending += chunk;
@@ -107,6 +108,7 @@ export class Terminals extends EventEmitter {
       if (t.closed) return; // close() already said so
       this.#flush(id);
       this.#live.delete(id);
+      t.ring.clear();
       this.emit('exit', { id, code: exitCode });
     });
 
@@ -140,7 +142,7 @@ export class Terminals extends EventEmitter {
   scrollback(id) {
     const t = this.#live.get(id);
     if (!t) throw new Error('that terminal has ended');
-    return t.ring;
+    return t.ring.text();
   }
 
   /**
@@ -215,21 +217,10 @@ export class Terminals extends EventEmitter {
     // Say it ended now, once: a program that ignores the hangup may take
     // its time, and nobody can reach this terminal any more anyway.
     t.closed = true;
+    t.ring.clear();
     try { t.pty.kill(); } catch { /* already gone */ }
     this.emit('exit', { id, code: null });
   }
 
   closeAll() { for (const id of [...this.#live.keys()]) this.close(id); }
-}
-
-/**
- * Keep the tail. A hard cut can land inside an escape sequence, so prefer the
- * first line break after the cut - xterm resynchronises either way, but this
- * way the replay usually starts on a clean line.
- */
-function trim(s) {
-  if (s.length <= RING_BYTES) return s;
-  const cut = s.length - RING_BYTES;
-  const nl = s.indexOf('\n', cut);
-  return s.slice(nl !== -1 && nl - cut < 4096 ? nl + 1 : cut);
 }

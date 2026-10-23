@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createReplayBuffer } from '../src/replay-buffer.js';
 import { nativeLaunchSettings } from '../src/native-settings.js';
 /**
  * The terminal host.
@@ -72,7 +73,7 @@ setInterval(() => {
 function procOut(id, data) {
   if (clients.size === 0) {
     const p = procs.get(id);
-    if (p) p.backlog = (p.backlog + data).slice(-PROC_BACKLOG_MAX);
+    if (p) p.backlog.append(data);
     return;
   }
   broadcast({ t: 'proc.data', id, data });
@@ -87,7 +88,7 @@ function procOpen(msg) {
       env: msg.env ? { ...process.env, ...msg.env } : process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const proc = { child, errTail: '', backlog: '' };
+    const proc = { child, errTail: '', backlog: createReplayBuffer(PROC_BACKLOG_MAX, { trimLine: false }) };
     let spawned = false;
     procs.set(msg.id, proc);
 
@@ -97,6 +98,7 @@ function procOpen(msg) {
     child.stderr.on('data', (d) => { proc.errTail = (proc.errTail + d).slice(-4000); });
 
     const remove = () => {
+      proc.backlog.clear();
       procs.delete(msg.id);
       armIdleExit();
     };
@@ -132,6 +134,7 @@ function procOpen(msg) {
 
 function procDrop() {
   for (const p of procs.values()) {
+    p.backlog.clear();
     try { p.child.kill('SIGTERM'); } catch { /* already gone */ }
   }
   procs.clear();
@@ -227,7 +230,8 @@ const server = createServer((sock) => {
   // hand it anything those processes said while nobody was listening.
   send(sock, { t: 'hello', pty: !!pty, reason: pty ? null : ptyUnavailable(), ids: terminals.list(), procs: [...procs.keys()], nativeSessions: [...nativeSessions.values()] });
   for (const [id, p] of procs) {
-    if (p.backlog) { send(sock, { t: 'proc.data', id, data: p.backlog }); p.backlog = ''; }
+    const backlog = p.backlog.text();
+    if (backlog) { send(sock, { t: 'proc.data', id, data: backlog }); p.backlog.clear(); }
   }
 
   let buffer = '';
