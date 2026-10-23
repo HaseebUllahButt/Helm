@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
 import { EVENTS_DIR } from './events.js';
 import { ownerText } from './owner-keeper.js';
+import { extractSearchEvents } from './search-native.js';
 
 /**
  * What was said in every chat on this machine, ready to be searched.
@@ -265,6 +266,9 @@ export class SearchIndex {
       if (!raw) return;
       let e;
       try { e = JSON.parse(raw); } catch { return; }
+      acceptEvent(e);
+    };
+    const acceptEvent = (e) => {
       if (legacyOpen && typeof e.seq === 'number' && e.seq > checkpoint) mergeLegacyOpen();
       if (legacyOpen) {
         const key = `${id}:${e.id}`;
@@ -293,12 +297,32 @@ export class SearchIndex {
       if (typeof e.seq === 'number' && chat.liveSeqs.has(e.seq)) return;
       this.note(id, e, { fromLog: true });
     };
-    for (;;) {
-      const newline = body.indexOf(10, consumed);
-      if (newline < 0) break;
-      const raw = body.toString('utf8', consumed, newline);
-      consumed = newline + 1;
-      accept(raw);
+    // Leave the final record with JSON.parse, including its existing recovery
+    // for a valid event without a newline or a torn write completed later.
+    const complete = body.lastIndexOf(10) + 1;
+    const rows = extractSearchEvents(body.subarray(0, complete));
+    if (rows) {
+      for (const [event, from, to] of rows) {
+        if (!event) { accept(body.toString('utf8', from, to)); continue; }
+        if (from != null) {
+          const key = `${id}:${event.id}`;
+          const open = this.#open.get(key);
+          const legacy = legacyOpen?.get(key);
+          if ((open && open.text.length < AGENT_CHARS * 2) || (legacy && legacy.text.length < AGENT_CHARS * 2)) {
+            event.text = JSON.parse(body.toString('utf8', from, to));
+          }
+        }
+        acceptEvent(event);
+      }
+      consumed = complete;
+    } else {
+      for (;;) {
+        const newline = body.indexOf(10, consumed);
+        if (newline < 0) break;
+        const raw = body.toString('utf8', consumed, newline);
+        consumed = newline + 1;
+        accept(raw);
+      }
     }
     if (consumed < body.length) {
       const raw = body.toString('utf8', consumed);
