@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
 import { EventFile } from './event-file.js';
+import { latestToolEvent } from './event-stream.js';
 
 /**
  * What happened in a session, in order.
@@ -410,10 +411,11 @@ export class EventLog {
       const want = tail > 0 ? tail : Infinity;
       let bytes = 0;
       let front = list.length;
+      const newer = new Map();
       for (let i = list.length - 1; i >= 0 && events.length < want; i--) {
         const raw = list.at(i);
         if (!raw) continue;
-        const e = shaped(raw);
+        const e = shaped(tail > 0 ? latestToolEvent(raw, newer) : raw);
         const n = sizeOf(e);
         // Always at least one: a single event over the budget still has to
         // move, or the client asks forever and never advances.

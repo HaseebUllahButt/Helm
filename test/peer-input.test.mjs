@@ -63,3 +63,14 @@ test('abandoned frames remain bounded and a valid fragmented RPC still completes
   assert.equal(h.calls[0][0], 'ping');
   assert.equal(h.sent[0].result, 'ok');
 });
+
+test('a direct stream reaches its open device without sending chat bodies to other devices', async t => {
+  const h = await harness(); t.after(() => h.hub.stop());
+  h.hub.broadcast('session.event', { id: 'chat', events: [] }, 'one', ['other-device']);
+  assert.equal(h.sent.length, 0);
+  h.hub.broadcast('session.event', { id: 'chat', events: [] }, 'two', ['device']);
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].eid, 'two');
+  h.hub.broadcast('session.update', { session: { id: 'chat' } }, 'three');
+  assert.equal(h.sent.length, 2, 'sidebar updates still reach devices without an open chat');
+});

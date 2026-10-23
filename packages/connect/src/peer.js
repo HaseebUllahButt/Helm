@@ -298,9 +298,10 @@ export class PeerHub {
   }
 
   /** Push an event to every connected client that took the direct route. */
-  broadcast(kind, payload, eid) {
+  broadcast(kind, payload, eid, to) {
     const frame = JSON.stringify({ t: 'event', kind, payload, eid });
     for (const peer of this.#peers.values()) {
+      if (Array.isArray(to) && !to.includes(peer.device)) continue;
       if (this.events && !this.events(peer.device)) continue;
       sendFrame(peer.channel, frame);
     }

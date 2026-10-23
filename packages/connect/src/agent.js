@@ -72,6 +72,7 @@ import { NetworkMonitor } from './network-monitor.js';
 import { createBrowserRoutes } from './browser-routes.js';
 import { AgentMessages } from './agent-messages.js';
 import { InputDelivery } from './input-delivery.js';
+import { streamBatch } from './event-stream.js';
 
 const RECONNECT_MIN = 250;
 const RECONNECT_MAX = 5000;
@@ -1187,23 +1188,25 @@ export class Daemon {
   #eventFlush = null;
 
   /**
-   * Session events go out in small batches, one frame per session per tick,
-   * and only while somebody has asked to watch that session: the relay fans
-   * out per machine, so this is what keeps a phone from receiving the text
-   * of every session on the box.
+   * Chat events go out in small batches, one frame per chat per tick.
+   * Each frame names only the devices with an open, visible chat view.
    */
   #queueEvent(id, event) {
     if (!this.sessions.watching(id)) return;
     if (!this.#eventQueue.has(id)) this.#eventQueue.set(id, []);
-    // The same cap a fetched reply gets: a 140KB edit is no cheaper to push
-    // than it was to send, and a phone reading it live is the same phone.
-    this.#eventQueue.get(id).push(forWire(event));
+    // Keep raw rows until flush so repeated tool snapshots can be folded
+    // before applying the same payload cap as fetched history.
+    this.#eventQueue.get(id).push(event);
     if (!this.#eventFlush) {
       this.#eventFlush = setImmediate(() => {
         this.#eventFlush = null;
         const batches = [...this.#eventQueue];
         this.#eventQueue.clear();
-        for (const [sid, events] of batches) this.#emit(E.SESSION_EVENT, { id: sid, events });
+        for (const [sid, events] of batches) {
+          const to = this.sessions.watcherRecipients(sid);
+          if (to?.length === 0) continue;
+          this.#emit(E.SESSION_EVENT, { id: sid, events: streamBatch(events).map(forWire) }, to);
+        }
       });
     }
   }
@@ -1222,10 +1225,10 @@ export class Daemon {
    * Whichever copy arrives first wins, the other is dropped, and a restarted
    * daemon cannot collide with its own past because the boot half is new.
    */
-  #emit(kind, payload) {
+  #emit(kind, payload, to) {
     const eid = `${this.#boot}:${++this.#emitted}`;
-    this.broadcastFrame(T.EVENT, { kind, payload, eid });
-    this.peers?.broadcast(kind, payload, eid);
+    this.broadcastFrame(T.EVENT, { kind, payload, eid, ...(to ? { to } : {}) });
+    this.peers?.broadcast(kind, payload, eid, to);
   }
 
   /**

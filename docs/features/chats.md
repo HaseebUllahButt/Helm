@@ -81,6 +81,17 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `hidden-context`.
 
 ## Long chats: folds, copy, selection
+- **Latest first:** opening a chat or returning to it reads its newest window.
+  Saved text can appear first when offline. Missed live events do not replay.
+  Older replies load with the earlier-history control.
+- **Live reading:** a hidden chat releases its live view. Only devices with
+  an open view receive its text. Text redraws before repeated tool updates;
+  events keep their original order. Repeated tool output sends its newest
+  value within each batch. Full history stays on the machine.
+- **Prove latest first:** close a private chat, add many replies to its private
+  history, restart the private daemon, and reopen the chat. Check that the
+  latest answer appears. Load earlier replies and check that they appear.
+  Send another message and check that the live answer arrives once.
 - **Storage rule:** append new events to history files. Replace old history
   with a rename. Readers keep byte positions between pages and search updates.
 - **Prove selection copy (driven 2026-10-17):** fake chat at 390×844 with
@@ -92,4 +103,5 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
 - **Traps:** iPhone handles and Safari permissions still need a device.
 - **Tests:** `test/browser/activity-fold`, `chat-fold`,
   `history-pagination`, `transcript-performance`, `copy-selection`,
-  `highlight-performance`, `markdown-loading`.
+  `highlight-performance`, `markdown-loading`, `latest-first`, `chat-sync`;
+  `test/event-stream`, `stream-routing`.

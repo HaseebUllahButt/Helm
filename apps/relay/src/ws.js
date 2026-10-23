@@ -113,7 +113,7 @@ export function createWsLayer() {
   function meshEvent(frame) {
     if (online.has(frame.env) || !mesh?.machines().has(frame.env)) return;
     for (const [sock, subs] of clients) {
-      if (subs.has(frame.env)) send(sock, T.EVENT, { ...frame, t: T.EVENT });
+      if (subs.has(frame.env) && (!Array.isArray(frame.to) || frame.to.includes(sock.sub))) send(sock, T.EVENT, { ...frame, t: T.EVENT });
     }
   }
 
@@ -392,7 +392,7 @@ export function createWsLayer() {
           } catch { /* a malformed digest must never kill the connection */ }
         }
         for (const [sock2, subs] of clients) {
-          if (subs.has(envId)) send(sock2, T.EVENT, { ...msg, env: envId });
+          if (subs.has(envId) && (!Array.isArray(msg.to) || msg.to.includes(sock2.sub))) send(sock2, T.EVENT, { ...msg, env: envId });
         }
         for (const watcher of online.values()) {
           if (watcher.hubSubscriptions?.has(envId)) send(watcher, T.HUB_EVENT, { ...msg, t: T.HUB_EVENT, env: envId });

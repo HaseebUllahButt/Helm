@@ -6,10 +6,9 @@ import { txn } from '../idb';
  * instantly instead of after up to 8 relay round-trips of history paging.
  *
  * Flow: on open, the stored events (if any) are applied first and the UI
- * renders immediately; the hook then fetches only `since` the cached
- * last seq in the background, so the refresh is small and quick. Closing
- * the session (or finishing a refresh) rewrites the record, so nothing
- * is ever lost - at worst an abrupt kill re-fetches a few events.
+ * renders immediately; the hook then fetches the latest window. Older
+ * events stay on the machine and load when the reader asks. Closing the
+ * chat or finishing a refresh saves the current window for offline use.
  *
  * IndexedDB, not localStorage: a long chat's deltas run to megabytes and
  * localStorage caps at ~5MB shared with everything else. One record per

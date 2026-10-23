@@ -127,13 +127,20 @@ test('cold live pushes cannot move the cursor past history before it is loaded',
   assert.equal(await text(page),'old latest');
 });
 
-test('all catch-up pages are fetched, including more than the previous eight-page limit',async t=>{
-  const events=[...transcript(),...Array.from({length:12},(_,i)=>event(i+4,'item.delta',{id:'reply-1',text:String(i)}))];
-  const remote=server(events);remote.pageSize=1;
+test('a long unattended chat opens its latest window without replaying earlier pages',async t=>{
+  const events=[...transcript(),...Array.from({length:1200},(_,i)=>event(i+4,'status',{status:'working'})),...transcript('Latest answer',1204)];
+  const remote=server(events);
+  remote.handler=params=>params.tail?{
+    ...remote.history(params),events:events.slice(-3),firstSeq:1204,
+  }:remote.history(params);
   const page=await device(t,remote,{cache:transcript()});
-  await caughtUp(page,15);
-  assert.equal(await text(page),'old01234567891011');
-  assert.ok(remote.calls.filter(c=>c.method==='session.events').length>=12);
+  await caughtUp(page,1206);
+  assert.equal(await text(page),'Latest answer');
+  const reads=remote.calls.filter(c=>c.method==='session.events');
+  assert.equal(reads.length,1);
+  assert.equal(reads[0].params.tail,200);
+  assert.equal(reads[0].params.since,undefined);
+  assert.equal(await page.evaluate(()=>window.state.earlier),true);
 });
 
 test('earlier pages merge fuller duplicate event fields without duplicating output', async t => {
