@@ -1,8 +1,7 @@
 # Machines, devices and moving work
 
-The private copy is a network of one machine ("verify-<you>"), so anything
-between two machines cannot be driven with it. Use the tests, or the real
-machines with care.
+Each private copy starts with one machine ("verify-<you>"). To test work
+between machines, pair two private copies only with each other.
 
 ## Machines and devices
 - **Prove (driven 2026-10-15):** `$V text` on Home shows "verify-<you>" and

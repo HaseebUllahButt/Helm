@@ -346,16 +346,16 @@ test('/usage views format the account activity API as Markdown', () => {
     ],
   };
   const daily = formatAccountUsage(activity, 'daily');
-  assert.match(daily, /### Daily token activity/);
+  assert.match(daily, /### Daily tokens \(text units\)/);
   assert.match(daily, /\| Date \| Tokens \|/);
   assert.match(daily, /\| 2026-09-20 \| 300 \|/);
   const weekly = formatAccountUsage(activity, 'weekly');
-  assert.match(weekly, /### Weekly token activity/);
+  assert.match(weekly, /### Weekly tokens \(text units\)/);
   assert.match(weekly, /\| Week starting \| Tokens \|/);
   assert.match(weekly, /\| 2026-09-14 \| 600 \|/);
   const cumulative = formatAccountUsage(activity, 'cumulative');
-  assert.match(cumulative, /### Cumulative usage/);
-  assert.match(cumulative, /\*\*Lifetime tokens:\*\* 123,456/);
+  assert.match(cumulative, /### All-time usage/);
+  assert.match(cumulative, /\*\*All-time tokens \(text units\):\*\* 123,456/);
   const summary = formatAccountUsage(activity);
   assert.match(summary, /### Account usage/);
   assert.match(summary, /\*\*Today:\*\* [\d,]+ tokens/);
@@ -391,7 +391,7 @@ test('/pwd is handled locally as a completed command turn', async () => {
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
   const body = log.of('item.delta').map((e) => e.text).join('');
-  assert.equal(body, `**Current directory:** \`${fake.dir}\``);
+  assert.equal(body, `**Current folder:** \`${fake.dir}\``);
   assert.equal(fake.stdinLines().some((line) => line.method === 'turn/start'), false);
   await driver.kill();
 });
@@ -410,7 +410,7 @@ test('informational slash commands do not clear an active turn status', async ()
   // and the quota bars the TUI's /status draws.
   const item = log.of('item.start').find((e) => e.kind === 'text' && String(e.turnId).startsWith('command-'));
   const body = log.of('item.delta').filter((e) => e.id === item.id).map((e) => e.text).join('');
-  assert.match(body, /### Session status/);
+  assert.match(body, /### Chat status/);
   assert.match(body, /\*\*Account:\*\* dev@example\\\.com \(Pro\)/);
   assert.match(body, /\*\*5h limit\*\* `█+░+` 12% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-][\d:]+\)/);
   assert.match(body, /\*\*Weekly limit\*\* `█+░+` 30% used/);
