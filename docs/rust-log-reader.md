@@ -13,6 +13,9 @@ Search extraction keeps event identities and small search fields. Reply text
 stays in the input buffer until the search reader needs it. Complete records
 use blocks of about one MiB to reduce temporary memory. A larger record stays
 whole. The final record keeps the existing partial-write recovery.
+Large file reads and block boundaries let live chat work run between scans.
+Search passes share their file offsets. Live search records wait for their
+chat's saved records, so a reply keeps its saved prefix during a scan.
 
 Transcript extraction selects Codex and Claude records before JavaScript
 decodes them. JavaScript keeps message assembly, settings, usage, activity,

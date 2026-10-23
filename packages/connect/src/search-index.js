@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, renameSync, statSync, mkdirSync, openSync, readSync, closeSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
 import { EVENTS_DIR } from './events.js';
@@ -85,6 +86,8 @@ export class SearchIndex {
   #open = new Map();
   #dir; #file; #saveTimer = null; #dirty = false; #built = null; #bytesRead = 0;
   #restoreOpenFromLogs = new Set();
+  #updates = null;
+  #pending = new Map();
   log;
 
   constructor({ dir = EVENTS_DIR, file = SEARCH_FILE, log = () => {} } = {}) {
@@ -160,6 +163,17 @@ export class SearchIndex {
   /** One event of one chat, live or read from its log. */
   note(id, e, { fromLog = false } = {}) {
     if (!e || typeof e !== 'object') return;
+    const pending = !fromLog && this.#pending.get(id);
+    if (pending) {
+      // Finish this chat's saved records before applying its new live records.
+      // Only search indexing waits; the chat continues streaming normally.
+      const copy = { ...e };
+      if (typeof e.seq === 'number' || ['item.delta', 'item.done'].includes(e.type)
+        || e.type === 'item.start' && ['text', 'message'].includes(e.kind)) copy.id = `${e.id}`;
+      if (e.type === 'turn.start' && !e.local && !e.wake) copy.text = String(e.text ?? '');
+      pending.push(copy);
+      return;
+    }
     const chat = this.#chat(id);
     if (typeof e.seq === 'number') {
       if (e.seq > chat.last) chat.last = e.seq;
@@ -206,7 +220,17 @@ export class SearchIndex {
   }
 
   /** Read what a chat's log holds beyond what is indexed. Returns true when something was read. */
-  #readLog(id) {
+  async #readLog(id) {
+    const pending = [];
+    this.#pending.set(id, pending);
+    try { return await this.#scanLog(id); }
+    finally {
+      this.#pending.delete(id);
+      for (const event of pending) this.note(id, event);
+    }
+  }
+
+  async #scanLog(id) {
     const file = join(this.#dir, `${id}.jsonl`);
     let info;
     try { info = statSync(file); } catch { return false; }
@@ -215,29 +239,38 @@ export class SearchIndex {
     const fileKey = `${info.dev}:${info.ino}`;
     const stampChanged = chat.mtimeMs != null && chat.ctimeMs != null
       && (chat.mtimeMs !== info.mtimeMs || chat.ctimeMs !== info.ctimeMs);
-    const readRange = (position, length) => {
+    const readRange = async (position, length) => {
       if (length <= 0) return Buffer.alloc(0);
+      const small = length <= SCAN_BYTES;
       let fd;
       try {
-        fd = openSync(file, 'r');
+        // Keep tiny guards and normal chat reads cheap. Large reads use the
+        // file worker pool, so disk work does not hold up live chat events.
+        fd = small ? openSync(file, 'r') : await open(file, 'r');
         const bytes = Buffer.alloc(length);
         let count = 0;
         while (count < length) {
-          const n = readSync(fd, bytes, count, length - count, position + count);
+          const n = small ? readSync(fd, bytes, count, length - count, position + count)
+            : (await fd.read(bytes, count, length - count, position + count)).bytesRead;
           if (!n) break;
           count += n;
         }
         this.#bytesRead += count;
         return bytes.subarray(0, count);
       } catch { return null; }
-      finally { if (fd !== undefined) closeSync(fd); }
+      finally {
+        if (fd !== undefined) {
+          if (small) closeSync(fd);
+          else await fd.close();
+        }
+      }
     };
     if (size === chat.size && fileKey === chat.fileKey && !stampChanged && !chat.offsetMissing) return false;
     let replaced = !!chat.fileKey && fileKey !== chat.fileKey;
     if (!replaced && chat.fileKey && stampChanged) {
-      const prefix = readRange(0, Math.min(32, chat.size));
+      const prefix = await readRange(0, Math.min(32, chat.size));
       const tailLength = Math.min(32, chat.offset);
-      const tail = readRange(chat.offset - tailLength, tailLength);
+      const tail = await readRange(chat.offset - tailLength, tailLength);
       replaced = size <= chat.size || (!!chat.prefix && !!chat.tail && (!prefix || !tail
         || prefix.toString('base64') !== chat.prefix || tail.toString('base64') !== chat.tail));
     }
@@ -252,7 +285,7 @@ export class SearchIndex {
       chat.offset = 0;
     }
     if (size < chat.offset) chat.offset = 0;
-    let body = readRange(chat.offset, Math.max(0, size - chat.offset));
+    const body = await readRange(chat.offset, Math.max(0, size - chat.offset));
     if (!body) return false;
     const start = chat.offset;
     let after = chat.diskLast;
@@ -331,6 +364,7 @@ export class SearchIndex {
           accept(raw);
         }
       }
+      if (consumed < complete) await new Promise(resolve => setImmediate(resolve));
     }
     if (consumed < body.length) {
       const raw = body.toString('utf8', consumed);
@@ -345,9 +379,9 @@ export class SearchIndex {
     chat.fileKey = fileKey;
     chat.mtimeMs = info.mtimeMs;
     chat.ctimeMs = info.ctimeMs;
-    const prefix = readRange(0, Math.min(32, size));
+    const prefix = await readRange(0, Math.min(32, size));
     const tailLength = Math.min(32, chat.offset);
-    const tail = readRange(chat.offset - tailLength, tailLength);
+    const tail = await readRange(chat.offset - tailLength, tailLength);
     chat.prefix = prefix?.toString('base64');
     chat.tail = tail?.toString('base64');
     this.#dirty = true;
@@ -358,17 +392,28 @@ export class SearchIndex {
    * Bring the index up to date with the logs of these chats. The first call
    * after install reads every log once (about a second for hundreds of
    * chats); later calls read only logs that grew. Chats no longer listed are
-   * dropped. Between logs it lets the daemon breathe, so a chat streaming a
+   * dropped. Between blocks it lets the daemon breathe, so a chat streaming a
    * reply does not stall behind the read; live events noted meanwhile keep
    * their place by `seq`.
    */
-  async update(sessions) {
+  update(sessions) {
+    // One pass owns the offsets. A second search must not start the same read
+    // while the first is waiting for disk or letting chat events run.
+    const run = () => this.#update(sessions);
+    const work = this.#updates ? this.#updates.then(run, run) : run();
+    this.#updates = work;
+    const done = () => { if (this.#updates === work) this.#updates = null; };
+    work.then(done, done);
+    return work;
+  }
+
+  async #update(sessions) {
     const keep = new Set();
     let read = 0;
     for (const s of sessions) {
       if (!searchable(s)) continue;
       keep.add(s.id);
-      if (!this.#readLog(s.id)) continue;
+      if (!await this.#readLog(s.id)) continue;
       read++;
       await new Promise((resolve) => setImmediate(resolve));
       const chat = this.#chats.get(s.id);
