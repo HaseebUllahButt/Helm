@@ -153,7 +153,7 @@ export function writingNote() {
 }
 
 export function visualNote() {
-  return '[Helm visuals: When a diagram, chart, comparison or simulation would help, make one self-contained HTML file, check it with helm preview, then publish it with helm render (helm render --help has the limits). Use helm canvas <file-or-spin-url> to open project files, visuals or live pages in the column beside the chat. The owner sees it above your reply, so do not repeat it. Prefer plain text for simple answers.]';
+  return '[Helm visuals: Use plain text by default, including reviews, comparisons and progress reports. Make or publish visuals only when the owner asks. Keep verification screenshots private unless asked to show them. Skills must follow the owner\'s chosen format. Report useful findings based on evidence; do not stop at a fixed count. For a requested visual, make one self-contained HTML file, check it with helm preview, then publish it with helm render (helm render --help has the limits). Use helm canvas <file-or-spin-url> to open requested project files, visuals or live pages beside the chat.]';
 }
 
 /** Read-only parents cannot acquire write access through a different CLI. */

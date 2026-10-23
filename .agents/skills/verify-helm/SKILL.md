@@ -41,6 +41,7 @@ its own copy, named after its Helm session; `--name <name>` picks another.
 2. Drive it as the owner would, at phone size first, then `size 1280 800`
    if it has a desktop layout.
 3. Look at every screenshot. Read `errors` before saying done.
+   Keep screenshots private unless the owner asks to see them.
 4. Report what you drove and saw, and name what you could not drive.
    "Tests pass" is not "it works".
 
