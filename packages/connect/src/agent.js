@@ -72,7 +72,7 @@ import { NetworkMonitor } from './network-monitor.js';
 import { createBrowserRoutes } from './browser-routes.js';
 import { AgentMessages } from './agent-messages.js';
 import { InputDelivery } from './input-delivery.js';
-import { streamBatch } from './event-stream.js';
+import { ChatEventStream } from './event-stream.js';
 
 const RECONNECT_MIN = 250;
 const RECONNECT_MAX = 5000;
@@ -724,6 +724,7 @@ export class Daemon {
   async stop() {
     if (this.#stopped) return;
     this.#stopped = true;
+    this.#eventStream.stop();
     this.inputDelivery?.stop();
     await this.executions.stop();
     await this.browsers?.stop();
@@ -1184,31 +1185,18 @@ export class Daemon {
   }
 
   /** sessionId -> events waiting for the next flush */
-  #eventQueue = new Map();
-  #eventFlush = null;
+  #eventStream = new ChatEventStream({
+    recipients: id => this.sessions.watcherRecipients(id),
+    emit: (id, events, to) => this.#emit(E.SESSION_EVENT, { id, events: events.map(forWire) }, to),
+  });
 
   /**
-   * Chat events go out in small batches, one frame per chat per tick.
+   * Tool updates share a short batch. Text and questions flush it at once.
    * Each frame names only the devices with an open, visible chat view.
    */
   #queueEvent(id, event) {
     if (!this.sessions.watching(id)) return;
-    if (!this.#eventQueue.has(id)) this.#eventQueue.set(id, []);
-    // Keep raw rows until flush so repeated tool snapshots can be folded
-    // before applying the same payload cap as fetched history.
-    this.#eventQueue.get(id).push(event);
-    if (!this.#eventFlush) {
-      this.#eventFlush = setImmediate(() => {
-        this.#eventFlush = null;
-        const batches = [...this.#eventQueue];
-        this.#eventQueue.clear();
-        for (const [sid, events] of batches) {
-          const to = this.sessions.watcherRecipients(sid);
-          if (to?.length === 0) continue;
-          this.#emit(E.SESSION_EVENT, { id: sid, events: streamBatch(events).map(forWire) }, to);
-        }
-      });
-    }
+    this.#eventStream.push(id, event);
   }
 
   /**

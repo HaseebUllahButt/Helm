@@ -15,10 +15,11 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `stream`, `session-driver`.
 
 ## Queue a message while the agent works
-- **Prove (driven):** fake-ask keeps the turn open.
+- **Prove (driven 2026-10-23):** fake-ask keeps the turn open.
   ```sh
   $V click "Ask anything"; $V type "first"; $V click send; $V wait "TOOL APPROVAL"
-  $V click "Decide above"; $V type "second"; $V click send; $V wait "1 waiting"
+  $V click "Message Devin"; $V type "second"; $V click send; $V wait "1 waiting"
+  $V restart                            # the first approval and second message stay
   $V click Approve; $V wait "TOOL APPROVAL"   # "second" was delivered and asks again
   ```
 - **Traps:** each CLI reads a mid-reply message at a different moment
@@ -87,7 +88,7 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
 - **Live reading:** a hidden chat releases its live view. Only devices with
   an open view receive its text. Text redraws before repeated tool updates;
   events keep their original order. Repeated tool output sends its newest
-  value within each batch. Full history stays on the machine.
+  value within each short batch. Full history stays on the machine.
 - **Prove latest first:** close a private chat, add many replies to its private
   history, restart the private daemon, and reopen the chat. Check that the
   latest answer appears. Load earlier replies and check that they appear.

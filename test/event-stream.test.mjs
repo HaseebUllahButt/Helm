@@ -7,7 +7,7 @@ import { apply, emptyLog } from '../apps/web/src/session/types.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-event-stream-'));
 process.env.HELM_DIR = root;
-const { streamBatch } = await import('../packages/connect/src/event-stream.js');
+const { streamBatch, ChatEventStream } = await import('../packages/connect/src/event-stream.js');
 const { SessionViewers } = await import('../packages/connect/src/session-viewers.js');
 test.after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -23,6 +23,46 @@ test('repeated tool output gives way to its newest value while text and sequence
   assert.equal(batch.at(-2).output, 'x'.repeat(8000) + '101');
   assert.ok(JSON.stringify(batch).length < before.length / 20, 'old output snapshots must not compete with the answer');
   assert.equal(JSON.stringify(events), before, 'stored history must remain unchanged');
+});
+
+test('text flushes nearby tool updates without waiting for the tool timer or changing order', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sent = [];
+  const stream = new ChatEventStream({ recipients: () => ['phone'], emit: (...args) => sent.push(args) });
+  t.after(() => stream.stop());
+  stream.push('chat', { seq: 1, type: 'item.update', id: 'tool', output: 'first' });
+  t.mock.timers.tick(50);
+  stream.push('chat', { seq: 2, type: 'item.update', id: 'tool', output: 'newest' });
+  assert.equal(sent.length, 0);
+  stream.push('chat', { seq: 3, type: 'item.delta', id: 'answer', text: 'Read now' });
+  t.mock.timers.tick(0);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0][1].map(e => e.seq), [1, 2, 3]);
+  assert.equal(sent[0][1][0].output, undefined);
+  assert.equal(sent[0][1][1].output, 'newest');
+  assert.equal(sent[0][1][2].text, 'Read now');
+  assert.deepEqual(sent[0][2], ['phone']);
+});
+
+test('tool updates still arrive while text is quiet and a closed view receives nothing', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sent = [];
+  let readers = ['phone'];
+  const stream = new ChatEventStream({ recipients: () => readers, emit: (...args) => sent.push(args) });
+  stream.push('chat', { seq: 1, type: 'item.update', id: 'tool', output: 'current' });
+  t.mock.timers.tick(149);
+  assert.equal(sent.length, 0);
+  t.mock.timers.tick(1);
+  assert.equal(sent.length, 1);
+  stream.push('chat', { seq: 2, type: 'item.update', id: 'tool', output: 'closed' });
+  readers = [];
+  t.mock.timers.tick(150);
+  assert.equal(sent.length, 1);
+  stream.push('chat', { seq: 3, type: 'item.update', id: 'tool', output: 'stopped' });
+  stream.stop();
+  readers = ['phone'];
+  t.mock.timers.tick(150);
+  assert.equal(sent.length, 1);
 });
 
 test('item identities and history resets keep independent tool results separate', () => {
