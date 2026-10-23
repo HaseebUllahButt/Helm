@@ -82,6 +82,8 @@ test('a failed Git batch keeps its previous saved point and removes private inpu
     [{ path: 'same', data: '' }, { path: 'same', data: '' }],
     [{ path: 'a', data: '' }, { path: 'a/b', data: '' }],
     [{ path: '.git/config', data: '' }],
+    [{ path: 'nested/.git/config', data: '' }],
+    [{ path: '.GIT/config', data: '' }],
   ]) {
     assert.throws(() => taskCheckpoint(directory, { files }, base));
     assert.equal(head(), base);

@@ -30,6 +30,9 @@ export function taskCheckpoint(directory, snapshot, parent = null) {
     for (const file of files) {
       const path = resolve(working, file.path);
       if (!path.startsWith(`${working}${sep}`)) throw new Error('checkpoint path escaped its workspace');
+      if (path.slice(working.length + 1).split(sep).some(part => part.toLowerCase() === '.git')) {
+        throw new Error('Checkpoint path uses a Git folder.');
+      }
       if (paths.has(path)) throw new Error('Checkpoint repeats a file path.');
       paths.add(path);
     }
