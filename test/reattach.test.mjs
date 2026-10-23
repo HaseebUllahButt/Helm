@@ -92,7 +92,7 @@ test('a failed reconnect leaves an idle chat idle and quiet, but holds and marks
   const held = again.get(busy.id);
   assert.equal(held.status, 'idle');
   assert.equal(held.recovery?.kind, 'error');
-  assert.match(held.recovery.message, /Could not reconnect/);
+  assert.match(held.recovery.message, /Helm did not reconnect/);
   assert.equal(held.queuePaused, true);
 
   // The next retry reaches the agent: the mark goes and the queue moves.

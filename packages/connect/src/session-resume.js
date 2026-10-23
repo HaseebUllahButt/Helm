@@ -96,7 +96,8 @@ export class SessionResume {
 
   /** Whether the record is holding work because its agent could not be checked. */
   unreachable(s) {
-    return s.recovery?.kind === 'error' && !!s.recovery.message?.startsWith(RECONNECT_FAILED);
+    return s.recovery?.kind === 'error' && [RECONNECT_FAILED, 'Could not reconnect to the agent:']
+      .some(prefix => s.recovery.message?.startsWith(prefix));
   }
 
   /** A failed reattach that has since succeeded no longer needs attention. */
