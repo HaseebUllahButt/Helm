@@ -9,9 +9,10 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   the header title changes from "Quick chat".
 - **Traps:** the title is made from your words and may drop one ("hello from
   fmap" became "from fmap"). The model chip shows real Devin model names even
-  for the fake agent.
+  for the fake agent. Streamed replies must not redraw the message editor;
+  approval cards and settings still update while a draft stays in the box.
 - **Tests:** `test/browser/chat-cycle`, `send-v2`, `send-entry-points`,
-  `failed-send`, `composer-card`; `test/message-delivery`, `user-message`,
+  `failed-send`, `composer-card`, `composer-streaming`; `test/message-delivery`, `user-message`,
   `stream`, `session-driver`.
 
 ## Queue a message while the agent works

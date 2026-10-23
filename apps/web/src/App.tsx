@@ -1,5 +1,5 @@
 import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice } from './session/voice';
-import { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
 import { useNow } from './useNow';
 import { isUnread, markSeen, seenHere, useSeenVersion } from './threadStatus';
@@ -16,7 +16,8 @@ import { NotificationToast } from './NotificationToast';
 import { MachineUpdateNotice } from './MachineUpdateNotice';
 import { sending, useSends } from './send/store';
 import { SendActivity, SendNotice } from './send/SendActivity';
-import { BackIcon, Icon } from './Icon';
+import { Icon } from './Icon';
+import { deferredScreen } from './deferredScreen';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import { brainHost } from '@helm/protocol/brain-host';
@@ -31,15 +32,8 @@ import { Gear } from './screens/icons';
 import { whereOf, HomeRow, StatusChip, Fold, NeedCard, NEVER_SNOOZE, when, PagedRows, SETTLED_FIRST, SETTLED_STEP } from './screens/ThreadRows';
 import { shareHopTarget, clearShareHop, ShareHop } from './screens/ShareHop';
 import { type Auth, Login } from './screens/Login';
-import { DevicesView } from './screens/Devices';
 import { EnvView } from './screens/EnvView';
 import { BrainView } from './screens/Brain';
-import { EnvSettings } from './screens/MachineSettings';
-import { SettingsView, LinksView, NetworkSettings } from './screens/Settings';
-import { OwnerView } from './screens/Owner';
-import { ModelPrefsView } from './screens/ModelPrefs';
-import { Browse } from './screens/Browse';
-import { MediaView } from './screens/Media';
 import { Start } from './screens/Start';
 import { SessionView } from './session/SessionView';
 
@@ -58,23 +52,20 @@ function useWide() {
   return wide;
 }
 
-const UsageView = lazy(() => import('./Usage').then((m) => ({ default: m.UsageView })));
-const UpdatesView = lazy(() => import('./Updates').then((m) => ({ default: m.UpdatesView })));
-const IntegrationsView = lazy(() => import('./Integrations').then((m) => ({ default: m.IntegrationsView })));
-const TransferView = lazy(() => import('./Transfer').then((m) => ({ default: m.TransferView })));
-const VerifyView = lazy(() => import('./Transfer').then((m) => ({ default: m.VerifyView })));
-
-function ViewLoading({ title, onBack }: { title: string; onBack: () => void }) {
-  return (
-    <>
-      <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <b>{title}</b>
-      </div>
-      <div className="scroll"><div className="pad"><div className="empty quiet">Helm is loading.</div></div></div>
-    </>
-  );
-}
+const UsageView = deferredScreen('Usage', () => import('./Usage').then(m => ({ default: m.UsageView })));
+const UpdatesView = deferredScreen('Updates', () => import('./Updates').then(m => ({ default: m.UpdatesView })));
+const IntegrationsView = deferredScreen('Connectors & skills', () => import('./Integrations').then(m => ({ default: m.IntegrationsView })));
+const TransferView = deferredScreen('Send a project', () => import('./Transfer').then(m => ({ default: m.TransferView })));
+const VerifyView = deferredScreen('Check setup', () => import('./Transfer').then(m => ({ default: m.VerifyView })));
+const DevicesView = deferredScreen('Devices', () => import('./screens/Devices').then(m => ({ default: m.DevicesView })));
+const EnvSettings = deferredScreen('Machine settings', () => import('./screens/MachineSettings').then(m => ({ default: m.EnvSettings })));
+const SettingsView = deferredScreen('Settings', () => import('./screens/Settings').then(m => ({ default: m.SettingsView })));
+const LinksView = deferredScreen('Links', () => import('./screens/Settings').then(m => ({ default: m.LinksView })));
+const NetworkSettings = deferredScreen('Network settings', () => import('./screens/Settings').then(m => ({ default: m.NetworkSettings })));
+const OwnerView = deferredScreen('Your preferences', () => import('./screens/Owner').then(m => ({ default: m.OwnerView })));
+const ModelPrefsView = deferredScreen('Models', () => import('./screens/ModelPrefs').then(m => ({ default: m.ModelPrefsView })));
+const Browse = deferredScreen('Folders', () => import('./screens/Browse').then(m => ({ default: m.Browse })));
+const MediaView = deferredScreen('Media', () => import('./screens/Media').then(m => ({ default: m.MediaView })));
 
 const DONE_FOR_MS = 3 * 24 * 60 * 60_000;
 
@@ -1336,15 +1327,11 @@ function Shell({ client, conn, onSignOut }: {
             onOpen={(v) => push(v)} onUnpair={() => setUnpairing(true)}
           />
         ) : view.kind === 'usage' ? (
-          <Suspense fallback={<ViewLoading title="Usage" onBack={back} />}>
-            <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
-          </Suspense>
+          <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
         ) : view.kind === 'devices' ? (
           <DevicesView client={client} onBack={back} />
         ) : view.kind === 'updates' ? (
-          <Suspense fallback={<ViewLoading title="Updates" onBack={back} />}>
-            <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
-          </Suspense>
+          <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
         ) : view.kind === 'links' ? (
           <LinksView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'owner' ? (
@@ -1433,9 +1420,7 @@ function Shell({ client, conn, onSignOut }: {
             onOpen={(s) => push({ kind: 'session', session: s })}
           />
         ) : view.kind === 'integrations' ? (
-          <Suspense fallback={<ViewLoading title="Connectors & skills" onBack={back} />}>
-            <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
-          </Suspense>
+          <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
         ) : view.kind === 'media' ? (
           <MediaView key={env.id} client={client} env={env} onBack={back} />
         ) : view.kind === 'starting' ? (
@@ -1476,28 +1461,24 @@ function Shell({ client, conn, onSignOut }: {
             onPick={(cwd) => push({ kind: 'transfer', cwd })}
           />
         ) : view.kind === 'transfer' ? (
-          <Suspense fallback={<ViewLoading title="Send a project" onBack={back} />}>
-            <TransferView
-              key={`${env.id}:${view.cwd}`}
-              client={client} source={env} envs={envs} folder={view.cwd} session={view.session} jobId={view.jobId} onBack={back}
-              onJob={(job) => restate([...nav.current.stack.slice(0, -1), { kind: 'transfer', cwd: job.source.path, jobId: job.id }])}
-              onAgain={() => restate([...nav.current.stack.slice(0, -1), { kind: 'transfer', cwd: view.cwd }])}
-              onOpenFolder={(targetId, path) => navigate([{ kind: 'env' }, { kind: 'browse', path }], targetId)}
-              onStartChat={(targetId, path) => navigate([{ kind: 'env' }, { kind: 'start', cwd: path }], targetId)}
-              onOpenSession={(targetId, session) => navigate([
-                { kind: 'env' }, { kind: 'session', session },
-              ], targetId)}
-            />
-          </Suspense>
+          <TransferView
+            key={`${env.id}:${view.cwd}`}
+            client={client} source={env} envs={envs} folder={view.cwd} session={view.session} jobId={view.jobId} onBack={back}
+            onJob={(job) => restate([...nav.current.stack.slice(0, -1), { kind: 'transfer', cwd: job.source.path, jobId: job.id }])}
+            onAgain={() => restate([...nav.current.stack.slice(0, -1), { kind: 'transfer', cwd: view.cwd }])}
+            onOpenFolder={(targetId, path) => navigate([{ kind: 'env' }, { kind: 'browse', path }], targetId)}
+            onStartChat={(targetId, path) => navigate([{ kind: 'env' }, { kind: 'start', cwd: path }], targetId)}
+            onOpenSession={(targetId, session) => navigate([
+              { kind: 'env' }, { kind: 'session', session },
+            ], targetId)}
+          />
         ) : view.kind === 'verify' ? (
-          <Suspense fallback={<ViewLoading title="Check setup" onBack={back} />}>
-            <VerifyView
-              client={client} env={env} folder={view.path} onBack={back}
-              onOpenSession={(envId, session) => navigate([
-                { kind: 'env' }, { kind: 'session', session },
-              ], envId)}
-            />
-          </Suspense>
+          <VerifyView
+            client={client} env={env} folder={view.path} onBack={back}
+            onOpenSession={(envId, session) => navigate([
+              { kind: 'env' }, { kind: 'session', session },
+            ], envId)}
+          />
         ) : view.kind === 'start' ? (
           <Start
             client={client} env={env} cwd={view.cwd} quick={view.quick} onBack={back}
