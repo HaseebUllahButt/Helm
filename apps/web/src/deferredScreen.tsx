@@ -1,11 +1,10 @@
 import { Component, lazy, Suspense, createElement, type ComponentPropsWithRef, type ComponentType, type ReactNode } from 'react';
-import { BackIcon } from './Icon';
 import { reloadApp } from './reload';
 
 function ScreenFrame({ title, onBack, children }: { title: string; onBack: () => void; children: ReactNode }) {
   return <>
     <div className="bar">
-      <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
+      <button className="iconbtn back" onClick={onBack}>Back</button>
       <b>{title}</b>
     </div>
     <div className="scroll"><div className="pad">{children}</div></div>
