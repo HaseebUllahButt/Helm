@@ -81,6 +81,8 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `hidden-context`.
 
 ## Long chats: folds, copy, selection
+- **Storage rule:** append new events to history files. Replace old history
+  with a rename. Readers keep byte positions between pages and search updates.
 - **Prove selection copy (driven 2026-10-17):** fake chat at 390×844 with
   clipboard permission granted; blur the composer, select `.chat .md p`
   with a Range (no pointer events). After 450 ms

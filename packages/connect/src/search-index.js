@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, renameSync, statSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, statSync, mkdirSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
 import { EVENTS_DIR } from './events.js';
@@ -29,6 +29,31 @@ const SNIPPET = 120;
 const clip = (text, n) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
 const flat = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
 
+// Live events normally arrive in order. Ranges remember exact delivery without
+// keeping one number for every token until the next search reads the log.
+class LiveRanges {
+  constructor(ranges = []) { this.ranges = ranges; }
+  add(seq) {
+    const last = this.ranges.at(-1);
+    if (!last || seq > last[1] + 1) { this.ranges.push([seq, seq]); return; }
+    if (seq >= last[0]) { last[1] = Math.max(last[1], seq); return; }
+    this.ranges.push([seq, seq]); this.ranges.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const range of this.ranges) {
+      const prev = merged.at(-1);
+      if (prev && range[0] <= prev[1] + 1) prev[1] = Math.max(prev[1], range[1]);
+      else merged.push(range);
+    }
+    this.ranges = merged;
+  }
+  has(seq) { return this.ranges.some(([from, to]) => from <= seq && seq <= to); }
+  clear() { this.ranges = []; }
+  prune(seq) {
+    while (this.ranges[0]?.[1] <= seq) this.ranges.shift();
+    if (this.ranges[0]?.[0] <= seq) this.ranges[0][0] = seq + 1;
+  }
+}
+
 /** Words typed in the box; all must appear for a match. */
 export function queryWords(query) {
   return String(query ?? '').toLowerCase().split(/\s+/).filter((w) => w.length > 0);
@@ -51,49 +76,94 @@ export function searchable(s) {
 }
 
 export class SearchIndex {
-  /** chat id -> { last: seq, size: bytes read, entries: [{ who, seq, at, text }] } */
+  /** chat id -> { last: seq, size: file bytes, offset: complete bytes read, fileKey, entries } */
   #chats = new Map();
   /** item id -> growing text, for agent replies arriving in pieces */
   #open = new Map();
-  #dir; #file; #saveTimer = null; #dirty = false; #built = null;
+  #dir; #file; #saveTimer = null; #dirty = false; #built = null; #bytesRead = 0;
+  #restoreOpenFromLogs = new Set();
   log;
 
   constructor({ dir = EVENTS_DIR, file = SEARCH_FILE, log = () => {} } = {}) {
     this.#dir = dir; this.#file = file; this.log = log;
     try {
       const saved = JSON.parse(readFileSync(file, 'utf8'));
-      if (saved?.v === 1 && saved.chats && typeof saved.chats === 'object') {
+      if ((saved?.v === 1 || saved?.v === 2) && saved.chats && typeof saved.chats === 'object') {
         for (const [id, chat] of Object.entries(saved.chats)) {
-          if (Array.isArray(chat?.entries)) this.#chats.set(id, { last: Number(chat.last) || 0, size: Number(chat.size) || 0, entries: chat.entries });
+          if (Array.isArray(chat?.entries)) {
+            for (const entry of chat.entries) entry.lower ??= String(entry.text ?? '').toLowerCase();
+            const restored = { last: Number(chat.last) || 0, diskLast: Number(chat.diskLast ?? chat.last) || 0, resetSeq: Number(chat.resetSeq) || 0, liveSeqs: new LiveRanges(chat.liveRanges ?? []), size: Number(chat.size) || 0, offset: Number(chat.offset) || 0, offsetMissing: chat.offset == null, fileKey: chat.fileKey, mtimeMs: chat.mtimeMs, ctimeMs: chat.ctimeMs, prefix: chat.prefix, tail: chat.tail, entries: chat.entries };
+            // Older indexes can miss history first read after live delivery.
+            // Replay once while retaining indexed words from legacy trimmed logs.
+            if (saved.v === 1) { restored.diskLast = 0; restored.offset = 0; restored.offsetMissing = true; }
+            this.#reindex(restored);
+            this.#chats.set(id, restored);
+          }
+        }
+      }
+      if (saved?.v === 2 && saved.open && typeof saved.open === 'object') this.#open = new Map(Object.entries(saved.open));
+      else {
+        for (const [id, chat] of this.#chats) {
+          this.#restoreOpenFromLogs.add(id);
+          chat.offset = 0;
+          chat.offsetMissing = true;
         }
       }
     } catch { /* no index yet, or unreadable: built again from the logs */ }
   }
 
   get size() { return this.#chats.size; }
+  get bytesRead() { return this.#bytesRead; }
 
   #chat(id) {
     let chat = this.#chats.get(id);
-    if (!chat) { chat = { last: 0, size: 0, entries: [] }; this.#chats.set(id, chat); }
+    if (!chat) { chat = { last: 0, diskLast: 0, resetSeq: 0, liveSeqs: new LiveRanges(), size: 0, offset: 0, fileKey: null, entries: [], lower: null, matchCache: null }; this.#chats.set(id, chat); }
     return chat;
+  }
+
+  #reindex(chat) {
+    chat.lower = null;
+    chat.matchCache = null;
   }
 
   #add(chat, entry) {
     const text = flat(entry.text);
     if (!text) return;
     // The owner's message is logged when sent and again when the CLI echoes it.
-    const prev = chat.entries[chat.entries.length - 1];
-    if (prev && prev.who === entry.who && prev.text === text) { prev.seq = Math.max(prev.seq, entry.seq); return; }
-    chat.entries.push({ who: entry.who, seq: entry.seq, at: entry.at, text });
+    if (chat.entries.length >= MAX_ENTRIES && entry.seq < chat.entries[0].seq) return;
+    let at = 0, end = chat.entries.length;
+    while (at < end) {
+      const mid = Math.floor((at + end) / 2);
+      if (chat.entries[mid].seq < entry.seq) at = mid + 1;
+      else end = mid;
+    }
+    const duplicate = chat.entries[at];
+    if (duplicate?.seq === entry.seq && duplicate.who === entry.who) {
+      if (duplicate.text === text) return;
+      chat.entries.splice(at, 1);
+    }
+    chat.entries.splice(at, 0, { who: entry.who, seq: entry.seq, at: entry.at, text, lower: text.toLowerCase() });
+    for (let i = Math.max(0, at - 1); i + 1 < chat.entries.length && i <= at; i++) {
+      const prev = chat.entries[i], next = chat.entries[i + 1];
+      if (prev.who === next.who && prev.text === next.text) {
+        prev.seq = Math.max(prev.seq, next.seq); chat.entries.splice(i + 1, 1); i--;
+      }
+    }
     if (chat.entries.length > MAX_ENTRIES) chat.entries.splice(0, chat.entries.length - MAX_ENTRIES);
+    this.#reindex(chat);
     this.#dirty = true;
   }
 
   /** One event of one chat, live or read from its log. */
-  note(id, e) {
+  note(id, e, { fromLog = false } = {}) {
     if (!e || typeof e !== 'object') return;
     const chat = this.#chat(id);
-    if (typeof e.seq === 'number' && e.seq > chat.last) chat.last = e.seq;
+    if (typeof e.seq === 'number') {
+      if (e.seq > chat.last) chat.last = e.seq;
+      const hasReply = this.#open.has(`${id}:${e.id}`);
+      const applied = !['item.delta', 'item.done'].includes(e.type) || hasReply;
+      if (!fromLog && applied && e.seq > chat.diskLast) chat.liveSeqs.add(e.seq);
+    }
     switch (e.type) {
       case 'turn.start': {
         if (e.local || e.wake) return;
@@ -102,11 +172,11 @@ export class SearchIndex {
         return;
       }
       case 'item.start':
-        if (e.kind === 'text' || e.kind === 'message') this.#open.set(`${id}:${e.id}`, { text: '', at: e.at });
+        if (e.kind === 'text' || e.kind === 'message') { this.#open.set(`${id}:${e.id}`, { text: '', at: e.at }); this.#dirty = true; }
         return;
       case 'item.delta': {
         const open = this.#open.get(`${id}:${e.id}`);
-        if (open && typeof e.text === 'string' && open.text.length < AGENT_CHARS * 2) open.text += e.text;
+        if (open && typeof e.text === 'string' && open.text.length < AGENT_CHARS * 2) { open.text += e.text; this.#dirty = true; }
         return;
       }
       case 'item.done': {
@@ -114,13 +184,17 @@ export class SearchIndex {
         const open = this.#open.get(key);
         if (!open) return;
         this.#open.delete(key);
+        this.#dirty = true;
         const text = flat(open.text);
         if (text) this.#add(chat, { who: 'agent', seq: e.seq, at: e.at ?? open.at, text: clip(text, AGENT_CHARS) });
         return;
       }
       case 'history.reset':
-        // The chat was rewound or restored: what came after is gone from it.
-        chat.entries = chat.entries.filter((x) => typeof e.seq !== 'number' || x.seq < e.seq);
+        // The rewritten log replays kept history after this reset marker.
+        chat.entries = [];
+        chat.resetSeq = e.seq ?? chat.resetSeq;
+        if (!fromLog) { chat.liveSeqs.clear(); if (typeof e.seq === 'number') chat.liveSeqs.add(e.seq); }
+        this.#reindex(chat);
         for (const key of this.#open.keys()) if (key.startsWith(`${id}:`)) this.#open.delete(key);
         this.#dirty = true;
         return;
@@ -131,21 +205,119 @@ export class SearchIndex {
   /** Read what a chat's log holds beyond what is indexed. Returns true when something was read. */
   #readLog(id) {
     const file = join(this.#dir, `${id}.jsonl`);
-    let size;
-    try { size = statSync(file).size; } catch { return false; }
+    let info;
+    try { info = statSync(file); } catch { return false; }
+    const size = info.size;
     const chat = this.#chat(id);
-    if (size === chat.size) return false;
-    let body;
-    try { body = readFileSync(file, 'utf8'); } catch { return false; }
-    const after = chat.last;
-    for (const raw of body.split('\n')) {
-      if (!raw) continue;
-      let e;
-      try { e = JSON.parse(raw); } catch { continue; }
-      if (typeof e.seq === 'number' && e.seq <= after && e.type !== 'history.reset') continue;
-      this.note(id, e);
+    const fileKey = `${info.dev}:${info.ino}`;
+    const stampChanged = chat.mtimeMs != null && chat.ctimeMs != null
+      && (chat.mtimeMs !== info.mtimeMs || chat.ctimeMs !== info.ctimeMs);
+    const readRange = (position, length) => {
+      if (length <= 0) return Buffer.alloc(0);
+      let fd;
+      try {
+        fd = openSync(file, 'r');
+        const bytes = Buffer.alloc(length);
+        let count = 0;
+        while (count < length) {
+          const n = readSync(fd, bytes, count, length - count, position + count);
+          if (!n) break;
+          count += n;
+        }
+        this.#bytesRead += count;
+        return bytes.subarray(0, count);
+      } catch { return null; }
+      finally { if (fd !== undefined) closeSync(fd); }
+    };
+    if (size === chat.size && fileKey === chat.fileKey && !stampChanged && !chat.offsetMissing) return false;
+    let replaced = !!chat.fileKey && fileKey !== chat.fileKey;
+    if (!replaced && chat.fileKey && stampChanged) {
+      const prefix = readRange(0, Math.min(32, chat.size));
+      const tailLength = Math.min(32, chat.offset);
+      const tail = readRange(chat.offset - tailLength, tailLength);
+      replaced = size <= chat.size || (!!chat.prefix && !!chat.tail && (!prefix || !tail
+        || prefix.toString('base64') !== chat.prefix || tail.toString('base64') !== chat.tail));
     }
+    if (replaced) {
+      chat.entries = [];
+      this.#reindex(chat);
+      for (const key of this.#open.keys()) if (key.startsWith(`${id}:`)) this.#open.delete(key);
+      chat.last = 0;
+      chat.diskLast = 0;
+      chat.resetSeq = 0;
+      chat.liveSeqs.clear();
+      chat.offset = 0;
+    }
+    if (size < chat.offset) chat.offset = 0;
+    let body = readRange(chat.offset, Math.max(0, size - chat.offset));
+    if (!body) return false;
+    const start = chat.offset;
+    let after = chat.diskLast;
+    let consumed = 0;
+    const checkpoint = chat.diskLast;
+    let legacyOpen = this.#restoreOpenFromLogs.has(id) ? new Map() : null;
+    const mergeLegacyOpen = () => {
+      if (!legacyOpen) return;
+      for (const [key, open] of legacyOpen) if (!this.#open.has(key)) this.#open.set(key, open);
+      legacyOpen = null;
+    };
+    const accept = (raw) => {
+      if (!raw) return;
+      let e;
+      try { e = JSON.parse(raw); } catch { return; }
+      if (legacyOpen && typeof e.seq === 'number' && e.seq > checkpoint) mergeLegacyOpen();
+      if (legacyOpen) {
+        const key = `${id}:${e.id}`;
+        if (e.type === 'history.reset') for (const k of legacyOpen.keys()) legacyOpen.delete(k);
+        else if (e.type === 'item.start' && (e.kind === 'text' || e.kind === 'message')) legacyOpen.set(key, { text: '', at: e.at });
+        else if (e.type === 'item.delta' && legacyOpen.has(key) && typeof e.text === 'string' && legacyOpen.get(key).text.length < AGENT_CHARS * 2) legacyOpen.get(key).text += e.text;
+        else if (e.type === 'item.done') legacyOpen.delete(key);
+      }
+      if (legacyOpen && typeof e.seq === 'number' && e.seq <= checkpoint) return;
+      if (typeof e.seq === 'number' && e.seq <= chat.resetSeq) {
+        after = Math.max(after, e.seq); chat.diskLast = Math.max(chat.diskLast, e.seq); return;
+      }
+      if (e.type === 'history.reset' && typeof e.seq === 'number') {
+        after = e.seq;
+        chat.diskLast = e.seq;
+        mergeLegacyOpen();
+        this.note(id, e, { fromLog: true });
+        return;
+      }
+      if (typeof e.seq === 'number' && e.seq <= after) return;
+      if (typeof e.seq === 'number') {
+        after = e.seq;
+        chat.diskLast = e.seq;
+      }
+      if (legacyOpen && typeof e.seq === 'number' && e.seq > checkpoint) mergeLegacyOpen();
+      if (typeof e.seq === 'number' && chat.liveSeqs.has(e.seq)) return;
+      this.note(id, e, { fromLog: true });
+    };
+    for (;;) {
+      const newline = body.indexOf(10, consumed);
+      if (newline < 0) break;
+      const raw = body.toString('utf8', consumed, newline);
+      consumed = newline + 1;
+      accept(raw);
+    }
+    if (consumed < body.length) {
+      const raw = body.toString('utf8', consumed);
+      try { JSON.parse(raw); accept(raw); } catch { /* Keep a torn tail for the next read. */ }
+    }
+    mergeLegacyOpen();
+    this.#restoreOpenFromLogs.delete(id);
+    chat.liveSeqs.prune(chat.diskLast);
+    chat.offset = start + consumed;
     chat.size = size;
+    chat.offsetMissing = false;
+    chat.fileKey = fileKey;
+    chat.mtimeMs = info.mtimeMs;
+    chat.ctimeMs = info.ctimeMs;
+    const prefix = readRange(0, Math.min(32, size));
+    const tailLength = Math.min(32, chat.offset);
+    const tail = readRange(chat.offset - tailLength, tailLength);
+    chat.prefix = prefix?.toString('base64');
+    chat.tail = tail?.toString('base64');
     this.#dirty = true;
     return true;
   }
@@ -170,7 +342,11 @@ export class SearchIndex {
       const chat = this.#chats.get(s.id);
       if (chat) chat.entries.sort((a, b) => a.seq - b.seq);
     }
-    for (const id of this.#chats.keys()) if (!keep.has(id)) { this.#chats.delete(id); this.#dirty = true; }
+    for (const id of this.#chats.keys()) if (!keep.has(id)) {
+      this.#chats.delete(id);
+      for (const key of this.#open.keys()) if (key.startsWith(`${id}:`)) this.#open.delete(key);
+      this.#dirty = true;
+    }
     if (this.#dirty) this.#scheduleSave();
     return read;
   }
@@ -203,13 +379,24 @@ export class SearchIndex {
       const titleHit = title && words.every((w) => title.toLowerCase().includes(w));
       let best = null, count = 0;
       if (chat) {
-        for (let i = chat.entries.length - 1; i >= 0; i--) {
-          const entry = chat.entries[i];
-          const lower = entry.text.toLowerCase();
-          if (!words.every((w) => lower.includes(w))) continue;
-          count++;
-          if (!best) best = entry;
+        const key = JSON.stringify(words);
+        let cached = chat.matchCache;
+        if (!cached || cached.key !== key) {
+          let found = null;
+          let matches = 0;
+          if (chat.lower == null) chat.lower = chat.entries.map(e => e.lower ??= e.text.toLowerCase()).join('\n');
+          if (words.every((w) => chat.lower.includes(w))) {
+            for (let i = chat.entries.length - 1; i >= 0; i--) {
+              const entry = chat.entries[i];
+              if (!words.every((w) => entry.lower.includes(w))) continue;
+              matches++;
+              if (!found) found = entry;
+            }
+          }
+          cached = chat.matchCache = { key, best: found, count: matches };
         }
+        best = cached.best;
+        count = cached.count;
       }
       if (!best && !titleHit) continue;
       out.push({
@@ -234,11 +421,17 @@ export class SearchIndex {
     if (this.#saveTimer) { clearTimeout(this.#saveTimer); this.#saveTimer = null; }
     if (!this.#dirty) return false;
     const chats = {};
-    for (const [id, chat] of this.#chats) chats[id] = chat;
+    for (const [id, chat] of this.#chats) {
+      const { last, diskLast, resetSeq, size, offset, fileKey, mtimeMs, ctimeMs, prefix, tail, entries, liveSeqs } = chat;
+      chats[id] = {
+        last, diskLast, resetSeq, liveRanges: liveSeqs.ranges, size, offset, fileKey, mtimeMs, ctimeMs, prefix, tail,
+        entries: entries.map(({ who, seq, at, text }) => ({ who, seq, at, text })),
+      };
+    }
     try {
       mkdirSync(join(this.#file, '..'), { recursive: true });
       const tmp = `${this.#file}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ v: 1, chats }));
+      writeFileSync(tmp, JSON.stringify({ v: 2, chats, open: Object.fromEntries(this.#open) }));
       renameSync(tmp, this.#file);
       this.#dirty = false;
       return true;

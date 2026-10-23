@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmS
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
+import { EventFile } from './event-file.js';
 
 /**
  * What happened in a session, in order.
@@ -118,6 +119,7 @@ export function forWire(event) {
  * thread whose final turn was longer than that, and the chat opened blank.
  */
 function turnStartFor(events, from) {
+  if (events.turnStartBefore) return events.turnStartBefore(from);
   for (let i = Math.min(from, events.length - 1); i >= 0; i--) {
     if (events[i].type === 'turn.start') return i;
   }
@@ -170,29 +172,6 @@ function anchor(event) {
   return result;
 }
 
-/** A line's seq without parsing the rest: every event is written seq first. */
-function seqOf(line) {
-  const m = /^\{"seq":(\d+)/.exec(line);
-  if (m) return Number(m[1]);
-  try { return JSON.parse(line).seq ?? 0; } catch { return 0; }
-}
-
-/**
- * Where a file's unbroken history starts. Seqs go up by one per event, so a
- * gap marks the front: logs trimmed before 2026-10-19 keep a sparse prefix of
- * anchors ahead of what is left, and those are not history to page through.
- */
-function contiguousFirst(lines) {
-  let first = 0, next = 0;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const seq = seqOf(lines[i]);
-    if (!seq) continue;
-    if (first && seq !== next) break;
-    first = seq; next = seq - 1;
-  }
-  return first;
-}
-
 /**
  * Retain the newest KEEP events plus just the identities those events need.
  * `older` walks backwards and is repeatable: disk opens need not parse every
@@ -200,7 +179,7 @@ function contiguousFirst(lines) {
  * Each referenced item has at most one start, each owner one of each lifecycle
  * event, so context remains bounded by the retained tail rather than log age.
  */
-function retain(tail, older) {
+function retain(tail, older, full = event => event) {
   const first = tail[0]?.seq ?? 0;
   const pending = pendingTickets([...older()].reverse().concat(tail));
   const items = new Set(tail.filter(e => e.type.startsWith('item.')).map(e => e.id));
@@ -241,7 +220,8 @@ function retain(tail, older) {
     if (turns.has(key)) continue;
     // An echo names its ticket; the ticket's own start is kept with it.
     if (event.inputId) owners.add(event.inputId);
-    turns.add(key); context.push(pending.has(event.turnId) ? event : anchor(event));
+    const chosen = full(event);
+    turns.add(key); context.push(pending.has(event.turnId) ? chosen : anchor(chosen));
   }
   return { events: [...context, ...tail].sort((a, b) => a.seq - b.seq), first };
 }
@@ -257,6 +237,7 @@ const OPEN_LOGS = 24;
 export class EventLog {
   /** sessionId -> { seq, events[] }, least recently used first */
   #logs = new Map();
+  #files = new Map();
   /**
    * sessionId -> unanswered permission requests, kept past eviction: the
    * session list asks for every thread's count, and answering that must not
@@ -282,18 +263,15 @@ export class EventLog {
     log = { seq: 0, events: [], first: 0, diskFirst: 0 };
     const file = this.#file(id);
     if (existsSync(file)) {
-      const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
-      log.diskFirst = contiguousFirst(lines);
-      const from = Math.max(0, lines.length - KEEP), tail = [];
-      for (const line of lines.slice(from)) {
-        try { tail.push(JSON.parse(line)); } catch { /* a torn last line after a crash */ }
-      }
-      const older = function* () {
-        for (let i = from - 1; i >= 0; i--) {
-          try { yield JSON.parse(lines[i]); } catch { /* a torn historic line */ }
-        }
-      };
-      Object.assign(log, retain(tail, older));
+      const indexed = this.#indexed(id), view = indexed.view();
+      log.diskFirst = indexed.first;
+      const from = Math.max(0, view.length - KEEP), tail = [];
+      for (let i = from; i < view.length; i++) { const event = view.at(i); if (event) tail.push(event); }
+      // Retention needs identities and turn records, never old text deltas.
+      // Parse those records once, then share them across retention's passes.
+      const context = [...view.contextBefore(from)].map(e => isTurn(e) ? e : anchor(e)).reverse();
+      const older = function* () { yield* context; };
+      Object.assign(log, retain(tail, older, event => indexed.get(event.seq) ?? event));
       log.context = log.events.length - tail.length;
       if (log.events.length) log.seq = log.events[log.events.length - 1].seq;
     }
@@ -301,7 +279,10 @@ export class EventLog {
     const open = new Map();
     for (const e of log.events) this.#track(open, e);
     this.#pending.set(id, open);
-    while (this.#logs.size > OPEN_LOGS) this.#logs.delete(this.#logs.keys().next().value);
+    while (this.#logs.size > OPEN_LOGS) {
+      const oldest = this.#logs.keys().next().value;
+      this.#logs.delete(oldest); this.#files.delete(oldest);
+    }
     return log;
   }
 
@@ -351,6 +332,7 @@ export class EventLog {
   /** Append one event; returns it with `seq` and `at` filled in. */
   append(id, event) {
     const log = this.#open(id);
+    const indexed = this.#files.get(id)?.refresh();
     const full = { seq: ++log.seq, at: Date.now(), ...event };
     log.events.push(full);
     this.#track(this.#pending.get(id), full);
@@ -364,7 +346,9 @@ export class EventLog {
     } else if (!log.context) log.first = log.events[0]?.seq ?? 0;
     log.diskFirst ||= full.seq;
     mkdirSync(this.dir, { recursive: true });
-    appendFileSync(this.#file(id), JSON.stringify(full) + '\n', { mode: 0o600 });
+    const line = JSON.stringify(full) + '\n';
+    appendFileSync(this.#file(id), line, { mode: 0o600 });
+    indexed?.append(full, line);
     return full;
   }
 
@@ -403,11 +387,13 @@ export class EventLog {
     // Memory holds the newest part. Paging back, or catching up from further
     // back than that, reads the file, which holds all of it.
     const fromDisk = before > 0 || (since > 0 && since + 1 < log.first);
-    let list = fromDisk ? this.#disk(id) : log.events;
-    if (before > 0) list = before <= log.diskFirst ? [] : list.filter((e) => e.seq < before);
-    if (since > 0) list = list.filter((e) => e.seq > since);
+    const indexed = fromDisk ? this.#indexed(id) : null;
+    let list = indexed ? indexed.view({ before, since }) : log.events;
+    if (before > 0 && before <= log.diskFirst) list = [];
+    if (!fromDisk && since > 0) list = list.filter((e) => e.seq > since);
 
     const shaped = (e) => forWire(this.#hydrate(id, e));
+    const fullContext = e => indexed ? indexed.get(e.seq) ?? e : e;
     // Bytes on the wire, not string units: Urdu or Chinese text is up to
     // three bytes a character, and a page of it was three times its budget.
     const sizeOf = (e) => Buffer.byteLength(JSON.stringify(e));
@@ -423,7 +409,9 @@ export class EventLog {
       let bytes = 0;
       let front = list.length;
       for (let i = list.length - 1; i >= 0 && events.length < want; i--) {
-        const e = shaped(list[i]);
+        const raw = list.at(i);
+        if (!raw) continue;
+        const e = shaped(raw);
         const n = sizeOf(e);
         // Always at least one: a single event over the budget still has to
         // move, or the client asks forever and never advances.
@@ -442,14 +430,21 @@ export class EventLog {
       if (front > 0 && events.length && events[0].type !== 'turn.start') {
         const at = turnStartFor(list, front - 1);
         if (at >= 0) {
-          const head = list.slice(at, front).map(shaped);
-          const headBytes = head.reduce((n, e) => n + sizeOf(e), 0);
+          const head = [];
+          let headBytes = 0;
+          for (let i = at; i < front; i++) {
+            const raw = list.at(i);
+            if (!raw) continue;
+            const e = shaped(raw);
+            head.push(e); headBytes += sizeOf(e);
+            if (bytes + headBytes > maxBytes) break;
+          }
           if (bytes + headBytes <= maxBytes) { events.unshift(...head); front = at; }
           else events.unshift(head[0]);
         }
       }
       // The front of the unbroken window: what a client may ask "before".
-      contiguous = list[front]?.seq ?? events[0]?.seq ?? 0;
+      contiguous = list.at(front)?.seq ?? events[0]?.seq ?? 0;
       // The nearest start may be a queued message typed during another
       // turn. Carry the actual owners of the items too; otherwise a cold
       // device puts the running turn's output in that hidden queue row.
@@ -459,11 +454,12 @@ export class EventLog {
       if (!before && !since) for (const turnId of pendingTickets(list)) owners.add(turnId);
       const context = [];
       let contextRoom = Math.max(0, maxBytes - events.reduce((n, e) => n + sizeOf(e), 0));
-      for (const e of list.slice(0, front)) {
+      const prefix = list.contextBefore ? [...list.contextBefore(front)] : list.slice(0, front);
+      for (const e of prefix) {
         if (e.type !== 'item.start' || !itemIds.has(e.id)) continue;
         if (e.turnId) owners.add(e.turnId);
         if (!included.has(e.seq)) {
-          let anchor = shaped(e);
+          let anchor = shaped(fullContext(e));
           if (sizeOf(anchor) > contextRoom) {
             // The identity is needed to apply a delta. An old tool's input
             // and diff can wait for the reader to page back to that step.
@@ -474,9 +470,9 @@ export class EventLog {
           context.push(anchor);
         }
       }
-      for (const e of list.slice(0, front)) {
+      for (const e of prefix) {
         if (owners.has(e.turnId) && TURN_CONTEXT.has(e.type)
-          && !included.has(e.seq)) context.push(shaped(e));
+          && !included.has(e.seq)) context.push(shaped(fullContext(e)));
       }
       if (context.length) events = [...context, ...events].sort((a, b) => a.seq - b.seq);
     } else {
@@ -504,19 +500,17 @@ export class EventLog {
     };
   }
 
-  /**
-   * The whole file, parsed. Only for paging back past what memory holds,
-   * which someone asked for by scrolling up, so it is not kept.
-   */
-  #disk(id) {
-    let text = '';
-    try { text = readFileSync(this.#file(id), 'utf8'); } catch { return []; }
-    const events = [];
-    for (const line of text.split('\n')) {
-      if (!line) continue;
-      try { events.push(JSON.parse(line)); } catch { /* a torn line after a crash */ }
-    }
-    return events;
+  #indexed(id) {
+    let file = this.#files.get(id);
+    if (!file) this.#files.set(id, file = new EventFile(this.#file(id), event => {
+      // Exact text is needed to settle queued messages against provider echoes.
+      if (isTurn(event)) {
+        const { seq, at, type, turnId, inputId, local, wake, queued, text } = event;
+        return { seq, at, type, turnId, inputId, local, wake, queued, text };
+      }
+      return anchor(event);
+    }));
+    return file.refresh();
   }
 
   /**
@@ -641,7 +635,7 @@ export class EventLog {
     const file = this.#file(id);
     writeFileSync(`${file}.rewind`, events.map(e => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
     renameSync(`${file}.rewind`, file);
-    this.#logs.delete(id); this.#pending.delete(id); this.#derived.delete(id); this.#glanced.delete(id);
+    this.#logs.delete(id); this.#files.delete(id); this.#pending.delete(id); this.#derived.delete(id); this.#glanced.delete(id);
     this.#open(id);
   }
 
@@ -731,6 +725,7 @@ export class EventLog {
 
   remove(id) {
     this.#logs.delete(id);
+    this.#files.delete(id);
     this.#derived.delete(id);
     this.#glanced.delete(id);
     this.#pending.delete(id);

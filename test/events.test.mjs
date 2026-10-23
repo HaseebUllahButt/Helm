@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventLog, activeTurnFromEvents } from '../packages/connect/src/events.js';
+import { EventFile } from '../packages/connect/src/event-file.js';
 import { apply, emptyLog } from '../apps/web/src/session/types.ts';
 
 test('events are numbered, persisted, and replayable from a sequence number', () => {
@@ -21,6 +22,95 @@ test('events are numbered, persisted, and replayable from a sequence number', ()
   const again = new EventLog(dir);
   assert.deepEqual(again.since('s1', 0).map((e) => e.type), ['turn.start', 'item.delta']);
   assert.equal(again.append('s1', { type: 'turn.done' }).seq, 3);
+});
+
+test('older pages read their payloads and selected owners instead of every old tool payload', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-offsets-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const events = [];
+  const emit = event => events.push({ seq: events.length + 1, at: 0, ...event });
+  for (let turn = 0; turn < 80; turn++) {
+    const turnId = 't' + turn, id = 'tool' + turn;
+    emit({ type: 'turn.start', turnId, text: 'Check ' + turn });
+    emit({ type: 'item.start', turnId, id, kind: 'tool', input: { text: 'x'.repeat(100_000) } });
+    for (let n = 0; n < 50; n++) emit({ type: 'item.delta', id, text: '日本語 😀 ' + n });
+    emit({ type: 'item.done', id, status: 'ok' });
+    emit({ type: 'turn.done', turnId, status: 'ok' });
+  }
+  writeFileSync(join(dir, 's.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
+  const log = new EventLog(dir);
+  log.window('s', { tail: 20 });
+  let bytesRead = 0;
+  let indexedRecords = 0;
+  const read = EventFile.prototype.read;
+  const record = EventFile.prototype.record;
+  t.mock.method(EventFile.prototype, 'record', function(...args) {
+    indexedRecords++;
+    return record.apply(this, args);
+  });
+  t.mock.method(EventFile.prototype, 'read', function(start, end) {
+    bytesRead += end - start;
+    return read.call(this, start, end);
+  });
+  let page = log.window('s', { before: 1500, tail: 20 });
+  assert.ok(page.events.length);
+  assert.ok(bytesRead < 500_000, `${bytesRead} bytes read for one older page`);
+  const seen = new Set();
+  for (let n = 0; n < 100 && page.firstSeq > page.logFirst; n++) {
+    const before = page.firstSeq;
+    for (const event of page.events) seen.add(event.seq);
+    page = log.window('s', { before });
+    assert.ok(page.firstSeq < before, 'each page moves backwards');
+  }
+  for (const event of page.events) seen.add(event.seq);
+  assert.equal(seen.size, 1499, 'all earlier events remain available');
+  const forward = log.window('s', { since: 100 });
+  assert.equal(forward.events[0].seq, 101);
+  assert.ok(forward.hasMore);
+  assert.equal(indexedRecords, 0, 'history pages never rebuild the existing index');
+  log.append('s', { type: 'turn.start', turnId: 'appended', text: 'One new event' });
+  log.window('s', { before: 1500, tail: 20 });
+  assert.equal(indexedRecords, 1, 'a known append indexes only its new record');
+  log.replace('s', [{ seq: 7000, type: 'turn.start', turnId: 'new', text: 'Replacement' }]);
+  assert.equal(log.window('s', { before: 7001 }).events[0].text, 'Replacement');
+  log.restart('s');
+  log.append('s', { type: 'turn.start', turnId: 'again', text: 'After restart' });
+  assert.equal(log.window('s', { before: 8000 }).events[0].text, 'After restart');
+});
+
+test('extending an old page to its turn start stops when the wire budget fails', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-long-page-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const events = [
+    { seq: 1, type: 'turn.start', turnId: 't', text: 'One long task' },
+    { seq: 2, type: 'item.start', turnId: 't', id: 'reply', kind: 'text' },
+    ...Array.from({ length: 2400 }, (_, n) => ({ seq: n + 3, type: 'item.delta', id: 'reply', text: 'x'.repeat(8000) })),
+  ];
+  writeFileSync(join(dir, 's.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
+  const log = new EventLog(dir);
+  log.window('s', { tail: 20 });
+  let bytesRead = 0;
+  const read = EventFile.prototype.read;
+  t.mock.method(EventFile.prototype, 'read', function(start, end) {
+    bytesRead += end - start;
+    return read.call(this, start, end);
+  });
+  const page = log.window('s', { before: 2300, tail: 5 });
+  assert.equal(page.events[0].text, 'One long task');
+  assert.ok(page.firstSeq > 2200, 'the sparse turn start never fills the omitted middle');
+  assert.ok(bytesRead < 250_000, `${bytesRead} bytes read across a 19 MB turn`);
+});
+
+test('history positions are rebuilt after log eviction', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-evicted-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = new EventLog(dir);
+  log.append('first', { type: 'turn.start', turnId: 'old', text: 'Old' });
+  new EventLog(dir).window('first', { before: 2 });
+  log.window('first', { before: 2 });
+  for (let n = 0; n < 25; n++) log.append('chat' + n, { type: 'turn.start', turnId: 't' + n });
+  log.replace('first', [{ seq: 80, type: 'turn.start', turnId: 'new', text: 'New' }]);
+  assert.equal(log.window('first', { before: 81 }).events[0].text, 'New');
 });
 
 test('unconsumed queue edits and reference snapshots survive retention and cold windows', () => {
