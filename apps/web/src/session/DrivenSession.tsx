@@ -602,28 +602,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // tell a turn that just started from one that has been thinking for a
   // while. The open turn's own start beats the record's last transition,
   // which also moves when a permission is answered.
-  const now = useNow();
   const openTurn = transcriptTurns.filter((t) => !t.done).at(-1);
   const taskList = stripTodos(transcriptTurns);
-  const since = working && openTurn ? openTurn.at : session.updatedAt;
-  const age = since ? waitingSince(since, now) : '';
-  const rate = useTokenRate(openTurn, status === 'working');
   // The machine says so for every CLI; an older machine only has the item.
   const liveCompaction = working ? [...transcriptTurns].reverse().flatMap((turn) => turn.items)
     .find((item) => isCompaction(item) && item.status === 'streaming') : undefined;
   const compacting = working && (session.compacting || liveCompaction?.startedAt || !!liveCompaction);
-  const chip = (s: string) => {
-    const ago = age && age !== 'just now' ? ` ${age}` : '';
-    return s === 'blocked' ? <span className="chip blocked"><i />waiting{ago}</span>
-      : s === 'starting' ? <span className="chip working"><i />starting</span>
-      : s === 'working' && compacting ? <span className="chip working"><i />Summarizing chat</span>
-      : s === 'working' ? <span className="chip working"><i />working{ago}{rate ? ` · ${rate} tok/s` : ''}</span>
-      // Its own turn is over, but child tasks are not: the sidebar calls
-      // this working, so the open chat must not look finished.
-      : childrenWorking ? <span className="chip working" title="Helpers are still working"><i />working</span>
-      : s === 'unknown' ? <span className="chip exited" title="The machine cannot report if this agent is working.">Status unknown</span>
-      : null;
-  };
 
   const prefs = trayPrefs({ client, env: env.id, engine: session.engine, profileId: session.profileId, options, setOptions, setError });
   const controls = Controls({ options,
@@ -753,7 +737,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           </span>
         </div>
         {cloning ? <span className="chip working" role="status"><i />Copying project {session.clone!.percent}%</span>
-          : settingUp ? <span className="chip working" role="status"><i />setting up</span> : chip(status)}
+          : settingUp ? <span className="chip working" role="status"><i />setting up</span> : <WorkingChip status={status} working={working} childrenWorking={childrenWorking} compacting={!!compacting} turn={openTurn} updatedAt={session.updatedAt} />}
         {/* Git gets its own button with the count of changed files: it is
             the thing most often checked. The other opens agents and repeats.
             It is always there, Git project or not: hiding it when a folder was
@@ -972,6 +956,27 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       )}
     </>
   );
+}
+
+// Only the status readout listens to its clocks. A second passing must not
+// rebuild the transcript or the composer's actions.
+function WorkingChip({ status: s, working, childrenWorking, compacting, turn, updatedAt }: {
+  status: string; working: boolean; childrenWorking: boolean; compacting: boolean; turn?: Turn; updatedAt?: number;
+}) {
+  const now = useNow();
+  const since = working && turn ? turn.at : updatedAt;
+  const age = since ? waitingSince(since, now) : '';
+  const rate = useTokenRate(turn, s === 'working');
+  const ago = age && age !== 'just now' ? ` ${age}` : '';
+  return s === 'blocked' ? <span className="chip blocked"><i />waiting{ago}</span>
+    : s === 'starting' ? <span className="chip working"><i />starting</span>
+    : s === 'working' && compacting ? <span className="chip working"><i />Summarizing chat</span>
+    : s === 'working' ? <span className="chip working"><i />working{ago}{rate ? ` · ${rate} tok/s` : ''}</span>
+    // Its own turn is over, but child tasks are not: the sidebar calls
+    // this working, so the open chat must not look finished.
+    : childrenWorking ? <span className="chip working" title="Helpers are still working"><i />working</span>
+    : s === 'unknown' ? <span className="chip exited" title="The machine cannot report if this agent is working.">Status unknown</span>
+    : null;
 }
 
 /**
