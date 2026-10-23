@@ -1,8 +1,13 @@
 # Rust chat log reader
 
-Rust scans saved chat bytes and returns record positions. JavaScript keeps chat
-rules, approvals, paging, file access, and the recent text cache. This boundary
-avoids creating JavaScript strings for old reply and tool output records.
+Rust scans saved chat bytes and returns record positions. It also finds the
+turn and approval records used at startup. JavaScript keeps chat rules,
+approvals, paging, file access, and the recent text cache. This boundary avoids
+creating JavaScript strings for old reply and tool output records.
+
+Usage extraction keeps each message's identity and metadata. JavaScript still
+chooses the latest message version, converts numbers, and formats totals. Raw
+metadata preserves those rules without decoding large message bodies.
 
 The scanner borrows one input buffer during a synchronous call. Its output owns
 only positions and small numbers. It must not retain chat text or open files.
@@ -18,7 +23,8 @@ the previous release.
 
 The binary name includes the platform, machine type, and a source checksum.
 Changed source cannot load an old binary. Missing or incompatible binaries use
-JavaScript. `env.info.logReader` identifies the reader in the running daemon.
+JavaScript. All native features share one loaded library. `env.info.logReader`
+identifies the chat reader; `env.info.rustFeatures` lists its loaded functions.
 Set `HELM_LOG_READER=javascript` before startup to select the JavaScript reader.
 
 ## Proof boundary
@@ -29,5 +35,7 @@ retained JavaScript memory, and peak process memory. These numbers do not prove
 phone or network speed.
 
 `test/log-index-native.test.mjs` compares both readers with damaged JSON, Unicode,
-older pages, approvals, and waiting messages. Private app checks follow
+older pages, approvals, and waiting messages. Startup scans also compare exact
+turns and approvals. Usage checks compare latest message versions, dimensions,
+and malformed-record recovery. Private app checks follow
 [the chat guide](features/chats.md).

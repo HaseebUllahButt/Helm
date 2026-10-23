@@ -14,7 +14,7 @@ import {
   MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
-import { logReader } from './log-index-native.js';
+import { logReader, nativeFeatures } from './log-index-native.js';
 import { BASH_GUARD_MODES } from './pi-settings.js';
 import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
@@ -1279,6 +1279,7 @@ export class Daemon {
       release: release(),
       runtime: this.runtimeInfo,
       logReader,
+      rustFeatures: nativeFeatures,
       // 'pty' or 'panes': what a terminal here will actually be.
       terminals,
       // Whether this machine can turn a recording into words. The composer

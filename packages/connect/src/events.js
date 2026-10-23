@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
 import { EventFile } from './event-file.js';
 import { latestToolEvent } from './event-stream.js';
+import { nativeFunction } from './log-index-native.js';
+
+const scanGlancePositions = nativeFunction('scanGlancePositions');
 
 /**
  * What happened in a session, in order.
@@ -590,8 +593,9 @@ export class EventLog {
     try { buf = stamp ? readFileSync(this.#file(id)) : null; } catch { /* removed meanwhile */ }
     // Where each non-empty line starts. Searching the bytes and decoding only
     // the lines that matter is most of what makes this cheap.
-    const starts = [];
-    for (let at = 0; buf && at < buf.length;) {
+    const scanned = buf && scanGlancePositions?.(buf);
+    const starts = scanned?.starts ?? [];
+    for (let at = 0; !scanned && buf && at < buf.length;) {
       const end = buf.indexOf(10, at);
       const stop = end < 0 ? buf.length : end;
       if (stop > at) starts.push(at);
@@ -607,17 +611,21 @@ export class EventLog {
       try { seq = line(i).seq ?? 0; } catch { /* a torn last line after a crash */ }
     }
     // Inside a JSON string these quotes are escaped, so a hit is a field.
-    const hits = new Set();
-    for (const needle of ['"type":"turn.', '"type":"permission.']) {
-      for (let at = buf.indexOf(needle); at >= 0; at = buf.indexOf(needle, at + needle.length)) {
-        const start = buf.lastIndexOf(10, at) + 1;
-        let lo = 0, hi = starts.length - 1;
-        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= start) lo = mid; else hi = mid - 1; }
-        hits.add(lo);
+    let hits = scanned?.hits;
+    if (!hits) {
+      const found = new Set();
+      for (const needle of ['"type":"turn.', '"type":"permission.']) {
+        for (let at = buf.indexOf(needle); at >= 0; at = buf.indexOf(needle, at + needle.length)) {
+          const start = buf.lastIndexOf(10, at) + 1;
+          let lo = 0, hi = starts.length - 1;
+          while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= start) lo = mid; else hi = mid - 1; }
+          found.add(lo);
+        }
       }
+      hits = [...found].sort((a, b) => a - b);
     }
     const turns = [], open = new Map(), from = starts.length - KEEP;
-    for (const i of [...hits].sort((a, b) => a - b)) {
+    for (const i of hits) {
       let e;
       try { e = line(i); } catch { continue; }
       if (isTurn(e)) turns.push(e);

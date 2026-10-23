@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { expand, HOME } from './paths.js';
 import { formatReset, quotaBar } from './quota.js';
+import { extractUsageMessages } from './usage-native.js';
 
 /**
  * Devin's /usage card, headless.
@@ -107,9 +108,12 @@ export function devinSessionConsumption(dbPath, sessionId) {
   const conn = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const latest = new Map();
-    for (const r of conn.prepare('SELECT chat_message FROM message_nodes WHERE session_id = ?').all(sessionId)) {
+    const records = conn.prepare('SELECT chat_message FROM message_nodes WHERE session_id = ?').all(sessionId);
+    const projected = extractUsageMessages(records.map(r => r.chat_message));
+    for (let n = 0; n < records.length; n++) {
       let m;
-      try { m = JSON.parse(r.chat_message); } catch { continue; }
+      try { m = projected ? projected[n][0] ?? JSON.parse(projected[n][1]) : JSON.parse(records[n].chat_message); }
+      catch { continue; }
       if (m?.message_id) latest.set(m.message_id, m);
     }
     const dims = new Map();
