@@ -470,28 +470,29 @@ test('dispatch: a paired device can invite but never accept, and session.start c
 });
 
 test('worker preparation rechecks permission before sending', async () => {
-  for (const changed of ['controller', 'target', 'signing-key', 'expiry']) {
-    const target = make();
-    const { grant } = target.invite(forSrc, 'dev1');
-    const sourceNet = structuredClone({ ...net, self: SRC });
-    let checks = 0;
-    let sent = false;
-    const sender = new Transfers({
-      network: () => {
-        // Three checks cover entry, captured files, and the invitation.
-        // The fourth runs after encryption finishes in its worker.
-        if (++checks === 4) {
-          if (changed === 'controller') sourceNet.revoked.dev1 = Date.now();
-          if (changed === 'target') sourceNet.revoked[net.self] = Date.now();
-          if (changed === 'signing-key') sourceNet.machines[net.self].codeSignPubkey = CT.createEphemeralCodeKey().codePubkey;
-        }
-        return sourceNet;
-      },
-      now: () => changed === 'expiry' && checks >= 4 ? Date.now() + 20 * 60_000 : Date.now(),
-      rpc: async () => { sent = true; throw new Error('Unexpected send.'); },
-    });
-    await assert.rejects(sender.send({ folder: sourceDir, targetMachineId: net.self, grant }, 'dev1'),
-      /paired device|another machine|did not verify|expired/, changed);
-    assert.equal(sent, false, changed);
+  for (const stage of [2, 4]) {
+    for (const changed of ['controller', 'target', 'signing-key', 'expiry']) {
+      const target = make();
+      const { grant } = target.invite(forSrc, 'dev1');
+      const sourceNet = structuredClone({ ...net, self: SRC });
+      let checks = 0;
+      let sent = false;
+      const sender = new Transfers({
+        network: () => {
+          // Check after capture and after encryption, while the worker owns bytes.
+          if (++checks === stage) {
+            if (changed === 'controller') sourceNet.revoked.dev1 = Date.now();
+            if (changed === 'target') sourceNet.revoked[net.self] = Date.now();
+            if (changed === 'signing-key') sourceNet.machines[net.self].codeSignPubkey = CT.createEphemeralCodeKey().codePubkey;
+          }
+          return sourceNet;
+        },
+        now: () => changed === 'expiry' && checks >= stage ? Date.now() + 20 * 60_000 : Date.now(),
+        rpc: async () => { sent = true; throw new Error('Unexpected send.'); },
+      });
+      await assert.rejects(sender.send({ folder: sourceDir, targetMachineId: net.self, grant }, 'dev1'),
+        /paired device|another machine|did not verify|expired/, changed);
+      assert.equal(sent, false, changed);
+    }
   }
 });

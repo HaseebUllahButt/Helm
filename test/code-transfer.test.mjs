@@ -619,3 +619,74 @@ test('worker preparation preserves signed snapshot bytes, exclusions, and encryp
   await assert.rejects(createCodeSnapshotAsync(join(source, 'missing')), /ENOENT/);
   await assert.rejects(sealCodeSnapshotAsync({}, 'invalid', 'worker-test'));
 });
+
+const retainedSource = () => {
+  const source = mkdtempSync(join(helmDir, 'retained-source-'));
+  mkdirSync(join(source, '.aws'));
+  writeFileSync(join(source, 'run.js'), 'console.log("π 😀")\n', { mode: 0o755 });
+  writeFileSync(join(source, 'empty'), '');
+  writeFileSync(join(source, '.env'), 'PRIVATE=test-only\n');
+  writeFileSync(join(source, '.aws', '.env'), 'PRIVATE=nested-test-only\n');
+  writeFileSync(join(source, '.aws', 'credentials'), 'private');
+  symlinkSync(join(source, 'run.js'), join(source, 'link.js'));
+  return source;
+};
+
+test('retained preparation reviews metadata and seals the exact captured bytes', async () => {
+  const CT = await import('../packages/connect/src/code-transfer.js');
+  const { transferPreflight } = await import('../packages/connect/src/transfer-check.js');
+  const source = retainedSource();
+  for (const includeEnv of [false, true]) {
+    const expected = CT.createCodeSnapshot(source, { includeEnv });
+    await CT.withCodeSnapshotAsync(source, { includeEnv }, async ({ snapshot, seal }) => {
+      assert.deepEqual(snapshot, {
+        ...expected, files: expected.files.map(({ data, ...file }) => file),
+      });
+      assert.deepEqual(transferPreflight(snapshot), transferPreflight(expected));
+      // Neither a source edit nor a parent edit can change captured signed bytes.
+      const original = readFileSync(join(source, 'run.js'));
+      writeFileSync(join(source, 'run.js'), 'changed after capture');
+      snapshot.files[0].path = 'changed-by-parent';
+      try {
+        const envelope = await seal(CT.codeKeyInfo().codePubkey, 'retained-test');
+        assert.deepEqual(CT.openCodeSnapshot(envelope, 'retained-test'), expected);
+        await assert.rejects(seal(CT.codeKeyInfo().codePubkey, 'twice'), /already sealed/);
+        assert.throws(() => CT.openCodeSnapshot(envelope, 'different-id'), /mismatch/);
+      } finally {
+        writeFileSync(join(source, 'run.js'), original);
+      }
+    });
+  }
+});
+
+test('retained preparation releases its worker on review, capture, caller and sealing failures', async t => {
+  const CT = await import('../packages/connect/src/code-transfer.js');
+  const { Worker } = await import('node:worker_threads');
+  const original = Worker.prototype.terminate;
+  let stopped = 0;
+  t.mock.method(Worker.prototype, 'terminate', function (...args) {
+    stopped++;
+    return original.apply(this, args);
+  });
+  const source = retainedSource();
+  assert.equal(await CT.withCodeSnapshotAsync(source, {}, () => 'review'), 'review');
+  assert.equal(stopped, 1);
+  await assert.rejects(CT.withCodeSnapshotAsync(join(source, 'missing'), {}, () => {
+    assert.fail('capture failed');
+  }), /ENOENT/);
+  assert.equal(stopped, 2);
+  await assert.rejects(CT.withCodeSnapshotAsync(source, {}, () => {
+    throw new Error('Invalid invitation.');
+  }), /Invalid invitation/);
+  assert.equal(stopped, 3);
+  await assert.rejects(CT.withCodeSnapshotAsync(source, {}, ({ seal }) => seal('invalid', 'bad-key')));
+  assert.equal(stopped, 4);
+});
+
+test('retained preparation fails if its worker stops during sealing', async t => {
+  const CT = await import('../packages/connect/src/code-transfer.js');
+  const { Worker } = await import('node:worker_threads');
+  t.mock.method(Worker.prototype, 'postMessage', function () { void this.terminate(); });
+  await assert.rejects(CT.withCodeSnapshotAsync(retainedSource(), {},
+    ({ seal }) => seal(CT.codeKeyInfo().codePubkey, 'stopped')), /worker stopped/);
+});

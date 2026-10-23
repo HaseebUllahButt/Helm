@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { M } from '@helm/protocol';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import {
-  createCodeSnapshotAsync, createEphemeralCodeKey, materializeCode, sealCodeSnapshotAsync, configureGitOrigin,
+  createCodeSnapshotAsync, createEphemeralCodeKey, materializeCode, withCodeSnapshotAsync, configureGitOrigin,
   signHandoffDigest, verifyHandoffSignature,
 } from './code-transfer.js';
 import {
@@ -146,66 +146,67 @@ export class Transfers {
     }
 
     const includeEnv = params?.includeEnv === true;
-    const snapshot = await createCodeSnapshotAsync(folder, { includeEnv });
-    this.#controller(caller, 'a transfer send');
-    const preflight = transferPreflight(snapshot);
-    if (preflight.requiresAcknowledgement && params?.allowSkipped !== true) {
-      return { sent: false, requiresAcknowledgement: true, preflight };
-    }
+    return withCodeSnapshotAsync(folder, { includeEnv }, async ({ snapshot, seal }) => {
+      this.#controller(caller, 'a transfer send');
+      const preflight = transferPreflight(snapshot);
+      if (preflight.requiresAcknowledgement && params?.allowSkipped !== true) {
+        return { sent: false, requiresAcknowledgement: true, preflight };
+      }
 
-    const grant = decodeTransferGrant(line(params?.grant, MAX_TOKEN) ?? '');
-    const checkGrant = () => {
-      const current = this.#controller(caller, 'a transfer send');
-      if (current.self !== net.self || !current.machines?.[target] || current.revoked?.[target]) {
-        throw new Error('a transfer send names another machine of this network');
-      }
-      if (grant.targetMachineId !== target) {
-        throw new Error('that grant is for a different machine');
-      }
-      if (grant.sourceMachineId !== current.self) {
-        throw new Error('that grant is for a different source machine');
-      }
-      if (grant.expiresAt <= this.now()) {
-        throw new Error('that grant has expired; ask for a fresh invitation');
-      }
-      const signPubkey = current.machines[target]?.codeSignPubkey;
-      if (!signPubkey) throw new Error('the target has no pinned signing key yet');
-      if (!verifyHandoffSignature(signPubkey, transferGrantDigest(grant), grant.signature)) {
-        throw new Error('the transfer invitation did not verify against the target');
-      }
-    };
-    checkGrant();
+      const grant = decodeTransferGrant(line(params?.grant, MAX_TOKEN) ?? '');
+      const checkGrant = () => {
+        const current = this.#controller(caller, 'a transfer send');
+        if (current.self !== net.self || !current.machines?.[target] || current.revoked?.[target]) {
+          throw new Error('a transfer send names another machine of this network');
+        }
+        if (grant.targetMachineId !== target) {
+          throw new Error('that grant is for a different machine');
+        }
+        if (grant.sourceMachineId !== current.self) {
+          throw new Error('that grant is for a different source machine');
+        }
+        if (grant.expiresAt <= this.now()) {
+          throw new Error('that grant has expired; ask for a fresh invitation');
+        }
+        const signPubkey = current.machines[target]?.codeSignPubkey;
+        if (!signPubkey) throw new Error('the target has no pinned signing key yet');
+        if (!verifyHandoffSignature(signPubkey, transferGrantDigest(grant), grant.signature)) {
+          throw new Error('the transfer invitation did not verify against the target');
+        }
+      };
+      checkGrant();
 
-    const transferId = randomBytes(12).toString('hex');
-    const requested = params?.targetFolder === undefined ? null : line(params.targetFolder);
-    if (params?.targetFolder !== undefined && requested === null) {
-      throw new Error('invalid target folder');
-    }
-    const targetFolder = requested
-      || `~/.helm/transfers/${snapshot.rootName}-${transferId.slice(0, 8)}`;
-    const request = {
-      transferId,
-      sourceMachineId: net.self,
-      targetMachineId: target,
-      folder: targetFolder,
-      envelope: await sealCodeSnapshotAsync(snapshot, grant.transferPubkey, transferId),
-      snapshotDigest: snapshot.digest,
-      grantSecret: grant.secret,
-    };
-    // The controller, target, and invitation can change while the worker runs.
-    checkGrant();
-    request.requestDigest = transferRequestDigest(request);
-    request.sourceSignature = signHandoffDigest(request.requestDigest);
-    const receipt = await this.rpc(target, M.TRANSFER_ACCEPT, request, { timeout: 240_000, direct: true });
-    return {
-      sent: true,
-      transferId,
-      sourceMachineId: net.self,
-      targetMachineId: target,
-      targetName: net.machines[target]?.name ?? target,
-      preflight,
-      receipt,
-    };
+      const transferId = randomBytes(12).toString('hex');
+      const requested = params?.targetFolder === undefined ? null : line(params.targetFolder);
+      if (params?.targetFolder !== undefined && requested === null) {
+        throw new Error('invalid target folder');
+      }
+      const targetFolder = requested
+        || `~/.helm/transfers/${snapshot.rootName}-${transferId.slice(0, 8)}`;
+      const request = {
+        transferId,
+        sourceMachineId: net.self,
+        targetMachineId: target,
+        folder: targetFolder,
+        envelope: await seal(grant.transferPubkey, transferId),
+        snapshotDigest: snapshot.digest,
+        grantSecret: grant.secret,
+      };
+      // The controller, target, and invitation can change while the worker runs.
+      checkGrant();
+      request.requestDigest = transferRequestDigest(request);
+      request.sourceSignature = signHandoffDigest(request.requestDigest);
+      const receipt = await this.rpc(target, M.TRANSFER_ACCEPT, request, { timeout: 240_000, direct: true });
+      return {
+        sent: true,
+        transferId,
+        sourceMachineId: net.self,
+        targetMachineId: target,
+        targetName: net.machines[target]?.name ?? target,
+        preflight,
+        receipt,
+      };
+    });
   }
 
   async verify(params = {}, caller) {
