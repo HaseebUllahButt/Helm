@@ -22,9 +22,9 @@ import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brai
 import { brainHost } from '@helm/protocol/brain-host';
 import { Client, LOOPBACK_HOST, type Environment, type Session, type Project, type NativeAgent } from './client';
 import { busyWord, needsAttention, runningThread, settledThread, unknownThread, listedThread } from './format';
-import { loadWorkspace, loadWorkspaceDurable, saveWorkspace, updateWorkspaceSession, forgetWorkspace, workspaceScope } from './workspaceCache';
+import { saveWorkspace, forgetWorkspace, workspaceScope } from './workspaceCache';
+import { useWorkspaceData } from './useWorkspaceData';
 import { engineOf } from './engines';
-import { useLiveInterval } from './useLiveInterval';
 import { useViewingReport } from './useViewingReport';
 import { ownTerminal, byRecent, ago } from './screens/common';
 import { Gear } from './screens/icons';
@@ -195,11 +195,10 @@ function Shell({ client, conn, onSignOut }: {
 }) {
   const wide = useWide();
   const scope = workspaceScope(client.token);
-  const active = useRef(true);
-  useEffect(() => { active.current = true; return () => { active.current = false; }; }, [client]);
-  const [cached] = useState(() => loadWorkspace(scope));
-  const [envs, setEnvs] = useState<Environment[]>(() => cached.environments.map(e => ({ ...e, online: false })));
-  const [sessions, setSessions] = useState<Record<string, Session[]>>(cached.sessions);
+  const {
+    cached, envs, sessions, loadEnvs, loadSessions, recordSession, envError,
+    liveEnvsSeen, liveListsSeen, restoredView, removeSession, markVoice,
+  } = useWorkspaceData(client, conn.online);
   const sessionsNow = useRef(sessions);
   sessionsNow.current = sessions;
   const [savedSend] = useState(() => history.state?.helm && history.state.stack?.at(-1)?.kind === 'transfer'
@@ -208,26 +207,12 @@ function Shell({ client, conn, onSignOut }: {
   const [stack, setStack] = useState<MainView[]>(() => savedSend ? supportedViews(savedSend.stack) : (cached.view
     ? [{ kind: 'env' }, { kind: 'session', session: cached.view.session }] : [{ kind: 'env' }]));
   const sends = useSends(client, envs);
-  const liveEnvsSeen = useRef(false);
-  const liveListsSeen = useRef(new Set<string>());
-  const sessionRequests = useRef(new Set<string>());
-  const envRequest = useRef(false);
-  const envAgain = useRef(false);
-  useEffect(() => {
-    let stale = false;
-    void loadWorkspaceDurable(scope).then(value => {
-      if (stale) return;
-      if (!liveEnvsSeen.current) setEnvs(value.environments.map(e => ({ ...e, online: false })));
-      setSessions(current => ({ ...Object.fromEntries(Object.entries(value.sessions)
-        .filter(([id]) => !liveListsSeen.current.has(id))), ...current }));
-      if (!savedSend && !cached.view && value.view && !location.hash && nav.current.depth === 0 && nav.current.stack.length === 1) {
-        restate([{ kind: 'env' }, { kind: 'session', session: value.view.session }], value.view.envId);
-      }
-    });
-    return () => { stale = true; };
-  }, [scope]);
   const [error, setError] = useState('');
-  const [envError, setEnvError] = useState('');
+  useEffect(() => {
+    if (!savedSend && !cached.view && restoredView && !location.hash && nav.current.depth === 0 && nav.current.stack.length === 1) {
+      restate([{ kind: 'env' }, { kind: 'session', session: restoredView.session }], restoredView.envId);
+    }
+  }, [restoredView]);
   const [downSince, setDownSince] = useState<number | null>(null);
   /** "thread X needs you" while a different session is on screen. */
   const [toast, setToast] = useState<Toast | null>(null);
@@ -322,15 +307,10 @@ function Shell({ client, conn, onSignOut }: {
     if (!envId) return;
     client.rpc<{ discarded: boolean }>(envId, 'session.discard-empty', { id: current.session.id }, 10_000)
       .then((r) => {
-        if (r.discarded) {
-          setSessions((all) => ({
-            ...all,
-            [envId]: (all[envId] ?? []).filter((s) => s.id !== current.session.id),
-          }));
-        }
+        if (r.discarded) removeSession(envId, current.session.id);
       })
       .catch(() => { /* offline: the still-empty chat remains recoverable */ });
-  }, [client]);
+  }, [client, removeSession]);
 
   useEffect(() => {
     history.replaceState({ helm: 1, ...nav.current }, '');
@@ -433,126 +413,13 @@ function Shell({ client, conn, onSignOut }: {
     setDownSince((t) => t ?? Date.now());
   }, [conn.online]);
 
-  const loadEnvs = useCallback((): void => {
-    if (!active.current) return;
-    if (envRequest.current) { envAgain.current = true; return; }
-    envRequest.current = true;
-    client.environments()
-      .then((r) => {
-        if (!active.current) return;
-        liveEnvsSeen.current = true;
-        setEnvs(r.environments); setEnvError('');
-        saveWorkspace(scope, { environments: r.environments });
-      })
-      .catch((e) => { if (active.current) setEnvError(e.message); })
-      .finally(() => {
-        envRequest.current = false;
-        const again = envAgain.current; envAgain.current = false;
-        if (again && active.current) loadEnvs();
-      });
-  }, [client, scope]);
-
-  /** One trailing session.list per machine per burst of updates. */
-  const relist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const listRetries = useRef<Record<string, number>>({});
-  /**
-   * Updates that landed while a list was on its way. The list can have been
-   * read before them - on the VPN a round trip is over half a second - so
-   * laying it down as-is put a thread that had just started back under Done,
-   * or kept one that had just finished under Running. They are laid back
-   * over the list, and one more list is asked for to settle it.
-   */
-  const pushedDuringList = useRef<Record<string, Map<string, Session>>>({});
-  const listAgain = useRef(new Set<string>());
-  const recordSession = useCallback((envId: string, up: Session) => {
-    const during = pushedDuringList.current[envId];
-    if (during) during.set(up.id, { ...during.get(up.id), ...up, recovery: up.recovery });
-    setSessions((all) => {
-      const list = all[envId];
-      const known = list?.find(x => x.id === up.id);
-      if (!known) return all;
-      // An update that changes nothing keeps the same objects, so nothing
-      // drawn from them has to be drawn again.
-      if (sameSession(known, up)) return all;
-      return { ...all, [envId]: list!.map(x => x === known ? { ...x, ...up, recovery: up.recovery } : x) };
-    });
-    updateWorkspaceSession(scope, envId, up);
-  }, [scope]);
-  const loadSessions = useCallback((envId: string) => {
-    if (!active.current) return;
-    if (sessionRequests.current.has(envId)) { listAgain.current.add(envId); return; }
-    sessionRequests.current.add(envId);
-    const pushed = new Map<string, Session>();
-    pushedDuringList.current[envId] = pushed;
-    client.rpc<{ sessions: Session[] }>(envId, 'session.list', { includeDetected: true }, 15_000)
-      .then((r) => {
-        if (!active.current) return;
-        liveListsSeen.current.add(envId);
-        delete listRetries.current[envId];
-        const list = pushed.size
-          ? r.sessions.map((x) => { const up = pushed.get(x.id); return up ? { ...x, ...up, recovery: up.recovery } : x; })
-          : r.sessions;
-        setSessions((s) => ({ ...s, [envId]: keepUnchanged(s[envId], list) }));
-        saveWorkspace(scope, { sessions: { [envId]: list } });
-      })
-      .catch(() => {
-        // Until one list has arrived, the screen is the saved copy, which
-        // updates alone never complete: keep asking (a machine that just
-        // restarted can take a while to answer).
-        const tries = listRetries.current[envId] = (listRetries.current[envId] ?? 0) + 1;
-        if (!liveListsSeen.current.has(envId) && tries <= 20) {
-          clearTimeout(relist.current[envId]);
-          relist.current[envId] = setTimeout(() => loadSessions(envId), 3000);
-        }
-      })
-      .finally(() => {
-        sessionRequests.current.delete(envId);
-        if (pushedDuringList.current[envId] === pushed) delete pushedDuringList.current[envId];
-        if (listAgain.current.delete(envId) && active.current) loadSessions(envId);
-      });
-  }, [client, scope]);
-
   useEffect(() => {
-    loadEnvs();
     return client.on((e, kind, payload) => {
-      if (kind === 'presence') {
-        if (e && payload?.env) {
-          // The name travels with presence, and a rename is the one thing
-          // that changes it: a machine renamed from another phone lands here.
-          setEnvs((list) => list.map((m) => (
-            m.id === e ? { ...m, online: !!payload.online, name: payload.name ?? m.name } : m)));
-        } else loadEnvs();
-      }
-      if (kind === 'connection' && (payload.online || payload.reachable)) loadEnvs();
       if (kind === 'session.update' && e) {
-        // The update carries the session, so draw it now; the list call
-        // behind it only has to find what came or went. It used to be the
-        // only path - a full session.list per update, two per status change
-        // (the daemon sends `session` and `status` together), each one a
-        // relay round trip before the sidebar moved.
-        const up = payload?.session as Session | undefined;
-        // A conversation that was taken over lives on as a new thread: the
-        // screen showing it follows, rather than going blank.
-        if (up?.movedTo) {
+        const update = payload?.session as Session | undefined;
+        if (update?.movedTo) {
           const top = nav.current.stack[nav.current.stack.length - 1];
-          if (top?.kind === 'session' && top.session.id === up.id) openSession(e, up.movedTo);
-        }
-        if (up?.id) {
-          recordSession(e, up);
-        }
-        // The whole list (hundreds of KB) is asked for again only when this
-        // update can change which threads it holds: one new to it, one that
-        // ended, moved or was archived. A known thread changing, or a helper
-        // (shown under its lead, which sends its own update), is drawn from
-        // the update alone - busy helpers used to cost a full list each.
-        // Until a live list has arrived, every update still asks for one.
-        const known = up?.id ? sessionsNow.current[e]?.find((x) => x.id === up.id) : undefined;
-        const helper = !!up?.delegation?.parentId && !up.unhomed;
-        const changesList = !liveListsSeen.current.has(e) || !up?.id || !!up.movedTo || up.status === 'exited'
-          || (known ? !!known.archived !== !!up.archived : !helper);
-        if (changesList) {
-          clearTimeout(relist.current[e]);
-          relist.current[e] = setTimeout(() => loadSessions(e), 400);
+          if (top?.kind === 'session' && top.session.id === update.id) openSession(e, update.movedTo);
         }
         // A session that just started waiting, on a machine this window is
         // not looking at, earns a tap-target in front of whatever is open -
@@ -562,7 +429,7 @@ function Shell({ client, conn, onSignOut }: {
         // A machine that knows what was asked follows "blocked" a moment
         // later with `asked`; that fills in the notice already showing, or
         // raises one for a second prompt in a thread that was already waiting.
-        const s = payload?.session;
+        const s = update;
         if ((payload?.transition?.to === 'blocked' || payload?.asked) && s && listedThread(s)) {
           const top = nav.current.stack[nav.current.stack.length - 1];
           const looking = top?.kind === 'session' && top.session.id === s.id;
@@ -577,64 +444,8 @@ function Shell({ client, conn, onSignOut }: {
         }
       }
     });
-  }, [loadEnvs, loadSessions, recordSession, client]);
+  }, [client]);
 
-  useEffect(() => {
-    const catchUp = () => { if (!document.hidden) loadEnvs(); };
-    window.addEventListener('focus', catchUp);
-    window.addEventListener('online', catchUp);
-    window.addEventListener('pageshow', catchUp);
-    document.addEventListener('visibilitychange', catchUp);
-    return () => {
-      window.removeEventListener('focus', catchUp);
-      window.removeEventListener('online', catchUp);
-      window.removeEventListener('pageshow', catchUp);
-      document.removeEventListener('visibilitychange', catchUp);
-    };
-  }, [loadEnvs]);
-
-  const liveIds = envs.filter((e) => e.online).map((e) => e.id).join(',');
-  useEffect(() => {
-    let stopped = false, checking = false;
-    const check = async () => {
-      if (checking || document.hidden || !conn.online) return;
-      checking = true;
-      try {
-        await Promise.all((liveIds ? liveIds.split(',') : []).map(async (id) => {
-          try {
-            const info = await client.rpc<Environment['info']>(id, 'env.info', {}, 8000);
-            if (!stopped && info.version) setEnvs((list) => list.map((e) => e.id === id ? { ...e, info: { ...e.info, ...info } } : e));
-          } catch { /* keep the last known version through a reconnect */ }
-        }));
-      } finally { checking = false; }
-    };
-    void check();
-    const timer = setInterval(() => { void check(); }, 60_000);
-    window.addEventListener('online', check);
-    document.addEventListener('visibilitychange', check);
-    return () => {
-      stopped = true; clearInterval(timer);
-      window.removeEventListener('online', check);
-      document.removeEventListener('visibilitychange', check);
-    };
-  }, [client, liveIds, conn.online]);
-  // `conn.online` is a dependency because of what it costs to leave out. The
-  // machine list arrives over HTTP and the session lists go over the socket,
-  // so on a cold open this runs first and every `session.list` in it is
-  // rejected as "not connected" and swallowed - and nothing asked again
-  // until the 15s tick below. Measured on loopback, where the daemon answers
-  // in 3ms: 15 seconds of "asking every machine…" for a 3ms question.
-  useEffect(() => {
-    const live = liveIds ? liveIds.split(',') : [];
-    for (const id of live) { client.subscribe(id); loadSessions(id); }
-  }, [liveIds, client, loadSessions, conn.online]);
-  // Status changes arrive pushed, so this list is reconciliation rather
-  // than the live feed - it can afford to be slower than the events that
-  // keep it fresh, and nothing at all while the page is hidden.
-  useLiveInterval(30_000, () => {
-    const live = liveIds ? liveIds.split(',') : [];
-    for (const id of live) loadSessions(id);
-  }, [liveIds, loadSessions]);
 
   useEffect(() => {
     if (wide && !selected && envs.length) { autoPicked.current = envs[0].id; setSelected(envs[0].id); }
@@ -907,7 +718,7 @@ function Shell({ client, conn, onSignOut }: {
       restate([...nav.current.stack.slice(0, -1), { kind: 'session', session }]);
     } else if (!chat.message && !chat.draft.trim()) {
       client.rpc<{ discarded: boolean }>(chat.envId, 'session.discard-empty', { id: session.id }, 10_000)
-        .then((r) => { if (r.discarded) setSessions((all) => ({ ...all, [chat.envId]: (all[chat.envId] ?? []).filter((s) => s.id !== session.id) })); })
+        .then((r) => { if (r.discarded) removeSession(chat.envId, session.id); })
         .catch(() => { /* offline: the empty chat stays recoverable */ });
     }
     forgetChat(chat.id);
@@ -1521,7 +1332,7 @@ function Shell({ client, conn, onSignOut }: {
         {view.kind === 'app-settings' ? (
           <SettingsView
             client={client} envs={envs} onBack={back}
-            onVoice={(ids) => setEnvs((list) => list.map((m) => (ids.includes(m.id) ? { ...m, info: { ...m.info, voice: true } } : m)))}
+            onVoice={markVoice}
             onOpen={(v) => push(v)} onUnpair={() => setUnpairing(true)}
           />
         ) : view.kind === 'usage' ? (
@@ -1800,31 +1611,4 @@ function Shell({ client, conn, onSignOut }: {
       )}
     </div>
   );
-}
-
-/** Whether laying `up` over `known` would change anything it holds. */
-function sameSession(known: Session, up: Session) {
-  if (JSON.stringify(known.recovery) !== JSON.stringify(up.recovery)) return false;
-  for (const [key, value] of Object.entries(up)) {
-    const was = (known as unknown as Record<string, unknown>)[key];
-    if (was === value) continue;
-    if (value && typeof value === 'object' && JSON.stringify(was) === JSON.stringify(value)) continue;
-    return false;
-  }
-  return true;
-}
-
-
-/** A fresh list, reusing the old object for every chat that did not change. */
-function keepUnchanged(old: Session[] | undefined, fresh: Session[]) {
-  if (!old?.length) return fresh;
-  const before = new Map(old.map((s) => [s.id, s]));
-  let same = old.length === fresh.length;
-  const next = fresh.map((s, i) => {
-    const was = before.get(s.id);
-    const kept = was && JSON.stringify(was) === JSON.stringify(s) ? was : s;
-    if (kept !== old[i]) same = false;
-    return kept;
-  });
-  return same ? old : next;
 }
