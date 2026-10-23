@@ -202,6 +202,36 @@ test('a refused message keeps its place ahead of messages added while the CLI wa
   assert.equal(driver.sent.at(-1), 'Later follow-up');
 });
 
+test('a consumed message stays consumed when its pending steering call later fails', async (t) => {
+  const { sessions, session, driver, events } = await setup(t, 'codex');
+  const held = deferred();
+  driver.onSteer = () => held.promise;
+  driver.push('item.start', { id: 'tool', kind: 'tool', turnId: driver.turnId });
+  await sessions.input(session.id, 'Read this once');
+  await tick();
+  const sent = driver.steered[0];
+  driver.push('input.consumed', { inputId: sent.inputId, text: sent.text });
+  await sessions.input(session.id, 'Read this later', { delivery: 'queue' });
+  held.reject(new Error('The call failed after the message was read'));
+  await tick();
+  driver.finish(); await tick();
+  assert.equal(driver.sent.at(-1), 'Read this later');
+  assert.equal(driver.sent.filter(text => text === 'Read this once').length, 0);
+  assert.equal(events().filter(e => e.type === 'turn.accept' && e.turnId === sent.inputId).length, 1);
+});
+
+test('a failed send cannot claim the echo of a later message with the same text', async (t) => {
+  const { sessions, session, driver, events } = await setup(t, 'devin');
+  driver.finish(); await tick();
+  const send = driver.send;
+  driver.send = async () => { throw new Error('Send failed'); };
+  await assert.rejects(sessions.input(session.id, 'Same words', { turnId: 'failed-reply' }), /Send failed/);
+  driver.send = send;
+  await sessions.input(session.id, 'Same words', { turnId: 'fresh-reply' });
+  const echo = events().findLast(e => e.type === 'turn.start' && e.turnId === driver.turnId);
+  assert.equal(echo.inputId, 'fresh-reply');
+});
+
 test('Codex waits for the next tool step after an awaited handover', async (t) => {
   const { sessions, session, driver } = await setup(t, 'codex');
   const held = deferred();

@@ -43,7 +43,7 @@ export class LimitRecovery {
     if (r?.kind !== 'limited' || !r.resetAt) return;
     const identity = `${session.id}:${r.turnId || r.at}:${r.resetAt}`;
     const turnId = `local-limit-${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`;
-    if (this.#core.outbox.get(session.id)?.some(item => item.turnId === turnId)) this.#sessions.dequeue(session.id, turnId);
+    if (this.#core.deliveryState.queue(session.id)?.some(item => item.turnId === turnId)) this.#sessions.dequeue(session.id, turnId);
   }
 
   startLimitRecovery() {
@@ -60,7 +60,7 @@ export class LimitRecovery {
       for (const s of this.#core.index.values()) {
         if (!recoveryDue(s, now)) continue;
         if (!['idle', 'done', 'error'].includes(s.status) || this.#sessions.events.pending(s.id).length
-          || this.#sessions.events.activeTurn(s.id) || this.#core.sending.has(s.id) || this.#core.settling.has(s.id) || this.#sessions.hasActiveDelegations(s.id)) continue;
+          || this.#sessions.events.activeTurn(s.id) || this.#core.deliveryState.isSending(s.id) || this.#core.deliveryState.hasSettling(s.id) || this.#sessions.hasActiveDelegations(s.id)) continue;
         try { await this.#sessions.recover(s.id, { automatic: true, now }); }
         catch (error) {
           if (s.recovery?.kind === 'limited') {
@@ -79,7 +79,7 @@ export class LimitRecovery {
     const recovery = session.recovery;
     if (automatic && !recoveryDue(session, now)) return { skipped: true };
     const generation = session.stopGeneration ?? 0;
-    const queued = this.#core.outbox.get(id)?.length;
+    const queued = this.#core.deliveryState.queue(id)?.length;
     // Leave the durable failure in place until the continuation ticket exists.
     // Retrying after a crash uses the same ticket, never a second prompt.
     if (automatic && (!queued || recovery.retryTurnId)) {
@@ -95,8 +95,8 @@ export class LimitRecovery {
         if (attachments.some(a => !a.data)) throw new Error('A refused attachment is no longer available. Resume manually.');
       }
       await this.#sessions.input(id, prompt, { turnId, attachments, delivery: 'queue', source: 'usage-reset' });
-      if (recovery.retryTurnId && this.#core.outbox.get(id)?.some(item => item.turnId === turnId)) {
-        this.#sessions.reorderQueue(id, [turnId, ...this.#core.outbox.get(id).filter(item => item.turnId !== turnId).map(item => item.turnId)]);
+      if (recovery.retryTurnId && this.#core.deliveryState.queue(id)?.some(item => item.turnId === turnId)) {
+        this.#sessions.reorderQueue(id, [turnId, ...this.#core.deliveryState.queue(id).filter(item => item.turnId !== turnId).map(item => item.turnId)]);
       }
       if (!recoveryDue(session, now) || session.stoppedAt || generation !== (session.stopGeneration ?? 0) || session.recovery !== recovery) {
         this.#sessions.dequeue(id, turnId);
@@ -107,7 +107,7 @@ export class LimitRecovery {
     delete session.recovery;
     session.queuePaused = false;
     this.#core.save(); this.#sessions.emit('session', session);
-    if (this.#core.outbox.get(id)?.length) this.#core.delivery.pump(session);
+    if (this.#core.deliveryState.queue(id)?.length) this.#core.delivery.pump(session);
     else if (!automatic) await this.#sessions.input(id, 'Continue the previous task from the saved conversation. Check what already finished before taking further action.');
     return { ok: true, session: wire(session) };
   }

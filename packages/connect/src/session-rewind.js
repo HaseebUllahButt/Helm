@@ -56,8 +56,8 @@ export class SessionRewind {
     const s = this.#core.index.get(id);
     if (!s?.driver) throw new Error('No such driven conversation.');
     if (!DRIVERS[s.driver]?.canRewind || s.external || s.nativeSocket || s.nativeCli || s.shared) throw new Error('This provider does not support safe rewind in Helm.');
-    if (!['idle', 'done', 'exited'].includes(s.status) || this.#core.sending.has(id) || this.#core.settling.has(id)
-      || this.#core.driverStarts.has(id) || this.#core.outbox.get(id)?.length || this.#core.steered.get(id)?.length
+    if (!['idle', 'done', 'exited'].includes(s.status) || this.#core.deliveryState.isSending(id) || this.#core.deliveryState.hasSettling(id)
+      || this.#core.driverStarts.has(id) || this.#core.deliveryState.queue(id)?.length || this.#core.deliveryState.steered(id)?.length
       || this.#sessions.events.pending(id).length || this.#sessions.hasActiveDelegations(id)) throw new Error('Wait for this conversation, queued messages, and descendants to finish before rewinding.');
     const events = this.#sessions.events.tail(id, 0);
     const turn = events.find(e => e.type === 'turn.start' && e.turnId === turnId && !e.local && !e.wake && !e.queued);
@@ -146,7 +146,7 @@ export class SessionRewind {
       this.#sessions.checkpoints.write(recoveryId, 'recovery.json', { ...recovery, phase: 'committed', newEngineSessionId: s.engineSessionId });
       committed = true;
       this.#core.bindDriver(s, candidate, profile);
-      this.#core.awaitingEcho.delete(id); this.#core.closedTurns.delete(id);
+      this.#core.deliveryState.clearAwaitingEcho(id); this.#core.deliveryState.clearClosedTurns(id);
       this.#sessions.emit('session', s);
       // The reset event also invalidates every connected device's old history.
       for (const event of next) this.#sessions.emit('event', { id, event });

@@ -146,7 +146,7 @@ export class DriverEvents {
       const status = e.status === 'exited' ? 'idle' : e.status;
       if (s.delegation && !s.stoppedAt && ['working', 'blocked'].includes(status)) s.delegation.status = status;
       if (s.delegation) this.#core.delegation.updateTeam(s);
-      if (e.status === 'exited' && this.#core.drivers.get(s.id) === d) { this.#core.drivers.delete(s.id); this.#core.awaitingEcho.delete(s.id); }
+      if (e.status === 'exited' && this.#core.drivers.get(s.id) === d) { this.#core.drivers.delete(s.id); this.#core.deliveryState.clearAwaitingEcho(s.id); }
       // An idle ACP connection does not own a chat resumed in O2's service.
       if (s.external && s.engine === 'opencode2') return;
       if (e.status === 'exited' && s.shared) this.#sessions.emit('session', { ...s, alive: false });
@@ -163,7 +163,7 @@ export class DriverEvents {
       // turn ended badly. `exited` counts too: delivery respawns the driver,
       // which is how a queue survives the process dying mid-turn. The pump
       // reads s.status to know the agent is free, so it runs after it lands.
-      if (status === 'idle' || e.status === 'exited') this.#core.steps.delete(s.id);
+      if (status === 'idle' || e.status === 'exited') this.#core.deliveryState.clearSteps(s.id);
       if (e.status === 'idle' && this.#finishing(s)) this.#awaitTurnDone(s);
       else {
         this.#core.settled(s.id);
@@ -190,34 +190,31 @@ export class DriverEvents {
     }
     // A compaction is not a step: nothing waiting should go in while the CLI rewrites its context.
     if (e.type === 'item.start' && !e.parentId && !['text', 'thinking'].includes(e.kind) && e.name !== 'compact') {
-      const steps = this.#core.steps.get(s.id) ?? new Set();
-      steps.add(e.id);
-      this.#core.steps.set(s.id, steps);
+      this.#core.deliveryState.addStep(s.id, e.id);
       void this.#core.delivery.handOver(s);
     }
-    if (e.type === 'item.done') this.#core.steps.get(s.id)?.delete(e.id);
-    if (e.type === 'turn.done') this.#core.steps.delete(s.id);
+    if (e.type === 'item.done') this.#core.deliveryState.removeStep(s.id, e.id);
+    if (e.type === 'turn.done') this.#core.deliveryState.clearSteps(s.id);
     // A wordless command card is an answer, not the echo of anything sent.
     if (e.type === 'turn.start' && !e.wake && !(e.local && !e.text)) {
       // The echo of a message sent as a new turn carries its ticket's id.
       // A driver that knows it says so; otherwise the oldest matching text
       // sent through this driver claims it.
-      const awaiting = this.#core.awaitingEcho.get(s.id);
+      const awaiting = this.#core.deliveryState.awaitingEcho(s.id);
       const echo = (e.text ?? '').trim();
       const index = awaiting?.findIndex((entry) => entry.driver === d && (e.inputId != null
         ? entry.turnId === e.inputId
         : entry.text === echo || (entry.text && echo.startsWith(`${entry.text}\n`)))) ?? -1;
       if (index >= 0) {
-        const [entry] = awaiting.splice(index, 1);
-        if (!awaiting.length) this.#core.awaitingEcho.delete(s.id);
+        const entry = awaiting[index];
+        this.#core.deliveryState.removeAwaitingEcho(s.id, entry.turnId, d);
         forwarded = { ...forwarded, inputId: entry.turnId, ...(entry.source === 'agent' ? { source: 'agent' } : {}), ...(entry.checkpoint ? { checkpoint: entry.checkpoint } : {}) };
       }
       // Handed over too late for the turn it was typed into, the CLI runs
       // it as the next one instead; the echo is the client's cue.
-      const steered = this.#core.steered.get(s.id);
+      const steered = this.#core.deliveryState.steered(s.id);
       const i = steered?.findIndex((x) => forwarded.inputId != null ? x.turnId === forwarded.inputId : x.text.trim() === echo) ?? -1;
-      if (i >= 0) steered.splice(i, 1);
-      if (i >= 0 && !steered.length) this.#core.steered.delete(s.id);
+      if (i >= 0) this.#core.deliveryState.removeSteered(s.id, steered[i].turnId);
     }
     if (e.type === 'title') return this.#core.titles.titled(s, e.title, 'agent');
     // Every turn has always said what it cost and nothing added them up.
@@ -311,7 +308,7 @@ export class DriverEvents {
     if (e.type === 'turn.done') {
       this.#sessions.emit('session', s);
       if (s.delegation && !card) void this.#core.delegation.notifyParent(s, event);
-      if (this.#core.settling.has(s.id) && !this.#finishing(s)) {
+      if (this.#core.deliveryState.hasSettling(s.id) && !this.#finishing(s)) {
         this.#core.settled(s.id);
         if (s.status === 'idle') this.#core.delivery.pump(s);
       }
@@ -322,13 +319,9 @@ export class DriverEvents {
   #closeTurn(id, turnId) {
     // After a restart the set starts from what the log already shows closed,
     // so a driver replaying a completion it said before cannot count it again.
-    const closed = this.#core.closedTurns.get(id)
-      ?? new Set(this.#sessions.events.tail(id, 0).filter((e) => e.type === 'turn.done' && e.turnId).map((e) => e.turnId));
-    if (closed.has(turnId)) return false;
-    closed.add(turnId);
-    if (closed.size > 200) closed.delete(closed.values().next().value);
-    this.#core.closedTurns.set(id, closed);
-    return true;
+    this.#core.deliveryState.seedClosedTurns(id,
+      () => this.#sessions.events.tail(id, 0).filter((e) => e.type === 'turn.done' && e.turnId).map((e) => e.turnId));
+    return this.#core.deliveryState.closeTurn(id, turnId);
   }
 
   /** Whether this turn began by itself (the agent woke), not from a message of ours. */
@@ -350,14 +343,14 @@ export class DriverEvents {
   }
 
   #awaitTurnDone(s) {
-    if (this.#core.settling.has(s.id)) return;
+    if (this.#core.deliveryState.hasSettling(s.id)) return;
     const timer = setTimeout(() => {
-      if (this.#core.settling.get(s.id) !== timer) return;
-      this.#core.settling.delete(s.id);
+      if (this.#core.deliveryState.settling(s.id) !== timer) return;
+      this.#core.deliveryState.clearSettling(s.id);
       this.#sessions.log(`[${s.id}] idle without finishing its turn; sending what is queued`);
       if (s.status === 'idle') this.#core.delivery.pump(s);
     }, this.#sessions.turnSettleMs);
     timer.unref?.();
-    this.#core.settling.set(s.id, timer);
+    this.#core.deliveryState.setSettling(s.id, timer);
   }
 }

@@ -242,7 +242,7 @@ export class SessionDelivery {
       // cannot, since the first send into an idle session is briefly local
       // too without ever having waited.
       let sideband = delivery !== 'queue' && !raw && compact == null && !images.length && d?.canRunWhileBusy?.(clean);
-      let busy = !sideband && (s.queuePaused || this.#core.sending.has(s.id) || this.#core.settling.has(s.id) || s.status === 'working' || s.status === 'blocked' || this.#core.preparing(s));
+      let busy = !sideband && (s.queuePaused || this.#core.deliveryState.isSending(s.id) || this.#core.deliveryState.hasSettling(s.id) || s.status === 'working' || s.status === 'blocked' || this.#core.preparing(s));
       const commandText = compact != null ? `/compact${compact ? ` ${compact}` : ''}` : clean;
       if (s.stoppedAt || stopGeneration !== (s.stopGeneration ?? 0) || !this.#core.index.has(id)) throw new Error('message cancelled because the thread was stopped');
       const item = { turnId, text: commandText, images, compact, delivery, references, referenceContext, stopGeneration, introduce, source };
@@ -298,10 +298,8 @@ export class SessionDelivery {
       // the turn settles - the same thing typing into a busy CLI does, on
       // engines whose own queue would drop it instead.
       if (busy) {
-        const q = this.#core.outbox.get(s.id) ?? [];
-        q.push(item);
-        this.#core.outbox.set(s.id, q);
-        if ((delivery === 'steer' || delivery === 'auto' && s.nativeSocket && !referenceContext && compact == null && !clean.trimStart().startsWith('/')) && s.status === 'working' && !this.#core.sending.has(s.id)) {
+        this.#core.deliveryState.addTicket(s.id, item);
+        if ((delivery === 'steer' || delivery === 'auto' && s.nativeSocket && !referenceContext && compact == null && !clean.trimStart().startsWith('/')) && s.status === 'working' && !this.#core.deliveryState.isSending(s.id)) {
           // The message is already safely queued; a Send now that cannot
           // happen leaves it there for the end of the reply.
           try { await this.#sessions.sendNow(s.id, turnId); }
@@ -309,7 +307,7 @@ export class SessionDelivery {
         } else if (delivery === 'auto') void this.handOver(s);
         return { ok: true };
       }
-      this.#core.sending.add(s.id);
+      this.#core.deliveryState.setSending(s.id);
       try {
         await this.#deliver(s, item, d);
       } finally {
@@ -435,10 +433,7 @@ export class SessionDelivery {
       }
       if (s.unsent) { delete s.unsent; this.#core.save(); }
     } catch (err) {
-      const awaiting = this.#core.awaitingEcho.get(s.id);
-      const index = awaiting?.indexOf(echo) ?? -1;
-      if (index >= 0) awaiting.splice(index, 1);
-      if (awaiting && !awaiting.length) this.#core.awaitingEcho.delete(s.id);
+      if (echo) this.#core.deliveryState.removeAwaitingEcho(s.id, echo.turnId, echo.driver);
       if (!this.#core.index.has(s.id)) throw err;
       if (s.delegation) {
         s.delegation.status = 'error';
@@ -477,24 +472,23 @@ export class SessionDelivery {
    * the order the messages were typed.
    */
   pump(s) {
-    if (this.#core.rewinder.rewinding.has(s.id) || this.#core.sending.has(s.id) || this.#core.settling.has(s.id) || s.queuePaused || s.stoppedAt || this.#core.preparing(s)) return;
-    const q = this.#core.outbox.get(s.id);
+    if (this.#core.rewinder.rewinding.has(s.id) || this.#core.deliveryState.isSending(s.id) || this.#core.deliveryState.hasSettling(s.id) || s.queuePaused || s.stoppedAt || this.#core.preparing(s)) return;
+    const q = this.#core.deliveryState.queue(s.id);
     if (!q?.length) return;
     if (s.status === 'working' || s.status === 'blocked') return;
-    this.#core.sending.add(s.id);
+    this.#core.deliveryState.setSending(s.id);
     (async () => {
       try {
         for (;;) {
-          const next = this.#core.outbox.get(s.id)?.[0];
+          const next = this.#core.deliveryState.queue(s.id)?.[0];
           if (!next) break;
           // A killed session drops what it was holding: its event log is
           // gone, so there is no turn to close the message against anyway.
-          if (!this.#core.index.has(s.id)) { this.#core.outbox.delete(s.id); break; }
-          if (s.status === 'working' || s.status === 'blocked' || this.#core.settling.has(s.id) || s.queuePaused || s.stoppedAt) break;
+          if (!this.#core.index.has(s.id)) { this.#core.deliveryState.clearQueue(s.id); break; }
+          if (s.status === 'working' || s.status === 'blocked' || this.#core.deliveryState.hasSettling(s.id) || s.queuePaused || s.stoppedAt) break;
           // Once delivery starts the ticket is no longer withdrawable or
           // interruptible as queued work; those actions apply to later items.
-          this.#core.outbox.get(s.id)?.shift();
-          if (!this.#core.outbox.get(s.id)?.length) this.#core.outbox.delete(s.id);
+          this.#core.deliveryState.takeNextTicket(s.id);
           try {
             await this.#deliver(s, next);
           } catch {
@@ -504,7 +498,7 @@ export class SessionDelivery {
           }
         }
       } finally {
-        this.#core.sending.delete(s.id);
+        this.#core.deliveryState.setSending(s.id, false);
         // The turn just started may take the rest mid-turn (OpenCode).
         if (s.status === 'working') void this.handOver(s);
       }
@@ -535,17 +529,15 @@ export class SessionDelivery {
 
   /** Remember a message sent as a new turn until its echo names it. */
   #expectEcho(s, driver, item, text) {
-    const awaiting = this.#core.awaitingEcho.get(s.id) ?? [];
     const entry = { turnId: item.turnId, text: text.trim(), driver, checkpoint: item.checkpoint, source: item.source };
     // A CLI that never echoes must not grow this without end.
-    if (awaiting.push(entry) > 16) awaiting.shift();
-    this.#core.awaitingEcho.set(s.id, awaiting);
+    this.#core.deliveryState.addAwaitingEcho(s.id, entry);
     return entry;
   }
 
   /** The send is over: the turn-end queue and the mid-turn handover both get a look. */
   #releaseSending(s) {
-    this.#core.sending.delete(s.id);
+    this.#core.deliveryState.setSending(s.id, false);
     this.pump(s);
     if (s.status === 'working') void this.handOver(s);
   }
@@ -562,16 +554,13 @@ export class SessionDelivery {
   dequeue(id, turnId) {
     this.#core.rewinder.assertRewindUnlocked(id);
     const s = this.#sessions.get(id);
-    const q = this.#core.outbox.get(id) ?? [];
-    const i = q.findIndex((x) => x.turnId === turnId);
     // Send now has reserved it: it is on its way, not waiting.
-    if (i < 0 || this.#core.delivering.get(id) === turnId) {
-      if (i < 0 && this.#orphaned(id, turnId)) {
+    if (!this.#core.deliveryState.hasTicket(id, turnId) || this.#core.deliveryState.delivering(id) === turnId) {
+      if (!this.#core.deliveryState.hasTicket(id, turnId) && this.#orphaned(id, turnId)) {
         // Nothing holds it and nothing will close it: it went out under a
         // reply Helm could not match to it, or the record of it was lost in
         // a restart. Its row would sit in the queue for good, so it goes.
-        const awaiting = this.#core.awaitingEcho.get(id)?.filter((x) => x.turnId !== turnId);
-        if (awaiting?.length) this.#core.awaitingEcho.set(id, awaiting); else this.#core.awaitingEcho.delete(id);
+        this.#core.deliveryState.removeAwaitingEcho(id, turnId);
         const event = this.#sessions.events.append(id, { type: 'turn.remove', turnId });
         s.lastSeq = event.seq;
         this.#sessions.emit('event', { id, event });
@@ -579,7 +568,7 @@ export class SessionDelivery {
       }
       return { ok: true, found: false };
     }
-    const [item] = q.splice(i, 1);
+    const item = this.#core.deliveryState.removeTicket(id, turnId);
     const event = this.#sessions.events.append(id, { type: 'turn.remove', turnId });
     s.lastSeq = event.seq;
     this.#sessions.emit('event', { id, event });
@@ -590,12 +579,12 @@ export class SessionDelivery {
 
   /** A queued row no part of delivery holds any more, and no event has closed. */
   #orphaned(id, turnId) {
-    if (this.#core.sending.has(id) || this.#core.delivering.get(id) === turnId) return false;
+    if (this.#core.deliveryState.isSending(id) || this.#core.deliveryState.delivering(id) === turnId) return false;
     const held = (list) => (list ?? []).some((x) => x.turnId === turnId);
-    if (held(this.#core.steered.get(id))) return false;
+    if (held(this.#core.deliveryState.steered(id))) return false;
     // A message sent as a new turn is echoed when that turn starts. Once the
     // agent is idle again, an echo still awaited is one that never matched.
-    if (held(this.#core.awaitingEcho.get(id)) && this.#sessions.get(id)?.status === 'working') return false;
+    if (held(this.#core.deliveryState.awaitingEcho(id)) && this.#sessions.get(id)?.status === 'working') return false;
     const tail = this.#sessions.events.tail(id, 0);
     return tail.some((e) => e.type === 'turn.start' && e.turnId === turnId && e.queued)
       && !tail.some((e) => e.turnId === turnId && ['turn.done', 'turn.remove', 'turn.accept', 'turn.deliver'].includes(e.type));
@@ -607,14 +596,13 @@ export class SessionDelivery {
     const session = this.#sessions.get(id);
     const images = attachments === undefined ? null : acceptImages(attachments);
     if (typeof text !== 'string' || text.length > 32000 || (!text.trim() && !images?.length)) throw new Error('queued messages need 1–32000 characters');
-    if (this.#core.sending.has(id)) throw new Error('a message is being delivered; try again');
-    const item = this.#core.outbox.get(id)?.find((entry) => entry.turnId === turnId);
+    if (this.#core.deliveryState.isSending(id)) throw new Error('a message is being delivered; try again');
+    const item = this.#core.deliveryState.ticket(id, turnId);
     if (!item) throw new Error('this message has already left the queue');
     if (item.compact != null || text.trimStart().startsWith('/')) throw new Error('withdraw slash commands before editing them');
     const event = this.#sessions.events.append(id, { type: 'turn.edit', turnId, text: text.trim(),
       ...(images ? { attachments: images.map((a) => this.#sessions.events.putAttachment(id, a)) } : {}) });
-    item.text = text.trim();
-    if (images) item.images = images;
+    this.#core.deliveryState.updateTicket(id, turnId, { text: text.trim(), ...(images ? { images } : {}) });
     session.lastSeq = event.seq;
     this.#sessions.emit('event', { id, event });
     return { ok: true };
@@ -623,13 +611,13 @@ export class SessionDelivery {
   reorderQueue(id, turnIds) {
     this.#core.rewinder.assertRewindUnlocked(id);
     const session = this.#sessions.get(id);
-    const queue = this.#core.outbox.get(id) ?? [];
-    if (this.#core.sending.has(id)) throw new Error('a message is being delivered; try again');
+    const queue = this.#core.deliveryState.queue(id) ?? [];
+    if (this.#core.deliveryState.isSending(id)) throw new Error('a message is being delivered; try again');
     if (!Array.isArray(turnIds) || turnIds.length !== queue.length || new Set(turnIds).size !== queue.length
       || turnIds.some((turnId) => !queue.some((entry) => entry.turnId === turnId))) throw new Error('the queue changed; refresh it and try again');
     session.queueOrder = turnIds;
     this.#core.save();
-    this.#core.outbox.set(id, turnIds.map((turnId) => queue.find((entry) => entry.turnId === turnId)));
+    this.#core.deliveryState.restoreQueue(id, turnIds.map((turnId) => queue.find((entry) => entry.turnId === turnId)));
     this.#sessions.emit('session', session);
     void this.handOver(session);
     return { ok: true, session: wire(session) };
@@ -674,12 +662,12 @@ export class SessionDelivery {
   async sendNow(id, turnId) {
     this.#core.rewinder.assertRewindUnlocked(id);
     const s = this.#sessions.get(id);
-    const item = (this.#core.outbox.get(id) ?? []).find((x) => x.turnId === turnId);
+    const item = (this.#core.deliveryState.queue(id) ?? []).find((x) => x.turnId === turnId);
     if (!item) return { ok: true, found: false, sent: false };
     if (this.#core.preparing(s)) throw new Error(s.chatWorktree?.setup === 'running' ? 'This goes to the agent once its worktree is set up.' : 'This goes to the agent once the repo is cloned.');
-    if (this.#core.sending.has(s.id)) throw new Error('message is already being sent');
-    this.#core.sending.add(s.id);
-    this.#core.delivering.set(id, turnId);
+    if (this.#core.deliveryState.isSending(s.id)) throw new Error('message is already being sent');
+    this.#core.deliveryState.setSending(s.id);
+    this.#core.deliveryState.setDelivering(id, turnId);
     try {
       const d = this.#core.drivers.get(id) ?? await this.#core.driver(s);
       this.#checkDelivery(s, item);
@@ -695,25 +683,22 @@ export class SessionDelivery {
         // Cut short, a delegated task would report itself stopped to the
         // orchestrator waiting on it.
         if (s.delegation) throw new Error(`${s.engine} reads this message when its current reply ends.`);
-        if (this.#core.steered.get(id)?.length) throw new Error('Wait until the CLI reads the messages already sent to it.');
+        if (this.#core.deliveryState.steered(id)?.length) throw new Error('Wait until the CLI reads the messages already sent to it.');
         await this.#interruptReply(s, d);
-      } else if (this.#core.settling.has(id)) throw new Error('The last reply is still finishing; try again in a moment.');
+      } else if (this.#core.deliveryState.hasSettling(id)) throw new Error('The last reply is still finishing; try again in a moment.');
       this.#checkDelivery(s, item);
-      const q = this.#core.outbox.get(id);
-      const index = q?.indexOf(item) ?? -1;
-      if (index < 0) return { ok: true, found: false, sent: false };
-      q.splice(index, 1);
-      if (!q.length) this.#core.outbox.delete(id);
+      const deliveredItem = this.#core.deliveryState.removeTicket(id, turnId);
+      if (!deliveredItem) return { ok: true, found: false, sent: false };
       // The reply cut short to make room is not a task the owner stopped.
       if (busy && !beside && s.recovery?.kind === 'interrupted') {
         delete s.recovery;
         this.#core.save();
         this.#sessions.emit('session', s);
       }
-      await this.#deliver(s, item, this.#core.drivers.get(id) === d ? d : null);
+      await this.#deliver(s, deliveredItem, this.#core.drivers.get(id) === d ? d : null);
       return { ok: true, found: true, sent: true };
     } finally {
-      this.#core.delivering.delete(id);
+      this.#core.deliveryState.setDelivering(id);
       this.#releaseSending(s);
     }
   }
@@ -729,18 +714,18 @@ export class SessionDelivery {
   async stopReplyForNext(id) {
     const s = this.#core.index.get(id);
     const d = this.#core.drivers.get(id);
-    if (!s || !d || s.nativeCli || s.stoppedAt || this.#core.sending.has(id)) return null;
+    if (!s || !d || s.nativeCli || s.stoppedAt || this.#core.deliveryState.isSending(id)) return null;
     if (!['working', 'blocked'].includes(s.status)) return null;
-    const handed = this.#core.steered.get(id) ?? [];
+    const handed = this.#core.deliveryState.steered(id) ?? [];
     // A CLI that keeps a handed message after its reply is stopped would run it twice.
     if (handed.length && !d.dropsHandedOnInterrupt) return null;
-    if (!handed.length && !this.#core.outbox.get(id)?.length) return null;
+    if (!handed.length && !this.#core.deliveryState.queue(id)?.length) return null;
     // Held so no handover or pump can take the line while the reply stops.
-    this.#core.sending.add(id);
+    this.#core.deliveryState.setSending(id);
     try {
-      this.#core.steered.delete(id);
+      this.#core.deliveryState.clearSteered(id);
       const back = handed.map((entry) => entry.item).filter(Boolean);
-      if (back.length) this.#core.outbox.set(id, [...back, ...(this.#core.outbox.get(id) ?? [])]);
+      if (back.length) this.#core.deliveryState.restoreQueue(id, [...back, ...(this.#core.deliveryState.queue(id) ?? [])]);
       try { await this.#interruptReply(s, d); }
       catch (err) { this.#sessions.log(`[${id}] stop for the next message: ${err.message}`); }
       return { ok: true, next: true };
@@ -796,25 +781,25 @@ export class SessionDelivery {
    * it waits for the turn to end; so does a message the CLI refused once.
    */
   async handOver(s) {
-    if (this.#core.sending.has(s.id) || s.queuePaused || s.stoppedAt) return;
+    if (this.#core.deliveryState.isSending(s.id) || s.queuePaused || s.stoppedAt) return;
     const d = this.#core.drivers.get(s.id);
     const timing = messageDelivery(s.engine).timing;
     if (timing === 'turn' || typeof d?.steer !== 'function') return;
     const ready = () => !s.queuePaused && !s.stoppedAt && (timing === 'tool'
-      ? ['working', 'blocked'].includes(s.status) && !!this.#core.steps.get(s.id)?.size
+      ? ['working', 'blocked'].includes(s.status) && this.#core.deliveryState.hasSteps(s.id)
       : s.status === 'working');
     const eligible = (item) => !!item && item.delivery !== 'queue' && !item.nativeRejected && !item.referenceContext
       && this.#canSteer(d, item);
     // Oldest first, but another agent's message passes the owner's held
     // ones: those wait for the task by choice, a teammate should not.
     const next = () => {
-      const q = this.#core.outbox.get(s.id) ?? [];
+      const q = this.#core.deliveryState.queue(s.id) ?? [];
       const at = q.findIndex((item, i) => i === 0 ? eligible(item)
         : item.source === 'agent' && eligible(item) && q.slice(0, i).every((held) => held.delivery === 'queue'));
       return at < 0 ? undefined : q[at];
     };
     if (!ready() || !next()) return;
-    this.#core.sending.add(s.id);
+    this.#core.deliveryState.setSending(s.id);
     try {
       for (;;) {
         const item = next();
@@ -839,40 +824,36 @@ export class SessionDelivery {
    */
   async #steerOne(s, d, item) {
     this.#checkDelivery(s, item);
-    const q = this.#core.outbox.get(s.id);
-    const index = q?.indexOf(item) ?? -1;
+    const q = this.#core.deliveryState.queue(s.id);
+    const index = q.findIndex((entry) => entry.turnId === item.turnId);
     if (index < 0) return;
     const before = new Set(q.slice(0, index).map((entry) => entry.turnId));
     const after = new Set(q.slice(index + 1).map((entry) => entry.turnId));
-    q.splice(index, 1);
-    if (!q.length) this.#core.outbox.delete(s.id);
+    const ticket = this.#core.deliveryState.removeTicket(s.id, item.turnId);
+    if (!ticket) return;
     const prompt = this.#promptOf(s, d, item);
-    const steered = this.#core.steered.get(s.id) ?? [];
     // The ticket rides along so a Stop can put it back in line.
-    const entry = { turnId: item.turnId, text: prompt, item };
-    steered.push(entry);
-    this.#core.steered.set(s.id, steered);
+    const entry = { turnId: item.turnId, text: prompt, item: ticket };
+    this.#core.deliveryState.addSteered(s.id, entry);
     try {
       await d.steer(prompt, item.images, { inputId: item.turnId });
     } catch (err) {
-      const at = steered.indexOf(entry);
-      if (at >= 0) steered.splice(at, 1);
-      if (!steered.length && this.#core.steered.get(s.id) === steered) this.#core.steered.delete(s.id);
+      const currentTicket = this.#core.deliveryState.removeSteered(s.id, item.turnId);
       // A Stop while the call was out has already removed the ticket.
       const current = !s.stoppedAt && this.#core.index.has(s.id)
         && (item.stopGeneration == null || item.stopGeneration === (s.stopGeneration ?? 0));
-      if (at >= 0 && current) {
-        const rest = this.#core.outbox.get(s.id) ?? [];
+      if (currentTicket && current) {
+        const rest = this.#core.deliveryState.queue(s.id) ?? [];
         const next = rest.findIndex((ticket) => after.has(ticket.turnId));
         const previous = rest.findLastIndex((ticket) => before.has(ticket.turnId));
-        item.nativeRejected = true;
-        rest.splice(next >= 0 ? next : previous + 1, 0, item);
-        this.#core.outbox.set(s.id, rest);
+        currentTicket.item.nativeRejected = true;
+        rest.splice(next >= 0 ? next : previous + 1, 0, currentTicket.item);
+        this.#core.deliveryState.restoreQueue(s.id, rest);
       }
       throw err;
     }
     // Already used (a CLI can say so before its call returns), or stopped.
-    if (!steered.includes(entry) || s.stoppedAt || !this.#core.index.has(s.id)
+    if (!this.#core.deliveryState.steeredTicket(s.id, entry.turnId) || s.stoppedAt || !this.#core.index.has(s.id)
       || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0))) return;
     const event = this.#sessions.events.append(s.id, { type: 'turn.deliver', turnId: item.turnId });
     s.lastSeq = event.seq;
@@ -887,13 +868,12 @@ export class SessionDelivery {
    * refusal on the wrong message.
    */
   consumed(s, text, inputId, error = null) {
-    const steered = this.#core.steered.get(s.id);
-    if (!steered?.length) return this.#absorbed(s, text);
+    const steered = this.#core.deliveryState.steered(s.id);
+    if (!steered.length) return this.#absorbed(s, text);
     const want = String(text ?? '').trim();
     const i = steered.findIndex((x) => inputId != null ? x.turnId === inputId : x.text.trim() === want);
     if (i < 0) return;
-    const [{ turnId }] = steered.splice(i, 1);
-    if (!steered.length) this.#core.steered.delete(s.id);
+    const { turnId } = this.#core.deliveryState.removeSteered(s.id, steered[i].turnId);
     const event = this.#sessions.events.append(s.id, error
       ? { type: 'turn.done', turnId, status: 'error', error: String(error) }
       : { type: 'turn.accept', turnId });
@@ -911,7 +891,7 @@ export class SessionDelivery {
     if (!want) return;
     const tail = this.#sessions.events.tail(s.id, 0);
     const settled = new Set(tail.filter((e) => ['turn.done', 'turn.remove', 'turn.accept'].includes(e.type)).map((e) => e.turnId));
-    const waiting = new Set((this.#core.outbox.get(s.id) ?? []).map((item) => item.turnId));
+    const waiting = new Set((this.#core.deliveryState.queue(s.id) ?? []).map((item) => item.turnId));
     const said = (e) => String(e.text ?? '').trim();
     // An echo after it means the CLI ran it as a turn of its own.
     const echoed = (e) => tail.some((x) => x.type === 'turn.start' && x.seq > e.seq

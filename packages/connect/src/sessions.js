@@ -32,6 +32,7 @@ import { AccountLimits } from './account-limits.js';
 import { CLAUDE_NATIVE_COMMANDS } from './commands.js';
 import { canvasPath } from './git.js';
 import { validateVisual } from './visual.js';
+import { DeliveryState } from './delivery-state.js';
 import { DRIVERS, pendingSummary, wire } from './session-wire.js';
 import { driverTakesImages } from './session-attachments.js';
 import { missingClaudeConversation, parentLink } from './session-text.js';
@@ -147,56 +148,9 @@ export class Sessions extends EventEmitter {
   #seen = new Map();
   /** When a row was removed, so new activity in its CLI can bring it back. */
   #removedAt = new Map();
-  /**
-   * sessionId -> messages accepted but not yet handed to the agent.
-   *
-   * Every CLI queues input typed mid-turn *differently*: claude holds it
-   * internally, codex's app-server refuses a second turn/start outright, and
-   * an ACP agent answers a prompt sent while one is open however it pleases.
-   * So the queue lives here, where it works the same on all of them: a
-   * message sent while the agent is working or blocked waits here, then goes
-   * out in the order it was typed - mid-turn at the CLI's own handover point
-   * (`messageDelivery`), otherwise when the turn ends.
-   * Open `local-` turns are the durable tickets; `resume()` rebuilds this
-   * map from the event log after a daemon restart.
-   */
-  #outbox = new Map();
-  /** sessionIds with a pump loop live - the queue's mutex. */
-  #sending = new Set();
-  /**
-   * sessionId -> top-level tool items running now. Claude and Codex both
-   * take a message typed mid-turn at the end of the step in flight, so that
-   * is when a held message is handed over - and until then it can still be
-   * withdrawn, which neither CLI can do once it has the message.
-   */
-  #steps = new Map();
-  /** sessionId -> messages handed to the CLI that it has not used yet. */
-  #steered = new Map();
-  /**
-   * sessionId -> the ticket Send now is delivering. It is reserved: while
-   * the current reply is being cancelled for it, it cannot be withdrawn and
-   * then reach the CLI anyway.
-   */
-  #delivering = new Map();
-  /**
-   * sessionId -> messages sent as a new turn whose echo has not arrived.
-   * The echo gets the ticket's id, so the app and a restart match it to
-   * the right message even when two say the same thing.
-   */
-  #awaitingEcho = new Map();
-  /**
-   * sessionId -> timer, while an agent says it is idle but its newest turn
-   * has not finished. Codex reports the thread idle a few milliseconds
-   * before the turn's completion; a queued message sent into that gap
-   * started its turn before the last one was done, and the late completion
-   * then showed the new turn as idle. The queue waits for the completion,
-   * or for this long if it never comes.
-   */
-  #settling = new Map();
+  #deliveryState = new DeliveryState();
   /** sessionId -> open command cards (turn.start with local: true). */
   #commandCards = new Map();
-  /** sessionId -> the last turns a driver closed, so a repeat is told apart. */
-  #closedTurns = new Map();
 
   constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, waiterGraceMs = 3000, delegationIdleMs = DELEGATION_IDLE_MS, reattachRetryMs = 90_000, reattachConcurrency = 4 } = {}) {
     super();
@@ -307,10 +261,8 @@ export class Sessions extends EventEmitter {
 
   /**
    * The parts of this class kept in their own files (session-*.js). Each
-   * part gets this instance, for what is public, and `core`: the private
-   * state and steps it shares with the rest of the class - the same Maps and
-   * the same methods, so nothing is copied and none of it becomes reachable
-   * from outside the way a public field would be.
+   * part gets this instance, for what is public, and `core`: shared private
+   * state and named operations. Delivery state stays behind its owner.
    */
   #titles;
   #rewinder;
@@ -333,15 +285,8 @@ export class Sessions extends EventEmitter {
       retiring: this.#retiring,
       marks: this.#marks,
       removedAt: this.#removedAt,
-      outbox: this.#outbox,
-      sending: this.#sending,
-      steps: this.#steps,
-      steered: this.#steered,
-      delivering: this.#delivering,
-      awaitingEcho: this.#awaitingEcho,
-      settling: this.#settling,
+      deliveryState: this.#deliveryState,
       commandCards: this.#commandCards,
-      closedTurns: this.#closedTurns,
       terminal: this.#terminal.bind(this),
       setContext: this.#setContext.bind(this),
       get lastDetected() { return sessions.#lastDetected; },
@@ -868,7 +813,7 @@ export class Sessions extends EventEmitter {
 
   canReturnTask(id) {
     return ['idle', 'done'].includes(this.get(id).status)
-      && !this.#sending.has(id) && !this.#settling.has(id) && !this.get(id).queuePaused && !this.#outbox.get(id)?.length
+      && !this.#deliveryState.isSending(id) && !this.#deliveryState.hasSettling(id) && !this.get(id).queuePaused && !this.#deliveryState.hasQueue(id)
       && !this.events.activeTurn(id) && !this.events.pending(id).length && !this.hasActiveDelegations(id);
   }
 
@@ -1203,7 +1148,7 @@ export class Sessions extends EventEmitter {
       // returned it with engineSessionId null when startup went wrong.
       this.#drivers.delete(session.id);
       this.#index.delete(session.id);
-      this.#outbox.delete(session.id);
+      this.#deliveryState.clear(session.id);
       clearTimeout(this.#reapers.get(session.id));
       this.#reapers.delete(session.id);
       driver?.removeAllListeners?.('event');
@@ -1430,8 +1375,7 @@ export class Sessions extends EventEmitter {
   }
 
   #settled(id) {
-    clearTimeout(this.#settling.get(id));
-    this.#settling.delete(id);
+    clearTimeout(this.#deliveryState.clearSettling(id));
   }
 
   /** Finished children release their runtime quickly; their conversation stays resumable. */
@@ -1445,7 +1389,7 @@ export class Sessions extends EventEmitter {
       this.#reapers.delete(s.id);
       const d = this.#drivers.get(s.id);
       if (!d || d.status !== 'idle' || s.status !== 'idle' || this.#retiring.has(s.id)) return;
-      if (this.#sending.has(s.id) || this.#outbox.get(s.id)?.length || d.pending?.size
+      if (this.#deliveryState.isSending(s.id) || this.#deliveryState.hasQueue(s.id) || d.pending?.size
         || this.events.pending(s.id).length || this.events.activeTurn(s.id) || this.hasActiveDelegations(s.id)
         // A background command or watch it is waiting on dies with it.
         || d.backgroundTasks > 0) {
@@ -1662,6 +1606,7 @@ export class Sessions extends EventEmitter {
   watch(id, watcher) { return this.#viewers.watch(id, watcher); }
   unwatch(id, watcher) { return this.#viewers.unwatch(id, watcher); }
   watching(id) { return this.#viewers.watching(id); }
+  watcherRecipients(id) { return this.#viewers.recipients(id); }
   messages(id, options) { return this.#viewers.messages(id, options); }
   read(id, options) { return this.#viewers.read(id, options); }
   attach(id, options) { return this.#viewers.attach(id, options); }
@@ -1726,14 +1671,13 @@ export class Sessions extends EventEmitter {
     // would fire the next message the moment the interrupt landed. Each
     // waiting bubble disappears because the agent never saw it. Only the
     // actual turn in flight ends as interrupted and earns a "stopped" line.
-    const queued = this.#outbox.get(id) ?? [];
-    this.#outbox.delete(id);
+    const queued = this.#deliveryState.removeQueue(id);
     for (const item of queued) {
       const event = this.events.append(id, { type: 'turn.remove', turnId: item.turnId });
       this.emit('event', { id, event });
     }
-    const handed = this.#steered.get(id) ?? [];
-    this.#steered.delete(id);
+    const handed = this.#deliveryState.steered(id);
+    this.#deliveryState.restoreSteered(id, []);
     for (const item of handed) {
       const event = this.events.append(id, { type: 'turn.remove', turnId: item.turnId });
       this.emit('event', { id, event });
@@ -2038,14 +1982,10 @@ export class Sessions extends EventEmitter {
       this.#clones.delete(id);
       const d = this.#drivers.get(id);
       this.#drivers.delete(id);
-      this.#outbox.delete(id);
-      this.#steps.delete(id);
-      this.#steered.delete(id);
-      this.#delivering.delete(id);
-      this.#awaitingEcho.delete(id);
+      this.#deliveryState.clear(id);
       this.#settled(id);
       this.#commandCards.delete(id);
-      this.#closedTurns.delete(id);
+      this.#deliveryState.clearClosedTurns(id);
       this.#rewinder.providerRevisions.delete(id);
       clearTimeout(this.#reapers.get(id));
       if (d) await d.kill();
@@ -2226,7 +2166,7 @@ export class Sessions extends EventEmitter {
     for (const timer of this.#reapers.values()) clearTimeout(timer);
     this.#reapers.clear();
     await Promise.allSettled(this.#retiring.values());
-    for (const id of [...this.#settling.keys()]) this.#settled(id);
+    for (const id of this.#deliveryState.settlingIds()) this.#settled(id);
     await (await this.hooks?.catch(() => null))?.close();
     this.nativeDiscovery = false;
     await this.#natives.nativeDiscovery?.catch(() => {});

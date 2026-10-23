@@ -235,7 +235,7 @@ export class ExternalSessions {
       || this.#core.drivers.get(s.id)?.pending?.size || this.#core.drivers.get(s.id)?.backgroundTasks > 0
       || this.#sessions.events.activeTurn(s.id) || this.#sessions.events.pending(s.id).length
       || this.#core.driverStarts.has(s.id) || this.#core.retiring.has(s.id)
-      || this.#core.sending.has(s.id) || this.#core.outbox.get(s.id)?.length);
+      || this.#core.deliveryState.isSending(s.id) || this.#core.deliveryState.hasQueue(s.id));
     if (!idle() || !opencodeServiceStatus(s.engineSessionId)) return;
     found ??= (await inventory((await getProfiles()).filter(p => p.engine === 'opencode2'), { limit: Infinity }))
       .find(x => x.id === s.engineSessionId);

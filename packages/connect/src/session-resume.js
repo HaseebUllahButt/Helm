@@ -72,7 +72,7 @@ export class SessionResume {
     const closed = new Set(tail.filter((e) => ['turn.done', 'turn.remove'].includes(e.type)).map((e) => e.turnId));
     // A message still waiting in the queue never reached the dead process:
     // it stays queued, and goes to the next one.
-    const waiting = new Set((this.#core.outbox.get(id) ?? []).map((item) => item.turnId));
+    const waiting = new Set((this.#core.deliveryState.queue(id) ?? []).map((item) => item.turnId));
     for (const e of tail) {
       if (e.type !== 'turn.start' || closed.has(e.turnId) || waiting.has(e.turnId)) continue;
       closed.add(e.turnId);
@@ -221,7 +221,7 @@ export class SessionResume {
     if (revive.length) {
       const order = new Map((s.queueOrder ?? []).map((turnId, index) => [turnId, index]));
       revive.sort((left, right) => (order.get(left.turnId) ?? Infinity) - (order.get(right.turnId) ?? Infinity));
-      this.#core.outbox.set(s.id, [...(this.#core.outbox.get(s.id) ?? []), ...revive]);
+      this.#core.deliveryState.restoreQueue(s.id, [...(this.#core.deliveryState.queue(s.id) ?? []), ...revive]);
     }
   }
 
@@ -233,7 +233,7 @@ export class SessionResume {
   #inFlight(s) {
     return ['working', 'blocked', 'starting'].includes(s.status)
       || this.#sessions.events.pending(s.id).length > 0
-      || (this.#core.outbox.get(s.id)?.length ?? 0) > 0
+      || (this.#core.deliveryState.queue(s.id)?.length ?? 0) > 0
       || !!activeTurnFromEvents(this.#sessions.events.tail(s.id, 0));
   }
 

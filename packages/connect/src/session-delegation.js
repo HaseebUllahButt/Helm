@@ -248,7 +248,7 @@ export class SessionDelegation {
         // Persist before removing tickets: a restart in between still knows
         // not to revive or deliver a result that the parent already read.
         this.#core.save();
-        for (const item of [...(this.#core.outbox.get(parent.id) ?? [])]) {
+        for (const item of [...(this.#core.deliveryState.queue(parent.id) ?? [])]) {
           if (this.#consumedResult(parent, item.turnId)) this.#sessions.dequeue(parent.id, item.turnId);
         }
       }
@@ -282,7 +282,7 @@ export class SessionDelegation {
     const turnId = `local-message-${randomBytes(6).toString('hex')}`;
     await this.#sessions.input(id, data.trim(), { turnId });
     if (child.status === 'working' && typeof d?.steer === 'function') {
-      if (!this.#core.sending.has(id)) await this.#sessions.sendNow(id, turnId);
+      if (!this.#core.deliveryState.isSending(id)) await this.#sessions.sendNow(id, turnId);
     }
     return { ok: true };
   }

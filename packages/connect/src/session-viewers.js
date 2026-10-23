@@ -54,6 +54,20 @@ export class SessionViewers {
     return viewers.size > 0;
   }
 
+  /** Only devices with an open view receive this chat's live body. */
+  recipients(id) {
+    if (!this.watching(id)) return [];
+    const recipients = new Set();
+    for (const watcher of this.#watching.get(id).keys()) {
+      try {
+        const identity = JSON.parse(watcher);
+        if (!Array.isArray(identity) || typeof identity[0] !== 'string' || identity[0] === 'legacy') return null;
+        recipients.add(identity[0]);
+      } catch { return null; } // An older caller still receives its normal stream.
+    }
+    return [...recipients];
+  }
+
   /**
    * The session as a conversation.
    *
