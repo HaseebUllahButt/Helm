@@ -47,7 +47,10 @@ const snapshot = async () => {
 };
 const start = { seq: 1, type: 'item.start', kind: 'text', id: null, at: null };
 const delta = { seq: 2, type: 'item.delta', id: null, text: 'café اردو 😀\ud800 ' };
-writeFileSync(log, line(start) + line(delta) + '{bad json}\n'
+// Keep an open reply across several scan blocks, including an oversized row.
+const padding = line({ type: 'item.delta', id: 'tool', text: 'tool '.repeat(1400) }).repeat(170)
+  + line({ type: 'item.delta', id: 'tool', text: 'oversized '.repeat(160000) });
+writeFileSync(log, line(start) + padding + line(delta) + '{bad json}\n'
   + '{"seq":3,"seq":4,"type":"turn.start","text":"queued owner words"}\n'
   + line({ seq: 5, type: 'turn.start', text: '<helm-brief>hidden</helm-brief> queued café words' })
   + line({ seq: 6, type: 'item.delta', id: 'tool', text: 'tool payload'.repeat(10000) })

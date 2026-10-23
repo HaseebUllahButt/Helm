@@ -15,14 +15,17 @@ if (process.argv[2] === '--read') {
   global.gc();
   const before = process.memoryUsage().heapUsed;
   const index = new SearchIndex({ dir, file: join(dir, `index-${process.pid}.json`) });
+  const cpuBefore = process.cpuUsage();
   const start = performance.now();
   await index.update(sessions);
   const ms = performance.now() - start;
+  const cpu = process.cpuUsage(cpuBefore);
+  const cpuMs = (cpu.user + cpu.system) / 1000;
   index.close();
   const saved = JSON.parse(readFileSync(join(dir, `index-${process.pid}.json`)));
   const digest = createHash('sha256').update(JSON.stringify({ saved, result: index.search('café', sessions) })).digest('hex');
   global.gc();
-  console.log(JSON.stringify({ reader: searchReader, ms, digest, retained: process.memoryUsage().heapUsed - before,
+  console.log(JSON.stringify({ reader: searchReader, ms, cpuMs, digest, retained: process.memoryUsage().heapUsed - before,
     peakRss: process.resourceUsage().maxRSS * 1024 }));
 } else {
   const dir = mkdtempSync(join(tmpdir(), 'helm-search-bench-'));
@@ -58,6 +61,7 @@ if (process.argv[2] === '--read') {
       console.log(JSON.stringify({ name, bytes: statSync(join(dir, 'chat.jsonl')).size, events: seq,
         ...Object.fromEntries(Object.entries(runs).map(([reader, rows]) => [reader, {
           ms: +median(rows.map(r => r.ms)).toFixed(2),
+          cpuMs: +median(rows.map(r => r.cpuMs)).toFixed(2),
           retainedMiB: +(median(rows.map(r => r.retained)) / 1048576).toFixed(2),
           peakRssMiB: +(median(rows.map(r => r.peakRss)) / 1048576).toFixed(2),
         }])) }));

@@ -26,6 +26,8 @@ const YOU_CHARS = 400;
 const AGENT_CHARS = 320;
 const SAVE_AFTER_MS = 5_000;
 const SNIPPET = 120;
+// Bound temporary native results, without limiting log or record size.
+const SCAN_BYTES = 1024 * 1024;
 
 const clip = (text, n) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
 const flat = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -300,28 +302,34 @@ export class SearchIndex {
     // Leave the final record with JSON.parse, including its existing recovery
     // for a valid event without a newline or a torn write completed later.
     const complete = body.lastIndexOf(10) + 1;
-    const rows = extractSearchEvents(body.subarray(0, complete));
-    if (rows) {
-      for (const [event, from, to] of rows) {
-        if (!event) { accept(body.toString('utf8', from, to)); continue; }
-        if (from != null) {
-          const key = `${id}:${event.id}`;
-          const open = this.#open.get(key);
-          const legacy = legacyOpen?.get(key);
-          if ((open && open.text.length < AGENT_CHARS * 2) || (legacy && legacy.text.length < AGENT_CHARS * 2)) {
-            event.text = JSON.parse(body.toString('utf8', from, to));
+    while (consumed < complete) {
+      const start = consumed;
+      let end = body.lastIndexOf(10, Math.min(start + SCAN_BYTES, complete) - 1) + 1;
+      // A single record can exceed the target block size. Keep it whole.
+      if (end <= start) end = body.indexOf(10, start) + 1;
+      const block = body.subarray(start, end);
+      const rows = extractSearchEvents(block);
+      if (rows) {
+        for (const [event, from, to] of rows) {
+          if (!event) { accept(block.toString('utf8', from, to)); continue; }
+          if (from != null) {
+            const key = `${id}:${event.id}`;
+            const open = this.#open.get(key);
+            const legacy = legacyOpen?.get(key);
+            if ((open && open.text.length < AGENT_CHARS * 2) || (legacy && legacy.text.length < AGENT_CHARS * 2)) {
+              event.text = JSON.parse(block.toString('utf8', from, to));
+            }
           }
+          acceptEvent(event);
         }
-        acceptEvent(event);
-      }
-      consumed = complete;
-    } else {
-      for (;;) {
-        const newline = body.indexOf(10, consumed);
-        if (newline < 0) break;
-        const raw = body.toString('utf8', consumed, newline);
-        consumed = newline + 1;
-        accept(raw);
+        consumed = end;
+      } else {
+        while (consumed < end) {
+          const newline = body.indexOf(10, consumed);
+          const raw = body.toString('utf8', consumed, newline);
+          consumed = newline + 1;
+          accept(raw);
+        }
       }
     }
     if (consumed < body.length) {
