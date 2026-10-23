@@ -109,7 +109,7 @@ test('Codex reports how full the context is from the latest call, not the runnin
   assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 0, window: 258_400, compacted: true });
 });
 
-function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false } = {}) {
+function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false, reply: override } = {}) {
   const fake = fakeCli('codex', 'plain');
   let receive, exited;
   const writes = [];
@@ -123,7 +123,7 @@ function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false } 
         ? unsupportedTurns && request.params.includeTurns
           ? { error: { message: 'list_turns is not supported yet' } }
           : error ? { error } : { result: { thread } }
-        : { result: {} };
+        : override?.(request) ?? { result: {} };
       emit({ id: request.id, ...reply });
       if (request.method === 'thread/read') afterRead?.(emit);
     },
@@ -157,6 +157,24 @@ for (const [name, status, turns, expected] of [
   } else if (expected === 'idle') {
     await assert.rejects(driver.steer('Do not revive stale work'), /no active turn/);
   }
+});
+
+test('adopted Codex loads an unloaded thread when a message finds it missing', async (t) => {
+  let loaded = false;
+  const { driver, log, writes } = adoptedCodex(t, {
+    thread: { status: { type: 'notLoaded' }, turns: [] },
+    reply: (request) => {
+      if (request.method === 'thread/resume') { loaded = true; return { result: { thread: { id: 'recovered-thread' } } }; }
+      if (request.method === 'turn/start') return loaded ? { result: { turn: { id: 'new-turn' } } }
+        : { error: { code: -32600, message: 'thread not found: recovered-thread' } };
+    },
+  });
+  await driver.start();
+  await driver.send('Status?');
+  assert.deepEqual(writes.map((request) => request.method), ['thread/read', 'turn/start', 'thread/resume', 'turn/start']);
+  assert.equal(writes[2].params.threadId, 'recovered-thread');
+  assert.equal(log.of('error').length, 0);
+  assert.equal(driver.status, 'working');
 });
 
 test('reattaching Codex does not replay old helper failures and checks a surviving child live', async t => {

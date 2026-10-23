@@ -789,11 +789,7 @@ export class CodexDriver extends Driver {
       return;
     }
     const { approvalPolicy, sandbox } = this.#policy();
-    const config = Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
-      .map((k) => [`shell_environment_policy.set.${k}`, this.env[k]]));
-    const common = { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}),
-      ...(this.instructions ? { developerInstructions: this.instructions } : {}),
-      ...(Object.keys(config).length ? { config } : {}) };
+    const common = this.#threadParams();
     // A newly opened TUI has a loaded thread before its first prompt creates
     // a rollout. Resume is invalid until then; direct input still works.
     const nativeEmpty = this.nativeSocket && (!this.transcript || !existsSync(this.transcript));
@@ -864,6 +860,29 @@ export class CodexDriver extends Driver {
     this.push('turn.done', { turnId: saved, status: outcome,
       ...(outcome === 'error' ? { error: known?.error?.message ?? 'turn failed' } : {}) });
     return null;
+  }
+
+  /** What a thread is opened with, on start and on a later reload. */
+  #threadParams() {
+    const { approvalPolicy, sandbox } = this.#policy();
+    const config = Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
+      .map((k) => [`shell_environment_policy.set.${k}`, this.env[k]]));
+    return { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}),
+      ...(this.instructions ? { developerInstructions: this.instructions } : {}),
+      ...(Object.keys(config).length ? { config } : {}) };
+  }
+
+  /**
+   * A call that addresses this thread. An adopted account server reads an
+   * idle thread without loading it ("notLoaded"), and then refuses work on
+   * it as "thread not found". The thread is loaded once and the call retried.
+   */
+  async #callThread(method, params) {
+    const res = await this.#server.call(method, params);
+    if (!res.error || this.nativeSocket || !/thread not found/i.test(res.error.message)) return res;
+    const resumed = await this.#server.call('thread/resume', { threadId: this.threadId, excludeTurns: true, ...this.#threadParams() });
+    if (resumed.error) return res;
+    return this.#server.call(method, params);
   }
 
   /** Initialize app-server for account reads without resuming the thread. */
@@ -955,7 +974,7 @@ export class CodexDriver extends Driver {
     if (!this.pending.size) this.push('status', { status: 'working' });
     this.#opening++;
     let res;
-    try { res = await this.#server.call('turn/start', params); } finally { this.#opening--; }
+    try { res = await this.#callThread('turn/start', params); } finally { this.#opening--; }
     if (res.error) {
       this.push('error', { message: res.error.message, kind: 'turn' });
       // Only unwind the status this call set: when a turn was already
@@ -1016,7 +1035,7 @@ export class CodexDriver extends Driver {
   async compact() {
     await this.start();
     this.#compactUntil = Date.now() + 30_000;
-    const res = await this.#server.call('thread/compact/start', { threadId: this.threadId });
+    const res = await this.#callThread('thread/compact/start', { threadId: this.threadId });
     if (res.error) { this.#compactUntil = 0; throw new Error(res.error.message); }
   }
 
@@ -1045,7 +1064,7 @@ export class CodexDriver extends Driver {
       if (this.nativeSocket) this.#nativeTurnStarts.add(commandTurn);
       this.#opening++;
       let res;
-      try { res = await this.#server.call('review/start', { threadId: this.threadId, target }); }
+      try { res = await this.#callThread('review/start', { threadId: this.threadId, target }); }
       finally { this.#opening--; this.#pendingReview = null; }
       if (res.error) {
         this.push('turn.done', { turnId: commandTurn, status: 'error', error: res.error.message });
@@ -1263,7 +1282,7 @@ export class CodexDriver extends Driver {
     if (!this.pending.size) this.push('status', { status: 'working' });
     this.#opening++;
     let res;
-    try { res = await this.#server.call('turn/start', params); } finally { this.#opening--; }
+    try { res = await this.#callThread('turn/start', params); } finally { this.#opening--; }
     if (res.error) {
       this.push('error', { message: res.error.message, kind: 'turn' });
       if (!wasWorking) this.push('status', { status: 'idle' });
