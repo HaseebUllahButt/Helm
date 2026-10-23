@@ -90,12 +90,14 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   an open view receive its text. Text redraws before repeated tool updates;
   events keep their original order. Repeated tool output sends its newest
   value within each short batch. Full history stays on the machine.
-- **Prove latest first:** close a private chat, add many replies to its private
+- **Prove latest first (driven 2026-10-23 with the Rust reader):** close a private chat, add many replies to its private
   history, restart the private daemon, and reopen the chat. Check that the
   latest answer appears. Load earlier replies and check that they appear.
   Send another message and check that the live answer arrives once.
 - **Storage rule:** append new events to history files. Replace old history
   with a rename. Readers keep byte positions between pages and search updates.
+  Rust scans saved record positions when built; JavaScript remains available.
+  See [the reader boundary and checks](../rust-log-reader.md).
 - **Prove selection copy (driven 2026-10-17):** fake chat at 390×844 with
   clipboard permission granted; blur the composer, select `.chat .md p`
   with a Range (no pointer events). After 450 ms

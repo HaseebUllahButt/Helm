@@ -1,4 +1,5 @@
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { scanEventPositions } from './log-index-native.js';
 
 const READ_BLOCK = 16 * 1024;
 const contextType = type => type?.startsWith('turn.') || type === 'item.start' || type === 'item.done';
@@ -17,9 +18,14 @@ export class EventFile {
 
   constructor(file, summarize = event => event) { this.file = file; this.summarize = summarize; }
 
-  record(event, start, end) {
+  #position(seq, start, end) {
     const index = this.seqs.length;
-    this.starts.push(start); this.ends.push(end); this.seqs.push(event.seq);
+    this.starts.push(start); this.ends.push(end); this.seqs.push(seq);
+    return index;
+  }
+
+  record(event, start, end) {
+    const index = this.#position(event.seq, start, end);
     if (this.#recent) this.#recent[index % this.#recent.length] = event;
     if (contextType(event.type)) { this.contexts.push(index); this.summaries.push(this.summarize(event)); }
     if (event.type === 'turn.start') this.turns.push(index);
@@ -43,6 +49,27 @@ export class EventFile {
     this.#snapshot = visit ? bytes : null;
     this.#recent = visit && keep > 0 ? new Array(keep) : null;
     try {
+      const positions = scanEventPositions(bytes);
+      if (positions) {
+        for (let n = 0; n < positions.length; n += 4) {
+          const start = positions[n], end = positions[n + 1], seq = positions[n + 2], kind = positions[n + 3];
+          if (kind === 0) this.#position(seq, start, end);
+          else {
+            try {
+              const event = JSON.parse(bytes.toString('utf8', start, end));
+              if (event && typeof event.seq === 'number') this.record(event, start, end);
+            } catch { /* Keep the same recovery for unusual or corrupt rows. */ }
+          }
+        }
+        this.complete = bytes.lastIndexOf(10) + 1;
+        if (this.#recent) {
+          for (let n = Math.max(0, this.seqs.length - keep); n < this.seqs.length; n++) {
+            this.#recent[n % keep] = JSON.parse(bytes.toString('utf8', this.starts[n], this.ends[n]));
+          }
+        }
+        visit?.(this);
+        return this;
+      }
       for (let from = 0; from < bytes.length;) {
         const nl = bytes.indexOf(10, from), end = nl < 0 ? bytes.length : nl;
         if (end > from) {

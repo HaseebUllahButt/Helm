@@ -204,6 +204,33 @@ test('a failed app build also rolls back and can complete on retry', async () =>
   }
 });
 
+test('a failed Rust build restores the old release and a retry builds before the app', async (t) => {
+  const { remote, installed } = make();
+  const before = git(installed, ['rev-parse', 'HEAD']);
+  mkdirSync(join(remote, 'scripts'));
+  writeFileSync(join(remote, 'scripts/build-log-reader.mjs'), 'throw Error("Rust build failed");\n');
+  commit(remote, 'add the Rust reader');
+  const bin = mkdtempSync(join(tmpdir(), 'helm-update-bin-'));
+  const calls = join(bin, 'calls'), npm = join(bin, 'npm');
+  writeFileSync(npm, `#!/bin/sh\necho "$*" >> "${calls}"\nexit 0\n`);
+  chmodSync(npm, 0o755);
+  const previous = process.env.PATH;
+  process.env.PATH = `${bin}:${previous}`;
+  t.after(() => { process.env.PATH = previous; });
+  await assert.rejects(selfUpdate(installed, { restart: false }), /Rust build failed/);
+  assert.equal(git(installed, ['rev-parse', 'HEAD']), before);
+  assert.doesNotMatch(readFileSync(calls, 'utf8'), /workspace/, 'the app must not build after a failed Rust build');
+
+  writeFileSync(join(remote, 'scripts/build-log-reader.mjs'),
+    `import {appendFileSync} from 'node:fs';appendFileSync(${JSON.stringify(calls)}, 'rust\\n');\n`);
+  commit(remote, 'fix the Rust build');
+  assert.equal((await selfUpdate(installed, { restart: false })).updated, true);
+  assert.equal(git(installed, ['rev-parse', 'HEAD']), git(remote, ['rev-parse', 'HEAD']));
+  const steps = readFileSync(calls, 'utf8').trim().split('\n');
+  assert.equal(steps.at(-2), 'rust');
+  assert.match(steps.at(-1), /workspace.*build/);
+});
+
 test('an interrupted post-reset transaction is journaled and recovered', async () => {
   const { remote, installed } = make();
   const previousHead = git(installed, ['rev-parse', 'HEAD']);

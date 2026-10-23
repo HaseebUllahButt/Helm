@@ -124,6 +124,10 @@ export function selectTests(options = {}) {
   ];
 
   const changed = (options.changed ?? changedFiles()).filter((f) => !IGNORED.some((r) => r.test(f)));
+  // Rust is loaded through a computed binary name, outside the JS import graph.
+  if (changed.some(f => f.startsWith('native/log-index/'))) {
+    changed.push('packages/connect/src/log-index-native.js', 'scripts/build-log-reader.mjs');
+  }
   const all = changed.some((f) => EVERYTHING.some((r) => r.test(f)));
   const picked = new Map();
   // network.sh drives two real hubs through the daemon, protocol and relay.

@@ -24,6 +24,14 @@ test('near selection checks direct imports only', () => {
   assert.equal(result.all, false);
 });
 
+test('Rust reader changes select its callers and build checks without selecting every test', () => {
+  const result = selectTests({ changed: ['native/log-index/src/lib.rs'], args: [] });
+  assert.equal(result.all, false);
+  assert.ok(result.tests.includes('test/event-file.test.mjs'));
+  assert.ok(result.tests.includes('test/log-index-native.test.mjs'));
+  assert.equal(result.network, true);
+});
+
 test('docs-only changes select no tests', () => {
   const result = selectTests({ changed: ['docs/example.md'], args: [] });
   assert.deepEqual(result.tests, []);

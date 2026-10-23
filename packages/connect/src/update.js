@@ -381,6 +381,9 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
       await ensurePty(dir);
     }
     if (rebuild) {
+      if (existsSync(join(dir, 'scripts', 'build-log-reader.mjs'))) {
+        await gentle(process.execPath, ['scripts/build-log-reader.mjs'], { cwd: dir });
+      }
       say('building the app');
       await gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir });
     }
