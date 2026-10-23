@@ -1450,7 +1450,8 @@ export class Client {
       const started = Date.now();
       let deadline: ReturnType<typeof setTimeout> | undefined;
       let fallback: ReturnType<typeof setTimeout> | undefined;
-      const clear = () => { clearTimeout(deadline); clearTimeout(fallback); };
+      const http = HTTP_READ_METHODS.has(method) ? new AbortController() : undefined;
+      const clear = () => { clearTimeout(deadline); clearTimeout(fallback); http?.abort(); };
       this.pending.set(id, {
         resolve: (value) => { clear(); resolve(value as T); },
         reject: (error) => { clear(); reject(error); },
@@ -1501,7 +1502,7 @@ export class Client {
           pending.hedged = true;
           pending.routes?.add('http');
           if (pending.sentAt) pending.sentAt.http = Date.now();
-          this.readHttp<T>(env, method, params, timeout - elapsed).then(
+          this.readHttp<T>(env, method, params, timeout - elapsed, http?.signal).then(
             result => this.receiveRpc({ id, ok: true, result }, 'http'),
             error => this.receiveRpc({ id, ok: false, error }, 'http'),
           );
@@ -1536,8 +1537,9 @@ export class Client {
     });
   }
 
-  private async readHttp<T>(env: string, method: string, params: any, timeout: number): Promise<T> {
+  private async readHttp<T>(env: string, method: string, params: any, timeout: number, signal?: AbortSignal): Promise<T> {
     if (this.closed) throw new Error('client closed');
+    if (signal?.aborted) throw new Error('read cancelled');
     const bases = [...new Set([this.relay, ...this.endpoints])].filter(Boolean).filter(reachableFromHere);
     if (!bases.length) throw new Error('not connected');
     const body = JSON.stringify({ env, method, params });
@@ -1556,11 +1558,13 @@ export class Client {
         settled = true;
         clearTimeout(stagger); clearTimeout(deadline);
         this.httpReads.delete(cancel);
+        signal?.removeEventListener('abort', cancel);
         for (const controller of controllers) controller.abort();
         error ? reject(error) : resolve(result as T);
       };
-      const cancel = () => done(new Error('client closed'));
+      const cancel = () => done(new Error(this.closed ? 'client closed' : 'read cancelled'));
       this.httpReads.add(cancel);
+      signal?.addEventListener('abort', cancel, { once: true });
       const launch = () => {
         clearTimeout(stagger); stagger = undefined;
         if (settled) return;

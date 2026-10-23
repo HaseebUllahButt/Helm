@@ -771,6 +771,37 @@ test('HTTP still recovers a chat read when both open socket routes are silent', 
   h.client.close();
 });
 
+test('a socket read cancels its HTTP backup when it returns first', async () => {
+  for (const route of ['direct', 'relay']) {
+    const h = harness({ delays: { 'http://good/api/read': Infinity } });
+    h.start(); await h.advance(10);
+    if (route === 'direct') { await h.client.openDirect('machine'); h.peers[0].open(); }
+    const request = h.client.rpc('machine', 'session.events');
+    await h.advance(3010);
+    const backup = h.requests.find(r => r.url.endsWith('/api/read'));
+    assert.ok(backup);
+    assert.equal(backup.init.signal.aborted, false);
+    const sender = route === 'direct' ? h.peers[0] : h.sockets[0];
+    const frame = (route === 'direct' ? sender.channel.frames : sender.frames).find(f => f.t === 'rpc');
+    sender.message({ t: 'rpcResult', id: frame.id, ok: true, result: 'latest chat' });
+    assert.equal(await request, 'latest chat');
+    assert.equal(backup.init.signal.aborted, true);
+    await h.advance(30000);
+    assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 1);
+    h.client.close();
+  }
+});
+
+test('the parent read deadline cancels a running HTTP backup', async () => {
+  const h = harness({ delays: { 'http://good/api/read': Infinity } });
+  h.start(); await h.advance(10);
+  const request = h.client.rpc('machine', 'session.events', {}, 4000).catch(e => e.message);
+  await h.advance(4010);
+  assert.match(await request, /timed out/);
+  assert.equal(h.requests.find(r => r.url.endsWith('/api/read')).init.signal.aborted, true);
+  h.client.close();
+});
+
 test('HTTP reads fail over promptly from a dead remembered relay and cancel the losing request', async () => {
   const h = harness({ endpoints: ['http://old', 'http://good'], delays: { 'http://old': Infinity, 'http://good': 10 } });
   const request = h.client.rpc('machine', 'session.events', {}, 20000);
