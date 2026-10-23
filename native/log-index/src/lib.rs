@@ -1,6 +1,7 @@
 pub mod discovery;
 pub mod glance;
 pub mod search;
+pub mod transcript;
 pub mod usage;
 
 use napi::bindgen_prelude::{Buffer, Float64Array};

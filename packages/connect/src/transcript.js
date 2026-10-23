@@ -8,6 +8,7 @@ import { offThread } from '@helm/usage/off-thread';
 import { expand, HOME } from './paths.js';
 import { ENGINES } from './engines.js';
 import { readUsageMessages } from './usage-native.js';
+import { RULES, transcriptLines, transcriptReader } from './transcript-native.js';
 
 /**
  * Reading a session as a conversation rather than as a terminal.
@@ -232,7 +233,58 @@ function summarise(input) {
   return String(first).replace(/\s+/g, ' ').slice(0, 120);
 }
 
-async function readLines(path, onLine, { tailBytes = 4 << 20 } = {}) {
+/** Parse the lines Rust selected from `bytes`; skipped lines need no decoding. */
+function parseSelected(bytes, rows, onLine) {
+  for (let i = 0; i < rows.length; i += 2) {
+    try { onLine(JSON.parse(bytes.toString('utf8', rows[i], rows[i + 1]))); } catch { /* torn or malformed line */ }
+  }
+}
+
+// The same lines and callbacks as readLines below, but Rust drops the records
+// that `rule` ignores before JavaScript decodes them.
+async function readSelectedLines(path, onLine, tailBytes, rule) {
+  const fh = await open(path, 'r');
+  try {
+    if (tailBytes === Infinity) {
+      // Readline ends a line at "\n", "\r\n" or a lone "\r". Cut each block
+      // after the last line end. A "\r" at the end of the data waits for the
+      // next block, which tells a lone "\r" from "\r\n". The read buffer is
+      // reused, so an unfinished line is copied out of it.
+      let pieces = [], position = 0;
+      const chunk = Buffer.allocUnsafe(4 << 20);
+      for (;;) {
+        const { bytesRead } = await fh.read(chunk, 0, chunk.length, position);
+        if (!bytesRead) break;
+        position += bytesRead;
+        const data = chunk.subarray(0, bytesRead);
+        let cut = Math.max(data.lastIndexOf(10), data.lastIndexOf(13)) + 1;
+        if (cut === data.length && data[cut - 1] === 13) cut--;
+        if (!cut) { pieces.push(Buffer.from(data)); continue; }
+        const block = pieces.length ? Buffer.concat([...pieces, data.subarray(0, cut)]) : data.subarray(0, cut);
+        parseSelected(block, transcriptLines(block, rule, true), onLine);
+        pieces = cut < data.length ? [Buffer.from(data.subarray(cut))] : [];
+      }
+      if (pieces.length) {
+        const block = Buffer.concat(pieces);
+        parseSelected(block, transcriptLines(block, rule, true), onLine);
+      }
+      return;
+    }
+    const { size } = await fh.stat();
+    const start = Math.max(0, size - tailBytes);
+    const buf = Buffer.alloc(size - start);
+    await fh.read(buf, 0, buf.length, start);
+    // A partial first line is unavoidable when reading a tail; drop it.
+    const first = start > 0 ? buf.indexOf(10) : -1;
+    const body = start > 0 ? buf.subarray(first < 0 ? buf.length : first + 1) : buf;
+    parseSelected(body, transcriptLines(body, rule), onLine);
+  } finally {
+    await fh.close();
+  }
+}
+
+async function readLines(path, onLine, { tailBytes = 4 << 20, rule } = {}) {
+  if (rule != null && transcriptReader === 'rust') return readSelectedLines(path, onLine, tailBytes, rule);
   if (tailBytes === Infinity) {
     // Full history without allocating the whole rollout. External Codex
     // transcripts can be hundreds of MB after a long-running task.
@@ -314,7 +366,7 @@ function codexParser() {
 
 async function codexMessages(path, { all = false } = {}) {
   const parser = codexParser();
-  await readLines(path, parser.accept, { tailBytes: all ? Infinity : 4 << 20 });
+  await readLines(path, parser.accept, { tailBytes: all ? Infinity : 4 << 20, rule: RULES.codexMessages });
   return parser.out;
 }
 
@@ -376,7 +428,7 @@ export async function codexSessionState(path) {
       };
       state.rateLimits = p.rate_limits ?? state.rateLimits;
     }
-  });
+  }, { rule: RULES.codexState });
   return state;
 }
 
@@ -439,7 +491,7 @@ export async function sessionActivity({ engine, path, sessionId, active = false,
               }
             }
           }
-        }, { tailBytes: 512 << 10 });
+        }, { tailBytes: 512 << 10, rule: engine === 'codex' ? RULES.codexActivity : undefined });
         activityCache.set(key, { stamp, phase });
         if (activityCache.size > 1024) activityCache.delete(activityCache.keys().next().value);
       }
@@ -525,7 +577,8 @@ function claudeParser(sidechain = false) {
 
 async function claudeMessages(path, { all = false, sidechain = false } = {}) {
   const parser = claudeParser(sidechain);
-  await readLines(path, parser.accept, { tailBytes: all ? Infinity : 4 << 20 });
+  await readLines(path, parser.accept, { tailBytes: all ? Infinity : 4 << 20,
+    rule: sidechain ? RULES.claudeSidechain : RULES.claudeMessages });
   return parser.out;
 }
 
@@ -561,6 +614,10 @@ export class IncrementalTranscript {
       .update(JSON.stringify(this.#parser.out[index])).digest('hex');
   }
 
+  #rule() {
+    return this.engine === 'codex' ? RULES.codexMessages : this.sidechain ? RULES.claudeSidechain : RULES.claudeMessages;
+  }
+
   #revision() {
     return Object.fromEntries(['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']
       .map(key => [key, String(this.#info[key])]));
@@ -577,8 +634,7 @@ export class IncrementalTranscript {
   async #read(trusted) {
     const fh = await open(this.path, 'r');
     let bytesRead = 0;
-    const read = async (start, length) => {
-      const buffer = Buffer.alloc(length);
+    const read = async (start, length, buffer = Buffer.alloc(length)) => {
       let used = 0;
       while (used < length) {
         const result = await fh.read(buffer, used, length - used, start + used);
@@ -613,8 +669,10 @@ export class IncrementalTranscript {
       let changedFrom = reset ? 0 : this.#parser.out.length;
       this.#parser.clearChanges?.();
       const size = Number(info.size);
+      // Each chunk is used before the next read, and fragments are copied.
+      const scratch = Buffer.allocUnsafe(64 << 10);
       while (this.#offset < size) {
-        const chunk = await read(this.#offset, Math.min(64 << 10, size - this.#offset));
+        const chunk = await read(this.#offset, Math.min(64 << 10, size - this.#offset), scratch);
         if (!chunk.length) break;
         this.#offset += chunk.length;
         let start = 0, end;
@@ -637,13 +695,26 @@ export class IncrementalTranscript {
           this.#unterminated = false;
           start = newline + 1;
         }
+        const rule = transcriptReader === 'rust' ? this.#rule() : null;
         while ((end = chunk.indexOf(10, start)) !== -1) {
           const part = chunk.subarray(start, end);
           const line = this.#pending.length ? Buffer.concat([...this.#pending, part]) : part;
           this.#pending = [];
+          start = end + 1;
+          if (rule != null) {
+            // Rust drops ignored records before decoding. The joined first
+            // line is scanned alone; whole lines after it go in one call.
+            parseSelected(line, transcriptLines(line, rule), record => this.#accept(record));
+            const last = chunk.lastIndexOf(10);
+            if (last >= start) {
+              const block = chunk.subarray(start, last);
+              parseSelected(block, transcriptLines(block, rule), record => this.#accept(record));
+              start = last + 1;
+            }
+            continue;
+          }
           try { this.#accept(JSON.parse(line.toString('utf8'))); }
           catch { /* Ignore malformed complete lines, as the full parser does. */ }
-          start = end + 1;
         }
         // Keep fragments until the line ends. Copy each byte at most once
         // when joining a large record, rather than joining on every chunk.
@@ -907,7 +978,7 @@ export async function sessionSnapshot({ engine, path, sessionId, cwd, monitored 
         if (r.type !== 'assistant' || !m) return;
         model = m.model ?? model;
         seen.set(m.id ?? r.uuid ?? `${seen.size}`, m.usage ?? {});
-      }, { tailBytes: Infinity });
+      }, { tailBytes: Infinity, rule: RULES.claudeUsage });
       let input = 0, output = 0, cacheRead = 0;
       for (const x of seen.values()) {
         input += Number(x.input_tokens ?? 0);
