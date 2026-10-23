@@ -30,6 +30,7 @@ import { promisify } from 'node:util';
 import { brotliCompressSync, brotliDecompressSync, constants as zlib } from 'node:zlib';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { HELM_DIR, expand, HOME } from './paths.js';
+import { Worker } from 'node:worker_threads';
 
 const KEY_FILE = join(HELM_DIR, 'code_x25519');
 const SIGN_KEY_FILE = join(HELM_DIR, 'code_ed25519');
@@ -269,6 +270,31 @@ export function verifyCodeKeyProof(targetCodePubkey, secret, response) {
     throw new Error('the machine did not prove it holds the pinned code key');
   }
   return true;
+}
+
+// Keep file reads, packing, and encryption off the daemon's main loop.
+// No inline fallback: a failed worker must fail the transfer visibly.
+function prepareInWorker(operation, args) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./code-transfer-worker.js', import.meta.url), {
+      workerData: { operation, args },
+    });
+    worker.once('message', message => {
+      if (message.error) reject(new Error(message.error));
+      else resolve(message.value);
+    });
+    worker.once('error', reject);
+    worker.once('exit', code => reject(new Error(`Code transfer worker stopped (${code}).`)));
+  });
+}
+
+export function createCodeSnapshotAsync(root, options = {}) {
+  // Resolve relative paths before leaving the caller's working directory.
+  return prepareInWorker('snapshot', [resolve(expand(root || process.cwd())), options]);
+}
+
+export function sealCodeSnapshotAsync(snapshot, targetCodePubkey, handoffId) {
+  return prepareInWorker('seal', [snapshot, targetCodePubkey, handoffId]);
 }
 
 /** Encrypt a snapshot to the target's published X25519 public key. */

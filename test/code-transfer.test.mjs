@@ -589,3 +589,33 @@ test('a secret marker that is not exactly true refuses the file', async () => {
     );
   }
 });
+
+test('worker preparation preserves signed snapshot bytes, exclusions, and encryption', async () => {
+  const {
+    createCodeSnapshot, createCodeSnapshotAsync, sealCodeSnapshotAsync,
+    openCodeSnapshot, codeKeyInfo,
+  } = await import('../packages/connect/src/code-transfer.js');
+  const source = join(helmDir, 'worker-source');
+  mkdirSync(join(source, '.aws'), { recursive: true });
+  mkdirSync(join(source, 'node_modules'), { recursive: true });
+  writeFileSync(join(source, 'run.js'), 'console.log("π 😀")\n', { mode: 0o755 });
+  writeFileSync(join(source, 'empty'), '');
+  writeFileSync(join(source, '.env'), 'PRIVATE=test-only\n');
+  writeFileSync(join(source, '.env.example'), 'PRIVATE=\n');
+  writeFileSync(join(source, '.aws', '.env'), 'PRIVATE=nested-test-only\n');
+  writeFileSync(join(source, '.aws', 'credentials'), 'private');
+  writeFileSync(join(source, 'node_modules', 'generated.js'), 'generated');
+  symlinkSync(join(source, 'run.js'), join(source, 'link.js'));
+  execFileSync('git', ['init', source], { stdio: 'ignore' });
+  execFileSync('git', ['-C', source, '-c', 'user.name=Test', '-c', 'user.email=test@example.test',
+    'commit', '--allow-empty', '-m', 'test'], { stdio: 'ignore' });
+  for (const includeEnv of [false, true]) {
+    const expected = createCodeSnapshot(source, { includeEnv });
+    const actual = await createCodeSnapshotAsync(source, { includeEnv });
+    assert.equal(JSON.stringify(actual), JSON.stringify(expected), 'exact signed bytes');
+    const envelope = await sealCodeSnapshotAsync(actual, codeKeyInfo().codePubkey, 'worker-test');
+    assert.deepEqual(openCodeSnapshot(envelope, 'worker-test'), expected);
+  }
+  await assert.rejects(createCodeSnapshotAsync(join(source, 'missing')), /ENOENT/);
+  await assert.rejects(sealCodeSnapshotAsync({}, 'invalid', 'worker-test'));
+});
