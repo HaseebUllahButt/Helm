@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { LineBuffer } from '../line-buffer.js';
 import { mkdirSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -498,12 +499,11 @@ export class CodexServer {
       this.#calls.clear();
       for (const d of this.#drivers.values()) d.serverExited(code, stderr);
     });
-    let buf = '';
+    const lines = new LineBuffer();
     pipe.onData((chunk) => {
-      buf += chunk;
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      lines.write(chunk);
+      let line;
+      while ((line = lines.read()) !== null) {
         if (!line.trim()) continue;
         try { this.#onMessage(JSON.parse(line)); }
         catch { this.log(`codex: ${line.slice(0, 200)}`); }

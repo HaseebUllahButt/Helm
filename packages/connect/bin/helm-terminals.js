@@ -15,6 +15,7 @@ import { nativeLaunchSettings } from '../src/native-settings.js';
  * the service it was started from; `terminals.js` handles that when spawning.
  */
 import { createServer } from 'node:net';
+import { LineBuffer } from '../src/line-buffer.js';
 import { spawn } from 'node:child_process';
 import { existsSync, unlinkSync, mkdirSync, chmodSync } from 'node:fs';
 import { HELM_DIR } from '../src/paths.js';
@@ -234,13 +235,11 @@ const server = createServer((sock) => {
     if (backlog) { send(sock, { t: 'proc.data', id, data: backlog }); p.backlog.clear(); }
   }
 
-  let buffer = '';
+  const lines = new LineBuffer();
   sock.on('data', async (chunk) => {
-    buffer += chunk;
-    let cut;
-    while ((cut = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, cut);
-      buffer = buffer.slice(cut + 1);
+    lines.write(chunk);
+    let line;
+    while ((line = lines.read()) !== null) {
       if (!line.trim()) continue;
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }

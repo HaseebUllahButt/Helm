@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { LineBuffer } from '../line-buffer.js';
 import { randomUUID } from 'node:crypto';
 import { Driver, checkVersion, assertFolder } from './index.js';
 import { modeFor, modesFor } from '../modes.js';
@@ -595,12 +596,11 @@ export class AcpDriver extends Driver {
         resolve({ code });
       });
     });
-    let buf = '';
+    const lines = new LineBuffer();
     pipe.onData((chunk) => {
-      buf += chunk;
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      lines.write(chunk);
+      let line;
+      while ((line = lines.read()) !== null) {
         if (!line.trim()) continue;
         // Some agents print outside the protocol - antigravity's OAuth URL
         // is a plain stdout line, not JSON-RPC. The spec claims those.
