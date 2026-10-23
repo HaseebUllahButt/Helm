@@ -23,10 +23,12 @@ Module._load=function(name,...args){
   return load.call(this,name,...args);
 };
 const {devinSessionConsumption}=await import('./packages/connect/src/devin-usage.js');
+const {sessionSnapshot}=await import('./packages/connect/src/transcript.js');
 const {usageReader,extractUsageMessages}=await import('./packages/connect/src/usage-native.js');
 const file=join(process.env.HELM_DIR,'usage.db');
 const db=new DatabaseSync(file);
 db.exec('CREATE TABLE IF NOT EXISTS message_nodes(session_id TEXT, chat_message TEXT); DELETE FROM message_nodes;');
+db.exec("CREATE TABLE IF NOT EXISTS sessions(id TEXT, model TEXT, agent_mode TEXT); DELETE FROM sessions; INSERT INTO sessions VALUES ('basic','private-model','yolo');");
 const insert=db.prepare('INSERT INTO message_nodes VALUES (?,?)');
 for(const row of [
   '{bad}', 'null', '42', '[]', '{}',
@@ -36,6 +38,8 @@ for(const row of [
   '{"message_id":null,"metadata":{"committed_credit_cost":1000}}',
   '{"message_id":"null","metadata":null}',
   '{"message_id":"negative","metadata":{"committed_credit_cost":-1}}',
+  '{"message_id":"metrics","role":"assistant","metadata":{"metrics":{"input_tokens":100}}}',
+  '{"message_id":"metrics","role":"assistant","metadata":{"metrics":{"input_tokens":3,"output_tokens":4,"cache_read_tokens":2}}}',
 ])insert.run('basic',row);
 for(const row of [
   {message_id:'old',metadata:{response_dimensions:[{uid:'credit',kind:{CumulativeMetric:{value:100,prefix:'$',tail:' unit',plural_tail:' units'}}}]}},
@@ -44,7 +48,8 @@ for(const row of [
 ])insert.run('dimensions',JSON.stringify(row));
 db.close();
 const projected=extractUsageMessages([JSON.stringify({message_id:'small',metadata:{committed_credit_cost:2},text:'body'.repeat(10000)})]);
-console.log(JSON.stringify({reader:usageReader,basic:devinSessionConsumption(file,'basic'),dimensions:devinSessionConsumption(file,'dimensions'),projectedBytes:projected?JSON.stringify(projected).length:null}));
+const snapshot=await sessionSnapshot({engine:'devin',path:file,sessionId:'basic',cwd:'/private',monitored:false});
+console.log(JSON.stringify({reader:usageReader,basic:devinSessionConsumption(file,'basic'),dimensions:devinSessionConsumption(file,'dimensions'),snapshot,projectedBytes:projected?JSON.stringify(projected).length:null}));
 `;
 
 test('Rust usage extraction preserves totals, revisions, dimensions and JavaScript recovery', () => {
@@ -55,8 +60,9 @@ test('Rust usage extraction preserves totals, revisions, dimensions and JavaScri
       const result=JSON.parse(execFileSync(process.execPath,['--input-type=module','-e',worker],{
         env:{...process.env,HELM_DIR:dir,HELM_LOG_READER:mode==='javascript'?'javascript':'rust',USAGE_TEST_MODE:mode},encoding:'utf8',
       }));
-      if(mode==='javascript')expected={basic:result.basic,dimensions:result.dimensions};
-      else assert.deepEqual({basic:result.basic,dimensions:result.dimensions},expected,mode);
+      if(mode==='javascript')expected={basic:result.basic,dimensions:result.dimensions,snapshot:result.snapshot};
+      else assert.deepEqual({basic:result.basic,dimensions:result.dimensions,snapshot:result.snapshot},expected,mode);
+      assert.match(result.snapshot,/\*\*Input:\*\* 3/);
       assert.equal(result.reader,['rust','failure'].includes(mode)?'rust':'javascript');
       if(mode==='rust')assert.ok(result.projectedBytes<100,'message text stays outside the projected metadata');
     }

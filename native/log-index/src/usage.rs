@@ -7,6 +7,8 @@ struct UsageMessage<'a> {
     #[serde(borrow)]
     message_id: Option<&'a RawValue>,
     #[serde(borrow)]
+    role: Option<&'a RawValue>,
+    #[serde(borrow)]
     metadata: Option<&'a RawValue>,
 }
 
@@ -24,6 +26,8 @@ fn project(records: &[String]) -> String {
         if let Some(message) = message {
             output.push_str("[{\"message_id\":");
             output.push_str(message.message_id.map_or("null", RawValue::get));
+            output.push_str(",\"role\":");
+            output.push_str(message.role.map_or("null", RawValue::get));
             output.push_str(",\"metadata\":");
             output.push_str(message.metadata.map_or("null", RawValue::get));
             output.push_str("}]");
@@ -58,7 +62,7 @@ mod tests {
         ];
         assert_eq!(
             project(&rows),
-            r#"[[{"message_id":"x","metadata":{"committed_credit_cost":2}}]]"#
+            r#"[[{"message_id":"x","role":null,"metadata":{"committed_credit_cost":2}}]]"#
         );
     }
 
