@@ -951,7 +951,7 @@ test('images ride the driver when it implements the verb, else a placeholder', a
   // And the owner is told, rather than the bytes going quietly missing.
   const said = plain.events.since(s1.id, 0).filter((e) => e.type === 'error' && e.kind === 'attachment');
   assert.equal(said.length, 1);
-  assert.match(said[0].message, /cannot be sent images/);
+  assert.match(said[0].message, /cannot receive images/);
 
   // A driver with the verb gets the bytes.
   class ImageDriver extends FakeDriver {

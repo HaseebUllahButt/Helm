@@ -116,7 +116,7 @@ for (const [index, host] of [undefined, '127.0.0.1', '::1', '0.0.0.0'].entries()
     await page.getByText(`Sign in to open ${name}, shared from Laptop.`, { exact: true }).waitFor();
     if (process.env.HELM_SPIN_SHOT_DIR && index === 0) await page.screenshot({ path: join(process.env.HELM_SPIN_SHOT_DIR, 'spin-sign-in.png') });
     await page.locator('input[type=password]').fill('test-pairing-code');
-    await page.getByRole('button', { name: 'pair this device', exact: true }).click();
+    await page.getByRole('button', { name: 'Pair this device', exact: true }).click();
     await page.getByText('Shared page ready', { exact: true }).waitFor();
     assert.equal(page.url(), exact);
     const member = (await context.cookies(exact)).find((cookie) => cookie.name === '__Host-helm-member');
@@ -138,7 +138,7 @@ for (const [index, host] of [undefined, '127.0.0.1', '::1', '0.0.0.0'].entries()
       await page.goto('https://another-private.home.test/next?keep=a%2Fb');
       await page.getByText('Live reload works', { exact: true }).waitFor();
       assert.equal(page.url(), 'https://another-private.home.test/next?keep=a%2Fb');
-      assert.equal(await page.getByRole('button', { name: 'pair this device' }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: 'Pair this device' }).count(), 0);
     }
     assert.deepEqual(errors, []);
     if (process.env.HELM_SPIN_SHOT_DIR && index === 0) await page.screenshot({ path: join(process.env.HELM_SPIN_SHOT_DIR, 'spin-open.png') });

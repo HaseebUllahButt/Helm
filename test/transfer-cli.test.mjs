@@ -88,7 +88,7 @@ test('send refuses unknown flags and missing flag values', () => {
 
   const duplicate = helm(['send', 'target', src, '--grant', 'one', '--grant', 'two']);
   assert.equal(duplicate.status, 1);
-  assert.match(duplicate.stderr, /--grant was given more than once/);
+  assert.match(duplicate.stderr, /Use --grant once\./);
 });
 
 test('a risky omission refuses before any network or grant is touched', () => {
@@ -119,7 +119,7 @@ test('verify inspects statically and never runs what it finds', () => {
   const run = helm(['verify', folder]);
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /target readiness: needs-setup/);
-  assert.match(run.stdout, /runtime-not-verified|not verified/);
+  assert.match(run.stdout, /\[warning\] Helm ran no commands\. It did not check the app, databases, services or settings on this machine\./);
   assert.equal(existsSync(join(folder, 'VERIFY-RAN')), false);
   assert.equal(run.stdout.includes('verify-marker'), false);
   assert.equal(run.stderr.includes('verify-marker'), false);
@@ -151,7 +151,7 @@ test('verify -- runs exactly what the owner named and reports honestly', () => {
     "require('node:fs').writeFileSync('check-marker.txt', 'ok')",
   ]);
   assert.equal(ok.status, 0, ok.stderr);
-  assert.match(ok.stdout, /explicit check passed/);
+  assert.match(ok.stdout, /The requested check passed\./);
   assert.equal(existsSync(join(folder, 'check-marker.txt')), true);
 
   const failed = helm(['verify', folder, '--', process.execPath, '-e', 'process.exit(7)']);

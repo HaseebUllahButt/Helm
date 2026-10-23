@@ -241,7 +241,7 @@ test('leaving vm drops the advertised https endpoint', async (t) => {
 
   const r = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'nas' });
   assert.equal(r.from, 'vm');
-  assert.ok(r.notes.some((n) => /Caddy site can be removed/.test(n)));
+  assert.ok(r.notes.some((n) => /Remove its Caddy site with:/.test(n)));
 
   const after = N.loadNetwork();
   assert.equal(after.machines[after.self].kind, 'nas');

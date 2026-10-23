@@ -126,9 +126,9 @@ test('pickup reads the chats and git: commits since, unmerged worktree work, unc
   assert.match(page, /Its final reply says what is left:\n {4}What is left:\n {4}- Merge helm\/phone\./);
   assert.match(page, /Commits here since then:\n {2}\w+ Sidebar loads at once\n(?!.*Before the chat)/);
   assert.doesNotMatch(page, /Before the chat/);
-  assert.match(page, /This checkout \(main\), uncommitted \(may belong to a running chat\):\n {3}M b\.txt/);
+  assert.match(page, /This project copy \(main\) has changes without commits\. Check Running chats before editing:\n {3}M b\.txt/);
   assert.match(page, /repo-wt \(helm\/phone\) has commits not in this one:\n {2}\w+ Phone view, not merged/);
-  assert.match(page, /Running now.*\n {2}busy11 {2}Other work \(working\) on why in /);
+  assert.match(page, /Check Running chats before editing the same files\. Ask them with `helm say <id>`:\n {2}busy11 {2}Other work \(working\) on why in /);
   assert.doesNotMatch(page, /Not shown|Not checked/, 'one machine: nothing on others to warn about');
   assert.doesNotMatch(page, /me0000/, 'the chat asking is not listed');
   assert.ok(page.split('\n').length < 25, 'short enough to land in an agent\'s context');
@@ -216,10 +216,10 @@ test('pickup reads every machine by project: other paths, busy chats, offline sn
   const page = await pickup({ cwd: repo, self: 'why', selfName: 'why', machines, rpc, find: null, snapshots: [snapshot, Promise.resolve(null)], now });
   assert.match(page, /^Chat lapdon on Laptop: Phone view \(codex, idle, 2m ago\) in \/home\/u\/code\/helm$/m, 'matched by project, not path');
   assert.match(page, /Its final reply says what is left:\n {4}What is left:\n {4}- Check it on a real phone\./);
-  assert.match(page, /^Chat homedo on haseeb \(offline, last seen 3h ago\): Windows build .*\n {2}Last seen doing: Built the installer\n {2}Its replies are on haseeb/m);
-  assert.match(page, /Running now.*\n {2}lapbus {2}Sidebar \(working\) on Laptop in \/home\/u\/code\/helm\n {2}slowbu {2}Quick fix \(working when last seen\) on Pi \(not answering just now, seen 30s ago\) in \/srv\/helm\n {2}homebu {2}Long run \(working when last seen\) on haseeb \(offline, last seen 3h ago\) in D:\/helm\n/);
-  assert.match(page, /^Not shown: commits not pushed, or files not committed, on Laptop, haseeb, Pi\./m);
-  assert.match(page, /^Not checked, an older Helm there cannot say which project a folder holds: HomePC\.$/m);
+  assert.match(page, /^Chat homedo on haseeb \(offline, last seen 3h ago\): Windows build \(claude, idle, 4h ago\) in D:\/helm\n {2}Last seen doing: Built the installer\n {2}Read replies with `helm pickup homedo` when haseeb is online\./m);
+  assert.match(page, /Check Running chats before editing the same files\. Ask them with `helm say <id>`:\n {2}lapbus {2}Sidebar \(working\) on Laptop in \/home\/u\/code\/helm\n {2}slowbu {2}Quick fix \(working when last seen\) on Pi \(not answering, last seen 30s ago\) in \/srv\/helm\n {2}homebu {2}Long run \(working when last seen\) on haseeb \(offline, last seen 3h ago\) in D:\/helm\n/);
+  assert.match(page, /^Helm does not show commits without pushes or files without commits on Laptop, haseeb, Pi\. Run `helm exec <machine> --cwd <folder> -- git status` to check them\.$/m);
+  assert.match(page, /^Not checked, the older Helm cannot identify the project in each folder: HomePC\.$/m);
   assert.match(page, /^Not checked, not answering and nothing saved: VM\.$/m);
   assert.doesNotMatch(page, /Notes|homenot|Else|pcchat/);
   assert.doesNotMatch(page, /\/home\/u\/code\/helm \(/, 'no git state read for another machine\'s path');

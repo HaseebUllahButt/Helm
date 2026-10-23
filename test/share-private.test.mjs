@@ -132,7 +132,7 @@ test('a signed-in device gets a pass, the link swaps it for its own cookie, once
 
   const again = await enter(pass);
   assert.equal(again.status, 401, 'a pass is good once');
-  assert.match(again.text, /already used/);
+  assert.match(again.text, /This sign-in expired or someone used it\. Sign in again\./);
 });
 
 test('a pass is for one link, on one host, for a minute', async () => {
