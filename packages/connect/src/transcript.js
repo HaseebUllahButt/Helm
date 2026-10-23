@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { offThread } from '@helm/usage/off-thread';
 import { expand, HOME } from './paths.js';
 import { ENGINES } from './engines.js';
+import { readUsageMessages } from './usage-native.js';
 
 /**
  * Reading a session as a conversation rather than as a terminal.
@@ -934,8 +935,7 @@ export async function sessionSnapshot({ engine, path, sessionId, cwd, monitored 
       if (row?.agent_mode) lines.splice(2, 0, `**Mode:** ${esc(row.agent_mode)}`);
       const seen = new Map();
       usage = { input: 0, output: 0, cacheRead: 0 };
-      for (const record of records) {
-        const m = json(record.chat_message);
+      for (const m of readUsageMessages(records.map(record => record.chat_message))) {
         if (m?.role !== 'assistant' || !m.message_id) continue;
         seen.set(m.message_id, m.metadata?.metrics ?? {});
       }
