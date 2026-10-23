@@ -2,6 +2,7 @@ import { readdir, stat, open } from 'node:fs/promises';
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join, basename } from 'node:path';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { offThread } from '@helm/usage/off-thread';
 import { expand, HOME } from './paths.js';
@@ -260,9 +261,9 @@ async function readLines(path, onLine, { tailBytes = 4 << 20 } = {}) {
   }
 }
 
-async function codexMessages(path, { all = false } = {}) {
+function codexParser() {
   const out = [];
-  await readLines(path, (rec) => {
+  const accept = (rec) => {
     if (rec.type !== 'response_item') return;
     const p = rec.payload;
     if (!p) return;
@@ -277,7 +278,7 @@ async function codexMessages(path, { all = false } = {}) {
         tools: [{ name: p.name ?? (p.type === 'local_shell_call' ? 'shell' : p.type.replace(/_call$/, '')), input: summariseTool(input) }],
         at: rec.timestamp,
       });
-      return;
+      return out.length - 1;
     }
     if (p.type !== 'message') return;
     // `developer` carries injected instructions, not conversation.
@@ -305,8 +306,15 @@ async function codexMessages(path, { all = false } = {}) {
     out.push({ role: p.role, text: clip(text), tools, at: rec.timestamp, sourceId: p.id ?? rec.id,
       ...(attachments.length ? { attachments, rawText: clip(rawText) } : {}),
     });
-  }, { tailBytes: all ? Infinity : 4 << 20 });
-  return out;
+    return out.length - 1;
+  };
+  return { out, accept };
+}
+
+async function codexMessages(path, { all = false } = {}) {
+  const parser = codexParser();
+  await readLines(path, parser.accept, { tailBytes: all ? Infinity : 4 << 20 });
+  return parser.out;
 }
 
 function summariseTool(input) {
@@ -476,9 +484,10 @@ function combine(a, b) {
   return { ...b, text: clip(text), tools: snapshot ? b.tools : [...a.tools, ...b.tools], thinking: a.thinking || b.thinking, at: a.at };
 }
 
-async function claudeMessages(path, { all = false, sidechain = false } = {}) {
-  const found = [];
-  await readLines(path, (rec) => {
+function claudeParser(sidechain = false) {
+  const out = [], byId = new Map();
+  let changedFrom = Infinity;
+  const accept = (rec) => {
     if (rec.type !== 'user' && rec.type !== 'assistant') return;
     // A subagent's lines, not this conversation's - unless the file is the
     // subagent's own transcript, where every line is one.
@@ -492,24 +501,182 @@ async function claudeMessages(path, { all = false, sidechain = false } = {}) {
     if (rec.type === 'user' && !text) return;
     if (rec.type === 'user' && text.startsWith('<')) return;
 
-    found.push({
+    const message = {
       role: rec.type, text: clip(text), tools,
       thinking, at: rec.timestamp, sourceId: msg.id ?? rec.uuid,
-    });
-  }, { tailBytes: all ? Infinity : 4 << 20 });
+    };
+    const at = message.sourceId ? byId.get(message.sourceId) : null;
+    changedFrom = Math.min(changedFrom, at ?? out.length);
+    if (at == null) {
+      if (message.sourceId) byId.set(message.sourceId, out.length);
+      out.push(message);
+    } else out[at] = combine(out[at], message);
+    return at ?? out.length - 1;
+  };
   // One reply reaches the file as several lines sharing its id: current
   // Claude Code writes each block - thinking, the text, every tool call - on
   // a line of its own; older versions rewrote growing snapshots. Combine
   // them: keeping only the last line kept the last tool call and dropped
   // everything Claude said before it.
-  const out = [], byId = new Map();
-  for (const message of found) {
-    if (!message.sourceId) { out.push(message); continue; }
-    const at = byId.get(message.sourceId);
-    if (at == null) { byId.set(message.sourceId, out.length); out.push(message); }
-    else out[at] = combine(out[at], message);
+  return { out, accept, get changedFrom() { return changedFrom; },
+    clearChanges() { changedFrom = Infinity; } };
+}
+
+async function claudeMessages(path, { all = false, sidechain = false } = {}) {
+  const parser = claudeParser(sidechain);
+  await readLines(path, parser.accept, { tailBytes: all ? Infinity : 4 << 20 });
+  return parser.out;
+}
+
+/**
+ * A live JSONL reader. Keep display messages, not provider records. The byte
+ * cursor includes unfinished bytes. A valid JSON object at EOF also counts
+ * as a record, as in the full parser; its eventual newline is not replayed.
+ * Providers append records. Check both edges for accidental growing rewrites;
+ * arbitrary interior rewrites plus growth require a full read to detect.
+ * A new reader rebuilds its state, independently of saved import counts.
+ */
+export class IncrementalTranscript {
+  #parser;
+  #digests = [];
+  #info = null;
+  #invalid = false;
+  #offset = 0;
+  #pending = [];
+  #unterminated = false;
+  #guards = [];
+  #work = Promise.resolve();
+
+  constructor({ engine, path, sidechain = false }) {
+    if (!['codex', 'claude'].includes(engine)) throw new Error('Choose Codex or Claude.');
+    this.engine = engine;
+    this.path = path;
+    this.sidechain = sidechain;
   }
-  return out;
+
+  #accept(record) {
+    const index = this.#parser.accept(record);
+    if (index != null) this.#digests[index] = createHash('sha256')
+      .update(JSON.stringify(this.#parser.out[index])).digest('hex');
+  }
+
+  #revision() {
+    return Object.fromEntries(['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']
+      .map(key => [key, String(this.#info[key])]));
+  }
+
+  // Trusted internal callers read the parser's current array without copying.
+  // They must not mutate it or retain it across another read.
+  read({ trusted = false } = {}) {
+    const work = this.#work.then(() => this.#read(trusted));
+    this.#work = work.catch(() => {});
+    return work;
+  }
+
+  async #read(trusted) {
+    const fh = await open(this.path, 'r');
+    let bytesRead = 0;
+    const read = async (start, length) => {
+      const buffer = Buffer.alloc(length);
+      let used = 0;
+      while (used < length) {
+        const result = await fh.read(buffer, used, length - used, start + used);
+        bytesRead += result.bytesRead;
+        if (!result.bytesRead) break;
+        used += result.bytesRead;
+      }
+      return buffer.subarray(0, used);
+    };
+    const digest = buffer => createHash('sha256').update(buffer).digest('hex');
+    try {
+      const info = await fh.stat({ bigint: true });
+      const previous = this.#info;
+      const unchanged = previous && ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].every(key => info[key] === previous[key]);
+      if (unchanged && !this.#invalid) return { messages: trusted ? this.#parser.out : structuredClone(this.#parser.out), bytesRead, reset: false, changedFrom: Infinity, digests: trusted ? this.#digests : this.#digests.slice(), revision: this.#revision() };
+      let reset = this.#invalid || !!previous && (info.dev !== previous.dev || info.ino !== previous.ino
+        || info.size <= previous.size);
+      // Detect growing rewrites that change either edge of the old extent.
+      // An interior rewrite plus growth cannot be proved from append reads.
+      if (previous && !reset) {
+        for (const guard of this.#guards) {
+          if (digest(await read(guard.start, guard.length)) !== guard.hash) { reset = true; break; }
+        }
+      }
+      if (!this.#parser || reset) {
+        this.#parser = this.engine === 'codex' ? codexParser() : claudeParser(this.sidechain);
+        this.#digests = [];
+        this.#offset = 0;
+        this.#pending = [];
+        this.#unterminated = false;
+      }
+      let changedFrom = reset ? 0 : this.#parser.out.length;
+      this.#parser.clearChanges?.();
+      const size = Number(info.size);
+      while (this.#offset < size) {
+        const chunk = await read(this.#offset, Math.min(64 << 10, size - this.#offset));
+        if (!chunk.length) break;
+        this.#offset += chunk.length;
+        let start = 0, end;
+        if (this.#unterminated) {
+          const newline = chunk.indexOf(10);
+          const prefix = chunk.subarray(0, newline < 0 ? chunk.length : newline);
+          if (!/^[\t\r ]*$/.test(prefix.toString('utf8'))) {
+            // Appending inside a previously valid EOF record invalidates it.
+            // Rebuild without retaining the provider record or replaying it.
+            reset = true;
+            changedFrom = 0;
+            this.#parser = this.engine === 'codex' ? codexParser() : claudeParser(this.sidechain);
+            this.#digests = [];
+            this.#offset = 0;
+            this.#pending = [];
+            this.#unterminated = false;
+            continue;
+          }
+          if (newline < 0) continue;
+          this.#unterminated = false;
+          start = newline + 1;
+        }
+        while ((end = chunk.indexOf(10, start)) !== -1) {
+          const part = chunk.subarray(start, end);
+          const line = this.#pending.length ? Buffer.concat([...this.#pending, part]) : part;
+          this.#pending = [];
+          try { this.#accept(JSON.parse(line.toString('utf8'))); }
+          catch { /* Ignore malformed complete lines, as the full parser does. */ }
+          start = end + 1;
+        }
+        // Keep fragments until the line ends. Copy each byte at most once
+        // when joining a large record, rather than joining on every chunk.
+        if (start < chunk.length) this.#pending.push(Buffer.from(chunk.subarray(start)));
+      }
+      if (this.#pending.length) {
+        try {
+          const record = JSON.parse(Buffer.concat(this.#pending).toString('utf8'));
+          this.#accept(record);
+          this.#pending = [];
+          this.#unterminated = true;
+        } catch { /* Keep unfinished bytes, including a torn Unicode character. */ }
+      }
+      changedFrom = Math.min(changedFrom, this.#parser.changedFrom ?? Infinity);
+      if (!reset && changedFrom === this.#parser.out.length) changedFrom = Infinity;
+      this.#guards = [];
+      for (const start of new Set([0, Math.max(0, this.#offset - 256)])) {
+        const length = Math.min(256, this.#offset - start);
+        if (length) this.#guards.push({ start, length, hash: digest(await read(start, length)) });
+      }
+      // Read the initial extent even while the writer appends. Leave those
+      // new bytes for the next read, without making a busy file starve.
+      const after = await fh.stat({ bigint: true });
+      this.#info = info;
+      this.#invalid = this.#offset < size || after.size < info.size
+        || after.size === info.size && ['mtimeNs', 'ctimeNs'].some(key => info[key] !== after[key]);
+      if (this.#invalid) throw new Error('Read the chat again. The file changed.');
+
+      return { messages: trusted ? this.#parser.out : structuredClone(this.#parser.out), bytesRead, reset, changedFrom, digests: trusted ? this.#digests : this.#digests.slice(), revision: this.#revision() };
+    } catch (error) {
+      this.#invalid = true;
+      throw error;
+    } finally { await fh.close(); }
+  }
 }
 
 function tableColumns(conn, table) {

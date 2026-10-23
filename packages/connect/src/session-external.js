@@ -1,12 +1,13 @@
 import { piChatArgs } from './pi-settings.js';
 import { existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { expand } from './paths.js';
 import { getProfiles } from './profiles.js';
-import { messages as readMessages, sessionActivity } from './transcript.js';
+import { messages as readMessages, sessionActivity, IncrementalTranscript } from './transcript.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { EVENT_KEEP } from './events.js';
+import { EventFile } from './event-file.js';
 import { accountKey } from './settings.js';
 import { defaultMode } from './modes.js';
 import { inventory } from './inventory.js';
@@ -17,6 +18,11 @@ import { openFiles, processArgv, processCwd } from './procinfo.js';
 import { claudeChatArgs } from './claude-hooks.js';
 import { wire } from './session-wire.js';
 import { externalInput } from './session-transcript-events.js';
+
+const transcriptSource = event => event.sourceId ? `id:${event.sourceId}`
+  : Number.isInteger(event.sourceIndex) ? `index:${event.sourceIndex}` : null;
+const transcriptCost = message => message.role === 'user' ? 1
+  : (message.tools?.length ?? 0) * 2 + (message.text ? 3 : 0) + 1;
 
 /**
  * Conversations a CLI recorded on its own, opened in Helm: read from the
@@ -35,6 +41,191 @@ export class ExternalSessions {
   #connections = new Map();
   /** session object -> in-flight full-rollout reconciliation */
   #imports = new WeakMap();
+  #transcripts = new WeakMap();
+
+  /** Share one byte cursor between the importer and transcript viewers. */
+  async readTranscript(s) {
+    if (!['codex', 'claude'].includes(s.engine)) return { messages: await readMessages({
+      engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, all: true,
+    }) };
+    let state = this.#transcripts.get(s);
+    if (!state || state.reader.path !== s.transcript || state.reader.engine !== s.engine) {
+      state = { reader: new IncrementalTranscript({ engine: s.engine, path: s.transcript }),
+        first: true, reset: !!state, changedFrom: Infinity };
+      this.#transcripts.set(s, state);
+    }
+    const result = await state.reader.read({ trusted: true });
+    state.reset ||= result.reset;
+    const saved = s.externalTranscriptRevision;
+    // Keep a growing final reply attached to its saved item after restart.
+    // Replacement, truncation, and a same-size rewrite rebuild the events.
+    if (state.first && saved) {
+      const current = result.revision;
+      if (saved.dev !== current.dev || saved.ino !== current.ino || Number(current.size) < Number(saved.size)
+        || current.size === saved.size && ['mtimeNs', 'ctimeNs'].some(key => saved[key] !== current[key])) {
+        state.reset = true;
+      } else if (current.size !== saved.size && s.externalTail) {
+        const index = (s.externalImported ?? 0) - 1;
+        const message = result.messages[index], tail = s.externalTail;
+        if (message?.sourceId !== tail.sourceId) state.changedFrom = 0;
+        else if (message.text !== tail.text || (message.tools?.length ?? 0) !== tail.tools) state.changedFrom = index;
+      }
+    }
+    if (state.first && s.externalTranscriptDigests) {
+      const savedDigests = s.externalTranscriptDigests;
+      const base = s.externalTranscriptDigestBase ?? 0;
+      if (s.externalTranscriptPrefixDigest && this.#prefixDigest(s, result.digests,
+        Math.min(base, result.digests.length), Infinity) !== s.externalTranscriptPrefixDigest) state.changedFrom = 0;
+      for (let offset = 0; offset < Math.min(savedDigests.length, result.digests.length - base); offset++) {
+        if (savedDigests[offset] !== result.digests[base + offset]) {
+          state.changedFrom = Math.min(state.changedFrom, base + offset);
+          break;
+        }
+      }
+    }
+    if (!state.first) state.changedFrom = Math.min(state.changedFrom, result.changedFrom);
+    state.first = false;
+    return { ...result, reset: state.reset, changedFrom: state.changedFrom };
+  }
+
+  /** Release cached history when its viewer or skip operation ends. */
+  releaseTranscript(s) {
+    if (s) this.#transcripts.delete(s);
+  }
+
+  #prefixDigest(s, digests, through, changedFrom) {
+    const state = this.#transcripts.get(s);
+    let prefix = state?.prefix;
+    if (!prefix || through < prefix.through || changedFrom < prefix.through)
+      prefix = { through: 0, hash: createHash('sha256') };
+    while (prefix.through < through) prefix.hash.update(digests[prefix.through++]);
+    if (state) state.prefix = prefix;
+    return prefix.hash.copy().digest('hex');
+  }
+
+  #saveTranscriptDigests(s, digests, changedFrom, messages) {
+    if (!digests) return false;
+    const saved = s.externalTranscriptDigests, to = s.externalImported;
+    if (saved && changedFrom === Infinity && (s.externalTranscriptDigestBase ?? 0) + saved.length === to) return false;
+    // Match the existing imported event budget. Do not put a full chat's
+    // digest array in sessions.json or copy it on every chat-list save.
+    let from = to, budget = EVENT_KEEP * 0.8;
+    while (from > 0 && budget - transcriptCost(messages[from - 1]) > 0) budget -= transcriptCost(messages[--from]);
+    const next = digests.slice(from, to);
+    const prefix = this.#prefixDigest(s, digests, from, changedFrom);
+    if (saved && s.externalTranscriptDigestBase === from && saved.length === next.length
+      && s.externalTranscriptPrefixDigest === prefix && saved.every((hash, index) => hash === next[index])) return false;
+    s.externalTranscriptPrefixDigest = prefix;
+    s.externalTranscriptDigests = next;
+    s.externalTranscriptDigestBase = from;
+    return true;
+  }
+
+  /** Read the full retained log, including local records outside its tail. */
+  #replacementState(s, messages) {
+    const log = this.#sessions.events;
+    let events;
+    new EventFile(join(log.dir, `${s.id}.jsonl`), e => ({ seq: e.seq }))
+      .refresh(file => { events = [...file.view()]; });
+    // Old imported logs have no source fields. Match their owner prompts
+    // in order, then match retained text items to their current replies.
+    const textByItem = new Map();
+    for (const e of events) if (e.type === 'item.delta' && String(e.id).startsWith('imported-') && e.text)
+      textByItem.set(e.id, (textByItem.get(e.id) ?? '') + e.text);
+    const legacyItems = new Map();
+    let cursor = 0;
+    for (const e of events) {
+      if (transcriptSource(e)) {
+        if (['turn.start', 'item.start'].includes(e.type) && Number.isInteger(e.sourceIndex)) cursor = Math.max(cursor, e.sourceIndex + 1);
+        continue;
+      }
+      const prompt = e.type === 'turn.start' && (e.imported || String(e.turnId).startsWith('imported-')) && e.text;
+      const text = e.type === 'item.start' && e.kind === 'text' && textByItem.get(e.id);
+      const tool = e.type === 'item.start' && e.kind === 'tool' && String(e.id).startsWith('imported-');
+      if (!prompt && !text && !tool) continue;
+      const index = messages.findIndex((m, at) => at >= (tool ? Math.max(0, cursor - 1) : cursor) && (prompt
+        ? m.role === 'user' && m.text === e.text
+        : tool ? m.role === 'assistant' && m.tools?.some(t => t.name === e.name && JSON.stringify(externalInput(t)) === JSON.stringify(e.input))
+          : m.role === 'assistant' && m.text && (m.text.startsWith(text) || text.startsWith(m.text))));
+      if (index < 0) continue;
+      e.sourceIndex = index;
+      e.sourceId = messages[index].sourceId;
+      if (text || tool) legacyItems.set(e.id, { sourceId: e.sourceId, sourceIndex: index });
+      cursor = index + 1;
+    }
+    for (const e of events) if (!transcriptSource(e) && legacyItems.has(e.id)) Object.assign(e, legacyItems.get(e.id));
+    const turns = new Map(events.filter(e => e.type === 'turn.start' && transcriptSource(e)).map(e => [transcriptSource(e), e.turnId]));
+    const items = new Map(), positions = new Map(), seen = new Set();
+    for (const e of events) if (e.type === 'item.start' && String(e.id).startsWith('imported-') && transcriptSource(e) && !seen.has(e.id)) {
+      const key = JSON.stringify([transcriptSource(e), e.kind]);
+      const position = positions.get(key) ?? 0;
+      positions.set(key, position + 1);
+      items.set(JSON.stringify([transcriptSource(e), e.kind, position]), e.id);
+      seen.add(e.id);
+    }
+    return { events, turns, items };
+  }
+
+  /** Publish a corrected history without moving or deleting Helm's cards. */
+  #publishTranscriptReplacement(s, previous, importedEvents) {
+    const log = this.#sessions.events;
+    const importedTurns = new Set(previous.filter(e => e.imported || String(e.turnId).startsWith('imported-')).map(e => e.turnId));
+    const visuals = new Set(previous.filter(e => e.type === 'item.start' && e.kind === 'visual').map(e => e.id));
+    const isLocal = e => e.type !== 'history.reset' && (e.local || e.type === 'native.images' || visuals.has(e.id)
+      || (!e.imported && (e.type.startsWith('item.') ? !String(e.id).startsWith('imported-')
+        : !importedTurns.has(e.turnId) || !['turn.start', 'turn.done'].includes(e.type))));
+    const local = previous.filter(isLocal);
+    const owners = new Set(local.map(e => e.turnId).filter(Boolean));
+    const parents = new Set(local.flatMap(e => [e.id, e.parentId]).filter(Boolean));
+    const newTurns = new Set(importedEvents.filter(e => e.type === 'turn.start').map(e => e.turnId));
+    const newItems = new Set(importedEvents.filter(e => e.type === 'item.start').map(e => e.id));
+    // A local item can refer to an imported tool as its parent. Keep that
+    // parent's own anchor too, through every level of the item chain.
+    for (let more = true; more;) {
+      more = false;
+      for (const e of previous) if (e.type === 'item.start' && parents.has(e.id)) {
+        if (e.turnId) owners.add(e.turnId);
+        if (e.parentId && !parents.has(e.parentId)) { parents.add(e.parentId); more = true; }
+      }
+    }
+    const kept = new Set(local);
+    for (const e of previous) {
+      if (['turn.start', 'turn.done'].includes(e.type) && owners.has(e.turnId) && !newTurns.has(e.turnId)) kept.add(e);
+      if (['item.start', 'item.done'].includes(e.type) && parents.has(e.id) && !newItems.has(e.id)) kept.add(e);
+    }
+    const sources = new Set(importedEvents.map(transcriptSource).filter(Boolean));
+    const before = new Map(), after = new Map(), unplaced = [];
+    const add = (map, key, event) => { if (!map.has(key)) map.set(key, []); map.get(key).push(event); };
+    let next = null;
+    const nextSource = new Array(previous.length);
+    for (let index = previous.length - 1; index >= 0; index--) {
+      nextSource[index] = next;
+      if (!kept.has(previous[index]) && sources.has(transcriptSource(previous[index]))) next = transcriptSource(previous[index]);
+    }
+    let prior = null;
+    for (let index = 0; index < previous.length; index++) {
+      const event = previous[index];
+      if (kept.has(event)) {
+        if (nextSource[index]) add(before, nextSource[index], event);
+        else if (prior) add(after, prior, event);
+        else unplaced.push(event);
+      } else if (sources.has(transcriptSource(event))) prior = transcriptSource(event);
+    }
+    const merged = [];
+    for (let index = 0; index < importedEvents.length; index++) {
+      const event = importedEvents[index], source = transcriptSource(event);
+      if (source !== (importedEvents[index - 1] ? transcriptSource(importedEvents[index - 1]) : null)) merged.push(...(before.get(source) ?? []));
+      merged.push(event);
+      if (source !== (importedEvents[index + 1] ? transcriptSource(importedEvents[index + 1]) : null)) merged.push(...(after.get(source) ?? []));
+    }
+    merged.push(...unplaced);
+    let seq = log.last(s.id) + 1;
+    const replacement = [{ type: 'history.reset', at: Date.now(), seq: ++seq },
+      ...merged.map(e => ({ ...e, seq: ++seq }))];
+    log.replace(s.id, replacement);
+    s.lastSeq = seq;
+    for (const event of replacement) this.#sessions.emit('event', { id: s.id, event });
+  }
 
   /** A conversation can return to O2 after Helm last drove it. */
   async monitorService(s, found) {
@@ -465,11 +656,14 @@ export class ExternalSessions {
   /** Mark the CLI's history as already shown, without copying any of it. */
   async skipExternalTranscript(s) {
     if (!s.transcript) return;
-    const messages = await readMessages({
-      engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, all: true,
-    }).catch(() => null);
+    const { messages, revision, digests } = await this.readTranscript(s).catch(() => ({}))
+      .finally(() => this.releaseTranscript(s));
     if (!messages) return;
+    const state = this.#transcripts.get(s);
+    if (state) { state.reset = false; state.changedFrom = Infinity; }
+    s.externalTranscriptRevision = revision;
     s.externalImported = messages.length;
+    this.#saveTranscriptDigests(s, digests, 0, messages);
     s.externalImagesVersion = 1;
     s.externalTail = null;
     if (this.#core.index.has(s.id)) this.#core.save();
@@ -477,13 +671,27 @@ export class ExternalSessions {
 
   async #readExternalTranscript(s) {
     if (!s.transcript) return;
-    const messages = await readMessages({
-      engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, all: true,
-    });
+    const { messages, reset, changedFrom, revision, digests } = await this.readTranscript(s);
+    let rebuild = null;
+    s.externalTranscriptRevision = revision;
+    const state = this.#transcripts.get(s);
+    if (state) { state.reset = false; state.changedFrom = Infinity; }
+    // Extend a growing final reply in place. Changes to an earlier reply
+    // require rebuilding the retained events in their original order.
+    const count = s.externalImported ?? 0, last = messages[count - 1], tail = s.externalTail;
+    const tailGrowth = changedFrom === count - 1
+      && last?.role === 'assistant' && last.sourceId && last.sourceId === tail?.sourceId
+      && (last.text ?? '').startsWith(tail.text ?? '') && (last.tools?.length ?? 0) >= (tail.tools ?? 0);
+    if (['codex', 'claude'].includes(s.engine) && (reset || changedFrom < count && !tailGrowth
+      || messages.length < count)) {
+      rebuild ??= this.#replacementState(s, messages);
+      s.externalImported = 0;
+      s.externalTail = null;
+    }
     // Claude chats copied before replies were read whole are missing what
     // Claude said between its tool calls: copy those once more, from scratch.
     if (s.engine === 'claude' && s.external && (s.externalImported ?? 0) > 0 && s.externalTextVersion !== 1) {
-      this.#sessions.events.restart(s.id);
+      rebuild ??= this.#replacementState(s, messages);
       s.externalImported = 0;
       s.externalTail = null;
     }
@@ -505,7 +713,19 @@ export class ExternalSessions {
       s.externalImported = imported;
     }
     const nextId = () => `imported-${randomBytes(8).toString('hex')}`;
+    const buffered = [];
+    let sourceId, sourceIndex;
+    const itemPositions = new Map();
+    const nextItem = kind => {
+      if (!rebuild) return nextId();
+      const source = transcriptSource({ sourceId, sourceIndex });
+      const key = JSON.stringify([source, kind]), position = itemPositions.get(key) ?? 0;
+      itemPositions.set(key, position + 1);
+      return rebuild.items.get(JSON.stringify([source, kind, position])) ?? nextId();
+    };
     const append = (event) => {
+      event = { ...event, ...(sourceId ? { sourceId } : {}), ...(Number.isInteger(sourceIndex) ? { sourceIndex } : {}) };
+      if (rebuild) { buffered.push({ ...event, at: Date.now() }); return; }
       const saved = this.#sessions.events.append(s.id, event);
       s.lastSeq = saved.seq;
       this.#sessions.emit('event', { id: s.id, event: saved.attachments?.length ? this.#sessions.events.since(s.id, saved.seq - 1)[0] : saved });
@@ -535,33 +755,47 @@ export class ExternalSessions {
       s.externalImagesVersion = 1;
       if (this.#core.index.has(s.id)) this.#core.save();
     }
-    // SQLite providers update the final message row in place while it
-    // streams, so the message count does not move. Extend the already drawn
-    // item when its persisted snapshot grows instead of waiting for the next
-    // message (or drawing the whole answer a second time).
-    if (imported === messages.length) {
-      const last = messages.at(-1), tail = s.externalTail;
+    // Claude snapshots and database rows can grow without adding a message.
+    // Extend the existing item and keep its id and all preceding events.
+    let tailChanged = false;
+    {
+      const last = messages[imported - 1], tail = s.externalTail;
       if (last?.role === 'assistant' && last.sourceId && tail?.sourceId === last.sourceId) {
         const text = last.text ?? '';
-        if (tail.itemId && text.startsWith(tail.text ?? '') && text.length > (tail.text?.length ?? 0)) {
+        const tools = last.tools?.length ?? 0;
+        const changed = text !== tail.text || tools !== (tail.tools ?? 0);
+        tailChanged = changed;
+        sourceId = last.sourceId;
+        sourceIndex = imported - 1;
+        if (changed && text && !tail.itemId) {
+          tail.itemId = nextItem('text');
+          append({ type: 'item.start', id: tail.itemId, turnId: tail.turnId, kind: 'text' });
+          append({ type: 'item.delta', id: tail.itemId, turnId: tail.turnId, text });
+          append({ type: 'item.done', id: tail.itemId, turnId: tail.turnId, status: 'ok' });
+        } else if (tail.itemId && text.startsWith(tail.text ?? '') && text.length > (tail.text?.length ?? 0)) {
           append({ type: 'item.delta', id: tail.itemId, turnId: tail.turnId, text: text.slice((tail.text ?? '').length) });
         }
         for (const tool of (last.tools ?? []).slice(tail.tools ?? 0)) {
-          const itemId = nextId();
+          const itemId = nextItem('tool');
           append({ type: 'item.start', id: itemId, turnId: tail.turnId, kind: 'tool', name: tool.name, input: externalInput(tool) });
           append({ type: 'item.done', id: itemId, turnId: tail.turnId, status: 'ok' });
         }
         tail.text = text;
         tail.tools = last.tools?.length ?? 0;
-        if (this.#core.index.has(s.id)) this.#core.save();
       }
-      return;
+      if (imported === messages.length) {
+        if (rebuild) this.#publishTranscriptReplacement(s, rebuild.events, buffered);
+        s.externalImported = imported;
+        const checkpointChanged = this.#saveTranscriptDigests(s, digests, changedFrom, messages);
+        if ((tailChanged || checkpointChanged || rebuild) && this.#core.index.has(s.id)) this.#core.save();
+        return;
+      }
     }
     // The log keeps its last couple of thousand events. A long chat opened
     // for the first time used to write every one and trim as it went, which
     // got slower the longer the chat: start where the kept part starts, on
     // a message the owner wrote. The CLI's own history still has the rest.
-    const cost = (m) => m.role === 'user' ? 1 : (m.tools?.length ?? 0) * 2 + (m.text ? 3 : 0) + 1;
+    const cost = transcriptCost;
     let budget = EVENT_KEEP * 0.8, from = messages.length;
     while (from > imported && budget - cost(messages[from - 1]) > 0) budget -= cost(messages[--from]);
     if (from > imported) {
@@ -574,30 +808,35 @@ export class ExternalSessions {
       append({ type: 'turn.done', turnId, status: 'ok', imported: true });
       turnId = null;
     };
-    for (const message of messages.slice(imported)) {
+    for (let index = imported; index < messages.length; index++) {
+      const message = messages[index];
       if (message.role === 'user') {
         close();
+        sourceId = message.sourceId;
+        sourceIndex = index;
         s.externalTail = null;
-        turnId = nextId();
+        turnId = rebuild?.turns.get(transcriptSource({ sourceId, sourceIndex })) ?? nextId();
         append({ type: 'turn.start', turnId, text: message.text ?? '', imported: true,
           ...(message.attachments?.length ? { attachments: message.attachments.map((a) => this.#sessions.events.putAttachment(s.id, a)) } : {}),
         });
         continue;
       }
+      sourceId = message.sourceId;
+      sourceIndex = index;
       if (!turnId) {
-        turnId = nextId();
+        turnId = rebuild?.turns.get(transcriptSource({ sourceId, sourceIndex })) ?? nextId();
         append({ type: 'turn.start', turnId, text: '', imported: true });
       }
       // What Claude says comes before the calls it makes in the same reply.
       let textItemId = null;
       if (message.text) {
-        textItemId = nextId();
+        textItemId = nextItem('text');
         append({ type: 'item.start', id: textItemId, turnId, kind: 'text' });
         append({ type: 'item.delta', id: textItemId, turnId, text: message.text });
         append({ type: 'item.done', id: textItemId, turnId, status: 'ok' });
       }
       for (const tool of message.tools ?? []) {
-        const itemId = nextId();
+        const itemId = nextItem('tool');
         append({ type: 'item.start', id: itemId, turnId, kind: 'tool', name: tool.name, input: externalInput(tool) });
         append({ type: 'item.done', id: itemId, turnId, status: 'ok' });
       }
@@ -607,7 +846,9 @@ export class ExternalSessions {
       };
     }
     close();
+    if (rebuild) this.#publishTranscriptReplacement(s, rebuild.events, buffered);
     s.externalImported = messages.length;
+    this.#saveTranscriptDigests(s, digests, rebuild ? 0 : changedFrom, messages);
     if (this.#core.index.has(s.id)) this.#core.save();
   }
 }

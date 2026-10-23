@@ -95,7 +95,12 @@ export class SessionViewers {
     }
     // Asking for messages is how a chat view says it is watching.
     this.watchTranscript(id, s.transcript);
-    const messages = await readMessages({ engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit });
+    const messages = s.external && s.transcript && ['codex', 'claude'].includes(s.engine)
+      ? structuredClone((await this.#core.external.readTranscript(s).catch(error => {
+          if (error.code === 'ENOENT') return { messages: [] };
+          throw error;
+        })).messages.slice(-limit))
+      : await readMessages({ engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit });
     if (s.nativeChat) {
       const images = new Map(this.#sessions.events.tail(id, 0).filter(event => event.type === 'native.images')
         .map(event => [event.prompt, event]));
@@ -137,7 +142,10 @@ export class SessionViewers {
     this.#stopped = true;
     for (const w of this.#watchers.values()) clearTimeout(w.timer);
     this.#watchers.clear();
-    for (const t of this.#transcripts.values()) clearInterval(t.poll);
+    for (const [id, t] of this.#transcripts) {
+      clearInterval(t.poll);
+      this.#core.external?.releaseTranscript?.(this.#core.index.get(id));
+    }
     this.#transcripts.clear();
   }
 
@@ -237,21 +245,19 @@ export class SessionViewers {
       if (Date.now() > t.expires) {
         clearInterval(t.poll);
         this.#transcripts.delete(id);
+        this.#core.external?.releaseTranscript?.(this.#core.index.get(id));
         return;
       }
-      // One tick at a time, and a slow import earns a rest: re-reading a
-      // 64MB transcript is ~0.7s of CPU, and a CLI writing to it changes it
-      // every tick - unguarded that was a core spent for as long as it ran.
-      // Resting 3x the import caps it near a quarter of one.
+      // Keep the rest for providers that still read their full history.
       if (t.busy || Date.now() < t.rest) return;
       t.busy = true;
       try {
-        const { size, mtimeMs } = await stat(path);
+        const { size, mtimeMs, ctimeMs, dev, ino } = await stat(path);
         // SQLite writes live updates to a WAL while another CLI is open.
         // Watching only the main database makes OpenCode/Devin appear frozen
         // until their process checkpoints or exits.
         const wal = await stat(`${path}-wal`).catch(() => null);
-        const stamp = `${size}:${mtimeMs}:${wal?.size ?? 0}:${wal?.mtimeMs ?? 0}`;
+        const stamp = `${dev}:${ino}:${size}:${mtimeMs}:${ctimeMs}:${wal?.size ?? 0}:${wal?.mtimeMs ?? 0}`;
         if (this.#transcripts.get(id) !== t) return;
         if (t.size !== -1 && stamp !== t.size) {
           this.#sessions.emit('transcript', { id });
@@ -265,7 +271,7 @@ export class SessionViewers {
             const began = Date.now();
             await this.#core.external.importExternalTranscript(session);
             const took = Date.now() - began;
-            if (took > TRANSCRIPT_POLL_MS / 2) t.rest = Date.now() + took * 3;
+            if (!['codex', 'claude'].includes(session.engine) && took > TRANSCRIPT_POLL_MS / 2) t.rest = Date.now() + took * 3;
           }
         }
         const monitored = this.#core.index.get(id);
