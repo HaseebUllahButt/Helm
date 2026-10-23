@@ -17,43 +17,85 @@ export async function scanSend(path, { includeEnv = true, filterFile } = {}) {
   let allowed = null;
   const leave = (path, why) => { if (left.length < 40) left.push({ path, why }); };
   if (kind === 'folder') {
-    try {
-      if ((await git(root, ['rev-parse', '--show-toplevel'])).trim() === root) {
-        const gs = await lstat(join(root, '.git'));
-        if (!gs.isDirectory()) throw new Error('linked Git worktrees need a standalone clone before sending');
-        allowed = new Set((await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).split('\0').filter(Boolean));
-        // Ignored env files are intentionally included through the encrypted lane.
-        for (const p of (await git(root, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard'])).split('\0')) {
-          if (ENV.test(basename(p)) && !p.split('/').some(n => BULK_SKIP_DIRS.includes(n))) allowed.add(p);
-        }
-        const [branch, dirty] = await Promise.all([git(root, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => 'HEAD'), git(root, ['status', '--porcelain'])]);
-        repository = { branch: branch.trim(), dirty: !!dirty.trim() };
+    let top;
+    try { top = (await git(root, ['rev-parse', '--show-toplevel'])).trim(); }
+    catch (error) {
+      // A broken repository must not expose ignored files through fallback.
+      const marker = await lstat(join(root, '.git')).catch(e => {
+        if (e.code === 'ENOENT') return null;
+        throw e;
+      });
+      if (marker) throw error;
+    }
+    if (top === root) {
+      const gs = await lstat(join(root, '.git'));
+      if (!gs.isDirectory()) throw new Error('linked Git worktrees need a standalone clone before sending');
+      allowed = new Set((await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).split('\0').filter(Boolean));
+      // Ignored env files are intentionally included through the encrypted lane.
+      for (const p of (await git(root, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard'])).split('\0')) {
+        if (ENV.test(basename(p)) && !p.split('/').some(n => BULK_SKIP_DIRS.includes(n))) allowed.add(p);
       }
-    } catch (e) { if (/linked Git/.test(e.message)) throw e; }
+      const [branch, dirty] = await Promise.all([git(root, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => 'HEAD'), git(root, ['status', '--porcelain'])]);
+      repository = { branch: branch.trim(), dirty: !!dirty.trim() };
+    }
   }
-  const add = async (full, p, inGit = false) => {
+  // Each scan owns its filesystem workers. Keep results in traversal order,
+  // independent of the order in which metadata reads finish.
+  const roots = kind === 'file' ? [{ full: root, p: basename(root) }]
+    : allowed ? [{ full: root, p: '', rootOnly: true },
+      { full: join(root, '.git'), p: '.git', inGit: true },
+      ...[...allowed].map(p => ({ full: join(root, p), p }))]
+    : [{ full: root, p: '' }];
+  const pending = [...roots]; let next = 0, active = 0;
+  const inspect = async node => {
+    const { full, p, inGit = false } = node;
+    // Directory entries can go stale while waiting for a worker. Never use
+    // their type to descend into a directory that became a symbolic link.
     const s = await lstat(full);
+    if (full === root && (kind === 'folder' ? !s.isDirectory() : !s.isFile())) {
+      throw new Error('The source changed. Choose the file or folder again.');
+    }
+    if (node.rootOnly) return;
     if (s.isDirectory()) {
       if (allowed && !inGit && p && allowed.has(p)) throw new Error(`Git submodule ${p} needs a standalone copy; refusing to omit its files`);
-      if (!inGit && BULK_SKIP_DIRS.includes(basename(p)) && !allowed) { leave(p, 'dependency or cache folder'); return; }
-      for (const entry of await readdir(full)) await add(join(full, entry), p ? `${p}/${entry}` : entry, inGit || p === '.git');
+      if (!inGit && BULK_SKIP_DIRS.includes(basename(p)) && !allowed) { node.skipped = true; return; }
+      node.children = (await readdir(full, { withFileTypes: true })).map(entry => ({
+        full: join(full, entry.name), p: p ? `${p}/${entry.name}` : entry.name,
+        inGit: inGit || p === '.git',
+      }));
+      for (const child of node.children) pending.push(child);
       return;
     }
     if (!s.isFile() && !s.isSymbolicLink()) throw new Error(`cannot send special file: ${p}`);
+    node.size = s.size;
+  };
+  await new Promise(done => {
+    const pump = () => {
+      while (active < 32 && next < pending.length) {
+        const node = pending[next++]; active++;
+        inspect(node).catch(error => { node.error = error; }).finally(() => { active--; pump(); });
+      }
+      if (!active) done();
+    };
+    pump();
+  });
+  const add = node => {
+    const { p, inGit = false } = node;
+    if (node.error) throw node.error;
+    if (node.rootOnly) return;
+    if (node.skipped) { leave(p, 'dependency or cache folder'); return; }
+    if (node.children) { for (const child of node.children) add(child); return; }
     if (allowed && !inGit && !allowed.has(p)) { leave(p, 'ignored by Git'); return; }
     if (!inGit && ENV.test(basename(p))) {
       envFiles.push(p);
       if (!includeEnv) { leave(p, 'environment file excluded'); return; }
     }
-    selected.add(p); files++; bytes += s.size;
+    selected.add(p); files++; bytes += node.size;
   };
-  if (kind === 'file') await add(root, basename(root));
-  else if (allowed) {
-    // Do not walk ignored dependency trees just to exclude them.
-    await add(join(root, '.git'), '.git', true);
-    for (const p of allowed) { try { await add(join(root, p), p); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
-    leave('(Git ignored files)', 'build output and caches ignored by Git');
-  } else await add(root, '');
+  for (const node of roots) {
+    try { add(node); } catch (e) { if (!allowed || node.inGit || node.rootOnly || e.code !== 'ENOENT') throw e; }
+  }
+  if (allowed) leave('(Git ignored files)', 'build output and caches ignored by Git');
   const excludes = allowed ? [] : [...BULK_SKIP_DIRS.map(n => `${n}/`), ...(!includeEnv ? ['.[eE][nN][vV]*'] : [])];
   if (allowed && filterFile) {
     // Literal rsync filter paths (escape wildcard syntax), with parent traversal.
