@@ -56,12 +56,12 @@ test('OpenCode 2 JSON-column history renders text, tools, and usage', async () =
   assert.deepEqual(history.map((m) => [m.role, m.text]), [['user', 'fix it'], ['assistant', 'done']]);
   assert.deepEqual(history[1].tools, [{ name: 'bash', input: 'npm test' }]);
   const status = await sessionSnapshot({ engine: 'opencode', path, sessionId: 'oc-1', cwd: '/work', monitored: false });
-  assert.match(status, /### Session status/);
+  assert.match(status, /### Chat status/);
   assert.match(status, /\*\*Model:\*\* model-x/);
-  assert.match(status, /### Session usage/);
+  assert.match(status, /### Chat usage/);
   assert.match(status, /\*\*Input:\*\* 120/);
   assert.match(status, /\*\*Cost:\*\* \$0\.1250/);
-  assert.match(status, /\*\*State:\*\* resumed in Helm/);
+  assert.match(status, /\*\*State:\*\* continued in Helm/);
 });
 
 test('OpenCode 2 native session history renders from session_message', async () => {
@@ -108,7 +108,7 @@ test('Devin history keeps the final streaming snapshot and session statistics', 
   assert.deepEqual(history.map((m) => [m.role, m.text]), [['user', 'build it'], ['assistant', 'built']]);
   assert.deepEqual(history[1].tools, [{ name: 'exec', input: 'npm test' }]);
   const status = await sessionSnapshot({ engine: 'devin', path, sessionId: 'dv-1', cwd: '/work' });
-  assert.match(status, /### Session status/);
+  assert.match(status, /### Chat status/);
   assert.match(status, /\*\*Model:\*\* swe-test/);
   assert.match(status, /\*\*Mode:\*\* code/);
   assert.match(status, /\*\*Input:\*\* 10/);
