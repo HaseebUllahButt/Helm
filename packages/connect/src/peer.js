@@ -1,5 +1,6 @@
 import { RTCPeerConnection } from 'node-datachannel/polyfill';
 import { nativeDirectConfig } from './direct-config.js';
+import { encodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
 
 /**
  * Direct connections to clients.
@@ -25,6 +26,7 @@ export const DC_CHUNK_TYPE = 'dc-chunk';
 
 /** Split a large frame into chunk frames. Small frames pass through as-is. */
 export function fragment(frame, gid) {
+  if (Buffer.isBuffer(frame)) return fragmentTunnelFrame(frame);
   if (frame.length <= DC_CHUNK_AT) return [frame];
   const n = Math.ceil(frame.length / DC_CHUNK_AT);
   const out = [];
@@ -220,7 +222,7 @@ export class PeerHub {
 
   #onRaw(peer, raw) {
     let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
+    try { msg = (peer.tunnelFrames ??= new TunnelFrames()).decode(raw); } catch { return; }
     if (msg?.t === DC_CHUNK_TYPE && typeof msg.gid === 'string') {
       const full = this.#accumulate(peer, msg);
       if (full == null) return;
@@ -311,6 +313,7 @@ export class PeerHub {
     clearTimeout(peer.deadline);
     clearTimeout(peer.disconnectedTimer);
     peer.fragments?.clear();
+    peer.tunnelFrames?.clear();
     try { peer.channel?.close(); peer.pc.close(); } catch { /* already torn down */ }
     const transport = peer.transport;
     peer.transport = null;
@@ -322,7 +325,7 @@ export class PeerHub {
   #sendTunnel(peerId, peer, t, extra) {
     const run = (peer.sendChain ?? Promise.resolve()).then(async () => {
       let ok = false;
-      try { ok = await sendBuffered(peer.channel, JSON.stringify({ t, ...extra })); } catch {}
+      try { ok = await sendBuffered(peer.channel, encodeTunnelFrame({ t, ...extra }, true)); } catch {}
       if (!ok) this.drop(peerId, peer);
       return ok;
     });

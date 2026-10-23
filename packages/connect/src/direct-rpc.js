@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { loadNetwork } from '@helm/protocol/network';
 import { signDirectOffer } from './direct-auth.js';
 import { nativeDirectConfig } from './direct-config.js';
+import { encodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
 
 const CHUNK = 16_000;
 const MAX_FRAME = 64 * 1024 * 1024;
@@ -14,6 +15,7 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
   const candidates = [];
   const localCandidates = [];
   const fragments = new Map();
+  const tunnelFrames = new TunnelFrames();
   let offerSent = false, remoteReady = false;
   let open = false, closed = false;
   let disconnectedTimer;
@@ -26,6 +28,7 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
     closed = true;
     clearTimeout(connectTimer);
     clearTimeout(disconnectedTimer);
+    tunnelFrames.clear();
     try { channel.close(); pc.close(); } catch {}
     if (!open) rejectReady(error ?? new Error('direct channel closed'));
     try { onClose?.(error); } catch {}
@@ -33,7 +36,7 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
   const connectTimer = setTimeout(() => finish(new Error(`direct connection timed out (${remoteReady ? 'answer received' : 'no answer'}; ${localCount} local, ${remoteCount} remote addresses; ${pc.iceConnectionState})`)), connectTimeout);
   channel.onmessage = ({ data }) => {
     let message;
-    try { message = JSON.parse(data); } catch { return; }
+    try { message = tunnelFrames.decode(data); } catch { return; }
     if (!message || typeof message !== 'object' || Array.isArray(message)) return;
     if (message.t === 'dc-chunk') {
       if (!Number.isInteger(message.n) || message.n < 2 || message.n > Math.ceil(MAX_FRAME / CHUNK)
@@ -88,7 +91,8 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
   // `unsent` on a failure means not one byte of this frame left: the caller
   // may send it another way without any chance of it running twice.
   const sendBuffered = async (serialized, onStart) => {
-    const count = Math.ceil(serialized.length / CHUNK);
+    const binaryParts = Buffer.isBuffer(serialized) ? fragmentTunnelFrame(serialized) : null;
+    const count = binaryParts?.length ?? Math.ceil(serialized.length / CHUNK);
     const gid = randomBytes(12).toString('hex');
     for (let index = 0; index < count; index++) {
       const deadline = Date.now() + 120_000;
@@ -98,7 +102,7 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
       if (closed || channel.readyState !== 'open') throw Object.assign(new Error('direct channel closed'), { unsent: index === 0 });
       if (Date.now() >= deadline) throw Object.assign(new Error('direct channel backpressure did not drain'), { unsent: index === 0 });
       if (index === 0) onStart?.();
-      channel.send(count === 1 ? serialized : JSON.stringify({
+      channel.send(binaryParts ? binaryParts[index] : count === 1 ? serialized : JSON.stringify({
         t: 'dc-chunk', gid, i: index, n: count,
         data: serialized.slice(index * CHUNK, (index + 1) * CHUNK),
       }));
@@ -110,8 +114,8 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
     send(frame, onStart) {
       const unsent = (message) => Promise.reject(Object.assign(new Error(message), { unsent: true }));
       let serialized;
-      try { serialized = JSON.stringify(frame); } catch { return unsent('unserializable direct frame'); }
-      if (typeof serialized !== 'string') return unsent('unserializable direct frame');
+      try { serialized = encodeTunnelFrame(frame, true); } catch { return unsent('unserializable direct frame'); }
+      if (typeof serialized !== 'string' && !Buffer.isBuffer(serialized)) return unsent('unserializable direct frame');
       if (serialized.length > MAX_FRAME) return unsent('direct frame exceeds size limit');
       const run = sendChain.then(() => sendBuffered(serialized, onStart));
       sendChain = run.catch(() => {});

@@ -127,12 +127,12 @@ export class TunnelReceiver {
 
   write(data) {
     if (this.stopped) return;
-    if (typeof data !== 'string' || data.length > Math.ceil(TUNNEL_CHUNK / 3) * 4
-        || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
+    if (!Buffer.isBuffer(data) && (typeof data !== 'string' || data.length > Math.ceil(TUNNEL_CHUNK / 3) * 4
+        || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))) {
       this.fail(new Error('invalid tunnel data'));
       return;
     }
-    const chunk = Buffer.from(data, 'base64');
+    const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data, 'base64');
     if (!chunk.length || chunk.length > TUNNEL_CHUNK
         || this.received - this.acknowledged + chunk.length > this.window) {
       this.fail(new Error('tunnel receive window exceeded'));

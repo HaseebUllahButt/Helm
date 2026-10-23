@@ -4,7 +4,8 @@ import { T } from '@helm/protocol';
 import { requireNetwork, hubCredential, allEndpoints } from '@helm/protocol/network';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { verifyHandoffSignature } from './code-transfer.js';
-import { cleanCopyFolder, createCopyRequest, copyWindow } from './copy-transport.js';
+import { cleanCopyFolder, createCopyRequest, copyWindow, COPY_CODEC } from './copy-transport.js';
+import { encodeTunnelFrame, decodeTunnelFrame } from '../../protocol/tunnel-frame.js';
 import { directPeer } from './direct-rpc.js';
 import { TunnelSender, TunnelReceiver, COPY_WINDOW } from './tunnel-flow.js';
 
@@ -63,6 +64,16 @@ function connectSocket(url, token, ms) {
       headers: { authorization: `Bearer ${token}` },
       handshakeTimeout: ms,
     });
+    ws.binaryTunnel = false;
+    const welcome = raw => {
+      try {
+        const frame = JSON.parse(raw);
+        if (frame.t !== T.WELCOME) return;
+        ws.binaryTunnel = frame.binaryTunnel === 1;
+        ws.off('message', welcome);
+      } catch {}
+    };
+    ws.on('message', welcome);
     let settled = false;
     const timer = setTimeout(() => {
       try { ws.terminate(); } catch {}
@@ -103,12 +114,12 @@ export function socketTransport(ws, keep = false) {
   const transport = {
     onFrame: null,
     onClose: null,
-    send: (t, extra = {}) => ws.send(JSON.stringify({ t, ...extra })),
+    send: (t, extra = {}) => ws.send(encodeTunnelFrame({ t, ...extra }, ws.binaryTunnel === true)),
     close: () => { ws.off('message', message); ws.off('close', closed); ws.off('error', closed); if (!keep) { try { ws.close(); } catch {} } },
   };
   const message = (raw) => {
     let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
+    try { msg = decodeTunnelFrame(raw); } catch { return; }
     transport.onFrame?.(msg);
   };
   const closed = () => transport.onClose?.();
@@ -194,7 +205,9 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
               || !verifyHandoffSignature(peer.codeSignPubkey, proof.requestDigest, proof.signature)) {
             throw new Error('bad proof');
           }
+          if (proof.codec !== undefined && (proof.codec !== COPY_CODEC || request.codec !== COPY_CODEC)) throw new Error('unsupported copy codec');
           onProof?.(proof);
+          if (proof.codec === COPY_CODEC) cipher.useBinary();
         } catch {
           return fail(Object.assign(new Error(
             'The target did not prove it holds its signing key - refusing to send data.',
@@ -206,7 +219,7 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
         clearTimeout(readyTimer);
         release = beginTransferActivity();
         receiver = new TunnelReceiver(output, (bytes) => sendPacket({ type: 'ack', bytes }), fail, { window: COPY_WINDOW });
-        sender = new TunnelSender(input, (chunk) => sendPacket({ type: 'data', data: chunk.toString('base64') }), fail,
+        sender = new TunnelSender(input, (chunk) => sendPacket({ type: 'data', data: chunk }), fail,
           { window: copyWindow(msg.window) });
         input.on('end', onInputEnd);
         input.on('error', onStreamError);
@@ -318,7 +331,7 @@ export async function copyProxy(args, deps = {}) {
       timing('credential-start', { base });
       const token = await credential(net, base, { timeout: bounded(HELLO_MS) });
       timing('credential-ready', { base });
-      const ws = await openSocket(`${base.replace(/\/+$/, '')}${path}?role=client`, token, bounded(HANDSHAKE_MS));
+      const ws = await openSocket(`${base.replace(/\/+$/, '')}${path}?role=client&binaryTunnel=1`, token, bounded(HANDSHAKE_MS));
       timing('socket-ready', { base }); return ws;
     }
   }

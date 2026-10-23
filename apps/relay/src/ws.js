@@ -11,6 +11,7 @@ import {
 import { loadOwner, mergeOwner, ownerHash } from '../../../packages/protocol/owner.js';
 import { fanOut, isNew } from './notify.js';
 import { desktop } from './desktop-notify.js';
+import { encodeTunnelFrame, decodeTunnelFrame } from '../../../packages/protocol/tunnel-frame.js';
 
 const HEARTBEAT_MS = 30_000;
 // Longer than the CLI's 120s call timeout: the relay must not report a
@@ -50,7 +51,7 @@ export function createWsLayer() {
   };
 
   const send = (sock, t, extra) => {
-    if (sock?.readyState === 1) sock.send(JSON.stringify({ t, ...extra }));
+    if (sock?.readyState === 1) sock.send(encodeTunnelFrame({ t, ...extra }, sock.binaryTunnel === true));
   };
 
   /**
@@ -762,6 +763,7 @@ export function createWsLayer() {
   });
 
   wss.on('connection', (sock, req, auth) => {
+    sock.binaryTunnel = new URL(req.url, 'http://localhost').searchParams.get('binaryTunnel') === '1';
     // Protocol/transport errors occur before the JSON message handler. Keep
     // a malformed frame confined to its socket, including normal close cleanup.
     sock.on('error', () => sock.terminate());
@@ -796,7 +798,7 @@ export function createWsLayer() {
         saveNetwork(net);
       }
       send(sock, T.WELCOME, {
-        version: PROTOCOL_VERSION, envId, name: auth.env.name,
+        version: PROTOCOL_VERSION, envId, name: auth.env.name, ...(sock.binaryTunnel ? { binaryTunnel: 1 } : {}),
       });
       broadcastPeers();
       notifyPresence(envId, true);
@@ -812,12 +814,12 @@ export function createWsLayer() {
       sock.isMachine = !!auth.machine;
       clients.set(sock, new Set());
       markSeen(sock.sub);
-      send(sock, T.WELCOME, { version: PROTOCOL_VERSION, role: 'client' });
+      send(sock, T.WELCOME, { version: PROTOCOL_VERSION, role: 'client', ...(sock.binaryTunnel ? { binaryTunnel: 1 } : {}) });
     }
 
     sock.on('message', (raw) => {
       let msg;
-      try { msg = JSON.parse(raw); } catch { return; }
+      try { msg = decodeTunnelFrame(raw); } catch { return; }
       // Authenticated traffic is liveness evidence even when a pong is
       // waiting behind file data on a slow connection.
       sock.isAlive = true;

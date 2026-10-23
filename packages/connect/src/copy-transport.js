@@ -25,6 +25,7 @@ const MAX_PLAIN = 96 * 1024;
 const KILL_GRACE_MS = 3000;
 const CTRL = /[\u0000-\u001f\u007f]/;
 const KEY_B64 = /^[A-Za-z0-9_-]{40,512}$/;
+export const COPY_CODEC = 'binary1';
 
 /** The window the other end said it can take; older helms say nothing. */
 export const copyWindow = (offered) => (Number.isSafeInteger(offered) && offered >= TUNNEL_WINDOW
@@ -90,14 +91,19 @@ export function createCopyCipher(privateKey, remotePubkey, salt, copyId, side) {
   const receiveAad = Buffer.from(`helm-copy-v1:${copyId}:${receiveDirection}`);
   let sent = 0n;
   let received = 0n;
+  let binary = false;
   const ivFor = (seq) => {
     const iv = Buffer.alloc(12);
     iv.writeBigUInt64BE(seq, 4);
     return iv;
   };
   return {
+    useBinary() { binary = true; },
     seal(packet) {
-      const plain = Buffer.from(JSON.stringify(packet));
+      const data = packet.type === 'data' && Buffer.isBuffer(packet.data) ? packet.data : null;
+      const plain = binary
+        ? data ? Buffer.concat([Buffer.from([1]), data]) : Buffer.concat([Buffer.from([0]), Buffer.from(JSON.stringify(packet))])
+        : Buffer.from(JSON.stringify(data ? { ...packet, data: data.toString('base64') } : packet));
       if (plain.length > MAX_PLAIN) throw new Error('copy packet exceeds the size limit');
       const seq = sent;
       const aes = createCipheriv('aes-256-gcm', sendKey, ivFor(seq));
@@ -106,14 +112,16 @@ export function createCopyCipher(privateKey, remotePubkey, salt, copyId, side) {
       sent += 1n;
       const head = Buffer.alloc(8);
       head.writeBigUInt64BE(seq);
-      return Buffer.concat([head, aes.getAuthTag(), body]).toString('base64');
+      const encoded = Buffer.concat([head, aes.getAuthTag(), body]);
+      return binary ? encoded : encoded.toString('base64');
     },
     open(encoded) {
-      if (typeof encoded !== 'string' || encoded.length > MAX_PACKET
-          || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded) || encoded.length % 4 !== 0) {
+      if (!(binary && Buffer.isBuffer(encoded)) && (typeof encoded !== 'string' || encoded.length > MAX_PACKET
+          || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded) || encoded.length % 4 !== 0)) {
         throw new Error('invalid copy packet encoding');
       }
-      const raw = Buffer.from(encoded, 'base64');
+      const raw = Buffer.isBuffer(encoded) ? encoded : Buffer.from(encoded, 'base64');
+      if (raw.length > MAX_PLAIN + 24) throw new Error('copy packet exceeds the size limit');
       if (raw.length < 8 + 16 + 1) throw new Error('truncated copy packet');
       const seq = raw.readBigUInt64BE(0);
       if (seq !== received) throw new Error('unexpected copy packet sequence');
@@ -122,7 +130,12 @@ export function createCopyCipher(privateKey, remotePubkey, salt, copyId, side) {
       aes.setAuthTag(raw.subarray(8, 24));
       const plain = Buffer.concat([aes.update(raw.subarray(24)), aes.final()]);
       if (plain.length > MAX_PLAIN) throw new Error('copy packet exceeds the size limit');
-      const packet = JSON.parse(plain.toString('utf8'));
+      let packet;
+      if (binary && plain[0] === 1) packet = { type: 'data', data: plain.subarray(1) };
+      else {
+        if (binary && plain[0] !== 0) throw new Error('invalid copy packet type');
+        packet = JSON.parse(plain.toString('utf8', binary ? 1 : 0));
+      }
       if (typeof packet !== 'object' || packet === null || Array.isArray(packet)) {
         throw new Error('invalid copy packet');
       }
@@ -160,6 +173,9 @@ export function createCopyRequest(net, peer, targetFolder, serverArgs, sendJob) 
   request.requestDigest = copyRequestDigest(request);
   request.sourceSignature = signHandoffDigest(request.requestDigest);
   request.window = COPY_WINDOW;
+  // The authenticated ready proof selects this performance hint. Legacy
+  // receivers ignore it and keep their original signed request format.
+  request.codec = COPY_CODEC;
   if (JSON.stringify(request).length > MAX_REQUEST) throw new Error('copy request is too large');
   const cipher = createCopyCipher(ephemeral.privateKey, peer.codePubkey, request.salt, copyId, 'source');
   return { request, cipher };
@@ -280,6 +296,7 @@ export class CopyReceiver {
       copyId: request.copyId,
       source: caller,
       requestDigest: request.requestDigest,
+      binary: request.codec === COPY_CODEC,
       window: copyWindow(request.window),
       cipher,
       child,
@@ -320,6 +337,7 @@ export class CopyReceiver {
           ...(stream.sendProof ? { send: stream.sendProof } : {}),
           requestDigest: stream.requestDigest,
           signature: this.signer(stream.requestDigest),
+          ...(stream.binary ? { codec: COPY_CODEC } : {}),
         }),
       });
       sent?.catch?.(() => this.#teardown(stream, 'copy channel write failed'));
@@ -327,6 +345,7 @@ export class CopyReceiver {
       this.#teardown(stream, 'copy channel write failed');
       return;
     }
+    if (stream.binary) stream.cipher.useBinary();
     const fail = (err) => this.#teardown(stream, err?.message || 'copy stream failed');
     stream.receiver = new TunnelReceiver(
       stream.child.stdin,
@@ -336,7 +355,7 @@ export class CopyReceiver {
     );
     stream.sender = new TunnelSender(
       stream.child.stdout,
-      (chunk) => this.#send(stream, { type: 'data', data: chunk.toString('base64') }),
+      (chunk) => this.#send(stream, { type: 'data', data: chunk }),
       fail,
       { window: stream.window },
     );

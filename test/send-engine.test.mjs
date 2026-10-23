@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
+import { encodeTunnelFrame } from '../packages/protocol/tunnel-frame.js';
 const root = mkdtempSync(join(homedir(), '.helm-send-test-'));
 Object.assign(process.env, { HELM_DIR: join(root, 'state'), HELM_DB: join(root,'hub.sqlite'), HELM_SSH_DIR: join(root,'ssh'), HELM_PROCS_SOCKET: join(root,'procs.sock'), HELM_TERMINALS_SOCKET: join(root,'terminals.sock'), HELM_NO_SERVICE: '1' });
 const { SendEngine } = await import('../packages/connect/src/send-engine.js');
@@ -25,7 +26,7 @@ async function fixture({ delay = 0, old = false } = {}) {
   const receiver = new CopyReceiver({ network:()=>({...net,self:'bb22'}), sendReceiver:received, spawnProcess:(command,args,opts)=>importSpawn(command,args,{...opts,cwd:home}) });
   const wss = new WebSocketServer({ port:0 }); await new Promise(r=>wss.once('listening',r));
   net.machines.bb22.endpoints = [`http://127.0.0.1:${wss.address().port}`];
-  const send = (ws, data) => { if(delay) setTimeout(()=> { if(ws.readyState===1) ws.send(JSON.stringify(data)); },delay/2); else if(ws.readyState===1) ws.send(JSON.stringify(data)); };
+  const send = (ws, data) => { if(delay) setTimeout(()=> { if(ws.readyState===1) ws.send(encodeTunnelFrame(data)); },delay/2); else if(ws.readyState===1) ws.send(encodeTunnelFrame(data)); };
   wss.on('connection',ws=> {
     const link = { id:randomBytes(6).toString('hex'), send:(t,extra)=>send(ws,{t,...extra}) };
     ws.on('message',raw=> { const frame=JSON.parse(raw); if(delay) setTimeout(()=>receiver.handle(link,frame,'aa11'),delay/2); else receiver.handle(link,frame,'aa11'); });

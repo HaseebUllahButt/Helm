@@ -17,7 +17,7 @@ async function harness() {
     async setLocalDescription(answer) { this.localDescription = answer; }
     close() {}
   }
-  const context = { module: { exports: {} }, exports: {}, setTimeout, clearTimeout,
+  const context = { module: { exports: {} }, exports: {}, setTimeout, clearTimeout, Buffer,
     JSON: { stringify: JSON.stringify, parse: (...args) => { parses++; return JSON.parse(...args); } },
     Map: class extends Map { constructor(...args) { super(...args); maps.push(this); } },
     require: specifier => specifier === './direct-config.js'
