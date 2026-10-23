@@ -76,7 +76,9 @@ fn decode(raw: &[u8]) -> Option<Cow<'_, str>> {
     let inner = raw.strip_prefix(b"\"")?.strip_suffix(b"\"")?;
     if !inner.contains(&b'\\') {
         // Invalid UTF-8 cannot equal a field name. JavaScript sees U+FFFD.
-        return Some(Cow::Borrowed(std::str::from_utf8(inner).unwrap_or("\u{fffd}")));
+        return Some(Cow::Borrowed(
+            std::str::from_utf8(inner).unwrap_or("\u{fffd}"),
+        ));
     }
     serde_json::from_slice::<String>(raw).ok().map(Cow::Owned)
 }
@@ -97,7 +99,12 @@ fn name_of(key: &[u8], names: &[&str]) -> Result<Option<usize>, ()> {
 /// value of `names[n]` at `i` and returns its end; other values are skipped.
 /// As in JSON.parse, a later duplicate key replaces an earlier value, so `on`
 /// overwrites. Err means the scanner cannot follow the text.
-fn object(b: &[u8], start: usize, names: &[&str], mut on: impl FnMut(usize, usize) -> Result<usize, ()>) -> Result<usize, ()> {
+fn object(
+    b: &[u8],
+    start: usize,
+    names: &[&str],
+    mut on: impl FnMut(usize, usize) -> Result<usize, ()>,
+) -> Result<usize, ()> {
     let mut i = skip_space(b, start + 1);
     if b.get(i) == Some(&b'}') {
         return Ok(i + 1);
@@ -127,7 +134,11 @@ fn object(b: &[u8], start: usize, names: &[&str], mut on: impl FnMut(usize, usiz
 }
 
 /// Walk the array that starts at `start`; `on(i)` returns each element's end.
-fn array(b: &[u8], start: usize, mut on: impl FnMut(usize) -> Result<usize, ()>) -> Result<usize, ()> {
+fn array(
+    b: &[u8],
+    start: usize,
+    mut on: impl FnMut(usize) -> Result<usize, ()>,
+) -> Result<usize, ()> {
     let mut i = skip_space(b, start + 1);
     if b.get(i) == Some(&b']') {
         return Ok(i + 1);
@@ -150,7 +161,11 @@ fn span(b: &[u8], i: usize) -> Result<(&[u8], usize), ()> {
 
 /// The named fields of the value at `i`, or None when it is not an object,
 /// like a JavaScript property read on a primitive or array. Also its end.
-fn fields<'a, const N: usize>(b: &'a [u8], i: usize, names: [&str; N]) -> Result<(Option<[Raw<'a>; N]>, usize), ()> {
+fn fields<'a, const N: usize>(
+    b: &'a [u8],
+    i: usize,
+    names: [&str; N],
+) -> Result<(Option<[Raw<'a>; N]>, usize), ()> {
     if b.get(i) != Some(&b'{') {
         return Ok((None, value_end(b, i).ok_or(())?));
     }
@@ -164,7 +179,11 @@ fn fields<'a, const N: usize>(b: &'a [u8], i: usize, names: [&str; N]) -> Result
 }
 
 /// Walk a whole line, which must hold one object and nothing else.
-fn record(line: &[u8], names: &[&str], on: impl FnMut(usize, usize) -> Result<usize, ()>) -> Result<(), ()> {
+fn record(
+    line: &[u8],
+    names: &[&str],
+    on: impl FnMut(usize, usize) -> Result<usize, ()>,
+) -> Result<(), ()> {
     let start = skip_space(line, 0);
     if line.get(start) != Some(&b'{') {
         return Err(());
@@ -188,7 +207,11 @@ fn top<'a, const N: usize>(line: &'a [u8], names: [&str; N]) -> Result<[Raw<'a>;
 }
 
 /// Top-level `type` plus the named fields of the object in `inner`.
-fn top_and_inner<'a, const N: usize>(line: &'a [u8], inner: &str, names: [&str; N]) -> Result<(Raw<'a>, Option<[Raw<'a>; N]>), ()> {
+fn top_and_inner<'a, const N: usize>(
+    line: &'a [u8],
+    inner: &str,
+    names: [&str; N],
+) -> Result<(Raw<'a>, Option<[Raw<'a>; N]>), ()> {
     let (mut kind, mut fields_in) = (None, None);
     record(line, &["type", inner], |n, i| {
         if n == 0 {
@@ -242,10 +265,12 @@ fn truthy(raw: Raw<'_>) -> bool {
     match raw[0] {
         b'f' | b'n' => false,
         b'"' => raw.len() > 2,
-        b'-' | b'0'..=b'9' => std::str::from_utf8(raw)
-            .ok()
-            .and_then(|n| n.parse::<f64>().ok())
-            .map_or(true, |n| n != 0.0),
+        b'-' | b'0'..=b'9' => {
+            std::str::from_utf8(raw)
+                .ok()
+                .and_then(|n| n.parse::<f64>().ok())
+                != Some(0.0)
+        }
         _ => true,
     }
 }
@@ -263,17 +288,32 @@ pub enum Rule {
 impl Rule {
     fn from(code: u32) -> Option<Rule> {
         use Rule::*;
-        [CodexMessages, ClaudeMessages, ClaudeSidechain, CodexState, ClaudeUsage, CodexActivity]
-            .get(code as usize)
-            .copied()
+        [
+            CodexMessages,
+            ClaudeMessages,
+            ClaudeSidechain,
+            CodexState,
+            ClaudeUsage,
+            CodexActivity,
+        ]
+        .get(code as usize)
+        .copied()
     }
 }
 
-const CODEX_TOOLS: [&str; 4] = ["custom_tool_call", "function_call", "local_shell_call", "web_search_call"];
+const CODEX_TOOLS: [&str; 4] = [
+    "custom_tool_call",
+    "function_call",
+    "local_shell_call",
+    "web_search_call",
+];
 
 /// Ok(false) only when the JavaScript reader would certainly ignore the line.
 fn wanted(line: &[u8], rule: Rule) -> Result<bool, ()> {
-    if line.iter().all(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c)) {
+    if line
+        .iter()
+        .all(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c))
+    {
         return Ok(false);
     }
     match rule {
@@ -282,14 +322,23 @@ fn wanted(line: &[u8], rule: Rule) -> Result<bool, ()> {
             if !is(kind, &["response_item"])? {
                 return Ok(false);
             }
-            let Some([kind, role]) = payload else { return Ok(false) };
-            Ok(is(kind, &CODEX_TOOLS)? || is(kind, &["message"])? && is(role, &["user", "assistant"])?)
+            let Some([kind, role]) = payload else {
+                return Ok(false);
+            };
+            Ok(is(kind, &CODEX_TOOLS)?
+                || is(kind, &["message"])? && is(role, &["user", "assistant"])?)
         }
         Rule::ClaudeMessages | Rule::ClaudeSidechain => {
             let (mut kind, mut sidechain, mut content) = (None, None, false);
             record(line, &["type", "isSidechain", "message"], |n, i| match n {
-                0 => span(line, i).map(|(value, end)| { kind = Some(value); end }),
-                1 => span(line, i).map(|(value, end)| { sidechain = Some(value); end }),
+                0 => span(line, i).map(|(value, end)| {
+                    kind = Some(value);
+                    end
+                }),
+                1 => span(line, i).map(|(value, end)| {
+                    sidechain = Some(value);
+                    end
+                }),
                 _ if line[i] == b'{' => {
                     content = false;
                     object(line, i, &["content"], |_, j| {
@@ -298,17 +347,27 @@ fn wanted(line: &[u8], rule: Rule) -> Result<bool, ()> {
                         Ok(end)
                     })
                 }
-                _ => span(line, i).map(|(_, end)| { content = false; end }),
+                _ => span(line, i).map(|(_, end)| {
+                    content = false;
+                    end
+                }),
             })?;
-            Ok(is(kind, &["user", "assistant"])? && truthy(sidechain) == (rule == Rule::ClaudeSidechain) && content)
+            Ok(is(kind, &["user", "assistant"])?
+                && truthy(sidechain) == (rule == Rule::ClaudeSidechain)
+                && content)
         }
         Rule::CodexState => {
             let (kind, payload) = top_and_inner(line, "payload", ["type"])?;
             if is(kind, &["session_meta", "turn_context"])? {
                 return Ok(true);
             }
-            let Some([inner]) = payload else { return Ok(false) };
-            Ok(is(kind, &["event_msg"])? && is(inner, &["thread_settings_applied", "token_count"])?)
+            let Some([inner]) = payload else {
+                return Ok(false);
+            };
+            Ok(
+                is(kind, &["event_msg"])?
+                    && is(inner, &["thread_settings_applied", "token_count"])?,
+            )
         }
         Rule::ClaudeUsage => {
             let [kind, message] = top(line, ["type", "message"])?;
@@ -316,12 +375,27 @@ fn wanted(line: &[u8], rule: Rule) -> Result<bool, ()> {
         }
         Rule::CodexActivity => {
             let (kind, payload) = top_and_inner(line, "payload", ["type", "role", "channel"])?;
-            let Some([inner, role, channel]) = payload else { return Ok(false) };
+            let Some([inner, role, channel]) = payload else {
+                return Ok(false);
+            };
             if is(kind, &["event_msg"])? {
-                return is(inner, &["task_started", "turn_started", "user_message", "task_complete",
-                    "task_completed", "turn_complete", "turn_aborted"]);
+                return is(
+                    inner,
+                    &[
+                        "task_started",
+                        "turn_started",
+                        "user_message",
+                        "task_complete",
+                        "task_completed",
+                        "turn_complete",
+                        "turn_aborted",
+                    ],
+                );
             }
-            Ok(is(kind, &["response_item"])? && is(inner, &["message"])? && is(role, &["assistant"])? && is(channel, &["final"])?)
+            Ok(is(kind, &["response_item"])?
+                && is(inner, &["message"])?
+                && is(role, &["assistant"])?
+                && is(channel, &["final"])?)
         }
     }
 }
@@ -334,9 +408,13 @@ pub fn select(bytes: &[u8], rule: Option<Rule>, split_cr: bool) -> Vec<f64> {
     let mut start = 0;
     while start <= bytes.len() {
         let rest = &bytes[start..];
-        let found = if split_cr { memchr::memchr2(b'\n', b'\r', rest) } else { memchr::memchr(b'\n', rest) };
+        let found = if split_cr {
+            memchr::memchr2(b'\n', b'\r', rest)
+        } else {
+            memchr::memchr(b'\n', rest)
+        };
         let end = found.map_or(bytes.len(), |n| start + n);
-        if end > start && rule.map_or(true, |rule| wanted(&bytes[start..end], rule).unwrap_or(true)) {
+        if end > start && rule.is_none_or(|rule| wanted(&bytes[start..end], rule).unwrap_or(true)) {
             rows.extend([start as f64, end as f64]);
         }
         match found {
@@ -367,22 +445,58 @@ mod tests {
     #[test]
     fn codex_keeps_messages_and_tools_only() {
         let rule = Rule::CodexMessages;
-        assert!(keeps(rule, r#"{"type":"response_item","payload":{"type":"message","role":"user"}}"#));
-        assert!(keeps(rule, r#"{"type":"response_item","payload":{"type":"function_call"}}"#));
-        assert!(keeps(rule, r#"{"type":"response_item","payload":{"type":"message","role":"assistant"}}"#));
-        assert!(!keeps(rule, r#"{"type":"response_item","payload":{"type":"function_call_output","output":"x"}}"#));
-        assert!(!keeps(rule, r#"{"type":"response_item","payload":{"type":"message","role":"developer"}}"#));
-        assert!(!keeps(rule, r#"{"type":"event_msg","payload":{"type":"message","role":"user"}}"#));
+        assert!(keeps(
+            rule,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user"}}"#
+        ));
+        assert!(keeps(
+            rule,
+            r#"{"type":"response_item","payload":{"type":"function_call"}}"#
+        ));
+        assert!(keeps(
+            rule,
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant"}}"#
+        ));
+        assert!(!keeps(
+            rule,
+            r#"{"type":"response_item","payload":{"type":"function_call_output","output":"x"}}"#
+        ));
+        assert!(!keeps(
+            rule,
+            r#"{"type":"response_item","payload":{"type":"message","role":"developer"}}"#
+        ));
+        assert!(!keeps(
+            rule,
+            r#"{"type":"event_msg","payload":{"type":"message","role":"user"}}"#
+        ));
         assert!(!keeps(rule, r#"{"type":"response_item","payload":[1]}"#));
-        assert!(!keeps(rule, r#"{"payload":{"type":"message","role":"user"}}"#));
+        assert!(!keeps(
+            rule,
+            r#"{"payload":{"type":"message","role":"user"}}"#
+        ));
         // The last duplicate wins, as in JSON.parse.
-        assert!(keeps(rule, r#"{"type":"event_msg","type":"response_item","payload":{"type":"message","role":"user"}}"#));
-        assert!(!keeps(rule, r#"{"type":"response_item","type":"event_msg","payload":{"type":"message","role":"user"}}"#));
-        assert!(!keeps(rule, r#"{"type":"response_item","payload":{"type":"message","role":"user"},"payload":7}"#));
+        assert!(keeps(
+            rule,
+            r#"{"type":"event_msg","type":"response_item","payload":{"type":"message","role":"user"}}"#
+        ));
+        assert!(!keeps(
+            rule,
+            r#"{"type":"response_item","type":"event_msg","payload":{"type":"message","role":"user"}}"#
+        ));
+        assert!(!keeps(
+            rule,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user"},"payload":7}"#
+        ));
         // Lines the scanner cannot follow go to JSON.parse.
-        assert!(keeps(rule, r#"{"type":"response_item","payload":{"type":"message","role":"\ud800"}}"#));
+        assert!(keeps(
+            rule,
+            r#"{"type":"response_item","payload":{"type":"message","role":"\ud800"}}"#
+        ));
         assert!(keeps(rule, r#"{"type":"event_msg"} x"#));
-        assert!(keeps(rule, r#"{"type":"response_item","payload":{"type":"x"}"#));
+        assert!(keeps(
+            rule,
+            r#"{"type":"response_item","payload":{"type":"x"}"#
+        ));
         assert!(keeps(rule, "null"));
         assert!(keeps(rule, r#"["response_item"]"#));
     }
@@ -391,38 +505,98 @@ mod tests {
     fn claude_drops_tool_results_thinking_and_other_chats() {
         let rule = Rule::ClaudeMessages;
         assert!(keeps(rule, r#"{"type":"user","message":{"content":"hi"}}"#));
-        assert!(keeps(rule, r#"{"type":"assistant","message":{"content":[{"type":"thinking"},{"type":"tool_use"}]}}"#));
-        assert!(!keeps(rule, r#"{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"x"}]}]}}"#));
-        assert!(!keeps(rule, r#"{"type":"assistant","message":{"content":[{"type":"thinking"},null,["text"],7]}}"#));
+        assert!(keeps(
+            rule,
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking"},{"type":"tool_use"}]}}"#
+        ));
+        assert!(!keeps(
+            rule,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"x"}]}]}}"#
+        ));
+        assert!(!keeps(
+            rule,
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking"},null,["text"],7]}}"#
+        ));
         assert!(!keeps(rule, r#"{"type":"user","message":{"content":""}}"#));
-        assert!(!keeps(rule, r#"{"type":"user","isSidechain":1,"message":{"content":"hi"}}"#));
-        assert!(keeps(rule, r#"{"type":"user","isSidechain":-0.0,"message":{"content":"hi"}}"#));
-        assert!(keeps(Rule::ClaudeSidechain, r#"{"type":"user","isSidechain":"no","message":{"content":"hi"}}"#));
-        assert!(!keeps(rule, r#"{"type":"progress","message":{"content":"hi"}}"#));
+        assert!(!keeps(
+            rule,
+            r#"{"type":"user","isSidechain":1,"message":{"content":"hi"}}"#
+        ));
+        assert!(keeps(
+            rule,
+            r#"{"type":"user","isSidechain":-0.0,"message":{"content":"hi"}}"#
+        ));
+        assert!(keeps(
+            Rule::ClaudeSidechain,
+            r#"{"type":"user","isSidechain":"no","message":{"content":"hi"}}"#
+        ));
+        assert!(!keeps(
+            rule,
+            r#"{"type":"progress","message":{"content":"hi"}}"#
+        ));
         assert!(!keeps(rule, r#"{"type":"user","message":"hi"}"#));
-        assert!(keeps(rule, r#"{"type":"user","message":{"content":[{"type":"x","type":"text"}]}}"#));
-        assert!(!keeps(rule, r#"{"type":"user","message":{"content":[{"type":"text","type":"x"}]}}"#));
-        assert!(keeps(rule, r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"a \" ] } \\"},{"type":"text"}]}}"#));
+        assert!(keeps(
+            rule,
+            r#"{"type":"user","message":{"content":[{"type":"x","type":"text"}]}}"#
+        ));
+        assert!(!keeps(
+            rule,
+            r#"{"type":"user","message":{"content":[{"type":"text","type":"x"}]}}"#
+        ));
+        assert!(keeps(
+            rule,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"a \" ] } \\"},{"type":"text"}]}}"#
+        ));
     }
 
     #[test]
     fn state_usage_and_activity_keep_only_their_records() {
         let state = Rule::from(3).unwrap();
         assert!(keeps(state, r#"{"type":"turn_context","payload":7}"#));
-        assert!(keeps(state, r#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#));
-        assert!(!keeps(state, r#"{"type":"event_msg","payload":{"type":"exec_command_end","aggregated_output":"x"}}"#));
-        assert!(!keeps(state, r#"{"type":"response_item","payload":{"type":"token_count"}}"#));
+        assert!(keeps(
+            state,
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#
+        ));
+        assert!(!keeps(
+            state,
+            r#"{"type":"event_msg","payload":{"type":"exec_command_end","aggregated_output":"x"}}"#
+        ));
+        assert!(!keeps(
+            state,
+            r#"{"type":"response_item","payload":{"type":"token_count"}}"#
+        ));
         let usage = Rule::from(4).unwrap();
-        assert!(keeps(usage, r#"{"type":"assistant","message":{"usage":{}}}"#));
+        assert!(keeps(
+            usage,
+            r#"{"type":"assistant","message":{"usage":{}}}"#
+        ));
         assert!(!keeps(usage, r#"{"type":"assistant","message":null}"#));
-        assert!(!keeps(usage, r#"{"type":"user","message":{"content":[{"type":"tool_result"}]}}"#));
+        assert!(!keeps(
+            usage,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result"}]}}"#
+        ));
         let activity = Rule::from(5).unwrap();
-        assert!(keeps(activity, r#"{"type":"event_msg","payload":{"type":"task_complete"}}"#));
-        assert!(keeps(activity, r#"{"type":"response_item","payload":{"type":"message","role":"assistant","channel":"final"}}"#));
-        assert!(!keeps(activity, r#"{"type":"response_item","payload":{"type":"message","role":"assistant"}}"#));
-        assert!(!keeps(activity, r#"{"type":"event_msg","payload":{"type":"token_count"}}"#));
+        assert!(keeps(
+            activity,
+            r#"{"type":"event_msg","payload":{"type":"task_complete"}}"#
+        ));
+        assert!(keeps(
+            activity,
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","channel":"final"}}"#
+        ));
+        assert!(!keeps(
+            activity,
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant"}}"#
+        ));
+        assert!(!keeps(
+            activity,
+            r#"{"type":"event_msg","payload":{"type":"token_count"}}"#
+        ));
         // An unknown rule keeps every line.
-        assert_eq!(select(b"{}\n \nx", Rule::from(99), false), vec![0.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(
+            select(b"{}\n \nx", Rule::from(99), false),
+            vec![0.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
     }
 
     #[test]
@@ -430,9 +604,25 @@ mod tests {
         let body = "{\"type\":\"x\"}\r{\"type\":\"user\",\"message\":{\"content\":\"اردو 😀\"}}\r\n\n  \n{bad";
         let rows = select(body.as_bytes(), Some(Rule::ClaudeMessages), true);
         let second = body.find("\r\n").unwrap();
-        assert_eq!(rows, vec![13.0, second as f64, (body.len() - 4) as f64, body.len() as f64]);
+        assert_eq!(
+            rows,
+            vec![
+                13.0,
+                second as f64,
+                (body.len() - 4) as f64,
+                body.len() as f64
+            ]
+        );
         // Without readline's rule the first line holds both records and is not JSON.
         let rows = select(body.as_bytes(), Some(Rule::ClaudeMessages), false);
-        assert_eq!(rows, vec![0.0, (second + 1) as f64, (body.len() - 4) as f64, body.len() as f64]);
+        assert_eq!(
+            rows,
+            vec![
+                0.0,
+                (second + 1) as f64,
+                (body.len() - 4) as f64,
+                body.len() as f64
+            ]
+        );
     }
 }
