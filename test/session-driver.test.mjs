@@ -1374,9 +1374,10 @@ test('terminals are numbered by the machine, not guessed by the app', async () =
 
   // A stand-in for the pty host: opening always works, nothing really runs.
   const { EventEmitter } = await import('node:events');
+  const opened = [];
   const terminals = Object.assign(new EventEmitter(), {
     ensure: async () => true,
-    open: async () => ({}),
+    open: async (id, opts) => { opened.push(opts); return {}; },
     has: () => true,
     adopt: async () => [],
   });
@@ -1399,6 +1400,11 @@ test('terminals are numbered by the machine, not guessed by the app', async () =
   // A name the caller chose is still theirs.
   const named = await sessions.start({ cwd: '/tmp', profileId: 'shell', title: 'build' });
   assert.equal(named.title, 'build');
+
+  // Opened at the size the app draws at, so the first prompt fits it.
+  await sessions.start({ cwd: '/tmp', profileId: 'shell', size: { cols: 132, rows: 41, watcher: 'w' } });
+  assert.deepEqual([opened.at(-1).cols, opened.at(-1).rows], [132, 41]);
+  assert.equal(opened[0].cols, undefined, 'no size asked: the pty default');
 });
 
 test('a chat asks for its end, and is told what is behind it', async () => {

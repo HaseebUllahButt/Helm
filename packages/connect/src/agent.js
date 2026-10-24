@@ -2078,8 +2078,16 @@ export class Daemon {
       case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
-        const { originHandoffId: _originHandoffId, delegation: _delegation, ...start } = p;
-        return { session: await this.sessions.start({ ...start, quick: start.quick === true }) };
+        const { originHandoffId: _originHandoffId, delegation: _delegation, attach, ...start } = p;
+        const session = await this.sessions.start({ ...start, quick: start.quick === true, size: attach ?? null });
+        // A new terminal's first screen comes back with it, so the app can
+        // draw it without a second trip - a whole second over a slow link.
+        // Its output is pushed only from this view on, so nothing is missed
+        // and nothing is drawn twice.
+        const first = attach && session.pty
+          ? await this.sessions.attach(session.id, { cols: attach.cols, rows: attach.rows, watcher: attach.watcher }).catch(() => null)
+          : null;
+        return first ? { session, attach: { text: first.text, pty: true } } : { session };
       }
       case M.SESSION_LINK:    return this.sessions.linkChild(p.id, p.child);
       // Attaching starts a push stream of the screen (E.SESSION_DATA); the

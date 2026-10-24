@@ -6,7 +6,7 @@ import { transform } from 'esbuild';
 
 const source = readFileSync(new URL('../apps/web/src/Terminal.tsx', import.meta.url), 'utf8');
 
-function mountTerminal() {
+function mountTerminal({ firstScreen } = {}) {
   const refs = [];
   const effects = [];
   const intervals = new Map();
@@ -51,6 +51,7 @@ function mountTerminal() {
     'react/jsx-runtime': jsxRuntime,
     '@xterm/xterm': { Terminal: FakeXterm },
     '@xterm/addon-fit': { FitAddon: FakeFitAddon },
+    './startingTerminals': { takeFirstScreen: () => firstScreen },
   };
   const module = { exports: {} };
   const context = {
@@ -98,6 +99,22 @@ function mountTerminal() {
       }));
     });
 }
+
+test('a terminal opened from here draws the screen its start brought, without asking again', async () => {
+  const firstScreen = { watcher: 'w-1', text: '$ ', cols: 100, rows: 30, later: [{ text: 'hi', reset: false }] };
+  const { xterm, calls, cleanup } = await mountTerminal({ firstScreen });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(xterm.writes, ['<reset>', '$ ', 'hi']);
+    assert.equal(calls.filter((call) => call.method === 'session.attach').length, 0);
+    // It opened at a guess of the size; the real one follows.
+    const resize = calls.find((call) => call.method === 'session.resize');
+    assert.deepEqual({ ...resize?.params }, { id: 'session-1', cols: 80, rows: 24 });
+  } finally {
+    cleanup();
+  }
+  assert.equal(calls.find((call) => call.method === 'session.detach')?.params.watcher, 'w-1');
+});
 
 test('password-like PTY input is sent directly and never speculatively drawn', async () => {
   const { xterm, calls, emitOutput, cleanup } = await mountTerminal();

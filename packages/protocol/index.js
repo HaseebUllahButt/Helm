@@ -174,7 +174,7 @@ export const M = {
   CONTEXT_LIMIT: 'account.contextLimit', // { profileId | account, model, window: number|null } -> { matched, window, limits }  Claude's "compact at" size; omit window to only read
   PICKER_PREFS: 'picker.prefs',    // { hidden?, last?, favs? } -> { picker }  what the new-session picker shows, shared by every device
   SESSION_LIST: 'session.list',    // { projects?: true } -> { sessions[], projects?: { [folder]: keys[] } }  keys: project-key.js
-  SESSION_START: 'session.start',  // { cwd | quick: true, profileId, model?, effort?, mode?, speed?, title?, parent?, clone?: { repo, login? } } -> { session }  quick: no folder; runs in an empty ~/.helm/quick/<id> removed on delete. clone: the repo is cloned into cwd first; the chat is there at once with session.clone { repo, state, percent, error? }
+  SESSION_START: 'session.start',  // { cwd | quick: true, profileId, model?, effort?, mode?, speed?, title?, parent?, clone?: { repo, login? }, attach?: { cols, rows, watcher } } -> { session, attach?: { text, pty } }  attach: a new terminal's first screen in the same reply, its watcher already viewing. quick: no folder; runs in an empty ~/.helm/quick/<id> removed on delete. clone: the repo is cloned into cwd first; the chat is there at once with session.clone { repo, state, percent, error? }
   SESSION_CLONE_RETRY: 'session.cloneRetry', // { id } -> { ok }: clone again (or start the agent again) after session.clone failed
   SESSION_LINK:  'session.link',   // { id, child } -> { session }  durable parent/child handoff link
   SESSION_AGENT_MESSAGES: 'session.agent-messages', // { id, before?, limit? } -> { messages, next }

@@ -829,7 +829,7 @@ export class Sessions extends EventEmitter {
     try { return await this.#start(options); } finally { this.flush(); }
   }
 
-  async #start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null }) {
+  async #start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null, size = null }) {
     if (originAutomationId != null) {
       if (!/^[A-Za-z0-9._:-]{1,120}$/.test(originAutomationId)) throw new Error('invalid automation identity');
       const existing = this.findAutomationSession(originAutomationId);
@@ -925,7 +925,7 @@ export class Sessions extends EventEmitter {
     // than borrowing a herdr pane and reading its screen back. Where the pty
     // addon is missing the old path still works, slowly.
     if (spec.plain && await this.terminals.ensure()) {
-      return this.#startTerminal({ dir, profileId, title, env: spec.env, parent: lineage, originHandoffId });
+      return this.#startTerminal({ dir, profileId, title, env: spec.env, parent: lineage, originHandoffId, size });
     }
 
     const handle = await this.runtime.createSession({
@@ -1008,7 +1008,7 @@ export class Sessions extends EventEmitter {
     return session;
   }
 
-  async #startTerminal({ dir, profileId, title, env, parent = null, originHandoffId = null }) {
+  async #startTerminal({ dir, profileId, title, env, parent = null, originHandoffId = null, size = null }) {
     this.#rewinder.assertRewindUnlocked(null, dir);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -1029,7 +1029,9 @@ export class Sessions extends EventEmitter {
     // it before either had been added, and both be called "Terminal 1".
     this.#index.set(session.id, session);
     try {
-      await this.terminals.open(session.id, { cwd: dir, env });
+      // Opened at the size the app draws at, so the first prompt fits it.
+      const fits = size?.cols > 0 && size?.rows > 0 ? { cols: size.cols, rows: size.rows } : {};
+      await this.terminals.open(session.id, { cwd: dir, env, ...fits });
     } catch (err) {
       this.#index.delete(session.id);
       throw err;

@@ -11,6 +11,8 @@ import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { DrivenSession } from './session/DrivenSession';
 import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
+import { StartingTerminalView } from './session/StartingTerminalView';
+import { beginTerminal, type StartingTerminal } from './startingTerminals';
 import { beginChat, forgetChat, onStartingChat, type StartingChat } from './startingChats';
 import { EngineMark } from './EngineMark';
 import { NotificationToast } from './NotificationToast';
@@ -163,7 +165,9 @@ export type MainView =
   // One of Claude Code's own subagents, opened from its chat; read only.
   | { kind: 'native-agent'; parent: Session; agent: NativeAgent }
   // A new chat whose agent is still starting; becomes the chat once it is.
-  | { kind: 'starting'; startId: string };
+  | { kind: 'starting'; startId: string }
+  // A new terminal whose machine has not answered yet; becomes it once it has.
+  | { kind: 'terminal-opening'; openId: string };
 
 const VIEW_KINDS: Record<MainView['kind'], true> = {
   env: true, integrations: true, usage: true, brain: true, new: true,
@@ -171,6 +175,7 @@ const VIEW_KINDS: Record<MainView['kind'], true> = {
   start: true, settings: true, 'network-settings': true, links: true,
   updates: true, owner: true, models: true, devices: true, 'app-settings': true,
   media: true, session: true, 'native-agent': true, starting: true,
+  'terminal-opening': true,
 };
 /** History can outlive the screen that wrote it across an app update. */
 function supportedViews(views: MainView[]): MainView[] {
@@ -936,19 +941,32 @@ function Shell({ client, conn, onSignOut }: {
   // that chat's folder; the same key in a terminal goes back to where you
   // were. A terminal already open there is reused, so a running build or
   // server is never cut off.
-  const terminalOpening = useRef(false);
+  //
+  // A new terminal is on screen at once, saying it is opening, and becomes
+  // the terminal when its machine answers - or says why it could not.
+  const terminalOpened = useRef<(t: StartingTerminal) => void>(() => {});
+  terminalOpened.current = (t) => {
+    loadSessions(t.envId);
+    const top = nav.current.stack.at(-1);
+    if (t.session && nav.current.selected === t.envId && top?.kind === 'terminal-opening' && top.openId === t.id) {
+      restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: t.session }]);
+    }
+  };
+  /** `inPlace`: from a terminal, the new one takes its place in the history. */
+  const newTerminal = useRef<(envId: string, cwd: string, inPlace?: boolean) => void>(() => {});
+  newTerminal.current = (envId, cwd, inPlace = false) => {
+    const t = beginTerminal(client, envId, cwd, (done) => terminalOpened.current(done));
+    const view: MainView = { kind: 'terminal-opening', openId: t.id };
+    if (inPlace) restate([...nav.current.stack.slice(0, -1), view]);
+    else navigate([{ kind: 'env' }, view], envId);
+  };
   /** Back to the newest terminal on a machine (or the one in `cwd`), else a new one there. */
   const openTerminalOn = useCallback((envId: string, cwd = '~', inFolder = false) => {
     const open = (sessions[envId] ?? []).filter(ownTerminal).sort(byRecent);
     const reuse = inFolder ? open.find((s) => s.cwd === cwd) : open[0];
     if (reuse) { openSession(envId, reuse); return; }
-    if (terminalOpening.current) return;
-    terminalOpening.current = true;
-    client.rpc<{ session: Session }>(envId, 'session.start', { cwd, profileId: 'shell' }, 45_000)
-      .then((r) => { loadSessions(envId); if (r?.session) openSession(envId, r.session); })
-      .catch(() => { /* the machine is off or has no shell; nothing to open */ })
-      .finally(() => { terminalOpening.current = false; });
-  }, [sessions, openSession, client, loadSessions]);
+    newTerminal.current(envId, cwd);
+  }, [sessions, openSession]);
   // The machine this window runs on, when it is one of yours: the laptop's
   // own app window is served by the laptop at a loopback address.
   const [hereId, setHereId] = useState<string | null>(null);
@@ -975,13 +993,9 @@ function Shell({ client, conn, onSignOut }: {
       ?? online.find((e) => e.id === hereId)
       ?? [...online].sort((a, b) => lastUsed(b) - lastUsed(a)).find((e) => lastUsed(e) > 0)
       ?? online[0];
-    if (!machine || terminalOpening.current) return;
+    if (!machine) return;
     const chat = current?.kind === 'session' && !current.session.quick && current.session.engine !== 'shell' && machine.id === chosen ? current.session : null;
-    terminalOpening.current = true;
-    client.rpc<{ session: Session }>(machine.id, 'session.start', { cwd: chat?.cwd || '~', profileId: 'shell' }, 45_000)
-      .then((r) => { loadSessions(machine.id); if (r?.session) openSession(machine.id, r.session); })
-      .catch(() => { /* the machine is off or has no shell; nothing to open */ })
-      .finally(() => { terminalOpening.current = false; });
+    newTerminal.current(machine.id, chat?.cwd || '~');
   };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -1016,7 +1030,7 @@ function Shell({ client, conn, onSignOut }: {
       event.preventDefault();
       event.stopPropagation();
       const current = nav.current.stack.at(-1);
-      if (current?.kind === 'session' && current.session.engine === 'shell') { history.back(); return; }
+      if ((current?.kind === 'session' && current.session.engine === 'shell') || current?.kind === 'terminal-opening') { history.back(); return; }
       const envId = nav.current.selected ?? envs.find((e) => e.online)?.id;
       if (!envId) return;
       const chat = current?.kind === 'session' && !current.session.quick ? current.session : null;
@@ -1419,6 +1433,7 @@ function Shell({ client, conn, onSignOut }: {
             onUsage={() => push({ kind: 'usage', envId: env.id })}
             onMedia={() => push({ kind: 'media' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
+            onNewTerminal={() => newTerminal.current(env.id, '~')}
           />
         ) : view.kind === 'integrations' ? (
           <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
@@ -1426,6 +1441,8 @@ function Shell({ client, conn, onSignOut }: {
           <MediaView key={env.id} client={client} env={env} onBack={back} />
         ) : view.kind === 'starting' ? (
           <StartingChatView key={view.startId} client={client} env={env} startId={view.startId} onBack={back} />
+        ) : view.kind === 'terminal-opening' ? (
+          <StartingTerminalView key={view.openId} client={client} env={env} openId={view.openId} onBack={back} />
         ) : view.kind === 'native-agent' ? (
           <NativeAgentView key={`${env.id}:${view.parent.id}:${view.agent.id}`} client={client} env={env} parent={view.parent} agent={view.agent} onBack={back} />
         ) : view.kind === 'settings' ? (
@@ -1519,11 +1536,7 @@ function Shell({ client, conn, onSignOut }: {
             terminals={(sessions[env.id] ?? []).filter(ownTerminal).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))}
             onSwitch={(s) => restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: s }])}
             onOpenNative={(agent) => push({ kind: 'native-agent', parent: view.session, agent })}
-            onNewTerminal={async () => {
-              const r = await client.rpc<{ session: Session }>(env.id, 'session.start', { cwd: '~', profileId: 'shell' }, 45_000);
-              loadSessions(env.id);
-              restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: r.session }]);
-            }}
+            onNewTerminal={async () => newTerminal.current(env.id, '~', true)}
             onBack={back}
             onClosed={() => {
               loadSessions(env.id);

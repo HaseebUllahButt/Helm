@@ -74,6 +74,8 @@ function writeFakeAccount(dir) {
     { id: 'fake-ask', label: 'Fake agent (asks)', engine: 'devin', cmd: bin, args: [], env: { FAKE_TURN_MS: '800', FAKE_ASK: '1', FAKE_HOME: join(dir, 'fake-ask') }, source: 'custom' },
     { id: 'fake-pics', label: 'Fake agent (sees pictures)', engine: 'devin', cmd: bin, args: [], env: { FAKE_TURN_MS: '800', FAKE_IMAGES: '1', FAKE_HOME: join(dir, 'fake-pics') }, source: 'custom' },
     { id: 'fake-slow', label: 'Fake agent (slow)', engine: 'devin', cmd: bin, args: [], env: { FAKE_TURN_MS: '120000', FAKE_HOME: join(dir, 'fake-slow') }, source: 'custom' },
+    // The terminal button needs it; a real machine finds it on its own.
+    { id: 'shell', label: 'Shell', engine: 'shell', cmd: process.env.SHELL || '/bin/sh', args: [], env: {}, source: 'builtin' },
   ];
   writeFileSync(join(dir, 'helm', 'profiles.json'), JSON.stringify({ version: 1, profiles: fake }, null, 2), { mode: 0o600 });
 }

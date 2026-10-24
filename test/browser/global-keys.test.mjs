@@ -25,6 +25,11 @@ before(async () => {
           window.calls.push({env,method,params});
           if(method==='session.list') return {sessions:env==='laptop'?[{id:'done1',title:'Yesterday work',cwd:'/work/yesterday',engine:'claude',profileId:'claude',driver:'claude',alive:true,status:'idle',turns:3,updatedAt:Date.now()-3600000}]:[]};
           if(method==='session.events') return {session:null,events:[],pending:[],last:0};
+          if(method==='session.start'&&params.profileId==='shell') {
+            if(window.failStart) throw new Error('could not reach that machine');
+            if(window.holdStart) await new Promise(r=>{window.releaseStart=r;});
+            return {session:{id:'sh1',title:'Terminal 1',cwd:params.cwd,engine:'shell',profileId:'shell',pty:true,alive:true,status:'shell'},attach:{text:'$ ',pty:true}};
+          }
           if(method==='session.title'||method==='session.archive'||method==='session.kill') return {ok:true};
           if(method==='model.list') return {models:[],modes:[]};
           if(method==='fs.list') return {path:'/home/test',entries:[]};
@@ -81,11 +86,31 @@ test('Ctrl+Shift+E opens a terminal in the open chat\'s folder, and goes back fr
   await page.keyboard.press('Control+Shift+KeyE');
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.start'));
   const start = await page.evaluate(()=>window.calls.find(c=>c.method==='session.start'));
-  assert.deepEqual([start.env, start.params], ['laptop', { cwd: '/work/yesterday', profileId: 'shell' }]);
-  await page.evaluate(()=>window.visit('laptop',{kind:'session',session:{id:'sh1',title:'zsh',cwd:'~',engine:'shell',profileId:'shell',alive:true,status:'shell'}}));
+  assert.deepEqual([start.env, start.params.cwd, start.params.profileId], ['laptop', '/work/yesterday', 'shell']);
+  // The first screen comes back with the start: no second trip for it.
+  assert.ok(start.params.attach?.watcher && start.params.attach.cols > 0 && start.params.attach.rows > 0);
+  await page.waitForFunction(()=>history.state?.stack?.at(-1)?.session?.id === 'sh1', null, {timeout:3000});
+  await page.locator('.xterm').waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='session.attach').length), 0, 'the terminal asked for its screen again');
   await page.keyboard.press('Control+Shift+KeyE');
   await page.waitForFunction(()=>history.state?.stack?.at(-1)?.session?.id === 'done1', null, {timeout:3000});
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='session.start').length), 1, 'the key in a terminal starts nothing new');
+});
+
+test('a new terminal is on screen at once, and says why when it cannot open', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(()=>{ window.holdStart = true; });
+  await page.keyboard.press('Control+Alt+KeyT');
+  await page.getByText(/Opening a terminal on/).waitFor({timeout:3000});
+  await page.evaluate(()=>{ window.holdStart = false; window.releaseStart(); });
+  await page.locator('.xterm').waitFor({timeout:3000});
+  await page.evaluate(()=>{ window.failStart = true; });
+  await page.getByRole('button',{name:'New terminal'}).click();
+  await page.getByText('The terminal did not open.').waitFor({timeout:3000});
+  assert.match(await page.locator('.terminal-opening-failed').innerText(), /Could not reach that machine/);
+  await page.evaluate(()=>{ window.failStart = false; });
+  await page.getByRole('button',{name:'Try again'}).click();
+  await page.waitForFunction(()=>history.state?.stack?.at(-1)?.session?.id === 'sh1', null, {timeout:3000});
 });
 
 test('the shortcuts list names both keys', async t => {

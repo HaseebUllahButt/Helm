@@ -1171,6 +1171,11 @@ pre.snippet {
 }
 .xterm-host .xterm { height: 100%; padding: 10px 6px 6px 12px; }
 .xterm-host .xterm-viewport { background: #0a0a0a !important; }
+/* Before the machine answers: the same dark box, saying so. */
+.terminal-opening { padding: 14px 16px; font: var(--t-meta) var(--mono); color: #9ca3af; }
+.terminal-opening p { margin: 0; display: flex; align-items: center; gap: 8px; }
+.terminal-opening-failed { color: #e8e8e8; max-width: 560px; }
+.terminal-opening-failed p { display: block; margin: 0 0 12px; overflow-wrap: anywhere; }
 .xterm-viewport { -webkit-overflow-scrolling: touch; }
 /* The keys a phone keyboard does not have, as T3 Code has them: one row
    that scrolls sideways, shown only while typing on a touch screen. */
