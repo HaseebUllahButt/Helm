@@ -9,7 +9,7 @@ const bundle = await build({ stdin: { contents: source, resolveDir: new URL('../
   loader: 'ts' }, bundle: true, write: false, format: 'cjs', target: 'node22' });
 const code = bundle.outputFiles[0].text;
 
-function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, machineIds = {}, socket = 'open', socketDelay = 1, pong = true, location } = {}) {
+function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, machineIds = {}, socket = 'open', socketDelay = 1, pong = true, location, streams = false } = {}) {
   let now = 0, serial = 0, parses = 0;
   const timers = new Map(), sockets = [], peers = [], events = [], requests = [], windows = new Map(), documents = new Map(), connection = new Map();
   const timer = (fn, delay = 0, interval = 0) => {
@@ -73,6 +73,7 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     setInterval: (fn, ms) => timer(fn, ms, ms), clearInterval: id => timers.delete(id),
     AbortController, AbortSignal, WebSocket: Socket, RTCPeerConnection: Peer,
     ...(location ? { location } : {}),
+    ...(streams ? { DecompressionStream, TextDecoderStream } : {}),
     document,
     navigator: { connection: { addEventListener: (kind, fn) => connection.set(kind, fn), removeEventListener: kind => connection.delete(kind) } },
     window: { addEventListener: (kind, fn) => windows.set(kind, fn), removeEventListener: kind => windows.delete(kind) },
@@ -985,5 +986,35 @@ test('a hub reconnect leaves a machine on its direct link quiet', async () => {
   const next = h.sockets.at(-1);
   assert.notEqual(next, h.sockets[0]);
   assert.deepEqual(next.frames.filter(f => f.t === 'subscribe').map(f => f.env), ['other']);
+  h.client.close();
+});
+
+test('a browser that can read compressed frames gets them in one stream', async () => {
+  const { DeflateLink } = await import('../packages/connect/src/peer.js');
+  const h = harness({ streams: true }); h.start(); await h.advance(200);
+  await h.client.openDirect('vm'); const peer = h.peers[0]; peer.open();
+  assert.deepEqual(peer.channel.frames[0], { t: 'hello', zip: 'deflate-raw' });
+  assert.equal(peer.channel.binaryType, 'arraybuffer');
+
+  const sent = [];
+  const link = new DeflateLink({ readyState: 'open', bufferedAmount: 0, send: (bytes) => sent.push(Buffer.from(bytes)) });
+  const big = 'x'.repeat(100_000);
+  const read = h.client.rpc('vm', 'session.events', { id: 'c' });
+  const rpc = peer.channel.frames.find(f => f.method === 'session.events');
+  for (let i = 0; i < 3; i++) await link.send(JSON.stringify({ t: 'event', kind: 'session.update', payload: { session: { id: 'c', n: i } }, eid: `b:${i}` }));
+  await link.send(JSON.stringify({ t: 'rpcResult', id: rpc.id, ok: true, result: { text: big } }));
+  link.close();
+  assert.ok(sent.length > 1 && sent.every(b => b.length <= 16_000), 'large output is split');
+  const raw = sent.reduce((n, b) => n + b.length, 0);
+  assert.ok(raw < 5_000, `compressed to ${raw} bytes`);
+  // Split the bytes at other places than the machine did: the reader must not care.
+  const all = Buffer.concat(sent);
+  for (let at = 0; at < all.length; at += 7) {
+    const piece = all.subarray(at, at + 7);
+    peer.channel.onmessage({ data: piece.buffer.slice(piece.byteOffset, piece.byteOffset + piece.length) });
+  }
+  for (let i = 0; i < 20 && h.events.filter(e => e.kind === 'session.update').length < 3; i++) await new Promise(r => setTimeout(r, 5));
+  assert.deepEqual(h.events.filter(e => e.kind === 'session.update').map(e => e.payload.session.n), [0, 1, 2]);
+  assert.equal((await read).text.length, big.length);
   h.client.close();
 });

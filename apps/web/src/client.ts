@@ -514,6 +514,38 @@ interface Peer {
   /** When the channel last carried anything, and whether a check is out. */
   heard?: number;
   checking?: boolean;
+  /** Reads the machine's compressed frames (peer.js DeflateLink). */
+  inflate?: { write: (bytes: ArrayBuffer) => void; close: () => void };
+}
+
+/**
+ * Frames from one raw deflate stream of newline-ended JSON, in order. The
+ * machine flushes after each frame and may split the bytes anywhere, so they
+ * are read as one stream, not message by message.
+ */
+function inflater(onFrame: (msg: Record<string, any>) => void, onError: () => void) {
+  const stream = new DecompressionStream('deflate-raw');
+  const writer = stream.writable.getWriter();
+  const reader = stream.readable.pipeThrough(new TextDecoderStream()).getReader();
+  let text = '';
+  void (async () => {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      text += value;
+      for (let end = text.indexOf('\n'); end >= 0; end = text.indexOf('\n')) {
+        const line = text.slice(0, end);
+        text = text.slice(end + 1);
+        let msg: any;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg && typeof msg === 'object' && !Array.isArray(msg)) onFrame(msg);
+      }
+    }
+  })().catch(onError);
+  return {
+    write: (bytes: ArrayBuffer) => { writer.write(new Uint8Array(bytes)).catch(onError); },
+    close: () => { writer.abort().catch(() => {}); },
+  };
 }
 
 /**
@@ -1777,6 +1809,7 @@ export class Client {
       pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       try { channel = pc.createDataChannel('helm', { ordered: true }); }
       catch (error) { pc.close(); throw error; }
+      channel.binaryType = 'arraybuffer';
     } catch {
       this.directErrors.set(env, 'This browser could not start the direct link.');
       this.retryDirect(env);
@@ -1816,19 +1849,30 @@ export class Client {
       // It worked, so the next failure starts its backoff from scratch.
       this.directWait.delete(env);
       peer.heard = Date.now();
+      // Ask for compressed frames where this browser can read them. An older
+      // machine ignores the hello and keeps sending text.
+      if (typeof DecompressionStream === 'function' && typeof TextDecoderStream === 'function') {
+        try {
+          peer.inflate = inflater(handle, () => this.dropDirect(env, peer, 'The direct link sent data Helm could not read.'));
+          channel.send(JSON.stringify({ t: 'hello', zip: 'deflate-raw' }));
+        } catch { peer.inflate = undefined; }
+      }
       this.quietHub(env);
       this.emit(env, 'transport', { direct: true });
     };
     channel.onclose = () => this.dropDirect(env, peer);
-    channel.onmessage = (ev) => {
-      peer.heard = Date.now();
-      const msg = this.accumulate(peer, ev.data);
-      if (msg == null) return;
+    const handle = (msg: Record<string, any>) => {
       if (msg.t === 'rpcResult') {
         this.receiveRpc(msg, 'direct');
         return;
       }
       if (msg.t === 'event') this.deliver(env, msg.kind, msg.payload, msg.eid);
+    };
+    channel.onmessage = (ev) => {
+      peer.heard = Date.now();
+      if (typeof ev.data !== 'string') { peer.inflate?.write(ev.data); return; }
+      const msg = this.accumulate(peer, ev.data);
+      if (msg != null) handle(msg);
     };
 
     try {
@@ -1932,6 +1976,7 @@ export class Client {
     clearTimeout(peer.disconnectedTimer);
     if (reason) this.directErrors.set(env, reason);
     try { peer.channel.close(); peer.pc.close(); } catch { /* already gone */ }
+    peer.inflate?.close();
     const gap = this.wakeHub(env);
     this.emit(env, 'transport', { direct: false });
     // The hub held this machine's events back, so some may be lost. Screens
