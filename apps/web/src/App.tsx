@@ -1044,8 +1044,8 @@ function Shell({ client, conn, onSignOut }: {
   useSeenVersion();
   const unreadDone = doneNow.filter(({ s }) => isUnread(s)).length;
   const isOpen = ({ env: e, s }: { env: Environment; s: Session }) => selected === e.id && view.kind === 'session' && view.session.id === s.id;
-  const homeRow = (x: { env: Environment; s: Session }, slim = false) => (
-    <HomeRow key={x.s.id} s={x.s} machine={x.env.name} slim={slim} selected={isOpen(x)} onOpen={() => openSession(x.env.id, x.s)} actions={threadActions(x.env, x.s)} />
+  const homeRow = (x: { env: Environment; s: Session }) => (
+    <HomeRow key={x.s.id} s={x.s} machine={x.env.name} selected={isOpen(x)} onOpen={() => openSession(x.env.id, x.s)} actions={threadActions(x.env, x.s)} />
   );
   // A chat you have open is a chat you have seen, including what it finishes while you watch.
   const openId = view.kind === 'session' ? view.session.id : null;
@@ -1096,15 +1096,15 @@ function Shell({ client, conn, onSignOut }: {
             <img src="/favicon.svg" alt="" />
             <b className="wordmark">helm</b>
           </div>
-          {/* Live with every machine up is just the dot: the machines list
-              below already says who is online. Words appear when something
-              is off. */}
+          {/* Live is just the dot, even with some machines off: the machines
+              list below already says who is online. Words appear only when
+              this device cannot reach Helm. */}
           {(() => {
             const online = envs.filter((e) => e.online).length;
-            const quiet = status === 'live' && online === envs.length;
-            return <span className={`conn ${status}`} title={conn.error || (quiet ? `Connected · ${online} of ${envs.length} machines online` : status)}
-              role="status" aria-label={quiet ? `Connected, all ${envs.length} machines online` : undefined}>
-              <i />{quiet ? '' : status === 'live' ? `${online}/${envs.length} online` : status}
+            const live = status === 'live';
+            return <span className={`conn ${status}`} title={conn.error || (live ? `Connected · ${online} of ${envs.length} machines online` : status)}
+              role="status" aria-label={live ? `Connected, ${online} of ${envs.length} machines online` : undefined}>
+              <i />{live ? '' : status}
             </span>;
           })()}
           <span className="side-tools">
@@ -1180,22 +1180,21 @@ function Shell({ client, conn, onSignOut }: {
             <div className="rows plain brain-entry">
                 {brainEnv ? (() => {
                   const s = brainOn(brainEnv.id);
-                  return <button className="row tall" disabled={brainOpening} onClick={() => void openBrain()}>
+                  const where = `${brainEnv.name} · ${s ? engineOf(s.engine).label : 'Pick an account'}${!brainEnv.online ? ' · offline' : ''}`;
+                  return <button className="row" disabled={brainOpening} onClick={() => void openBrain()} title={`Open the Helm brain\n${where}`}>
                     <EngineMark engine={s ? engineOf(s.engine).cls : undefined} />
                     <span className="grow">
                       <span className="rt"><span className="rt-text">Helm brain</span>{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
-                      <span className="rm">
-                        {brainEnv.name} · {s ? engineOf(s.engine).label : 'Pick an account'}{!brainEnv.online ? ' · offline' : ''}
-                      </span>
                     </span>
                     {brainOpening ? <span className="chip working"><i />opening</span>
                       // The brain is counted in its machine's "running", so it says so here.
                       : s && brainEnv.online && !attentionOn(brainEnv.id, s) && runningThread(s) ? <StatusChip status={busyWord(s.status, s.compacting)} at={s.updatedAt} />
-                      : <span className="chev"><Icon name="forward" size={15} /></span>}
+                      : !brainEnv.online ? <span className="rm">offline</span> : null}
                   </button>;
-                })() : <button className="row tall" disabled>
+                })() : <button className="row" disabled title="Add a VM (a virtual machine) to start the Helm brain.">
                   <EngineMark />
-                  <span className="grow"><span className="rt">Helm brain</span><span className="rm">Add a VM (a virtual machine) to start.</span></span>
+                  <span className="grow"><span className="rt">Helm brain</span></span>
+                  <span className="rm">Add a VM</span>
                 </button>}
             </div>
 
@@ -1238,10 +1237,10 @@ function Shell({ client, conn, onSignOut }: {
               <Fold
                 shelf defaultOpen title="Settled" count={doneNow.length} remember="sidebar:settled"
                 note={unreadDone ? `${unreadDone} new` : doneIsSaved ? 'saved' : undefined} noteTone={unreadDone ? 'fresh' : undefined}
-                peek={doneNow.some(isOpen) ? <div className="rows plain">{doneNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
+                peek={doneNow.some(isOpen) ? <div className="rows plain">{doneNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
               >
                 <PagedRows
-                  items={doneNow} isSelected={isOpen} row={(x) => homeRow(x, true)}
+                  items={doneNow} isSelected={isOpen} row={homeRow}
                   first={SETTLED_FIRST} step={SETTLED_STEP}
                 />
               </Fold>
@@ -1267,24 +1266,25 @@ function Shell({ client, conn, onSignOut }: {
               <div className="rows plain">
                 {envs.map((e) => {
                   const waiting = waitingCountOn(e);
+                  // One line: the name, and a word only when there is news.
+                  // The full story is in the tooltip and on the machine screen.
+                  const running = workingThreadsOn(e).length;
+                  const said = e.online ? activityOn(e, 'idle') : e.lastSeen ? `seen ${ago(e.lastSeen)}` : 'never connected';
                   return (
                     <button
                       key={e.id}
-                      className={`row tall machine${e.id === selected && wide ? ' active' : ''}${e.online ? '' : ' offline'}`}
+                      className={`row machine${e.id === selected && wide ? ' active' : ''}${e.online ? '' : ' offline'}`}
                       aria-current={e.id === selected && wide ? 'true' : undefined}
                       onClick={() => openEnv(e.id)}
+                      title={`${e.name} · ${e.online ? 'online' : 'offline'} · ${said}`}
                     >
                       <span className={`mdot ${e.online ? 'on' : 'off'}`} />
                       <span className="grow">
                         <span className="rt"><span className="rt-text">{e.name}</span></span>
-                        <span className="rm">
-                          {e.online
-                            ? activityOn(e, 'idle')
-                            : e.lastSeen ? `seen ${ago(e.lastSeen)}` : 'never connected'}
-                        </span>
                       </span>
+                      {e.online ? running > 0 && <span className="rm">{running} running</span>
+                        : <span className="rm">{e.lastSeen ? ago(e.lastSeen) : 'never'}</span>}
                       {waiting > 0 && <span className="badge">{waiting}</span>}
-                      <span className="chev"><Icon name="forward" size={15} /></span>
                     </button>
                   );
                 })}

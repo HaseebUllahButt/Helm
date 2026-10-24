@@ -332,8 +332,11 @@ test('Running counts only working threads and excludes idle native sessions', as
   await laptop.waitFor();
   assert.equal(await laptop.locator('.rm').textContent(), '1 running');
   assert.equal(await laptop.locator('.badge').textContent(), '1');
-  assert.equal(await rows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'idle');
-  assert.match(await rows.filter({ hasText: 'old' }).locator('.rm').textContent(), /^seen/);
+  // One line each: a word only when there is news; the rest is in the tooltip.
+  assert.equal(await rows.filter({ hasText: 'vm' }).locator('.rm').count(), 0, 'an idle machine says nothing');
+  assert.equal(await rows.filter({ hasText: 'vm' }).getAttribute('title'), 'vm · online · idle');
+  assert.equal(await rows.filter({ hasText: 'old' }).locator('.rm').textContent(), '2d ago');
+  assert.equal(await rows.filter({ hasText: 'old' }).getAttribute('title'), 'old · offline · seen 2d ago');
   const runningSection = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Running$/ }) });
   assert.ok(await runningSection.getByText('Busy', { exact: true }).isVisible());
   assert.equal(await runningSection.getByText('Idle alive', { exact: true }).count(), 0);
@@ -523,7 +526,8 @@ for (const width of [1280, 390]) test(`one VM brain stays the entry point while 
   const entry = page.locator('.sidebar').getByRole('button',{name:/Helm brain/});
   await entry.waitFor();
   assert.equal(await entry.count(),1);
-  assert.match(await entry.innerText(),/VM.*offline/s);
+  assert.match(await entry.innerText(),/offline/);
+  assert.match(await entry.getAttribute('title'),/VM · .* · offline/);
   await entry.click();
   await page.getByRole('heading',{name:'Brain',exact:true}).waitFor();
   assert.equal(await page.getByText('Select an account',{exact:true}).count(),0,'a cold offline open retains the VM conversation');
@@ -603,7 +607,8 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
   assert.equal(await starting.locator('.tstat.working').textContent(), 'starting');
   assert.equal(await running.locator('.thread-row').filter({ hasText: 'claude children' }).locator('.tstat.working').count(), 1);
   const laptop = sidebar.locator('.row.machine').filter({ hasText: 'Laptop' });
-  assert.equal(await laptop.locator('.rm').textContent(), `${n * 3} running · ${n} status unavailable`,
+  assert.equal(await laptop.locator('.rm').textContent(), `${n * 3} running`);
+  assert.equal(await laptop.getAttribute('title'), `Laptop · online · ${n * 3} running · ${n} status unavailable`,
     'threads the machine cannot read are counted, not called idle');
   assert.equal(await laptop.locator('.badge').textContent(), String(n));
 

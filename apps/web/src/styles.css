@@ -2904,98 +2904,84 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .owner-added { color: var(--emerald); }
 .owner-removed { color: var(--text-dim); text-decoration: line-through; }
 
-/* Sidebar chats, arranged as T3 Code's inbox does: title and what the chat is
-   doing on the first line, where it runs and which agent on the second. What
-   needs you is full strength; work in the background steps back. Helm's own
-   colours and type throughout. */
-.row.thread-row.tri, .rowx .rowmain.thread-row.tri { flex-direction: column; align-items: stretch; gap: 2px; min-height: 0; padding: 8px 10px 9px; }
+/* Sidebar chats, as T3 Code's sidebar does them: one line each, the title
+   and one status at the right edge. Folder, machine, branch and agent live
+   in the tooltip and the chat, so the title has the width. Running chats
+   are at full strength with a live clock; finished ones are dimmer with a
+   grey age. Helm's own colours and type throughout. */
+.row.thread-row.tri, .rowx .rowmain.thread-row.tri { flex-direction: row; align-items: center; gap: 8px; min-height: 34px; padding: 7px 10px; }
 /* The sidebar row: its body is the button, the ⋯ sits beside it and shows on hover. */
 .row.rowx.tri-row { min-height: 0; }
 .row.rowx.tri-row .rowend { opacity: 0; }
 .row.rowx.tri-row:hover .rowend, .row.rowx.tri-row .rowend[aria-expanded="true"], .row.rowx.tri-row .rowend:focus-visible { opacity: 1; }
-@media (pointer: coarse) { .row.rowx.tri-row .rowend { opacity: 1; } }
-/* With a mouse the ⋯ holds no column of its own: it shows in the agent
-   mark's place on hover, and the title has the whole width the rest of the time. */
+/* On a touch screen the ⋯ always shows, narrow and quiet. */
+@media (pointer: coarse) { .row.rowx.tri-row .rowend { opacity: .6; min-width: 34px; padding: 0 6px; } }
+/* With a mouse the ⋯ holds no column of its own: on hover it takes the
+   status's place, and the title has the whole width the rest of the time. */
 @media (hover: hover) and (pointer: fine) {
-  .row.rowx.tri-row .rowend { position: absolute; right: 6px; bottom: 6px; height: 24px; min-width: 24px; padding: 0 3px; }
-  .row.rowx.tri-row.slim .rowend { bottom: auto; top: 50%; transform: translateY(-50%); }
-  .row.rowx.tri-row:is(:hover, :has(.rowend[aria-expanded="true"]), :has(.rowend:focus-visible)) .tri-mark { opacity: 0; }
+  .row.rowx.tri-row .rowend { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); height: 24px; min-width: 24px; padding: 0 3px; }
+  .row.rowx.tri-row:is(:hover, :has(.rowend[aria-expanded="true"]), :has(.rowend:focus-visible)) :is(.tstat, .chip) { visibility: hidden; }
 }
-.tri-top, .tri-bot { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: var(--t-micro); color: var(--mutedfg); }
-.tri-top { gap: 10px; }
-.tri-top svg, .tri-bot svg { flex: none; opacity: .8; }
-.tri-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tri-note { flex: none; color: var(--text-dim); white-space: nowrap; }
-.tri-bot .tri-where + svg { margin-left: 6px; }
-.tri-title { flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 500; color: var(--text-dim); overflow: hidden; text-overflow: clip; white-space: nowrap; line-height: 1.35; }
+.tri-title { flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 450; color: var(--text-dim); overflow: hidden; text-overflow: clip; white-space: nowrap; line-height: 1.35; }
 /* A long name fades out at the edge, like the chat bar's, instead of ending in "…". */
 .tri-title:is([data-more], .cut) { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
 .row.thread-row.tri:hover .tri-title, .row.thread-row.tri.active .tri-title, .tri-row:hover .tri-title, .thread-row.tri.active .tri-title { color: var(--text); }
-.tri-branch { font-family: var(--mono); font-size: 11px; min-width: 0; flex-shrink: 4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tri-end { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
-.tri-end .chip { font-size: 10.5px; padding: 0 6px; min-height: 18px; }
-.tri-mark.mark { width: 18px; height: 18px; border-radius: 5px; }
-.tri-mark.mark svg { width: 11px; height: 11px; }
+.tri-row .chip { flex: none; font-size: 10.5px; padding: 0 6px; min-height: 18px; }
 
-/* The status slot: one place, at the right of the first line. */
+/* The status slot: one place, at the right of the line. */
 .tstat { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; font-size: var(--t-micro); font-weight: 550; line-height: 1.35; font-variant-numeric: tabular-nums; }
-.tri-top .tstat svg, .tstat svg { opacity: 1; }
+.tstat svg { opacity: 1; }
 .tstat.working { color: var(--sky); }
+/* The chat screen's ".working" line must not size the row's clock. */
+.tri-row .tstat.working { min-height: 0; padding: 0; gap: 5px; font-size: var(--t-micro); }
 .tstat.needs { color: var(--amber-text); font-weight: 650; }
 .tstat.failed { color: var(--red); }
 .tstat.unread { color: var(--ok); }
+.tstat.unread i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: var(--ok-glow); }
 .tstat.quiet { color: var(--mutedfg); font-weight: 450; }
 .tspin { animation: tspin 1.6s linear infinite; }
 @keyframes tspin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .tspin { animation: none; } }
 
-/* What wants you reads at full strength, in a heavier hand. */
-.tri-row.mood-needs .tri-title, .tri-row.mood-failed .tri-title, .tri-row.mood-unread .tri-title { color: var(--text); font-weight: 600; }
-/* Background work steps back until the pointer, focus or the chat itself asks. */
-.tri-row.recede { opacity: .7; transition: opacity 0.15s var(--ease); }
-.tri-row.recede:hover, .tri-row.recede:focus-within, .tri-row.recede:has(.rowend[aria-expanded="true"]) { opacity: 1; }
-/* A row with its menu open sits above the rows around it, even part-way through the fade. */
+/* What is live or wants you reads at full strength; a finished chat you have seen steps back. */
+.tri-row:is(.mood-working, .mood-needs, .mood-failed, .mood-unread) .tri-title { color: var(--text); }
+.tri-row:is(.mood-needs, .mood-failed) .tri-title { font-weight: 600; }
+.tri-row.mood-unread .tri-title { font-weight: 500; }
+/* A row with its menu open sits above the rows around it. */
 .row.rowx.tri-row:has(.rowend[aria-expanded="true"]) { z-index: 5; }
-@media (prefers-reduced-motion: reduce) { .tri-row.recede { transition: none; } }
 
-/* Settled: one line - the title, when it wrapped up, the agent. */
-.row.rowx.tri-row.slim { min-height: 0; }
-.row.thread-row.tri.slim, .rowx .rowmain.thread-row.tri.slim { flex-direction: row; align-items: center; gap: 8px; padding: 7px 10px; min-height: 34px; }
-.tri-row.slim .tri-title { font-size: var(--t-body); font-weight: 450; }
-.slim-when { flex: none; font-size: var(--t-micro); color: var(--mutedfg); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.tri-row.slim .tri-mark { filter: grayscale(1); opacity: .5; transition: opacity 0.15s var(--ease), filter 0.15s var(--ease); }
-.tri-row.slim:hover .tri-mark, .tri-row.slim.active .tri-mark, .tri-row.slim:focus-within .tri-mark { filter: none; opacity: 1; }
-@media (prefers-reduced-motion: reduce) { .tri-row.slim .tri-mark { transition: none; } }
-/* "wrapped up" is a lead-in the title gives way to: only when the row is wide enough for both. */
-.tri-row.slim { container-type: inline-size; }
-@container (max-width: 399px) { .slim-pre { display: none; } }
-
-/* Shelves: Needs you, Working, Settled. A title, a count when folded away
-   (or when it is the one to look at), and a hairline running out to the edge. */
+/* Shelves: Needs you, Running, Settled, Machines. A quiet label, and a
+   count only when folded away (or when it is the one to look at). */
 .section.fold.shelf {
-  margin: 16px 0 4px; padding: 0 4px; min-height: 26px;
-  font-size: 12.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--text-dim);
+  margin: 14px 0 2px; padding: 0 4px; min-height: 24px;
+  font-size: var(--t-micro); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--mutedfg);
 }
-.section.fold.shelf:hover { color: var(--text); }
-.section.shelf .caret svg { width: 12px; height: 12px; }
-.section.shelf .fold-toggle { gap: 6px; align-items: center; min-height: 26px; }
-.section.shelf .count { font-size: var(--t-micro); color: var(--mutedfg); }
+.section.fold.shelf:hover { color: var(--text-dim); }
+.section.shelf .caret { color: var(--icon); opacity: .7; }
+.section.shelf .caret svg { width: 11px; height: 11px; }
+.section.shelf .fold-toggle { gap: 5px; align-items: center; min-height: 24px; }
+.section.shelf .count { font-size: var(--t-micro); color: var(--mutedfg); font-weight: 450; }
 .section.shelf .note-inline { font-size: var(--t-micro); }
-.section.shelf .note-inline.fresh { color: var(--ok); font-weight: 550; text-shadow: var(--ok-glow); }
-.shelf-rule { flex: 1; min-width: 12px; height: 1px; margin-left: 4px; background: var(--line); }
+.section.shelf .note-inline.fresh { color: var(--ok); font-weight: 550; }
 .section.fold.shelf.attention { color: var(--amber-text); }
 .section.shelf.attention::before { display: none; }
 .section.shelf.attention .count {
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
   background: var(--amber); color: var(--on-amber); font-weight: 650;
 }
-.section.shelf.attention .shelf-rule { background: color-mix(in srgb, var(--amber) 28%, transparent); }
 .shelf-more {
-  display: block; width: 100%; margin-top: 2px; padding: 7px 12px; text-align: left;
-  background: none; border: 0; border-radius: var(--radius-md); color: var(--mutedfg); font-size: var(--t-meta);
+  display: block; width: 100%; margin-top: 0; padding: 5px 10px; text-align: left;
+  background: none; border: 0; border-radius: var(--radius-md); color: var(--mutedfg); font-size: var(--t-micro);
 }
 .shelf-more:hover { background: var(--hover); color: var(--text); }
 .foldwrap > .need:last-child { margin-bottom: 4px; }
+
+/* Sidebar machines: one line - the dot, the name, and a word only when there is news. */
+.sidebar .row.machine { min-height: 34px; padding: 6px 10px; }
+.sidebar .row.machine .rt { font-size: var(--t-body); }
+.sidebar .row.machine .rt-text { font-family: inherit; font-weight: 500; }
+.sidebar .row.machine .rm { flex: none; font-size: var(--t-micro); }
+.sidebar .row.machine .mdot { margin: 0 2px; }
 
 /* Accounts: one panel, a block per account with hairlines between - the
    name with its engine's mark and where it was read, each allowance as a
@@ -3094,13 +3080,14 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .pipeline-account select { width: 100%; min-height: 42px; background: var(--card); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 8px 10px; }
 .pipeline-account p { font-size: var(--t-micro); color: var(--mutedfg); margin: 7px 0; }
 
-.brain-entry { margin-block: 4px 12px; }
-/* One line: the name, then where it runs, dimmer. */
-.brain-entry .row.tall { min-height: 40px; padding-block: 6px; }
-.brain-entry .row .grow { flex-direction: row; align-items: baseline; gap: 8px; }
-.brain-entry .row.tall .rt { flex: none; font-size: var(--t-body); }
-.brain-entry .row .rm { min-width: 0; }
-.brain-entry .mark { width: 22px; height: 22px; border-radius: 6px; }
+/* The brain: one quiet line under the search, never a panel of its own. */
+.sidebar .rows.plain.brain-entry { margin-block: 2px 4px; background: none; border-color: transparent; padding: 0; box-shadow: none; }
+.brain-entry .row { min-height: 34px; padding: 6px 10px; }
+.brain-entry .row .rt { font-size: var(--t-body); font-weight: 500; color: var(--text-dim); }
+.brain-entry .row:hover .rt { color: var(--text); }
+.brain-entry .row .rm { flex: none; font-size: var(--t-micro); color: var(--mutedfg); }
+.brain-entry .mark { width: 18px; height: 18px; border-radius: 5px; }
+.brain-entry .mark svg { width: 11px; height: 11px; }
 
 /* ---- live steps (ideas 1/6/8) ---- */
 /* While the agent works, each step is its own line, as it starts. The

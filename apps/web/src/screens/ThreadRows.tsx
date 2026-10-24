@@ -2,7 +2,7 @@ import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { useNow, waitingSince } from '../useNow';
-import { ThreadStatus, moodOf, isUnread, useSeenVersion, wrappedUp } from '../threadStatus';
+import { ThreadStatus, moodOf, isUnread, useSeenVersion } from '../threadStatus';
 import { plainProblem } from '../session/problem';
 import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
@@ -23,7 +23,7 @@ import { fadeWhenCut } from '../fadeWhenCut';
  */
 export function Fold({ title, count, note, noteTone, hint, kind, shelf = false, peek, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, children }: {
   title: string; count: number; openWhen?: boolean; children: ReactNode;
-  /** The sidebar's way: sentence case, a hairline, and the count only once it is folded away. */
+  /** The sidebar's way: sentence case, quiet, and the count only once it is folded away. */
   shelf?: boolean;
   /** What stays on show when a shelf is folded - the chat you are in. */
   peek?: ReactNode;
@@ -74,7 +74,6 @@ export function Fold({ title, count, note, noteTone, hint, kind, shelf = false, 
           <span className="fold-title" title={hint}>{title}</span>
           {count > 0 && (!shelf || !open || attention) && <span className="count">{count}</span>}
           {note && <span className={`note-inline${noteTone ? ` ${noteTone}` : ''}`}>{note}</span>}
-          {shelf && <span className="shelf-rule" aria-hidden="true" />}
         </button>
         {actions && <span className="fold-actions">{actions}</span>}
       </div>
@@ -265,13 +264,13 @@ export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Sessi
 }
 
 /**
- * A chat in the sidebar. Title and what it is doing on the first line; where
- * it runs, and the agent, on the second. A settled chat shrinks to one line.
+ * A chat in the sidebar, on one line: the title, then one status at the
+ * right edge - a clock while it works, "Needs you", "Failed", or its age.
+ * The folder, machine, branch and agent are in the tooltip and in the chat
+ * itself, so the title has the width. Borrowed from T3 Code's sidebar.
  */
-export function HomeRow({ s, machine, onOpen, note, selected = false, slim = false, actions }: {
+export function HomeRow({ s, machine, onOpen, note, selected = false, actions }: {
   s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean;
-  /** One line: the title and when it wrapped up. */
-  slim?: boolean;
   /** Rename, archive, delete - the same ⋯ the machine screen's rows have. */
   actions?: { onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void };
 }) {
@@ -279,46 +278,23 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
   useSeenVersion();
   const eng = engineOf(s.engine);
   const mood = moodOf(s, isUnread(s));
-  // Work going on in the background steps back; what wants you does not.
-  const recede = mood === 'working' && !selected;
   const name = shownTitle(s.title);
-  const title = <span className={`tri-title${name.cut ? ' cut' : ''}`} ref={fadeWhenCut}>{name.text}</span>;
-  const className = `row tall rowx tri-row mood-${mood}${slim ? ' slim' : ''}${selected ? ' active' : ''}${recede ? ' recede' : ''}`;
-  if (slim) {
-    return (
-      <div className={className}>
-        <button className={`rowmain thread-row tri slim${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
-          {title}
-          <span className="slim-when">{(() => { const w = wrappedUp(s.updatedAt, now); return <><span className="slim-pre">{w.lead}</span>{w.rest}</>; })()}</span>
-          {mood === 'unread' && <ThreadStatus s={s} mood={mood} now={now} />}
-          <EngineMark engine={eng.cls} className="tri-mark" />
-        </button>
-        {actions && <ThreadActions s={s} {...actions} />}
-      </div>
-    );
-  }
+  const where = [whereOf(s), machine, s.branch, eng.label].filter(Boolean).join(' · ');
+  // A word that says more than the age does takes its place.
+  const chip = mood === 'working' || mood === 'needs' || mood === 'failed' ? null
+    : s.recovery?.kind === 'interrupted' ? <span className="chip exited">stopped</span>
+    : unknownThread(s) ? <StatusChip status="unknown" />
+    : s.externalActive || (s.shared && s.alive) ? <span className="chip">Ready</span> : null;
   return (
-    <div className={className}>
-    <button className={`rowmain thread-row tri${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
-      <span className="tri-top">
-        {title}
-        <ThreadStatus s={s} mood={mood} now={now} />
-      </span>
-      <span className="tri-bot">
-        <Icon name={s.quick ? 'bolt' : 'folder'} size={12} />
-        <span className="tri-where">{[whereOf(s), machine].filter(Boolean).join(' · ')}</span>
-        {note && <span className="tri-note">{note}</span>}
-        {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
-        <span className="tri-end">
-          {/* Stopped by the owner part-way: finished with, but not finished. */}
-          {s.recovery?.kind === 'interrupted' && mood !== 'working' ? <span className="chip exited">stopped</span>
-            : unknownThread(s) ? <StatusChip status="unknown" />
-            : mood !== 'working' && (s.externalActive || (s.shared && s.alive)) ? <span className="chip">Ready</span> : null}
-          <EngineMark engine={eng.cls} className="tri-mark" />
-        </span>
-      </span>
-    </button>
-    {actions && <ThreadActions s={s} {...actions} />}
+    <div className={`row tall rowx tri-row mood-${mood}${selected ? ' active' : ''}`}>
+      <button
+        className={`rowmain thread-row tri${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}
+        title={`${s.title}\n${where}`} data-where={where}
+      >
+        <span className={`tri-title${name.cut ? ' cut' : ''}`} ref={fadeWhenCut}>{name.text}</span>
+        {note ? <span className="tstat quiet" data-mood="quiet">{note}</span> : chip ?? <ThreadStatus s={s} mood={mood} now={now} />}
+      </button>
+      {actions && <ThreadActions s={s} {...actions} />}
     </div>
   );
 }
