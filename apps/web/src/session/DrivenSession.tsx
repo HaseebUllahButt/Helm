@@ -53,7 +53,7 @@ const ENGINE_LABEL: Record<string, string> = {
 
 type Attachment = { name: string; mime: string; data: string; url: string };
 /** Words whose send failed after the composer had moved on, kept until sent or dismissed. */
-type FailedSend = { id: string; messageId: string; body: string; references: string[]; error: string; retrying?: boolean };
+type FailedSend = { id: string; messageId: string; body: string; references: string[]; error: string; retrying?: boolean; before: Set<string> };
 const rejectedDelivery = (error: { code?: string }) => !!error.code && !retryableDelivery(error);
 
 /**
@@ -328,6 +328,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       setPreparingImages((count) => Math.max(0, count - 1));
     }
   };
+  // The answer to a send can be lost on the way back while the message itself
+  // arrived. A new turn with the same words in the chat proves it arrived.
+  const turnsNow = useRef(log.turns);
+  turnsNow.current = log.turns;
+  const arrivedSince = (before: Set<string>, body: string) => !!body.trim() && turnsNow.current.some((turn) =>
+    !before.has(turn.id) && (splitNote(turn.text).text ?? turn.text ?? '').trim() === body.trim());
   const sendText = async (body: string, atts: Attachment[], sentReferences = references) => {
     const fingerprint = JSON.stringify([env.id, session.id, body, atts.map(a => [a.name, a.mime, a.data]), sentReferences.map(item => item.id)]);
     const messageId = retryDeliveryIds.current.get(fingerprint) ?? newMessageId();
@@ -336,6 +342,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     if (!atts.length) setDraft('');
     if (atts.length) setSendingImages(true);
     const clearedAt = editRevision.current;
+    // Turns already in the chat: a new one with these words means it arrived.
+    const before = new Set(log.turns.map((turn) => turn.id));
     try {
       await client.input(env.id, { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 120_000, messageId);
       retryDeliveryIds.current.delete(fingerprint);
@@ -345,6 +353,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       }
     }
     catch (e: any) {
+      if (!atts.length && !rejectedDelivery(e) && arrivedSince(before, body)) {
+        retryDeliveryIds.current.delete(fingerprint);
+        return;
+      }
       // An explicit rejection can start a new attempt on the owner's next
       // send. An unknown result must retain its original identity.
       const retryId = rejectedDelivery(e) ? newMessageId() : messageId;
@@ -362,11 +374,18 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         // The owner has typed since: keep the words on a card of their own
         // rather than lose them. A slow failure may still have arrived.
         failedSendSeq.current += 1;
-        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), error: e.message };
+        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), error: e.message, before };
         setFailedSends((current) => [...current, failed]);
       }
     } finally { if (atts.length) setSendingImages(false); }
   };
+  // A card whose words show up later in the chat was sent after all.
+  useEffect(() => {
+    const arrived = failedSends.filter((failed) => arrivedSince(failed.before, failed.body));
+    if (!arrived.length) return;
+    setFailedSends((current) => current.filter((failed) => !arrived.some((item) => item.id === failed.id)));
+    setError((current) => arrived.some((failed) => failed.error === current) ? '' : current);
+  }, [log.turns, failedSends]);
   /** Sends exactly what failed - never whatever is in the composer now. */
   const retryFailedSend = async (failed: FailedSend) => {
     if (retryingSends.current.has(failed.id)) return;
