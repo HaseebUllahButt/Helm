@@ -15,6 +15,8 @@ test('a message pasted into a terminal CLI loses the paste wrapper and the image
   // Pictures the log already has win over the note's file names.
   const kept = [{ filename: 'shot.png', mime: 'image/png' }];
   assert.deepEqual(userMessage(raw, kept).attachments, kept);
+  // Newer CLIs repeat the id on the closing tag.
+  assert.equal(userMessage(raw.replace('</pasted_content>', '</pasted_content id="8cd0">')).text, 'nth  i cant see anything [Image #1]');
 });
 
 test('labels opening a message go, since the pictures show them; labels in the words stay', () => {
