@@ -960,8 +960,10 @@ export class ClaudeDriver extends Driver {
     this.#flushCommandOutput();
     // A result outside any turn closes nothing that is open. A failure still
     // says so - the CLI can refuse a message before it echoes it - but with no
-    // turn id, never the last turn's again; a success is that turn's repeated.
-    if (!this.#inTurn && this.#turnId && !m.is_error) return;
+    // turn id, never the last turn's again. A success is the last turn's
+    // repeated, or, in a resumed process, a task that ended while it was
+    // away: closing then would mark the message just sent as done.
+    if (!this.#inTurn && !m.is_error) return;
     const turnId = this.#inTurn ? this.#turnId : null;
     this.#inTurn = false;
     const interrupted = this.#interrupting && m.is_error;
