@@ -2097,7 +2097,7 @@ export class Daemon {
       case M.SESSION_EVENTS:
         await this.sessions.prepareHistory(p.id);
         return this.sessions.history(p.id, {
-          since: p.since ?? 0, limit: p.limit ?? 500, tail: p.tail ?? 0, before: p.before ?? 0,
+          since: p.since ?? 0, limit: p.limit ?? 500, tail: p.tail ?? 0, before: p.before ?? 0, pageBytes: p.pageBytes ?? 0,
         });
       // A view owns its lease. Refreshing or closing one tab cannot cancel
       // another device's stream, even when both use the same login.

@@ -13,7 +13,7 @@ before(async () => {
     import { Transcript } from './apps/web/src/session/Transcript';
     const client = { subscribe() {}, on() { return () => {}; }, rpc: window.rpc };
     function App() {
-      const state = useSessionLog(client, 'machine', 'chat');
+      const state = useSessionLog(client, 'machine', 'chat', { wholeChat: window.wholeChat === true });
       window.state = state;
       return <Transcript turns={state.log.turns} status={state.log.status} loaded={state.log.loaded}
         earlier={state.earlier} loadingEarlier={state.loadingEarlier} onEarlier={state.loadEarlier} />;

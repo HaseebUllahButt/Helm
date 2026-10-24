@@ -43,7 +43,7 @@ before(async () => {
       await cache.saveCached('machine','Another chat',3,events('Other saved response'),1);
       await txn('kv','readonly',s=>s.get('helm.workspace:'+scope));
     };
-    function Probe(){const state=useSessionLog(client,'machine','Cached chat');window.state=state;return <pre>{JSON.stringify(state.log)}</pre>}
+    function Probe(){const state=useSessionLog(client,'machine','Cached chat', { wholeChat: window.wholeChat === true });window.state=state;return <pre>{JSON.stringify(state.log)}</pre>}
     window.mount = (online=false) => root.render(<Shell client={client} conn={{online,reachable:online}} onSignOut={()=>{}}/>);
     window.unmount = () => root.render(null);
     window.probe = () => root.render(<Probe/>);
@@ -255,15 +255,15 @@ test('trimming a long cached turn retains its real owner even behind queued stee
   const result = await page.evaluate(async () => {
     const events = window.events();
     events.push({seq:4,at:4,type:'turn.start',turnId:'ticket',text:'Queued steering',queued:true});
-    for(let seq=5;seq<4205;seq++) events.push({seq,at:seq,type:'item.delta',id:'reply',text:'x'});
-    await window.cache.saveCached('machine','long',4204,events,1);
+    for(let seq=5;seq<20205;seq++) events.push({seq,at:seq,type:'item.delta',id:'reply',text:'x'});
+    await window.cache.saveCached('machine','long',20204,events,1);
     const cached = await window.cache.loadCached('machine','long');
     const log = window.emptyLog(); cached.events.forEach(e=>window.apply(log,e));
     return {first:cached.first,turn:log.turns.find(t=>t.id==='turn'),count:cached.events.length};
   });
   assert.equal(result.first,205);
-  assert.equal(result.turn.items[0].text.length,4000);
-  assert.equal(result.count,4002);
+  assert.equal(result.turn.items[0].text.length,20000);
+  assert.equal(result.count,20002);
 });
 
 test('a blocked cache transaction cannot hold up healthy network history or overwrite it later', async t => {

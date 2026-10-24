@@ -16,7 +16,7 @@ before(async () => {
     window.emit = events => listeners.forEach(fn => fn('machine', 'session.event', { id: 'chat', events }));
     window.renders = 0;
     function Probe() {
-      const state = useSessionLog(client, 'machine', 'chat');
+      const state = useSessionLog(client, 'machine', 'chat', { wholeChat: window.wholeChat === true });
       window.state = state; window.renders++;
       return <><output>{state.log.turns.flatMap(t => t.items).filter(i => i.kind === 'text').map(i => i.text).join('')}</output>
         <button onClick={state.loadEarlier}>Earlier</button></>;

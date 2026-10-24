@@ -13,7 +13,7 @@ before(async () => {
     const listeners=new Set();
     const client={input:(env,params)=>client.rpc(env,'session.input',params),subscribe:()=>{},on:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},rpc:window.rpc};
     const root=createRoot(document.getElementById('root'));
-    function Chat({id}) { const state=useSessionLog(client,'machine',id); window.state=state;
+    function Chat({id}) { const state=useSessionLog(client,'machine',id, { wholeChat: window.wholeChat === true }); window.state=state;
       return <pre>{JSON.stringify(state.log)}</pre>; }
     window.mount=(id='chat')=>root.render(<Chat id={id}/>);
     window.unmount=()=>root.render(null);

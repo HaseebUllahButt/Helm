@@ -941,12 +941,33 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
   const openTurn = turns.filter((t) => !t.done && !t.steered).at(-1);
   const working = status === 'working' || status === 'blocked';
 
+  // What the reader is looking at while away from the bottom: the first
+  // step or message that starts on screen, and how far below the top. Older
+  // history arrives above in the background, sometimes inside the message
+  // that is half off the top, so the next one down is what must not move.
+  const hold = useRef<{ sel: string; top: number } | undefined>(undefined);
+  const holdFrame = useRef(0);
+  const markHold = () => {
+    const el = box.current;
+    hold.current = undefined;
+    if (!el || stuck.current) return;
+    const top = el.getBoundingClientRect().top;
+    for (const node of el.querySelectorAll<HTMLElement>('[data-item-id], [data-turn-id]')) {
+      const b = node.getBoundingClientRect();
+      if (!b.height || b.top < top - 1) continue;
+      const attr = node.hasAttribute('data-item-id') ? 'data-item-id' : 'data-turn-id';
+      hold.current = { sel: `[${attr}="${CSS.escape(node.getAttribute(attr)!)}"]`, top: b.top - top };
+      return;
+    }
+  };
   const onScroll = () => {
     const el = box.current;
     if (!el) return;
     stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     setAway(!stuck.current);
     if (stuck.current) setUnread(false);
+    cancelAnimationFrame(holdFrame.current);
+    holdFrame.current = requestAnimationFrame(markHold);
   };
   // Only changed transcript content needs a synchronous layout read. Older
   // turns arriving above keep the reader where they were - iOS Safari has no
@@ -992,10 +1013,19 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
         return;
       }
     }
-    if (stuck.current) el.scrollTop = h;
-    else if (prev.first !== undefined && first !== prev.first) el.scrollTop += h - prev.h;
-    else if (h > prev.h) setUnread(true);
+    if (stuck.current) { el.scrollTop = h; return; }
+    const node = hold.current && el.querySelector<HTMLElement>(hold.current.sel);
+    let moved = 0;
+    if (node) {
+      moved = node.getBoundingClientRect().top - el.getBoundingClientRect().top - hold.current!.top;
+      if (Math.abs(moved) >= 1) el.scrollTop += moved;
+    } else if (prev.first !== undefined && first !== prev.first) el.scrollTop += moved = h - prev.h;
+    // Growth the correction does not explain happened below: new work.
+    if (h - prev.h > Math.max(0, moved) + 1) setUnread(true);
   }, [turns, revision, status, loaded, earlier, loadingEarlier]);
+  // After any move above, the reader's place is wherever they now are.
+  useLayoutEffect(markHold, [turns, revision, status, loaded, earlier, loadingEarlier]);
+  useEffect(() => () => cancelAnimationFrame(holdFrame.current), []);
 
   /** Jump to the previous or next thing you asked - the landmarks of a long thread. */
   const step = (dir: -1 | 1) => {

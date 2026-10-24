@@ -1499,13 +1499,17 @@ export class Sessions extends EventEmitter {
    * happened while it was away. Every shape is budgeted in bytes by
    * `events.window`, so no reply is ever too big to arrive.
    */
-  history(id, { since = 0, limit = 500, tail = 0, before = 0 } = {}) {
+  history(id, { since = 0, limit = 500, tail = 0, before = 0, pageBytes = 0 } = {}) {
     const s = this.get(id);
     const back = tail > 0 || before > 0;
     const w = this.events.window(s.id, {
       since,
       before,
       tail: tail ? Math.max(1, Math.min(Number(tail), 1000)) : 0,
+      // A device fetching a whole chat behind the first screen asks for
+      // bigger pages: each page redraws the chat, so 17 small ones stalled
+      // a phone 17 times.
+      ...(Number(pageBytes) > 0 ? { maxBytes: Math.max(16_000, Math.min(Number(pageBytes), 1_000_000)) } : {}),
     });
     // `limit` caps a page read forwards. A window taken from the end is
     // already bounded by `tail` and by the byte budget, and slicing it here

@@ -31,12 +31,12 @@ const MAX_SESSIONS = 25;
 /** And how many for the much smaller message records. */
 const MAX_MESSAGE_SESSIONS = 50;
 /**
- * The most events one session's record holds. The daemon keeps 2000 and the
- * device is allowed to remember more than that - an event it has already been
- * told about is not lost just because the machine has since trimmed its log -
- * but not without end, since every save rewrites the whole array.
+ * The most events one session's record holds. The app now fetches whole
+ * chats, and the longest seen held about 7,000 events (2 MB), so this keeps
+ * whole chats with room to spare - but not without end, since every save
+ * rewrites the whole array.
  */
-const MAX_EVENTS = 4000;
+const MAX_EVENTS = 20_000;
 
 /**
  * The store keeps its keys out of line - `kv` next door needs that, and one

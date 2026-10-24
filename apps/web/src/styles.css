@@ -827,7 +827,9 @@ pre.snippet {
 /* ------------------------------------------------------------------- chat */
 
 .chat-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
-.chat { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px 14px 8px; }
+/* The transcript keeps the reader's place itself (Transcript.tsx hold):
+   browser scroll anchoring would move the page a second time. */
+.chat { flex: 1; overflow-y: auto; overflow-anchor: none; -webkit-overflow-scrolling: touch; padding: 16px 14px 8px; }
 @media (min-width: 900px) { .chat { padding: 24px 24px 8px; } }
 .timeline { max-width: var(--measure); width: 100%; margin: 0 auto; display: flex; flex-direction: column; }
 

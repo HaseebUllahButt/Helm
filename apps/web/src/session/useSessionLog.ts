@@ -21,8 +21,13 @@ function mergeEvent(existing: HelmEvent, incoming: HelmEvent): HelmEvent {
   return merged;
 }
 
-/** Open at the latest work. Fetch older events only when the reader asks. */
-export function useSessionLog(client: Client, env: string, sessionId: string) {
+/**
+ * Open at the latest work, then fetch the rest of the chat behind it, one
+ * page at a time. The owner reads whole chats on the phone to learn from
+ * them, so the history must not stop at the first screen; the device keeps
+ * what it has fetched (logCache), and the next open only adds what is new.
+ */
+export function useSessionLog(client: Client, env: string, sessionId: string, { wholeChat = true } = {}) {
   const [state, setState] = useState<LogState>(emptyLog);
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(true);
@@ -37,7 +42,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     let paint: ReturnType<typeof setTimeout> | undefined;
     let writer: ReturnType<typeof setTimeout> | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    let networkRead = false;
+    let networkRead = false, more = false, filling = false, logFirst = 0;
     const buffered = new Map<number, HelmEvent>();
     const watchId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const visible = () => !stopped && !document.hidden;
@@ -75,7 +80,10 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
         raw.push(event); apply(log, event);
       }
     };
-    const noteWindow = (logFirst?: number) => setEarlier(!!logFirst && !!first && logFirst < first);
+    const noteWindow = (front?: number) => {
+      if (front) logFirst = front;
+      more = !!logFirst && !!first && logFirst < first; setEarlier(more);
+    };
     const rebuild = () => {
       const next = emptyLog();
       for (const event of raw) apply(next, event);
@@ -129,6 +137,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
         noteWindow(r.logFirst); publish();
         setError(''); setSyncing(false); retryDelay = 1000;
         dirty = true; persist();
+        void fill();
       } catch (e: any) {
         failed = true;
         if (visible() && version === visibilityVersion) { setError(e.message); scheduleRetry(); }
@@ -182,23 +191,37 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     client.subscribe(env);
     // Cached text can paint offline. It never controls the network cursor,
     // and a slow cache read cannot replace the fresh tail after it arrives.
-    void loadCached(env, sessionId).then(cached => {
-      if (stopped || networkRead && log.loaded || !cached?.events.length || raw.length) return;
+    const cacheRead = loadCached(env, sessionId).then(cached => {
+      if (stopped || !cached?.events.length) return;
+      // The network won the race. The saved copy can still supply the part
+      // of the chat in front of the fresh window, so it is not fetched again.
+      if (networkRead && log.loaded) {
+        const older = cached.events.filter(event => event.seq < first);
+        const front = cached.first || cached.events[0].seq;
+        if (!older.length || front >= first || cached.last < first - 1 || pagingBack) return;
+        raw = [...older, ...raw].sort((a, b) => a.seq - b.seq);
+        first = front;
+        const { loaded, pending, status } = log;
+        rebuild(); Object.assign(log, { loaded, pending, status });
+        noteWindow(); publish();
+        return;
+      }
+      if (raw.length) return;
       consume([...cached.events].sort((a, b) => a.seq - b.seq));
       if (!log.turns.length) { raw = []; log = emptyLog(); return; }
       log.loaded = true; first = cached.first || cached.events[0].seq; publish();
-    });
+    }).catch(() => {});
     catchUp();
 
-    const loadEarlier = async () => {
-      if (!visible() || pagingBack || !first) return;
+    const loadEarlier = async (quiet = false) => {
+      if (!visible() || pagingBack || !first) return false;
       pagingBack = true; setLoadingEarlier(true);
       const version = windowVersion;
       try {
-        const r = await client.rpc<History>(env, 'session.events', { id: sessionId, before: first }, 30_000);
-        if (!visible() || version !== windowVersion) return;
+        const r = await client.rpc<History>(env, 'session.events', { id: sessionId, before: first, ...(quiet ? { pageBytes: 1_000_000 } : {}) }, 30_000);
+        if (!visible() || version !== windowVersion) return false;
         setError('');
-        if (!r.events.length) { setEarlier(false); return; }
+        if (!r.events.length) { more = false; setEarlier(false); return false; }
         first = r.firstSeq ?? r.events[0].seq;
         noteWindow(r.logFirst);
         const bySeq = new Map(raw.map(event => [event.seq, event]));
@@ -210,10 +233,28 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
         const { loaded, pending, status } = log;
         rebuild(); Object.assign(log, { loaded, pending, status });
         dirty = true; publish(); persist();
-      } catch (e: any) { if (visible()) setError(e.message); }
+        return true;
+      } catch (e: any) { if (visible() && !quiet) setError(e.message); return false; }
       finally { pagingBack = false; if (!stopped) setLoadingEarlier(false); }
     };
-    actions.current = { refresh, earlier: loadEarlier };
+    // Page back until the machine has nothing older. One page at a time, so
+    // live updates never wait behind history; a failed page stops quietly
+    // and the next open or return to the chat carries on from there.
+    const fill = async () => {
+      if (filling || !wholeChat) return;
+      filling = true;
+      try {
+        // The saved copy may already hold the older part; reading 2 MB of it
+        // takes a slow phone seconds, and fetching it again would waste them.
+        await cacheRead;
+        while (visible() && more) {
+          const from = first;
+          if (!await loadEarlier(true) || first === from) break;
+        }
+      } finally { filling = false; }
+    };
+    // A tap that works after a failed background page carries the rest on.
+    actions.current = { refresh, earlier: async () => { if (await loadEarlier()) void fill(); } };
     const timer = setInterval(() => { if (visible()) void renew(); }, RENEW_MS);
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('focus', catchUp);
@@ -230,7 +271,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
       window.removeEventListener('pagehide', hide);
       persist(); release();
     };
-  }, [client, env, sessionId]);
+  }, [client, env, sessionId, wholeChat]);
 
   const refresh = useCallback(() => actions.current.refresh(), []);
   const loadEarlier = useCallback(() => actions.current.earlier(), []);
