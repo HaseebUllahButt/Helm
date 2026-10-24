@@ -328,6 +328,21 @@ test("a terminal Claude's own busy/idle word fixes what hooks miss, never a newe
   } finally { await sessions.stop(); }
 });
 
+test('a terminal Claude stays blank until the first message', async () => {
+  class FreshHost extends Host { nativeSessions() { return [{ id: 'native-blank', engine: 'claude', nativeChat: true, cwd: root, createdAt: 1 }]; } }
+  const sessions = create(new FreshHost());
+  try {
+    await sessions.hooks;
+    assert.equal(sessions.get('native-blank').blank, true);
+    await sendHook('native-blank', { hook_event_name: 'SessionStart', session_id: 'conv-blank', transcript_path: join(root, 'conv-blank.jsonl') });
+    assert.equal(sessions.get('native-blank').blank, true);
+    await sendHook('native-blank', { hook_event_name: 'UserPromptSubmit' });
+    assert.equal(sessions.get('native-blank').blank, false);
+    await sendHook('native-blank', { hook_event_name: 'Stop' });
+    assert.equal(sessions.get('native-blank').blank, false);
+  } finally { await sessions.stop(); }
+});
+
 /** Claude's own shift+tab ring, drawing its footer the way 2.1.295 does. */
 class CycleHost extends Host {
   ring = ['auto mode', 'manual mode', 'accept edits', 'plan mode'];

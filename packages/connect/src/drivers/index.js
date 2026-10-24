@@ -137,7 +137,12 @@ export class Driver extends EventEmitter {
   // default speaks the /compact both CLIs understand as user text.
   async compact(hint) { return this.send('/compact' + (hint ? ` ${hint}` : '')); }
   async answer(_requestId, _decision) { throw new Error('not implemented'); }
-  async interrupt() { throw new Error('not implemented'); }
+  /**
+   * Stop the reply in flight. `background`: the owner pressed Stop, so the
+   * commands, watches and helpers the CLI left running stop too, where the
+   * CLI can stop them. Left alone, each one wakes the agent when it ends.
+   */
+  async interrupt(_options = {}) { throw new Error('not implemented'); }
   async setModel(_model) { throw new Error('not implemented'); }
   async setMode(_mode) { throw new Error('not implemented'); }
   async kill() { throw new Error('not implemented'); }

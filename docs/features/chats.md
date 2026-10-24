@@ -35,6 +35,16 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   seconds, so its handed case keeps the full stop (no
   `dropsHandedOnInterrupt`) rather than risk sending it twice. While an
   approval waits there is no stop button; Decline ends the turn.
+- **Rule:** a full stop also ends the background commands, watches and
+  helpers the CLI left running (Claude `stop_task`, Codex
+  `thread/backgroundTerminals/clean`). Each one left running woke the agent
+  when it ended, and the chat worked again by itself. A stop for the next
+  message leaves them running.
+- **Rule:** the button turns to a ring at once. It clears when the work
+  ends, or 5 s after the machine took the stop, so it can be pressed again.
+- **Prove background work (driven 2026-10-24, real Claude and Codex):** ask
+  for `sleep 90` in the background, then a 60 s count in the foreground.
+  Stop. `ps` shows no `sleep 90`, and no wake-up turn follows.
 - **Prove the waiting case (driven 2026-10-18, real Claude):** ask for
   `python3 -c 'import time; time.sleep(45)'` in the foreground, send "Reply
   with only the word LEMON." while it runs, click "stop the agent". The log

@@ -54,7 +54,7 @@ function CompactingBar({ since }: { since?: number }) {
   );
 }
 
-function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, danger, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After this response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop, stopping, waiting, working, engine, keys: withKeys = true, danger, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After this response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   /** The agent's pending question or approval, as the top of the card. */
   banner?: React.ReactNode;
@@ -63,6 +63,8 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   /** What is waiting on you, so the box can say what typing here would do. */
   ask?: 'question' | 'approval';
   onKey?: (k: string) => void; onStop?: () => void;
+  /** Stop was pressed and the agent has not stopped yet. */
+  stopping?: boolean;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
   foot?: React.ReactNode; statusLine?: React.ReactNode; danger?: boolean;
   /** The agent is compacting, since this time (or true when unknown). */
@@ -612,7 +614,8 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
                 one: a line under the card cost the chat a row on every screen. */}
             <ComposerSlot name="statusLine" />
             {working && onStop && (
-              <button className="stop" onClick={onStop} title="stop the agent" aria-label="stop the agent">
+              <button className={`stop${stopping ? ' stopping' : ''}`} onClick={onStop} disabled={stopping}
+                title={stopping ? 'Stopping the agent' : 'stop the agent'} aria-label={stopping ? 'Stopping the agent' : 'stop the agent'}>
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>
               </button>
             )}

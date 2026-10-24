@@ -38,12 +38,12 @@ function valid(value: any): value is WorkspaceSnapshot {
 /** Small headers, never transcript bodies, keys or provider settings. */
 function header(s: Session): Session {
   const { id, title, cwd, engine, profileId, status, driver, pty, model, engineModel, mode, effort, engineEffort, permissionControl,
-    speed, alive, createdAt, updatedAt, seenAt, team, recovery, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared, nativeCards, context } = s;
+    speed, alive, createdAt, updatedAt, seenAt, team, recovery, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, blank, nativeChat, shared, nativeCards, context } = s;
   // seenAt, team and recovery decide which shelf a chat sits on and whether
   // it is new; a saved row without them was sorted differently from the
   // same chat live.
   return { id, title: title?.slice(0, 300), cwd, engine, profileId, status, driver, pty,
-    model, engineModel, mode, effort, engineEffort, permissionControl, speed, alive, createdAt, updatedAt, seenAt, team, recovery, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared,
+    model, engineModel, mode, effort, engineEffort, permissionControl, speed, alive, createdAt, updatedAt, seenAt, team, recovery, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, blank, nativeChat, shared,
     // How full the chat is: the ring under the composer, before the machine answers.
     context,
     // A chat's own helpers, so its Agents count is right before the machine answers.

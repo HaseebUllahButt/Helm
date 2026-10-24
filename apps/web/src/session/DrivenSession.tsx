@@ -53,7 +53,7 @@ const ENGINE_LABEL: Record<string, string> = {
 
 type Attachment = { name: string; mime: string; data: string; url: string };
 /** Words whose send failed after the composer had moved on, kept until sent or dismissed. */
-type FailedSend = { id: string; messageId: string; body: string; references: string[]; error: string; retrying?: boolean };
+type FailedSend = { id: string; messageId: string; body: string; references: string[]; error: string; retrying?: boolean; before: Set<string> };
 const rejectedDelivery = (error: { code?: string }) => !!error.code && !retryableDelivery(error);
 
 /**
@@ -328,6 +328,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       setPreparingImages((count) => Math.max(0, count - 1));
     }
   };
+  // The answer to a send can be lost on the way back while the message itself
+  // arrived. A new turn with the same words in the chat proves it arrived.
+  const turnsNow = useRef(log.turns);
+  turnsNow.current = log.turns;
+  const arrivedSince = (before: Set<string>, body: string) => !!body.trim() && turnsNow.current.some((turn) =>
+    !before.has(turn.id) && (splitNote(turn.text).text ?? turn.text ?? '').trim() === body.trim());
   const sendText = async (body: string, atts: Attachment[], sentReferences = references) => {
     const fingerprint = JSON.stringify([env.id, session.id, body, atts.map(a => [a.name, a.mime, a.data]), sentReferences.map(item => item.id)]);
     const messageId = retryDeliveryIds.current.get(fingerprint) ?? newMessageId();
@@ -336,6 +342,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     if (!atts.length) setDraft('');
     if (atts.length) setSendingImages(true);
     const clearedAt = editRevision.current;
+    // Turns already in the chat: a new one with these words means it arrived.
+    const before = new Set(log.turns.map((turn) => turn.id));
     try {
       await client.input(env.id, { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 120_000, messageId);
       retryDeliveryIds.current.delete(fingerprint);
@@ -345,6 +353,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       }
     }
     catch (e: any) {
+      if (!atts.length && !rejectedDelivery(e) && arrivedSince(before, body)) {
+        retryDeliveryIds.current.delete(fingerprint);
+        return;
+      }
       // An explicit rejection can start a new attempt on the owner's next
       // send. An unknown result must retain its original identity.
       const retryId = rejectedDelivery(e) ? newMessageId() : messageId;
@@ -362,11 +374,18 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         // The owner has typed since: keep the words on a card of their own
         // rather than lose them. A slow failure may still have arrived.
         failedSendSeq.current += 1;
-        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), error: e.message };
+        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), error: e.message, before };
         setFailedSends((current) => [...current, failed]);
       }
     } finally { if (atts.length) setSendingImages(false); }
   };
+  // A card whose words show up later in the chat was sent after all.
+  useEffect(() => {
+    const arrived = failedSends.filter((failed) => arrivedSince(failed.before, failed.body));
+    if (!arrived.length) return;
+    setFailedSends((current) => current.filter((failed) => !arrived.some((item) => item.id === failed.id)));
+    setError((current) => arrived.some((failed) => failed.error === current) ? '' : current);
+  }, [log.turns, failedSends]);
   /** Sends exactly what failed - never whatever is in the composer now. */
   const retryFailedSend = async (failed: FailedSend) => {
     if (retryingSends.current.has(failed.id)) return;
@@ -472,7 +491,25 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   };
 
   const answer = (d: Decision) => pending && call(() => client.rpc(env.id, 'session.answer', { id: session.id, requestId: pending.requestId, decision: d }));
-  const stop = () => call(() => client.rpc(env.id, 'session.interrupt', { id: session.id }));
+  // The button answers at once: a stop sent to another machine can take
+  // seconds to come back. It clears when the work ends, when the stop sent
+  // the waiting message instead, or a few seconds after the machine took
+  // the stop, so an agent that did not stop can be stopped again.
+  const [stopping, setStopping] = useState(false);
+  const stopTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => { if (!working) setStopping(false); }, [working]);
+  useEffect(() => { setStopping(false); return () => clearTimeout(stopTimer.current); }, [session.id]);
+  const stop = async () => {
+    clearTimeout(stopTimer.current);
+    setStopping(true);
+    setBusy(true); setError('');
+    try {
+      const r: any = await client.rpc(env.id, 'session.interrupt', { id: session.id });
+      if (r?.next) setStopping(false);
+      else stopTimer.current = setTimeout(() => setStopping(false), 5000);
+    } catch (e: any) { setStopping(false); setError(e.message); }
+    finally { setBusy(false); }
+  };
   // model / thinking / permissions / speed all go the same way: tell the
   // daemon, take the session it hands back. Nothing restarts that the driver
   // cannot resume.
@@ -811,7 +848,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       </div>)}
       <LiveComposer
         onTranscribe={onTranscribe}
-        live={live} setDraft={setDraft} onSend={send} onStop={stop} working={working}
+        live={live} setDraft={setDraft} onSend={send} onStop={stop} stopping={stopping} working={working}
         engine={engine} keys={false} waiting={!!pending} ask={pending ? (pending.kind === 'question' ? 'question' : 'approval') : undefined}
         shoulder={taskList && <TodoStrip todos={taskList} />}
         banner={pending && <div ref={permissionBox} className="ask-box"><PermissionSheet key={pending.requestId} variant="banner" permission={pending} onAnswer={answer} busy={busy} onHandle={holdQuestion} /></div>}

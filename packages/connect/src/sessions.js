@@ -712,6 +712,7 @@ export class Sessions extends EventEmitter {
             ?? detected.find((x) => x.engine === s.engine && x.id === s.engineSessionId);
           s.profileId = profile?.id ?? null;
           if (current) {
+            s.blank = false;
             s.engineSessionId = current.id;
             s.transcript = current.transcript;
             // A live Pi extension is fresher than the append-only transcript.
@@ -1701,7 +1702,7 @@ export class Sessions extends EventEmitter {
     const s = this.#index.get(id);
     if (s && (queued.length || handed.length)) s.lastSeq = this.events.last(id);
     const d = this.#drivers.get(id);
-    if (d) stopping.push(d.interrupt());
+    if (d) stopping.push(d.interrupt({ background: true }));
     // A Pi in a terminal has no driver to ask: press Esc, which is how Pi
     // stops a reply. Only mid-turn - a second Esc at Pi's prompt opens its tree.
     else if (s?.nativeCli && s.engine === 'pi' && ['working', 'blocked'].includes(s.status)
