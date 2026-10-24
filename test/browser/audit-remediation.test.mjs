@@ -253,7 +253,7 @@ for (const width of [1280, 390]) test(`a chat names its account once, beside the
   await status.getByText('claudes', { exact: true }).waitFor();
   assert.equal(await page.locator('.limits-line .lw').count(), 0, 'no quota was reported');
   assert.equal(await page.locator('.session-bar').getByText('claudes').count(), 0, 'the header does not repeat the account');
-  await page.locator('.session-bar .route-machine').getByText('Laptop', { exact: true }).waitFor();
+  assert.match(await page.locator('.session-bar .titles').getAttribute('title'), /^Laptop\b/, 'the hover note names the machine');
   const box = await status.boundingBox();
   assert.ok(box.x >= 0 && box.x + box.width <= width);
 });

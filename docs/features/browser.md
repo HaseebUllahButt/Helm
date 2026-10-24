@@ -5,9 +5,10 @@ machine with a screen, hidden on the VM. Helm's panel is only a remote.
 Design: [`docs/browser-use.md`](../browser-use.md).
 
 ## Open the browser panel
-- **Reach:** chat header **Browser**, or Ctrl/⌘+Shift+B. Computers only: a
-  phone has no way in, on purpose (the owner does not watch the browser from
-  the phone).
+- **Reach:** **Open browser** in the chat's ⋯ menu, or Ctrl/⌘+Shift+B. The
+  header shows a Browser button only while the panel is open or the agent opened
+  a tab. Computers only: a phone has no way in, on purpose (the owner does
+  not watch the browser from the phone).
 - **Prove (panel driven 2026-10-15, tabs not yet driven):**
   `$V click Browser; $V text` shows "No tabs yet. Agents on verify-<you>
   browse here…" (the phone-size browser is not a touch screen).

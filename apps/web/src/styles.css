@@ -369,6 +369,10 @@ code, pre, kbd { font-family: var(--mono); }
 .menu button + button.destructive::before {
   content: ''; position: absolute; left: 6px; right: 6px; top: -3px; height: 1px; background: var(--line);
 }
+/* A chat's ⋯ menu: the shortcut beside an action, and where the chat runs. */
+.menu button kbd { float: right; margin-left: 16px; padding: 0; border: 0; background: none; font: 500 var(--t-meta) var(--mono); color: var(--mutedfg); }
+@media (pointer: coarse) { .menu button kbd { display: none; } }
+.menu-facts { margin: 4px 6px 2px; padding: 8px 4px 2px; border-top: 1px solid var(--line); font-size: var(--t-meta); color: var(--mutedfg); overflow-wrap: anywhere; max-width: 300px; }
 
 .brand { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
 .brand img { width: 22px; height: 22px; border-radius: 6px; flex: none; }
@@ -1156,7 +1160,7 @@ pre.snippet {
 @media (pointer: fine) { .termkeys { display: none; } }
 /* The chat's browser is a window on the agent's machine; a phone has no
    use for its remote, so the header button stays on computers. */
-@media (pointer: coarse) { .browser-launch { display: none; } }
+@media (pointer: coarse) { .browser-launch, .menu button.browser-launch { display: none; } }
 .selection-copied {
   position: fixed; left: 0; right: 0; margin: 0 auto; width: fit-content;
   bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 80; pointer-events: none;

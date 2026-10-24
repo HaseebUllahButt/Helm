@@ -362,7 +362,7 @@ test('the palette opens a quick chat on the machine on screen',async t=>{
   assert.deepEqual({env:call.env,quick:call.params.quick},{env:'laptop',quick:true});
 });
 
-for (const width of [1280,390]) test(`a quick chat says "quick chat" where the folder goes, with no Git, at ${width}px`,async t=>{
+for (const width of [1280,390]) test(`a quick chat says "quick chat" where the folder would be, with no Git, at ${width}px`,async t=>{
   const page=await pageFor(t);
   await page.setViewportSize({width,height:844});
   await page.evaluate(()=>window.visit('laptop',{kind:'env'}));
@@ -373,7 +373,7 @@ for (const width of [1280,390]) test(`a quick chat says "quick chat" where the f
   await row.click();
   const bar=page.locator('.session-bar');
   await bar.waitFor();
-  assert.match(await bar.locator('.sub').innerText(),/laptop\s*· quick chat/);
+  assert.equal(await bar.locator('.titles').getAttribute('title'),'laptop · quick chat');
   assert.doesNotMatch(await bar.innerText(),/quickone|\.helm/);
   // Git is always in the header; a quick chat's Git sheet says why it is empty.
   assert.equal(await bar.getByRole('button',{name:/^Git/}).count(),1);
@@ -381,6 +381,7 @@ for (const width of [1280,390]) test(`a quick chat says "quick chat" where the f
   await bar.getByRole('button',{name:'more'}).click();
   assert.equal(await page.getByRole('button',{name:'Send to another machine'}).count(),0);
   assert.equal(await page.getByRole('button',{name:'Rename chat'}).count(),1);
+  assert.equal(await bar.locator('.menu-facts').innerText(),'laptop · quick chat');
 });
 
 test('with the machine\'s folder list, typing searches on the device and shows how fresh it is',async t=>{

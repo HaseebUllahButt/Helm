@@ -4,7 +4,8 @@ A helper (subagent) is a second chat started by a chat, on any account. It
 shows as a card inside its parent, never as its own row in Working.
 
 ## Start a subagent from the app
-- **Reach:** **Agents** in the chat header, or Ctrl/⌘+Shift+A.
+- **Reach:** **Agents** in the chat header while a chat has helpers, else
+  **Agents** in the ⋯ menu, or Ctrl/⌘+Shift+A.
 - **Prove (driven 2026-10-15):** in a fake-ask chat:
   ```sh
   $V click Agents; sleep 3                  # wait past "Finding accounts…"

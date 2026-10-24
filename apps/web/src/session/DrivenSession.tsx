@@ -4,7 +4,6 @@ import { Client, chatFolder, type Environment, type Session, type ModelList, typ
 import { useNow, waitingSince } from '../useNow';
 import { LiveComposer, createLiveDraft } from './liveDraft';
 import { prepareAttachment } from './image';
-import { EngineMark } from '../EngineMark';
 import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
 import { TodoStrip, stripTodos } from './Todos';
 import { RecoveryCard } from './RecoveryCard';
@@ -33,7 +32,6 @@ import { ExternalSessionNotice } from './ExternalSessionNotice';
 import { QueueEdit } from './QueueEdit';
 import { BackIcon, Icon } from '../Icon';
 import { fadeWhenCut } from '../fadeWhenCut';
-import { Route } from '../Route';
 import { EmptyChat, useDockLift } from './EmptyChat';
 import { CloneCard } from './CloneCard';
 import { TaskReturn } from './TaskReturn';
@@ -567,7 +565,6 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     const next = nameDraft.trim();
     if (save && next) void rename(next);
   };
-  const folder = !session.brain && !session.quick && session.cwd ? chatFolder(session).replace(/\/+$/, '').split('/').pop() || '~' : '';
 
   // "Ping me when it finishes": one ring, once, the next time the thread
   // settles. New sessions start enabled; the owner can silence this thread.
@@ -689,19 +686,27 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const firstMessage = loaded && !logError && transcriptTurns.length === 0 && queuedTurns.length === 0
     && !sentFirst && !working && !pending && !session.external && (session.alive !== false || preparing) && failedSends.length === 0 && !session.recovery;
   const dockAnchor = useDockLift(firstMessage);
+  const toggleCanvas = () => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); };
+  const toggleBrowser = () => { if (!browser.open) canvas.setOpen(false); browser.toggle(); };
+  const where = [env.name, session.quick ? 'quick chat' : chatFolder(session), session.nativeCodex ? 'Live agent program' : '',
+    session.brain ? engine : '', money(session.costUsd)].filter(Boolean).join(' · ');
+  // Only a state that needs a look gets a line under the title.
+  const barNotice = log.loaded && (logError || (!env.online && syncing))
+    ? <span className="offline" role="status">Saved chat · reconnecting…</span>
+    : !env.online && !log.loaded ? <span className="offline">Machine offline</span>
+    : env.online && conn && !conn.online && !logError ? <span className="offline">Live updates reconnecting…</span>
+    : syncing && !(cameUpEmpty && !log.loaded) ? <span role="status">Syncing chat…</span>
+    : null;
 
   return (
     <>
       <div className="bar session-bar">
         <button className="iconbtn back" aria-label={parentThread && onOpenSession ? 'Back to main chat' : 'Back'}
           onClick={parentThread && onOpenSession ? openParent : onBack}><BackIcon /></button>
-        <div className="titles">
+        {/* The bar holds only the title and what needs a look now. Where the
+            chat runs and what it costs are a hover away and in the ⋯ menu. */}
+        <div className="titles" title={where}>
           <div className="crumb">
-            <EngineMark engine={session.engine} />
-            {folder && <>
-              <span className="crumb-folder" title={chatFolder(session)}>{folder}</span>
-              <span className="crumb-sep" aria-hidden="true">/</span>
-            </>}
             {renaming ? (
               <input
                 className="crumb-edit" aria-label="Chat name" value={nameDraft} maxLength={200}
@@ -719,22 +724,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
                 onDoubleClick={() => { setNameDraft(session.title); setRenaming(true); }}>{shownTitle(session.title).text}</h1>
             )}
           </div>
-          <span className="sub">
-            <Route machine={env.name} quick={session.quick} />
-            {session.nativeCodex && <span> · Live agent program</span>}
-            {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
-              <span key={part}><span className="sep"> · </span>{part}</span>
-            ))}
-            {/* On a phone the folder leaves the title line to the title. */}
-            {folder && <span className="sub-folder" title={chatFolder(session)}><span className="sep"> · </span>{folder}</span>}
-            {log.loaded && (logError || (!env.online && syncing))
-              ? <span className="offline" role="status"> · Saved chat · reconnecting…</span>
-              : syncing && !(cameUpEmpty && !log.loaded) && <span role="status"> · Syncing chat…</span>}
-            {!env.online && !log.loaded && <span className="offline"> · machine offline</span>}
-            {env.online && conn && !conn.online && !logError && (
-              <span className="offline"> · live updates reconnecting…</span>
-            )}
-          </span>
+          {barNotice && <span className="sub">{barNotice}</span>}
         </div>
         {cloning ? <span className="chip working" role="status"><i />Copying project {session.clone!.percent}%</span>
           : settingUp ? <span className="chip working" role="status"><i />setting up</span> : <WorkingChip status={status} working={working} childrenWorking={childrenWorking} compacting={!!compacting} turn={openTurn} updatedAt={session.updatedAt} />}
@@ -746,11 +736,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
             onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         )}
-        <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents"
-          onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
-        {!session.brain && <button className="iconbtn" title="Open canvas: notes and documents (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
-          onClick={() => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); }}><Icon name="canvas" size={17} /></button>}
-        <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={() => { if (!browser.open) canvas.setOpen(false); browser.toggle(); }}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
+        {agentCount > 0 && <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents"
+          onClick={() => setDetails('agents')}><Icon name="subagents" size={17} /><b className="cbadge quiet">{agentCount}</b></button>}
+        {!session.brain && canvas.open && <button className="iconbtn" title="Close canvas (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed
+          onClick={toggleCanvas}><Icon name="canvas" size={17} /></button>}
+        {(browser.open || browser.dot) && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={toggleBrowser}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -767,6 +757,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         {/* Only what the buttons beside it do not already reach. */}
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
+            {!session.brain && <button aria-pressed={canvas.open} onClick={toggleCanvas}>{canvas.open ? 'Close canvas' : 'Open canvas'}<kbd>Ctrl/⌘ Shift D</kbd></button>}
+            <button className="browser-launch" aria-pressed={browser.open} onClick={toggleBrowser}>{browser.open ? 'Close browser' : 'Open browser'}<kbd>Ctrl/⌘ Shift B</kbd></button>
+            <button onClick={() => setDetails('agents')}>{agentCount > 0 ? `Agents (${agentCount})` : 'Agents'}</button>
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename chat</button>
             {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
             {!session.brain && onSendTask && !session.external && (
@@ -779,6 +772,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             {parentThread && onOpenSession && <button onClick={openParent}>Open main chat</button>}
             <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
             <button className="destructive" onClick={kill}>{session.nativeCodex ? 'Remove from Helm' : 'Delete chat'}</button>
+            <p className="menu-facts">{where}</p>
           </div>
         )}
       </div>
@@ -971,7 +965,7 @@ function WorkingChip({ status: s, working, childrenWorking, compacting, turn, up
   return s === 'blocked' ? <span className="chip blocked"><i />waiting{ago}</span>
     : s === 'starting' ? <span className="chip working"><i />starting</span>
     : s === 'working' && compacting ? <span className="chip working"><i />Summarizing chat</span>
-    : s === 'working' ? <span className="chip working"><i />working{ago}{rate ? ` · ${rate} tok/s` : ''}</span>
+    : s === 'working' ? <span className="chip working" title={rate ? `${rate} tok/s` : undefined}><i />working{ago}</span>
     // Its own turn is over, but child tasks are not: the sidebar calls
     // this working, so the open chat must not look finished.
     : childrenWorking ? <span className="chip working" title="Helpers are still working"><i />working</span>

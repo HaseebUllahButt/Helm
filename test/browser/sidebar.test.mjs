@@ -531,7 +531,8 @@ for (const width of [1280, 390]) test(`one VM brain stays the entry point while 
   await entry.click();
   await page.getByRole('heading',{name:'Brain',exact:true}).waitFor();
   assert.equal(await page.getByText('Select an account',{exact:true}).count(),0,'a cold offline open retains the VM conversation');
-  assert.match(await page.locator('.main .bar .sub').innerText(),/VM/);
+  assert.match(await page.locator('.main .bar .titles').getAttribute('title'),/^VM\b/);
+  assert.match(await page.locator('.main .bar .sub').innerText(),/offline|reconnecting/i,'the bar says why it is stale');
 });
 
 test('opening the online brain validates the VM provider before entering the conversation', async t => {

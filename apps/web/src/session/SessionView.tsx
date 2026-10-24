@@ -28,9 +28,7 @@ import { ExternalSessionNotice } from './ExternalSessionNotice';
 import { useSessionLog } from './useSessionLog';
 import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
 import type { Decision } from './types';
-import { EngineMark } from '../EngineMark';
 import { BackIcon, Icon, toolKind } from '../Icon';
-import { Route } from '../Route';
 import { Client, chatFolder, type Environment, type Session, type Message, type ModelList, type NativeControl, type NativeAgent } from '../client';
 import { followModelRefresh } from '../modelRefresh';
 import { loadMessages, saveMessages } from './logCache';
@@ -414,27 +412,28 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     </Composer>
   );
 
+  const toggleCanvas = () => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); };
+  const toggleBrowser = () => { if (!browser.open) canvas.setOpen(false); browser.toggle(); };
+  const where = [env.name, session.quick ? 'quick chat' : chatFolder(session), eng.label, (session as any).model ?? ''].filter(Boolean).join(' · ');
+
   return (
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <div className="titles">
+        {/* As in a Helm chat: the title and what needs a look now. Where it
+            runs and with what are a hover away and in the ⋯ menu. */}
+        <div className="titles" title={where}>
           <h1>{session.title}</h1>
-          <span className="sub">
-            <EngineMark engine={eng.cls} />
-            <Route machine={env.name} folder={chatFolder(session)} quick={session.quick} />
-            <span className="sep"> · </span>{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''}
-            {!isShell && messages && (readError || !env.online) && <span className="offline" role="status"> · Saved chat · reconnecting…</span>}
-          </span>
+          {!isShell && messages && (readError || !env.online) && <span className="sub"><span className="offline" role="status">Saved chat · reconnecting…</span></span>}
         </div>
         <StatusChip status={compacting && status === 'working' ? 'compacting' : status} at={statusAt} />
         {/* Git is in every chat's header, as in a Helm chat, terminal or not.
             Hiding it here made it look gone. The sheet says when there is no Git. */}
         <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
           onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
-        {!isShell && <button className="iconbtn" title="Open canvas: notes and documents (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
-          onClick={() => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); }}><Icon name="canvas" size={17} /></button>}
-        {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={() => { if (!browser.open) canvas.setOpen(false); browser.toggle(); }}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
+        {!isShell && canvas.open && <button className="iconbtn" title="Close canvas (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed
+          onClick={toggleCanvas}><Icon name="canvas" size={17} /></button>}
+        {!isShell && (browser.open || browser.dot) && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={toggleBrowser}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'Show chat' : 'Show terminal'} aria-label={raw ? 'Show chat' : 'Show terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
@@ -442,7 +441,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         )}
         {/* A Claude terminal chat starts Helm helpers like any chat. Another
             CLI's terminal only lists the helpers that CLI ran itself. */}
-        {!isShell && (session.nativeChat || !!session.nativeCards?.length) && (
+        {!isShell && agentCount > 0 && (
           <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents" onClick={() => setDetails('agents')}>
             <Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}
           </button>
@@ -461,6 +460,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           </div>
         ) : (
           <div className="menu" onClick={() => setMenu(false)}>
+            <button aria-pressed={canvas.open} onClick={toggleCanvas}>{canvas.open ? 'Close canvas' : 'Open canvas'}<kbd>Ctrl/⌘ Shift D</kbd></button>
+            <button className="browser-launch" aria-pressed={browser.open} onClick={toggleBrowser}>{browser.open ? 'Close browser' : 'Open browser'}<kbd>Ctrl/⌘ Shift B</kbd></button>
+            {(session.nativeChat || !!session.nativeCards?.length) && <button onClick={() => setDetails('agents')}>{agentCount > 0 ? `Agents (${agentCount})` : 'Agents'}</button>}
             <button onClick={() => setNaming(true)}>Rename chat</button>
             {session.nativeChat && <>
               <button disabled={settingBusy || sending || status === 'blocked' || !env.online} onClick={() => void nativeCommand('/permissions')}>Claude permissions</button>
@@ -470,6 +472,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
             {!isExternal && onSendTask && <button disabled={!env.online} onClick={onSendTask}>Send task to another machine</button>}
             <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
             <button className="destructive" onClick={() => setKilling(true)}>{session.nativeCli ? 'Stop chat' : 'Delete chat'}</button>
+            <p className="menu-facts">{where}</p>
           </div>
         ))}
       </div>

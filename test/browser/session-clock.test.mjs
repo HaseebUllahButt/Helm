@@ -72,8 +72,8 @@ test('the working clock updates without redrawing the chat or losing a draft', a
     window.emit([{type:'item.delta',id:'answer',text:' more words'}]);
     await new Promise(r=>setTimeout(r,100));
   }});
-  await page.locator('.chip.working').filter({hasText:'tok/s'}).waitFor();
-  await page.waitForFunction(()=>!document.querySelector('.chip.working')?.textContent.includes('tok/s'),{timeout:5000});
+  await page.waitForFunction(()=>document.querySelector('.chip.working')?.title.includes('tok/s'));
+  await page.waitForFunction(()=>!document.querySelector('.chip.working')?.title,{timeout:5000});
   await page.getByRole('button',{name:'model: a',exact:true}).click();
   await page.getByRole('option',{name:'Model B',exact:true}).waitFor();
   await page.keyboard.press('Escape');

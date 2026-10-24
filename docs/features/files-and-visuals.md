@@ -27,7 +27,7 @@
   `attach-tags`, `retain-assets`.
 
 ## Canvas (notes and docs beside the chat)
-- **Reach:** the canvas button in a chat's header, or Ctrl/⌘ Shift D. A wide
+- **Reach:** **Open canvas** in the chat's ⋯ menu, or Ctrl/⌘ Shift D. A wide
   screen gets a third column (shares the browser panel's slot, one at a
   time); a phone gets a full-screen sheet. Open state and file are kept per
   chat on the device. An agent's `helm canvas` opens it once per ask; closing

@@ -144,8 +144,9 @@ test('the agent opens the canvas once per request, a closed canvas stays closed,
   await page.getByRole('button', { name: 'Open Inline chart in canvas' }).waitFor();
   await request(page, 'a', agentBoard);
   assert.equal(await canvas(page).count(), 0, 'or after a reload');
-  // The header button brings back what it showed.
-  await page.getByRole('button', { name: 'Canvas', exact: true }).click();
+  // The ⋯ menu brings back what it showed.
+  await page.locator('.session-bar').getByRole('button', { name: 'more', exact: true }).click();
+  await page.locator('.session-bar .menu').getByRole('button', { name: /^Open canvas/ }).click();
   await page.frameLocator('.canvas iframe.visual-frame').getByText('Agent board').waitFor();
   await canvas(page).getByRole('button', { name: 'Close canvas' }).click();
   await canvas(page).waitFor({ state: 'detached' });
