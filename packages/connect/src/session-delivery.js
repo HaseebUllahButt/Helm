@@ -11,6 +11,7 @@ import { defaultMode } from './modes.js';
 import { opencodeServiceSessions, opencodeServiceActive } from './opencode-service.js';
 import { hostedProcId } from './hosted-process.js';
 import { messageDelivery } from '@helm/protocol/message-delivery';
+import { stripBrief, withReminder } from '@helm/protocol/brief';
 import { DRIVERS, wire } from './session-wire.js';
 import { acceptAttachments, acceptImages, driverTakesImages, saveUploads } from './session-attachments.js';
 
@@ -510,21 +511,25 @@ export class SessionDelivery {
    * pointed at, and - the first time this CLI conversation hears from Helm -
    * Helm's brief in front, in tags so it reads as instructions rather than
    * as the owner talking. Tracked per CLI conversation, not per chat: one
-   * that could not be resumed and started over has never been told.
+   * that could not be resumed and started over has never been told. Every
+   * message ends with the writing reminder (brief.js).
    */
   #promptOf(s, d, item) {
-    const request = item.referenceContext ? `${item.text}\n\n${item.referenceContext}` : item.text;
-    if (!item.introduce || item.text.trimStart().startsWith('/')) return request;
+    const said = item.referenceContext ? `${item.text}\n\n${item.referenceContext}` : item.text;
+    if (item.text.trimStart().startsWith('/')) return said;
+    // Hidden chats are Helm's own workers (titles, the keeper); their replies are data.
+    const remind = (text) => (this.#sessions.delegationBrief && !s.delegation?.hidden ? withReminder(text) : text);
+    if (!item.introduce) return remind(said);
     const conversation = d?.engineSessionId ?? s.engineSessionId ?? null;
     // Chats told before this was tracked per conversation.
     if (s.delegationIntroduced && s.introducedTo === undefined) s.introducedTo = s.engineSessionId ?? null;
-    if (s.introducedTo !== undefined && s.introducedTo === conversation) return request;
+    if (s.introducedTo !== undefined && s.introducedTo === conversation) return remind(said);
     const note = this.#sessions.delegationBrief?.(s);
-    if (!note) return request;
+    if (!note) return remind(said);
     s.introducedTo = conversation;
     s.delegationIntroduced = true;
     this.#core.save();
-    return `<helm_instructions>\n${note}\n</helm_instructions>\n\n<user_request>\n${request}\n</user_request>`;
+    return remind(`<helm_instructions>\n${note}\n</helm_instructions>\n\n<user_request>\n${said}\n</user_request>`);
   }
 
   /** Remember a message sent as a new turn until its echo names it. */
@@ -632,7 +637,7 @@ export class SessionDelivery {
         const events = this.#sessions.events.tail(id, 500);
         const textIds = new Set(events.filter((event) => event.type === 'item.start' && event.kind === 'text' && !event.parentId).map((event) => event.id));
         const excerpt = events.flatMap((event) => {
-          if (event.type === 'turn.start' && !event.queued && !String(event.turnId).startsWith('local-')) return [`\nUser: ${event.text ?? ''}\n`];
+          if (event.type === 'turn.start' && !event.queued && !String(event.turnId).startsWith('local-')) return [`\nUser: ${stripBrief(event.text ?? '')}\n`];
           if (event.type === 'item.delta' && textIds.has(event.id)) return [event.text ?? ''];
           return [];
         }).join('').slice(-8000);

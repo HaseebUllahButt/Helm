@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { WRITING_REMINDER } from '../packages/protocol/brief.js';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-delegation-'));
 process.env.HELM_NO_SERVICE = '1';
@@ -868,11 +869,12 @@ test('agents get the tool instructions as standing instructions, not in the owne
   await sessions.input(parent.id, '/status');
   assert.equal(drivers.get(parent.id).sent, '/status');
   drivers.get(parent.id).finish();
+  // Only the short writing reminder rides on each message.
   await sessions.input(parent.id, 'Work');
-  assert.equal(drivers.get(parent.id).sent, 'Work');
+  assert.equal(drivers.get(parent.id).sent, `Work\n\n${WRITING_REMINDER}`);
   drivers.get(parent.id).finish();
   await sessions.input(parent.id, 'Continue');
-  assert.equal(drivers.get(parent.id).sent, 'Continue');
+  assert.equal(drivers.get(parent.id).sent, `Continue\n\n${WRITING_REMINDER}`);
   const child = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
   assert.equal(drivers.get(child.session.id).instructions, `${drivers.get(parent.id).instructions} helper of ${parent.id}`);
 });
