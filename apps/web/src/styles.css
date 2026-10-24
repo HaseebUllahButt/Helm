@@ -1276,6 +1276,15 @@ pre.snippet {
   color: var(--text); background: var(--accent); box-shadow: inset 0 0 0 1px var(--line-2);
 }
 .stop:hover { background: var(--hover); }
+/* Pressed: the ring turns until the agent says it stopped. */
+.stop.stopping { position: relative; cursor: default; }
+.stop.stopping svg { opacity: 0.35; }
+.stop.stopping::after {
+  content: ''; position: absolute; inset: 3px; border-radius: 50%;
+  border: 1.5px solid transparent; border-top-color: var(--text-dim);
+  animation: micspin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .stop.stopping::after { animation: none; } }
 
 /* The sheet: a question docked above the composer with room to show its case. */
 .sheet {

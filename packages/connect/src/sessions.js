@@ -1702,7 +1702,7 @@ export class Sessions extends EventEmitter {
     const s = this.#index.get(id);
     if (s && (queued.length || handed.length)) s.lastSeq = this.events.last(id);
     const d = this.#drivers.get(id);
-    if (d) stopping.push(d.interrupt());
+    if (d) stopping.push(d.interrupt({ background: true }));
     // A Pi in a terminal has no driver to ask: press Esc, which is how Pi
     // stops a reply. Only mid-turn - a second Esc at Pi's prompt opens its tree.
     else if (s?.nativeCli && s.engine === 'pi' && ['working', 'blocked'].includes(s.status)
