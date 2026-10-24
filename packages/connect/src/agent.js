@@ -380,6 +380,8 @@ export class Daemon {
   /** This process's half of an event id; a restart must not reuse ids. */
   #boot = Math.random().toString(36).slice(2, 8);
   #emitted = 0;
+  /** Chat lists sent lately, by digest: id -> that chat's revision. */
+  #lists = new Map();
   // The nas capability, only ever populated when this machine is designated
   // one: { server, port } for the media listener, plus the lazily imported
   // module. A machine that is never a nas never loads the package.
@@ -1201,6 +1203,34 @@ export class Daemon {
   }
 
   /**
+   * A chat list, or only its changes for a device that holds an earlier one.
+   *
+   * The phone asks for the whole list whenever a chat starts, ends or moves,
+   * often several times while one chat opens. Each copy was tens of KB over
+   * a mobile link, almost all of it unchanged. A device that names the
+   * digest of the list it holds gets the order of ids and the chats whose
+   * revision changed. An unknown digest (this daemon restarted, or the list
+   * aged out) gets the full list, which older apps always ask for.
+   */
+  #listReply(sessions, have) {
+    const rev = (s) => createHash('sha1').update(JSON.stringify(s)).digest('base64url').slice(0, 12);
+    const order = sessions.map((s) => [s.id, rev(s)]);
+    const revs = new Map(order);
+    const digest = createHash('sha1').update(order.join('\n')).digest('base64url').slice(0, 16);
+    const base = typeof have === 'string' ? this.#lists.get(have) : undefined;
+    // Least recently used last out; a handful covers every screen's filter.
+    for (const [key, value] of [[have, base], [digest, revs]]) {
+      if (!value) continue;
+      this.#lists.delete(key);
+      this.#lists.set(key, value);
+    }
+    while (this.#lists.size > 32) this.#lists.delete(this.#lists.keys().next().value);
+    if (!base) return { sessions, digest };
+    if (have === digest) return { base: have, digest, unchanged: true };
+    return { base: have, digest, ids: order.map(([id]) => id), changed: sessions.filter((s, i) => base.get(s.id) !== order[i][1]) };
+  }
+
+  /**
    * Push an event to everyone watching this machine.
    *
    * A client with a direct peer connection is *also* still attached to a hub
@@ -1991,7 +2021,7 @@ export class Daemon {
 
       case M.SESSION_LIST: {
         const sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true });
-        if (p.projects !== true) return { sessions };
+        if (p.projects !== true) return this.#listReply(sessions, p.have);
         // `helm pickup` from another machine: which project each chat's
         // folder holds, worked out here where the folder is.
         const dirs = sessions.flatMap((s) => [s.cwd, s.delegation?.worktree?.repo]);

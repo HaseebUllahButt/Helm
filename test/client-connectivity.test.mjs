@@ -890,3 +890,38 @@ test('a faster hub with the same machines restores subscriptions and drains pend
   assert.equal(h.client.relay, 'http://local');
   h.client.close();
 });
+
+test('a chat list is asked for as changes to the one the device holds', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const socket = h.sockets[0];
+  const answer = async (result) => {
+    await h.advance(1);
+    const frame = socket.frames.filter(f => f.method === 'session.list').at(-1);
+    socket.message({ t: 'rpcResult', id: frame.id, ok: true, result });
+    return frame;
+  };
+  const a = { id: 'a', title: 'one' }, b = { id: 'b', title: 'two' }, c = { id: 'c', title: 'new' };
+  const first = h.client.rpc('vm', 'session.list', { includeDetected: true });
+  assert.equal((await answer({ sessions: [a, b], digest: 'd1' })).params.have, undefined);
+  assert.equal(JSON.stringify((await first).sessions), JSON.stringify([a, b]));
+
+  const second = h.client.rpc('vm', 'session.list', { includeDetected: true });
+  assert.equal((await answer({ base: 'd1', digest: 'd2', ids: ['c', 'b'], changed: [c] })).params.have, 'd1');
+  assert.equal(JSON.stringify((await second).sessions), JSON.stringify([c, b]));
+
+  const third = h.client.rpc('vm', 'session.list', { includeDetected: true });
+  assert.equal((await answer({ base: 'd2', digest: 'd2', unchanged: true })).params.have, 'd2');
+  assert.equal(JSON.stringify((await third).sessions), JSON.stringify([c, b]));
+
+  // A filter of its own holds its own list.
+  const other = h.client.rpc('vm', 'session.list', {});
+  assert.equal((await answer({ sessions: [a], digest: 'd9' })).params.have, undefined);
+  assert.equal(JSON.stringify((await other).sessions), JSON.stringify([a]));
+
+  // Changes that do not fit the held list mean one more ask, for all of it.
+  const lost = h.client.rpc('vm', 'session.list', { includeDetected: true });
+  await answer({ base: 'd2', digest: 'd3', ids: ['x'], changed: [] });
+  assert.equal((await answer({ sessions: [a], digest: 'd4' })).params.have, undefined);
+  assert.equal(JSON.stringify((await lost).sessions), JSON.stringify([a]));
+  h.client.close();
+});
