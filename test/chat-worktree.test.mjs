@@ -292,3 +292,37 @@ test('a folder removed by hand comes back from its branch; deleting a chat keeps
   assert.ok(!existsSync(empty.cwd), 'a chat that did nothing takes its worktree along');
   await s.stop();
 });
+
+test('a restart closes an idle agent whose folder was removed by hand, and does not rebuild it', async () => {
+  const dir = repo();
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-gone'));
+  const closed = [];
+  const drivers = [];
+  const make = () => new Sessions(new StubRuntime(), {
+    events,
+    // Every hosted agent outlived the old daemon.
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => true, procPipe: () => null, close: async (id) => { closed.push(id); } }),
+    makeDriver: (engine, opts) => { const d = new FakeDriver({ engine, ...opts }); drivers.push(d); return d; },
+  });
+  const first = make();
+  const chat = await first.start({ cwd: dir, profileId: 'claudea' });
+  const kept = await first.start({ cwd: dir, profileId: 'claudea' });
+  first.flush();
+  git(dir, 'worktree', 'remove', '--force', chat.cwd);
+
+  const next = make();
+  drivers.length = 0;
+  await next.resume();
+  assert.ok(!existsSync(chat.cwd), 'the folder stays gone');
+  assert.ok(closed.includes(chat.id), 'its agent is closed');
+  assert.ok(!closed.includes(kept.id) && drivers.some((d) => d.env.HELM_SESSION_ID === kept.id), 'the other one is reattached');
+  assert.ok(!drivers.some((d) => d.env.HELM_SESSION_ID === chat.id));
+  assert.equal(next.get(chat.id).status, 'idle');
+
+  await next.input(chat.id, 'carry on');
+  await until(() => drivers.some((d) => d.env.HELM_SESSION_ID === chat.id));
+  assert.ok(existsSync(chat.cwd), 'its next message rebuilds the folder');
+  assert.ok(existsSync(kept.cwd));
+  await next.stop();
+  await first.stop();
+});
