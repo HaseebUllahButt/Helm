@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { createContext, memo, useContext, useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useNow } from '../useNow';
 import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
@@ -372,7 +373,12 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
       return !!area && !!target?.closest && area.contains(target) && !target.closest('.browser-panel, .xterm, .slab')
         && Array.from(e.dataTransfer?.types ?? []).includes('Files');
     };
-    const over = (e: DragEvent) => { if (!mine(e)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; setDragging(true); };
+    const over = (e: DragEvent) => {
+      // The box handles its own drags; anywhere else outside the chat drops the cover.
+      if (slabRef.current?.contains(e.target as Node)) return;
+      if (!mine(e)) { setDragging(false); return; }
+      e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; setDragging(true);
+    };
     const leave = (e: DragEvent) => { if (!e.relatedTarget) setDragging(false); };
     const drop = (e: DragEvent) => { setDragging(false); if (!mine(e)) return; e.preventDefault(); takeNow.current(e.dataTransfer?.files); };
     const end = () => setDragging(false);
@@ -390,8 +396,26 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
     el.style.height = Math.min(el.scrollHeight, 180) + 'px';
   }, [draft]);
 
+  // A drag over the chat covers it with one clear target, not only a
+  // coloured border on the box. The cover lets the drop through to the
+  // chat below, so it lands where it always did.
+  const dropArea = dragging && onAttach ? slabRef.current?.closest('.main') : null;
+
   return (
     <div className="composer-wrap">
+      {dropArea && createPortal(
+        <div className="drop-cover" aria-hidden="true">
+          <div className="drop-card">
+            <span className="drop-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+              </svg>
+            </span>
+            <strong>Drop to attach</strong>
+            <small>{canAttach ? 'Files and images go into your message.' : 'Files go into your message. This agent cannot read images.'}</small>
+          </div>
+        </div>, dropArea)}
       <div className="composer-col">
         <ComposerSlot name="children" />
         {!!compacting && !waiting && <CompactingBar since={typeof compacting === 'number' ? compacting : undefined} />}
@@ -408,7 +432,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
           ref={slabRef}
           className={`slab${danger ? ' danger' : ''}${dragging ? ' dropping' : ''}`}
           onDragOver={(e) => { if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragging(true); } }}
-          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
+          onDragLeave={(e) => { if (!e.currentTarget.closest('.main')?.contains(e.relatedTarget as Node | null)) setDragging(false); }}
           onDrop={(e) => { setDragging(false); if (take(e.dataTransfer?.files)) e.preventDefault(); }}
         >
           <ComposerSlot name="banner" />
