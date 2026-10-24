@@ -1018,3 +1018,43 @@ test('a browser that can read compressed frames gets them in one stream', async 
   assert.equal((await read).text.length, big.length);
   h.client.close();
 });
+
+test('after waking, a socket that does not answer in 1.2 s is replaced at once', async () => {
+  const h = harness({ pong: false }); h.start(); await h.advance(10);
+  h.document.hidden = true; h.document.visibilityState = 'hidden'; h.visible();
+  await h.advance(60000);
+  h.document.hidden = false; h.document.visibilityState = 'visible'; h.visible();
+  await h.advance(1100);
+  assert.equal(h.sockets.length, 1, 'a slow answer still has time');
+  await h.advance(200);
+  assert.equal(h.sockets.length, 2, 'a fresh socket opens beside the silent one');
+  assert.equal(h.client.connected, true);
+  await h.advance(2000);
+  assert.equal(h.sockets[0].readyState, 3, 'the silent socket is retired');
+  assert.equal(h.sockets.length, 2);
+  h.client.close();
+});
+
+test('after waking, a socket that answers is kept', async () => {
+  const h = harness({ pong: 1000 }); h.start(); await h.advance(10);
+  h.document.hidden = true; h.document.visibilityState = 'hidden'; h.visible();
+  await h.advance(60000);
+  h.document.hidden = false; h.document.visibilityState = 'visible'; h.visible();
+  await h.advance(8000);
+  assert.equal(h.sockets.length, 1);
+  h.client.close();
+});
+
+test('just after waking, a read tries the web route after 0.5 s', async () => {
+  const h = harness({ pong: false }); h.start(); await h.advance(10);
+  h.document.hidden = true; h.document.visibilityState = 'hidden'; h.visible();
+  await h.advance(60000);
+  h.document.hidden = false; h.document.visibilityState = 'visible'; h.visible();
+  const read = h.client.rpc('vm', 'session.events', { id: 'c', since: 1 });
+  await h.advance(400);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  await h.advance(200);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 1);
+  assert.equal((await read).fresh, true);
+  h.client.close();
+});

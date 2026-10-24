@@ -763,6 +763,8 @@ export class Client {
   private connectStartedAt = 0;
   private recoveryTimer: ReturnType<typeof setInterval> | undefined;
   private backgrounded = false;
+  /** When the page last came back from the background. */
+  private wokeAt = 0;
   private connectVersion = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private disconnectSocket: ((reason: string, retry?: boolean) => void) | null = null;
@@ -781,6 +783,7 @@ export class Client {
     if (document.visibilityState !== 'visible') { this.backgrounded = true; return; }
     const resumed = this.backgrounded || event?.type === 'pageshow' || event?.type === 'resume';
     this.backgrounded = false;
+    if (resumed) this.wokeAt = Date.now();
     // Picking the phone back up. It may well be on a different network than
     // it was when you put it down, so anything relaying is worth another go.
     this.retryDirectNow();
@@ -1203,6 +1206,7 @@ export class Client {
       let drain: ReturnType<typeof setTimeout> | undefined;
       let lastReceived = Date.now(), awaiting = false;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
+      let woke: ReturnType<typeof setTimeout> | undefined;
       const settle = (err?: Error) => {
         if (settled) return;
         settled = true;
@@ -1211,7 +1215,7 @@ export class Client {
       const stop = (reason: string, retry = true) => {
         if (stopped) return;
         stopped = true;
-        clearTimeout(handshake); clearInterval(heartbeat); clearTimeout(drain);
+        clearTimeout(handshake); clearInterval(heartbeat); clearTimeout(drain); clearTimeout(woke);
         this.socketCleanups.delete(cleanup);
         ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
         if (this.ws === ws) {
@@ -1264,6 +1268,23 @@ export class Client {
         // grace period instead of declaring a healthy socket dead on wake.
         if (reset) { awaiting = false; lastReceived = Date.now(); }
         beat(true);
+        // An unlocked phone often holds a socket its network dropped during
+        // sleep. It still looks open, and the usual 15 s wait for its pong
+        // left the screen stale that long. After waking, 1.2 s of silence
+        // opens a fresh socket beside it (connect() moves over when it opens
+        // and retires this one), and 3 s drops this one outright. A slow
+        // answer costs one reconnect, so the hub is not marked as failed.
+        if (!reset || !awaiting) return;
+        clearTimeout(woke);
+        woke = setTimeout(() => {
+          if (stopped || !awaiting || this.ws !== ws) return;
+          void this.connect(hub).catch(() => {});
+          woke = setTimeout(() => {
+            if (stopped || !awaiting || this.ws !== ws) return;
+            stop('connection did not answer after waking', false);
+            this.recoverConnection(true);
+          }, 1800);
+        }, 1200);
       };
       ws.onopen = () => {
         if (stopped || this.closed || version !== this.connectVersion) { stop('connection superseded', false); return; }
@@ -1619,7 +1640,11 @@ export class Client {
         const samples = this.rttSamples?.get(env);
         const rtt = samples?.length ? Math.min(...samples) : 0;
         const previousRead = this.readDurations?.get(`${env}:${method}`) || 0;
-        const hedgeAfter = Math.min(8000, Math.max(1500, rtt * 2 + 250, previousRead * 1.5 + 250), timeout / 2);
+        // Just after waking, the route is the doubt, not the machine: the
+        // first reads try the web route after 0.5 s instead of 1.5 s.
+        const justWoke = this.wokeAt > 0 && Date.now() - this.wokeAt < 5000;
+        const hedgeAfter = justWoke ? 500
+          : Math.min(8000, Math.max(1500, rtt * 2 + 250, previousRead * 1.5 + 250), timeout / 2);
         const httpFallback = (elapsed: number) => {
           const pending = this.pending.get(id);
           if (!pending || pending.routes?.has('http')) return;
