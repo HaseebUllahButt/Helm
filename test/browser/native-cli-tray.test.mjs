@@ -95,7 +95,7 @@ test('a working terminal Pi shows a stop button that stops it',async t=>{
 test('provider rejections stay visible beside the native tray',async t=>{
   const page=await open(t,'pi');await page.evaluate(()=>window.rejectControl=true);
   await page.getByRole('button',{name:'Open model in the agent program'}).click();
-  await page.getByRole('alert').getByText('Wait until the CLI finishes its turn').first().waitFor();
+  await page.getByRole('alert').getByText('Wait for the agent to finish this reply. Try again.').first().waitFor();
 });
 
 test('native model sheet shares favorites and defaults while preserving provider-reported state',async t=>{

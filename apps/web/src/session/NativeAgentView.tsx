@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useState } from 'react';
 import type { Client, Environment, NativeAgent, NativeAgentDetail, Session } from '../client';
 import { EngineMark } from '../EngineMark';
@@ -51,7 +52,7 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
         if (r.agent.status === 'working' || r.agent.status === 'blocked' || Date.now() - sentAt < AFTER_SEND_MS) timer = setTimeout(load, POLL_MS);
       } catch (failure) {
         if (stopped) return;
-        setError(failure instanceof Error ? failure.message : String(failure));
+        setError(errorMessage(failure));
         setLog((current) => current.loaded ? current : { ...current, loaded: true });
         timer = setTimeout(load, POLL_MS * 3);
       }
@@ -69,7 +70,7 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
       setDraft('');
       setSentAt(Date.now());
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      setError(errorMessage(failure));
     } finally { setSending(false); }
   };
 

@@ -1,18 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { transform } from 'esbuild';
+import { build, transform } from 'esbuild';
+import { fileURLToPath } from 'node:url';
 import { askPreview } from '../packages/connect/src/notify.js';
 
 const load = async (path) => {
   const source = await readFile(new URL(path, import.meta.url), 'utf8');
-  const { code } = await transform(source, { loader: 'ts', format: 'esm' });
+  const { code } = path.endsWith('/problem.ts')
+    ? { code: (await build({ entryPoints: [fileURLToPath(new URL(path, import.meta.url))], bundle: true, write: false, format: 'esm' })).outputFiles[0].text }
+    : await transform(source, { loader: 'ts', format: 'esm' });
   return import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
 };
 const { plainProblem, plainError } = await load('../apps/web/src/session/problem.ts');
 const { isBrowserKey } = await load('../apps/web/src/browserKeys.ts');
 
-test('a CLI failure reads as a sentence, with the raw line kept for Details', () => {
+test('a CLI failure keeps the original text for Details', () => {
   const raw = 'claude exited with code 1: No conversation found with session ID: c11b0faa-9520-4551-a2b0-6dd8c3971a7f';
   const p = plainProblem('error', raw);
   assert.equal(p.title, 'Task failed');
@@ -23,10 +26,11 @@ test('a CLI failure reads as a sentence, with the raw line kept for Details', ()
   assert.match(plainError('API Error: 529 Overloaded'), /busy/);
 });
 
-test('an unknown failure keeps its own words, without ids or the exit prefix', () => {
-  const p = plainProblem('error', 'codex exited with code 2: the frobnicator 3f2a9c1e-1111-2222-3333-444455556666 jammed');
-  assert.equal(p.text, 'the frobnicator jammed');
-  assert.ok(p.raw);
+test('an unknown failure uses a safe message', () => {
+  const raw = 'codex exited with code 2: the frobnicator 3f2a9c1e-1111-2222-3333-444455556666 jammed';
+  const p = plainProblem('error', raw);
+  assert.match(p.text, /agent stopped/);
+  assert.equal(p.raw, raw);
 });
 
 test('a limit says when it resets; a restart and a stop say what to do', () => {

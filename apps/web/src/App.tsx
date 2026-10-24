@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice } from './session/voice';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
@@ -788,7 +789,7 @@ function Shell({ client, conn, onSignOut }: {
       loadSessions(envId);
       navigate([...nav.current.stack, { kind: 'session', session: r.session }], envId);
     } catch (e: any) {
-      setError(`Helm cannot continue that chat: ${e.message}`);
+      setError(errorMessage(e, { fallback: 'Helm cannot continue this chat. Try again.' }));
     } finally { setResuming(null); }
   };
 
@@ -833,7 +834,7 @@ function Shell({ client, conn, onSignOut }: {
         try {
           const r = await client.rpc<{ text: string }>(e.id, 'voice.transcribe', { audio: data, mime }, 60_000);
           return r.text;
-        } catch (err: any) { last = err?.message ?? 'Helm cannot convert the recording to text.'; }
+        } catch (err: any) { last = errorMessage(err, { fallback: 'Helm cannot convert the recording to text.' }); }
       }
       throw new Error(last || 'No machine can convert this recording to text.');
     };
@@ -890,7 +891,7 @@ function Shell({ client, conn, onSignOut }: {
       rememberBrain(brainEnv.id, r.session);
       loadSessions(brainEnv.id);
       navigate([{ kind: 'session', session: r.session }], brainEnv.id);
-    } catch (e: any) { setError(`Helm cannot open its brain: ${e.message}`); }
+    } catch (e: any) { setError(errorMessage(e, { fallback: 'Helm cannot open its brain. Try again.' })); }
     finally { setBrainOpening(false); }
   };
   const rememberBrain = (envId: string, s: Session) => {
@@ -1102,7 +1103,7 @@ function Shell({ client, conn, onSignOut }: {
           {(() => {
             const online = envs.filter((e) => e.online).length;
             const live = status === 'live';
-            return <span className={`conn ${status}`} title={conn.error || (live ? `Connected · ${online} of ${envs.length} machines online` : status)}
+            return <span className={`conn ${status}`} title={conn.error ? errorMessage(conn.error) : (live ? `Connected · ${online} of ${envs.length} machines online` : status)}
               role="status" aria-label={live ? `Connected, ${online} of ${envs.length} machines online` : undefined}>
               <i />{live ? '' : status}
             </span>;

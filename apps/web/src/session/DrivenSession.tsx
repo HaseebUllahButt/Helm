@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
 import { Client, chatFolder, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
@@ -53,7 +54,7 @@ const ENGINE_LABEL: Record<string, string> = {
 
 type Attachment = { name: string; mime: string; data: string; url: string };
 /** Words whose send failed after the composer had moved on, kept until sent or dismissed. */
-type FailedSend = { id: string; messageId: string; body: string; references: string[]; error: string; retrying?: boolean; before: Set<string> };
+type FailedSend = { id: string; messageId: string; body: string; references: string[]; attachments: Attachment[]; error: string; retrying?: boolean; before: Set<string> };
 const rejectedDelivery = (error: { code?: string }) => !!error.code && !retryableDelivery(error);
 
 /**
@@ -285,7 +286,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
 
   const call = async (fn: () => Promise<unknown>) => {
     setBusy(true); setError('');
-    try { await fn(); } catch (e: any) { setError(e.message); }
+    try { await fn(); } catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
   // An orphaned helper is listed on its own; its parent is gone, so there is no thread to go back to.
@@ -318,7 +319,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         try {
           next.push(await prepareAttachment(f));
         } catch (e: any) {
-          failures.push(`${f.name}: ${e?.message || 'Helm cannot read the file.'}`);
+          failures.push(`${f.name}: ${errorMessage(e, { fallback: 'Helm cannot read the file.' })}`);
         }
       }
       if (next.length) await setAttachments((current) => [...current, ...next]);
@@ -347,6 +348,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     try {
       await client.input(env.id, { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 120_000, messageId);
       retryDeliveryIds.current.delete(fingerprint);
+      setFailedSends(current => current.filter(item => item.messageId !== messageId));
       if (atts.length) {
         if (editRevision.current === clearedAt) setDraft('');
         await setAttachments(current => current.filter(image => !atts.includes(image)));
@@ -361,21 +363,24 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       // send. An unknown result must retain its original identity.
       const retryId = rejectedDelivery(e) ? newMessageId() : messageId;
       retryDeliveryIds.current.set(fingerprint, retryId);
-      setError(e.message);
+      const problem = errorMessage(e, { machine: env.name });
+      setError(rejectedDelivery(e) ? problem : '');
       setSentFirst(false);
       // Only restore the failed send if the composer is still exactly in the
       // state produced by clearing it. A newer draft or attachment edit -
       // including one from another pending send - belongs to the owner and
       // must not be overwritten by a late RPC failure.
-      if (editRevision.current === clearedAt) {
+      const restore = editRevision.current === clearedAt;
+      if (restore) {
         setDraft(body);
         setReferences(sentReferences);
-      } else if (!atts.length) {
-        // The owner has typed since: keep the words on a card of their own
-        // rather than lose them. A slow failure may still have arrived.
+      }
+      if (!rejectedDelivery(e) || !restore) {
+        // Keep the complete request, even if the owner edits the restored
+        // draft. Retrying an unknown result must use the same identity.
         failedSendSeq.current += 1;
-        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), error: e.message, before };
-        setFailedSends((current) => [...current, failed]);
+        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), attachments: atts, error: problem, before };
+        setFailedSends((current) => [...current.filter(item => item.messageId !== messageId), failed]);
       }
     } finally { if (atts.length) setSendingImages(false); }
   };
@@ -392,7 +397,16 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     retryingSends.current.add(failed.id);
     setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, retrying: true } : item));
     try {
-      await client.input(env.id, { id: session.id, data: failed.body, references: failed.references }, 120_000, failed.messageId);
+      const revision = editRevision.current;
+      const restoredDraft = live.get() === failed.body
+        && attachments.length === failed.attachments.length
+        && attachments.every((image, i) => image === failed.attachments[i])
+        && references.length === failed.references.length
+        && references.every((item, i) => item.id === failed.references[i]);
+      await client.input(env.id, { id: session.id, data: failed.body, references: failed.references,
+        ...(failed.attachments.length ? { attachments: failed.attachments.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) } : {}) }, 120_000, failed.messageId);
+      if (restoredDraft && editRevision.current === revision) { setDraft(''); setReferences([]); }
+      if (failed.attachments.length) await setAttachments(current => current.filter(image => !failed.attachments.includes(image)));
       for (const [fingerprint, messageId] of retryDeliveryIds.current) {
         if (messageId === failed.messageId) retryDeliveryIds.current.delete(fingerprint);
       }
@@ -402,7 +416,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       for (const [fingerprint, previous] of retryDeliveryIds.current) {
         if (previous === failed.messageId) retryDeliveryIds.current.set(fingerprint, messageId);
       }
-      setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, messageId, error: e.message, retrying: false } : item));
+      setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, messageId, error: errorMessage(e, { machine: env.name }), retrying: false } : item));
     } finally { retryingSends.current.delete(failed.id); }
   };
   const send = async () => {
@@ -453,7 +467,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       if (method === 'session.dequeue' && result?.found === false && !result.removed) setError('The agent received this message. You cannot take it back.');
       return true;
     }
-    catch (failure: any) { setError(failure.message); return false; }
+    catch (failure: any) { setError(errorMessage(failure)); return false; }
     finally { setQueueBusy(''); }
   };
   const moveQueued = (turn: Turn, direction: -1 | 1) => {
@@ -486,7 +500,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         if (turn.references?.length) setReferences((current) => [...current, ...turn.references!.filter((id) => !current.some((item) => item.id === id)).map((id) => referenceOptions.find((item) => item.id === id) ?? { id, title: id })].slice(0, 3));
         if (turn.attachments?.length) setAttachments((current) => [...current, ...turn.attachments!.filter((item) => item.data).map((item) => ({ name: item.filename, mime: item.mime, data: item.data!, url: `data:${item.mime};base64,${item.data}` }))]);
       }
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setQueueBusy(''); }
   };
 
@@ -507,7 +521,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       const r: any = await client.rpc(env.id, 'session.interrupt', { id: session.id });
       if (r?.next) setStopping(false);
       else stopTimer.current = setTimeout(() => setStopping(false), 5000);
-    } catch (e: any) { setStopping(false); setError(e.message); }
+    } catch (e: any) { setStopping(false); setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
   // model / thinking / permissions / speed all go the same way: tell the
@@ -839,7 +853,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
         <strong>Send not confirmed</strong>
         <p className="failed-send-text">{failed.body}</p>
-        <p>{failed.error} — Check the chat before you try again.</p>
+        {failed.attachments.length > 0 && <p>{failed.attachments.length} {failed.attachments.length === 1 ? 'attached file' : 'attached files'}</p>}
+        <p>{failed.error}</p>
       </div>
         <span className="failed-send-actions">
           <button disabled={failed.retrying} onClick={() => void retryFailedSend(failed)}>{failed.retrying ? 'Sending…' : 'Retry send'}</button>
@@ -887,7 +902,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             after…"); a card asking to continue it was one more thing to dismiss. */}
         {session.recovery && session.recovery.kind !== 'interrupted' && !working && !pending && (
           <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} autoResume={session.autoResumeLimited}
-            onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(e.message)); }} />
+            onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(errorMessage(e))); }} />
         )}
         {childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Helpers need your answer">
           {childrenWaiting.map(({ session: child }) => <button key={child.id} disabled={!onOpenSession} onClick={() => onOpenSession?.(child)}>
@@ -919,7 +934,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <p>Helm removes this message and later replies. It returns the message to your draft. The machine keeps the old history.</p>
           {(live.get().trim() || attachments.length > 0) && <p>This replaces your draft.</p>}
           <label className="rewind-files"><input type="checkbox" checked={rewinding.restore} disabled={!rewinding.allowed || busy} onChange={event => setRewinding({ ...rewinding, restore: event.target.checked })} />Restore files to before this message</label>
-          <p>{rewinding.allowed ? 'This includes new files and files selected for commit. Files that Git ignores stay unchanged.' : rewinding.reason}</p>
+          <p>{rewinding.allowed ? 'This includes new files and files selected for commit. Files that Git ignores stay unchanged.' : errorMessage(rewinding.reason, { fallback: 'Helm cannot restore files for this message.' })}</p>
           {error && <p role="alert" className="error">{error}</p>}
         </div>
         <div className="modal-actions">

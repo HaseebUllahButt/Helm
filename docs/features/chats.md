@@ -11,7 +11,16 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   fmap" became "from fmap"). The model chip shows real Devin model names even
   for the fake agent. Streamed replies must not redraw the message editor;
   approval cards and settings still update while a draft stays in the box.
-- **Tests:** `test/browser/chat-cycle`, `send-v2`, `send-entry-points`,
+- **Errors (driven 2026-10-24):** make each `session.deliver` request return
+  a timeout in the private browser. After two minutes, expect "Send not
+  confirmed", a plain timeout message, and Retry send. Restore replies and
+  select Retry send. Expect one reply and the original message ID on every
+  attempt. Check `errors` and inspect `shot` at phone size.
+- **Rule:** app errors use `apps/web/src/errors.ts`. Keep clear, short messages.
+  Put technical text behind Details on failed tasks. Log each distinct error once.
+  Retry an unconfirmed send with its original
+  ID, text, images and chat references.
+- **Tests:** `test/web-errors`; `test/browser/chat-cycle`, `send-v2`, `send-entry-points`,
   `failed-send`, `composer-card`, `composer-streaming`; `test/message-delivery`, `user-message`,
   `stream`, `session-driver`.
 

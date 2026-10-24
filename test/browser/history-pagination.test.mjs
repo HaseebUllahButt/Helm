@@ -107,7 +107,7 @@ test('a failed earlier read can be retried and clears its error after revealing 
   const { page, calls } = await device(t, { fail: true });
   const button = page.getByRole('button', { name: 'Earlier in this chat', exact: true });
   await button.click();
-  await page.waitForFunction(() => window.state.error === 'History disconnected' && !window.state.loadingEarlier);
+  await page.waitForFunction(() => window.state.error === 'This machine is not connected. Check the connection. Try again.' && !window.state.loadingEarlier);
   assert.equal(await button.isEnabled(), true);
   await button.click();
   await page.locator('[data-item-id="step-0"]').waitFor({ state: 'visible' });

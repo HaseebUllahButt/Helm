@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useState } from 'react';
 import type { Client, Session } from '../client';
 import { Markdown } from '../Markdown';
@@ -23,7 +24,7 @@ export function AgentMessages({ client, envId, parent, children }: { client: Cli
     let stale = false;
     client.rpc<Listing>(envId, 'session.agent-messages', { id: parent.id })
       .then(result => { if (!stale) { setListing(now => ({ ...result, messages: [...new Map([...now.messages, ...result.messages].map(m => [m.id, m])).values()].sort((a,b) => b.at-a.at), next: now.messages.length > 30 ? now.next : result.next })); setError(''); } })
-      .catch(e => { if (!stale) setError(e.message); });
+      .catch(e => { if (!stale) setError(errorMessage(e)); });
     return () => { stale = true; };
   }, [client, envId, parent.id, open, revision]);
   const older = async () => {
@@ -31,7 +32,7 @@ export function AgentMessages({ client, envId, parent, children }: { client: Cli
     try {
       const result = await client.rpc<Listing>(envId, 'session.agent-messages', { id: parent.id, before: listing.next });
       setListing(now => ({ ...result, messages: [...new Map([...now.messages, ...result.messages].map(m => [m.id, m])).values()].sort((a,b) => b.at-a.at) }));
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setLoading(false); }
   };
   return <section className="agent-exchanges">
@@ -44,7 +45,7 @@ export function AgentMessages({ client, envId, parent, children }: { client: Cli
         <small>{new Date(message.at).toLocaleString()} · {message.status === 'delivered' ? 'Delivered' : message.status === 'sending' ? 'Sending' : 'Not confirmed'}{message.replyTo ? ' · Reply' : ''}</small>
         {message.replyTo && <details><summary>In reply to</summary><p>{listing.messages.find(m => m.id === message.replyTo)?.text ?? `Load earlier messages to see message ${message.replyTo}.`}</p></details>}
         <Markdown text={message.text} />
-        {message.error && <p className="error">{message.error}</p>}
+        {message.error && <p className="error">{errorMessage(message.error)}</p>}
       </li>)}</ol>
       {listing.next && <button className="ghost" disabled={loading} onClick={() => void older()}>{loading ? 'Loading…' : 'Earlier messages'}</button>}
     </div>}

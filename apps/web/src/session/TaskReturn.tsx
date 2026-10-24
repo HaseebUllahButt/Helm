@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useState } from 'react';
 import { type Client, type Session } from '../client';
 
@@ -17,7 +18,7 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
     try {
       const reply = await client.rpc<{ session: Session }>(original.machineId, 'session.events', { id: original.sessionId, tail: 1 });
       onOpenSession(original.machineId, reply.session);
-    } catch (err: any) { setError(err.message); }
+    } catch (err: any) { setError(errorMessage(err)); }
     finally { setBusy(false); }
   };
   const recheck = async (keepLocal = false) => {
@@ -25,7 +26,7 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
     try {
       await client.rpc(envId, 'task.retry-return', { handoffId: transfer.handoffId,
         ...(keepLocal ? { keepLocal: transfer.conflicts ?? [] } : {}) }, 180_000);
-    } catch (err: any) { setError(err.message); }
+    } catch (err: any) { setError(errorMessage(err)); }
     finally { setBusy(false); }
   };
   return <div className="banner" role="status">
@@ -48,7 +49,7 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
     </>}
     {!source && (returned || conflict) && original && onOpenSession &&
       <button className="linkish" disabled={busy} onClick={openOriginal}>Continue on original machine</button>}
-    {transfer.error && <p className="note">Return pending: {transfer.error}. Helm will retry automatically.</p>}
+    {transfer.error && <p className="note">Return pending. {errorMessage(transfer.error)} Helm will try again.</p>}
     {error && <p className="error">{error}</p>}
   </div>;
 }

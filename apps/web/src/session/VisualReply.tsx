@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { visualDocument } from '@helm/protocol/visual';
 import { useDialog } from '../useDialog';
@@ -73,7 +74,7 @@ export function useVisualHtml(read: VisualReader | undefined, ref: string, activ
     let stale = false;
     setHtml(undefined); setError('');
     if (!read) { setError('Connect to this chat’s machine to load the image or page.'); return; }
-    read(ref).then(result => { if (!stale) setHtml(result.html); }).catch(err => { if (!stale) setError(err.message || 'Helm cannot load this visual.'); });
+    read(ref).then(result => { if (!stale) setHtml(result.html); }).catch(err => { if (!stale) setError(errorMessage(err, { fallback: 'Helm cannot load this visual.' })); });
     return () => { stale = true; };
   }, [active, read, ref, retry]);
   return { html, error, retry: () => setRetry(value => value + 1) };

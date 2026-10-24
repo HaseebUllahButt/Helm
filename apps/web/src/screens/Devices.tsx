@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from '../Modal';
 import { useNow, waitingSince } from '../useNow';
@@ -36,7 +37,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
   const load = useCallback(() => {
     client.devices()
       .then((r) => setDevices(r.devices))
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(errorMessage(e)));
   }, [client]);
   useEffect(load, [load]);
 
@@ -84,7 +85,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
       pairingBase.current = r.base;
       knownAtInvite.current = new Set(r.knownDeviceIds);
       setInvite({ link: `${r.base}/#pair=${encodeURIComponent(r.password)}`, expiresAt: r.expiresAt });
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
 
@@ -97,7 +98,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
       setRemoving(null);
       if (d.self) { onBack(); location.reload(); return; } // this device's own key is gone
       load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
 

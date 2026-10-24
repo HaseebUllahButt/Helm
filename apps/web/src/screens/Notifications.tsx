@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../Icon';
 import { Client } from '../client';
@@ -77,7 +78,7 @@ export function Notifications({ client }: { client: Client }) {
       const sub = await boundSub(client, reg, key) ?? await subscribe(client, reg, key);
       setState(sub ? 'on' : 'off');
     } catch (e: any) {
-      setError(e?.message || 'Helm cannot turn notifications on.');
+      setError(errorMessage(e, { fallback: 'Helm cannot turn notifications on.' }));
     } finally { setBusy(false); }
   };
 
@@ -93,7 +94,7 @@ export function Notifications({ client }: { client: Client }) {
       }
       setState('off');
     } catch (e: any) {
-      setError(e?.message || 'Helm cannot turn notifications off.');
+      setError(errorMessage(e, { fallback: 'Helm cannot turn notifications off.' }));
     } finally { setBusy(false); }
   };
 

@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { BackIcon, Icon } from '../Icon';
 import type { Client, Environment } from '../client';
@@ -76,7 +77,7 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
       take(next, keepText);
       setError('');
     } catch (err: any) {
-      setError(/unknown method/i.test(err?.message ?? '') ? 'Update Helm on this machine first.' : err?.message || 'Helm cannot read the list.');
+      setError(/unknown method/i.test(err?.message ?? '') ? 'Update Helm on this machine first.' : errorMessage(err, { fallback: 'Helm cannot read the list.' }));
     }
   }, [client, target, state?.keeper?.machine]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -94,7 +95,7 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
     if (!env) { setError('No machines are online.'); return; }
     setBusy(true); setError('');
     try { take(await client.rpc<OwnerState>(env.id, method, params), method !== 'owner.set' || params.lines === undefined); }
-    catch (err: any) { setError(err?.message || 'Helm cannot save the list.'); }
+    catch (err: any) { setError(errorMessage(err, { fallback: 'Helm cannot save the list.' })); }
     finally { setBusy(false); }
   };
 

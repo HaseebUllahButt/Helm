@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useRef, useState } from 'react';
 import { BackIcon, Icon } from '../Icon';
 import { Client, type Environment, type MediaRoot, type MediaEntry } from '../client';
@@ -31,7 +32,7 @@ export function MediaView({ client, env, onBack }: {
   useEffect(() => {
     client.mediaRoots(env.id)
       .then((r) => setRoots(r.roots))
-      .catch((e: any) => setError(e.message));
+      .catch((e: any) => setError(errorMessage(e)));
   }, [client, env.id]);
 
   useEffect(() => {
@@ -40,7 +41,7 @@ export function MediaView({ client, env, onBack }: {
     setError('');
     client.mediaList(env.id, root.id, path)
       .then((r) => setEntries(r.entries))
-      .catch((e: any) => setError(e.message));
+      .catch((e: any) => setError(errorMessage(e)));
   }, [client, env.id, root, path]);
 
   const play = async (entry: MediaEntry) => {
@@ -53,7 +54,7 @@ export function MediaView({ client, env, onBack }: {
         entry,
         url: client.mediaStreamUrl(env, { root: root.id, path: entry.path, ticket: t.ticket }),
       });
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
   };
 
   /**

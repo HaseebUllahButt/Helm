@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Client, Environment, Session } from './client';
 import { loadWorkspace, loadWorkspaceDurable, saveWorkspace, updateWorkspaceSession, workspaceScope } from './workspaceCache';
@@ -82,7 +83,7 @@ export function useWorkspaceData(client: Client, connected: boolean) {
         setEnvError('');
         saveWorkspace(scope, { environments: result.environments });
       })
-      .catch((error) => { if (active.current) setEnvError(error.message); })
+      .catch((error) => { if (active.current) setEnvError(errorMessage(error)); })
       .finally(() => {
         envRequest.current = false;
         const again = envAgain.current;

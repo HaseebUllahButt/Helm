@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import type { Client, Session } from './client';
 import { saveDraft } from './draftStore';
 
@@ -90,7 +91,7 @@ function attempt(client: Client, chat: StartingChat) {
       runs.delete(chat.id);
       notify(chat);
     },
-    (e) => { chat.state = 'failed'; chat.error = e instanceof Error ? e.message : String(e); notify(chat); },
+    (e) => { chat.state = 'failed'; chat.error = errorMessage(e); notify(chat); },
   );
 }
 

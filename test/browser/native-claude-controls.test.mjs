@@ -128,7 +128,7 @@ test('failed native controls stay in chat with the reported model and a visible 
   await page.getByRole('button', {name:'model: opus', exact:true}).click();
   await page.getByRole('option', {name:'sonnet', exact:true}).click();
   await page.getByRole('alert').waitFor();
-  assert.match(await page.getByRole('alert').innerText(), /no longer running/);
+  assert.match(await page.getByRole('alert').innerText(), /agent is not running/);
   assert.equal(await page.getByRole('button', {name:'model: opus', exact:true}).count(), 1);
   assert.equal(await page.getByRole('button', {name:'Show terminal', exact:true}).count(), 1);
 });

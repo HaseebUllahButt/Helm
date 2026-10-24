@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   type Client, type Environment, type Session,
@@ -108,7 +109,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
         setModel('');
         setProfileId(available.find((agent) => agent.id === session?.profileId)?.id ?? available[0]?.id ?? '');
       })
-      .catch((err) => { if (live) setError(err.message); })
+      .catch((err) => { if (live) setError(errorMessage(err)); })
       .finally(() => { if (live) setAgentsLoading(false); });
     return () => { live = false; };
   }, [client, task, targetId, session?.profileId, locked]);
@@ -123,7 +124,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
     const timer = setTimeout(() => {
       client.transferPreview(source.id, folder, includeEnv)
         .then((r) => { if (live) setPreview(r); })
-        .catch((e) => { if (live) { setPreview(null); setError(e.message); } })
+        .catch((e) => { if (live) { setPreview(null); setError(errorMessage(e)); } })
         .finally(() => { if (live) setPreviewing(false); });
     }, 120);
     return () => { live = false; clearTimeout(timer); };
@@ -179,7 +180,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
         return;
       }
     } catch (e: any) {
-      setError(e.message);
+      setError(errorMessage(e));
     } finally {
       setBusy(false); setStep('');
     }
@@ -201,7 +202,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
       const reply = await client.rpc<{ session: Session }>(taskResult.targetMachineId,
         'session.events', { id: taskResult.receipt.sessionId, tail: 1, limit: 1 });
       onOpenSession(taskResult.targetMachineId, reply.session);
-    } catch (err: any) { setError(err.message); }
+    } catch (err: any) { setError(errorMessage(err)); }
     finally { setBusy(false); }
   };
 
@@ -211,7 +212,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
     try {
       setRecheck(await client.transferVerify(result.targetMachineId, receipt.folder));
     } catch (e: any) {
-      setError(e.message);
+      setError(errorMessage(e));
     } finally {
       setChecking(false);
     }
@@ -227,7 +228,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
       }, 45_000);
       onOpenSession(result.targetMachineId, r.session);
     } catch (e: any) {
-      setError(e.message);
+      setError(errorMessage(e));
       setBusy(false);
     }
   };
@@ -294,7 +295,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
               </label>
               <p className="note">{receipt.repository.configured
                 ? 'The Git source address is set. Get updates with this machine’s GitHub login.'
-                : receipt.repository.error}</p>
+                : errorMessage(receipt.repository.error, { fallback: 'Helm cannot prepare Git history. Try again.' })}</p>
             </div>}
 
             {readiness && (
@@ -501,7 +502,7 @@ export function VerifyView({ client, env, folder, onBack, onOpenSession }: {
     setChecking(true); setError('');
     client.transferVerify(env.id, folder)
       .then(setReadiness)
-      .catch((e) => setError(e.message))
+      .catch((e) => setError(errorMessage(e)))
       .finally(() => setChecking(false));
   }, [client, env.id, folder]);
   useEffect(load, [load]);
@@ -515,7 +516,7 @@ export function VerifyView({ client, env, folder, onBack, onOpenSession }: {
       }, 45_000);
       onOpenSession(env.id, r.session);
     } catch (e: any) {
-      setError(e.message);
+      setError(errorMessage(e));
       setBusy(false);
     }
   };

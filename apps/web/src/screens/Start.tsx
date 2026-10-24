@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useRef, useState } from 'react';
 import { Sheet } from '../Modal';
 import { accountsFrom, loadPrefs, savePrefs, type Account, type PickerPrefs } from '../accounts';
@@ -44,7 +45,7 @@ export function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
 
   const savePicker = (change: Partial<PickerPrefs>) => {
     if (onMachine.current) {
-      client.rpc(env.id, 'picker.prefs', change, 15_000).catch((e) => setError(e.message));
+      client.rpc(env.id, 'picker.prefs', change, 15_000).catch((e) => setError(errorMessage(e)));
       return;
     }
     const slot = { ...prefs.current[env.id] };
@@ -126,7 +127,7 @@ export function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
         mode: mode || undefined, speed: speed || undefined,
       }, 70_000);
       onStarted(r.session);
-    } catch (e: any) { setError(e.message); setBusy(false); }
+    } catch (e: any) { setError(errorMessage(e)); setBusy(false); }
   };
 
   const eng = account ? engineOf(account.engine) : null;

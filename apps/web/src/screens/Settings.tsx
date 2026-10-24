@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { accountsFrom, type Account } from '../accounts';
 import { EngineMark } from '../EngineMark';
@@ -77,7 +78,7 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
           <p>App version: {document.querySelector<HTMLScriptElement>('script[type="module"]')?.src.split('/').at(-1) ?? 'development'}</p>
           <p>Helm home: {client.relay}</p>
           <p>Connection: {client.connected ? 'connected' : 'reconnecting'}</p>
-          {client.lastError && <p>Last connection error: {client.lastError}</p>}
+          {client.lastError && <p>{errorMessage(client.lastError)}</p>}
           {envs.map(env => {
             const direct = client.directStatus(env.id);
             return direct.state === 'not requested' ? null : <p key={env.id}>
@@ -134,7 +135,7 @@ export function NetworkSettings({ client, envs, onBack, onOpen }: {
     for (const env of envs.filter((e) => e.online)) {
       client.rpc(env.id, 'profile.list')
         .then((r: any) => { if (!stale) setAccounts((all) => ({ ...all, [env.id]: accountsFrom(r.profiles) })); })
-        .catch((e) => { if (!stale) setErrors((all) => ({ ...all, [env.id]: e.message })); });
+        .catch((e) => { if (!stale) setErrors((all) => ({ ...all, [env.id]: errorMessage(e, { machine: env.name }) })); });
     }
     return () => { stale = true; };
   }, [client, envs.map((e) => `${e.id}:${e.online}`).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps

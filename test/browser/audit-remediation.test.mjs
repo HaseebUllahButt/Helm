@@ -103,7 +103,8 @@ test('a failed send does not overwrite a newer draft or its saved copy', async (
   await page.waitForFunction(() => window.rejectSend);
   await area.fill('new unsent draft');
   await page.evaluate(() => window.rejectSend(new Error('simulated connection loss')));
-  await page.getByText('simulated connection loss', { exact: true }).waitFor();
+  await page.locator('.failed-send').getByText('Simulated connection loss', { exact: true }).waitFor();
+  assert.doesNotMatch(await page.locator('body').innerText(), /simulated connection loss/);
   assert.equal(await area.inputValue(), 'new unsent draft');
   assert.equal(await page.evaluate(() => localStorage.getItem('helm-draft:machine:chat')), 'new unsent draft');
 });
@@ -256,4 +257,40 @@ for (const width of [1280, 390]) test(`a chat names its account once, beside the
   assert.match(await page.locator('.session-bar .titles').getAttribute('title'), /^Laptop\b/, 'the hover note names the machine');
   const box = await status.boundingBox();
   assert.ok(box.x >= 0 && box.x + box.width <= width);
+});
+
+test('failed task Details reveals the original error and repeated renders log it once', async t => {
+  const page = await pageFor(t);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const raw = 'session.deliver failed; trace 123456789abcdef0\n at worker (/tmp/private-agent.js:12:4)';
+  const warnings = [];
+  page.on('console', message => { if (message.type() === 'warning' && message.text().includes(raw)) warnings.push(message.text()); });
+  await page.evaluate(raw => {
+    window.sessionFixture.recovery = { kind: 'error', message: raw, at: Date.now() };
+    window.mountDriven();
+  }, raw);
+  const card = page.locator('.recovery');
+  await card.getByText('Task failed', { exact: true }).waitFor();
+  assert.equal(await card.locator('.recovery-raw').count(), 0);
+  assert.doesNotMatch(await card.innerText(), /session\.deliver|123456789abcdef0/);
+  await card.getByRole('button', { name: 'Details', exact: true }).click();
+  assert.equal(await card.locator('.recovery-raw').innerText(), raw);
+  await card.getByRole('button', { name: 'Hide details', exact: true }).click();
+  await card.locator('.recovery-raw').waitFor({ state: 'detached' });
+  await page.evaluate(() => window.mountDriven());
+  await card.getByRole('button', { name: 'Details', exact: true }).click();
+  assert.equal(await card.locator('.recovery-raw').innerText(), raw);
+  assert.equal(warnings.length, 1);
+});
+
+test('a clear task error keeps its meaning in the phone recovery card', async t => {
+  const page = await pageFor(t);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => {
+    window.sessionFixture.recovery = { kind: 'error', message: 'Error: message cancelled because the thread was stopped', at: Date.now() };
+    window.mountDriven();
+  });
+  const message = page.locator('.recovery-copy p');
+  await message.filter({ hasText: 'Message cancelled because the thread was stopped' }).waitFor();
+  assert.equal(await message.innerText(), 'Message cancelled because the thread was stopped');
 });

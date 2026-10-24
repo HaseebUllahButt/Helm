@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useCallback, useEffect, useState } from 'react';
 import type { Client, Environment } from '../client';
 
@@ -22,7 +23,7 @@ export function useGitStatus(client: Client, env: Environment, cwd: string, key:
   const load = useCallback(() => {
     if (!env.online || !cwd) return;
     client.rpc<GitStatus>(env.id, 'git.status', { cwd }, 20_000).then(setStatus)
-      .catch((error) => setStatus((now) => now?.repo ? now : { repo: false, error: error instanceof Error ? error.message : String(error) }));
+      .catch((error) => setStatus((now) => now?.repo ? now : { repo: false, error: errorMessage(error) }));
   }, [client, env.id, env.online, cwd]);
   useEffect(load, [load, key]);
   return { status, reload: load };

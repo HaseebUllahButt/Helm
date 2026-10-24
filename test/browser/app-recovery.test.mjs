@@ -59,12 +59,14 @@ test('a missing screen chunk shows recovery without clearing pairing or saved dr
   assert.equal(await page.evaluate(() => localStorage.getItem('helm.auth')), 'test-membership');
 });
 
-test('a render error leaves a readable recovery screen and error details', async t => {
+test('a render error leaves a readable recovery screen without raw details', async t => {
   const page = await pageFor(t);
   await page.getByRole('button', { name: 'Open broken chat' }).click();
   await page.getByRole('heading', { name: 'Helm cannot open this screen.' }).waitFor();
-  await page.getByText('Error details', { exact: true }).click();
-  assert.equal(await page.getByText('Cannot render this chat', { exact: true }).isVisible(), true);
+  assert.equal(await page.getByText('Error details', { exact: true }).count(), 0);
+  assert.equal(await page.getByText('Cannot render this chat', { exact: true }).count(), 0);
+  await page.getByRole('button', { name: 'Reload Helm' }).click();
+  assert.equal(await page.evaluate(() => window.reloads), 1);
 });
 
 test('the installed shell remains recoverable even when its entry bundle is missing', async t => {

@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { useState, type FormEvent } from 'react';
 import type { Client, Environment } from './client';
 import { Icon } from './Icon';
@@ -38,7 +39,7 @@ export function DictationKey({ client, envs, onSaved }: {
         } catch (err: any) {
           const message = err?.message || 'Helm cannot save the key.';
           if (!saved.length && /accept|look like/.test(message)) throw new Error(message);
-          failed.push(`${env.name} (${/unknown method|not supported/i.test(message) ? 'needs a Helm update' : message})`);
+          failed.push(`${env.name} (${/unknown method|not supported/i.test(message) ? 'needs a Helm update' : errorMessage(err)})`);
         }
       }
       if (!saved.length) throw new Error(failed.length ? `Helm cannot save the key: ${failed.join(', ')}` : 'No machine is online to save the key.');
@@ -54,7 +55,7 @@ export function DictationKey({ client, envs, onSaved }: {
       ].filter(Boolean).join(' '));
       setKey(''); setAdding(false);
     } catch (err: any) {
-      setError(err?.message || 'Helm cannot save the key.');
+      setError(errorMessage(err, { fallback: 'Helm cannot save the key.' }));
     } finally { setBusy(false); }
   };
 

@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { Client, Mode, ModelList, ModelNote, Session, NativeControl } from '../client';
 import { Icon, type IconName } from '../Icon';
@@ -160,7 +161,7 @@ export function trayPrefs({ client, env, engine, profileId, options, setOptions,
 }) {
   const onFavs = (next: string[]) => {
     setOptions((now) => now && { ...now, favs: next });
-    client.rpc(env, 'picker.prefs', { favs: { [engine]: next } }, 15_000).catch((e) => setError(e.message));
+    client.rpc(env, 'picker.prefs', { favs: { [engine]: next } }, 15_000).catch((e) => setError(errorMessage(e)));
   };
   const onDefault = profileId ? async (kind: Kind, value: string) => {
     if (!options) return;
@@ -179,7 +180,7 @@ export function trayPrefs({ client, env, engine, profileId, options, setOptions,
         }, 15_000);
         setOptions((now) => now && { ...now, defaults: r.defaults });
       }
-    } catch (e: any) { setError(e.message); throw e; }
+    } catch (e: any) { setError(errorMessage(e)); throw e; }
   } : undefined;
   // The note is for one look: gone from this screen now, from the machine in a moment.
   const onNewsSeen = profileId ? () => {
@@ -448,7 +449,7 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
     setSaving(id);
     setSaveError('');
     try { await onDefault(id); }
-    catch (e) { setSaveError(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setSaveError(errorMessage(e)); }
     finally { setSaving(null); }
   };
   const [arming, setArming] = useState<string | null>(null);
