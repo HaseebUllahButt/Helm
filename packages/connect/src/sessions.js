@@ -15,7 +15,7 @@ import { nonAgentClaudeTask, claudeServiceTasks } from './claude-tasks.js';
 import { ENGINES } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
-import { optionArgs, peekModels, followNewModels } from './models.js';
+import { optionArgs, peekModels, listModels, followNewModels } from './models.js';
 import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
 import { EventLog } from './events.js';
 import { nativeCodexSocket } from './drivers/codex.js';
@@ -377,8 +377,9 @@ export class Sessions extends EventEmitter {
     if (s.external && s.engine !== 'codex') return EXTERNAL_INFO_COMMANDS;
     // A finished helper's worktree is removed once merged. Opening its chat
     // asks for this menu; starting the agent there only wrote a red "folder
-    // does not exist" into the chat on every visit.
-    if (!this.#drivers.has(s.id) && s.cwd && !existsSync(s.cwd)) return [];
+    // does not exist" into the chat on every visit. A folder being removed
+    // still exists for a moment, and the app asks again as the agent stops.
+    if (!this.#drivers.has(s.id) && ((s.cwd && !existsSync(s.cwd)) || this.#worktrees.removing(s))) return [];
     const driver = await this.#driver(s);
     const available = (await driver.availableCommands?.() ?? []).filter((c) => !['plan', 'plan-mode'].includes(c.name));
     return s.externalSource && s.engine !== 'codex'
@@ -851,12 +852,23 @@ export class Sessions extends EventEmitter {
       // A model released since a picker was last opened still becomes the
       // default before this chat starts - from the held catalogue only, so a
       // start never waits on a CLI.
+      let held = null;
       try {
         const eng = ENGINES[profile.engine], spec = materialize(profile);
-        followNewModels(profile, peekModels(profile.engine, spec.env?.[eng?.homeEnv] ?? eng?.defaultHome,
-          profile.wraps ? { cmd: spec.cmd, args: spec.args } : null));
+        const home = spec.env?.[eng?.homeEnv] ?? eng?.defaultHome;
+        const launcher = profile.wraps ? { cmd: spec.cmd, args: spec.args } : null;
+        held = peekModels(profile.engine, home, launcher);
+        // OpenCode's own pick can sit behind a refused sign-in (models.js
+        // startModel), so its first chat after a restart reads the list once.
+        if (!held && /^opencode2?$/.test(profile.engine)) {
+          held = await Promise.race([listModels(profile.engine, home, spec.env, launcher),
+            new Promise((done) => setTimeout(done, 5_000, null))]).catch(() => null);
+        }
+        followNewModels(profile, held);
       } catch { /* the default as it was is still fine */ }
-      model = modelPrefs(profile)?.default ?? null;
+      // With no default of its own, a CLI whose pick sits behind a refused
+      // sign-in starts on a model that works.
+      model = modelPrefs(profile)?.default ?? held?.startModel ?? null;
     }
     const defaults = startPrefs(profile) ?? {};
     if (!effort) effort = defaults.effort ?? null;

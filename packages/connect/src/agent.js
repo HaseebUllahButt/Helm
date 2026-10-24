@@ -19,7 +19,7 @@ import { BASH_GUARD_MODES } from './pi-settings.js';
 import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
-import { listModels, mergeLiveModelCatalog, followNewModels, modelsSettled } from './models.js';
+import { listModels, mergeLiveModelCatalog, followNewModels, setAsideSignedOut, modelsSettled } from './models.js';
 import { nativeControls, nativeModelChoices, nativeEffortChoices } from './native-controls.js';
 import { nativeClaudeAccount, nativeAccount } from './native-account.js';
 import { readProcess } from './takeover.js';
@@ -1988,8 +1988,10 @@ export class Daemon {
         const prefs = modelPrefs(profile);
         // `models` is the cached catalogue object - copy before folding in
         // prefs/extras so the cache never carries one session's answer.
-        const filtered = applyModelPrefs({ ...models }, prefs, { all: !!p.all });
+        let filtered = applyModelPrefs({ ...models }, prefs, { all: !!p.all });
         if (extra.length) filtered.more = [...(filtered.more ?? []), ...extra];
+        // Models behind a refused sign-in go last; the settings editor still sees all.
+        if (!p.all) filtered = setAsideSignedOut(filtered);
         // A stored default the running agent refuses must not read as the
         // session's model.
         if (live?.models?.length && filtered.default && !live.models.includes(filtered.default)) {

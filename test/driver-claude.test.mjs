@@ -299,6 +299,22 @@ test('a wake-up turn reads as working until it finishes, not done', async (t) =>
   ]);
 });
 
+test('a resumed Claude that reports a stale task first leaves the new message working', async (t) => {
+  // A chat resumed after its folder came back: Claude reported a background
+  // command that ended while it was away, with an empty result, before it
+  // read the message. That result closed the message's turn, so the chat
+  // read "done" for the whole reply.
+  const { driver, log } = make('resume-stale-result');
+  t.after(() => driver.kill());
+  await driver.send('Reply with exactly the words: hello from helm');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.turnId, log.of('turn.start')[0].turnId);
+  assert.equal(done.costTotalUsd, 0.016515);
+  const seq = log.events.filter((e) => e.type === 'status' || e.type === 'turn.start' || e.type === 'turn.done')
+    .map((e) => e.type === 'status' ? e.status : e.type);
+  assert.deepEqual(seq, ['working', 'turn.start', 'turn.done', 'idle']);
+});
+
 test('delegated Claude tasks cannot enter a plan approval workflow', () => {
   const { driver } = make('plain', { mode: 'bypassPermissions', delegated: true });
   const flag = driver.args.indexOf('--disallowedTools');

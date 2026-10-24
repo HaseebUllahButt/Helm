@@ -696,6 +696,11 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
   }
   const models = stdout.split('\n').map((l) => l.trim()).filter((l) => l && l.includes('/'));
   if (def && !models.includes(def)) models.unshift(def);
+  const signedOut = await refusedOpencodeKeys(bin, root, environment);
+  const refused = (m) => signedOut.some((p) => m.startsWith(`${p}/`));
+  // OpenCode lists opencode-go/ before opencode/, so with no configured
+  // default its own pick is a Go model: a new chat would fail on a dead key.
+  const startModel = signedOut.length && (!def || refused(def)) ? models.find((m) => !refused(m)) ?? null : null;
 
   // Expose correct reasoning levels from opencode's models cache (provider metadata
   // at models.dev). This is the source of truth for zen/opencode models - e.g.
@@ -721,7 +726,8 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
   } catch { /* the live session will advertise its actual levels */ }
 
   return {
-    default: def,
+    default: startModel ?? def,
+    ...(signedOut.length ? { signedOut, startModel } : {}),
     models,
     labels,
     efforts: [],
@@ -729,6 +735,68 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
     attachmentByModel,
     images: models.some((m) => attachmentByModel[m]),
     imagesByModel: { ...attachmentByModel },
+  };
+}
+
+/**
+ * OpenCode's own services answer their public model list to anyone, but
+ * refuse it with 401 for an expired or revoked key. `opencode auth list`
+ * still shows such a key as stored, so this is the only cheap way to tell:
+ * it costs no usage, and the key goes only where OpenCode sends it anyway.
+ */
+const OPENCODE_KEY_CHECKS = {
+  opencode: 'https://opencode.ai/zen/v1/models',
+  'opencode-go': 'https://opencode.ai/zen/go/v1/models',
+};
+
+/** OpenCode providers whose saved key the service refuses. */
+async function refusedOpencodeKeys(bin, root, environment = {}) {
+  const keys = new Map();
+  try {
+    // V2 keeps keys in its database and prints them with `auth export`.
+    const { stdout } = await exec(bin, ['auth', 'export'], {
+      timeout: 8_000,
+      env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
+    });
+    for (const c of JSON.parse(stdout)) {
+      if (c?.active && c.value?.type === 'key' && c.value.key) keys.set(c.integrationID, c.value.key);
+    }
+  } catch {
+    // V1 keeps them in <data home>/opencode/auth.json.
+    try {
+      const dataHome = environment.XDG_DATA_HOME || join(environment.HOME || expand('~'), '.local', 'share');
+      const saved = JSON.parse(readFileSync(join(dataHome, 'opencode', 'auth.json'), 'utf8'));
+      for (const [id, c] of Object.entries(saved ?? {})) if (c?.type === 'api' && c.key) keys.set(id, c.key);
+    } catch { /* no saved keys */ }
+  }
+  const refused = await Promise.all([...keys].filter(([id]) => OPENCODE_KEY_CHECKS[id]).map(async ([id, key]) => {
+    try {
+      const r = await fetch(OPENCODE_KEY_CHECKS[id], {
+        headers: { authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      return r.status === 401 || r.status === 403 ? id : null;
+    } catch { return null; }
+  }));
+  return refused.filter(Boolean);
+}
+
+/**
+ * Move models of a provider whose sign-in the service refuses to `more`, so
+ * the picker offers what works first. A live session lists them again, so
+ * this runs on the final answer, not only on the cached catalogue.
+ */
+export function setAsideSignedOut(list) {
+  const out = list?.signedOut;
+  if (!out?.length || !list.models?.length) return list;
+  const refused = (m) => out.some((p) => m.startsWith(`${p}/`));
+  const keep = list.models.filter((m) => !refused(m));
+  if (!keep.length) return list;
+  return {
+    ...list,
+    models: keep,
+    more: [...(list.more ?? []).filter((m) => !refused(m)), ...list.models.filter(refused), ...(list.more ?? []).filter(refused)],
+    default: list.default && refused(list.default) ? list.startModel ?? keep[0] : list.default,
   };
 }
 
