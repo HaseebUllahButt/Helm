@@ -626,6 +626,25 @@ test('interrupt: stops the turn and reports it as interrupted, not as an error',
   await driver.kill();
 });
 
+test('Stop also stops the commands and watches Claude left running; a stop for the next message does not', async (t) => {
+  const { driver, writes, send } = await modelControl(t);
+  for (const [task_id, task_type] of [['bash-1', 'local_bash'], ['watch-1', 'monitor']]) {
+    send({ type: 'system', subtype: 'task_started', task_id, tool_use_id: `toolu_${task_id}`, task_type });
+  }
+  const stops = () => writes.filter(w => w.type === 'control_request' && ['interrupt', 'stop_task'].includes(w.request.subtype));
+  const answer = () => { for (const w of stops()) send({ type: 'control_response', response: { subtype: 'success', request_id: w.request_id } }); };
+  const stopped = driver.interrupt({ background: true });
+  assert.deepEqual(stops().map(w => [w.request.subtype, w.request.task_id]),
+    [['interrupt', undefined], ['stop_task', 'bash-1'], ['stop_task', 'watch-1']]);
+  answer();
+  await stopped;
+  writes.length = 0;
+  const replyOnly = driver.interrupt();
+  assert.deepEqual(stops().map(w => w.request.subtype), ['interrupt']);
+  answer();
+  await replyOnly;
+});
+
 test('kill: a prompt still open is denied before the process is closed', async () => {
   const { driver, log, fake } = make('deny');
   await driver.send('write');

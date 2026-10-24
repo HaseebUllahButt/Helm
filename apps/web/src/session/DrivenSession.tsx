@@ -472,7 +472,25 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   };
 
   const answer = (d: Decision) => pending && call(() => client.rpc(env.id, 'session.answer', { id: session.id, requestId: pending.requestId, decision: d }));
-  const stop = () => call(() => client.rpc(env.id, 'session.interrupt', { id: session.id }));
+  // The button answers at once: a stop sent to another machine can take
+  // seconds to come back. It clears when the work ends, when the stop sent
+  // the waiting message instead, or a few seconds after the machine took
+  // the stop, so an agent that did not stop can be stopped again.
+  const [stopping, setStopping] = useState(false);
+  const stopTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => { if (!working) setStopping(false); }, [working]);
+  useEffect(() => { setStopping(false); return () => clearTimeout(stopTimer.current); }, [session.id]);
+  const stop = async () => {
+    clearTimeout(stopTimer.current);
+    setStopping(true);
+    setBusy(true); setError('');
+    try {
+      const r: any = await client.rpc(env.id, 'session.interrupt', { id: session.id });
+      if (r?.next) setStopping(false);
+      else stopTimer.current = setTimeout(() => setStopping(false), 5000);
+    } catch (e: any) { setStopping(false); setError(e.message); }
+    finally { setBusy(false); }
+  };
   // model / thinking / permissions / speed all go the same way: tell the
   // daemon, take the session it hands back. Nothing restarts that the driver
   // cannot resume.
@@ -811,7 +829,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       </div>)}
       <LiveComposer
         onTranscribe={onTranscribe}
-        live={live} setDraft={setDraft} onSend={send} onStop={stop} working={working}
+        live={live} setDraft={setDraft} onSend={send} onStop={stop} stopping={stopping} working={working}
         engine={engine} keys={false} waiting={!!pending} ask={pending ? (pending.kind === 'question' ? 'question' : 'approval') : undefined}
         shoulder={taskList && <TodoStrip todos={taskList} />}
         banner={pending && <div ref={permissionBox} className="ask-box"><PermissionSheet key={pending.requestId} variant="banner" permission={pending} onAnswer={answer} busy={busy} onHandle={holdQuestion} /></div>}

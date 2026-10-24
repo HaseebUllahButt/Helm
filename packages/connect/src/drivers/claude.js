@@ -510,10 +510,13 @@ export class ClaudeDriver extends Driver {
   /** With `cancel_queued`, a message handed over mid-reply is dropped with the reply. */
   get dropsHandedOnInterrupt() { return this.#capabilities.has('interrupt_cancel_queued_v1'); }
 
-  async interrupt() {
+  async interrupt({ background = false } = {}) {
     if (!this.#pipe) return;
     this.#interrupting = true;
-    await this.#control({ subtype: 'interrupt', cancel_queued: this.#capabilities.has('interrupt_cancel_queued_v1') });
+    // The reply first, the tasks with it: none waits for another to answer.
+    const reply = this.#control({ subtype: 'interrupt', cancel_queued: this.#capabilities.has('interrupt_cancel_queued_v1') });
+    const tasks = background ? [...this.#running] : [];
+    await Promise.all([reply, ...tasks.map((task_id) => this.#control({ subtype: 'stop_task', task_id }))]);
   }
 
   /**

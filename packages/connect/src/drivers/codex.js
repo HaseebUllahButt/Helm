@@ -1374,10 +1374,18 @@ export class CodexDriver extends Driver {
     this.push('status', { status: 'working' });
   }
 
-  async interrupt() {
-    if (!this.#server || !this.#turnId) return;
-    this.#interrupting = true;
-    await this.#server.call('turn/interrupt', { threadId: this.threadId, turnId: this.#turnId });
+  async interrupt({ background = false } = {}) {
+    if (!this.#server) return;
+    const stops = [];
+    if (this.#turnId) {
+      this.#interrupting = true;
+      stops.push(this.#server.call('turn/interrupt', { threadId: this.threadId, turnId: this.#turnId }));
+    }
+    // An older Codex without this call still stops the reply.
+    if (background && this.threadId) {
+      stops.push(this.#server.call('thread/backgroundTerminals/clean', { threadId: this.threadId }).catch(() => {}));
+    }
+    await Promise.all(stops);
   }
 
   async setModel(model) { this.model = model || null; }
