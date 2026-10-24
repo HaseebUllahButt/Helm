@@ -129,7 +129,7 @@ test('a device paired at one hub can still probe the others', async () => {
   });
   assert.equal(probed.status, 200);
   assert.equal(probed.headers.get('access-control-allow-origin'), 'https://1-2-3-4.sslip.io');
-  assert.equal(probed.headers.get('vary'), 'Origin');
+  assert.match(probed.headers.get('vary'), /\bOrigin\b/);
 
   // A near-miss on that name is still a stranger.
   const near = await fetch(`${BASE}/api/network`, {

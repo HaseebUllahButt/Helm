@@ -102,3 +102,13 @@ test('an unavailable machine gives an explicit retryable answer', async () => {
   assert.equal(response.status, 503);
   assert.match((await response.json()).error, /not connected/);
 });
+
+test('a large read answer is compressed for a client that accepts it', async () => {
+  const text = 'history '.repeat(1500);
+  const response = await read('session.list', { text });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-encoding'), 'gzip');
+  assert.equal((await response.json()).result.params.text, text);
+  const small = await read('session.list', {});
+  assert.equal(small.headers.get('content-encoding'), null);
+});
