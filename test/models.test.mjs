@@ -147,3 +147,19 @@ test("Claude's model setting names the model a new chat really starts with", asy
   assert.equal(claudeAlias('fable', models), null);
   assert.equal(claudeAlias('something-else', models), null);
 });
+
+test('models behind a refused OpenCode key go last and never stay the default', async () => {
+  const { setAsideSignedOut } = await import('../packages/connect/src/models.js');
+  const list = {
+    models: ['opencode-go/beam-free', 'opencode-go/glm-5.3', 'opencode/beam-free', 'opencode/big-pickle'],
+    more: ['opencode/old'], default: 'opencode-go/glm-5.3',
+    signedOut: ['opencode-go'], startModel: 'opencode/beam-free',
+  };
+  const out = setAsideSignedOut(list);
+  assert.deepEqual(out.models, ['opencode/beam-free', 'opencode/big-pickle']);
+  assert.deepEqual(out.more, ['opencode/old', 'opencode-go/beam-free', 'opencode-go/glm-5.3']);
+  assert.equal(out.default, 'opencode/beam-free');
+  assert.equal(setAsideSignedOut({ models: ['opencode-go/a'], signedOut: ['opencode-go'] }).models[0], 'opencode-go/a',
+    'an empty picker is worse than a picker of refused models');
+  assert.equal(setAsideSignedOut({ models: ['a/b'] }).models[0], 'a/b');
+});
