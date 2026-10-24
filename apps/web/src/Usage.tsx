@@ -164,13 +164,19 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
 
   const stale = answered.filter((e) => remembered[e.id]);
   const loading = pending.size > 0 && answered.length === 0;
+  // The total grows as machines answer. Name the ones still out, so a
+  // partial sum never reads as the whole bill.
+  const waiting = targets.filter((e) => pending.has(e.id));
+  const missing = waiting.filter((e) => !reports[e.id]).map((e) => e.name);
 
   return (
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <b>Usage</b>
-        {pending.size > 0 && answered.length > 0 && <span className="conn"><i />updating</span>}
+        {waiting.length > 0 && answered.length > 0 && <span className="conn connecting"><i />
+          {waiting.length > 2 ? `Waiting for ${waiting.length} machines` : `Waiting for ${waiting.map((e) => e.name).join(' and ')}`}
+        </span>}
       </div>
 
       <div className="scroll"><div className="pad usage">
@@ -189,6 +195,9 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
           {!!targets.length && <button className="linkish" onClick={() => targets.forEach(e => fetchReport(e, false))}>Retry usage</button>}
         </div>}
         {!loading && answered.length > 0 && <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />}
+        {!loading && missing.length > 0 && <p role="status" className="usage-limits-note">
+          This total does not include {missing.join(', ')} yet.
+        </p>}
 
         {!loading && answered.length > 0 && (
           <section className="usage-where" aria-label="Usage by group">

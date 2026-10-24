@@ -1125,6 +1125,25 @@ export class Daemon {
       .catch(() => {});
   }
 
+  #sharedUsage = { buckets: '', at: 0 };
+
+  /**
+   * Give the hubs a fresh rollup after a report, so they can answer for us
+   * while we sleep. It is the whole history (hundreds of KB on a busy
+   * machine) and went out ahead of every reply on the same links: each
+   * Usage screen paid for it, and a reply waited behind several copies.
+   * Now the reply goes first, and an unchanged rollup goes only every
+   * few minutes, to keep the hub's "last heard" time fresh.
+   */
+  #shareUsage(rollup) {
+    setTimeout(() => {
+      const buckets = JSON.stringify(rollup.buckets);
+      if (buckets === this.#sharedUsage.buckets && Date.now() - this.#sharedUsage.at < 10 * 60_000) return;
+      this.#sharedUsage = { buckets, at: Date.now() };
+      this.broadcastFrame(T.USAGE_SYNC, rollup);
+    }, 2_000).unref?.();
+  }
+
   /** The machine's whole usage rollup - shared by the report and the push. */
   async #usageRollup(rebuild = false) {
     this.usage ??= new UsageReader({ indexPath: join(HELM_DIR, 'usage-index.json') });
@@ -2231,7 +2250,7 @@ export class Daemon {
 
       case M.USAGE_REPORT: {
         const rollup = await this.#usageRollup(!!p.rebuild);
-        this.broadcastFrame(T.USAGE_SYNC, rollup);
+        this.#shareUsage(rollup);
         return foldBuckets(rollup.buckets, {
           model: typeof p.model === 'string' ? p.model : null,
           since: p.since ?? null,
