@@ -368,7 +368,8 @@ for (const width of [1280,390]) test(`a quick chat says "quick chat" where the f
   await page.evaluate(()=>window.visit('laptop',{kind:'env'}));
   const row=page.locator('.thread-row').filter({hasText:'Quick question'}).first();
   await row.waitFor();
-  assert.match(await row.getAttribute('data-where'),/^quick chat · laptop · [^·]+$/,'no branch');
+  assert.equal(await row.locator('.tri-where').innerText(),'quick chat · laptop');
+  assert.equal(await row.locator('.tri-branch').count(),0);
   await row.click();
   const bar=page.locator('.session-bar');
   await bar.waitFor();
