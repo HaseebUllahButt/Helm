@@ -86,6 +86,17 @@ export function saveVisual(html: string, title: string) {
   link.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
+/** Each device remembers which saved pages its owner folded away in the chat. */
+function useFolded(ref: string) {
+  const key = `helm.visual.folded.${ref}`;
+  const [folded, setFolded] = useState(() => { try { return localStorage.getItem(key) === '1'; } catch { return false; } });
+  const fold = (next: boolean) => {
+    setFolded(next);
+    try { if (next) localStorage.setItem(key, '1'); else localStorage.removeItem(key); } catch { /* private mode */ }
+  };
+  return [folded, fold] as const;
+}
+
 /** Lazy snapshot reads keep pages out of the chat's event/cache payloads. */
 export function VisualReply({ visual, read: supplied }: { visual: Visual; read?: VisualReader }) {
   const context = useContext(Visuals), read = supplied ?? context;
@@ -97,6 +108,7 @@ export function VisualReply({ visual, read: supplied }: { visual: Visual; read?:
   const [open, setOpen] = useState(false);
   // A picture on its own: the frame shrinks to it instead of spanning the chat.
   const [pictureWidth, setPictureWidth] = useState<number>();
+  const [folded, fold] = useFolded(visual.ref);
   useEffect(() => {
     const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { setVisible(true); observer.disconnect(); } }, { rootMargin: '300px' });
     if (ref.current) observer.observe(ref.current);
@@ -114,10 +126,20 @@ export function VisualReply({ visual, read: supplied }: { visual: Visual; read?:
       {url && canvas && <button aria-pressed={inCanvas} onClick={() => canvas.show(visual)}>{inCanvas ? 'In canvas' : 'Open in canvas'}</button>}
     </span>
   </div>;
+  // The page shows in one place at a time: while the canvas has it, the chat
+  // keeps only a line, and the page comes back when the canvas closes.
+  if (inCanvas || folded) return <div ref={ref} className="visual-reply visual-folded">
+    <span className="visual-link-text"><strong>{visual.title}</strong><small>{inCanvas ? 'Shown in canvas' : 'Collapsed'}</small></span>
+    {!inCanvas && <span className="visual-actions">
+      {canvas && <button onClick={() => canvas.show(visual)}>Open in canvas</button>}
+      <button aria-expanded={false} onClick={() => fold(false)}>Show</button>
+    </span>}
+  </div>;
   return <div ref={ref} className="visual-reply" style={pictureWidth ? { maxWidth: pictureWidth + 2 } : undefined}>
     {/* No title bar: the picture is the reply. Small corner buttons put it
         in the canvas or open it full size, where its source and Save live. */}
     {html && <span className="visual-corner">
+      <button className="visual-open" aria-label={`Collapse ${visual.title}`} aria-expanded title="Collapse" onClick={() => fold(true)}><Icon name="up" size={14} /></button>
       {toCanvas}
       <button className="visual-open" aria-label={`Expand ${visual.title}`} title="Expand" onClick={() => setOpen(true)}><Icon name="popout" size={14} /></button>
     </span>}
