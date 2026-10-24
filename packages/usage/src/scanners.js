@@ -274,14 +274,14 @@ export class Scanners {
     const root = join(home, 'projects');
     const files = await jsonlUnder(root);
     const stats = await this.claude.scan(files, { ...opts, root });
-    return { buckets: this.claude.fold(files), stats };
+    return { buckets: this.claude.fold(files, root), stats };
   }
 
   async scanCodex(home, opts) {
     const root = join(home, 'sessions');
     const files = await jsonlUnder(root);
     const stats = await this.codex.scan(files, { ...opts, root });
-    return { buckets: this.codex.fold(files), stats };
+    return { buckets: this.codex.fold(files, root), stats };
   }
 
   async scanDatabase(kind, dbPath, opts = {}) {
