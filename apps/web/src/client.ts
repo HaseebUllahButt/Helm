@@ -511,6 +511,9 @@ interface Peer {
   fragments: Map<string, { n: number; parts: string[]; got: number }>;
   deadline?: ReturnType<typeof setTimeout>;
   disconnectedTimer?: ReturnType<typeof setTimeout>;
+  /** When the channel last carried anything, and whether a check is out. */
+  heard?: number;
+  checking?: boolean;
 }
 
 /**
@@ -714,6 +717,14 @@ export class Client {
   private pending = new Map<string, Pending>();
   private listeners = new Set<Listener>();
   private subscribed = new Set<string>();
+  /**
+   * Machines whose events the hub holds back because a direct link carries
+   * them. Both routes used to deliver every event, so a phone downloaded each
+   * one twice. A quiet link is checked (checkDirect); losing it takes the
+   * hub's copy back and resyncs what the gap may have missed.
+   */
+  private quiet = new Set<string>();
+  private quietCheck: ReturnType<typeof setInterval> | undefined;
   private backoff = 500;
   private closed = false;
   private connecting = false;
@@ -741,6 +752,7 @@ export class Client {
     // Picking the phone back up. It may well be on a different network than
     // it was when you put it down, so anything relaying is worth another go.
     this.retryDirectNow();
+    this.checkDirect(true);
     this.probeSocket?.(resumed);
     this.refreshReachability();
     // Coming back to the foreground: the socket is almost certainly dead and
@@ -1243,7 +1255,7 @@ export class Client {
         lastReceived = Date.now();
         this.stopPresencePoll();
         if (!this.reachPoll) this.reachPoll = setInterval(() => this.refreshReachability(), 15_000);
-        for (const env of this.subscribed) ws.send(JSON.stringify({ t: 'subscribe', env }));
+        for (const env of this.subscribed) if (!this.quiet.has(env)) ws.send(JSON.stringify({ t: 'subscribe', env }));
         heartbeat = setInterval(beat, 5000);
         for (const [env, peer] of this.peers) if (!peer.ready) this.dropDirect(env, peer);
         this.retryDirectNow();
@@ -1347,6 +1359,7 @@ export class Client {
     this.stopPresencePoll();
     if (this.reachPoll) clearInterval(this.reachPoll);
     this.reachPoll = null;
+    clearInterval(this.quietCheck); this.quietCheck = undefined;
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisible);
       document.removeEventListener('resume', this.onVisible);
@@ -1368,8 +1381,45 @@ export class Client {
   }
 
   subscribe(env: string) {
+    if (this.subscribed.has(env)) return;
     this.subscribed.add(env);
-    if (this.connected) this.ws!.send(JSON.stringify({ t: 'subscribe', env }));
+    const peer = this.peers.get(env);
+    if (peer?.ready) this.quietHub(env, false);
+    else if (this.connected) this.ws!.send(JSON.stringify({ t: 'subscribe', env }));
+  }
+
+  /** The direct link carries this machine's events: the hub stops sending them. */
+  private quietHub(env: string, subscribedThere = true) {
+    if (!this.subscribed.has(env) || this.quiet.has(env)) return;
+    this.quiet.add(env);
+    if (subscribedThere && this.connected) try { this.ws!.send(JSON.stringify({ t: 'unsubscribe', env })); } catch { /* resubscribed on reconnect */ }
+    this.quietCheck ??= setInterval(() => this.checkDirect(), 5000);
+  }
+
+  /** The hub sends this machine's events again. True when it had stopped. */
+  private wakeHub(env: string) {
+    if (!this.quiet.delete(env)) return false;
+    if (!this.quiet.size) { clearInterval(this.quietCheck); this.quietCheck = undefined; }
+    if (this.connected) try { this.ws!.send(JSON.stringify({ t: 'subscribe', env })); } catch { /* resubscribed on reconnect */ }
+    return true;
+  }
+
+  /**
+   * A direct link can look open and carry nothing: a phone that changed
+   * networks, a laptop that slept. While the hub is quiet that would freeze
+   * the screen, so a link silent for 10 s gets a ping. No answer in 5 s
+   * drops the link (the call's own timeout), which wakes the hub. Skipped
+   * while the page is hidden; coming back checks at once.
+   */
+  private checkDirect(force = false) {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    const now = Date.now();
+    for (const env of this.quiet) {
+      const peer = this.peers.get(env);
+      if (!peer?.ready || peer.checking || (!force && now - (peer.heard ?? 0) < 10_000)) continue;
+      peer.checking = true;
+      this.call(env, 'ping', {}, 5000).catch(() => {}).finally(() => { peer.checking = false; });
+    }
   }
 
   /**
@@ -1765,10 +1815,13 @@ export class Client {
       this.directErrors.delete(env);
       // It worked, so the next failure starts its backoff from scratch.
       this.directWait.delete(env);
+      peer.heard = Date.now();
+      this.quietHub(env);
       this.emit(env, 'transport', { direct: true });
     };
     channel.onclose = () => this.dropDirect(env, peer);
     channel.onmessage = (ev) => {
+      peer.heard = Date.now();
       const msg = this.accumulate(peer, ev.data);
       if (msg == null) return;
       if (msg.t === 'rpcResult') {
@@ -1879,7 +1932,11 @@ export class Client {
     clearTimeout(peer.disconnectedTimer);
     if (reason) this.directErrors.set(env, reason);
     try { peer.channel.close(); peer.pc.close(); } catch { /* already gone */ }
+    const gap = this.wakeHub(env);
     this.emit(env, 'transport', { direct: false });
+    // The hub held this machine's events back, so some may be lost. Screens
+    // already reload everything after a reconnect; this is one.
+    if (gap && this.connected) this.emit('', 'connection', { online: true, hub: this.relay });
     // Losing it is not the end of trying for it.
     this.retryDirect(env);
   }

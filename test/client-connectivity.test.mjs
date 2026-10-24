@@ -937,3 +937,53 @@ test('a model list that waits for its refresh is not raced over other routes', a
   assert.equal((await waiting).models[0], 'm');
   h.client.close();
 });
+
+test('a direct link stops the hub copy of events, and losing it takes the copy back', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const hub = h.sockets[0];
+  h.client.subscribe('vm');
+  await h.client.openDirect('vm'); h.peers[0].open();
+  assert.deepEqual(hub.frames.filter(f => f.env === 'vm' && /subscribe/.test(f.t)).map(f => f.t), ['subscribe', 'unsubscribe']);
+  const before = h.events.filter(e => e.kind === 'connection').length;
+  h.peers[0].channel.close();
+  assert.deepEqual(hub.frames.filter(f => f.env === 'vm' && /subscribe/.test(f.t)).map(f => f.t), ['subscribe', 'unsubscribe', 'subscribe']);
+  assert.equal(h.events.filter(e => e.kind === 'connection' && e.payload.online).length, before + 1, 'screens resync the gap');
+  h.client.close();
+});
+
+test('a machine subscribed while its direct link is up never gets a hub copy', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('vm'); h.peers[0].open();
+  h.client.subscribe('vm');
+  assert.equal(h.sockets[0].frames.filter(f => f.env === 'vm' && /subscribe/.test(f.t)).length, 0);
+  h.client.close();
+});
+
+test('a silent direct link is checked, and dropped when it does not answer', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  h.client.subscribe('vm');
+  await h.client.openDirect('vm'); const peer = h.peers[0]; peer.open();
+  await h.advance(9000);
+  assert.equal(peer.channel.frames.filter(f => f.method === 'ping').length, 0, 'recent traffic needs no check');
+  await h.advance(2000);
+  const ping = peer.channel.frames.find(f => f.method === 'ping');
+  assert.ok(ping, 'ten silent seconds send a check');
+  peer.message({ t: 'rpcResult', id: ping.id, ok: true, result: {} });
+  await h.advance(1);
+  assert.equal(h.client.directTo('vm'), true);
+  await h.advance(20000);
+  assert.equal(h.client.directTo('vm'), false, 'an unanswered check drops the link');
+  assert.equal(h.sockets[0].frames.filter(f => f.env === 'vm' && f.t === 'subscribe').length, 2);
+  h.client.close();
+});
+
+test('a hub reconnect leaves a machine on its direct link quiet', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  h.client.subscribe('vm'); h.client.subscribe('other');
+  await h.client.openDirect('vm'); h.peers[0].open();
+  h.sockets[0].close(); await h.advance(5000);
+  const next = h.sockets.at(-1);
+  assert.notEqual(next, h.sockets[0]);
+  assert.deepEqual(next.frames.filter(f => f.t === 'subscribe').map(f => f.env), ['other']);
+  h.client.close();
+});
