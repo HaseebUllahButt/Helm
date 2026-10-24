@@ -332,6 +332,12 @@ export interface UsageReport {
    * own cache gets, surfaced the same way.
    */
   stale?: boolean;
+  /**
+   * Days whose Claude transcripts were deleted, estimated from Claude Code's
+   * daily totals. `id` is the same on every machine holding a copy of one
+   * Claude folder, so a merge counts each once.
+   */
+  estimates?: (UsageGroup & { id: string; date: string })[];
 }
 
 /** The share of input tokens that came back out of the prompt cache. */

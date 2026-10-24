@@ -218,6 +218,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
           stale={stale.length}
           failed={targets.filter((e) => failed[e.id]).map((e) => e.name)}
           unpriced={scoped.unpriced}
+          estimated={!!merged.estimates?.length}
           rescanning={pending.size > 0}
           onRescan={() => targets.forEach((e) => fetchReport(e, true))}
         />}
@@ -414,15 +415,19 @@ function Breakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: Fa
 /** How many machines the number covers, and the way to count it again.
     One short line; the finer print (remembered usage, unpriced models)
     sits in its tooltip, and unpriced costs already carry a "+". */
-function Provenance({ answered, total, stale, failed, unpriced, rescanning, onRescan }: {
+function Provenance({ answered, total, stale, failed, unpriced, estimated, rescanning, onRescan }: {
   answered: number; total: number; stale: number; failed: string[]; unpriced: boolean;
-  rescanning: boolean; onRescan: () => void;
+  estimated: boolean; rescanning: boolean; onRescan: () => void;
 }) {
   const detail = [
     stale > 0 ? `${stale} saved reports` : '',
     unpriced ? 'Some models have no published price. Helm shows only their token counts.' : '',
   ].filter(Boolean).join(' · ');
-  return (
+  return (<>
+    {estimated && <p className="usage-note">
+      Claude Code deleted some older chat records. Helm estimates those days from Claude Code daily totals.
+      The Folder view shows them as one row.
+    </p>}
     <p className="usage-note" title={detail || undefined}>
       {`${answered} of ${total} machines`}
       {failed.length > 0 ? ` · ${failed.join(', ')} not answering` : ''}
@@ -434,7 +439,7 @@ function Provenance({ answered, total, stale, failed, unpriced, rescanning, onRe
         {rescanning ? 'Helm is reading usage again.' : 'Read usage again'}
       </button>
     </p>
-  );
+  </>);
 }
 
 /** Fold the daemon's groups down to one dimension. */

@@ -4,6 +4,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { Scanners } from './scanners.js';
 import { splitKey, blankStats, addStats, loadIndex, saveIndex } from './scan-cache.js';
 import { priceBucket, cacheRatesFor, providerOf } from './pricing.js';
+import { ESTIMATED_FOLDER } from './claude-stats.js';
 
 /**
  * What this machine's agents have spent, read from what they already wrote.
@@ -236,6 +237,7 @@ export function foldBuckets(buckets, {
   const groups = new Map();
   const totals = blankTotals();
   const days = new Map();
+  const estimates = new Map();
   const offset = Number.isFinite(Number(tz)) ? Number(tz) : 0;
 
   const entries = buckets instanceof Map ? buckets.entries() : Object.entries(buckets ?? {});
@@ -250,6 +252,10 @@ export function foldBuckets(buckets, {
 
     // Rates change on a UTC date, so pricing reads the bucket's own day.
     const utcDay = stamp.slice(0, 10);
+    // Two homes holding one copied Claude folder estimate the same day; it
+    // counts once. The app does the same across machines with `estimates`.
+    const estimateId = project === ESTIMATED_FOLDER ? `${model}|${utcDay}|${b.claudeDaily ?? ''}` : null;
+    if (estimateId && estimates.has(estimateId)) continue;
     const cost = b.billedUsd != null && b.billedUsd > 0
       ? { total: b.billedUsd, billed: true }
       : priceBucket(b.engine, model, b, utcDay);
@@ -272,6 +278,11 @@ export function foldBuckets(buckets, {
     const g = groups.get(gkey) || { ...Object.fromEntries(by.map((d) => [d, dims[d] ?? ''])), ...blankTotals() };
     addInto(g, b, cost, rates);
     groups.set(gkey, g);
+    if (estimateId) {
+      const row = { id: estimateId, date, ...Object.fromEntries(by.map((d) => [d, dims[d] ?? ''])), ...blankTotals() };
+      addInto(row, b, cost, rates);
+      estimates.set(estimateId, row);
+    }
   }
 
   return {
@@ -281,6 +292,7 @@ export function foldBuckets(buckets, {
     accounts,
     scan,
     at: at ?? Date.now(),
+    ...(estimates.size ? { estimates: [...estimates.values()] } : {}),
   };
 }
 
@@ -329,3 +341,4 @@ export const hitRate = (t) => {
 };
 
 export { splitKey };
+export { ESTIMATED_FOLDER };

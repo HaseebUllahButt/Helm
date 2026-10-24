@@ -56,6 +56,7 @@ export function mergeReports(parts: { env: string; report: UsageReport }[]): Usa
   const accounts: UsageReport['accounts'] = [];
   const scan: Record<string, number> = {};
   let at = 0;
+  const estimates = new Map<string, NonNullable<UsageReport['estimates']>[number]>();
 
   for (const { report } of parts) {
     add(totals, report.totals);
@@ -74,6 +75,17 @@ export function mergeReports(parts: { env: string; report: UsageReport }[]): Usa
       add(cur, g);
       groups.set(k, cur);
     }
+    // A Claude folder copied between machines brings the same daily totals,
+    // so two machines can estimate one deleted day. The second copy comes
+    // back out of every figure it went into.
+    for (const e of report.estimates || []) {
+      if (!estimates.has(e.id)) { estimates.set(e.id, e); continue; }
+      add(totals, e, -1);
+      const day = daily.get(e.date);
+      if (day) add(day, e, -1);
+      const group = groups.get(['engine', 'account', 'model', 'provider', 'project'].map((d) => (e as any)[d] ?? '').join('\0'));
+      if (group) add(group, e, -1);
+    }
     accounts.push(...(report.accounts || []));
     for (const [k, v] of Object.entries(report.scan || {})) {
       if (typeof v === 'number') scan[k] = (scan[k] || 0) + v;
@@ -87,6 +99,7 @@ export function mergeReports(parts: { env: string; report: UsageReport }[]): Usa
     accounts,
     scan,
     at,
+    ...(estimates.size ? { estimates: [...estimates.values()] } : {}),
   };
 }
 
@@ -97,10 +110,10 @@ function blank() {
   };
 }
 
-function add(acc: ReturnType<typeof blank>, b: Partial<ReturnType<typeof blank>>) {
+function add(acc: ReturnType<typeof blank>, b: Partial<ReturnType<typeof blank>>, sign = 1) {
   for (const k of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'total', 'turns',
     'costUsd', 'cacheSavedUsd', 'cacheWritePremiumUsd'] as const) {
-    acc[k] += (b as any)[k] || 0;
+    acc[k] += sign * ((b as any)[k] || 0);
   }
   if (b.unpriced) acc.unpriced = true;
 }

@@ -3,6 +3,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { FileRollupCache, ResultCache, blankStats, bucketKey } from './scan-cache.js';
 import { offThread } from './off-thread.js';
+import { ClaudeStatsMemory, estimateMissing } from './claude-stats.js';
 
 /**
  * Reading what each CLI already wrote about what it spent.
@@ -265,16 +266,19 @@ export class Scanners {
     this.claude = new FileRollupCache({ id: 'claude', parser: claudeParser });
     this.codex = new FileRollupCache({ id: 'codex', parser: codexParser });
     this.dbs = new ResultCache({ id: 'db' });
+    this.claudeStats = new ClaudeStatsMemory();
   }
 
   /** Every cache this holds, for loading and saving the index as one file. */
-  get caches() { return [this.claude, this.codex, this.dbs]; }
+  get caches() { return [this.claude, this.codex, this.dbs, this.claudeStats]; }
 
   async scanClaude(home, opts) {
     const root = join(home, 'projects');
     const files = await jsonlUnder(root);
     const stats = await this.claude.scan(files, { ...opts, root });
-    return { buckets: this.claude.fold(files, root), stats };
+    const buckets = this.claude.fold(files, root);
+    for (const [key, b] of estimateMissing(buckets, await this.claudeStats.read(home))) buckets.set(key, b);
+    return { buckets, stats };
   }
 
   async scanCodex(home, opts) {
