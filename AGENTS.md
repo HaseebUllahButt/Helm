@@ -34,8 +34,15 @@ Report supported findings without a fixed count.
 
 ## Testing
 
-- Run `npm run check` before and after a change.
-- Never run the full test suite unless the owner asks. Rerun only failed files.
+- While you work, run the test files you touch by name:
+  `npm run test:smart -- test/a.test.mjs`. Rerun only failed files.
+- Run `npm run check` once before you commit. It type-checks the web app when
+  web code changed and runs the tests named after the changed files.
+- `check` lists changed files with no test of their own. Pick their tests by
+  name (docs/features lists tests per feature). Add `--near` only when needed.
+- Never run `npm test`, `test:browser`, `test:network`, `check:full` or
+  `--wide` unless the owner asks. No hosted server runs them for Helm.
+- New tests wait for an event or a state, never for a fixed time.
 
 ## Working alongside other chats
 

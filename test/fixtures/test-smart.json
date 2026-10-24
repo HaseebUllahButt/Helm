@@ -1,0 +1,35 @@
+{
+  "usageScreen": "apps/web/src/Usage.tsx",
+  "claudeDriver": "packages/connect/src/drivers/claude.js",
+  "protocol": "packages/protocol/index.js",
+  "discover": "packages/connect/src/discover.js",
+  "agent": "packages/connect/src/agent.js",
+  "pricing": "packages/usage/src/pricing.js",
+  "relayWs": "apps/relay/src/ws.js",
+  "app": "apps/web/src/App.tsx",
+  "terminal": "apps/web/src/Terminal.tsx",
+  "sessions": "packages/connect/src/sessions.js",
+  "relayShare": "apps/relay/src/share.js",
+  "rustReader": "native/log-index/src/lib.rs",
+  "lineBuffer": "packages/connect/src/line-buffer.js",
+  "usageFix": [
+    "apps/web/src/Usage.tsx",
+    "packages/connect/src/agent.js",
+    "packages/usage/src/pricing.js"
+  ],
+  "terminalFix": [
+    "apps/relay/src/ws.js",
+    "apps/web/src/App.tsx",
+    "apps/web/src/Terminal.tsx",
+    "apps/web/src/screens/EnvView.tsx",
+    "apps/web/src/styles.css",
+    "packages/connect/src/agent.js",
+    "packages/connect/src/sessions.js",
+    "packages/protocol/index.js",
+    "test/browser/global-keys.test.mjs",
+    "test/session-driver.test.mjs",
+    "test/terminal-browser.test.mjs",
+    "apps/web/src/session/StartingTerminalView.tsx",
+    "apps/web/src/startingTerminals.ts"
+  ]
+}
