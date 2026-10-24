@@ -530,6 +530,17 @@ const HTTP_READ_METHODS = new Set([
   'project.list',
 ]);
 
+/** A held chat list with a machine's changes applied, or null if they do not fit it. */
+function applyListChanges(held: Session[], r: any): Session[] | null {
+  if (typeof r?.digest !== 'string') return null;
+  if (r.unchanged) return held;
+  if (!Array.isArray(r.ids) || !Array.isArray(r.changed)) return null;
+  const byId = new Map(held.map((s) => [s.id, s]));
+  for (const s of r.changed) byId.set(s.id, s);
+  const rebuilt = r.ids.map((id: string) => byId.get(id));
+  return rebuilt.every(Boolean) ? rebuilt : null;
+}
+
 function sendDirect(channel: RTCDataChannel, frame: string): boolean {
   try {
     if (frame.length <= DC_CHUNK_AT) {
@@ -1420,6 +1431,36 @@ export class Client {
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
+    if (method === 'session.list' && params?.projects !== true) return this.listSessions(env, params, timeout) as Promise<T>;
+    return this.call<T>(env, method, params, timeout);
+  }
+
+  /** The last chat list each screen's filter got, by machine. */
+  private lists = new Map<string, { digest: string; sessions: Session[] }>();
+
+  /**
+   * A chat list, sent as only its changes when this device holds an earlier
+   * one (agent.js #listReply). A machine too old to know `have`, or one that
+   * no longer has that list, answers in full as before.
+   */
+  private async listSessions(env: string, params: any, timeout: number): Promise<any> {
+    const key = `${env}|${JSON.stringify(params ?? {})}`;
+    const held = this.lists.get(key);
+    let r = await this.call<any>(env, 'session.list', held ? { ...params, have: held.digest } : params, timeout);
+    if (r && typeof r === 'object' && 'base' in r) {
+      const rebuilt = held && r.base === held.digest ? applyListChanges(held.sessions, r) : null;
+      if (rebuilt) {
+        this.lists.set(key, { digest: r.digest, sessions: rebuilt });
+        return { sessions: [...rebuilt] };
+      }
+      r = await this.call<any>(env, 'session.list', params, timeout);
+    }
+    if (typeof r?.digest === 'string' && Array.isArray(r.sessions)) this.lists.set(key, { digest: r.digest, sessions: r.sessions });
+    else this.lists.delete(key);
+    return r;
+  }
+
+  private call<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
     // Watching an open chat includes restored tabs and deep links, which
     // never visit the machine screen that originally started direct links.
     if (method === 'session.watch') void this.openDirect(env).catch(() => {});

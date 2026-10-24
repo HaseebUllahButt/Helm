@@ -751,11 +751,17 @@ export function createWsLayer() {
 
   const wss = new WebSocketServer({
     noServer: true,
+    // Live chat updates are small frames that repeat the same fields. Fresh
+    // compression for each frame, only above 1 KB, sent three real chat logs
+    // at 18-77% of their size; a 16 KB window kept from frame to frame sends
+    // them at 6-24%, for about 200 KB of memory per socket. Uploads
+    // stay fresh per frame: they are small and the browser holds that side.
     perMessageDeflate: {
-      serverNoContextTakeover: true,
+      serverNoContextTakeover: false,
+      serverMaxWindowBits: 14,
       clientNoContextTakeover: true,
       concurrencyLimit: 4,
-      threshold: 1024,
+      threshold: 64,
     },
     // The web app offers ("helm", <token>): answer "helm" so the browser
     // accepts the handshake, without ever echoing the token back.
