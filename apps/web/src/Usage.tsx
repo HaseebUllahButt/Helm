@@ -358,6 +358,13 @@ function planSpend(groups: ChartGroup[], accounts: UsageReport['accounts']): Pla
  */
 const SHOWN = 6;
 
+/** A model run from several CLIs has no one engine: its maker's mark stands in. */
+const MAKERS: [RegExp, string][] = [[/^claude-/, 'claude'], [/^(gpt-|o\d)/, 'codex'], [/^grok-/, 'grok'], [/^gemini-/, 'gemini'], [/^kimi-/, 'kimi']];
+function makerOf(model?: string) {
+  const id = (model ?? '').split('/').pop()!.toLowerCase();
+  return MAKERS.find(([re]) => re.test(id))?.[1];
+}
+
 function Breakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: FacetId; onModel: (model: string) => void }) {
   const [all, setAll] = useState(false);
   const priced = groups.some((g) => g.costUsd > 0);
@@ -388,7 +395,7 @@ function Breakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: Fa
       <ul className="usage-shares" aria-label={`${facetLabel} share of ${priced ? 'cost' : 'tokens'}`}>
         {shown.map((g, i) => {
           const body = <>
-            {marked && <EngineMark engine={g.engine} className="usage-share-mark" />}
+            {marked && <EngineMark engine={g.engine ?? (facet === 'model' ? makerOf(g.model) : undefined)} className="usage-share-mark" />}
             <span className="usage-share-name">{name(g)}</span>
             <span className="usage-share-value">{amount(g)}</span>
             <span className="usage-share-pct">{share(g)}</span>
