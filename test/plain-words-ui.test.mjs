@@ -15,21 +15,22 @@ const load = async (path) => {
 const { plainProblem, plainError } = await load('../apps/web/src/session/problem.ts');
 const { isBrowserKey } = await load('../apps/web/src/browserKeys.ts');
 
-test('a CLI failure reads as a sentence without raw details', () => {
+test('a CLI failure keeps the original text for Details', () => {
   const raw = 'claude exited with code 1: No conversation found with session ID: c11b0faa-9520-4551-a2b0-6dd8c3971a7f';
   const p = plainProblem('error', raw);
   assert.equal(p.title, 'Task failed');
   assert.equal(p.action, 'Try again');
   assert.match(p.text, /no longer has the chat history/);
-  assert.equal(p.raw, undefined);
+  assert.equal(p.raw, raw);
   assert.match(plainError('Error: 401 Unauthorized'), /signed out/);
   assert.match(plainError('API Error: 529 Overloaded'), /busy/);
 });
 
 test('an unknown failure uses a safe message', () => {
-  const p = plainProblem('error', 'codex exited with code 2: the frobnicator 3f2a9c1e-1111-2222-3333-444455556666 jammed');
+  const raw = 'codex exited with code 2: the frobnicator 3f2a9c1e-1111-2222-3333-444455556666 jammed';
+  const p = plainProblem('error', raw);
   assert.match(p.text, /agent stopped/);
-  assert.equal(p.raw, undefined);
+  assert.equal(p.raw, raw);
 });
 
 test('a limit says when it resets; a restart and a stop say what to do', () => {
@@ -44,9 +45,9 @@ test('provider internal errors and rejected models explain how to recover', () =
   const internal = 'Client error: Protocol error (invalid_argument): an internal error occurred (trace ID: d0ebd00c684f0c6c1cd575844e2e38aa)';
   const unavailable = JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', message: "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account." } });
   assert.match(plainProblem('error', internal).text, /AI service.*Select another model/);
-  assert.equal(plainProblem('error', internal).raw, undefined);
+  assert.equal(plainProblem('error', internal).raw, internal);
   assert.match(plainProblem('error', unavailable).text, /account cannot use this model/);
-  assert.equal(plainProblem('error', unavailable).raw, undefined);
+  assert.equal(plainProblem('error', unavailable).raw, unavailable);
 });
 
 test('browser keys are caught; editing and finding keys are not', () => {

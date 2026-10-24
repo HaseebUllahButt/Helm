@@ -246,7 +246,7 @@ test('a clean folder and an unreachable history each say what is going on', asyn
   await page.getByRole('tab',{name:'Graph',exact:true,selected:true}).waitFor();
   assert.equal(await page.getByRole('tab',{name:'Changes',exact:true}).count(),1,'no zero count on a clean folder');
   await page.getByText('Helm cannot load Git history.').first().waitFor();
-  assert.doesNotMatch(await page.locator('body').innerText(), /git is busy/);
+  await page.getByText('Git is busy', { exact: true }).waitFor();
   await page.getByRole('button',{name:'Try again'}).click();
   await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();

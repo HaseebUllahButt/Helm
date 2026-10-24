@@ -52,7 +52,7 @@ test('a failed send after the owner typed on is kept on a card, retried as sent,
   await card.waitFor();
   assert.match(await card.innerText(), /Send not confirmed/);
   assert.match(await card.innerText(), /first message/);
-  assert.match(await card.innerText(), /Helm cannot finish this action. Try again./);
+  assert.match(await card.innerText(), /Machine did not answer/);
   assert.equal(await box.inputValue(), 'typed while waiting', 'the newer draft is left alone');
 
   // Retry sends the kept words, not the composer's; a double tap sends once.
@@ -62,7 +62,7 @@ test('a failed send after the owner typed on is kept on a card, retried as sent,
   assert.deepEqual(await p.evaluate(() => window.sends[1]),
     { id: 'failed-send-test', data: 'first message', references: [] });
   await p.evaluate(() => window.answers[1].reject(new Error('still nothing')));
-  await p.locator('.failed-send', { hasText: 'Helm cannot finish this action.' }).waitFor();
+  await p.locator('.failed-send', { hasText: 'Still nothing' }).waitFor();
   assert.equal(await p.evaluate(() => window.sends.length), 2);
 
   await card.getByRole('button', { name: 'Retry send' }).click();

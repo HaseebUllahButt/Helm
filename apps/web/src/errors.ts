@@ -1,8 +1,21 @@
-/** Show only known, plain messages. Keep the original failure in the console. */
+/** Show plain messages. Keep technical failures out of the main message. */
 export type ErrorContext = { machine?: string; fallback?: string };
+const reportedErrors = new Set<string>();
+
+function readableMessage(message: string): string | undefined {
+  const trimmed = message.trim();
+  if (/[\r\n\u2028\u2029]/.test(trimmed)) return;
+  const line = trimmed.replace(/^Error:[ \t]*/i, '');
+  if (!line || line.length > 160 || !/[a-z]/i.test(line)
+    || /[\x00-\x1f\x7f\u2028\u2029{}\[\]\\/]/.test(line)
+    || /\b[a-z_$][\w$]*(?:\.[a-z_$][\w$]*)+\b/i.test(line)
+    || /\b(?:[0-9a-f]{8,}|0x[0-9a-f]+)\b/i.test(line)
+    || /\bRPC\b|\b(?:Traceback|stack trace)\b|^at\s|^\w+Error:|["']\s*:/i.test(line)
+    || /^".*"$|^(?:null|true|false)$/i.test(line)) return;
+  return line[0].toUpperCase() + line.slice(1);
+}
 
 export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot finish this action. Try again.' }: ErrorContext = {}): string {
-  console.warn('Helm action failed:', error);
   const value = error && typeof error === 'object' ? error as { message?: unknown; code?: unknown; status?: unknown; name?: unknown } : {};
   const message = typeof error === 'string' ? error : typeof value.message === 'string' ? value.message : '';
   const code = typeof value.code === 'string' ? value.code.toLowerCase() : '';
@@ -10,6 +23,11 @@ export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot 
   const name = typeof value.name === 'string' ? value.name : '';
   const text = `${code} ${status} ${name} ${message}`;
   const where = machine || 'This machine';
+  const report = message || text;
+  if (!reportedErrors.has(report)) {
+    reportedErrors.add(report);
+    console.warn('Helm action failed:', error);
+  }
 
   if (/model.*(not supported|not available|unavailable)|does not offer/i.test(text)) return 'This account cannot use this model. Select another model.';
   if (/an internal error occurred/i.test(text)) return 'The AI service did not finish this reply. Try again. Select another model if it fails again.';
@@ -42,5 +60,5 @@ export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot 
   if (/conflict|uncommitted changes|unsaved changes|local changes.*overwritten/i.test(text)) return `Save the file changes on ${machine || 'this machine'}. Try again.`;
   if (/diverged|combine.*changes/i.test(text)) return `Combine the changes on ${machine || 'this machine'} before you update Helm.`;
   if (/overloaded|service unavailable|\b5\d\d\b/i.test(text)) return 'The service is busy. Try again soon.';
-  return fallback;
+  return readableMessage(message) ?? fallback;
 }

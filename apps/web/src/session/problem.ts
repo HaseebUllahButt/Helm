@@ -1,7 +1,7 @@
 import { errorMessage } from '../errors';
 
 /** A task outcome, with a safe message and a way to continue. */
-export interface Problem { title: string; text: string; action: string }
+export interface Problem { title: string; text: string; action: string; raw?: string }
 type Kind = 'limited' | 'error' | 'interrupted' | 'restart';
 
 function tidy(message: string): string {
@@ -40,8 +40,9 @@ export function plainProblem(kind: Kind, message: string): Problem {
     const when = resetTime(message ?? '');
     return {
       title: 'Usage limit reached', action: 'Resume',
+      raw,
       text: when ? `This account’s limit resets at ${when}. Waiting messages stay until you continue.` : 'This account reached its usage limit. Waiting messages stay until you continue.',
     };
   }
-  return { title: 'Task failed', action: 'Try again', text: plainError(message ?? '') };
+  return { title: 'Task failed', action: 'Try again', text: plainError(message ?? ''), raw };
 }

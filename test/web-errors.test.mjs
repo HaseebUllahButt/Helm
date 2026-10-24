@@ -21,12 +21,37 @@ test('network failures show safe next steps and the affected machine', () => {
 });
 
 test('unknown values never become error text and action details stay useful', () => {
-  for (const error of [null, undefined, {}, 42, 'a private server trace', 'upload failed', { status: Symbol('private'), name: Symbol('private') }]) {
+  for (const error of [null, undefined, {}, 42, '{"error":"private trace"}', '/private/trace', { status: Symbol('private'), name: Symbol('private') }]) {
     assert.equal(errorMessage(error), 'Helm cannot finish this action. Try again.');
   }
   assert.match(errorMessage(new Error('EACCES: /private/file')), /permissions/);
   assert.match(errorMessage(new Error('ENOSPC'), { machine: 'Laptop' }), /space on Laptop/);
   assert.match(errorMessage(new Error('401 Unauthorized')), /Sign in again/);
   assert.match(errorMessage(new Error('unknown method: owner.get')), /Update Helm/);
-  assert.equal(errorMessage('private', { fallback: 'Helm cannot open this file.' }), 'Helm cannot open this file.');
+  assert.equal(errorMessage('session.private', { fallback: 'Helm cannot open this file.' }), 'Helm cannot open this file.');
+});
+
+
+test('readable errors keep their meaning without technical text', () => {
+  assert.equal(errorMessage(new Error('message cancelled because the thread was stopped')), 'Message cancelled because the thread was stopped');
+  assert.equal(errorMessage('Error: the folder is read only.'), 'The folder is read only.');
+  assert.equal(errorMessage('upload failed'), 'Upload failed');
+  for (const raw of ['session.deliver failed', 'workerFailed at handler (/tmp/agent.js:12:3)',
+    'at worker (agent:12:4)', 'Failed with 63d6b99d80dbbf70b29db7d320c8d800',
+    'Failed with 12345678-1234-1234-1234-123456789abc', 'Failed with 0x123',
+    'Failed\n at worker', 'Failed on C:\\Users\\owner', '{"error":"Failed"}', '["Failed"]',
+    'RPC refused the request', 'Error:\nworker failed', '"Private trace"', 'null', 'x'.repeat(161)]) {
+    assert.equal(errorMessage(raw), 'Helm cannot finish this action. Try again.', raw);
+  }
+});
+
+test('the same raw failure logs once across repeated calls and Error objects', () => {
+  const warnings = [];
+  const previous = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  try {
+    for (let i = 0; i < 10; i++) errorMessage(i % 2 ? new Error('A unique warning for repeated renders.') : 'A unique warning for repeated renders.');
+    errorMessage('A second unique warning for repeated renders.');
+    assert.equal(warnings.length, 2);
+  } finally { console.warn = previous; }
 });

@@ -248,7 +248,7 @@ test('settings expose the app route and build without exposing pairing credentia
   await page.getByText('Connection details', { exact: true }).click();
   await page.getByText('Helm home: https://hub.example', { exact: true }).waitFor();
   await page.getByText('App version: development', { exact: true }).waitFor();
-  await page.getByText('Helm cannot finish this action. Try again.', { exact: true }).waitFor();
+  await page.getByText('Connection stopped responding', { exact: true }).waitFor();
   // The app reloads itself when a new build lands; no button for it.
   assert.equal(await page.getByRole('button', { name: /^Reload app/ }).count(), 0);
   assert.doesNotMatch(await page.locator('.main').innerText(), /helm1\./);
@@ -780,7 +780,7 @@ for (const width of [1280, 390]) for (const childState of ['error', 'blocked']) 
   await card.locator('.need-go').click();
   const details = page.getByRole('dialog', { name: 'Agents', exact: true });
   await details.getByRole('heading', { name: 'Agents' }).waitFor();
-  await details.locator('.delegation-branch.selected').getByText('Helm cannot finish this action. Try again.', { exact: true }).waitFor();
+  await details.locator('.delegation-branch.selected').getByText('Provider request failed', { exact: true }).waitFor();
   await details.getByRole('button', { name: 'Close agents' }).click();
   if (width < 500) await page.locator('.session-bar').getByRole('button', { name: 'Back', exact: true }).click();
   await card.locator('.need-main').click();

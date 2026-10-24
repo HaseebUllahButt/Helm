@@ -68,7 +68,7 @@ test('the Updates screen lists each machine’s coding tools, updates now and sa
     assert.match(text, /Claude Code[\s\S]*2\.1\.296[\s\S]*Helm updated this tool 2h ago\. \(2\.1\.290 → 2\.1\.296\)/);
     assert.match(text, /Codex[\s\S]*The tool is up to date\. Helm checked it 40m ago\./);
     assert.match(text, /Pi[\s\S]*0\.99\.1 · 1\.1\.0 is available/);
-    assert.match(text, /Cursor[\s\S]*The update failed 5h ago\. - Helm cannot finish this action. Try again./);
+    assert.match(text, /Cursor[\s\S]*The update failed 5h ago\. - Could not reach the update server/);
     const why = await page.locator('.rows.plain', { has: page.getByText('Gemini') }).innerText();
     assert.match(why, /Claude Code[\s\S]*2\.1\.280[\s\S]*Helm cannot update this tool: installed by the system/);
     assert.match(why, /Gemini[\s\S]*Helm cannot update this tool: installed with npm in a folder this user can not write to/);
