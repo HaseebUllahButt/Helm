@@ -420,7 +420,9 @@ export function createWsLayer() {
           drop: (endpoint) => q.pushDelete.run(endpoint),
           log: (line) => console.error(`[helm] ${line}`),
         }).then((sent) => {
-          if (sent) console.log(`[helm] push: told ${sent} device${sent === 1 ? '' : 's'} that ${payload.title}`);
+          // A resolve frame has no title: it only takes an answered alert away.
+          const what = payload.resolve ? 'an alert was answered' : payload.title;
+          if (sent) console.log(`[helm] push: told ${sent} device${sent === 1 ? '' : 's'} that ${what}`);
         }).catch(() => {});
         return;
       }

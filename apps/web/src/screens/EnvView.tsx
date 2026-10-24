@@ -85,7 +85,7 @@ function dedupeDetected(list: Session[], found: InventorySession[]): InventorySe
  */
 const botThread = (s: Session) => /^whatsapp-/i.test(s.title);
 
-export function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming, isSnoozed = () => false, sendJobs = [], sendTarget }: {
+export function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onNewTerminal, onResume, resuming, isSnoozed = () => false, sendJobs = [], sendTarget }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[]; sendJobs?: SendJob[]; sendTarget?: string;
   isSnoozed?: (session: Session) => boolean;
   /** What this machine last said it was running, while it cannot be asked. */
@@ -96,13 +96,14 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
   onStart: (cwd: string) => void;
   onSettings: () => void;
   onUsage: () => void; onMedia: () => void; onOpen: (s: Session) => void;
+  /** A new terminal on this machine, on screen at once while it opens. */
+  onNewTerminal: () => void;
   /** Continue a conversation a CLI recorded on its own; starts the engine. */
   onResume: (s: Session) => void;
   resuming: string | null;
 }) {
   const [direct, setDirect] = useState(false);
   const [ping, setPing] = useState<number | null>(null);
-  const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   /** Filing several threads away at once, rather than one ⋯ at a time. */
@@ -198,21 +199,14 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
     return () => { off(); projectSequence.current++; };
   }, [client, env.id, reloadProjects, projectCwds]);
 
-  const openTerminal = async () => {
+  const openTerminal = () => {
     // Back to the terminal you left, with whatever is running in it still
     // running: the button used to start a fresh shell and close the old one,
     // which killed a build or a server mid-run. A new one is the + beside
     // the terminal's tabs.
     const open = sessions.filter(ownTerminal).sort(byRecent)[0];
     if (open) { onOpen(open); return; }
-    setOpening(true); setError('');
-    try {
-      const r = await client.rpc<{ session: Session }>(env.id, 'session.start',
-        { cwd: '~', profileId: 'shell' }, 45_000);
-      reload();
-      onOpen(r.session);
-    } catch (e: any) { setError(errorMessage(e)); }
-    finally { setOpening(false); }
+    onNewTerminal();
   };
 
   // One box for the whole screen. The folder is part of what you are looking
@@ -419,7 +413,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
           // one and wonder what is wrong with it.
           title={env.info.terminals === 'panes' ? 'Open terminal (slow on this machine)' : 'terminal'}
           aria-label={env.info.terminals === 'panes' ? 'Open terminal (slow on this machine)' : 'terminal'}
-          disabled={!env.online || opening}
+          disabled={!env.online}
           onClick={openTerminal}
         ><Icon name="terminal" size={18} />{env.info.terminals === 'panes' && <b className="slowmark" aria-hidden="true">!</b>}</button>
         <button className="iconbtn" title={`Show costs on ${env.name}`} aria-label={`Show costs on ${env.name}`} onClick={onUsage}><Meter /></button>

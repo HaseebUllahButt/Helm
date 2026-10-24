@@ -20,6 +20,14 @@ Helm restart. Whoever typed last sets the size.
 - **Tests:** `test/terminal-browser`, `terminal-host`, `pty`,
   `shared-terminal`, `proc-host`, `pane-keys`.
 
+## Opening over a slow link
+A new terminal shows at once, saying "Opening a terminal on <machine>…",
+and becomes the terminal when the machine answers. If it cannot open, the
+reason and "Try again" show there. Its first screen comes back with the start
+(`session.start` with `attach`), so the app does not ask again.
+- **Tests:** `test/browser/global-keys` ("on screen at once"),
+  `test/terminal-browser`, `test/session-driver` ("numbered by the machine").
+
 ## The owner's own terminal panes
 - **Traps:** the private copy sees the owner's real herdr panes (`rpc
   session.list` ids like `pane:wD:p1`, marked `adopted`). Never open, type

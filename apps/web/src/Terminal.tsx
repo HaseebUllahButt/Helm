@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal as Xterm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type { Client } from './client';
+import { takeFirstScreen } from './startingTerminals';
 
 /**
  * The keys a phone keyboard does not have, as the bytes a keyboard sends.
@@ -143,7 +144,9 @@ export function Terminal({ client, env, sessionId }: {
     let seen = '';
     let stopped = false;
     let isPty = false;
-    const watcher = globalThis.crypto?.randomUUID?.() ?? `terminal-${Date.now()}-${Math.random()}`;
+    // A terminal just opened from here brought its first screen with it.
+    const first = takeFirstScreen(sessionId);
+    const watcher = first?.watcher ?? globalThis.crypto?.randomUUID?.() ?? `terminal-${Date.now()}-${Math.random()}`;
 
     const show = (text: string, reset: boolean) => {
       if (reset) {
@@ -234,7 +237,15 @@ export function Terminal({ client, env, sessionId }: {
       client.rpc(env, 'session.resize', { id: sessionId, cols, rows }, 10_000).catch(() => {});
     });
 
-    attach();
+    if (first) {
+      isPty = true;
+      show(first.text, true);
+      for (const piece of first.later) show(piece.text, piece.reset);
+      // It was opened at a guess of our size; now the real one is known.
+      if (xterm.cols !== first.cols || xterm.rows !== first.rows) {
+        client.rpc(env, 'session.resize', { id: sessionId, cols: xterm.cols, rows: xterm.rows }, 10_000).catch(() => {});
+      }
+    } else attach();
     // The renew keeps a watching viewer registered, so output stops being
     // pushed to a phone that has gone away.
     const renew = setInterval(() => attach(true), 25_000);
