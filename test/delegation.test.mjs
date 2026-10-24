@@ -387,7 +387,7 @@ test('stopping a parent leaves a helper that already finished as it was', async 
   assert.equal(sessions.get(done.id).delegation.finishedAt, finishedAt);
   assert.equal(sessions.get(done.id).recovery, undefined, 'and is not marked stopped');
   assert.equal(sessions.get(busy.id).delegation.status, 'interrupted', 'one still at work is stopped');
-  assert.equal(parent.recovery.message, 'Stopped by you. Its helper was stopped too.');
+  assert.equal(parent.recovery.message, 'You stopped this chat. Helm also stopped its helper.');
 });
 
 test('a child completion wakes its idle parent once with a durable result ticket', async (context) => {
