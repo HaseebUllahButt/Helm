@@ -160,7 +160,7 @@ for (const width of [1280, 390]) test(`the open chat label matches Running and n
   assert.equal(await page.locator('.recovery').count(), 0, 'a starting agent hides the last run’s problem');
   // Its own turn is over but child tasks are still going: not finished.
   await show('idle', { team: { working: 2, blocked: 0, failed: 0 } });
-  await page.waitForFunction(() => document.querySelector('.session-bar .chip')?.textContent === 'working');
+  await page.waitForFunction(() => document.querySelector('.session-bar .chip.dot-only'));
   assert.equal(await label.getAttribute('title'), 'Helpers are still working');
   // The machine could not tell: say so instead of looking idle.
   await show('unknown');

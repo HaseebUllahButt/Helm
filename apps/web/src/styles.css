@@ -611,6 +611,8 @@ code, pre, kbd { font-family: var(--mono); }
 .chip.blocked { color: var(--amber-text); }
 .chip.working { color: var(--sky); }
 .chip.working i { animation: pulse 2s steps(6) infinite; }
+.chip.dot-only { padding: 6px; }
+.chip.dot-only i { width: 8px; height: 8px; }
 .chip.done { color: var(--ok); }
 .chip.exited { color: var(--mutedfg); }
 

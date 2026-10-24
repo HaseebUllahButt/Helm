@@ -45,7 +45,7 @@ test('the working clock updates without redrawing the chat or losing a draft', a
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
   const box=page.locator('textarea[data-composer]');
   await page.locator('button[title="model: a"]').waitFor();
-  await page.getByText('working 1m',{exact:true}).waitFor();
+  await page.getByRole('img',{name:'Working 1m',exact:true}).waitFor();
   await box.fill('Keep this draft');
   await page.locator('.turn.user').waitFor();
   await page.waitForTimeout(500);
@@ -73,7 +73,7 @@ test('the working clock updates without redrawing the chat or losing a draft', a
     await new Promise(r=>setTimeout(r,100));
   }});
   await page.waitForFunction(()=>document.querySelector('.chip.working')?.title.includes('tok/s'));
-  await page.waitForFunction(()=>!document.querySelector('.chip.working')?.title,{timeout:5000});
+  await page.waitForFunction(()=>!document.querySelector('.chip.working')?.title.includes('tok/s'),{timeout:5000});
   await page.getByRole('button',{name:'model: a',exact:true}).click();
   await page.getByRole('option',{name:'Model B',exact:true}).waitFor();
   await page.keyboard.press('Escape');
