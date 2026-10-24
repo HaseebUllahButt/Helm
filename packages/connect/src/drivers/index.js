@@ -43,13 +43,15 @@ import { execFile } from 'node:child_process';
 
 // A model streams a few words at a time; a phone on a bad route does not want
 // a WebSocket frame for each. Deltas to the same item are merged for this
-// long before they leave the daemon. Nobody can tell 50ms from 0.
+// long before they leave the daemon. The first piece after a pause goes at
+// once: holding it made every reply's first word 50 ms late.
 export const COALESCE_MS = 50;
 
 export class Driver extends EventEmitter {
   /** itemId -> buffered text */
   #buffer = new Map();
   #flushTimer = null;
+  #flushedAt = 0;
   /** The open compaction item, if the CLI is compacting. */
   #compaction = null;
 
@@ -72,6 +74,11 @@ export class Driver extends EventEmitter {
   /** Emit one event, merging text deltas per item. */
   push(type, payload) {
     if (type === 'item.delta') {
+      if (!this.#flushTimer && Date.now() - this.#flushedAt >= COALESCE_MS) {
+        this.#flushedAt = Date.now();
+        this.emit('event', { type, id: payload.id, text: payload.text });
+        return;
+      }
       this.#buffer.set(payload.id, (this.#buffer.get(payload.id) ?? '') + payload.text);
       if (!this.#flushTimer) {
         this.#flushTimer = setTimeout(() => this.flush(), COALESCE_MS);
@@ -111,6 +118,7 @@ export class Driver extends EventEmitter {
 
   flush() {
     if (this.#flushTimer) { clearTimeout(this.#flushTimer); this.#flushTimer = null; }
+    if (this.#buffer.size) this.#flushedAt = Date.now();
     for (const [id, text] of this.#buffer) this.emit('event', { type: 'item.delta', id, text });
     this.#buffer.clear();
   }
