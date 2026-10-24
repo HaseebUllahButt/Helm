@@ -1044,8 +1044,8 @@ function Shell({ client, conn, onSignOut }: {
   useSeenVersion();
   const unreadDone = doneNow.filter(({ s }) => isUnread(s)).length;
   const isOpen = ({ env: e, s }: { env: Environment; s: Session }) => selected === e.id && view.kind === 'session' && view.session.id === s.id;
-  const homeRow = (x: { env: Environment; s: Session }) => (
-    <HomeRow key={x.s.id} s={x.s} machine={x.env.name} selected={isOpen(x)} onOpen={() => openSession(x.env.id, x.s)} actions={threadActions(x.env, x.s)} />
+  const homeRow = (x: { env: Environment; s: Session }, slim = false) => (
+    <HomeRow key={x.s.id} s={x.s} machine={x.env.name} slim={slim} selected={isOpen(x)} onOpen={() => openSession(x.env.id, x.s)} actions={threadActions(x.env, x.s)} />
   );
   // A chat you have open is a chat you have seen, including what it finishes while you watch.
   const openId = view.kind === 'session' ? view.session.id : null;
@@ -1237,10 +1237,10 @@ function Shell({ client, conn, onSignOut }: {
               <Fold
                 shelf defaultOpen title="Settled" count={doneNow.length} remember="sidebar:settled"
                 note={unreadDone ? `${unreadDone} new` : doneIsSaved ? 'saved' : undefined} noteTone={unreadDone ? 'fresh' : undefined}
-                peek={doneNow.some(isOpen) ? <div className="rows plain">{doneNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
+                peek={doneNow.some(isOpen) ? <div className="rows plain">{doneNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
               >
                 <PagedRows
-                  items={doneNow} isSelected={isOpen} row={homeRow}
+                  items={doneNow} isSelected={isOpen} row={(x) => homeRow(x, true)}
                   first={SETTLED_FIRST} step={SETTLED_STEP}
                 />
               </Fold>

@@ -13,13 +13,13 @@ until `text` starts with "helm / Search anything".
 ## Home shelves
 - **Rules:** the owner calls the shelf of recently finished chats
   "Settled". The sidebar shows live and Helm-known chats only, on purpose.
-- **Rules (owner asked for a calmer sidebar, 2026-10-24):** every row is one
-  line. A chat shows its title and one status: a clock while it runs,
-  "Needs you", "Failed", or its age (a green dot when not opened yet).
-  Folder, machine, branch and agent are in the row's tooltip
-  (`data-where`) and in the chat. A machine shows a word only for news
-  ("2 running", or the age when offline). The top bar shows only the dot
-  while connected. Shelf headers have no divider lines.
+- **Rules (owner, 2026-10-24):** a Settled chat is one line: title, one
+  status (its age, a green dot when not opened yet, "Needs you" or
+  "Failed"), and the agent logo. A Running chat keeps a second line with
+  its folder, machine, branch and agent logo; the owner wants these. A
+  machine shows a word only for news ("2 running", or the age when
+  offline). The top bar shows only the dot while connected. Shelf headers
+  have no divider lines.
 - **Prove (driven 2026-10-15):** finish one fake chat, then
   `$V click Back; $V text | head -14`: your chat under "Settled" with its
   age.

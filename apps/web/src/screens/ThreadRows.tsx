@@ -264,13 +264,14 @@ export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Sessi
 }
 
 /**
- * A chat in the sidebar, on one line: the title, then one status at the
- * right edge - a clock while it works, "Needs you", "Failed", or its age.
- * The folder, machine, branch and agent are in the tooltip and in the chat
- * itself, so the title has the width. Borrowed from T3 Code's sidebar.
+ * A chat in the sidebar. A settled chat is one line: the title, one status
+ * at the right edge (its age, "new", or a word that says more), and the
+ * agent. A running chat adds a second line: its folder, machine and branch.
  */
-export function HomeRow({ s, machine, onOpen, note, selected = false, actions }: {
+export function HomeRow({ s, machine, onOpen, note, selected = false, slim = false, actions }: {
   s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean;
+  /** One line: the title, its status and the agent. */
+  slim?: boolean;
   /** Rename, archive, delete - the same ⋯ the machine screen's rows have. */
   actions?: { onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void };
 }) {
@@ -285,14 +286,25 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, actions }:
     : s.recovery?.kind === 'interrupted' ? <span className="chip exited">stopped</span>
     : unknownThread(s) ? <StatusChip status="unknown" />
     : s.externalActive || (s.shared && s.alive) ? <span className="chip">Ready</span> : null;
+  const title = <span className={`tri-title${name.cut ? ' cut' : ''}`} ref={fadeWhenCut}>{name.text}</span>;
+  const status = note && slim ? <span className="tstat quiet" data-mood="quiet">{note}</span> : chip ?? <ThreadStatus s={s} mood={mood} now={now} />;
+  const mark = <EngineMark engine={eng.cls} className="tri-mark" />;
   return (
-    <div className={`row tall rowx tri-row mood-${mood}${selected ? ' active' : ''}`}>
+    <div className={`row tall rowx tri-row mood-${mood}${slim ? ' slim' : ''}${selected ? ' active' : ''}`}>
       <button
-        className={`rowmain thread-row tri${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}
+        className={`rowmain thread-row tri${slim ? ' slim' : ''}${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}
         title={`${s.title}\n${where}`} data-where={where}
       >
-        <span className={`tri-title${name.cut ? ' cut' : ''}`} ref={fadeWhenCut}>{name.text}</span>
-        {note ? <span className="tstat quiet" data-mood="quiet">{note}</span> : chip ?? <ThreadStatus s={s} mood={mood} now={now} />}
+        {slim ? <>{title}{status}{mark}</> : <>
+          <span className="tri-top">{title}{status}</span>
+          <span className="tri-bot">
+            <Icon name={s.quick ? 'bolt' : 'folder'} size={12} />
+            <span className="tri-where">{[whereOf(s), machine].filter(Boolean).join(' · ')}</span>
+            {note && <span className="tri-note">{note}</span>}
+            {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
+            <span className="tri-end">{mark}</span>
+          </span>
+        </>}
       </button>
       {actions && <ThreadActions s={s} {...actions} />}
     </div>

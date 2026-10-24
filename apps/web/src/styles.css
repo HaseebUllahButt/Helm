@@ -2904,12 +2904,12 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .owner-added { color: var(--emerald); }
 .owner-removed { color: var(--text-dim); text-decoration: line-through; }
 
-/* Sidebar chats, as T3 Code's sidebar does them: one line each, the title
-   and one status at the right edge. Folder, machine, branch and agent live
-   in the tooltip and the chat, so the title has the width. Running chats
-   are at full strength with a live clock; finished ones are dimmer with a
-   grey age. Helm's own colours and type throughout. */
-.row.thread-row.tri, .rowx .rowmain.thread-row.tri { flex-direction: row; align-items: center; gap: 8px; min-height: 34px; padding: 7px 10px; }
+/* Sidebar chats, as T3 Code's inbox does them. A running chat: the title and
+   its status on the first line, its folder, machine, branch and agent on the
+   second. A settled chat: one line - the title, its age and the agent.
+   Helm's own colours and type throughout. */
+.row.thread-row.tri, .rowx .rowmain.thread-row.tri { flex-direction: column; align-items: stretch; gap: 2px; min-height: 0; padding: 8px 10px 9px; }
+.row.thread-row.tri.slim, .rowx .rowmain.thread-row.tri.slim { flex-direction: row; align-items: center; gap: 8px; min-height: 34px; padding: 7px 10px; }
 /* The sidebar row: its body is the button, the ⋯ sits beside it and shows on hover. */
 .row.rowx.tri-row { min-height: 0; }
 .row.rowx.tri-row .rowend { opacity: 0; }
@@ -2919,14 +2919,29 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 /* With a mouse the ⋯ holds no column of its own: on hover it takes the
    status's place, and the title has the whole width the rest of the time. */
 @media (hover: hover) and (pointer: fine) {
-  .row.rowx.tri-row .rowend { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); height: 24px; min-width: 24px; padding: 0 3px; }
-  .row.rowx.tri-row:is(:hover, :has(.rowend[aria-expanded="true"]), :has(.rowend:focus-visible)) :is(.tstat, .chip) { visibility: hidden; }
+  .row.rowx.tri-row .rowend { position: absolute; right: 6px; bottom: 6px; height: 24px; min-width: 24px; padding: 0 3px; }
+  .row.rowx.tri-row.slim .rowend { bottom: auto; top: 50%; transform: translateY(-50%); }
+  .row.rowx.tri-row:is(:hover, :has(.rowend[aria-expanded="true"]), :has(.rowend:focus-visible)) .tri-mark { visibility: hidden; }
 }
 .tri-title { flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 450; color: var(--text-dim); overflow: hidden; text-overflow: clip; white-space: nowrap; line-height: 1.35; }
 /* A long name fades out at the edge, like the chat bar's, instead of ending in "…". */
 .tri-title:is([data-more], .cut) { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
 .row.thread-row.tri:hover .tri-title, .row.thread-row.tri.active .tri-title, .tri-row:hover .tri-title, .thread-row.tri.active .tri-title { color: var(--text); }
 .tri-row .chip { flex: none; font-size: 10.5px; padding: 0 6px; min-height: 18px; }
+.tri-top, .tri-bot { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: var(--t-micro); color: var(--mutedfg); }
+.tri-top { gap: 10px; }
+.tri-bot svg { flex: none; opacity: .8; }
+.tri-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tri-note { flex: none; color: var(--text-dim); white-space: nowrap; }
+.tri-bot .tri-where + svg { margin-left: 6px; }
+.tri-branch { font-family: var(--mono); font-size: 11px; min-width: 0; flex-shrink: 4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tri-end { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
+.tri-mark.mark { flex: none; width: 18px; height: 18px; border-radius: 5px; }
+.tri-mark.mark svg { width: 11px; height: 11px; }
+/* A settled chat's agent is grey until the pointer or the chat itself asks. */
+.tri-row.slim .tri-mark { filter: grayscale(1); opacity: .5; transition: opacity 0.15s var(--ease), filter 0.15s var(--ease); }
+.tri-row.slim:hover .tri-mark, .tri-row.slim.active .tri-mark, .tri-row.slim:focus-within .tri-mark { filter: none; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .tri-row.slim .tri-mark { transition: none; } }
 
 /* The status slot: one place, at the right of the line. */
 .tstat { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; font-size: var(--t-micro); font-weight: 550; line-height: 1.35; font-variant-numeric: tabular-nums; }

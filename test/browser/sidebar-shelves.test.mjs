@@ -113,7 +113,8 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   assert.equal(await settled.locator('.tstat.unread').count(), 1, 'only the unopened one');
   assert.equal(await fresh.locator('.tstat.unread').count(), 1);
   assert.ok(await settled.locator('.tri-row').first().evaluate(e => e.getBoundingClientRect().height < 40), 'rows are one line');
-  assert.ok(await working.locator('.tri-row').first().evaluate(e => e.getBoundingClientRect().height < 40), 'running rows are one line too');
+  assert.equal(await settled.locator('.tri-row').first().locator('.tri-mark').count(), 1, 'a settled row keeps its agent logo');
+  assert.ok(await working.locator('.tri-row').first().locator('.tri-bot .tri-where').isVisible(), 'a running row shows its folder');
   assert.equal(await settled.locator('.note-inline.fresh').innerText(), '1 new');
   await shot(page, `sidebar-shelves-${width}.png`);
   await page.locator('.sidebar .scroll').evaluate(e => { e.scrollTop = e.scrollHeight; });
