@@ -712,6 +712,7 @@ export class Sessions extends EventEmitter {
             ?? detected.find((x) => x.engine === s.engine && x.id === s.engineSessionId);
           s.profileId = profile?.id ?? null;
           if (current) {
+            s.blank = false;
             s.engineSessionId = current.id;
             s.transcript = current.transcript;
             // A live Pi extension is fresher than the append-only transcript.

@@ -106,7 +106,8 @@ export class NativeSessions {
     }
     const setStatus = (status) => {
       this.#nativeStatusAt.set(s.id, Date.now());
-      if (s.status === status) return;
+      if (s.status === status && (status === 'idle' || !s.blank)) return;
+      if (status !== 'idle') s.blank = false;
       s.status = status; s.updatedAt = Date.now(); this.#core.save();
       this.#sessions.emit('session', { ...wire(s), alive: this.#sessions.nativeTerminals.has(s.id), ...pendingSummary(this.#sessions.events.pending(s.id)) });
     };
@@ -393,6 +394,8 @@ export class NativeSessions {
       ...(meta.settings?.effort ? { engineEffort: meta.settings.effort } : {}),
       ...(meta.settings?.mode ? { mode: meta.settings.mode } : {}),
       ...(meta.conversation ? { engineSessionId: meta.conversation } : {}),
+      // Nothing said yet: the sidebar leaves it out until the first message.
+      ...(meta.conversation ? {} : { blank: true }),
       status: 'idle', createdAt: meta.createdAt, updatedAt: meta.createdAt };
     this.#core.index.set(meta.id, session);
     this.#core.save();

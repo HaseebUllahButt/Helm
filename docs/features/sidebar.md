@@ -20,6 +20,13 @@ until `text` starts with "helm / Search anything".
   machine shows a word only for news ("2 running", or the age when
   offline). The top bar shows only the dot while connected. Shelf headers
   have no divider lines.
+- **Rules (owner, 2026-10-24):** a CLI opened in a terminal with nothing
+  said in it is in neither Running nor Settled. It joins at its first
+  message. The machine marks it `blank` until then.
+- **Prove (driven 2026-10-24):** launch `helm-native-cli.js claude <fake
+  program>` with the copy's `HELM_DIR` and `XDG_RUNTIME_DIR` (no
+  `HELM_NATIVE_BYPASS`): no row. Send its `UserPromptSubmit` hook with
+  `sendHook`: it shows under Running. Send `Stop`: it moves to Settled.
 - **Prove (driven 2026-10-15):** finish one fake chat, then
   `$V click Back; $V text | head -14`: your chat under "Settled" with its
   age.

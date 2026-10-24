@@ -126,6 +126,8 @@ export interface Session {
   pty?: boolean;
   /** A normal local CLI launch; app and laptop share its native terminal. */
   nativeCli?: boolean;
+  /** A terminal chat with nothing said in it yet; the sidebar leaves it out. */
+  blank?: boolean;
   /** Native Claude connected to Helm's conversation UI through its channel. */
   nativeChat?: boolean;
   /** Joined through Codex's existing shared local daemon. */

@@ -1036,7 +1036,7 @@ function Shell({ client, conn, onSignOut }: {
   // lists are all there is, and they show, marked as saved.
   // A chat that cloned a repo stays listed before its first message: the
   // owner leaves it while the repo comes down and comes back to it here.
-  const doneNow = everyone.filter(({ env: machine, s }) => ((s.driver || s.adopted) && ((s.turns ?? 0) > 0 || !!s.clone) || s.nativeCli && s.alive)
+  const doneNow = everyone.filter(({ env: machine, s }) => ((s.driver || s.adopted) && ((s.turns ?? 0) > 0 || !!s.clone) || s.nativeCli && s.alive && !s.blank)
     && (machine.online || !liveEnvsSeen.current)
     && settledThread(s)
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);

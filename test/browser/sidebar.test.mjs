@@ -266,7 +266,8 @@ test('Done is newest first across machines, retires at three days, and the foote
       laptop: [session('Two days ago',48*hour),session('Newest',hour),session('Retired',72*hour),
         session('Almost retired',72*hour-1000),session('Working',100*hour,{status:'working'}),
         session('Archived',0,{archived:true}),session('Child',0,{delegation:{parentId:'other'}}),
-        session('Unused',0,{turns:0}),session('Waiting',0,{status:'blocked'})],
+        session('Unused',0,{turns:0}),session('Waiting',0,{status:'blocked'}),
+        session('Empty terminal',0,{driver:undefined,turns:0,nativeCli:true,pty:true,alive:true,blank:true})],
       vm: [session('Yesterday',24*hour),...Array.from({length:31},(_,i)=>session('Recent '+i,(i+2)*60000))],
     };
     window.mount(window.makeClient(['laptop','vm'].map(id=>({id,name:id,online:true,info:{}})), sessions, 'https://private.sslip.io'));
