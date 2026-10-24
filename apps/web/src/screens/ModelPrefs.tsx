@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useState } from 'react';
 import type { Account } from '../accounts';
 import { newsLines } from '../session/Controls';
@@ -51,7 +52,7 @@ export function ModelPrefsView({ client, env, account, onBack }: {
     const catalog = followModelRefresh(
       (settled) => client.rpc<ModelList>(env.id, 'model.list', { profileId: account.profile.id, all: true, ...(settled ? { settled } : {}) }, 45_000),
       (r) => take(r),
-      (e) => { if (!list) setError(e instanceof Error ? e.message : String(e)); },
+      (e) => { if (!list) setError(errorMessage(e)); },
     );
     return () => { stale = true; catalog.stop(); };
   }, [client, env.id, account.profile.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -83,7 +84,7 @@ export function ModelPrefsView({ client, env, account, onBack }: {
         }, 20_000),
       ]);
       onBack();
-    } catch (e: any) { setError(e.message); setBusy(false); }
+    } catch (e: any) { setError(errorMessage(e)); setBusy(false); }
   };
 
   const all = list?.models ?? [];

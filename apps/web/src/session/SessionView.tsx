@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useCopySelection } from '../useCopySelection';
 import type { Transcribe } from './voice';
 import { useDismiss } from '../useDismiss';
@@ -125,7 +126,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try {
       await client.input(env.id, { id: session.id, data: command });
       setNativeNotice(command);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setSettingBusy(false); }
   };
   // A model picked here is checked with Claude first: its PreModelSwitch
@@ -148,7 +149,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         setNativeNotice(`/${kind} ${value}`);
         if (!session.nativeChat) setRaw(true);
       }
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setSettingBusy(false); }
   };
 
@@ -168,7 +169,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       if (r.status) setStatus(r.status);
       setReadError(''); success = true;
       saveMessages(env.id, session.id, r.messages);
-    } catch (e: any) { if (mounted.current) setReadError(e.message); }
+    } catch (e: any) { if (mounted.current) setReadError(errorMessage(e)); }
     finally {
       reading.current = false;
       const again = readAgain.current; readAgain.current = false;
@@ -228,7 +229,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try {
       for (const file of picked) {
         try { ready.push(await prepareAttachment(file)); }
-        catch (e: any) { failures.push(`${file.name}: ${e.message}`); }
+        catch (e: any) { failures.push(`${file.name}: ${errorMessage(e)}`); }
       }
       await setImages(current => [...current, ...ready]);
       if (failures.length) setError(`Not added — ${failures.join('; ')}`);
@@ -260,13 +261,13 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       else setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now(),
         attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) }] : m);
       setTimeout(refresh, 600);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setSending(false); }
   };
 
   const key = async (k: string) => {
     try { await client.rpc(env.id, 'session.keys', { id: session.id, keys: [k] }); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
   };
 
   const [killing, setKilling] = useState(false);
@@ -275,7 +276,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const newTerminal = async () => {
     if (!onNewTerminal) return;
     setOpening(true);
-    try { await onNewTerminal(); } catch (e: any) { setError(e.message); } finally { setOpening(false); }
+    try { await onNewTerminal(); } catch (e: any) { setError(errorMessage(e)); } finally { setOpening(false); }
   };
 
   const stopNative = async () => {
@@ -285,7 +286,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
 
   const kill = async () => {
     try { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
   };
 
   // A terminal's own tab keys, the way a terminal app has them: Ctrl/Cmd+T a
@@ -323,7 +324,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const archive = async () => {
     setMenu(false);
     try { await client.rpc(env.id, 'session.archive', { id: session.id, archived: !session.archived }); onArchived(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
   };
 
   // Terminals are named by the machine ("Terminal 3") and agents by their
@@ -333,7 +334,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try {
       const r: any = await client.rpc(env.id, 'session.title', { id: session.id, title: next });
       onSession(r.session);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
   };
 
   const nativeProfile = nativeOptions?.profileId ?? session.profileId;
@@ -347,7 +348,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try {
       await client.rpc(env.id, 'session.control', { id: session.id, kind }, 70_000);
       setRaw(true);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setSettingBusy(false); }
   };
   const nativeControls = Controls({ options: nativeOptions, session,
@@ -557,7 +558,7 @@ function NativeClaudeApprovals({ client, env, sessionId, handle, children }: {
     if (!pending) return;
     setBusy(true); setError('');
     try { await client.rpc(env, 'session.answer', { id: sessionId, requestId: pending.requestId, decision }); await refresh(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
   const hold = useCallback((h: QuestionHandle | null) => { if (handle) handle.current = h; }, [handle]);

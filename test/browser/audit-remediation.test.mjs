@@ -103,7 +103,8 @@ test('a failed send does not overwrite a newer draft or its saved copy', async (
   await page.waitForFunction(() => window.rejectSend);
   await area.fill('new unsent draft');
   await page.evaluate(() => window.rejectSend(new Error('simulated connection loss')));
-  await page.getByText('simulated connection loss', { exact: true }).waitFor();
+  await page.locator('.failed-send').getByText('Helm cannot finish this action. Try again.', { exact: true }).waitFor();
+  assert.doesNotMatch(await page.locator('body').innerText(), /simulated connection loss/);
   assert.equal(await area.inputValue(), 'new unsent draft');
   assert.equal(await page.evaluate(() => localStorage.getItem('helm-draft:machine:chat')), 'new unsent draft');
 });

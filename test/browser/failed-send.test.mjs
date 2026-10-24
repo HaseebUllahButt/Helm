@@ -52,7 +52,7 @@ test('a failed send after the owner typed on is kept on a card, retried as sent,
   await card.waitFor();
   assert.match(await card.innerText(), /Send not confirmed/);
   assert.match(await card.innerText(), /first message/);
-  assert.match(await card.innerText(), /machine did not answer — Check the chat before you try again./);
+  assert.match(await card.innerText(), /Helm cannot finish this action. Try again./);
   assert.equal(await box.inputValue(), 'typed while waiting', 'the newer draft is left alone');
 
   // Retry sends the kept words, not the composer's; a double tap sends once.
@@ -62,7 +62,7 @@ test('a failed send after the owner typed on is kept on a card, retried as sent,
   assert.deepEqual(await p.evaluate(() => window.sends[1]),
     { id: 'failed-send-test', data: 'first message', references: [] });
   await p.evaluate(() => window.answers[1].reject(new Error('still nothing')));
-  await p.locator('.failed-send', { hasText: 'still nothing — Check the chat' }).waitFor();
+  await p.locator('.failed-send', { hasText: 'Helm cannot finish this action.' }).waitFor();
   assert.equal(await p.evaluate(() => window.sends.length), 2);
 
   await card.getByRole('button', { name: 'Retry send' }).click();
@@ -82,7 +82,7 @@ test('a failed send after the owner typed on is kept on a card, retried as sent,
   assert.equal(await p.evaluate(() => window.sends.length), 4);
 });
 
-test('a failed send with an untouched composer still goes back into it, with no card', async t => {
+test('an unconfirmed timeout keeps the draft and offers a safe retry with the same ID', async t => {
   const p = await browser.newPage(); t.after(() => p.close());
   p.setDefaultTimeout(5000);
   await p.route('http://helm.test/**', r => r.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
@@ -91,9 +91,17 @@ test('a failed send with an untouched composer still goes back into it, with no 
   await box.fill('only message');
   await p.getByRole('button', { name: 'send', exact: true }).click();
   await p.waitForFunction(() => window.sends.length === 1);
-  await p.evaluate(() => window.answers[0].reject(new Error('nope')));
+  await p.evaluate(() => window.answers[0].reject(Object.assign(new Error('session.deliver timed out; message 63d6b99d80dbbf70b29db7d320c8d800 is still unconfirmed - retry with the same delivery ID'), { code: 'timeout' })));
   await p.waitForFunction(() => document.querySelector('textarea').value === 'only message');
-  assert.equal(await p.locator('.failed-send').count(), 0);
+  const card = p.locator('.failed-send');
+  assert.match(await card.innerText(), /did not get a reply in time/);
+  assert.doesNotMatch(await p.locator('body').innerText(), /session\.deliver|63d6b99d|delivery ID/);
+  await card.getByRole('button', { name: 'Retry send' }).click();
+  await p.waitForFunction(() => window.sends.length === 2);
+  assert.equal(await p.evaluate(() => new Set(window.deliveryIds).size), 1);
+  await p.evaluate(() => window.answers[1].resolve({ ok: true }));
+  await card.waitFor({ state: 'detached' });
+  assert.equal(await box.inputValue(), '');
 });
 
 test('explicit rejections allow a new attempt, while unknown results keep their identity until confirmed', async t => {
@@ -121,4 +129,76 @@ test('explicit rejections allow a new attempt, while unknown results keep their 
   await p.waitForFunction(() => window.sends.length === 4);
   assert.notEqual(...await p.evaluate(() => [window.deliveryIds[2], window.deliveryIds[3]]), 'a later intentional repeat is a new message');
   await p.evaluate(() => window.answers[3].resolve({ ok: true }));
+});
+
+test('retry keeps original attachments and leaves a newer draft in place', async t => {
+  const p = await browser.newPage(); t.after(() => p.close());
+  p.setDefaultTimeout(5000);
+  await p.route('http://helm.test/**', r => r.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
+  await p.goto('http://helm.test/'); await p.addScriptTag({ content: script });
+  const box = p.locator('textarea');
+  await box.waitFor();
+  await p.waitForFunction(() => !document.querySelector('.attach-status'));
+  await p.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(['original document'], 'original.txt', { type: 'text/plain' }));
+    document.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await p.locator('.attach-preview').waitFor();
+  await p.getByRole('button', { name: 'send', exact: true }).click();
+  await p.waitForFunction(() => window.sends.length === 1);
+  await box.fill('a newer draft');
+  await p.evaluate(() => window.answers[0].reject(Object.assign(new Error('not connected'), { code: 'offline' })));
+  const card = p.locator('.failed-send');
+  await card.waitFor();
+  assert.match(await card.innerText(), /Laptop is not connected/);
+  await p.getByRole('button', { name: /Remove .*original.txt/ }).click();
+  await card.getByRole('button', { name: 'Retry send' }).click();
+  await p.waitForFunction(() => window.sends.length === 2);
+  assert.deepEqual(await p.evaluate(() => window.sends[1].attachments), await p.evaluate(() => window.sends[0].attachments));
+  assert.equal(await p.evaluate(() => new Set(window.deliveryIds).size), 1);
+  await box.fill('typed during retry');
+  await p.evaluate(() => window.answers[1].resolve({ ok: true }));
+  await card.waitFor({ state: 'detached' });
+  assert.equal(await box.inputValue(), 'typed during retry');
+});
+
+test('retry keeps a replacement file and its caption in the draft', async t => {
+  const p = await browser.newPage(); t.after(() => p.close());
+  p.setDefaultTimeout(5000);
+  await p.route('http://helm.test/**', r => r.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
+  await p.goto('http://helm.test/'); await p.addScriptTag({ content: script });
+  const box = p.locator('textarea');
+  await box.waitFor();
+  await p.waitForFunction(() => !document.querySelector('.attach-status'));
+  const pasteFile = data => p.evaluate(data => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([data], 'same.txt', { type: 'text/plain' }));
+    document.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, data);
+  await box.fill('keep this caption');
+  await pasteFile('original file');
+  await p.locator('.attach-preview').waitFor();
+  await p.getByRole('button', { name: 'send', exact: true }).click();
+  await p.waitForFunction(() => window.sends.length === 1);
+  const caption = await p.evaluate(() => window.sends[0].data);
+  await p.evaluate(() => window.answers[0].reject(new Error('not connected')));
+  await p.locator('.failed-send').waitFor();
+  await p.getByRole('button', { name: /Remove .*same.txt/ }).click();
+  await p.locator('.attach-preview').waitFor({ state: 'detached' });
+  await box.focus();
+  await box.press('Control+End');
+  await pasteFile('replacement file');
+  await p.locator('.attach-preview').waitFor();
+  await p.waitForFunction(() => document.querySelector('textarea').value.endsWith('[File: same.txt] '));
+  const replacementDraft = await box.inputValue();
+  assert.equal(replacementDraft.trim(), caption);
+  assert.equal(await p.locator('.attach-preview').count(), 1);
+  await p.getByRole('button', { name: 'Retry send' }).click();
+  await p.waitForFunction(() => window.sends.length === 2);
+  await p.evaluate(() => window.answers[1].resolve({ ok: true }));
+  await p.locator('.failed-send').waitFor({ state: 'detached' });
+  assert.equal(await box.inputValue(), replacementDraft);
+  assert.equal(await p.locator('.attach-preview').count(), 1);
+  assert.deepEqual(await p.evaluate(() => window.sends[1].attachments), await p.evaluate(() => window.sends[0].attachments));
 });

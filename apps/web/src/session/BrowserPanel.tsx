@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Client, Environment, Session } from '../client';
 import BrowserLogins from './BrowserLogins';
@@ -30,7 +31,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   const refresh = useCallback(async () => listed(await call<Listed>('list', { warm: true })), [call, listed]);
   // The window is used directly, so the list follows it: titles, new tabs, a closed window.
   useEffect(() => {
-    void refresh().catch(e => setError(e.message));
+    void refresh().catch(e => setError(errorMessage(e)));
     const timer = setInterval(() => { if (!document.hidden) void refresh().catch(() => {}); }, 2000);
     return () => clearInterval(timer);
   }, [refresh]);
@@ -42,7 +43,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   useEffect(() => { if (!typingAddress.current) setAddress(!tab?.url || tab.url === 'about:blank' || tab.url.startsWith('chrome://') ? '' : tab.url); }, [chosen, tab?.url]);
   const show = useCallback(async (tabId?: string) => {
     setBusy(true); setError('');
-    try { listed(await call<Listed>('show', tabId ? { tabId } : {})); } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+    try { listed(await call<Listed>('show', tabId ? { tabId } : {})); } catch (e: any) { setError(errorMessage(e)); } finally { setBusy(false); }
   }, [call, listed]);
   // Opening the browser at a computer brings its window up. On a phone the
   // window would only appear on the other machine's screen, so it waits to be asked.
@@ -56,15 +57,15 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
       const result = await call<{ tab?: Tab; text?: string }>('action', { tabId, viewer: viewer.current, action });
       if (result.text) setPageText(result.text);
       if (result.tab) setTabs(current => current.map(t => t.id === result.tab!.id ? result.tab! : t));
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
   };
   const openTab = async (url?: string) => {
     setBusy(true); setError('');
     try { const result = await call<{ tab: Tab }>('open', { viewer: viewer.current, ...(url ? { url } : {}) }); await refresh(); setChosen(result.tab.id); }
-    catch (e: any) { setError(e.message); } finally { setBusy(false); }
+    catch (e: any) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
-  const closeTab = async (id: string) => { try { await call('close', { tabId: id }); await refresh(); } catch (e: any) { setError(e.message); } };
-  const download = async (downloadId: string) => { try { const result = await call<{ name: string; data: string }>('download', { tabId: chosen, downloadId }); const bytes = Uint8Array.from(atob(result.data), c => c.charCodeAt(0)), url = URL.createObjectURL(new Blob([bytes])); const a = document.createElement('a'); a.href = url; a.download = result.name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } catch (e: any) { setError(e.message); } };
+  const closeTab = async (id: string) => { try { await call('close', { tabId: id }); await refresh(); } catch (e: any) { setError(errorMessage(e)); } };
+  const download = async (downloadId: string) => { try { const result = await call<{ name: string; data: string }>('download', { tabId: chosen, downloadId }); const bytes = Uint8Array.from(atob(result.data), c => c.charCodeAt(0)), url = URL.createObjectURL(new Blob([bytes])); const a = document.createElement('a'); a.href = url; a.download = result.name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } catch (e: any) { setError(errorMessage(e)); } };
   return <section className="browser-panel" aria-label="Browser">
     <div className="bp-head">
       <strong>Browser</strong>
@@ -96,7 +97,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
           <button className="bp-icon" aria-label={`Close ${t.title || host(t.url) || 'tab'}`} title="Close tab" onClick={() => void closeTab(t.id)}><Icon name="close" size={12} /></button>
         </li>)}
       </ul> : <p className="note bp-empty">{canWindow === false ? `No tabs are open. Agents on ${env.name} use this hidden browser.` : `No tabs are open. The browser window opens on ${env.name}.`}</p>}
-      {tab?.problem && !tab.loading && <div className="bp-problem" role="alert"><p>{tab.problem.message}</p><button onClick={() => void act({ kind: 'navigate', url: tab.problem!.url })}>Try again</button></div>}
+      {tab?.problem && !tab.loading && <div className="bp-problem" role="alert"><p>{errorMessage(tab.problem.message, { fallback: 'Helm cannot open this page. Check the address and try again.' })}</p><button onClick={() => void act({ kind: 'navigate', url: tab.problem!.url })}>Try again</button></div>}
       {tab?.dialog && <div className="bp-dialog" role="alertdialog" aria-label="Page message"><p>{tab.dialog.message}</p><span><button onClick={() => void act({ kind: 'dialog', accept: false })}>Dismiss</button><button className="primary" onClick={() => void act({ kind: 'dialog', accept: true })}>OK</button></span></div>}
       {!!tab?.downloads.length && <div className="bp-row">{tab.downloads.map(d => <button key={d.id} disabled={d.status !== 'ready'} onClick={() => void download(d.id)}>{d.name} · {d.status === 'ready' ? 'Save' : d.status}</button>)}</div>}
       {pageText && <pre className="browser-text">{pageText}</pre>}

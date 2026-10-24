@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { openPrivateLink } from '../privateLink';
 import { useEffect, useState } from 'react';
 import { Client } from '../client';
@@ -57,7 +58,7 @@ export function ShareHop({ client, target, onDone }: { client: Client; target: S
             openPrivateLink(pass);
             return;
           } catch (err: any) {
-            failures.push(`${base ? new URL(base).host : 'this device’s Helm home'}: ${err?.message || 'no answer'}`);
+            failures.push(`${base ? new URL(base).host : 'this device’s Helm home'}: ${errorMessage(err)}`);
           }
         }
       }

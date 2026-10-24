@@ -118,7 +118,7 @@ test('Send task includes env, keeps a retry identity, and opens the destination 
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({content:bundle.outputFiles[0].text});
     await page.getByRole('button',{name:'Send task to VM',exact:true}).click();
-    await page.getByText('Reply lost; retry the task',{exact:true}).waitFor();
+    await page.getByText('Helm cannot finish this action. Try again.',{exact:true}).waitFor();
     assert.equal(await page.getByLabel('Include .env files').isChecked(),true);
     assert.equal(await page.getByLabel('Include .env files').isDisabled(),true);
     assert.equal(await page.getByLabel('Instructions for continuing').isDisabled(),true);

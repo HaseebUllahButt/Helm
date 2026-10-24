@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useState } from 'react';
 import { accountsFrom, type Account } from '../accounts';
 import { EngineMark } from '../EngineMark';
@@ -39,7 +40,7 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
     setAccounts(null); setError('');
     client.rpc(env.id, 'profile.list')
       .then((r: any) => setAccounts(accountsFrom(r.profiles)))
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(errorMessage(e)));
   }, [client, env.id, env.online, picking]);
 
   // What this brain could think with. Asked of the live session, so the list
@@ -59,7 +60,7 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
       if (brain && replacing) await client.rpc(env.id, 'session.kill', { id: brain.id }, 30_000);
       const r = await client.rpc<{ session: Session }>(env.id, 'brain.open', { profileId: a.profile.id }, 60_000);
       onStarted(r.session);
-    } catch (e: any) { setError(e.message); setBusy(''); }
+    } catch (e: any) { setError(errorMessage(e)); setBusy(''); }
   };
 
   const setModel = async (model: string) => {
@@ -68,7 +69,7 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
     try {
       await client.rpc(env.id, 'session.model', { id: brain.id, model }, 30_000);
       onReplaced();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(''); }
   };
 

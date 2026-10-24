@@ -126,7 +126,7 @@ test('an offline read has an explicit retry; forged resize messages cannot contr
   await page.reload();
   await page.evaluate(() => { window.failRead = true; });
   await page.addScriptTag({ url: '/fixture.js' });
-  await page.getByRole('alert').getByText('Machine offline').waitFor();
+  await page.getByRole('alert').getByText('This machine is not connected. Check the connection. Try again.').waitFor();
   await page.evaluate(() => { window.failRead = false; });
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
   await page.frameLocator('.visual-frame').getByText('Isolated').waitFor();

@@ -113,7 +113,7 @@ for (const width of [390, 1280]) test(`Edit from here confirms a refused file re
   assert.match(await dialog.innerText(), /This replaces your draft/);
   const restore = dialog.getByRole('checkbox', { name: 'Restore files to before this message', exact: true });
   assert.equal(await restore.isDisabled(), true); assert.equal(await restore.isChecked(), false);
-  assert.equal(await dialog.getByText(await page.evaluate(() => window.restoreReason), { exact: true }).isVisible(), true);
+  assert.equal(await dialog.getByText('Another chat can use these files. Continue without restoring files.', { exact: true }).isVisible(), true);
   assert.equal(await composer.inputValue(), 'Keep this draft until confirmation');
   assert.deepEqual(await mutations(), [], 'opening the confirmation only checks availability');
   assert.deepEqual(await page.evaluate(() => window.calls.find(call => call.method === 'session.rewind-check')),

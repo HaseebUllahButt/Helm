@@ -10,6 +10,8 @@ export class AppErrorBoundary extends Component<{
 
   static getDerivedStateFromError(error: Error) { return { error }; }
 
+  componentDidCatch(error: Error) { console.warn('Helm screen failed:', error); }
+
   render() {
     const error = this.state.error;
     if (!error) return this.props.children;
@@ -24,7 +26,6 @@ export class AppErrorBoundary extends Component<{
             : 'Reload Helm to try again.'}</p>
         </div>
         <button className="primary" onClick={this.props.reload ?? reloadApp}>Reload Helm</button>
-        <details className="note"><summary>Error details</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{error.message}</pre></details>
       </div>
     </main>;
   }

@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
@@ -184,7 +185,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         setProjectError('');
       })
       .catch(error => {
-        if (sequence === projectSequence.current) setProjectError(error.message);
+        if (sequence === projectSequence.current) setProjectError(errorMessage(error));
       });
   }, [client, env.id, env.online]);
   const projectCwds = sessions.filter((s) => s.engine !== 'shell').map((s) => s.cwd ?? '').sort().join('\n');
@@ -210,7 +211,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         { cwd: '~', profileId: 'shell' }, 45_000);
       reload();
       onOpen(r.session);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setOpening(false); }
   };
 
@@ -297,7 +298,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
       // Archiving is a tap on a small ⋯ menu item with nothing to confirm it:
       // say what happened and leave the way back in reach.
       setUndo(archived && offerUndo ? s : null);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
   };
 
   const deleteSession = async (s: Session) => {
@@ -305,7 +306,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
     try {
       await client.rpc(env.id, 'session.kill', { id: s.id }, 20_000);
       reload(); reloadEarlier();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
   };
 
   // The `found:` pile is mostly threads nobody opens twice, but the ⋯ menu
@@ -317,7 +318,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
     const left = new Set(marked);
     for (const id of marked) {
       try { await client.rpc(env.id, 'session.archive', { id, archived: true }, 20_000); left.delete(id); }
-      catch (e: any) { setError(e.message); }
+      catch (e: any) { setError(errorMessage(e)); }
     }
     setMarked(left);
     if (!left.size) setSelecting(false);
@@ -327,7 +328,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
   const setTitle = async (s: Session, title: string) => {
     setError('');
     try { await client.rpc(env.id, 'session.title', { id: s.id, title }, 20_000); reload(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
   };
 
   const renameProject = async (p: Project, title: string) => {
@@ -335,7 +336,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
     try {
       await client.rpc(env.id, 'project.save', { path: p.path, title }, 20_000);
       reloadProjects();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setProjectBusy(false); }
   };
 
@@ -347,7 +348,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
       await client.rpc(env.id, 'project.remove', { path: p.path }, 20_000);
       setRemoving(null);
       reloadProjects();
-    } catch (e: any) { setRemoving(null); setError(e.message); }
+    } catch (e: any) { setRemoving(null); setError(errorMessage(e)); }
     finally { setProjectBusy(false); }
   };
 

@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useState, type FormEvent } from 'react';
 import { accountsFrom, type Account } from '../accounts';
 import { EngineMark } from '../EngineMark';
@@ -47,7 +48,7 @@ function MachineName({ client, env, onRenamed }: {
       // machine's name read from one place; refresh it.
       onRenamed();
     } catch (err: any) {
-      setError(err.message);
+      setError(errorMessage(err));
     } finally { setBusy(false); }
   };
 
@@ -116,7 +117,7 @@ function MachineKind({ client, env, onChanged }: {
       // The machine list reads the roster record the machine just wrote.
       onChanged();
     } catch (e: any) {
-      setError(e.message);
+      setError(errorMessage(e));
     } finally { setBusy(''); }
   };
 
@@ -162,7 +163,7 @@ export function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
   useEffect(() => {
     client.rpc(env.id, 'profile.list')
       .then((r: any) => setAccounts(accountsFrom(r.profiles)))
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(errorMessage(e)));
   }, [client, env.id]);
 
   return (

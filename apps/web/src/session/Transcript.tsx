@@ -32,7 +32,7 @@ export function CompactionLine({ live, item }: { live: boolean; item?: Item }) {
         : item?.status === 'streaming' ? 'Chat summary interrupted'
           : `Chat summarized${took > 2000 ? ` · ${seconds(took)}` : ''}`;
   return (
-    <div className={`compaction${live ? ' live' : ''}${item?.status === 'error' ? ' bad' : ''}`} title={item?.error || undefined} role={live ? 'status' : undefined}>
+    <div className={`compaction${live ? ' live' : ''}${item?.status === 'error' ? ' bad' : ''}`} title={item?.error ? plainError(item.error) : undefined} role={live ? 'status' : undefined}>
       <span className={live ? 'shine' : undefined}>{label}</span>
     </div>
   );
@@ -97,7 +97,7 @@ function ToolItem({ item }: { item: Item }) {
   const live = item.status === 'streaming';
   const summary = toolSummary(item);
   const out = item.output ?? '';
-  const body = out || item.error;
+  const body = out || (item.error ? plainError(item.error) : '');
   const head = (
     <>
       <span className={`aicon${item.status === 'error' ? ' bad' : item.status === 'ok' ? ' done' : ''}`}><ToolIcon name={item.name} /></span>
@@ -175,7 +175,7 @@ function hasDetail(it: Item): boolean {
 function StepDetail({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
   const command = rawCommand(item);
   const out = (item.output ?? item.text ?? '').replace(/\s+$/, '');
-  const body = out || item.error || '';
+  const body = out || (item.error ? plainError(item.error) : '');
   const raw = body.length > 4000 ? '…\n' + body.slice(-4000) : body;
   if (command !== undefined) {
     return (
@@ -504,21 +504,12 @@ function TodoStep({ item }: { item: Item }) {
   );
 }
 
-/** A failure, said plainly; what the CLI printed is one tap away. */
+/** A failure uses the same safe messages as other app screens. */
 function ErrorLine({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const plain = plainError(text);
-  const differs = plain !== text.trim();
-  return (
-    <div className="act bad errline">
-      <span className="aicon bad"><Icon name="alert" size={15} /></span>
-      <span className="alabel wrap">
-        {plain}
-        {differs && <button className="errline-more" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Hide details' : 'Details'}</button>}
-        {open && <pre className="errline-raw">{text}</pre>}
-      </span>
-    </div>
-  );
+  return <div className="act bad errline">
+    <span className="aicon bad"><Icon name="alert" size={15} /></span>
+    <span className="alabel wrap">{plainError(text)}</span>
+  </div>;
 }
 
 type ItemProps = { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean; plain?: boolean };

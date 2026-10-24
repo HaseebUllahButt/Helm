@@ -223,11 +223,11 @@ test('project timeout errors clear on recovery and late failures cannot replace 
   });
   await page.waitForFunction(() => window.projectRequests.length === 1);
   await page.evaluate(() => window.projectRequests[0].reject(new Error('project.list timed out')));
-  await page.getByText('project.list timed out', { exact: true }).waitFor();
+  await page.getByText('Helm did not get a reply in time. Try again.', { exact: true }).waitFor();
   await page.evaluate(() => window.reconnect());
   await page.waitForFunction(() => window.projectRequests.length === 2);
   await page.evaluate(() => window.projectRequests[1].resolve({ projects: [] }));
-  await page.getByText('project.list timed out', { exact: true }).waitFor({ state: 'detached' });
+  await page.getByText('Helm did not get a reply in time. Try again.', { exact: true }).waitFor({ state: 'detached' });
   await page.evaluate(() => { window.reconnect(); window.reconnect(); });
   await page.waitForFunction(() => window.projectRequests.length === 4);
   await page.evaluate(() => window.projectRequests[3].resolve({ projects: [] }));
@@ -248,7 +248,7 @@ test('settings expose the app route and build without exposing pairing credentia
   await page.getByText('Connection details', { exact: true }).click();
   await page.getByText('Helm home: https://hub.example', { exact: true }).waitFor();
   await page.getByText('App version: development', { exact: true }).waitFor();
-  await page.getByText('Last connection error: connection stopped responding', { exact: true }).waitFor();
+  await page.getByText('Helm cannot finish this action. Try again.', { exact: true }).waitFor();
   // The app reloads itself when a new build lands; no button for it.
   assert.equal(await page.getByRole('button', { name: /^Reload app/ }).count(), 0);
   assert.doesNotMatch(await page.locator('.main').innerText(), /helm1\./);
@@ -780,7 +780,7 @@ for (const width of [1280, 390]) for (const childState of ['error', 'blocked']) 
   await card.locator('.need-go').click();
   const details = page.getByRole('dialog', { name: 'Agents', exact: true });
   await details.getByRole('heading', { name: 'Agents' }).waitFor();
-  await details.locator('.delegation-branch.selected').getByText('Provider request failed', { exact: true }).waitFor();
+  await details.locator('.delegation-branch.selected').getByText('Helm cannot finish this action. Try again.', { exact: true }).waitFor();
   await details.getByRole('button', { name: 'Close agents' }).click();
   if (width < 500) await page.locator('.session-bar').getByRole('button', { name: 'Back', exact: true }).click();
   await card.locator('.need-main').click();
@@ -917,7 +917,7 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   await page.screenshot({ path: `/tmp/helm-dismiss-child-${width}.png` });
   await page.evaluate(() => { window.rejectDismiss = true; });
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
-  await card.getByRole('alert').getByText('Machine disconnected. Try again.', { exact: true }).waitFor();
+  await card.getByRole('alert').getByText('This machine is not connected. Check the connection. Try again.', { exact: true }).waitFor();
   await page.evaluate(() => { window.rejectDismiss = false; });
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
   await card.waitFor({ state: 'detached' });

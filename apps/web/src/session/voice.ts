@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
@@ -164,7 +165,7 @@ export function useDictation({ transcribe, onText }: {
       // re-asked from inside the page - so say which of the two it was.
       setError(e?.name === 'NotAllowedError'
         ? 'The browser blocks the microphone for this site.'
-        : e?.name === 'NotFoundError' ? 'This device has no microphone.' : e?.message || 'Helm cannot use the microphone.');
+        : e?.name === 'NotFoundError' ? 'This device has no microphone.' : errorMessage(e, { fallback: 'Helm cannot use the microphone.' }));
       return;
     }
     const mime = pickFormat();
@@ -225,7 +226,7 @@ export function useDictation({ transcribe, onText }: {
           const text = (await transcribe(blob, type)).trim();
           if (text) onText(text); else setError('Helm heard no speech.');
         } catch (e: any) {
-          setError(e?.message || 'Helm cannot convert the speech to text.');
+          setError(errorMessage(e, { fallback: 'Helm cannot convert the speech to text.' }));
         } finally { setState('idle'); }
       } finally { stopTiming?.(); }
     };

@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Client, Environment, UsageReport, UsageGroup, UsageTotals } from './client';
 import { hitRate, cacheSaved } from './client';
@@ -120,7 +121,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
         setRemembered((r) => { const { [env.id]: _drop, ...rest } = r; return rest; });
         saveUsage(env.id, report, win, since);
       })
-      .catch((e) => { if (request === generation.current) setFailed((f) => ({ ...f, [env.id]: String(e?.message || e) })); })
+      .catch((e) => { if (request === generation.current) setFailed((f) => ({ ...f, [env.id]: errorMessage(e, { machine: env.name }) })); })
       .finally(() => { if (request === generation.current) setPending((p) => { const n = new Set(p); n.delete(env.id); return n; }); });
   };
 

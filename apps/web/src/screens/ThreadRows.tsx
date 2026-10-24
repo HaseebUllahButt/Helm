@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
@@ -218,7 +219,7 @@ export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Sessi
   const dismiss = async () => {
     setDismissing(true); setDismissError('');
     try { await onDismiss(); }
-    catch (error: any) { setDismissError(error?.message || 'Helm cannot clear this failure alert. Try again.'); }
+    catch (error: any) { setDismissError(errorMessage(error, { fallback: 'Helm cannot clear this failure alert. Try again.' })); }
     finally { setDismissing(false); }
   };
   const eng = engineOf(s.engine);

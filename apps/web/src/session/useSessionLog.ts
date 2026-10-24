@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Client } from '../client';
 import { apply, emptyLog, type HelmEvent, type LogState, type Permission } from './types';
@@ -140,7 +141,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
         void fill();
       } catch (e: any) {
         failed = true;
-        if (visible() && version === visibilityVersion) { setError(e.message); scheduleRetry(); }
+        if (visible() && version === visibilityVersion) { setError(errorMessage(e)); scheduleRetry(); }
       } finally {
         fetching = false;
         if (visible()) {
@@ -234,7 +235,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
         rebuild(); Object.assign(log, { loaded, pending, status });
         dirty = true; publish(); persist();
         return true;
-      } catch (e: any) { if (visible() && !quiet) setError(e.message); return false; }
+      } catch (e: any) { if (visible() && !quiet) setError(errorMessage(e)); return false; }
       finally { pagingBack = false; if (!stopped) setLoadingEarlier(false); }
     };
     // Page back until the machine has nothing older. One page at a time, so

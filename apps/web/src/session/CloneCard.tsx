@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import type { Session } from '../client';
 import { Icon } from '../Icon';
 
@@ -26,7 +27,7 @@ export function CloneCard({ clone, agent, waiting, busy, offline, onRetry }: {
           {failed ? clone.cloned ? `${agent} did not start in` : 'Cannot copy project' : 'Copying project'} {name} <span className="dim">· {owner}</span>
         </span>
         {failed
-          ? <span className="clone-error">{clone.error || 'Helm did not copy the project.'}</span>
+          ? <span className="clone-error">{errorMessage(clone.error, { fallback: 'Helm did not copy the project. Try again.' })}</span>
           : <>
             <span className="clone-progress"><i style={{ width: `${Math.max(4, clone.percent)}%` }} /></span>
             <span className="clone-note">{waiting

@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { useEffect, useState } from 'react';
 import type { Client, Environment, Profile, Session } from './client';
 import { BackIcon, Icon } from './Icon';
@@ -60,9 +61,9 @@ export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: 
         const r: any = await client.rpc(env.id, 'env.update', { replace: true }, 300_000);
         setOut((o) => ({ ...o, [env.id]: r.updated
           ? { state: 'done', text: `Helm updated.${r.backup ? ` Your changes remain on ${r.backup}.` : ''}` }
-          : { state: r.reason?.startsWith('already') ? 'same' : 'refused', text: r.reason?.replace(/^already at .*/, 'Helm already matches the GitHub version.') ?? 'Helm did not update.' } }));
+          : { state: r.reason?.startsWith('already') ? 'same' : 'refused', text: r.reason?.startsWith('already') ? 'Helm already matches the GitHub version.' : errorMessage(r.reason, { machine: env.name, fallback: 'Helm did not update. Try again.' }) } }));
       } catch (e: any) {
-        setOut((o) => ({ ...o, [env.id]: { state: 'failed', text: e.message } }));
+        setOut((o) => ({ ...o, [env.id]: { state: 'failed', text: errorMessage(e, { machine: env.name }) } }));
       }
     }
     setBusy(false);
@@ -80,7 +81,7 @@ export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: 
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start', { cwd: env.info.version.dir, profileId: profile.id }, 70_000);
       await client.rpc(env.id, 'session.input', { id: r.session.id, data: AGENT_TASK }, 70_000);
       onOpenSession?.(env.id, r.session);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
 
@@ -105,7 +106,7 @@ export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: 
             const note = !env.online ? 'Offline'
               : !v ? 'This Helm version does not report its version.'
               : env.info.sync?.diverged ? `This machine and ${env.info.sync.with} have different changes. Ask your agent to combine them.`
-              : env.info.sync?.reason ? env.info.sync.reason
+              : env.info.sync?.reason ? errorMessage(env.info.sync.reason, { machine: env.name })
               : v.dirty ? 'This machine has unsaved changes. Helm will share them after you save them.'
               : newest && v.commit !== newest.info.version?.commit ? `This machine is updating from ${newest.name}.`
               : null;

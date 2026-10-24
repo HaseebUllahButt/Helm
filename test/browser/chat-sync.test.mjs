@@ -183,7 +183,7 @@ test('failed initial refresh retries and clears stale pending permissions from t
   const remote=server(cached);remote.status='idle';
   let attempts=0;remote.handler=p=>{if(++attempts===1)throw Error('disconnected');return remote.history(p)};
   const page=await device(t,remote,{cache:cached,clock:true});
-  await page.waitForFunction(()=>window.state?.error==='disconnected');
+  await page.waitForFunction(()=>window.state?.error==='This machine is not connected. Check the connection. Try again.');
   await page.clock.fastForward(1000);
   await caughtUp(page,4);
   assert.equal(await page.evaluate(()=>window.state.error),'');

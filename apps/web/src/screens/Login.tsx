@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useRef, useState } from 'react';
 import { useNow } from '../useNow';
 import type { StoredAuth } from '../store';
@@ -54,7 +55,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
     try {
       finish(await login(endpoint, secret, local));
     } catch (err: any) {
-      setError(err.message);
+      setError(errorMessage(err));
       setLinkSecretFailed(true);
       setPassword((p) => (p === secret ? '' : p));
     } finally { setBusy(false); setChecking(false); }
@@ -251,7 +252,7 @@ export function AddMachine({ client }: { client: Client }) {
     try {
       const r = await client.invite(role);
       setInvite({ link: `${r.base || client.relay}/#join=${encodeURIComponent(r.code)}`, expiresAt: r.expiresAt });
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
   const command = invite ? `helm join '${invite.link}'` : '';

@@ -149,7 +149,7 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
       await view.evaluate(()=>{window.failSave=true;});
       await view.getByRole('button',{name:'Use normal-model by default for subagents'}).click();
-      await view.getByRole('alert').filter({hasText:'Could not save helper default'}).waitFor();
+      await view.getByRole('alert').filter({hasText:'Helm cannot finish this action. Try again.'}).waitFor();
       await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
       await view.evaluate(()=>{window.failSave=false;});
       await view.getByRole('button',{name:'Use normal-model by default for subagents'}).click();
@@ -232,7 +232,7 @@ test('main task click opens the full child conversation and Back returns to its 
       assert.equal(await view.evaluate(() => window.calls.some(c=>c.method==='session.delegation-result')), false);
       await view.evaluate(() => { window.failParent = true; });
       await view.getByRole('button', {name:'Back to main chat',exact:true}).click();
-      await view.getByRole('alert').filter({hasText:'Parent temporarily unavailable'}).waitFor();
+      await view.getByRole('alert').filter({hasText:'Helm cannot finish this action. Try again.'}).waitFor();
       assert.equal(await view.getByRole('heading', {name:'Inspect child conversation',exact:true}).count(), 1);
       await view.evaluate(() => { window.failParent = false; });
       await view.getByRole('button', {name:'Back to main chat',exact:true}).click();
@@ -438,7 +438,7 @@ test('a failed task moves to Finished and retries with the same account, model, 
   await page.locator('.delegation-group.finished .delegation-branch').waitFor();
   assert.equal(await page.locator('.delegation-group.active').count(), 0);
   await page.getByRole('button',{name:'Failed, details'}).click();
-  await page.getByText('CLI crashed', {exact:true}).waitFor();
+  await page.getByText('Helm cannot finish this action. Try again.', {exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Stop helper'}).count(), 0);
   const before = await page.evaluate(() => window.calls.filter((call)=>call.method==='session.delegate').length);
   await page.evaluate(() => {

@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useRef, useState } from 'react';
 import type { Client, Environment, Session } from '../client';
 import { useDialog } from '../useDialog';
@@ -19,7 +20,7 @@ export default function BrowserLogins({ client, env, session }: { client: Client
       const [list, choice] = await Promise.all([call<{ profiles: Profile[] }>('profiles'), call<{ profileKey: string | null }>('loginDefault')]);
       setProfiles(list.profiles); setDefaultKey(choice.profileKey);
       setSelected(current => list.profiles.some(p => p.key === current) ? current : list.profiles.find(p => p.key === choice.profileKey && p.readable)?.key || list.profiles.find(p => p.readable && p.lastUsed)?.key || list.profiles.find(p => p.readable)?.key || '');
-    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+    } catch (e: any) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
   const copy = async (all = false) => {
     setBusy(true); setError(''); setMessage('');
@@ -27,7 +28,7 @@ export default function BrowserLogins({ client, env, session }: { client: Client
       const result = await call<Copied>('importLogins', { profileKey: selected });
       setMessage(`Helm copied logins for ${result.sites} ${result.sites === 1 ? 'site' : 'sites'}.${result.failed ? ` Helm did not copy ${result.failed} cookies (saved login data).` : ''}`);
       if (all) { const choice = await call<{ profileKey: string | null }>('loginDefault', { profileKey: selected }); setDefaultKey(choice.profileKey); }
-    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+    } catch (e: any) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
   const browsers = [...new Set(profiles.map(p => p.browser))];
   return <div style={{ position: 'relative' }}>
@@ -43,7 +44,7 @@ export default function BrowserLogins({ client, env, session }: { client: Client
         <button disabled={busy || !selected} onClick={() => void copy()}>{message ? 'Refresh' : 'Use in this chat'}</button>
         <button disabled={busy || !selected} onClick={() => void copy(true)}>Use for all new chats</button>
       </div>
-      {defaultKey && <p className="note">New chats use {profiles.find(p => p.key === defaultKey)?.name || 'the saved profile'}. <button disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await call('loginDefault', { profileKey: null }); setDefaultKey(null); } catch (e: any) { setError(e.message); } finally { setBusy(false); } }}>Clear default</button></p>}
+      {defaultKey && <p className="note">New chats use {profiles.find(p => p.key === defaultKey)?.name || 'the saved profile'}. <button disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await call('loginDefault', { profileKey: null }); setDefaultKey(null); } catch (e: any) { setError(errorMessage(e)); } finally { setBusy(false); } }}>Clear default</button></p>}
       {message && <p role="status">{message}</p>}{error && <p role="alert" className="error">{error}</p>}
       <button onClick={close}>Close</button>
     </div>}

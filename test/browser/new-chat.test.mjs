@@ -229,7 +229,7 @@ test('an agent that fails to start says why, keeps what you wrote, and can be tr
   const box=page.getByRole('textbox',{name:/^Message /});
   await box.fill('keep me');
   await page.evaluate(()=>window.refuse(new Error('claude is not logged in')));
-  await page.getByRole('alert').filter({hasText:'claude is not logged in'}).waitFor();
+  await page.getByRole('alert').filter({hasText:'This account is signed out.'}).waitFor();
   assert.equal(await box.inputValue(),'keep me');
   await page.getByRole('button',{name:'Try again'}).click();
   await page.locator('.chip.working').filter({hasText:'starting'}).waitFor();
@@ -337,7 +337,7 @@ test('a name the machine refuses is explained in the box and nothing starts',asy
   await box.fill('a/b');
   await page.getByRole('option').filter({hasText:'Create folder "a/b"'}).waitFor();
   await page.keyboard.press('Control+Shift+Enter');
-  await page.locator('.newchat .error').filter({hasText:'folder name cannot contain a path separator'}).waitFor();
+  await page.locator('.newchat .error').filter({hasText:'Enter a folder name without'}).waitFor();
   assert.equal(await page.getByRole('combobox',{name:'Search folders on vm'}).count(),1);
   // Not offered for a folder that is already there.
   await box.fill('');

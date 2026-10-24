@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { useDialog } from './useDialog';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { EngineMark } from './EngineMark';
@@ -187,7 +188,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     // Home as this device last saw it, at once; the machine's answer replaces it.
     setHome(knownInside(machine.id, '~'));
     listFolder(client, machine.id, '~')
-      .then((r) => { if (!stale) setHome(r.entries); }).catch((e) => { if (!stale) { setHome((now) => now ?? []); setError(e.message); } });
+      .then((r) => { if (!stale) setHome(r.entries); }).catch((e) => { if (!stale) { setHome((now) => now ?? []); setError(errorMessage(e)); } });
     // The folders this device remembers first, then the machine's own list
     // as it is now: it looks at its disk again when asked.
     void loadFolders(machine.id).then((held) => {
@@ -220,7 +221,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     setInside((all) => ({ ...all, [path]: knownInside(machine.id, path) }));
     listFolder(client, machine.id, path)
       .then((r) => setInside((all) => ({ ...all, [path]: r.entries })))
-      .catch((e) => { setInside((all) => ({ ...all, [path]: all[path] ?? [] })); setError(e.message); });
+      .catch((e) => { setInside((all) => ({ ...all, [path]: all[path] ?? [] })); setError(errorMessage(e)); });
   };
   const collapse = (id: string) => setOpened((all) => {
     // Closing a folder closes everything opened inside it too.
@@ -239,7 +240,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     const t = setTimeout(() => {
       client.rpc<any>(machine.id, 'fs.search', { query }, 20_000)
         .then((r) => { if (!stale) setRemoteHits(r.results ?? []); })
-        .catch((e) => { if (!stale) { setRemoteHits([]); setError(e.message); } });
+        .catch((e) => { if (!stale) { setRemoteHits([]); setError(errorMessage(e)); } });
     }, 120);
     return () => { stale = true; clearTimeout(t); };
   }, [searching, query, client, machine, remote]);
@@ -271,7 +272,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
         const fresh = await ask(true);
         if (!stale) { setGh(fresh); keepGh(machine.id, fresh, ghLogin); }
       })
-      .catch((e) => { if (!stale) { setGh((now) => now ?? { installed: true, accounts: [], login: null, repos: [], parent: '~', failed: true }); setError(e.message); } })
+      .catch((e) => { if (!stale) { setGh((now) => now ?? { installed: true, accounts: [], login: null, repos: [], parent: '~', failed: true }); setError(errorMessage(e)); } })
       .finally(() => { if (!stale) setGhBusy(false); });
     return () => { stale = true; };
   }, [step, client, machine, ghLogin, ghReload]);
@@ -304,7 +305,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
             return next;
           });
         })
-        .catch((e) => { if (!stale) setFinding({ query, state: 'failed', found: [], error: e.message }); });
+        .catch((e) => { if (!stale) setFinding({ query, state: 'failed', found: [], error: errorMessage(e) }); });
     }, 500);
     return () => { stale = true; clearTimeout(t); };
   }, [missed, query, machine, gh?.login, findAgain]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -329,7 +330,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       setFolder(target); setQuick(false); setCloneFrom(r.state === 'new' ? chosen : null);
       setBusy(false);
       go('cli');
-    } catch (e: any) { setError(e.message); setBusy(false); }
+    } catch (e: any) { setError(errorMessage(e)); setBusy(false); }
   };
 
   const refreshFolders = () => {
@@ -338,7 +339,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     setIndexing(true);
     fetchFolders(client, id, { refresh: true })
       .then((fresh) => { if (machine?.id === id) { setIndex(fresh); setNow(Date.now()); } })
-      .catch((e) => setError(e.message))
+      .catch((e) => setError(errorMessage(e)))
       .finally(() => setIndexing(false));
   };
   // "checked 20s ago" keeps counting while the picker is open.
@@ -380,7 +381,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       rememberFolderMade(machine.id, { name: entry.name, path: r.path, repo: false });
       setBusy(false); setCreating(null);
       pickFolder(r.path, r.path);
-    } catch (e: any) { setError(e.message); setBusy(false); }
+    } catch (e: any) { setError(errorMessage(e)); setBusy(false); }
   };
   /** Open the "New folder" box, aimed inside `parent`. */
   const createIn = (parent: string) => { setError(''); setCreating({ parent, name: '' }); };
@@ -397,7 +398,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     const hidden = [...before];
     setPicker({ ...picker, hidden });
     if (viewHidden && !accounts?.some((a) => before.has(a.key))) setViewHidden(false);
-    if (picker.onMachine) client.rpc(machine.id, 'picker.prefs', { hidden }, 15_000).catch((e) => setError(e.message));
+    if (picker.onMachine) client.rpc(machine.id, 'picker.prefs', { hidden }, 15_000).catch((e) => setError(errorMessage(e)));
     else {
       const prefs = loadPrefs();
       savePrefs({ ...prefs, [machine.id]: { ...prefs[machine.id], hidden } });

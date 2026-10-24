@@ -245,8 +245,8 @@ test('a clean folder and an unreachable history each say what is going on', asyn
   await page.evaluate(()=>{window.graphFails = 1;window.showGit('clean')});
   await page.getByRole('tab',{name:'Graph',exact:true,selected:true}).waitFor();
   assert.equal(await page.getByRole('tab',{name:'Changes',exact:true}).count(),1,'no zero count on a clean folder');
-  await page.getByText('Helm cannot load Git history.').waitFor();
-  await page.getByText('git is busy').waitFor();
+  await page.getByText('Helm cannot load Git history.').first().waitFor();
+  assert.doesNotMatch(await page.locator('body').innerText(), /git is busy/);
   await page.getByRole('button',{name:'Try again'}).click();
   await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();
@@ -339,10 +339,10 @@ test('CI / CD shows PR readiness, failing steps, deployment boundaries, refresh 
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='git.monitor').at(-1).params.force),true);
   await page.evaluate(()=>{window.monitorFails=1});
   await page.getByRole('button',{name:'Refresh build checks',exact:true}).click();
-  await page.getByText('GitHub is unreachable',{exact:false}).waitFor();
+  await page.getByText('Laptop is not connected. Check the connection. Try again.',{exact:false}).waitFor();
   assert.equal(await page.getByText('Unit tests',{exact:true}).count(),1,'a failed refresh preserves the previous display');
   await page.getByRole('button',{name:'Try again',exact:true}).click();
-  await page.getByText('GitHub is unreachable',{exact:false}).waitFor({state:'detached'});
+  await page.getByText('Laptop is not connected. Check the connection. Try again.',{exact:false}).waitFor({state:'detached'});
   await page.getByLabel('GitHub account',{exact:true}).selectOption('work');
   await page.waitForFunction(()=>window.githubAccount==='work');
   await page.getByText('Unit tests',{exact:true}).waitFor();

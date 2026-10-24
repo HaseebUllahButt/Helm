@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Client, Environment } from './client';
 import { EngineMark } from './EngineMark';
@@ -28,7 +29,7 @@ const ago = (ts: number, now: number) => {
 export function toolNote(t: Tool, running: boolean, auto: boolean, now: number): { text: string; tone: 'quiet' | 'done' | 'bad' } {
   if (running) return { text: 'Helm is updating this tool.', tone: 'quiet' };
   const r = t.lastResult;
-  if (r && !r.ok) return { text: `The update failed ${ago(r.at, now)}.${r.message ? ` - ${r.message}` : ''}`, tone: 'bad' };
+  if (r && !r.ok) return { text: `The update failed ${ago(r.at, now)}.${r.message ? ` - ${errorMessage(r.message)}` : ''}`, tone: 'bad' };
   if (!t.canUpdate) return { text: `Helm cannot update this tool: ${t.reason ?? 'unknown installation method'}`, tone: 'quiet' };
   if (r?.changed) return { text: `Helm updated this tool ${ago(r.at, now)}.${r.from && r.to ? ` (${r.from} → ${r.to})` : ''}`, tone: 'done' };
   if (r) return { text: `The tool is up to date. Helm checked it ${ago(r.at, now)}.`, tone: 'quiet' };
@@ -51,7 +52,7 @@ export function CodingTools({ client, env }: { client: Client; env: Environment 
       return r;
     } catch (e: any) {
       if (alive.current) setError(/unknown method|not supported/i.test(e.message)
-        ? `${env.name} runs an older Helm version. Its tools will appear after the update.` : e.message);
+        ? `${env.name} runs an older Helm version. Its tools will appear after the update.` : errorMessage(e, { machine: env.name }));
       return null;
     }
   }, [client, env.id, env.name]);
@@ -71,14 +72,14 @@ export function CodingTools({ client, env }: { client: Client; env: Environment 
     try {
       await client.rpc(env.id, 'cli.update', {}, 30_000);
       await load(false);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setStarting(false); }
   };
 
   const setAuto = async (on: boolean) => {
     setInfo((i) => (i ? { ...i, auto: on } : i));
     try { await client.rpc(env.id, 'cli.autoUpdate', { on }, 15_000); }
-    catch (e: any) { setError(e.message); setInfo((i) => (i ? { ...i, auto: !on } : i)); }
+    catch (e: any) { setError(errorMessage(e)); setInfo((i) => (i ? { ...i, auto: !on } : i)); }
   };
 
   const canUpdate = !!info?.tools.some((t) => t.canUpdate);

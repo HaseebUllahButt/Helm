@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useState } from 'react';
 import type { Session } from '../client';
 
@@ -16,7 +17,7 @@ export function ExternalSessionNotice({ session, onTakeOver }: {
   const waiting = session.takeover === 'waiting';
   const run = async (cancel = false) => {
     setBusy(true); setError('');
-    try { await onTakeOver?.(cancel); } catch (e: any) { setError(e.message); }
+    try { await onTakeOver?.(cancel); } catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
   const problem = error || session.takeoverError;

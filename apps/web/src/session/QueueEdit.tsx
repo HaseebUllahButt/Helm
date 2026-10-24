@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useRef, useState, type FormEvent } from 'react';
 import { Sheet } from '../Modal';
 import { Icon } from '../Icon';
@@ -30,7 +31,7 @@ export function QueueEdit({ turn, busy, onCancel, onSave }: {
     const ready: Image[] = [];
     for (const f of picked) {
       try { const p = await prepareImage(f); ready.push({ filename: p.name, mime: p.mime, data: p.data }); }
-      catch (e: any) { setError(`${f.name}: ${e.message}`); }
+      catch (e: any) { setError(`${f.name}: ${errorMessage(e)}`); }
     }
     if (!ready.length) return;
     const labels = ready.map((_, i) => `[Image #${images.length + i + 1}]`).join(' ');

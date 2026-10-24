@@ -47,7 +47,7 @@ test('model choice paints before a slow reply, retains its catalog, and rolls ba
   await page.waitForFunction(()=>window.requests.length===2);
   assert.equal(await chip().getAttribute('title'),'model: c');
   await page.evaluate(()=>window.requests[1].reject(new Error('Model unavailable')));
-  await page.getByText('Model unavailable',{exact:true}).waitFor();
+  await page.getByText('This account cannot use this model. Select another model.',{exact:true}).waitFor();
   assert.equal(await chip().getAttribute('title'),'model: b');
   assert.equal(await chip().getAttribute('aria-busy'),null);
   assert.deepEqual(errors,[]);

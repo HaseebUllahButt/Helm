@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Client, Environment, Session } from '../client';
 import { loadAccounts } from '../accountsCache';
@@ -77,7 +78,7 @@ export function ContextLimit({ client, env, machines, session }: {
       setNote({ ok: `Saved on ${saved} machine${saved === 1 ? '' : 's'}`, warn: warn || undefined });
     } catch (e: any) {
       setChosen(undefined);
-      setNote({ ok: '', warn: e?.message || "Helm cannot save this limit." });
+      setNote({ ok: '', warn: errorMessage(e, { fallback: 'Helm cannot save this limit.' }) });
     } finally { setBusy(false); }
   };
 

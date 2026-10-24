@@ -81,7 +81,7 @@ for(const mode of ['Native','Driven']){
     assert.doesNotMatch(await p.locator('textarea').inputValue(),/Image #9/);
     await p.evaluate(()=>window.fail=true);
     await p.getByRole('button',{name:'send',exact:true}).click();
-    await p.getByRole('alert').waitFor();
+    await (mode==='Driven' ? p.locator('.failed-send') : p.getByRole('alert')).waitFor();
     await reload(p,mode);
     await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===8);
     await p.getByRole('button',{name:'send',exact:true}).click();
@@ -143,7 +143,7 @@ test('native Claude paste prepares a preview and sends image bytes to the thread
 test('failed native image sends preserve the preview and draft for retry',async t=>{
   const p=await pageFor(t);await paste(p);await p.evaluate(()=>window.fail=true);
   await p.getByRole('button',{name:'send',exact:true}).click();await p.getByRole('alert').waitFor();
-  assert.match(await p.getByRole('alert').innerText(),/upload failed/);
+  assert.match(await p.getByRole('alert').innerText(),/Helm cannot finish this action. Try again./);
   assert.equal(await p.locator('.attach-preview').count(),1);assert.match(await p.locator('textarea').inputValue(),/Image #1/);
 });
 test('clipboard file items work when the clipboard file list is empty, without duplicating normal files',async t=>{
