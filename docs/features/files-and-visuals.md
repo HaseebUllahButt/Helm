@@ -23,6 +23,13 @@
   two pictures, put the cursor after "[Image #1]" with `eval`
   (`setSelectionRange(10,10)`), `$V key Backspace`. Proof: the box reads
   "[Image #1] …" with one preview left, the second picture.
+- **Rule:** a file dragged over the chat covers it with a "Drop to attach"
+  card (`.drop-cover`, portalled into `.main`). The cover takes no pointer
+  events, so the drop still lands on the chat. A drag onto the sidebar,
+  browser panel or a terminal removes it.
+- **Prove the drop (driven 2026-10-24):** `eval` a `dragover` with a
+  `DataTransfer` file on `.main`, `shot`, then a `drop`. Proof: the card,
+  then the file in the box and no card.
 - **Tests:** `test/browser/image-paste`; `test/paste-store`,
   `attach-tags`, `retain-assets`.
 
