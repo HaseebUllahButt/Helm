@@ -21,6 +21,8 @@ export class SessionWorktrees {
   #timer = null;
   /** Chats whose worktree is being checked or removed right now. */
   #busy = new Set();
+  /** Worktree folders being removed, from their agents' release to the end. */
+  #removing = new Map();
   constructor(sessions, core) {
     this.#sessions = sessions;
     this.#core = core;
@@ -61,6 +63,9 @@ export class SessionWorktrees {
 
   /** Before an agent starts: a chat reopened after its folder was removed gets it back. */
   async ensure(s) {
+    // A removal under way still shows the folder: an agent started now
+    // finds it gone a moment later and fails.
+    await this.#removing.get(s.chatWorktree?.path);
     if (!s.chatWorktree || existsSync(expand(s.chatWorktree.path))) return;
     let record;
     try { record = await restoreChatWorktree(s.chatWorktree); }
@@ -69,6 +74,9 @@ export class SessionWorktrees {
     for (const o of this.#sharing(s)) o.chatWorktree = { ...record, setup: o.chatWorktree.setup };
     this.#core.save();
   }
+
+  /** Whether the chat's folder is being removed right now. */
+  removing(s) { return this.#removing.has(s.chatWorktree?.path); }
 
   /** The chat has a name: the branch takes it while it holds no commits. */
   async titled(s) {
@@ -114,8 +122,11 @@ export class SessionWorktrees {
     if (this.#busy.has(s.id) || !s.chatWorktree || !idle()) return false;
     const merged = !this.#sharing(s).every((o) => now - (o.updatedAt || o.createdAt || now) >= UNUSED_MS);
     this.#busy.add(s.id);
+    const path = s.chatWorktree.path;
+    let removed = null;
     try {
       if (await keepReason(s.chatWorktree, { merged })) return false;
+      this.#removing.set(path, new Promise((resolve) => { removed = resolve; }));
       // The agent's process sits in that folder: let it go first. Its
       // conversation stays, and the next message rebuilds the folder.
       for (const o of this.#sharing(s)) await this.#sessions.release(o.id);
@@ -127,7 +138,10 @@ export class SessionWorktrees {
     } catch (err) {
       this.#sessions.log(`[${s.id}] could not remove its worktree: ${err.message}`);
       return false;
-    } finally { this.#busy.delete(s.id); }
+    } finally {
+      this.#busy.delete(s.id);
+      if (removed) { this.#removing.delete(path); removed(); }
+    }
   }
 
   /** Chats in the same worktree as `s`, itself included. */

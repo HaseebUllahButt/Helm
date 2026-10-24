@@ -232,6 +232,27 @@ test('a merged, idle chat loses its worktree; unmerged or uncommitted work keeps
   await s.stop();
 });
 
+test('a chat opened while its folder is being removed starts no agent there', async () => {
+  // The app asks for the command menu again as the agent is let go. The
+  // folder still existed, so an agent started in it, found it gone a
+  // moment later and wrote a red "can't access working directory" error.
+  const dir = repo();
+  const { sessions: s, drivers } = sessions();
+  const chat = await s.start({ cwd: dir, profileId: 'claudea' });
+  git(chat.cwd, 'commit', '-q', '--allow-empty', '-m', 'feature');
+  git(dir, 'merge', '-q', '--no-edit', s.get(chat.id).chatWorktree.branch);
+  const tidy = s.worktreeTidy(chat.id);
+  await until(() => drivers[0].killed);
+  assert.deepEqual(await s.commands(chat.id), []);
+  assert.equal(drivers.length, 1, 'the menu started no agent');
+  const sent = s.input(chat.id, 'one more thing');
+  await tidy;
+  await sent;
+  await until(() => drivers.length === 2);
+  assert.ok(existsSync(chat.cwd), 'a message waits for the removal, then gets its folder back');
+  await s.stop();
+});
+
 test('a chat quiet for an hour loses a worktree it never committed to', async () => {
   const dir = repo();
   const { sessions: s } = sessions();

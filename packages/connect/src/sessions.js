@@ -377,8 +377,9 @@ export class Sessions extends EventEmitter {
     if (s.external && s.engine !== 'codex') return EXTERNAL_INFO_COMMANDS;
     // A finished helper's worktree is removed once merged. Opening its chat
     // asks for this menu; starting the agent there only wrote a red "folder
-    // does not exist" into the chat on every visit.
-    if (!this.#drivers.has(s.id) && s.cwd && !existsSync(s.cwd)) return [];
+    // does not exist" into the chat on every visit. A folder being removed
+    // still exists for a moment, and the app asks again as the agent stops.
+    if (!this.#drivers.has(s.id) && ((s.cwd && !existsSync(s.cwd)) || this.#worktrees.removing(s))) return [];
     const driver = await this.#driver(s);
     const available = (await driver.availableCommands?.() ?? []).filter((c) => !['plan', 'plan-mode'].includes(c.name));
     return s.externalSource && s.engine !== 'codex'
