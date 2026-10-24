@@ -119,3 +119,13 @@ test('older pages arriving above keep the reader on the same words', async t => 
   await page.waitForTimeout(100);
   assert.deepEqual(await where(), before);
 });
+
+test('a catch-up read that brings nothing new leaves every message as it was', async t => {
+  const { page } = await open(t);
+  await whole(page);
+  await page.evaluate(() => { window.kept = window.state.log.turns.slice(); });
+  await page.evaluate(() => window.state.refresh());
+  await page.waitForFunction(() => !window.state.syncing);
+  const same = await page.evaluate(() => window.state.log.turns.every((turn, i) => turn === window.kept[i]) && window.state.log.turns.length === window.kept.length);
+  assert.equal(same, true, 'no message was rebuilt, so none is redrawn');
+});

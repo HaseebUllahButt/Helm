@@ -605,14 +605,18 @@ function helperName(from: string) {
   return name.split(/(?<=[.!?])\s/)[0].replace(/[.!?]$/, '') || name;
 }
 
+// toLocale*String builds a formatter on every call; a long chat called it
+// for every bubble on every redraw, which a phone could not keep up with.
+const timeFormat = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' });
+const dayFormat = new Intl.DateTimeFormat([], { month: 'short', day: 'numeric' });
+
 /** How long ago a bubble was sent, in the transcript's own quiet type. */
 function clock(ts?: number) {
   if (!ts) return '';
   const d = new Date(ts);
-  const today = new Date();
-  const sameDay = d.toDateString() === today.toDateString();
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const time = timeFormat.format(d);
+  return sameDay ? time : `${dayFormat.format(d)} ${time}`;
 }
 
 /** How long the work took, from the turn's start (or the first step) to the last step's end. */

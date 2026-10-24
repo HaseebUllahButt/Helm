@@ -120,18 +120,30 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
         if (!visible() || version !== visibilityVersion) return;
         const boundary = r.firstSeq ?? r.events[0]?.seq ?? 0;
         const overlap = log.loaded && r.last >= log.last && boundary <= log.last + 1;
+        // A catch-up read during a reply mostly repeats what is on screen.
+        // Rebuilding then made every message a new object and redrew a long
+        // chat whole, many times a reply. When no event already here gained
+        // anything, only the new ones are applied.
+        let fresh: HelmEvent[] | null = null;
         if (!overlap) {
           raw = [...r.events]; first = boundary; windowVersion++;
         } else {
           const bySeq = new Map(raw.map(event => [event.seq, event]));
+          const added: HelmEvent[] = [];
+          let altered = false;
           for (const event of r.events) {
             const old = bySeq.get(event.seq);
-            bySeq.set(event.seq, old ? mergeEvent(old, event) : event);
+            if (!old) { added.push(event); bySeq.set(event.seq, event); continue; }
+            const merged = mergeEvent(old, event);
+            if (!altered && JSON.stringify(merged) !== JSON.stringify(old)) altered = true;
+            bySeq.set(event.seq, merged);
           }
           raw = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+          if (!altered && added.every(event => event.seq > log.last && event.type !== 'history.reset')) fresh = added.sort((a, b) => a.seq - b.seq);
         }
         if (r.last < log.last) buffered.clear();
-        rebuild();
+        if (fresh && r.last >= log.last) { for (const event of fresh) apply(log, event); }
+        else rebuild();
         log.loaded = true; log.pending = r.pending ?? [];
         if (r.session?.status) log.status = r.session.status;
         noteWindow(r.logFirst); publish();
