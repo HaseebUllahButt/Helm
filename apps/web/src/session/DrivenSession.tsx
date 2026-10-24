@@ -242,7 +242,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       if (!stale && cached) setOptions((now) => now ?? cached);
     });
     const catalog = followModelRefresh(
-      () => client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id }, 30_000),
+      (settled) => client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id, ...(settled ? { settled } : {}) }, 30_000),
       (r) => { setOptions(r); saveModels(env.id, session.profileId, r); },
       () => setOptions((now) => now ?? { default: null, models: [] }),
     );

@@ -193,7 +193,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     let stale = false;
     loadModels(env.id, account).then((cached) => { if (!stale && cached) setCatalog((now) => now ?? cached); });
     const refresh = followModelRefresh(
-      () => client.rpc<ModelList>(env.id, 'model.list', { profileId: account }, 30_000),
+      (settled) => client.rpc<ModelList>(env.id, 'model.list', { profileId: account, ...(settled ? { settled } : {}) }, 30_000),
       (list) => {
         if (!Array.isArray(list?.models)) return;
         setCatalog(list); void saveModels(env.id, account, list);

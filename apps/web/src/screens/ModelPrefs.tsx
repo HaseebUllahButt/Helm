@@ -49,7 +49,7 @@ export function ModelPrefsView({ client, env, account, onBack }: {
     // the slowest thing the app asks for - and let the real answer replace it.
     loadModels(env.id, account.profile.id, true).then((c) => { if (c && !initialized) take(c, true); });
     const catalog = followModelRefresh(
-      () => client.rpc<ModelList>(env.id, 'model.list', { profileId: account.profile.id, all: true }, 45_000),
+      (settled) => client.rpc<ModelList>(env.id, 'model.list', { profileId: account.profile.id, all: true, ...(settled ? { settled } : {}) }, 45_000),
       (r) => take(r),
       (e) => { if (!list) setError(e instanceof Error ? e.message : String(e)); },
     );

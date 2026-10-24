@@ -19,7 +19,7 @@ import { BASH_GUARD_MODES } from './pi-settings.js';
 import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
-import { listModels, mergeLiveModelCatalog, followNewModels } from './models.js';
+import { listModels, mergeLiveModelCatalog, followNewModels, modelsSettled } from './models.js';
 import { nativeControls, nativeModelChoices, nativeEffortChoices } from './native-controls.js';
 import { nativeClaudeAccount, nativeAccount } from './native-account.js';
 import { readProcess } from './takeover.js';
@@ -1907,6 +1907,9 @@ export class Daemon {
       }
 
       case M.MODEL_LIST: {
+        // A picker that saw `refreshing` asks once more and waits here,
+        // rather than asking every second until the refresh ends.
+        if (p.settled === true) await modelsSettled();
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
         if (p.id) await this.sessions.refreshNativeSettings?.(p.id);
         const native = p.id ? this.sessions.get(p.id) : null;

@@ -608,6 +608,11 @@ export function newestFirst(ids, releasedAt = {}) {
     .map((x) => x.id);
 }
 
+/** Resolves once a public catalog refresh in progress has ended. */
+export function modelsSettled() {
+  return modelsDevInflight ?? Promise.resolve();
+}
+
 /** Return stale public data immediately and refresh it once in the background. */
 function modelsDevCatalog() {
   const now = Date.now();

@@ -925,3 +925,15 @@ test('a chat list is asked for as changes to the one the device holds', async ()
   assert.equal(JSON.stringify((await lost).sessions), JSON.stringify([a]));
   h.client.close();
 });
+
+test('a model list that waits for its refresh is not raced over other routes', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const waiting = h.client.rpc('vm', 'model.list', { profileId: 'p', settled: true }, 30000);
+  await h.advance(10000);
+  assert.equal(h.sockets[0].frames.filter(f => f.method === 'model.list').length, 1);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  const frame = h.sockets[0].frames.find(f => f.method === 'model.list');
+  h.sockets[0].message({ t: 'rpcResult', id: frame.id, ok: true, result: { models: ['m'] } });
+  assert.equal((await waiting).models[0], 'm');
+  h.client.close();
+});

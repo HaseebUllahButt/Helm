@@ -102,7 +102,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     if (!session.nativeCli) return;
     let stale = false;
     const catalog = followModelRefresh(
-      () => client.rpc<ModelList>(env.id, 'model.list', { id: session.id, profileId: session.profileId }, 30_000),
+      (settled) => client.rpc<ModelList>(env.id, 'model.list', { id: session.id, profileId: session.profileId, ...(settled ? { settled } : {}) }, 30_000),
       (options) => {
         // The same tray a Helm chat has. `default` and `effort` stay empty:
         // the chips show what Claude itself reports, never an account guess.

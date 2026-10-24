@@ -1487,6 +1487,9 @@ export class Client {
     }
 
     const id = `w${++this.seq}`;
+    // A model list asked with `settled` waits on the machine for its refresh
+    // to end. That wait is not a stalled route, so it is never raced.
+    const hedge = HTTP_READ_METHODS.has(method) && !(method === 'model.list' && params?.settled === true);
     return new Promise<T>((resolve, reject) => {
       const started = Date.now();
       let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -1498,7 +1501,7 @@ export class Client {
         reject: (error) => { clear(); reject(error); },
         ...(direct ? { direct: peer, env } : {}),
         routes: new Set([direct ? 'direct' : 'relay']),
-        ...(HTTP_READ_METHODS.has(method) ? { readKey: `${env}:${method}`, sentAt: { [direct ? 'direct' : 'relay']: started } } : {}),
+        ...(hedge ? { readKey: `${env}:${method}`, sentAt: { [direct ? 'direct' : 'relay']: started } } : {}),
       });
       const frame = JSON.stringify({ t: 'rpc', id, env, method, params });
       // Prefer the direct channel: relaying costs two internet round trips
@@ -1527,7 +1530,7 @@ export class Client {
       // A suspended laptop can leave a data channel looking open but silent.
       // These reads (and the idempotent view lease) are safe to race over the
       // hub too; never replay prompts, approvals, or other writes this way.
-      if (HTTP_READ_METHODS.has(method)) {
+      if (hedge) {
         // A slow but healthy link must not multiply a large history download.
         // Keep quick recovery when no latency is known, with a bounded grace
         // period once the machine's round-trip cost has been measured.
