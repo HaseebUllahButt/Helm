@@ -1017,10 +1017,12 @@ function WorkingChip({ status: s, working, childrenWorking, compacting, turn, up
   return s === 'blocked' ? <span className="chip blocked"><i />waiting{ago}</span>
     : s === 'starting' ? <span className="chip working"><i />starting</span>
     : s === 'working' && compacting ? <span className="chip working"><i />Summarizing chat</span>
-    : s === 'working' ? <span className="chip working" title={rate ? `${rate} tok/s` : undefined}><i />working{ago}</span>
+    // Plain work is only a blue dot. The time and speed are a hover away.
+    : s === 'working' ? <span className="chip working dot-only" role="img" aria-label={`Working${ago}`}
+        title={`Working${ago}${rate ? ` · ${rate} tok/s` : ''}`}><i /></span>
     // Its own turn is over, but child tasks are not: the sidebar calls
     // this working, so the open chat must not look finished.
-    : childrenWorking ? <span className="chip working" title="Helpers are still working"><i />working</span>
+    : childrenWorking ? <span className="chip working dot-only" role="img" aria-label="Helpers are still working" title="Helpers are still working"><i /></span>
     : s === 'unknown' ? <span className="chip exited" title="The machine cannot report if this agent is working.">Status unknown</span>
     : null;
 }
