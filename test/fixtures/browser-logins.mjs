@@ -9,11 +9,11 @@ export function encrypted(value, { password = 'peanuts', prefix = 'v10', host = 
   const bytes = Buffer.concat([...(version >= 24 ? [createHash('sha256').update(host).digest()] : []), Buffer.from(value)]);
   return Buffer.concat([Buffer.from(prefix), cipher.update(bytes), cipher.final()]);
 }
-export async function fixture(root, { browserPath = 'chromium', directory = 'Default', name = 'Personal', version = 24, network = true, wal = false } = {}) {
+export async function fixture(root, { browserPath = 'chromium', directory = 'Default', name = 'Personal', info = {}, version = 24, network = true, wal = false } = {}) {
   const browser = join(root, browserPath), profile = join(browser, directory);
   await mkdir(network ? join(profile, 'Network') : profile, { recursive: true });
   let state; try { state = JSON.parse(await (await import('node:fs/promises')).readFile(join(browser, 'Local State'), 'utf8')); } catch { state = { profile: { info_cache: {} } }; }
-  state.profile.info_cache[directory] = { name }; state.profile.last_used = directory;
+  state.profile.info_cache[directory] = { name, ...info }; state.profile.last_used = directory;
   await writeFile(join(browser, 'Local State'), JSON.stringify(state));
   const db = new DatabaseSync(join(profile, network ? 'Network/Cookies' : 'Cookies'));
   if (wal) db.exec('PRAGMA journal_mode=WAL');

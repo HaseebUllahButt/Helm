@@ -4,6 +4,11 @@ export function createBrowserRoutes({ sessions, manager = new BrowserManager({ s
   return {
     manager,
     stop: () => manager.stop(),
+    // A deleted chat's browser goes with it: its window, tabs and sign-ins.
+    sessionChanged(session) {
+      if (session?.status !== 'exited') return;
+      try { sessions.get(session.id); } catch { void manager.forget(session.id).catch(() => {}); }
+    },
     async dispatch(method, p) {
       if (!method.startsWith('browser.')) return undefined;
       if (method === 'browser.profiles') return manager.profiles(p.id);

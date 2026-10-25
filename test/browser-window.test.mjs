@@ -9,6 +9,7 @@ process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-browser-window-'));
 process.env.HELM_NO_SERVICE = '1';
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
+const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
 const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow } = await import('../packages/connect/src/browser-window.js');
 const { chromium } = await import('playwright');
 const realChromium = ['/usr/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
@@ -100,6 +101,59 @@ test('a closed window keeps its tabs asleep; listing does not reopen it, the age
   // The agent's next step opens the window again, on the same tab and page.
   assert.equal((await manager.run('one', a.tab.id, { kind: 'evaluate', script: 'location.origin' })).value, url);
   assert.equal(windows.length, 2); assert.equal((await manager.list('one')).open, true);
+});
+
+test('a new tab opens at its address, so it never sits on about:blank while the site answers', { timeout: 60000, skip: noChromium }, async t => {
+  const slow = createServer((req, res) => setTimeout(() => { res.setHeader('Content-Type', 'text/html'); res.end(`<title>Slow ${req.url}</title>slow`); }, 800));
+  await new Promise(resolve => slow.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => slow.close(resolve)));
+  const { manager } = await setup(t), url = `http://127.0.0.1:${slow.address().port}`;
+  const targets = async () => { const context = await manager.contexts.get('one'), cdp = await context.newCDPSession(context.pages()[0]); try { return (await cdp.send('Target.getTargets')).targetInfos.filter(info => info.type === 'page').map(info => info.url); } finally { await cdp.detach(); } };
+  await manager.open('one', { url: `${url}/first` });
+  const second = manager.open('one', { url: `${url}/second` }), viewer = manager.open('one', { url: `${url}/third`, viewer: 'v' });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.deepEqual((await targets()).sort(), [`${url}/first`, `${url}/second`, `${url}/third`], 'no empty tab, and none on about:blank');
+  assert.match((await second).text, /^Slow \/second/); await viewer;
+  // A hidden window's error page is empty, so the reason may be missing there.
+  await assert.rejects(manager.open('one', { url: 'http://nothing.invalid/' }), /Can't find nothing\.invalid|Could not open nothing\.invalid/);
+  assert.equal((await manager.list('one')).tabs.length, 3, 'a tab that could not open is closed');
+});
+
+test('a window nobody used for a while is put away; its tabs sleep and come back', { timeout: 60000, skip: noChromium }, async t => {
+  const { manager, url, windows } = await setup(t, { windowIdleMs: 60000 });
+  const a = await manager.open('one', { url });
+  manager.watched = async () => false;
+  await manager.sweep(); assert.equal(manager.windowContexts.size, 1, 'used a moment ago');
+  manager.tabs.get(a.tab.id).lastUsed -= 61000; manager.watched = async () => true;
+  await manager.sweep(); assert.equal(manager.windowContexts.size, 1, 'the owner is looking at it');
+  manager.watched = async () => false;
+  await manager.sweep(); assert.equal(manager.windowContexts.size, 0);
+  assert.deepEqual((await manager.list('one')).tabs.map(tab => [tab.id, tab.asleep]), [[a.tab.id, true]]);
+  assert.equal((await manager.run('one', a.tab.id, { kind: 'evaluate', script: 'location.origin' })).value, url);
+  assert.equal(windows.length, 2);
+});
+
+test('a deleted chat takes its browser with it; tidying removes old folders and refetched files', { timeout: 60000, skip: noChromium }, async t => {
+  const { manager, url } = await setup(t);
+  await manager.open('gone', { url });
+  const known = new Set(['gone']), forgotten = [];
+  const routes = createBrowserRoutes({ sessions: { get: sid => { if (!known.has(sid)) throw new Error('unknown session'); return { id: sid }; } }, manager });
+  manager.forget = (forget => async sid => { forgotten.push(sid); await forget.call(manager, sid); })(manager.forget);
+  routes.sessionChanged({ id: 'gone', status: 'exited' });
+  assert.deepEqual(forgotten, [], 'a chat that only stopped keeps its browser');
+  known.delete('gone'); routes.sessionChanged({ id: 'gone', status: 'exited' });
+  assert.deepEqual(forgotten, ['gone']);
+  await new Promise(resolve => { const wait = () => existsSync(join(manager.directory, 'gone')) ? setTimeout(wait, 20) : resolve(); wait(); });
+  assert.equal(existsSync(join(manager.directory, 'gone')), false); assert.equal(manager.tabs.size, 0); assert.equal(manager.contexts.size, 0);
+  const { utimesSync } = await import('node:fs');
+  for (const sid of ['old', 'recent', 'alive']) { mkdirSync(join(windowProfile(manager.directory, sid), 'component_crx_cache'), { recursive: true }); writeFileSync(join(manager.directory, sid, 'tabs.json'), '[]'); }
+  const dayAgo = new Date(Date.now() - 25 * 3600000);
+  for (const path of [join(manager.directory, 'old'), join(manager.directory, 'old', 'tabs.json')]) utimesSync(path, dayAgo, dayAgo);
+  manager.session = sid => { if (sid !== 'alive') throw new Error('unknown session'); return { id: sid }; };
+  await manager.tidy();
+  assert.equal(existsSync(join(manager.directory, 'old')), false, 'a chat gone for a day');
+  assert.equal(existsSync(join(manager.directory, 'recent', 'tabs.json')), true, 'maybe not loaded yet: kept');
+  assert.equal(existsSync(join(manager.directory, 'alive', 'tabs.json')), true);
+  assert.equal(existsSync(join(windowProfile(manager.directory, 'alive'), 'component_crx_cache')), false);
 });
 
 test('Show window opens an empty thread with one blank tab; without a screen it says so plainly', { timeout: 60000, skip: noChromium }, async t => {

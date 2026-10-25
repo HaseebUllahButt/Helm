@@ -3,6 +3,7 @@
 // it never moves the owner's mouse or types on their keyboard; the owner
 // just uses the window.
 import { existsSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -26,7 +27,9 @@ const systemChromium = () => process.env.HELM_WINDOW_CHROMIUM || [
  */
 export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
   const { chromium } = await import('playwright');
-  const args = ['--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', `--class=${name}`];
+  // No component downloads: each chat's profile would fetch its own ~150 MB
+  // of speech, DRM and model files, and starting is slower while it does.
+  const args = ['--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', '--disable-component-update', `--class=${name}`];
   if (process.platform === 'linux') args.push('--ozone-platform-hint=auto');
   const running = await attachWindow(chromium, profileDir);
   if (running) return running;
@@ -47,13 +50,35 @@ export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
 
 const PORT_FILE = 'DevToolsActivePort';
 
-/** Is a live Chromium using this profile? Chromium's lock names its process. */
-function profileInUse(profileDir) {
-  if (process.platform === 'win32') return true;
-  let target; try { target = readlinkSync(join(profileDir, 'SingletonLock')); } catch { return false; }
+/** The live Chromium using this profile, if any. Chromium's lock names its process. */
+function profilePid(profileDir) {
+  let target; try { target = readlinkSync(join(profileDir, 'SingletonLock')); } catch { return null; }
   const pid = Number(target.split('-').pop());
-  if (!Number.isInteger(pid) || pid < 1) return false;
-  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+  if (!Number.isInteger(pid) || pid < 1) return null;
+  try { process.kill(pid, 0); return pid; } catch (error) { return error.code === 'EPERM' ? pid : null; }
+}
+const profileInUse = (profileDir) => process.platform === 'win32' || !!profilePid(profileDir);
+
+/** Close a window Helm started for a chat that is gone, and wait for it to exit. */
+export async function stopWindow(profileDir) {
+  const pid = process.platform === 'win32' ? null : profilePid(profileDir);
+  if (!pid) return false;
+  try { process.kill(pid, 'SIGTERM'); } catch { return false; }
+  for (const until = Date.now() + 5000; Date.now() < until && profilePid(profileDir);) await new Promise(done => setTimeout(done, 100));
+  return true;
+}
+
+// What Chromium downloads or caches again by itself; sign-ins, history and
+// site storage stay.
+const REFETCHED = ['component_crx_cache', 'WasmTtsEngine', 'WidevineCdm', 'OnDeviceHeadSuggestModel', 'OptimizationHints', 'ActorSafetyLists',
+  'hyphen-data', 'ZxcvbnData', 'GPUPersistentCache', 'GrShaderCache', 'ShaderCache', 'BrowserMetrics', 'BrowserMetrics-spare.pma',
+  'Default/Cache', 'Default/Code Cache', 'Default/GPUCache', 'Default/DawnGraphiteCache', 'Default/DawnWebGPUCache'];
+
+/** Free a closed window's disk space. A window that is open is left alone. */
+export async function trimProfile(profileDir) {
+  if (!existsSync(profileDir) || profileInUse(profileDir)) return false;
+  await Promise.all(REFETCHED.map(name => rm(join(profileDir, name), { recursive: true, force: true }).catch(() => {})));
+  return true;
 }
 
 /** A window Helm started is open, maybe from before Helm restarted. */
@@ -83,7 +108,7 @@ async function attachWindow(chromium, profileDir) {
  */
 async function startWindow(chromium, executable, profileDir, args) {
   rmSync(join(profileDir, PORT_FILE), { force: true });
-  const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', ...args, 'about:blank'];
+  const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', ...args, NEW_TAB];
   const scoped = process.platform === 'linux' && !process.env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
   for (const [command, list] of [...(scoped ? [[scoped, ['--user', '--scope', '--collect', '--quiet', executable, ...argv]]] : []), [executable, argv]]) {
     const child = spawn(command, list, { detached: true, stdio: 'ignore' });

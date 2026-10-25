@@ -21,6 +21,22 @@ It controls web pages only, not desktop apps. Open it with a chat's
   scrolls, the agent's next step waits until they are still for 2.5 s (at
   most 20 s). Closing the window keeps its tabs as asleep; listing tabs
   never opens it.
+- **It cleans up after itself.** A window nobody used for 30 minutes
+  closes, unless the owner is looking at it; its tabs sleep and come back
+  with the next step. Deleting a chat closes its window and removes its
+  folder. Windows start with `--disable-component-update`, so a chat's
+  profile does not fetch ~150 MB of speech, DRM (Widevine) and model files;
+  DRM video does not play there. Some time after Helm starts, closed
+  windows lose the files Chromium fetches again, and folders of chats gone
+  for a day are removed.
+- **A new tab opens at its address** (`Target.createTarget` with the URL).
+  A tab Playwright makes starts empty, and Chromium shows "about:blank" over
+  a white page until the site answers. A failed load is read from
+  Chromium's error page: loading the address again there can leave the tab
+  unable to close.
+- **An agent gets the page when it goes quiet:** the load event, or half a
+  second with no fetch in flight (at most 3 s). Slow pictures and adverts
+  no longer hold every step back.
 - **Show me** (`helm browser point`) highlights an element and changes
   nothing, so it works in read-only chats. Read-only agents can read,
   navigate, wait and check; a batch holding any change is refused before
@@ -54,10 +70,18 @@ It controls web pages only, not desktop apps. Open it with a chat's
 
 ## Logins
 
-**Logins** in the panel copies only cookies from a Chromium, Chrome, Brave,
-Edge or Vivaldi profile on the chat's machine (`helm browser profiles`,
+**Logins** in the panel copies only cookies from a Helium, Chromium, Chrome,
+Brave, Edge or Vivaldi profile on the chat's machine (`helm browser profiles`,
 `helm browser logins "<profile>" [--default]`). The machine default stores
 only the profile name; cookies live only in each chat's private storage.
+
+- A profile is found by any name a person uses: the browser ("helium"),
+  the profile ("work", "Profile 7", its email), both ("work in chrome",
+  "brave:Default"), the start of a name, or a line pasted from the list.
+  When two fit, the system's default browser wins, then the latest used.
+  The list shows that order.
+- Helium keeps its key in the keyring under "chromium", and its flags in
+  `helium-browser-flags.conf`.
 
 - Sites that also need local storage or device-bound keys may still ask to
   sign in through the viewer.

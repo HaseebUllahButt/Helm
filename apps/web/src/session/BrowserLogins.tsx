@@ -4,7 +4,7 @@ import type { Client, Environment, Session } from '../client';
 import { useDialog } from '../useDialog';
 import { Icon } from '../Icon';
 
-type Profile = { key: string; browser: string; browserName: string; directory: string; name: string; lastUsed: boolean; readable: boolean; reason?: string };
+type Profile = { key: string; browser: string; browserName: string; directory: string; name: string; email?: string; lastUsed: boolean; readable: boolean; reason?: string };
 type Copied = { cookies: number; sites: number; failed: number; profile: string };
 
 export default function BrowserLogins({ client, env, session }: { client: Client; env: Environment; session: Session }) {
@@ -37,7 +37,7 @@ export default function BrowserLogins({ client, env, session }: { client: Client
       <p style={{ marginTop: 0 }}>Copy logins from a browser on {env.name}.</p>
       {profiles.length ? <select aria-label="Login profile" value={selected} disabled={busy} style={{ width: '100%' }} onChange={e => { setSelected(e.target.value); setMessage(''); }}>
         {!selected && <option value="">Select a profile</option>}
-        {browsers.map(browser => <optgroup key={browser} label={profiles.find(p => p.browser === browser)!.browserName}>{profiles.filter(p => p.browser === browser).map(p => <option key={p.key} value={p.key} disabled={!p.readable}>{p.name} ({p.directory}){p.lastUsed ? ' · Last used' : ''}</option>)}</optgroup>)}
+        {browsers.map(browser => <optgroup key={browser} label={profiles.find(p => p.browser === browser)!.browserName}>{profiles.filter(p => p.browser === browser).map(p => <option key={p.key} value={p.key} disabled={!p.readable}>{p.name} ({p.directory}){p.email ? ` · ${p.email}` : ''}{p.lastUsed ? ' · Last used' : ''}</option>)}</optgroup>)}
       </select> : <p>{busy ? 'Finding profiles…' : 'This machine has no browser profiles.'}</p>}
       {profiles.some(p => !p.readable) && <p className="note">{profiles.find(p => !p.readable)?.reason}</p>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>

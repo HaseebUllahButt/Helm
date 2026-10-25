@@ -542,7 +542,10 @@ export class Daemon {
       }).catch(() => {});
     }, WARM_DELAY_MS);
     warm.unref?.();
-    this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session: wire(session) }));
+    this.sessions.on('session', (session) => {
+      this.#emit(E.SESSION_UPDATE, { session: wire(session) });
+      this.browsers.sessionChanged(session);
+    });
     this.sessions.on('discovery', () => this.#emit(E.SESSION_UPDATE, {}));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
@@ -639,6 +642,10 @@ export class Daemon {
     // every couple of minutes.
     const first = setTimeout(() => { if (!this.#stopped) void this.#syncVersions(); }, UPDATE_AFTER_START_MS);
     first.unref?.();
+    // Browser folders of chats deleted while Helm was down, and the space
+    // closed windows refill by themselves.
+    const tidy = setTimeout(() => { if (!this.#stopped) void this.browsers.manager.tidy().catch(() => {}); }, 60_000);
+    tidy.unref?.();
     this.#wake = setInterval(() => { if (!this.#stopped) void this.#syncVersions(); }, SYNC_EVERY_MS);
     this.#wake.unref?.();
     // A version checked out here is taken at once, not on the next round.

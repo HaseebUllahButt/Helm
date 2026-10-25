@@ -203,6 +203,21 @@ test('the owner does not wait for a page to load, and a page that cannot be reac
   await manager.stop(); rmSync(directory, { recursive: true, force: true });
 });
 
+test('an agent gets a page once it stops fetching, without waiting for slow pictures', { timeout: 60000 }, async t => {
+  const server = createServer((req, res) => {
+    if (req.url.startsWith('/img')) return setTimeout(() => { res.setHeader('Content-Type', 'image/gif'); res.end(Buffer.from('R0lGODlhAQABAAAAACw=', 'base64')); }, 4000);
+    if (req.url === '/api') return setTimeout(() => res.end('data arrived'), 300);
+    res.setHeader('Content-Type', 'text/html'); res.end('<title>Heavy</title><img src="/img"><p id=d></p><script>fetch("/api").then(r => r.text()).then(x => d.textContent = x)</script>');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: mkdtempSync(join(tmpdir(), 'helm-settle-')), session: sid => ({ id: sid }), canWindow: false });
+  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
+  const started = Date.now(), { text } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}/` });
+  assert.match(text, /data arrived/, 'what the page fetched is there');
+  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+});
+
 test('Playwright’s own browser is tried first; a pinned path wins; the system browser is the fallback', async () => {
   const { chromium } = await import('playwright'), real = chromium.launch, calls = [], browser = new EventEmitter(); browser.isConnected = () => true; browser.close = async () => {};
   const saved = { HELM_CHROMIUM_PATH: process.env.HELM_CHROMIUM_PATH, HELM_TEST_CHROMIUM: process.env.HELM_TEST_CHROMIUM };

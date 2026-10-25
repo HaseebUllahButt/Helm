@@ -6,17 +6,32 @@ import { join, relative, sep } from 'node:path';
 import { readFile, lstat, mkdtemp, chmod, writeFile, rm } from 'node:fs/promises';
 
 const execFile = promisify(exec);
+// id, name, Linux folder, macOS folder, Windows folder, keyring name,
+// other names a person may call it, flags files beside the id's own.
 const BROWSERS = [
+  ['helium', 'Helium', 'net.imput.helium', 'net.imput.helium', 'imput/Helium/User Data', 'chromium', ['net.imput.helium'], ['helium-browser-flags.conf']],
   ['chromium', 'Chromium', 'chromium', 'Chromium', 'Chromium', 'chromium'],
-  ['chrome', 'Chrome', 'google-chrome', 'Google/Chrome', 'Google/Chrome/User Data', 'chrome'],
+  ['chrome', 'Chrome', 'google-chrome', 'Google/Chrome', 'Google/Chrome/User Data', 'chrome', ['google chrome', 'google-chrome', 'google-chrome-stable']],
   ['chrome-beta', 'Chrome Beta', 'google-chrome-beta', 'Google/Chrome Beta', 'Google/Chrome Beta/User Data', 'chrome'],
   ['chrome-unstable', 'Chrome Dev', 'google-chrome-unstable', 'Google/Chrome Dev', 'Google/Chrome Dev/User Data', 'chrome'],
-  ['brave', 'Brave', 'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser/User Data', 'brave'],
-  ['edge', 'Edge', 'microsoft-edge', 'Microsoft Edge', 'Microsoft/Edge/User Data', 'microsoft-edge'],
+  ['brave', 'Brave', 'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser/User Data', 'brave', ['brave browser', 'brave-browser']],
+  ['edge', 'Edge', 'microsoft-edge', 'Microsoft Edge', 'Microsoft/Edge/User Data', 'microsoft-edge', ['microsoft edge', 'microsoft-edge']],
   ['edge-dev', 'Edge Dev', 'microsoft-edge-dev', 'Microsoft Edge Dev', 'Microsoft/Edge Dev/User Data', 'microsoft-edge'],
   ['vivaldi', 'Vivaldi', 'vivaldi', 'Vivaldi', 'Vivaldi/User Data', 'vivaldi'],
 ];
 const label = p => `${p.browserName}: ${p.name} (${p.directory})`;
+const plain = value => String(value).toLowerCase().replace(/\s+/g, ' ').trim();
+// Every name a browser goes by, longest first so "chrome beta" wins over "chrome".
+const browserWords = BROWSERS.flatMap(([id, name, , , , , aliases = []]) => [id, name, ...aliases].map(word => [plain(word), id])).sort((a, b) => b[0].length - a[0].length);
+// The browser a desktop file opens, e.g. "helium.desktop" or "google-chrome.desktop".
+const desktopBrowser = file => { const name = plain(file).replace(/\.desktop$/, ''); return ['helium', 'chrome-beta', 'chrome-unstable', 'edge-dev'].find(id => name.includes(id.replace('chrome', 'google-chrome').replace('edge', 'microsoft-edge'))) || BROWSERS.find(([id, , linux]) => name === id || name === plain(linux) || name.includes(id))?.[0] || null; };
+const systemDefault = async (run, platform) => {
+  if (platform !== 'linux') return null;
+  for (const [command, args] of [['xdg-settings', ['get', 'default-web-browser']], ['xdg-mime', ['query', 'default', 'x-scheme-handler/https']]]) {
+    try { const { stdout } = await run(command, args, { timeout: 1500, maxBuffer: 4096 }); const id = desktopBrowser(stdout.trim()); if (id) return id; } catch { /* not installed */ }
+  }
+  return null;
+};
 const validDirectory = name => typeof name === 'string' && name !== '.' && name !== '..' && !/[\\/\x00-\x1f]/.test(name) && name.length <= 200;
 const unixTime = value => Number(value) / 1000000 - 11644473600;
 const key = (password, platform) => pbkdf2Sync(password, 'saltysalt', platform === 'darwin' ? 1003 : 1, 16, 'sha1');
@@ -30,38 +45,62 @@ async function privatePath(root, path) {
   return path;
 }
 
-export function createLoginReader({ home = homedir(), platform = process.platform, configHome = process.env.XDG_CONFIG_HOME || join(home, '.config'), localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), run = execFile, now = Date.now } = {}) {
+export function createLoginReader({ home = homedir(), platform = process.platform, configHome = process.env.XDG_CONFIG_HOME || join(home, '.config'), localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), run = execFile, now = Date.now, defaultBrowser = () => systemDefault(execFile, platform) } = {}) {
   const root = platform === 'darwin' ? join(home, 'Library', 'Application Support') : platform === 'win32' ? localAppData : configHome;
   const cache = new Map();
+  let usual; const usualBrowser = () => (usual ??= Promise.resolve().then(defaultBrowser).catch(() => null));
   const source = p => join(root, BROWSERS.find(b => b[0] === p.browser)[platform === 'darwin' ? 3 : platform === 'win32' ? 4 : 2]);
   async function passwordStore(browser) {
-    const brand = BROWSERS.find(b => b[0] === browser)[5];
-    for (const file of [`${browser}-flags.conf`, `${brand}-flags.conf`]) {
+    const [, , , , , brand, , flags = []] = BROWSERS.find(b => b[0] === browser);
+    for (const file of [...flags, `${browser}-flags.conf`, `${brand}-flags.conf`]) {
       try { const contents = await readFile(await privatePath(root, join(root, file)), 'utf8'); const match = /(?:^|\s)--password-store=([\w-]+)/m.exec(contents.replace(/^\s*#.*$/gm, '')); if (match) return match[1]; } catch {}
     }
     return 'auto';
   }
   async function listProfiles() {
-    const profiles = [];
+    const profiles = [], usualId = await usualBrowser();
     for (const [browser, browserName] of BROWSERS) {
       try {
         const state = JSON.parse(await readFile(await privatePath(root, join(source({ browser }), 'Local State')), 'utf8')).profile || {};
         for (const [directory, info] of Object.entries(state.info_cache || {})) {
           if (!validDirectory(directory)) continue;
           const path = await privatePath(root, join(source({ browser }), directory)); if (!(await lstat(path)).isDirectory()) continue;
-          profiles.push({ key: `${browser}:${directory}`, browser, browserName, directory, name: String(info.name || directory), lastUsed: directory === state.last_used, passwordStore: platform === 'linux' ? await passwordStore(browser) : platform === 'darwin' ? 'keychain' : 'app-bound', readable: platform !== 'win32', ...(platform === 'win32' ? { reason: 'Windows browser logins use app-bound encryption and cannot be copied here.' } : {}) });
+          const email = typeof info.user_name === 'string' && info.user_name.length <= 320 ? info.user_name : '';
+          profiles.push({ key: `${browser}:${directory}`, browser, browserName, directory, name: String(info.name || directory), ...(email ? { email } : {}), lastUsed: directory === state.last_used, usedAt: Number.isFinite(info.active_time) ? Math.round(info.active_time * 1000) : 0, ...(browser === usualId ? { defaultBrowser: true } : {}), passwordStore: platform === 'linux' ? await passwordStore(browser) : platform === 'darwin' ? 'keychain' : 'app-bound', readable: platform !== 'win32', ...(platform === 'win32' ? { reason: 'Windows browser logins use app-bound encryption and cannot be copied here.' } : {}) });
         }
       } catch { /* browser absent or unsafe */ }
     }
-    return profiles;
+    // The owner's everyday browser first, then the profiles used most lately.
+    return profiles.sort((a, b) => !!b.defaultBrowser - !!a.defaultBrowser || b.usedAt - a.usedAt);
   }
+  /**
+   * The profile a person means. They may name the browser ("helium", "Brave"),
+   * the profile ("work", "Profile 7", an email), both in any order ("helium
+   * work", "work in Chrome", "brave:Default"), or paste a line from the list.
+   * When two profiles fit, the everyday browser and then the latest used wins.
+   */
   async function resolveProfile(wanted) {
     const choices = await listProfiles(); const value = typeof wanted === 'object' ? wanted?.key : wanted;
     if (typeof value !== 'string' || value.length > 400) throw new Error('choose a browser profile');
-    const lower = value.toLowerCase(), colon = lower.indexOf(':');
-    const matches = choices.filter(p => p.key.toLowerCase() === lower || ((colon < 0 || p.browser === lower.slice(0, colon)) && [p.directory, p.name].some(v => v.toLowerCase() === (colon < 0 ? lower : lower.slice(colon + 1)))));
-    if (matches.length !== 1) throw new Error(`Profile ${matches.length ? 'is ambiguous' : 'was not found'}. Available: ${choices.map(label).join('; ') || 'none'}`);
-    return matches[0];
+    const asked = plain(value);
+    const exact = choices.find(p => plain(p.key) === asked || plain(label(p)) === asked);
+    if (exact) return exact;
+    let browser = null, rest = asked;
+    const colon = asked.indexOf(':');
+    if (colon > 0 && browserWords.some(([word]) => word === asked.slice(0, colon).trim())) { browser = browserWords.find(([word]) => word === asked.slice(0, colon).trim())[1]; rest = asked.slice(colon + 1); }
+    else for (const [word, id] of browserWords) {
+      const at = asked.startsWith(`${word} `) || asked.startsWith(`${word}/`) || asked === word ? 0 : asked.endsWith(` ${word}`) ? asked.length - word.length : asked.endsWith(`(${word})`) ? asked.length - word.length - 2 : -1;
+      if (at < 0) continue;
+      browser = id; rest = (at ? asked.slice(0, at) : asked.slice(word.length)).replace(/[()]/g, ' ').trim().replace(/\s(in|on|from)$/, '').replace(/^\s*[/-]\s*/, ''); break;
+    }
+    rest = rest.replace(/[\s/:-]+$/, '').replace(/^[\s/:-]+/, '').trim().replace(/^(the )?(default|main)( profile)?$/, 'default').replace(/ profile$/, '');
+    const pool = choices.filter(p => !browser || p.browser === browser);
+    const names = p => [p.directory, p.name, p.email].filter(Boolean).map(plain);
+    const matches = !rest ? pool.filter(p => p.lastUsed)
+      : [v => v === rest, v => v.startsWith(rest), v => v.includes(rest)].map(fits => pool.filter(p => names(p).some(fits))).find(found => found.length) || [];
+    if (browser && !pool.length) throw new Error(`${BROWSERS.find(b => b[0] === browser)[1]} has no profiles on this machine. Profiles here: ${choices.map(label).join('; ') || 'none'}`);
+    if (!matches.length) throw new Error(`No browser profile matches "${value}". Profiles here: ${choices.map(label).join('; ') || 'none'}`);
+    return matches.find(p => p.readable) ? matches.filter(p => p.readable)[0] : matches[0];
   }
   async function secret(profile) {
     const brand = BROWSERS.find(b => b[0] === profile.browser)[5];

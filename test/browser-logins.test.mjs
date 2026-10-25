@@ -18,18 +18,38 @@ const { createBrowserRoutes } = await import('../packages/connect/src/browser-ro
 const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
 const config = async t => { const root = await mkdtemp(join(directory, 'config-')); t.after(() => rm(root, { recursive: true, force: true })); return root; };
 
-test('discovers profiles, resolves labels and directories, and rejects ambiguity and symlinks', async t => {
+test('discovers profiles, finds the one a person names, and rejects symlinks', async t => {
   const root = await config(t), first = await fixture(root), second = await fixture(root, { browserPath: 'google-chrome', directory: 'Profile 3' }); first.db.close(); second.db.close();
-  const reader = createLoginReader({ configHome: root, platform: 'linux' });
+  const reader = createLoginReader({ configHome: root, platform: 'linux', defaultBrowser: async () => null });
   assert.equal((await reader.listProfiles()).length, 2);
   assert.equal((await reader.resolveProfile('CHROME:personal')).key, 'chrome:Profile 3');
   assert.equal((await reader.resolveProfile('Profile 3')).key, 'chrome:Profile 3');
-  await assert.rejects(reader.resolveProfile('Personal'), /ambiguous.*Chromium.*Chrome/);
-  await assert.rejects(reader.readLogins({ key: 'chromium:../../escape' }), /not found/);
+  assert.equal((await reader.resolveProfile('personal in chromium')).key, 'chromium:Default');
+  assert.equal((await reader.resolveProfile('Google Chrome Personal')).key, 'chrome:Profile 3');
+  assert.equal((await reader.resolveProfile('Chrome: Personal (Profile 3)')).key, 'chrome:Profile 3');
+  assert.equal((await reader.resolveProfile('chrome')).key, 'chrome:Profile 3', 'a browser alone is its last used profile');
+  await assert.rejects(reader.resolveProfile('brave'), /Brave has no profiles/);
+  await assert.rejects(reader.resolveProfile('nobody'), /No browser profile matches "nobody".*Chrome: Personal/);
+  await assert.rejects(reader.readLogins({ key: 'chromium:../../escape' }), /No browser profile matches/);
   await rm(join(first.profile, 'Network/Cookies')); await symlink(join(second.profile, 'Network/Cookies'), join(first.profile, 'Network/Cookies'));
   await assert.rejects(reader.readLogins('chromium:Default'), /symlinks/);
   await rm(first.profile, { recursive: true }); await symlink(second.profile, first.profile);
   assert.equal((await reader.listProfiles()).length, 1);
+});
+
+test('a name two browsers share means the everyday browser, then the latest used', async t => {
+  const root = await config(t);
+  for (const options of [{}, { browserPath: 'google-chrome', info: { active_time: 1700000000 } }, { browserPath: 'net.imput.helium', directory: 'Profile 7', name: 'Work', info: { user_name: 'me@example.test', active_time: 1600000000 } }]) (await fixture(root, options)).db.close();
+  await writeFile(join(root, 'helium-browser-flags.conf'), '--password-store=basic');
+  const plain = createLoginReader({ configHome: root, platform: 'linux', defaultBrowser: async () => null });
+  assert.equal((await plain.resolveProfile('personal')).key, 'chrome:Default', 'used most lately');
+  assert.equal((await plain.resolveProfile('me@example.test')).key, 'helium:Profile 7');
+  assert.equal((await plain.resolveProfile('wor')).key, 'helium:Profile 7', 'the start of a name is enough');
+  const helium = (await plain.listProfiles()).find(p => p.browser === 'helium');
+  assert.equal(helium.browserName, 'Helium'); assert.equal(helium.passwordStore, 'basic');
+  const everyday = createLoginReader({ configHome: root, platform: 'linux', defaultBrowser: async () => 'chromium' });
+  assert.equal((await everyday.resolveProfile('personal')).key, 'chromium:Default');
+  assert.deepEqual((await everyday.listProfiles()).map(p => p.key), ['chromium:Default', 'chrome:Default', 'helium:Profile 7']);
 });
 
 test('Linux decrypts v10 and v11 with host hashes, live WAL, expiry, sessions and SameSite', async t => {
