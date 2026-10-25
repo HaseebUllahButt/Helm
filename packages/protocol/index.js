@@ -121,7 +121,7 @@ export const M = {
   CLI_UPDATE: 'cli.update',        // { engine? } -> { started, busy?, results[] }  now, one tool or all
   CLI_AUTO_UPDATE: 'cli.autoUpdate', // { on } -> { auto }  this machine's setting, on by default
   ENV_BUNDLE: 'env.bundle',        // { have } -> { head, bundle }  this machine's saved version, for another to take
-  // What a machine is for ('pc' | 'vm' | 'nas'), asked of the machine itself
+  // What a machine is for ('pc' | 'vm'), asked of the machine itself
   // for the same reason as a rename: `kind` lives on its own roster record.
   MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }
   // What a session did to its folder, as git sees it.
@@ -302,23 +302,11 @@ export const M = {
   DISPATCH_SUBMIT: 'dispatch.submit', // { targetMachineId, params } -> queue receipt
   DISPATCH_STATUS: 'dispatch.status', // { handoffId } -> queue receipt
 
-  // A machine designated 'nas'. Browsing is RPC (small JSON, fits the
-  // channel), but the bytes themselves are not: streaming is real HTTP at
-  // /media/<machine>/stream on any hub, which a <video> element can speak
-  // directly. `media.ticket` mints the short-lived credential that URL
-  // carries, because a media element cannot set an Authorization header.
   // Public links: a name, a local port, maybe a password (protocol/share.js).
   // The hub asks every machine for its list when a link is opened.
   SHARE_LIST: 'share.list',        // { forHub?, members? } -> { shares[], features? }  hashes and private links only for a hub that asks
   SHARE_ADD: 'share.add',          // { name?, port, password?, private? } -> { share }
   SHARE_REMOVE: 'share.remove',    // { name } -> { removed }
-
-  MEDIA_INFO: 'media.info',        // {} -> { kind, port, roots[] }   the media listener's loopback port
-  MEDIA_ROOTS: 'media.roots',      // {} -> { roots[] }   the shared-folder allowlist
-  MEDIA_ROOT_ADD: 'media.root_add',    // { path } -> { roots[] }
-  MEDIA_ROOT_REMOVE: 'media.root_remove', // { path } -> { roots[] }
-  MEDIA_LIST: 'media.list',        // { root, path? } -> { root, path, entries[] }
-  MEDIA_TICKET: 'media.ticket',    // {} -> { ticket, expiresAt }  scoped to caller + this nas
 
   // A round trip that does nothing, for measuring what one costs. The
   // terminal needs to know: how it draws depends on how far away you are.

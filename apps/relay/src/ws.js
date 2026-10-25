@@ -630,7 +630,7 @@ export function createWsLayer() {
         send(target, T.RPC, {
           id: relayId, method: msg.method, params: msg.params ?? {},
           // Who is asking travels with the call, so methods that answer
-          // "for you" - a media ticket minted for the caller alone - work
+          // "for you" - a reply meant for the caller alone - work
           // over the hub exactly as they do over a direct channel.
           sub,
         });
@@ -958,8 +958,8 @@ export function createWsLayer() {
   // --------------------------------------------------- the hub itself asking
   //
   // A hub is nobody's client, but it is allowed to originate traffic of its
-  // own: answering an HTTP media request for a machine only this hub can see
-  // means first asking that machine which port its media is on, then opening
+  // own: answering an HTTP request for a share on a machine only this hub can
+  // see means first asking that machine which port it is on, then opening
   // a tunnel to it. `inner` is the in-process socket those go over - it
   // implements exactly the surface the RPC router and routeTunnel touch, so
   // the daemon cannot tell it apart from a ws client, and it answers to no
@@ -1078,7 +1078,7 @@ export function createWsLayer() {
       });
       // http.ClientRequest drives these on its socket; over a tunnel they
       // are no-ops, but the calls have to land somewhere. setTimeout must
-      // not arm anything: a media stream idles legitimately while paused.
+      // not arm anything: a stream idles legitimately while paused.
       stream.setNoDelay = () => stream;
       stream.setKeepAlive = () => stream;
       stream.setTimeout = () => stream;

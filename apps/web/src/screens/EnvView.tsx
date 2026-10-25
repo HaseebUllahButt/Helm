@@ -11,7 +11,7 @@ import { money, busyWord, needsAttention, runningThread } from '../format';
 import { engineOf } from '../engines';
 import { useLiveInterval } from '../useLiveInterval';
 import { shortPath, ownTerminal, byRecent, ago } from './common';
-import { Play, Meter, Gear } from './icons';
+import { Meter, Gear } from './icons';
 import { Fold, StatusChip, ThreadActions } from './ThreadRows';
 
 /**
@@ -85,7 +85,7 @@ function dedupeDetected(list: Session[], found: InventorySession[]): InventorySe
  */
 const botThread = (s: Session) => /^whatsapp-/i.test(s.title);
 
-export function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onNewTerminal, onResume, resuming, isSnoozed = () => false, sendJobs = [], sendTarget }: {
+export function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onOpen, onNewTerminal, onResume, resuming, isSnoozed = () => false, sendJobs = [], sendTarget }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[]; sendJobs?: SendJob[]; sendTarget?: string;
   isSnoozed?: (session: Session) => boolean;
   /** What this machine last said it was running, while it cannot be asked. */
@@ -95,7 +95,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
   onSendProject: (cwd?: string) => void; onCheckProject: (path: string) => void;
   onStart: (cwd: string) => void;
   onSettings: () => void;
-  onUsage: () => void; onMedia: () => void; onOpen: (s: Session) => void;
+  onUsage: () => void; onOpen: (s: Session) => void;
   /** A new terminal on this machine, on screen at once while it opens. */
   onNewTerminal: () => void;
   /** Continue a conversation a CLI recorded on its own; starts the engine. */
@@ -401,11 +401,6 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
             )}
           </span>
         </div>
-        {/* The media view only exists on a machine that is a nas: elsewhere
-            the button would be an offer the daemon has to refuse. */}
-        {env.kind === 'nas' && (
-          <button className="iconbtn" title={`Open media on ${env.name}`} aria-label={`Open media on ${env.name}`} onClick={onMedia}><Play /></button>
-        )}
         <button
           className="iconbtn mono"
           // A machine with no pty falls back to sampling a herdr pane's

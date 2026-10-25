@@ -30,7 +30,7 @@ export const shownTitle = (title = '') => {
 export const money = (usd?: number | null) =>
   (usd == null || usd <= 0 ? '' : usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`);
 
-/** A file size for a person, e.g. media listings. */
+/** A file size for a person, e.g. a transfer. */
 export const bytes = (n?: number | null) =>
   (n == null ? ''
     : n < 1024 ? `${n} B`

@@ -20,7 +20,10 @@ export type Status = 'idle' | 'working' | 'blocked' | 'done' | 'shell' | 'exited
 export interface Environment {
   id: string;
   name: string;
-  /** What the machine is for; absent on records from before kinds existed. */
+  /**
+   * What the machine is for; absent on records from before kinds existed.
+   * 'nas' is an old word for storage, which Helm no longer has: a pc.
+   */
   kind?: 'pc' | 'vm' | 'nas';
   online: boolean;
   lastSeen: number | null;
@@ -461,20 +464,6 @@ export interface TaskReturnState {
   sourceFolder?: string;
   conflicts?: string[];
   changed?: number;
-}
-
-/** A folder a machine designated 'nas' has agreed to serve. */
-export interface MediaRoot { id: number; name: string; path: string }
-
-/** One entry inside a shared folder. `media` means a browser can play it. */
-export interface MediaEntry {
-  name: string;
-  path: string;
-  dir: boolean;
-  size: number | null;
-  mtime: number;
-  mime: string | null;
-  media: boolean;
 }
 
 /** `worktrees` are other checkouts of this repo that have threads in them. */
@@ -2068,7 +2057,7 @@ export class Client {
   devices(base = this.relay) { return this.httpAt<{ devices: Device[] }>(base, '/api/devices'); }
 
   /** An invite for adding another machine. Carries the network key. */
-  async invite(role: 'pc' | 'vm' | 'nas' = 'pc') {
+  async invite(role: 'pc' | 'vm' = 'pc') {
     // Invites belong to the hub that minted them. A localhost link cannot
     // be redeemed on another computer; mint at a public home and carry that
     // same address, rather than replacing it with a different hub's address.
@@ -2127,7 +2116,7 @@ export class Client {
    * than an edit at whatever hub answered. Becoming the vm can take a
    * moment - the machine claims an https address before it answers.
    */
-  setMachineKind(env: string, kind: 'pc' | 'vm' | 'nas') {
+  setMachineKind(env: string, kind: 'pc' | 'vm') {
     return this.rpc<{ id: string; kind: string; from?: string; changed: boolean; notes?: string[] }>(
       env, 'machine.set_kind', { kind }, 90_000
     );
@@ -2135,49 +2124,6 @@ export class Client {
 
   removeMachine(id: string) { return this.http(`/api/machines/${id}`, { method: 'DELETE' }); }
   removeDevice(id: string) { return this.http(`/api/devices/${id}`, { method: 'DELETE' }); }
-
-  // ------------------------------------------------------------- nas media
-  //
-  // Browsing is ordinary RPC - small JSON, fits the channel. The bytes are
-  // not carried here at all: a media element speaks real HTTP, so playback
-  // is a URL it fetches itself. What it cannot send is an Authorization
-  // header, so the URL carries a ticket the nas minted for this device and
-  // for itself, good for a few hours and nothing else.
-
-  /** The folders a nas has agreed to serve. */
-  mediaRoots(env: string) {
-    return this.rpc<{ roots: MediaRoot[] }>(env, 'media.roots', {}, 15_000);
-  }
-
-  /** One directory inside a shared folder. */
-  mediaList(env: string, root: number, path = '') {
-    return this.rpc<{ root: number; path: string; entries: MediaEntry[] }>(
-      env, 'media.list', { root, path }, 15_000
-    );
-  }
-
-  /** Mint the URL credential a media element will send. */
-  mediaTicket(env: string) {
-    return this.rpc<{ ticket: string; expiresAt: number }>(env, 'media.ticket', {}, 15_000);
-  }
-
-  /**
-   * The URL a media element plays from.
-   *
-   * Every hub in the network answers the same /media route, so which one the
-   * file comes through is ours to choose: the machine's own hub when the
-   * page can reach it - the direct LAN path - and the hub we are attached to
-   * when it cannot, which proxies the stream through the network.
-   */
-  mediaStreamUrl(
-    env: Environment,
-    opts: { root: number; path: string; ticket: string },
-    { direct = true }: { direct?: boolean } = {},
-  ) {
-    const base = (direct ? env.endpoints?.find(reachableFromHere) : null) ?? this.relay;
-    const q = new URLSearchParams({ root: String(opts.root), path: opts.path, t: opts.ticket });
-    return `${base}/media/${env.id}/stream?${q}`;
-  }
 
   digests(limit = 50) { return this.http<{ digests: any[] }>(`/api/digests?limit=${limit}`); }
 

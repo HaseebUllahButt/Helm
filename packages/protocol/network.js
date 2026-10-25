@@ -163,16 +163,18 @@ export const machineName = (value) => {
  * version negotiation on a gossiped record.
  *
  * A 'pc' runs agents and dials out to the rest. A 'vm' does that and is also
- * a home - it holds an https address the others can be dialled at. A 'nas'
- * is storage for the network: the same hub and daemon as a pc, flagged so
- * the rest of the network knows it is a machine that stays reachable.
+ * a home - it holds an https address the others can be dialled at.
  *
  * A controller is deliberately not here. It is not a fourth kind of machine:
  * it holds a device token rather than the network key, runs no daemon and
  * cannot become a machine, so no value of `kind` ever names it.
  */
-export const MACHINE_KINDS = ['pc', 'vm', 'nas'];
+export const MACHINE_KINDS = ['pc', 'vm'];
 export const machineKind = (v) => (MACHINE_KINDS.includes(v) ? v : null);
+// Older machines may still hold 'nas' (storage, since removed) on their own
+// record. The roster keeps it word for word so fingerprints stay equal; it
+// acts as a pc everywhere it is read.
+const rosterKind = (v) => (v === 'nas' ? v : machineKind(v));
 
 /**
  * Start a brand new network with this machine as its first member.
@@ -574,7 +576,7 @@ function machineRecord(id, their, ceiling) {
   // Optional: records written before kinds existed carry none, and stay
   // valid - but a value that is not a real kind is dropped like any other
   // field the sender cannot vouch for.
-  keep(out, 'kind', machineKind(their.kind));
+  keep(out, 'kind', rosterKind(their.kind));
   keep(out, 'addedAt', stampOf(their.addedAt, ceiling));
   keep(out, 'pubkey', pubkeyOf(their.pubkey));
   keep(out, 'codePubkey', codePubkeyOf(their.codePubkey));

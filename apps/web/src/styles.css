@@ -1863,7 +1863,6 @@ button.sheet-editlink:hover { color: var(--text); }
 /* The nas player: as wide as the measure, nothing else dressed up. */
 .player video { width: 100%; border-radius: var(--radius); background: #000; display: block; }
 .player audio { width: 100%; }
-.media-meta { padding: 8px 2px 0; font-size: var(--t-meta); word-break: break-all; }
 
 /* Touch: the controls a thumb reaches for most were sized for a cursor. */
 @media (pointer: coarse) {

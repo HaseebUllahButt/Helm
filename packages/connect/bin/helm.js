@@ -47,7 +47,6 @@ const USAGE = `helm - Control your coding agents from anywhere
   helm add controller                Add a phone or browser to control machines
   helm add pc                        Add a computer to run agents and control machines
   helm add vm                        Add a VM that other machines connect to
-  helm add nas                       Add a machine to store shared files
   helm join                          Paste a private link to join a network
   helm join <private-link>           Join a network with the copied link
   helm start                         Start Helm in the background
@@ -70,8 +69,7 @@ const USAGE = `helm - Control your coding agents from anywhere
   helm browser open <url>            browse with your agent (Chromium or --engine bowser)
   helm browser tabs | look <id>      list tabs or read text and numbered controls
   helm machines                     machines in this network
-  helm redesignate [machine] <kind> what a machine is for: pc, vm or nas
-  helm nas [machine] [add|remove <folder>]   what a nas shares
+  helm redesignate [machine] <kind> what a machine is for: pc or vm
   helm spin <port> [options]         same as helm share; make a public link
   helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
     Make a Spin, a public link that ends after 3 hours unless you use --keep.
@@ -343,17 +341,15 @@ async function up() {
 /**
  * `helm add <what>`.
  *
- * Four things can join, and they are different enough that naming them is
+ * Three things can join, and they are different enough that naming them is
  * the whole point: a controller is a screen with no agents on it, a pc runs
- * agents and drives others, a vm also is somewhere to dial, a nas is the
- * same machine flagged as the network's storage - reachable, like a vm, but
- * dialling out like a pc. Only a controller gets a link to open; the
- * machines get a code to type.
+ * agents and drives others, a vm also is somewhere to dial. Only a
+ * controller gets a link to open; the machines get a code to type.
  *
  * CONTROLLER_WORDS comes from the protocol: the set means the same thing in
  * `helm redesignate`, where a controller is refused rather than invited.
  */
-const MACHINE_WORDS = { pc: 'pc', laptop: 'pc', vm: 'vm', nas: 'nas', storage: 'nas' };
+const MACHINE_WORDS = { pc: 'pc', laptop: 'pc', vm: 'vm' };
 
 async function add() {
   const what = (rest.find((a) => !a.startsWith('--')) || '').toLowerCase();
@@ -364,8 +360,7 @@ async function add() {
   console.log('\n  Pick a device to add.\n');
   console.log('    helm add controller    Add a phone or browser to control machines.');
   console.log('    helm add pc            Add a computer to run agents and control machines.');
-  console.log('    helm add vm            Add a VM to run agents and accept connections.');
-  console.log('    helm add nas           Add a machine to store shared files.\n');
+  console.log('    helm add vm            Add a VM to run agents and accept connections.\n');
   if (what) console.log(`  ("${what}" is none of those.)\n`);
 }
 
@@ -373,7 +368,7 @@ async function inviteMachine(role) {
   const net = requireNetwork();
   const { base: where, value } = await postToHome(net, '/api/invite', { role });
   const { code } = value;
-  console.log(`\n  Run this on the ${role === 'vm' ? 'VM' : role === 'nas' ? 'NAS' : 'computer'} you want to add:\n`);
+  console.log(`\n  Run this on the ${role === 'vm' ? 'VM' : 'computer'} you want to add:\n`);
   const link = `${where}/#join=${encodeURIComponent(code)}`;
   console.log('    helm join');
   console.log(`    Paste this link: ${link}\n`);
@@ -381,10 +376,6 @@ async function inviteMachine(role) {
   if (role === 'vm') {
     console.log('  This machine gets its own HTTPS address.');
     console.log('  Other machines can connect to it and this home.');
-  } else if (role === 'nas') {
-    console.log('  This machine connects to this Helm home.');
-    console.log('  It does not need its own HTTPS address.');
-    console.log('  Other machines see it as shared storage.');
   } else {
     console.log('  This machine connects to this Helm home without its own address.');
   }
@@ -1677,7 +1668,7 @@ async function redesignateLocally(net, kind, { from, home }) {
     fields.endpoints = [home, ...(me.endpoints ?? []).filter((e) => e !== home)];
   } else if (from === 'vm') {
     // The advertised https address is what made it a home; anything http is
-    // a LAN address that stays true of a pc or a nas.
+    // a LAN address that stays true of a pc.
     fields.endpoints = (me.endpoints ?? []).filter((e) => !e.startsWith('https://'));
   }
   net.role = kind;
@@ -1715,17 +1706,6 @@ function listMachines() {
   }
 }
 
-// --------------------------------------------------------------------- nas
-
-/**
- * `helm nas [machine] [add|remove <folder>]` - what a nas shares.
- *
- * The allowlist is the whole security boundary of the designation, so it is
- * edited deliberately and only ever on the machine that serves it: a remote
- * target is asked through its daemon, and this machine through its daemon
- * too when it is up - falling back to writing the file directly, which the
- * media handler re-reads on every request anyway.
- */
 /**
  * `helm share <port>` - a public https link to something running here, served
  * by the network's public home (helm's own ngrok). `list`, `stop <name>`, and
@@ -1879,66 +1859,6 @@ async function forwardCmd() {
   });
 }
 
-async function nasCmd() {
-  const net = requireNetwork();
-  const args = rest.filter((a) => !a.startsWith('--'));
-  const isVerb = (w) => ['ls', 'list', 'add', 'rm', 'remove'].includes(w);
-
-  let who = null, verb = 'list', folder = null;
-  if (args.length && !isVerb(args[0])) who = args.shift();
-  if (args.length) verb = args.shift();
-  if (args.length) folder = args.join(' ');
-  if (!isVerb(verb)) die('usage: helm nas [machine] [add|remove <folder>]');
-
-  const target = who ? machineId(who) : net.self;
-  const record = net.machines[target];
-  const kind = record?.kind ?? (target === net.self ? net.role : 'pc');
-  const nas = await import('@helm/nas');
-
-  if (verb === 'ls' || verb === 'list') {
-    if (kind !== 'nas') {
-      console.log(`\n  ${record?.name ?? 'this machine'} is not a nas - ` +
-        `\`helm redesignate ${who ?? ''} nas\` first.\n`);
-      return;
-    }
-    const { roots } = target === net.self && !await reachable(net, target)
-      ? { roots: nas.mediaRoots() }
-      : await hubRpc(net, target, M.MEDIA_ROOTS);
-    if (!roots.length) console.log('\n  This machine shares no folders. Run helm nas add <folder>.');
-    for (const r of roots) console.log(`  [${r.id}] ${r.path}`);
-    console.log('');
-    return;
-  }
-
-  if (kind !== 'nas') {
-    die(`${record?.name ?? 'this machine'} is not a NAS. Run ` +
-      `\`helm redesignate ${who ?? ''} nas\` first.`);
-  }
-  if (!folder) die(`usage: helm nas ${who ? `${who} ` : ''}${verb} <folder>`);
-  const method = verb === 'add' ? M.MEDIA_ROOT_ADD : M.MEDIA_ROOT_REMOVE;
-
-  if (target !== net.self || await reachable(net, target)) {
-    const { roots } = await hubRpc(net, target, method, { path: folder }).catch((err) => {
-      if (target !== net.self) throw err;
-      return null;
-    });
-    if (roots) { for (const r of roots) console.log(`  [${r.id}] ${r.path}`); console.log(''); return; }
-  }
-  // The daemon is not answering and the target is this machine: the file is
-  // the store, so write it directly. The listener re-reads it per request.
-  const roots = verb === 'add' ? nas.addMediaRoot(folder) : nas.removeMediaRoot(folder);
-  for (const r of roots) console.log(`  [${r.id}] ${r.path}`);
-  console.log('');
-}
-
-/** Can this machine's own daemon be asked something right now? */
-async function reachable(net, target) {
-  return hubRpc(net, target, M.MEDIA_INFO, {}, { timeout: 3000 }).then(
-    () => true,
-    () => false
-  );
-}
-
 /**
  * Remove a member. This is the only way something leaves a network - which is
  * the point: nothing else, including restarts, reinstalls or an expired
@@ -2079,10 +1999,6 @@ try {
 
     case 'redesignate':
       await redesignate();
-      break;
-
-    case 'nas':
-      await nasCmd();
       break;
 
     case 'spin':

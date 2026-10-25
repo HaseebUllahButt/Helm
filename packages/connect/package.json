@@ -10,7 +10,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@helm/nas": "*",
     "@helm/protocol": "*",
     "@helm/relay": "*",
     "@helm/usage": "*",

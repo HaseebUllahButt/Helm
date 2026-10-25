@@ -241,7 +241,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
 }
 
 export function AddMachine({ client }: { client: Client }) {
-  const [role, setRole] = useState<'pc' | 'vm' | 'nas'>('pc');
+  const [role, setRole] = useState<'pc' | 'vm'>('pc');
   const [invite, setInvite] = useState<{ link: string; expiresAt: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -267,7 +267,6 @@ export function AddMachine({ client }: { client: Client }) {
       <select aria-label="Computer kind" value={role} onChange={(e) => { setRole(e.target.value as typeof role); setInvite(null); }}>
         <option value="pc">Laptop or desktop</option>
         <option value="vm">Server (virtual machine)</option>
-        <option value="nas">File storage</option>
       </select>
       <button className="row" disabled={busy} onClick={makeInvite}>
         <span className="grow"><span className="rt">{busy ? 'making a command…' : 'Create join command'}</span></span>

@@ -68,7 +68,6 @@ const NetworkSettings = deferredScreen('Network settings', () => import('./scree
 const OwnerView = deferredScreen('Your preferences', () => import('./screens/Owner').then(m => ({ default: m.OwnerView })));
 const ModelPrefsView = deferredScreen('Models', () => import('./screens/ModelPrefs').then(m => ({ default: m.ModelPrefsView })));
 const Browse = deferredScreen('Folders', () => import('./screens/Browse').then(m => ({ default: m.Browse })));
-const MediaView = deferredScreen('Media', () => import('./screens/Media').then(m => ({ default: m.MediaView })));
 
 const DONE_FOR_MS = 3 * 24 * 60 * 60_000;
 
@@ -159,8 +158,6 @@ export type MainView =
   // One page for everything that is not the day's work: machine defaults,
   // what it has all cost, and this device's pairing, alerts and install.
   | { kind: 'app-settings' }
-  // The media a nas shares, browsed and played - only ever offered on one.
-  | { kind: 'media' }
   | { kind: 'session'; session: Session; reviewChildren?: number }
   // One of Claude Code's own subagents, opened from its chat; read only.
   | { kind: 'native-agent'; parent: Session; agent: NativeAgent }
@@ -174,7 +171,7 @@ const VIEW_KINDS: Record<MainView['kind'], true> = {
   browse: true, 'transfer-browse': true, transfer: true, verify: true,
   start: true, settings: true, 'network-settings': true, links: true,
   updates: true, owner: true, models: true, devices: true, 'app-settings': true,
-  media: true, session: true, 'native-agent': true, starting: true,
+  session: true, 'native-agent': true, starting: true,
   'terminal-opening': true,
 };
 /** History can outlive the screen that wrote it across an app update. */
@@ -1431,14 +1428,11 @@ function Shell({ client, conn, onSignOut }: {
             onStart={(cwd) => push({ kind: 'start', cwd })}
             onSettings={() => push({ kind: 'settings' })}
             onUsage={() => push({ kind: 'usage', envId: env.id })}
-            onMedia={() => push({ kind: 'media' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
             onNewTerminal={() => newTerminal.current(env.id, '~')}
           />
         ) : view.kind === 'integrations' ? (
           <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
-        ) : view.kind === 'media' ? (
-          <MediaView key={env.id} client={client} env={env} onBack={back} />
         ) : view.kind === 'starting' ? (
           <StartingChatView key={view.startId} client={client} env={env} startId={view.startId} onBack={back} />
         ) : view.kind === 'terminal-opening' ? (

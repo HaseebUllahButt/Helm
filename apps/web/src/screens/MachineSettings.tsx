@@ -88,15 +88,14 @@ function MachineName({ client, env, onRenamed }: {
 }
 
 /**
- * What a machine is for: pc, vm or nas.
+ * What a machine is for: pc or vm.
  *
  * Same authorship rule as the name above - the machine writes its own
  * record - so this is an RPC to it and it is off while offline. The choices
- * are deliberately only the three machine kinds: a controller is not a
- * fourth one and can never become one, which is why it appears nowhere here.
+ * are deliberately only the two machine kinds: a controller is not a
+ * third one and can never become one, which is why it appears nowhere here.
  * Becoming the vm claims an https address on the machine, and leaving it
- * stops advertising that address; pc and nas differ only in what the rest
- * of the network should expect of the machine.
+ * stops advertising that address.
  */
 function MachineKind({ client, env, onChanged }: {
   client: Client; env: Environment; onChanged: () => void;
@@ -104,12 +103,11 @@ function MachineKind({ client, env, onChanged }: {
   const KINDS = [
     { id: 'pc' as const, label: 'Computer', hint: 'Runs agents and controls other machines.' },
     { id: 'vm' as const, label: 'Always-on server', hint: 'Other machines connect here. It has an HTTPS address.' },
-    { id: 'nas' as const, label: 'Storage', hint: 'Stores files for your machines.' },
   ];
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
 
-  const pick = async (kind: 'pc' | 'vm' | 'nas') => {
+  const pick = async (kind: 'pc' | 'vm') => {
     if (kind === env.kind || busy) return;
     setBusy(kind); setError('');
     try {

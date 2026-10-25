@@ -382,11 +382,6 @@ export class Daemon {
   #emitted = 0;
   /** Chat lists sent lately, by digest: id -> that chat's revision. */
   #lists = new Map();
-  // The nas capability, only ever populated when this machine is designated
-  // one: { server, port } for the media listener, plus the lazily imported
-  // module. A machine that is never a nas never loads the package.
-  #media = null;
-  #nas = null;
 
   /**
    * @param {object} opts
@@ -638,11 +633,6 @@ export class Daemon {
     );
     this.#reconcile.unref?.();
 
-    // The opt-in half of being a nas. Synced with the kind at start and on
-    // every redesignation, so a machine that is never one never pays for it.
-    this.#syncMedia().catch((err) =>
-      console.error('[helm] nas media:', err?.message || err));
-
     // Every machine checks its checkout and peers: a
     // version saved here is built and started, and a newer one saved on
     // another machine is copied over the network. Soon after start, then
@@ -758,8 +748,6 @@ export class Daemon {
       tunnel.sock.destroy();
     }
     this.#tunnels.clear();
-    this.#media?.server.close();
-    this.#media = null;
     await this.copyReceiver?.stop();
     this.peers?.stop();
     this.runtime?.stop();
@@ -938,11 +926,11 @@ export class Daemon {
    * `kind` lives on this machine's own roster record, which has exactly one
    * author - so this is only ever asked of the machine itself, never written
    * at whichever hub the caller happened to reach. The set is closed (pc,
-   * vm, nas) and a controller is refused outright rather than mapped into
+   * vm) and a controller is refused outright rather than mapped into
    * it: a controller is not a kind of machine, it is a device - it runs
    * nothing and cannot become one.
    *
-   * pc and nas are a record change only; the flag is what the rest of the
+   * pc is a record change only; the flag is what the rest of the
    * network reads. Becoming the vm is real work: an https address has to be
    * claimed before anything is written, so a failure there leaves the
    * machine exactly what it was rather than half a home. Leaving vm is the
@@ -1012,7 +1000,7 @@ export class Daemon {
       notes.push(`This machine serves the network at ${home}.`);
     } else if (from === 'vm') {
       // The advertised https address is what made it the home. Tunnels and
-      // LAN addresses stay - they are still true of a pc or a nas.
+      // LAN addresses stay - they are still true of a pc.
       const drop = new Set(this.advertised.filter((e) => e.startsWith('https://')));
       this.advertised = this.advertised.filter((e) => !drop.has(e));
       this.extra = this.extra.filter((e) => !drop.has(e));
@@ -1031,70 +1019,7 @@ export class Daemon {
     // Now rather than at the next reconcile: the caller is waiting on the
     // answer, and every other machine holds the old word until this lands.
     this.broadcastFrame(T.ROSTER, { roster: rosterOf(this.net) });
-    await this.#syncMedia();
     return { id: this.id, kind, from, changed: true, notes };
-  }
-
-  // -------------------------------------------------------------------- nas
-
-  /** What this machine is for, as its own record currently says. */
-  #isNas() {
-    const net = loadNetwork() ?? this.net;
-    return (net.machines[this.id]?.kind ?? net.role) === 'nas';
-  }
-
-  /**
-   * The media listener, present exactly while this machine is a nas.
-   *
-   * It binds loopback only: the LAN-facing media path is the hub's /media
-   * route, and the remote one is a tunnel to this port. The listener exists
-   * for the tunnel - a hub on another machine reaches in through the
-   * connection this daemon already holds open, which is how a NAS behind
-   * NAT still streams. Nothing is ever served without the authorization
-   * plug, and the port enters the tunnel allowlist only while it is ours.
-   */
-  async #syncMedia() {
-    if (this.#isNas()) {
-      if (this.#media) return;
-      this.#nas ??= await import('@helm/nas');
-      const { server, port } = await this.#nas.startMediaServer({
-        host: '127.0.0.1', port: 0,
-        authorize: this.#nas.mediaAuthorize({ self: this.id }),
-      });
-      this.#media = { server, port };
-    } else if (this.#media) {
-      this.#media.server.close();
-      this.#media = null;
-    }
-  }
-
-  /**
-   * The media RPCs, gated on the kind: a machine that is not a nas has no
-   * media answers, full stop. `caller` is the member id the frame arrived
-   * under - the ticket it gets back is minted for that member alone.
-   */
-  async #mediaRpc(method, p, caller) {
-    if (!this.#isNas()) {
-      throw Object.assign(new Error('this machine is not a nas'), { code: 'not-nas' });
-    }
-    this.#nas ??= await import('@helm/nas');
-    switch (method) {
-      case M.MEDIA_INFO:
-        return { kind: 'nas', port: this.#media?.port ?? null, roots: this.#nas.mediaRoots() };
-      case M.MEDIA_ROOTS:
-        return { roots: this.#nas.mediaRoots() };
-      case M.MEDIA_ROOT_ADD:
-        return { roots: this.#nas.addMediaRoot(p.path) };
-      case M.MEDIA_ROOT_REMOVE:
-        return { roots: this.#nas.removeMediaRoot(p.path) };
-      case M.MEDIA_LIST: {
-        const root = this.#nas.mediaRoots()[Number(p.root)];
-        if (!root) throw new Error('no such shared folder');
-        return { root: root.id, ...(await this.#nas.listMedia(root.path, p.path ?? '')) };
-      }
-      case M.MEDIA_TICKET:
-        return this.#nas.mediaTicket(loadNetwork() ?? this.net, { sub: caller, env: this.id });
-    }
   }
 
   onLinkUp(link) {
@@ -1549,9 +1474,8 @@ export class Daemon {
    * own loopback interface and get a full duplex byte stream back, which is
    * every database, admin socket and localhost-only HTTP server on the box.
    *
-   * The only things that have ever needed a tunnel are ssh and - while this
-   * machine is a nas - its own media listener, which is how a remote hub
-   * reaches the byte stream. `tunnel.ports` in ~/.helm/config.json adds to
+   * The only things that have ever needed a tunnel are ssh and shared
+   * ports. `tunnel.ports` in ~/.helm/config.json adds to
    * the list for anyone who wants more, deliberately and on the machine
    * itself.
    */
@@ -1559,7 +1483,6 @@ export class Daemon {
     const extra = loadSettings()?.tunnel?.ports;
     return [
       Number(process.env.HELM_SSH_PORT || 22),
-      this.#media?.port,
       this.schedules?.share()?.port,
       // Ports shared on purpose with `helm share`, and only those.
       ...listShares().map((share) => share.port),
@@ -1764,7 +1687,7 @@ export class Daemon {
        * Same authorship rule as the name above: `kind` lives on this
        * machine's own roster record, so a CLI or app redesignating a machine
        * asks its daemon - a hub that answered the phone is never asked to
-       * write it. pc and nas are a record change; becoming the vm claims an
+       * write it. pc is a record change; becoming the vm claims an
        * https address first, and failing that fails the whole change.
        */
       // The owner's preferences: the same list on every machine, so any one
@@ -1820,13 +1743,6 @@ export class Daemon {
       case M.SHARE_REMOVE:
         return { removed: removeShare(p.name) };
 
-      case M.MEDIA_INFO:
-      case M.MEDIA_ROOTS:
-      case M.MEDIA_ROOT_ADD:
-      case M.MEDIA_ROOT_REMOVE:
-      case M.MEDIA_LIST:
-      case M.MEDIA_TICKET:
-        return this.#mediaRpc(method, p, caller);
 
       case M.FS_LIST:   return fsApi.list(p.path);
       case M.FS_ROOTS:  return fsApi.roots();
