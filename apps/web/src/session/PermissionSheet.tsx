@@ -143,7 +143,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
             <button className="sheet-editlink" onClick={() => setEditing(false)}>Restore original</button>
           )}
           {banner && !noting && (
-            <button className="sheet-editlink" onClick={() => setNoting(true)}>add a note</button>
+            <button className="sheet-editlink" onClick={() => setNoting(true)}>Add a note</button>
           )}
         </div>
       )}

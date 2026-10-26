@@ -1349,44 +1349,44 @@ pre.snippet {
 .sheet {
   position: relative; z-index: 0; margin: 0 6px -17px; padding: 12px 14px 28px;
   border-radius: 18px 18px 0 0; font-size: var(--t-meta); line-height: 1.55;
-  background: var(--need-bg);
-  border: 1px solid color-mix(in srgb, var(--amber) 34%, transparent); border-bottom: 0;
-  box-shadow: 0 -12px 32px -16px rgb(0 0 0 / 50%);
+  background: var(--card); border: 0;
+  box-shadow: 0 -12px 32px -16px rgb(0 0 0 / 35%);
   display: flex; flex-direction: column; gap: 10px; max-height: 62dvh;
 }
 .sheet-head { display: flex; align-items: center; gap: 8px; color: var(--text); }
 .sheet-head { flex-wrap: wrap; row-gap: 4px; }
 .sheet-head b { font-weight: 600; flex: 1 1 9em; min-width: 0; font-size: var(--t-body); }
-.sheet-reason { color: var(--amber-text); font-size: var(--t-meta); }
+.sheet-reason { color: var(--mutedfg); font-size: var(--t-meta); }
 .sheet-body { overflow: auto; min-height: 0; -webkit-overflow-scrolling: touch; }
 .sheet-cmd {
   margin: 0; padding: 10px 12px; font-size: var(--t-meta); line-height: 1.55; white-space: pre-wrap; word-break: break-all;
-  background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius); color: var(--text);
+  background: var(--code-bg); border-radius: var(--radius); color: var(--text);
 }
 .sheet-json { margin: 0; padding: 10px 12px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; background: var(--code-bg); border-radius: var(--radius); color: var(--text-dim); max-height: 30dvh; overflow: auto; }
 .sheet-path { font: 12.5px var(--mono); color: var(--text-dim); margin-bottom: 4px; }
 .sheet .diff { border-top: 0; background: var(--code-bg); border-radius: var(--radius); }
 .sheet .edit { background: var(--code-bg); }
-.sheet .plan { max-height: 40dvh; overflow: auto; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
-.sheet-note { font-size: var(--t-meta); padding: 8px 10px; }
+.sheet .plan { max-height: 40dvh; overflow: auto; padding: 8px 12px; background: var(--code-bg); border-radius: var(--radius); }
+.sheet .plan :is(h1, h2, h3, h4) { font-size: var(--t-body); font-weight: 600; margin: 4px 0; }
+.sheet-note { font-size: var(--t-meta); padding: 8px 10px; background: var(--code-bg); border-radius: var(--radius); }
 .sheet-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .sheet-actions button { width: auto; flex: 1 1 auto; margin: 0; padding: 10px 14px; min-height: 44px; font-size: var(--t-body); }
-.sheet-actions .deny { color: var(--red); }
-/* Allow is amber, like the card that brought you here: one colour for
-   "this is waiting on you". */
-.sheet-actions button.primary { background: var(--amber); color: var(--on-amber); }
-.sheet-actions button.primary:hover:not(:disabled) { filter: brightness(1.07); }
+/* One solid answer in the app's own black and white; the others are quiet words. */
+.sheet-actions button.ghost { color: var(--text-dim); background: transparent; }
+.sheet-actions button.ghost:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.sheet-actions .deny:hover:not(:disabled) { color: var(--red); }
+.sheet-actions button.primary { background: var(--text); color: var(--bg); font-weight: 600; }
+.sheet-actions button.primary:hover:not(:disabled) { opacity: .88; }
 .sheet-actions button.primary:disabled { background: var(--accent); color: var(--mutedfg); }
 
 /* Questions: a quiet card - who asks, the question, then the answers as one
-   list with hairlines between them, each led by its number. No amber wash:
-   one small dot says it is waiting on you; violet marks where you point. */
-.sheet.question {
-  background: var(--card); border-color: var(--line-2); gap: 12px; padding: 14px 14px 30px;
-}
+   list with hairlines between them, each led by its number. One small amber
+   dot says it is waiting on you; nothing else takes a colour. */
+.sheet.question { gap: 12px; padding: 14px 14px 30px; }
 .q-head { display: flex; align-items: center; gap: 8px; min-height: 20px; }
 .q-head .sdot { width: 7px; height: 7px; margin: 0; }
-.q-who { font-size: var(--t-meta); font-weight: 550; color: var(--text-dim); }
+.q-who { font-size: var(--t-meta); font-weight: 450; color: var(--mutedfg); }
+.ask-kind + .q-who::before { content: '·'; margin-right: 6px; }
 .q-steps { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; }
 .q-dot {
   width: 7px; height: 7px; min-height: 0; padding: 0; margin: 0; border: 0; border-radius: 50%;
@@ -1394,29 +1394,26 @@ pre.snippet {
   transition: width 0.2s var(--ease), background 0.2s var(--ease);
 }
 .q-dot.done { background: var(--mutedfg); }
-.q-dot.on { background: var(--primary-q); width: 18px; border-radius: 4px; }
+.q-dot.on { background: var(--text); width: 18px; border-radius: 4px; }
 .q-count { font: 500 var(--t-micro) var(--mono); color: var(--mutedfg); margin-left: 3px; font-variant-numeric: tabular-nums; }
 .q-wait { margin-left: auto; font: 500 var(--t-micro) var(--mono); color: var(--mutedfg); white-space: nowrap; }
 .q-text {
-  font-size: 17px; color: var(--text); font-weight: 600; line-height: 1.35; letter-spacing: -0.015em;
+  font-size: 16px; color: var(--text); font-weight: 600; line-height: 1.4; letter-spacing: -0.01em;
   margin: 2px 0 14px; text-wrap: pretty;
 }
 .q-hint { font-size: var(--t-micro); color: var(--mutedfg); margin: -10px 0 10px; }
-.q-options {
-  display: flex; flex-direction: column; width: 100%;
-  border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--muted);
-}
+.q-options { display: flex; flex-direction: column; width: 100%; border-top: 1px solid var(--edge); border-bottom: 1px solid var(--edge); }
 .q-opt {
   display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: baseline; align-content: center; column-gap: 12px;
-  width: 100%; min-height: 52px; margin: 0; padding: 11px 14px 11px 12px;
+  width: 100%; min-height: 50px; margin: 0; padding: 10px 10px 10px 4px;
   border: 0; border-radius: 0; text-align: left; background: transparent; color: var(--text);
   transition: background 0.15s var(--ease);
 }
-.q-opt + .q-opt { border-top: 1px solid var(--line); }
+.q-opt + .q-opt { border-top: 1px solid var(--edge); }
 .q-opt:hover:not(:disabled) { background: var(--hover); }
 .q-opt:active:not(:disabled) { background: var(--accent); }
 .q-opt:focus-visible { outline: 2px solid var(--primary-q); outline-offset: -2px; }
-.q-opt.on { background: var(--select); }
+.q-opt.on { background: var(--accent); }
 .q-opt .grow { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .q-label { font-size: var(--t-body); font-weight: 550; color: var(--text); letter-spacing: -0.005em; }
 .q-desc { font-size: var(--t-meta); color: var(--mutedfg); line-height: 1.4; }
@@ -1426,35 +1423,35 @@ pre.snippet {
   background: none; border: 0; box-shadow: none; padding: 0; min-width: 0;
   transition: color 0.15s var(--ease);
 }
-.q-opt:hover:not(:disabled) .q-num, .q-opt:focus-visible .q-num, .q-opt.on .q-num { color: var(--primary-q); }
+.q-opt:hover:not(:disabled) .q-num, .q-opt:focus-visible .q-num, .q-opt.on .q-num { color: var(--text); }
 /* The arrow says "this goes": a tap on a single answer is the answer. */
 .q-go {
-  display: inline-flex; align-self: center; color: var(--primary-q); opacity: 0; transform: translateX(-4px);
+  display: inline-flex; align-self: center; color: var(--text-dim); opacity: 0; transform: translateX(-4px);
   transition: opacity 0.15s var(--ease), transform 0.15s var(--ease);
 }
 .q-opt:hover:not(:disabled) .q-go, .q-opt:focus-visible .q-go, .q-opt.on .q-go { opacity: 1; transform: none; }
 @media (hover: none) { .q-go { display: none; } }
 .q-box {
   flex: none; align-self: center; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--edge-2);
-  display: inline-flex; align-items: center; justify-content: center; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; color: var(--bg);
   transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
 }
-.q-opt.on .q-box { background: var(--primary); border-color: var(--primary); }
+.q-opt.on .q-box { background: var(--text); border-color: var(--text); }
 .q-box svg { display: block; }
 .q-free { margin-top: 8px; }
 .q-free input {
-  width: 100%; margin: 0; padding: 12px 14px; border-radius: 14px; font-size: var(--t-body);
-  background: transparent; border: 1px solid var(--line); color: var(--text); box-shadow: none; outline: none;
+  width: 100%; margin: 0; padding: 11px 12px; border-radius: var(--radius); font-size: var(--t-body);
+  background: var(--code-bg); border: 0; color: var(--text); box-shadow: none; outline: none;
 }
 .q-free input::placeholder { color: var(--mutedfg); }
-.q-free input:focus, .q-free.on input { border-color: var(--primary-q); }
+.q-free input:focus, .q-free.on input { background: var(--accent); }
 .q-preview {
   margin: 10px 0 0; padding: 10px 12px; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere;
-  background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius); color: var(--text-dim); max-height: 30dvh; overflow: auto;
+  background: var(--code-bg); border-radius: var(--radius); color: var(--text-dim); max-height: 30dvh; overflow: auto;
 }
 .q-actions { display: flex; justify-content: flex-end; }
 .q-actions button { width: auto; margin: 0; min-height: 40px; padding: 8px 20px; border-radius: 10px; font-size: var(--t-body); }
-.q-actions button.primary { background: var(--text); color: var(--bg); }
+.q-actions button.primary { background: var(--text); color: var(--bg); font-weight: 600; }
 .q-actions button.primary:disabled { background: var(--accent); color: var(--mutedfg); }
 .menu.wide button { color: var(--text-dim); }
 .menu.wide button.on, .menu.wide button:hover { color: var(--text); }
@@ -1891,8 +1888,8 @@ button.withdraw:hover { color: var(--text); }
   padding: 10px 12px; background: var(--bg); border-radius: var(--radius); color: var(--text);
   resize: vertical; min-height: 3em;
 }
-button.sheet-editlink { align-self: flex-start; color: var(--primary-q); font-size: var(--t-meta); font-weight: 500; padding: 2px 0; }
-button.sheet-editlink:hover { color: var(--text); }
+button.sheet-editlink { align-self: flex-start; color: var(--text-dim); font-size: var(--t-meta); font-weight: 500; padding: 2px 0; text-decoration: underline; text-decoration-color: var(--edge-2); text-underline-offset: 3px; }
+button.sheet-editlink:hover { color: var(--text); text-decoration-color: currentColor; }
 
 /* The nas player: as wide as the measure, nothing else dressed up. */
 .player video { width: 100%; border-radius: var(--radius); background: #000; display: block; }
@@ -2733,7 +2730,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-output { max-height: 40dvh; overflow-y: auto; padding: 10px 12px; border-radius: var(--radius); background: var(--bg); }
 .delegation-detail .sheet {
   margin: 0; padding: 12px 14px; max-height: none; box-shadow: none;
-  border-radius: var(--radius-xl); border-bottom: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
+  border-radius: var(--radius-xl); background: var(--bg);
 }
 /* A CLI's own subagents, beside Helm's tasks. */
 .native-activity summary { cursor: pointer; color: var(--mutedfg); font-size: var(--t-meta); }
@@ -3457,7 +3454,7 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 .todo-segs { display: flex; gap: 3px; height: 3px; margin-top: 6px; }
 .todo-segs i { flex: 1 1 0; min-width: 3px; border-radius: 2px; background: var(--edge-2); }
 .todo-segs i.completed { background: var(--ok); }
-.todo-segs i.in_progress { background: var(--primary-q); }
+.todo-segs i.in_progress { background: var(--mutedfg); }
 .todo-strip-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; max-height: min(34dvh, 280px); overflow-y: auto; }
 .todo-strip .todo { font-size: var(--t-meta); padding: 3px 6px; }
 .todo-strip .todo.in_progress .todo-text { animation: none; background: none; color: var(--text); }
@@ -3468,12 +3465,12 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 .ask-box { display: block; }
 .sheet.banner {
   margin: 0; max-height: min(52dvh, 480px); padding: 14px 16px 12px; gap: 10px;
-  border: 0; border-bottom: 1px solid var(--line); border-radius: calc(var(--slab) - 1px) calc(var(--slab) - 1px) 0 0;
-  box-shadow: none; background: var(--need-bg);
+  border: 0; border-bottom: 1px solid var(--edge); border-radius: calc(var(--slab) - 1px) calc(var(--slab) - 1px) 0 0;
+  box-shadow: none; background: var(--card);
 }
-.sheet.banner.question { background: var(--card); gap: 10px; padding: 14px 16px 12px; }
-.ask-kind { flex: none; font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--amber-text); }
-.sheet.question.banner .ask-kind { color: var(--text-dim); }
+.sheet.banner.question { gap: 10px; padding: 14px 16px 12px; }
+.sheet.banner .sheet-head .sdot, .sheet.banner .q-head .sdot { width: 7px; height: 7px; margin: 0 2px 0 0; }
+.ask-kind { flex: none; font-size: var(--t-meta); font-weight: 550; color: var(--text-dim); }
 .sheet.banner .sheet-head { flex-wrap: nowrap; }
 .sheet.banner .sheet-head .tag { flex: none; }
 .sheet-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -3486,6 +3483,7 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 .sheet.banner .sheet-note { padding: 7px 10px; }
 .sheet.banner .sheet-actions { justify-content: flex-end; gap: 6px; }
 .sheet.banner .sheet-actions button { flex: 0 1 auto; min-height: 36px; padding: 6px 14px; font-size: var(--t-meta); border-radius: 10px; }
+.sheet.banner .sheet-actions button.primary { padding: 6px 18px; }
 .sheet.banner .q-text { margin-bottom: 12px; }
 .sheet.banner .q-actions button { min-height: 36px; }
 @media (max-width: 599px) {
@@ -3493,7 +3491,9 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
   /* About five lines; the rest scrolls inside. */
   .sheet.banner .sheet-cmd { max-height: 8.5em; padding: 8px 10px; }
   .todo-strip { margin: 0 20px -19px; }
+  /* The quiet answers share a row; the solid one takes the row under them. */
   .sheet.banner .sheet-actions button { flex: 1 1 auto; min-height: 44px; }
+  .sheet.banner .sheet-actions button.primary { flex-basis: 100%; order: 9; }
 }
 
 /* ------------------------------------------------- chat header, as a path */
