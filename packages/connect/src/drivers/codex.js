@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { codexProcId } from '../hosted-process.js';
 import { stageCodexRewind } from './rewind.js';
 import { Driver, readJsonLines, checkVersion } from './index.js';
+import { reportedMode } from '../native-settings.js';
 import { modeFor } from '../modes.js';
 import { HELM_DIR, expand } from '../paths.js';
 import { codexSessionState } from '../transcript.js';
@@ -47,7 +48,7 @@ const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.s
 export const CODEX_COMMANDS = [
   { name: 'help', description: 'Show the commands available in this chat', source: 'codex' },
   { name: 'model', description: 'List models, or switch with /model <id>', source: 'codex' },
-  { name: 'permissions', description: 'Show permissions, or switch ask, edit, full, or readonly', source: 'codex' },
+  { name: 'permissions', description: 'Show permissions, or switch ask, auto-review, edit, full, or readonly', source: 'codex' },
   { name: 'fast', description: 'Turn fast mode on or off with /fast on|off', source: 'codex' },
   { name: 'review', description: 'Review uncommitted changes, or add custom instructions', source: 'codex' },
   { name: 'rename', description: 'Rename this chat with /rename <title>', source: 'codex' },
@@ -210,6 +211,45 @@ export function formatAccountUsage(result, view = '', rateLimits = null) {
     '',
     '*Views:* `/usage daily` · `/usage weekly` · `/usage cumulative`',
   ].join('\n');
+}
+
+const REVIEW_NOTIFICATIONS = new Set(['item/autoApprovalReview/started', 'item/autoApprovalReview/completed', 'guardianWarning']);
+const isReviewRequest = (e) => e.codex?.method === 'thread/approveGuardianDeniedAction';
+
+/** The approval API takes protocol fields, not the camelCase notification. */
+function guardianAction(action) {
+  const snake = (v) => {
+    if (Array.isArray(v)) return v.map(snake);
+    if (!v || typeof v !== 'object') return v;
+    return Object.fromEntries(Object.entries(v).map(([k, value]) => [k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`), snake(value)]));
+  };
+  const out = snake(action);
+  for (const key of ['type', 'source', 'protocol']) {
+    if (typeof out[key] === 'string') out[key] = out[key].replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  }
+  return out;
+}
+
+function guardianEvent(p) {
+  return { id: p.reviewId, target_item_id: p.targetItemId ?? null, turn_id: p.turnId,
+    started_at_ms: p.startedAtMs, completed_at_ms: p.completedAtMs,
+    status: p.review.status.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`),
+    risk_level: p.review.riskLevel ?? null, user_authorization: p.review.userAuthorization ?? null,
+    rationale: p.review.rationale ?? null, decision_source: p.decisionSource ?? null,
+    action: guardianAction(p.action) };
+}
+
+function reviewAction(action = {}) {
+  switch (action.type) {
+    case 'command': return action.command;
+    case 'execve': return action.argv?.length ? action.argv.join(' ') : action.program;
+    case 'writeStdin': return 'Send input to a running command';
+    case 'applyPatch': return `Change ${(action.files ?? []).join(', ') || 'files'}`;
+    case 'networkAccess': return `Connect to ${action.target || action.host}`;
+    case 'mcpToolCall': return action.toolTitle || `${action.server}: ${action.toolName}`;
+    case 'requestPermissions': return action.reason || 'Use more access';
+    default: return 'Review an action';
+  }
 }
 
 // -------------------------------------------------------------- the server
@@ -535,7 +575,7 @@ export class CodexServer {
       const threadId = m.params?.threadId;
       const d = threadId && this.#route(threadId);
       if (d) d.onNotification(m.method, m.params);
-      else if (threadId && this.#hosted && m.method === 'serverRequest/resolved') this.#hold(threadId, m);
+      else if (threadId && this.#hosted && (m.method === 'serverRequest/resolved' || REVIEW_NOTIFICATIONS.has(m.method))) this.#hold(threadId, m);
       else if (!threadId && m.method === 'account/rateLimits/updated') {
         for (const d of this.#drivers.values()) d.onRateLimits(m.params?.rateLimits);
       }
@@ -684,6 +724,7 @@ export class CodexDriver extends Driver {
   #interrupting = false;
   /** itemId -> what we know about it (kind, changes) */
   #items = new Map();
+  #completedReviews = null;
   /** spawned child threadId -> the collab item that spawned it */
   #subagentThreads = new Map();
   /** the most recent spawn_agent item; later collab calls name its child */
@@ -730,6 +771,7 @@ export class CodexDriver extends Driver {
     const mode = modeFor('codex', this.mode);
     return {
       approvalPolicy: mode?.approvalPolicy ?? 'on-request',
+      approvalsReviewer: mode?.approvalsReviewer ?? 'user',
       sandbox: mode?.sandbox ?? 'workspace-write',
       sandboxPolicy: mode?.sandboxPolicy ?? { type: 'workspaceWrite' },
     };
@@ -776,6 +818,7 @@ export class CodexDriver extends Driver {
         model: this.model ?? this.#rolloutState.settings?.model ?? null,
         effort: this.effort ?? this.#rolloutState.settings?.effort ?? null,
         approvalPolicy: this.nativeSocket ? this.#rolloutState.settings?.approvalPolicy : this.#policy().approvalPolicy,
+        approvalsReviewer: this.#policy().approvalsReviewer,
         sandbox: this.nativeSocket ? this.#rolloutState.settings?.sandboxPolicy : this.#policy().sandbox,
         cliVersion: this.#rolloutState.cliVersion,
       };
@@ -817,6 +860,7 @@ export class CodexDriver extends Driver {
     this.info = {
       model: res.result.model ?? res.result.thread?.model ?? this.#rolloutState.settings?.model,
       effort: res.result.reasoningEffort ?? res.result.thread?.reasoningEffort ?? this.#rolloutState.settings?.effort,
+      approvalsReviewer: res.result.approvalsReviewer,
       approvalPolicy: res.result.approvalPolicy ?? this.#rolloutState.settings?.approvalPolicy ?? (this.nativeSocket ? undefined : approvalPolicy),
       sandbox: res.result.sandbox ?? this.#rolloutState.settings?.sandboxPolicy ?? (this.nativeSocket ? undefined : sandbox),
       cliVersion: res.result.thread?.cliVersion ?? this.#rolloutState.cliVersion,
@@ -869,10 +913,10 @@ export class CodexDriver extends Driver {
 
   /** What a thread is opened with, on start and on a later reload. */
   #threadParams() {
-    const { approvalPolicy, sandbox } = this.#policy();
+    const { approvalPolicy, approvalsReviewer, sandbox } = this.#policy();
     const config = Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
       .map((k) => [`shell_environment_policy.set.${k}`, this.env[k]]));
-    return { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}),
+    return { cwd: this.cwd, approvalPolicy, approvalsReviewer, sandbox, ...(this.model ? { model: this.model } : {}),
       ...(this.instructions ? { developerInstructions: this.instructions } : {}),
       ...(Object.keys(config).length ? { config } : {}) };
   }
@@ -895,7 +939,7 @@ export class CodexDriver extends Driver {
     if (this.#server) return this.#server;
     const server = CodexServer.for(this.cmd, this.env, this.log, this.procHost, this.nativeSocket);
     // Before the replay below can settle one of them.
-    if (this.procHost && !this.nativeSocket && this.threadId) this.#restorePending();
+    if (this.threadId) this.#restorePending();
     // Register before binding the pipe: ensure() synchronously replays the
     // host's buffered notifications, including completions during downtime.
     server.attach(this);
@@ -919,6 +963,7 @@ export class CodexDriver extends Driver {
   #restorePending() {
     for (const e of this.pendingEvents?.() ?? []) {
       if (this.pending.has(e.requestId)) continue;
+      if (!this.procHost && !isReviewRequest(e)) continue;
       this.#requests.set(e.requestId, savedRequest(e));
       this.pending.set(e.requestId, e);
       this.#restored.add(e.requestId);
@@ -928,7 +973,7 @@ export class CodexDriver extends Driver {
   #dropRestored(stale) {
     for (const requestId of [...this.#restored]) {
       const e = this.pending.get(requestId);
-      if (e && !stale(e)) continue;
+      if (e && (isReviewRequest(e) || !stale(e))) continue;
       this.#restored.delete(requestId);
       if (!e) continue;
       this.#requests.delete(requestId);
@@ -968,7 +1013,7 @@ export class CodexDriver extends Driver {
       threadId: this.threadId,
       input: [{ type: 'text', text, text_elements: [] }],
       clientUserMessageId: randomUUID(),
-      approvalPolicy: policy.approvalPolicy,
+      approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer,
       sandboxPolicy: policy.sandboxPolicy,
       ...(this.model ? { model: this.model } : {}),
       ...(this.effort ? { effort: this.effort } : {}),
@@ -1010,7 +1055,7 @@ export class CodexDriver extends Driver {
     await this.start();
     const input = [{ type: 'text', text, text_elements: [] }];
     const policy = this.#policy();
-    const params = { threadId, input, clientUserMessageId: randomUUID(), approvalPolicy: policy.approvalPolicy, sandboxPolicy: policy.sandboxPolicy };
+    const params = { threadId, input, clientUserMessageId: randomUUID(), approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandboxPolicy: policy.sandboxPolicy };
     let res = await this.#server.call('turn/start', params);
     if (res.error && /thread not found/i.test(res.error.message)) {
       const resumed = await this.#server.call('thread/resume', { threadId, excludeTurns: true });
@@ -1177,7 +1222,7 @@ export class CodexDriver extends Driver {
         return models.length ? mdLines('Models', models) : 'The agent reported no models.';
       }
       case 'permissions': {
-        const modes = ['ask', 'edit', 'full', 'readonly'];
+        const modes = ['ask', 'auto-review', 'edit', 'full', 'readonly'];
         if (!args) return `### Permissions\n\n**Current:** ${mdEscape(this.mode || 'ask')}  \n**Available:** ${modes.map(mdEscape).join(', ')}`;
         const picked = args.toLowerCase();
         if (!modes.includes(picked)) throw new Error(`Unknown permissions mode "${args}". Use ${modes.join(', ')}.`);
@@ -1276,7 +1321,7 @@ export class CodexDriver extends Driver {
       threadId: this.threadId,
       input,
       clientUserMessageId: randomUUID(),
-      approvalPolicy: policy.approvalPolicy,
+      approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer,
       sandboxPolicy: policy.sandboxPolicy,
       ...(this.model ? { model: this.model } : {}),
       ...(this.effort ? { effort: this.effort } : {}),
@@ -1345,6 +1390,18 @@ export class CodexDriver extends Driver {
     const req = this.pending.get(requestId);
     const raw = this.#requests.get(requestId);
     if (!req || !raw) throw new Error(`no pending request ${requestId}`);
+    if (raw.method === 'thread/approveGuardianDeniedAction') {
+      if (!['allow', 'deny'].includes(decision.option)) throw new Error('Choose Allow anyway or Keep denied.');
+      if (decision.option === 'allow') {
+        if (!this.#server) await this.#connectOnly();
+        const res = await this.#server.call(raw.method, raw.params);
+        if (res.error) throw new Error(`Codex could not allow this step: ${res.error.message}`);
+      }
+      this.#requests.delete(requestId);
+      this.#restored.delete(requestId);
+      this.push('permission.resolved', { requestId, decision: decision.option });
+      return;
+    }
     let result;
     switch (raw.method) {
       case 'item/commandExecution/requestApproval':
@@ -1433,6 +1490,10 @@ export class CodexDriver extends Driver {
   // ------------------------------------------------------------- the stream
 
   onNotification(method, p) {
+    if (REVIEW_NOTIFICATIONS.has(method)) {
+      if (p.threadId && p.threadId !== this.threadId && !this.#subagentThreads.has(p.threadId)) return;
+      return this.#reviewNotification(method, p);
+    }
     if (p.threadId && p.threadId !== this.threadId) {
       // A spawned agent's own thread: its items fold under the spawn card,
       // but its turns, status and usage are not this session's.
@@ -1471,6 +1532,15 @@ export class CodexDriver extends Driver {
       }
     }
     switch (method) {
+      case 'thread/settings/updated': {
+        const settings = p.threadSettings ?? {};
+        this.info = { ...this.info, ...settings };
+        if (this.nativeSocket) {
+          const mode = reportedMode('codex', settings);
+          if (mode) { this.mode = mode; this.push('settings', { mode }); }
+        }
+        return;
+      }
       case 'thread/name/updated':
         if (typeof p.threadName === 'string' && p.threadName.trim()) {
           this.push('title', { title: p.threadName.trim() });
@@ -1581,6 +1651,44 @@ export class CodexDriver extends Driver {
       }
       default: return;
     }
+  }
+
+  #reviewNotification(method, p) {
+    if (method === 'guardianWarning') {
+      const id = `codex-review-warning-${randomUUID()}`;
+      this.push('item.start', { id, turnId: this.#shownTurns.get(this.#turnId) ?? this.#turnId, kind: 'tool', name: 'codexReview', input: { action: 'Check the review warning', reviewStatus: 'warning' } });
+      this.push('item.done', { id, status: 'error', output: p.message });
+      return;
+    }
+    if (!p.reviewId || !p.review || !p.action) return;
+    const id = `codex-review-${p.threadId}-${p.reviewId}`;
+    this.#completedReviews ??= new Set((this.resumeEvents?.() ?? []).filter((e) => e.type === 'item.done' && e.id?.startsWith('codex-review-')).map((e) => e.id));
+    if (this.#completedReviews.has(id)) return;
+    const parentId = p.threadId !== this.threadId ? this.#subagentThreads.get(p.threadId) : undefined;
+    const own = parentId ? this.#turnId : p.turnId;
+    if (!parentId) this.#wake(own);
+    const action = reviewAction(p.action);
+    if (!this.#items.has(id)) {
+      this.#items.set(id, { kind: 'tool' });
+      this.push('item.start', { id, turnId: this.#shownTurns.get(own) ?? own, parentId,
+        kind: 'tool', name: 'codexReview', input: { action, reviewStatus: p.review.status } });
+    } else this.push('item.update', { id, input: { action, reviewStatus: p.review.status } });
+    if (method.endsWith('/started')) return;
+    this.#completedReviews.add(id);
+    this.#items.delete(id);
+    this.push('item.done', { id, status: p.review.status === 'approved' ? 'ok' : 'error', output: p.review.rationale ?? '' });
+    const requestId = id;
+    if (p.review.status !== 'denied' || this.pending.has(requestId)) return;
+    // This is an optional retry grant. Codex has already denied the action;
+    // do not interrupt or change the state of its current turn.
+    const params = { threadId: p.threadId, event: guardianEvent(p) };
+    this.#requests.set(requestId, { method: 'thread/approveGuardianDeniedAction', params });
+    this.push('permission.request', { requestId, itemId: id, parentId, kind: 'tool',
+      title: 'Codex denied this step', detail: action,
+      reason: p.review.rationale || 'Codex did not approve this step.',
+      options: [{ id: 'deny', role: 'deny', label: 'Keep denied' }, { id: 'allow', role: 'allow', label: 'Allow anyway' }],
+      defaultTo: 'deny', allowEdit: false,
+      codex: { method: 'thread/approveGuardianDeniedAction', params } });
   }
 
   onRateLimits(rateLimits) {

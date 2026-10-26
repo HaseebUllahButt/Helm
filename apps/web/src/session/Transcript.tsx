@@ -165,7 +165,7 @@ const rowable = (it: Item) => !isTextish(it) && !isApart(it) && it.kind !== 'sub
 
 /** What opening a step shows: the raw command and what it printed, the diff, the list. */
 function hasDetail(it: Item): boolean {
-  if (it.kind === 'command' || rawCommand(it) !== undefined) return true;
+  if (it.name === 'codexReview' || it.kind === 'command' || rawCommand(it) !== undefined) return true;
   if (it.kind === 'edit') return (it.changes ?? []).length > 0;
   if (isTodoItem(it)) return !!parseTodos(it);
   if (it.kind === 'thinking') return !!it.text;
@@ -177,6 +177,12 @@ function StepDetail({ item, byParent }: { item: Item; byParent: Map<string, Item
   const out = (item.output ?? item.text ?? '').replace(/\s+$/, '');
   const body = out || (item.error ? plainError(item.error) : '');
   const raw = body.length > 4000 ? '…\n' + body.slice(-4000) : body;
+  if (item.name === 'codexReview') return (
+    <div className="step-raw">
+      <code className="step-cmd">{item.input?.action}</code>
+      {raw && <pre className="aout">{raw}</pre>}
+    </div>
+  );
   if (command !== undefined) {
     return (
       <div className="step-raw">
@@ -546,7 +552,7 @@ const ItemBody = memo(function ItemBody({ item, byParent, commandOutput, plain }
   }, [focusItem]);
   return (
     <div ref={ref} data-item-id={item.id} tabIndex={-1}>
-      {plain && rowable(item) ? <StepRow item={item} byParent={byParent} /> : <ItemContent item={item} byParent={byParent} commandOutput={commandOutput} />}
+      {(plain || item.name === 'codexReview') && rowable(item) ? <StepRow item={item} byParent={byParent} /> : <ItemContent item={item} byParent={byParent} commandOutput={commandOutput} />}
     </div>
   );
 }, (a, b) => a.item === b.item && a.revision === b.revision && a.commandOutput === b.commandOutput

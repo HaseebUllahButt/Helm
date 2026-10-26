@@ -458,8 +458,9 @@ test('informational slash commands do not clear an active turn status', async ()
   await driver.kill();
 });
 
-test('plain: initialize, thread/start, turn/start; text streams as deltas', async () => {
+test('plain: initialize, thread/start, turn/start; text streams as deltas', async t => {
   const { driver, log, fake } = make('plain');
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
   await driver.send('Reply with exactly the words: hello from helm');
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
@@ -476,7 +477,7 @@ test('plain: initialize, thread/start, turn/start; text streams as deltas', asyn
   assert.deepEqual(sent[0].params.clientInfo.name, 'helm');
   assert.equal(sent[1].method, 'initialized');
   assert.equal(sent[2].method, 'thread/start');
-  assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', sandbox: 'workspace-write' });
+  assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write' });
   assert.equal(sent[3].method, 'turn/start');
   assert.deepEqual(sent[3].params.input, [{ type: 'text', text: 'Reply with exactly the words: hello from helm', text_elements: [] }]);
   assert.equal(sent[3].params.effort, 'low');
@@ -763,4 +764,187 @@ test('a Codex retry says why it is retrying', async (t) => {
     ['Reconnecting... 2/5 — We’re currently experiencing high demand, which may cause temporary errors.', 'retrying'],
     ['stream disconnected', 'turn'],
   ]);
+});
+
+// Shapes read from codex-cli 0.162's generated app-server schema.
+const reviewNotice = (overrides = {}) => ({
+  threadId: 'scripted-thread', turnId: 'review-turn', reviewId: 'review-1', targetItemId: 'command-1',
+  startedAtMs: 100, completedAtMs: 200, decisionSource: 'agent',
+  action: { type: 'command', source: 'unifiedExec', command: 'printf SAFE', cwd: '/work' },
+  review: { status: 'denied', rationale: 'This step can remove files.', riskLevel: 'high', userAuthorization: 'low' },
+  ...overrides,
+});
+
+test('auto-review reaches thread and turn starts and switching back restores the user reviewer', async t => {
+  const { fake, driver, log } = make('plain', { mode: 'auto-review' });
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
+  await driver.send('hello');
+  await log.until(e => e.type === 'turn.done');
+  for (const method of ['thread/start', 'turn/start']) {
+    const params = fake.stdinLines().find(m => m.method === method).params;
+    assert.equal(params.approvalPolicy, 'on-request');
+    assert.equal(params.approvalsReviewer, 'auto_review');
+  }
+  const scripted = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+    if (request.method === 'turn/start') return { result: { turn: { id: 'next' } } };
+  } });
+  await scripted.driver.setMode('auto-review');
+  await scripted.driver.send('First');
+  await scripted.driver.setMode('ask');
+  await scripted.driver.send('Next');
+  assert.deepEqual(scripted.writes.filter(m => m.method === 'turn/start').map(m => m.params.approvalsReviewer), ['auto_review', 'user']);
+});
+
+test('approved reviews stay quiet and denied reviews offer the exact one-action grant', async t => {
+  const { driver, log, notify, writes } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  const approved = reviewNotice({ reviewId: 'safe', review: { status: 'approved', rationale: 'Read files only.' } });
+  notify('item/autoApprovalReview/started', { ...approved, review: { status: 'inProgress' } });
+  notify('item/autoApprovalReview/completed', approved);
+  assert.equal(log.of('permission.request').length, 0);
+  assert.equal(log.of('item.start').at(-1).name, 'codexReview');
+  assert.equal(log.of('item.update').at(-1).input.reviewStatus, 'approved');
+  assert.equal(log.of('item.done').at(-1).status, 'ok');
+  const denied = reviewNotice();
+  notify('item/autoApprovalReview/completed', denied);
+  const card = log.of('permission.request').at(-1);
+  assert.equal(card.reason, denied.review.rationale);
+  assert.equal(card.options.find(o => o.role === 'allow').label, 'Allow anyway');
+  assert.equal(card.defaultTo, 'deny');
+  assert.equal(driver.status, 'idle', 'a review result must not invent a running or blocked turn');
+  await driver.answer(card.requestId, { option: 'allow' });
+  assert.deepEqual(writes.at(-1), { jsonrpc: '2.0', id: writes.at(-1).id, method: 'thread/approveGuardianDeniedAction', params: {
+    threadId: 'scripted-thread', event: { id: 'review-1', target_item_id: 'command-1', turn_id: 'review-turn',
+      started_at_ms: 100, completed_at_ms: 200, status: 'denied', risk_level: 'high', user_authorization: 'low',
+      rationale: denied.review.rationale, decision_source: 'agent',
+      action: { type: 'command', source: 'unified_exec', command: 'printf SAFE', cwd: '/work' } },
+  } });
+  assert.equal(driver.status, 'idle');
+  assert.equal(driver.pending.size, 0);
+  notify('item/autoApprovalReview/completed', denied);
+  assert.equal(log.of('permission.request').length, 1, 'replayed reviews do not ask twice');
+});
+
+test('denial grants convert every schema action and keep the reviewed target', async t => {
+  const { driver, log, notify, writes } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  const pairs = [
+    [{ type: 'execve', program: '/bin/echo', argv: ['echo', 'SAFE'], cwd: '/work', source: 'shell' },
+      { type: 'execve', program: '/bin/echo', argv: ['echo', 'SAFE'], cwd: '/work', source: 'shell' }],
+    [{ type: 'writeStdin', approvalId: 'stdin-1', processId: 'proc-1', stdin: 'yes\n', cwd: '/work' },
+      { type: 'write_stdin', approval_id: 'stdin-1', process_id: 'proc-1', stdin: 'yes\n', cwd: '/work' }],
+    [{ type: 'applyPatch', files: ['/work/a'], cwd: '/work' }, { type: 'apply_patch', files: ['/work/a'], cwd: '/work' }],
+    [{ type: 'networkAccess', host: 'example.test', target: 'https://example.test:443', port: 443, protocol: 'socks5Tcp' },
+      { type: 'network_access', host: 'example.test', target: 'https://example.test:443', port: 443, protocol: 'socks5_tcp' }],
+    [{ type: 'mcpToolCall', server: 'drive', toolName: 'write', toolTitle: 'Change a file', connectorId: 'app-1', connectorName: 'Drive' },
+      { type: 'mcp_tool_call', server: 'drive', tool_name: 'write', tool_title: 'Change a file', connector_id: 'app-1', connector_name: 'Drive' }],
+    [{ type: 'requestPermissions', reason: 'Read more files', permissions: { fileSystem: { globScanMaxDepth: 3, read: ['/extra'], entries: [{ access: 'read', path: { type: 'special', value: { kind: 'project_roots' } } }] }, network: { enabled: true } } },
+      { type: 'request_permissions', reason: 'Read more files', permissions: { file_system: { glob_scan_max_depth: 3, read: ['/extra'], entries: [{ access: 'read', path: { type: 'special', value: { kind: 'project_roots' } } }] }, network: { enabled: true } } }],
+  ];
+  for (const [i, [action, expected]] of pairs.entries()) {
+    const notice = reviewNotice({ reviewId: `action-${i}`, targetItemId: null, action });
+    notify('item/autoApprovalReview/completed', notice);
+    await driver.answer(log.of('permission.request').at(-1).requestId, { option: 'allow' });
+    assert.deepEqual(writes.at(-1).params.event.action, expected);
+    assert.equal(writes.at(-1).params.event.target_item_id, null);
+  }
+});
+
+test('failed grants stay answerable and keeping a denial sends no server response', async t => {
+  let failGrant = true;
+  const { driver, log, notify, writes } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+    if (request.method === 'thread/approveGuardianDeniedAction' && failGrant) return { error: { message: 'Try again' } };
+  } });
+  await driver.start();
+  notify('item/autoApprovalReview/completed', reviewNotice());
+  const card = log.of('permission.request').at(-1);
+  await assert.rejects(driver.answer(card.requestId, { option: 'allow' }), /could not allow/);
+  assert.equal(driver.pending.has(card.requestId), true);
+  failGrant = false;
+  const count = writes.length;
+  await driver.answer(card.requestId, { option: 'deny' });
+  assert.equal(writes.length, count);
+  assert.equal(driver.pending.size, 0);
+});
+
+test('review warnings and failed reviews show details without offering unsafe retry grants', () => {
+  const driver = new CodexDriver({ cmd: 'codex', env: {}, cwd: '/work', engineSessionId: 'scripted-thread' });
+  const log = collect(driver);
+  for (const status of ['timedOut', 'aborted']) driver.onNotification('item/autoApprovalReview/completed', reviewNotice({ reviewId: status, review: { status, rationale: 'Review stopped.' } }));
+  driver.onNotification('guardianWarning', { threadId: driver.threadId, message: 'Check this step before continuing.' });
+  assert.equal(log.of('item.done').length, 3);
+  assert.equal(log.of('item.done').at(-1).output, 'Check this step before continuing.');
+  assert.equal(log.of('permission.request').length, 0);
+});
+
+test('the shared Codex server holds review notifications for the correct chat', async t => {
+  let receive;
+  const got = [];
+  const fake = fakeCli('codex', 'plain');
+  const pipe = { onData(fn) { receive = fn; }, onExit() {}, end() {}, kill() {} };
+  const server = new CodexServer(fake.cmd, { CODEX_HOME: join(fake.dir, 'held-reviews') }, () => {}, { hasProc: () => true, procPipe: () => pipe });
+  const first = { threadId: 'first', onNotification: (...args) => got.push(['first', ...args]) };
+  const second = { threadId: 'second', onNotification: (...args) => got.push(['second', ...args]) };
+  t.after(() => { server.detach(first); server.detach(second); rmSync(fake.dir, { recursive: true, force: true }); });
+  server.attach(first);
+  await server.ensure();
+  for (const method of ['item/autoApprovalReview/started', 'item/autoApprovalReview/completed', 'guardianWarning']) {
+    receive(JSON.stringify({ method, params: { ...reviewNotice(), threadId: 'second' } }) + '\n');
+  }
+  assert.deepEqual(got, []);
+  server.attach(second);
+  assert.equal(got.length, 3);
+  assert.ok(got.every(([owner]) => owner === 'second'));
+});
+
+test('saved review grants survive a daemon restart even after the reviewed turn ends', async t => {
+  const { driver, log, notify } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  notify('item/autoApprovalReview/completed', reviewNotice());
+  const card = log.of('permission.request').at(-1);
+  const restored = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  restored.driver.pendingEvents = () => [card];
+  restored.driver.resumeEvents = () => log.events;
+  await restored.driver.start();
+  assert.ok(restored.driver.pending.has(card.requestId));
+  restored.notify('item/autoApprovalReview/completed', reviewNotice());
+  assert.equal(restored.log.of('permission.request').length, 0);
+  await restored.driver.answer(card.requestId, { option: 'allow' });
+  assert.equal(restored.writes.at(-1).method, 'thread/approveGuardianDeniedAction');
+});
+
+
+test('an adopted auto-review chat still reports the reviewer after a daemon restart', async t => {
+  const { driver } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.setMode('auto-review');
+  await driver.start();
+  const { reportedMode } = await import('../packages/connect/src/native-settings.js');
+  assert.equal(reportedMode('codex', driver.info), 'auto-review');
+});
+
+test('a child review keeps its card under the helper and grants only that child action', async t => {
+  const { driver, log, notify, writes } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  notify('item/started', { turnId: 'parent-turn', item: { id: 'helper-card', type: 'collabAgentToolCall', tool: 'spawnAgent', receiverThreadIds: ['child-thread'] } });
+  notify('item/autoApprovalReview/completed', reviewNotice({ threadId: 'child-thread' }));
+  const card = log.of('permission.request').at(-1);
+  assert.equal(card.parentId, 'helper-card');
+  assert.equal(log.of('item.start').at(-1).parentId, 'helper-card');
+  await driver.answer(card.requestId, { option: 'allow' });
+  assert.equal(writes.at(-1).params.threadId, 'child-thread');
+  assert.equal(writes.at(-1).params.event.id, 'review-1');
 });

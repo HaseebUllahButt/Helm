@@ -644,3 +644,19 @@ test('a changed step moves its own revision and every card it sits in, so drawn 
   ev({ type: 'turn.done', turnId: 't', status: 'ok' });
   assert.equal(said.revision, 7, 'ending the turn closes the streaming text and moves it');
 });
+
+
+test('a fast review stays with its message when Codex echoes the turn after its items', () => {
+  const state = emptyLog();
+  let seq = 0;
+  const ev = e => apply(state, { at: ++seq, seq, ...e });
+  ev({ type: 'turn.start', turnId: 'local-send', text: 'Check the project' });
+  ev({ type: 'item.start', id: 'review', turnId: 'codex-turn', kind: 'tool', name: 'codexReview', input: { action: 'Read app.ts', reviewStatus: 'approved' } });
+  ev({ type: 'item.done', id: 'review', status: 'ok' });
+  ev({ type: 'turn.start', turnId: 'codex-turn', inputId: 'local-send', text: 'Check the project' });
+  assert.equal(state.turns.length, 1);
+  assert.equal(state.turns[0].id, 'codex-turn');
+  assert.equal(state.turns[0].items[0].id, 'review');
+  ev({ type: 'turn.start', turnId: 'other-turn', text: 'Check the project' });
+  assert.equal(state.turns.length, 2, 'a different turn cannot claim these review items');
+});

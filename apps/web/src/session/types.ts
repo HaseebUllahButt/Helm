@@ -298,7 +298,9 @@ export function apply(state: LogState, e: HelmEvent): void {
       // messages are two rows, not one.
       for (let i = 0; !e.wake && !id.startsWith('local-') && i < state.turns.length; i++) {
         const t = state.turns[i];
-        if (t.items.length || t.done || t.steered) continue;
+        if (t.done || t.steered) continue;
+        // A fast review can arrive before the provider echoes its turn.
+        if (t.items.length && !t.items.every(it => it.turnId === id)) continue;
         // An echo that names its message is that message, whatever it says.
         if (e.inputId != null) { if (t.id === e.inputId) { open = t; break; } continue; }
         if (!t.id.startsWith('local-')) continue;

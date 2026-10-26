@@ -51,3 +51,16 @@ test('the old auto toggle still lands on each engine dangerous-enough mode', () 
   assert.equal(modeFromAuto('codex', true), 'full');
   assert.equal(modeFromAuto('codex', false), 'ask');
 });
+
+
+test('Codex alone offers auto-review without changing any default', () => {
+  const mode = modeFor('codex', 'auto-review');
+  assert.equal(mode.label, 'Codex reviews');
+  assert.equal(mode.approvalsReviewer, 'auto_review');
+  assert.equal(mode.approvalPolicy, modeFor('codex', 'ask').approvalPolicy);
+  assert.deepEqual(mode.sandboxPolicy, modeFor('codex', 'ask').sandboxPolicy);
+  assert.equal(defaultMode('codex'), 'full');
+  for (const [engine, modes] of Object.entries(MODES)) {
+    if (engine !== 'codex') assert.equal(modes.some(m => m.id === 'auto-review'), false);
+  }
+});

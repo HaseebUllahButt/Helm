@@ -7,6 +7,7 @@ import { appendFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, read
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { collect } from './helpers.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-native-codex-'));
 process.env.HELM_DIR = join(root, 'helm');
@@ -34,6 +35,7 @@ const wsServer = new WebSocketServer({ server: http });
 const seen = [];
 const answers = [];
 let approved = false;
+let approvalsReviewer = 'user';
 let nativeId = threadId;
 let emptyThread = false;
 let loaded = true;
@@ -66,7 +68,7 @@ wsServer.on('connection', (ws) => ws.on('message', (raw) => {
     case 'thread/start': result = { thread: thread(), model: m.params.model, approvalPolicy: m.params.approvalPolicy, sandbox: m.params.sandbox }; break;
     case 'thread/resume':
       if (failResumes > 0 && m.params.threadId === nativeId) { failResumes -= 1; ws.send(JSON.stringify({ id: m.id, error: { message: 'thread busy, try again' } })); return; }
-      result = { thread: thread(), model: 'native-model', approvalPolicy: 'on-request', sandbox: { type: 'workspaceWrite' } }; break;
+      result = { thread: thread(), model: 'native-model', approvalPolicy: 'on-request', approvalsReviewer, sandbox: { type: 'workspaceWrite' } }; break;
     case 'turn/start':
       emptyThread = false;
       if (approveFirstTurn) approved = false;
@@ -451,6 +453,41 @@ test('a Codex thread still open in its daemon keeps its worktree until the daemo
   await sessions.list();
   assert.equal(await sessions.worktreeTidy(s.id, later), true, 'the daemon closed it: an unused folder goes');
   assert.ok(!existsSync(path));
+});
+
+test('native Codex keeps its reviewer and sends the one-action grant through the shared daemon', async t => {
+  nativeId = '01a11111-0000-7000-8000-000000000017';
+  approved = true; activeTurn = null; loaded = true; approvalsReviewer = 'auto_review';
+  const sessions = createSessions();
+  t.after(async () => { approvalsReviewer = 'user'; await sessions.stop(); });
+  const s = (await sessions.list()).find(s => s.engineSessionId === nativeId);
+  assert.equal(s.mode, 'auto-review', 'the native reviewer appears in the mode picker');
+  const before = seen.length;
+  await sessions.input(s.id, 'Continue');
+  const start = seen.slice(before).find(m => m.method === 'turn/start');
+  assert.equal(start.params.approvalsReviewer, undefined, 'attachment does not replace native settings');
+  const permission = new Promise(resolve => sessions.on('event', ({ id, event }) => {
+    if (id === s.id && event.type === 'permission.request') resolve(event);
+  }));
+  broadcast('item/autoApprovalReview/completed', {
+    threadId: nativeId, turnId: 'native-next-turn', reviewId: 'native-review', targetItemId: null,
+    startedAtMs: 1, completedAtMs: 2, decisionSource: 'agent',
+    action: { type: 'networkAccess', host: 'example.test', target: 'example.test', port: 443, protocol: 'https' },
+    review: { status: 'denied', riskLevel: 'high', userAuthorization: 'low', rationale: 'Check the destination first.' },
+  });
+  const card = await permission;
+  await sessions.answer(s.id, card.requestId, { option: 'allow' });
+  const grant = seen.find(m => m.method === 'thread/approveGuardianDeniedAction');
+  assert.equal(grant.params.threadId, nativeId);
+  assert.equal(grant.params.event.id, 'native-review');
+  assert.equal(grant.params.event.action.type, 'network_access');
+  const d = new CodexDriver({ cmd: 'codex', cwd: root, engineSessionId: nativeId, nativeSocket: socket });
+  const log = collect(d);
+  d.onNotification('thread/settings/updated', { threadId: nativeId, threadSettings: {
+    approvalPolicy: 'on-request', approvalsReviewer: 'guardian_subagent', sandboxPolicy: { type: 'workspaceWrite' },
+  } });
+  assert.equal(log.of('settings').at(-1).mode, 'auto-review');
+  assert.equal(d.mode, 'auto-review');
 });
 
 test.after(async () => {

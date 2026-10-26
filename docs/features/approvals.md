@@ -16,6 +16,19 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 - **Tests:** `test/browser/composer-card`, `child-requests`;
   `test/local-answer`, `driver-acp`, `driver-claude`, `driver-codex`.
 
+## Codex reviews
+- **Rule:** Select **Codex reviews** for one chat. Keep the existing defaults
+  for new chats and helpers. Use the same project limits as **Ask before acting**.
+- **Proof:** In a private copy, use a fake Codex account that emits
+  `item/autoApprovalReview/started` and `item/autoApprovalReview/completed`.
+  Select the mode, send a message, and open the steps. Check **Codex approved**.
+  A denied step shows its reason and **Allow anyway**. Press it and check that
+  `thread/approveGuardianDeniedAction` receives the same action and chat ID.
+- **Trap:** **Allow anyway** permits one retry. It does not mean the action ran.
+  A denial is already final for that attempt, so its card must not stop a live turn.
+- **Tests:** `test/driver-codex`, `native-codex`, `modes`, `session-settings`,
+  `events`; `test/browser/codex-review`.
+
 ## Questions
 - **Not yet driven;** the fake agent never asks questions, so use a real
   chat you made. To look at the card alone, run `test/browser/composer-card`
