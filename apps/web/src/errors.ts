@@ -56,7 +56,7 @@ export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot 
   if (/\b(enospc|edquot)\b|no space left|disk.*full|quota.*exceeded|needs more free space/i.test(text)) return `Free some space on ${machine || 'this machine'}. Try again.`;
   if (/rate.?limit|\b429\b|usage limit/i.test(text)) return 'The service reached its usage limit. Try again later.';
   if (/context (window|length)|prompt is too long|too many tokens/i.test(text)) return 'This chat is too long. Summarize it or start a new chat.';
-  if (/no conversation found|session.*not found|could not resume/i.test(text)) return 'This machine no longer has the chat history. Send a message to start again.';
+  if (/no conversation found|session.*not found/i.test(text)) return 'This machine no longer has the chat history. Send a message to start again.';
   if (/\b(enoent|not_found)\b|no such file|not a file|file.*not found|folder.*not found/i.test(text)) return 'Helm cannot find the file or folder. Check that it still exists.';
   if (/already exists|\beexist\b/i.test(text)) return 'This name is already in use. Select another name.';
   if (/not a git|not.*repository/i.test(text)) return 'This folder has no Git history. Select a project folder.';

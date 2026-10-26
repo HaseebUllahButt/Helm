@@ -55,3 +55,8 @@ test('the same raw failure logs once across repeated calls and Error objects', (
     assert.equal(warnings.length, 2);
   } finally { console.warn = previous; }
 });
+
+test('a chat that could not open for now is not called lost', () => {
+  assert.doesNotMatch(errorMessage(new Error('Could not resume the chat: connection reset')), /no longer has the chat history/);
+  assert.match(errorMessage(new Error('Session abc not found')), /no longer has the chat history/);
+});
