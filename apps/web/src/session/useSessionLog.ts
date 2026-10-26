@@ -106,6 +106,21 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
       if (next.length) changed(next);
     };
 
+    // A chat already on screen asks only for what came after it: each focus
+    // and reconnect sent the last TAIL events again, many times a reply on a
+    // slow link. A gap wider than TAIL, or a reset log, still opens at the end.
+    const read = async (): Promise<History> => {
+      if (log.loaded && log.last > 0) {
+        const after = log.last;
+        const r = await client.rpc<History>(env, 'session.events', { id: sessionId, since: after, limit: TAIL }, 20_000);
+        const joins = r.last === after ? !r.events.length : r.events[0]?.seq === after + 1 && r.events.at(-1)?.seq === r.last;
+        if (joins && !r.hasMore && !r.events.some(event => event.type === 'history.reset')) {
+          return { ...r, firstSeq: after + 1 };
+        }
+      }
+      return client.rpc<History>(env, 'session.events', { id: sessionId, tail: TAIL }, 20_000);
+    };
+
     const refresh = async () => {
       if (!visible()) return;
       if (fetching) { refreshAgain = true; return; }
@@ -117,7 +132,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
       try {
         // A saved cursor is not a request to replay an unattended chat.
         // One tail read serves cold opens, reconnects, and live gaps alike.
-        const r = await client.rpc<History>(env, 'session.events', { id: sessionId, tail: TAIL }, 20_000);
+        const r = await read();
         if (!visible() || version !== visibilityVersion) return;
         const boundary = r.firstSeq ?? r.events[0]?.seq ?? 0;
         const overlap = log.loaded && r.last >= log.last && boundary <= log.last + 1;
