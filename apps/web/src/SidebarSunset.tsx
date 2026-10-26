@@ -1,12 +1,21 @@
-import { memo, useId } from 'react';
+import { memo, useEffect, useId, useState } from 'react';
 
 /**
- * The band behind the sidebar's top bar: the sky just after the sun has gone
- * down over the sea, fading into the sidebar. Borrowed from T3 Code
- * Nightly's night sky. The colours are CSS variables, so each theme paints
- * its own sunset. No viewBox: the scene is laid out in percentages and
+ * The band behind the sidebar's top bar: the sky over the sea, fading into
+ * the sidebar. Borrowed from T3 Code Nightly's night sky. It follows this
+ * device's clock: dawn, day, sunset, night. The colours are CSS variables
+ * per sky and theme. No viewBox: the scene is laid out in percentages and
  * pixels, so a wide sidebar spreads it out instead of stretching it.
  */
+type Sky = 'dawn' | 'day' | 'sunset' | 'night';
+export function skyAt(date: Date): Sky {
+  const h = date.getHours() + date.getMinutes() / 60;
+  if (h >= 5 && h < 7) return 'dawn';
+  if (h >= 7 && h < 17) return 'day';
+  if (h >= 17 && h < 19) return 'sunset';
+  return 'night';
+}
+
 const STARS: [string, number, number, number][] = [
   ['6%', 7, 0.55, 0.8], ['17%', 15, 0.45, 0.5], ['34%', 5, 0.4, 0.45], ['52%', 11, 0.4, 0.35],
   ['66%', 6, 0.45, 0.55], ['80%', 9, 0.5, 0.7], ['93%', 14, 0.4, 0.45],
@@ -23,8 +32,13 @@ export const SidebarSunset = memo(function SidebarSunset() {
   // Gradients are referenced by id; a page can hold more than one band.
   const id = `sun${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const stop = (name: string) => ({ stopColor: `var(--sunset-${name})` });
+  const [sky, setSky] = useState(() => skyAt(new Date()));
+  useEffect(() => {
+    const timer = setInterval(() => setSky(skyAt(new Date())), 60_000);
+    return () => clearInterval(timer);
+  }, []);
   return (
-    <div className="sidebar-sunset" aria-hidden="true">
+    <div className="sidebar-sunset" data-sky={sky} aria-hidden="true">
       <svg width="100%" height="96" fill="none">
         <defs>
           <linearGradient id={`${id}-sky`} x1="0" y1="0" x2="0" y2="1">
@@ -46,7 +60,7 @@ export const SidebarSunset = memo(function SidebarSunset() {
         </defs>
 
         <rect width="100%" height="48" fill={`url(#${id}-sky)`} />
-        <g style={{ fill: 'var(--sunset-star)' }}>
+        <g style={{ fill: 'var(--sunset-star)', opacity: 'var(--sunset-stars)' }}>
           {STARS.map(([x, y, r, o]) => <circle key={x} cx={x} cy={y} r={r} opacity={o} />)}
         </g>
         <rect y="20" width="100%" height="56" fill={`url(#${id}-glow)`} />

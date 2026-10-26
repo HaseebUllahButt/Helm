@@ -329,10 +329,27 @@ code, pre, kbd { font-family: var(--mono); }
 .sidebar:has(.sidebar-sunset) .bar.side { background: none; border-bottom-color: transparent; }
 .sidebar:has(.sidebar-sunset) > :not(.sidebar-sunset) { position: relative; z-index: 1; }
 .sidebar.collapsed .sidebar-sunset { display: none; }
-:root {
+/* One sky per time of day (skyAt in SidebarSunset.tsx). Night is the
+   default; light theme has its own four near the end of this file. */
+:root, .sidebar-sunset[data-sky="night"] {
   --sunset-top: #0a1430; --sunset-mid: #13295a; --sunset-low: #2456a6; --sunset-horizon: #5b9be6;
   --sunset-glow: #4f8fff; --sunset-cloud: #a9ccff; --sunset-sea-top: #0f1d3a; --sunset-sea: var(--sidebar);
-  --sunset-shine: #9cc6ff; --sunset-star: #ffffff;
+  --sunset-shine: #9cc6ff; --sunset-star: #ffffff; --sunset-stars: 1;
+}
+.sidebar-sunset[data-sky="dawn"] {
+  --sunset-top: #14203a; --sunset-mid: #3b4a63; --sunset-low: #d98a6a; --sunset-horizon: #f6c27e;
+  --sunset-glow: #ffb48a; --sunset-cloud: #ffd9c0; --sunset-sea-top: #222a38; --sunset-shine: #ffd8a8;
+  --sunset-stars: .5;
+}
+.sidebar-sunset[data-sky="day"] {
+  --sunset-top: #2f6fb8; --sunset-mid: #4f8fd6; --sunset-low: #8cbbe8; --sunset-horizon: #cfe3f5;
+  --sunset-glow: #ffffff; --sunset-cloud: #ffffff; --sunset-sea-top: #1d3550; --sunset-shine: #ffffff;
+  --sunset-stars: 0;
+}
+.sidebar-sunset[data-sky="sunset"] {
+  --sunset-top: #12203a; --sunset-mid: #4b2130; --sunset-low: #b4452b; --sunset-horizon: #f08a3c;
+  --sunset-glow: #ff8a3d; --sunset-cloud: #ffc98a; --sunset-sea-top: #2b1b20; --sunset-shine: #ffc070;
+  --sunset-stars: .8;
 }
 .side-tools { display: flex; align-items: center; flex: none; }
 .side-tools .iconbtn { padding-inline: 6px; min-width: 30px; }
@@ -2139,11 +2156,22 @@ button.sheet-editlink:hover { color: var(--text); }
 }
 
 /* The marks keep their dark tile and their own colours in every theme. */
-/* A daytime blue sky: pale blues, no dark band on a light page. */
-:root[data-theme="light"] {
+/* The four skies in pale colours: no dark band on a light page. */
+:root[data-theme="light"] .sidebar-sunset[data-sky="night"] {
+  --sunset-top: #5a7bb0; --sunset-mid: #7f9cc8; --sunset-low: #a9bfe0; --sunset-horizon: #cfdcf0;
+  --sunset-glow: #b8cff5; --sunset-cloud: #eef4ff; --sunset-sea-top: #a9bddb; --sunset-shine: #ffffff;
+}
+:root[data-theme="light"] .sidebar-sunset[data-sky="dawn"] {
+  --sunset-top: #b7cbe6; --sunset-mid: #e9d3d0; --sunset-low: #f5c3a4; --sunset-horizon: #fadbaa;
+  --sunset-glow: #ffc79a; --sunset-cloud: #fff4ea; --sunset-sea-top: #e6d2c8; --sunset-shine: #fff4e0;
+}
+:root[data-theme="light"] .sidebar-sunset[data-sky="day"] {
   --sunset-top: #8fb6e6; --sunset-mid: #aecbf0; --sunset-low: #c9dcf6; --sunset-horizon: #e1ecfb;
   --sunset-glow: #9cc4ff; --sunset-cloud: #ffffff; --sunset-sea-top: #b9d0ee; --sunset-shine: #ffffff;
-  --sunset-star: #ffffff;
+}
+:root[data-theme="light"] .sidebar-sunset[data-sky="sunset"] {
+  --sunset-top: #a9c8e8; --sunset-mid: #f1c8b8; --sunset-low: #f6a77b; --sunset-horizon: #f9c27a;
+  --sunset-glow: #ffb070; --sunset-cloud: #fff2e0; --sunset-sea-top: #eccab6; --sunset-shine: #fff4d6;
 }
 :root[data-theme="light"] .mark { background: #1d2027; }
 /* A letter mark takes its colour from the text token, which is dark here. */
