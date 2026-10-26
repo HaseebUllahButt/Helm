@@ -24,3 +24,19 @@ test('a click reaches the waiting window, or the next one to check in', async ()
   w.forget('a');
   assert.equal(createDesktopWindows().open({ envId: 'e', sessionId: 's' }), false, 'no window: the caller opens one');
 });
+
+test('a launcher with another name still counts when it opens the Helm window', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const { findEntry } = await import('../apps/relay/src/desktop-notify.js');
+  const dir = mkdtempSync(join(tmpdir(), 'helm-apps-'));
+  const profile = '/home/me/.helm/app-window';
+  writeFileSync(join(dir, 'other.desktop'), '[Desktop Entry]\nExec=/usr/bin/chromium --app=https://example.test/\n');
+  assert.equal(findEntry(dir, profile), null, 'another app window is not Helm');
+  writeFileSync(join(dir, 'chrome-abc-Default.desktop'),
+    `[Desktop Entry]\nExec=/usr/bin/chromium --user-data-dir=${profile} --profile-directory=Default --app=http://127.0.0.1:8787/\nStartupWMClass=chrome-127.0.0.1__-Default\n`);
+  assert.deepEqual(findEntry(dir, profile), { exec: `/usr/bin/chromium --user-data-dir=${profile} --profile-directory=Default --app=http://127.0.0.1:8787/`, wmClass: 'chrome-127.0.0.1__-Default' });
+  writeFileSync(join(dir, 'helm-app.desktop'), '[Desktop Entry]\nExec=helm-window\nStartupWMClass=helm\n');
+  assert.deepEqual(findEntry(dir, profile), { exec: 'helm-window', wmClass: 'helm' }, 'Helm\'s own launcher wins');
+});

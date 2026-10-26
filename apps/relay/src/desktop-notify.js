@@ -1,7 +1,8 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Notifications on this computer's own desktop, shown by Helm itself.
@@ -22,15 +23,29 @@ import { homedir } from 'node:os';
 
 const ENTRY = 'helm-app.desktop';
 const dataHome = () => process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
-const entryFile = () => join(dataHome(), 'applications', ENTRY);
 
-function readEntry() {
-  try {
-    const text = readFileSync(entryFile(), 'utf8');
-    const get = (key) => new RegExp(`^${key}=(.*)$`, 'm').exec(text)?.[1]?.trim() ?? '';
-    return { exec: get('Exec'), wmClass: get('StartupWMClass') };
-  } catch { return null; }
+const parseEntry = (text) => {
+  const get = (key) => new RegExp(`^${key}=(.*)$`, 'm').exec(text)?.[1]?.trim() ?? '';
+  return { exec: get('Exec'), wmClass: get('StartupWMClass') };
+};
+
+/**
+ * The Helm app's launcher: `helm-app.desktop`, or one an older install or the
+ * browser's own "install app" wrote, found by the window profile it opens.
+ * Without this, a renamed launcher silently left the alerts to Chromium.
+ */
+export function findEntry(dir = join(dataHome(), 'applications'), profile = join(process.env.HELM_DIR || join(homedir(), '.helm'), 'app-window')) {
+  try { return parseEntry(readFileSync(join(dir, ENTRY), 'utf8')); } catch { /* look for another */ }
+  let names = [];
+  try { names = readdirSync(dir).filter((n) => n.endsWith('.desktop')).sort(); } catch { return null; }
+  for (const name of names) {
+    let entry;
+    try { entry = parseEntry(readFileSync(join(dir, name), 'utf8')); } catch { continue; }
+    if (entry.exec.includes('--app=') && entry.exec.split(/\s+/).includes(`--user-data-dir=${profile}`)) return entry;
+  }
+  return null;
 }
+const readEntry = () => findEntry();
 
 const onPath = (bin) => (process.env.PATH || '/usr/bin:/bin').split(':')
   .some((dir) => dir && existsSync(join(dir, bin)));
@@ -63,13 +78,26 @@ export function desktopCapable() {
   return !!readEntry() && onPath('notify-send');
 }
 
-/** The sharpest icon file we can find; the theme name if there is none. */
+/** The sharpest icon file we can find; Helm's own copy if none is installed. */
 function iconPath() {
   for (const size of ['128x128', '256x256', '192x192', '512x512']) {
     const p = join(dataHome(), 'icons', 'hicolor', size, 'apps', 'helm-app.png');
     if (existsSync(p)) return p;
   }
-  return 'helm-app';
+  const shipped = fileURLToPath(new URL('../../web/public/icon-192.png', import.meta.url));
+  return existsSync(shipped) ? shipped : 'helm-app';
+}
+
+/**
+ * Most desktops read the body as simple markup (Omarchy, GNOME, KDE): a chat
+ * named "a < b" cut the rest away. Escape it where markup is read; elsewhere
+ * the escapes would show as typed.
+ */
+let markup = null;
+function bodyText(text, env) {
+  markup ??= /'body-markup'/.test(run('gdbus', ['call', '--session', '--dest', 'org.freedesktop.Notifications',
+    '--object-path', '/org/freedesktop/Notifications', '--method', 'org.freedesktop.Notifications.GetCapabilities'], env) ?? '');
+  return markup ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : text;
 }
 
 const run = (bin, args, env) => {
@@ -143,7 +171,7 @@ export function createDesktopNotifier({ onOpen = () => false } = {}) {
       `--urgency=${done ? 'normal' : 'critical'}`,
       '--print-id', '--action=default=Open',
       ...(previous?.id ? [`--replace-id=${previous.id}`] : []),
-      title, String(payload.body || ''),
+      title, bodyText(String(payload.body || ''), env),
     ];
     let child;
     try {
