@@ -231,10 +231,12 @@ test('a Helm restart leaves the window open; the next Helm takes its tabs back w
   const before = process.env.HELM_WINDOW_CHROMIUM; process.env.HELM_WINDOW_CHROMIUM = wrapper;
   t.after(() => { if (before === undefined) delete process.env.HELM_WINDOW_CHROMIUM; else process.env.HELM_WINDOW_CHROMIUM = before; });
   const { manager, url } = await setup(t, { launchWindow });
+  const folder = windowProfile(manager.directory, 'one');
+  // This Chromium outlives the test process; a failed check must still close it.
+  t.after(() => stopWindow(folder));
   const opened = await manager.open('one', { url });
   await manager.run('one', opened.tab.id, { kind: 'type', selector: '#name', text: 'kept' });
   const loadedAt = (await manager.run('one', opened.tab.id, { kind: 'evaluate', script: 'performance.timeOrigin' })).value;
-  const folder = windowProfile(manager.directory, 'one');
   await manager.stop();
   assert.ok(windowOpen(folder), 'the window is still open after Helm stops');
 
@@ -242,12 +244,7 @@ test('a Helm restart leaves the window open; the next Helm takes its tabs back w
   t.after(async () => {
     const context = await next.contexts.get('one');
     await context?.helmDetach?.(); await next.stop();
-    // Close the test window itself.
-    const { chromium: pw } = await import('playwright');
-    const port = Number(readFileSync(join(folder, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
-    const browser = await pw.connectOverCDP(`http://127.0.0.1:${port}`).catch(() => null);
-    await browser?.newBrowserCDPSession().then(s => s.send('Browser.close')).catch(() => {});
-    for (let i = 0; i < 50 && windowOpen(folder); i++) await new Promise(done => setTimeout(done, 100));
+    await stopWindow(folder);
   });
   const listed = await next.list('one');
   assert.equal(listed.open, true, 'the open window is taken back, not listed asleep');
