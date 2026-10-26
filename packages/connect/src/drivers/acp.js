@@ -1139,60 +1139,51 @@ export class AcpDriver extends Driver {
   }
 
   #toolCall(u) {
-    this.#closeStream();
-    const id = u.toolCallId ?? `tool-${++this.#itemSeq}`;
-    const input = u.rawInput ?? {};
-    const name = u._meta?.['cognition.ai/inferenceToolName'] ?? input.tool ?? null;
-    const isSpawn = SUBAGENT_TOOL.test(name ?? u.title ?? '');
-    const inChild = !isSpawn && !!u._meta?.['cognition.ai/subagent_context'];
-    const changes = this.#changes(u.content);
-    const kind = isSpawn ? 'subagent' : KIND[u.kind] ?? (input.command ? 'command' : changes.length ? 'edit' : 'tool');
-    if (isSpawn) this.#lastSub = id;
-    const parentId = inChild ? this.#lastSub : undefined;
-    // devin previews the command as a shellscript resource rather than in
-    // rawInput; opencode puts it in rawInput.command.
-    const script = (u.content ?? []).find((c) =>
-      c?.type === 'content' && c.content?.type === 'resource' &&
-      (c.content?._meta?.['cognition.ai/preview_is_shell_command'] || c.content?.resource?.mimeType === 'text/x-shellscript')
-    )?.content?.resource?.text;
-    const command = input.command
-      ?? u._meta?.['cognition.ai/editableCommand']
-      ?? script
-      ?? (kind === 'command' ? u.title : undefined);
-    const item = { kind, command, changes, name, output: '' };
-    this.#items.set(id, item);
-    this.push('item.start', {
-      id, kind, turnId: this.#turnId,
-      name: name ?? (kind === 'command' ? 'Bash' : kind === 'edit' ? 'Edit' : u.title ?? 'tool'),
-      input: Object.keys(input).length ? input : undefined,
-      command, cwd: u._meta?.['cognition.ai/cwd'] ?? input.cwd,
-      changes: changes.length ? changes : undefined,
-      parentId,
-      agent: isSpawn ? { status: 'running', description: u.title } : undefined,
-    });
-    if (u.status === 'completed' || u.status === 'failed') this.#toolDone(id, u);
+    this.#toolUpdate({ ...u, toolCallId: u.toolCallId ?? `tool-${++this.#itemSeq}` });
   }
 
   #toolUpdate(u) {
     const id = u.toolCallId;
     if (!id) return;
-    const item = this.#items.get(id) ?? { kind: 'tool', output: '' };
-    if (!this.#items.has(id)) {
-      this.#items.set(id, item);
-      const isSpawn = SUBAGENT_TOOL.test(u.title ?? '');
-      const inChild = !isSpawn && !!u._meta?.['cognition.ai/subagent_context'];
-      if (isSpawn) { item.kind = 'subagent'; this.#lastSub = id; }
-      this.push('item.start', { id, kind: item.kind, turnId: this.#turnId, name: u.title ?? 'tool', parentId: inChild ? this.#lastSub : undefined, agent: isSpawn ? { status: 'running', description: u.title } : undefined });
-    }
-    // Content entries replace rather than append: a terminal preview and the
-    // final output both say the whole thing.
-    const out = this.#contentText(u.content);
-    if (out) item.output = out;
-    const changes = this.#changes(u.content);
-    if (changes.length) {
-      item.changes = changes;
-      this.push('item.update', { id, changes });
-    }
+    this.#closeStream();
+    const previous = this.#items.get(id);
+    // Every field in an ACP update is optional. Keep the last supplied
+    // value, including details that arrive after the first tool notice.
+    const acp = { ...previous?.acp, ...u };
+    acp._meta = { ...previous?.acp?._meta, ...u._meta };
+    // Keep only the displayed content. Whole-file diffs can be very large.
+    delete acp.content;
+    delete acp.rawOutput;
+    const input = acp.rawInput ?? {};
+    const name = acp._meta?.['cognition.ai/inferenceToolName'] ?? input.tool ?? null;
+    const isSpawn = SUBAGENT_TOOL.test(name ?? acp.title ?? '');
+    const inChild = !isSpawn && !!acp._meta?.['cognition.ai/subagent_context'];
+    const changes = u.content === undefined ? (previous?.changes ?? []) : this.#changes(u.content);
+    const kind = isSpawn ? 'subagent' : KIND[acp.kind] ?? (input.command ? 'command' : changes.length ? 'edit' : 'tool');
+    if (isSpawn) this.#lastSub = id;
+    const script = (u.content ?? []).find((c) =>
+      c?.type === 'content' && c.content?.type === 'resource' &&
+      (c.content?._meta?.['cognition.ai/preview_is_shell_command'] || c.content?.resource?.mimeType === 'text/x-shellscript')
+    )?.content?.resource?.text;
+    const command = input.command
+      ?? acp._meta?.['cognition.ai/editableCommand']
+      ?? script
+      ?? previous?.command
+      ?? (kind === 'command' ? acp.title : undefined);
+    const output = u.content === undefined ? (previous?.output ?? '') : clip(this.#contentText(u.content));
+    const item = { acp, kind, command, changes, name, output };
+    this.#items.set(id, item);
+    const fields = {
+      kind,
+      name: name ?? (kind === 'command' ? 'Bash' : kind === 'edit' ? 'Edit' : acp.title ?? 'tool'),
+      input: Object.keys(input).length ? input : undefined,
+      command, cwd: acp._meta?.['cognition.ai/cwd'] ?? input.cwd,
+      changes,
+      parentId: inChild ? this.#lastSub : undefined,
+      agent: isSpawn ? { status: 'running', description: acp.title } : undefined,
+    };
+    if (!previous) this.push('item.start', { id, turnId: this.#turnId, ...fields });
+    if (previous || output) this.push('item.update', { id, ...fields, output });
     if (u.status === 'completed' || u.status === 'failed') this.#toolDone(id, u);
   }
 
@@ -1214,7 +1205,10 @@ export class AcpDriver extends Driver {
     const parts = [];
     for (const c of content) {
       if (c?.type === 'content' && c.content?.type === 'text') parts.push(c.content.text);
-      else if (c?.type === 'content' && c.content?.type === 'resource' && c.content?.text && !c.content?.uri?.startsWith('tool://')) parts.push(c.content.text);
+      else if (c?.type === 'content' && c.content?.type === 'resource') {
+        const resource = c.content.resource;
+        if (resource?.text && !resource.uri?.startsWith('tool://')) parts.push(resource.text);
+      }
     }
     return parts.join('\n');
   }

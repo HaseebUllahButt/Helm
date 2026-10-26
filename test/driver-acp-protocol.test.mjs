@@ -110,3 +110,62 @@ for (const stage of ['init', 'session']) {
     assert.equal(sent().filter(m => m.method === 'session/prompt').length, 1);
   });
 }
+
+test('ACP merges partial tool updates and shows live command output', async t => {
+  const { driver, log } = agent(t, { prompt: `
+    update({ sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'Tool', kind: 'other', status: 'pending' });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', title: 'Run echo', kind: 'execute',
+      rawInput: { command: 'echo hello', cwd: '/work' },
+      content: [{ type: 'content', content: { type: 'text', text: 'hello' } }] });
+    await request('ask-1', 'session/request_permission', {
+      toolCall: { toolCallId: 'tool-1' },
+      options: [{ optionId: 'yes', kind: 'allow_once', name: 'Allow' }],
+    });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'completed' });
+  ` });
+  await driver.send('Run echo');
+  const ask = await log.until(e => e.type === 'permission.request');
+  const progress = log.of('item.update').find(e => e.id === 'tool-1');
+  assert.equal(progress?.kind, 'command');
+  assert.equal(progress.command, 'echo hello');
+  assert.equal(progress.cwd, '/work');
+  assert.equal(progress.output, 'hello');
+  assert.equal(ask.detail, 'echo hello');
+  await driver.answer(ask.requestId, { option: 'allow' });
+  await log.until(e => e.type === 'turn.done');
+  assert.equal(log.of('item.start').filter(e => e.id === 'tool-1').length, 1);
+  assert.equal(log.of('item.done').find(e => e.id === 'tool-1').output, 'hello');
+});
+
+test('ACP keeps initial tool output and reads embedded text resources', async t => {
+  const { driver, log } = agent(t, { prompt: `
+    update({ sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'Read file', kind: 'read',
+      content: [{ type: 'content', content: { type: 'resource', resource: { uri: 'file:///hello.txt', text: 'file text' } } }] });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'completed' });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-2', title: 'Run echo', kind: 'execute',
+      rawInput: { command: 'echo two' }, status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: 'two' } }] });
+  ` });
+  await driver.send('Read file');
+  await log.until(e => e.type === 'turn.done');
+  assert.equal(log.of('item.done').find(e => e.id === 'tool-1').output, 'file text');
+  const command = log.of('item.start').find(e => e.id === 'tool-2');
+  assert.equal(command.kind, 'command');
+  assert.equal(command.command, 'echo two');
+});
+
+test('ACP replaces tool content when an update supplies an empty list', async t => {
+  const { driver, log } = agent(t, { prompt: `
+    update({ sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'Edit file', kind: 'edit' });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', content: [
+      { type: 'content', content: { type: 'text', text: 'old preview' } },
+      { type: 'diff', path: 'hello.txt', oldText: 'old', newText: 'new' },
+    ] });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', content: [], status: 'completed' });
+  ` });
+  await driver.send('Edit file');
+  await log.until(e => e.type === 'turn.done');
+  const updates = log.of('item.update').filter(e => e.id === 'tool-1');
+  assert.deepEqual(updates.at(-1).changes, []);
+  assert.equal(log.of('item.done').find(e => e.id === 'tool-1').output, '');
+});
