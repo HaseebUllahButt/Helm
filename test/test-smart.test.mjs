@@ -125,7 +125,7 @@ test('code, package and setting changes drop a saved pass; a failure never reuse
   const dir = mkdtempSync(join(tmpdir(), 'helm-check-repo-'));
   try {
     for (const d of ['scripts', 'test/browser', 'apps', 'packages/demo/src', 'node_modules']) mkdirSync(join(dir, d), { recursive: true });
-    for (const f of ['scripts/test-smart.mjs', 'scripts/test-pass-reporter.mjs']) copyFileSync(join(root, f), join(dir, f));
+    for (const f of ['scripts/test-smart.mjs', 'scripts/test-pass-reporter.mjs', 'scripts/test-cleanup.mjs']) copyFileSync(join(root, f), join(dir, f));
     writeFileSync(join(dir, 'test/thing.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert';\nimport { value } from '../packages/demo/src/thing.js';\ntest('one', () => assert.equal(value, 1));\n");
     writeFileSync(join(dir, 'packages/demo/src/thing.js'), 'export const value = 0;\n');
     writeFileSync(join(dir, 'node_modules/.package-lock.json'), '{}');
