@@ -107,7 +107,7 @@ export class SendStore {
     if (!this.off) {
       this.off = this.client.on((env, kind, payload) => {
         if (kind === 'send.update') this.accept(payload.job);
-        if (kind === 'connection' || kind === 'env.online') this.wake();
+        if (kind === 'connection') this.wake();
       });
       this.timer = setInterval(this.poll, 2000);
       window.addEventListener('online', this.wake);
