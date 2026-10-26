@@ -23,6 +23,28 @@ const make = (engine, name, opts = {}) => {
   return { fake, driver, log: collect(driver) };
 };
 
+for (const failed of [false, true]) {
+  test(`ACP closes the plan item when its turn ${failed ? 'fails' : 'ends'}`, async t => {
+    let receive, exited;
+    const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; }, write() {},
+      end() { exited({ code: 0 }); }, kill() { exited({ code: 0 }); } };
+    const driver = new OpencodeDriver({ cmd: 'unused', cwd: '/tmp', engineSessionId: 'kept', procId: 'kept',
+      procHost: { hasProc: () => true, procPipe: () => pipe },
+      openTurn: () => 'turn-kept', resumeEvents: () => [{ type: 'turn.start', turnId: 'turn-kept', acpPromptId: 'prompt-kept' }] });
+    t.after(() => driver.kill());
+    const log = collect(driver);
+    await driver.start();
+    receive(JSON.stringify({ method: 'session/update', params: { update: { sessionUpdate: 'plan',
+      entries: [{ content: 'Check the files', status: 'in_progress' }] } } }) + '\n');
+    const plan = log.of('item.start').find(event => event.name === 'plan');
+    assert.ok(plan);
+    receive(JSON.stringify({ id: 'prompt-kept', ...(failed ? { error: { message: 'lost connection' } }
+      : { result: { stopReason: 'end_turn' } }) }) + '\n');
+    assert.deepEqual(log.of('item.done').filter(event => event.id === plan.id),
+      [{ type: 'item.done', id: plan.id, status: failed ? 'error' : 'ok' }]);
+  });
+}
+
 for (const engine of ['devin', 'opencode']) {
   test(`${engine}: initialize, session/new, set mode, prompt; text streams as deltas`, async () => {
     const { driver, log, fake } = make(engine, 'plain');

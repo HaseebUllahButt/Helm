@@ -860,6 +860,12 @@ export class AcpDriver extends Driver {
       this.push('input.failed', { text: input.text, inputId: input.inputId, error: res.error?.message || 'The run ended before reading this message.' });
     }
     this.#closeStream();
+    const plan = `plan-${turnId}`;
+    if (this.#items.delete(plan)) {
+      const reason = res.result?.stopReason;
+      this.push('item.done', { id: plan, status: res.error ? 'error' : reason === 'cancelled' ? 'declined'
+        : reason && reason !== 'end_turn' ? 'error' : 'ok' });
+    }
     this.compactionEnded(res.error ? 'error' : res.result?.stopReason === 'cancelled' ? 'declined' : 'ok', res.error?.message);
     this.#turnId = null;
     this.#promptId = null;
