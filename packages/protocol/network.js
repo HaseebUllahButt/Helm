@@ -280,6 +280,7 @@ export async function hubCredential(net, base, { timeout = 15_000, signal } = {}
     body: JSON.stringify({ nonce }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
   });
+  if (!res.ok) await res.body?.cancel().catch(() => {});
   if (res.status === 404) {
     const err = new Error('that hub runs an older helm without the handshake - upgrade it');
     err.untrusted = true;
