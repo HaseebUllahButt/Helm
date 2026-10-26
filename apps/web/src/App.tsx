@@ -13,7 +13,8 @@ import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
 import { StartingTerminalView } from './session/StartingTerminalView';
 import { beginTerminal, type StartingTerminal } from './startingTerminals';
-import { beginChat, forgetChat, onStartingChat, type StartingChat } from './startingChats';
+import { beginChat, forgetChat, onStartingChat, startAgain, type StartingChat } from './startingChats';
+import { loadDraft } from './draftStore';
 import { EngineMark } from './EngineMark';
 import { SidebarSunset } from './SidebarSunset';
 import { NotificationToast } from './NotificationToast';
@@ -289,6 +290,14 @@ function Shell({ client, conn, onSignOut }: {
   const autoPicked = useRef<string | null>(null);
 
   /**
+   * Unused chats let go on the way out, by session id or placeholder id.
+   * Going back or forward to one starts the same chat again, so it is still
+   * a new chat to write in, not an empty page.
+   */
+  const letGo = useRef(new Set<string>());
+  const reopen = useRef<(key: string) => void>(() => {});
+
+  /**
    * Leaving an unused chat should not leave an empty row behind. The machine
    * re-checks that no input has reached the chat, so a send from another
    * device between our last refresh and this navigation can never be lost.
@@ -302,7 +311,10 @@ function Shell({ client, conn, onSignOut }: {
     if (!envId) return;
     client.rpc<{ discarded: boolean }>(envId, 'session.discard-empty', { id: current.session.id }, 10_000)
       .then((r) => {
-        if (r.discarded) removeSession(envId, current.session.id);
+        if (!r.discarded) return;
+        removeSession(envId, current.session.id);
+        letGo.current.add(current.session.id);
+        reopen.current(current.session.id);
       })
       .catch(() => { /* offline: the still-empty chat remains recoverable */ });
   }, [client, removeSession]);
@@ -320,6 +332,8 @@ function Shell({ client, conn, onSignOut }: {
       const top = s.stack.at(-1);
       saveWorkspace(scope, { view: s.selected && top?.kind === 'session' && top.session.engine !== 'shell'
         ? { envId: s.selected, session: top.session } : undefined });
+      const key = top?.kind === 'session' ? top.session.id : top?.kind === 'starting' ? top.startId : null;
+      if (key) reopen.current(key);
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -349,6 +363,33 @@ function Shell({ client, conn, onSignOut }: {
     const top = next.at(-1);
     saveWorkspace(scope, { view: sel && top?.kind === 'session' && top.session.engine !== 'shell'
       ? { envId: sel, session: top.session } : undefined });
+  };
+
+  // An unused chat that was let go is on screen again: start it the same
+  // way, with what was typed in its box, in place of the empty page.
+  reopen.current = (key) => {
+    const envId = nav.current.selected;
+    const top = nav.current.stack.at(-1);
+    const shown = top?.kind === 'session' ? top.session : null;
+    if (!envId || !letGo.current.has(key) || (shown?.id ?? (top?.kind === 'starting' ? top.startId : null)) !== key) return;
+    const draft = shown ? loadDraft(envId, shown.id) : '';
+    const chat = startAgain(client, key, draft) ?? (shown ? startLike(envId, shown, draft) : undefined);
+    if (!chat) return;
+    letGo.current.delete(key);
+    restate([...nav.current.stack.slice(0, -1), { kind: 'starting', startId: chat.id }], chat.envId);
+  };
+  /** A chat started before this page loaded: the same folder, agent and settings, read from its record. */
+  const startLike = (envId: string, s: Session, draft: string) => {
+    const folder = s.chatWorktree?.repo ?? s.cwd;
+    const params = {
+      ...(s.quick ? { quick: true } : { cwd: folder }), profileId: s.profileId,
+      model: s.model || undefined, effort: s.effort || undefined, speed: s.speed || undefined,
+      mode: s.mode && s.mode !== 'plan' ? s.mode : undefined,
+    };
+    return beginChat(client, {
+      envId, title: s.quick ? 'Quick chat' : whereOf(s), folder: s.quick ? null : folder,
+      account: s.account ?? s.profileId, profileId: s.profileId, engine: s.engine, agent: engineOf(s.engine).label,
+    }, () => client.rpc<{ session: Session }>(envId, 'session.start', params, 70_000).then((r) => r.session), draft);
   };
 
   /**
@@ -713,7 +754,12 @@ function Shell({ client, conn, onSignOut }: {
       restate([...nav.current.stack.slice(0, -1), { kind: 'session', session }]);
     } else if (!chat.message && !chat.draft.trim()) {
       client.rpc<{ discarded: boolean }>(chat.envId, 'session.discard-empty', { id: session.id }, 10_000)
-        .then((r) => { if (r.discarded) removeSession(chat.envId, session.id); })
+        .then((r) => {
+          if (!r.discarded) return;
+          removeSession(chat.envId, session.id);
+          letGo.current.add(chat.id);
+          reopen.current(chat.id);
+        })
         .catch(() => { /* offline: the empty chat stays recoverable */ });
     }
     forgetChat(chat.id);

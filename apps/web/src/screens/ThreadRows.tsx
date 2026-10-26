@@ -11,6 +11,7 @@ import { chatFolder, type Session } from '../client';
 import { shownTitle, unknownThread } from '../format';
 import { engineOf } from '../engines';
 import { fadeWhenCut } from '../fadeWhenCut';
+import { deleteKey } from '../session/chatKeys';
 
 /**
  * A section that can be put away, with what it holds counted on the header.
@@ -110,8 +111,10 @@ export function PagedRows<T extends { s: { id: string } }>({ items, isSelected, 
  * The ⋯ on a thread row: continue, rename, archive, delete. One component, so
  * the sidebar's rows and the machine screen's rows offer the same things.
  */
-export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: {
+export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete, ending: askedToEnd, setEnding: setAskedToEnd }: {
   s: Session; onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void;
+  /** The delete question, when the row asks it (its Delete key). */
+  ending?: boolean; setEnding?: (on: boolean) => void;
 }) {
   const eng = engineOf(s.engine);
   const adopted = s.adopted;
@@ -119,7 +122,9 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: 
   const [menu, setMenu] = useState(false);
   useDismiss(menu, useCallback(() => setMenu(false), []));
   const [naming, setNaming] = useState(false);
-  const [ending, setEnding] = useState(false);
+  const [endingHere, setEndingHere] = useState(false);
+  const ending = askedToEnd ?? endingHere;
+  const setEnding = setAskedToEnd ?? setEndingHere;
   return (
     <>
       <button
@@ -164,7 +169,7 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: 
             : adopted
               ? 'This closes the program in that terminal. Helm did not start it.'
               : 'This stops the agent. Helm permanently removes the chat.'}
-          confirmLabel={found ? 'Remove' : adopted ? 'Close' : 'Delete'} danger
+          confirmLabel={found ? 'Remove' : adopted ? 'Close' : 'Delete'} danger confirmKey="Delete"
           onCancel={() => setEnding(false)}
           onConfirm={() => { setEnding(false); onDelete(); }}
         />
@@ -290,10 +295,13 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
   const title = <span className={`tri-title${name.cut ? ' cut' : ''}`} ref={fadeWhenCut}>{name.text}</span>;
   const status = note && slim ? <span className="tstat quiet" data-mood="quiet">{note}</span> : chip ?? <ThreadStatus s={s} mood={mood} now={now} />;
   const mark = <EngineMark engine={eng.cls} className="tri-mark" />;
+  // A row with focus takes the Delete key for its own chat, before the open chat can.
+  const [ending, setEnding] = useState(false);
   return (
     <div className={`row tall rowx tri-row mood-${mood}${slim ? ' slim' : ''}${selected ? ' active' : ''}`}>
       <button
         className={`rowmain thread-row tri${slim ? ' slim' : ''}${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}
+        onKeyDown={actions?.onDelete ? (e) => { if (deleteKey(e, e.currentTarget)) { e.preventDefault(); setEnding(true); } } : undefined}
         title={`${s.title}\n${where}`} data-where={where}
       >
         {slim ? <>{title}{status}{mark}</> : <>
@@ -307,7 +315,7 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
           </span>
         </>}
       </button>
-      {actions && <ThreadActions s={s} {...actions} />}
+      {actions && <ThreadActions s={s} {...actions} ending={ending} setEnding={setEnding} />}
     </div>
   );
 }

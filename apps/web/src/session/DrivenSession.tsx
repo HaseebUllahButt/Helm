@@ -39,7 +39,7 @@ import { TaskReturn } from './TaskReturn';
 import { LimitsLine } from './LimitsLine';
 import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
-import { useChatKeys } from './chatKeys';
+import { useChatKeys, useDeleteKey } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
 import { Canvas, chatPages, useCanvas } from './Canvas';
 import { CanvasContext } from './VisualReply';
@@ -668,6 +668,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     model: () => controls.step('model'),
     agents: () => setDetails((open) => open === 'agents' ? null : 'agents'),
   });
+  useDeleteKey(() => { void kill(); });
   const limits = useAccountLimits(client, env.id, session.engine, session.brain ? null : session.profileId, log.limits);
   // Which account this chat runs on: with several logins per CLI the mark
   // alone does not say whose plan is being spent. It sits with that plan's
@@ -973,7 +974,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         <Confirm
           title={session.nativeCodex ? `Remove "${session.title}" from Helm?` : `Delete "${session.title}"?`}
           body={session.nativeCodex ? 'It stays in Codex and its terminal keeps running.' : 'The agent stops and this chat leaves Helm.'}
-          confirmLabel={session.nativeCodex ? 'Remove' : 'Delete'} danger busy={busy}
+          confirmLabel={session.nativeCodex ? 'Remove' : 'Delete'} danger busy={busy} confirmKey="Delete"
           onCancel={() => setAsk(null)}
           onConfirm={async () => {
             setAsk(null);

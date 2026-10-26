@@ -52,6 +52,12 @@ until `text` starts with "helm / Search anything".
   ```
 - **Proof:** the new name; the machine screen shows "ARCHIVED 1"; the
   deleted chat is gone. Only do this to chats you made.
+- **Delete key (owner, 2026-10-26):** Delete asks to delete the open chat,
+  or the sidebar row that has focus; Delete again (or the button) says yes.
+  It never takes a key you type: only outside a text box or in an empty
+  message box, and never in a terminal (`deleteKey`, chatKeys.ts). Prove
+  (driven 2026-10-26): open a chat, empty its box, `$V key Delete`; the
+  question names that chat; `$V key Delete` again and it is gone.
 - **Tests:** `test/browser/ui`; `test/delete-stays-deleted`, `titles`,
   `slash-title`.
 
