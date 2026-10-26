@@ -99,7 +99,11 @@ test('deleting a driven chat releases its cached helpers and tool links', async 
   await refreshed;
   cache.agentTools.set(session.id, new Map([['helper', new Set(['tool'])]]));
   assert.equal(cache.native.has(session.id), true);
+  const told = [];
+  sessions.on('session', s => { if (s.id === session.id) told.push(s); });
   await sessions.kill(session.id);
+  // Devices with this chat open learn it was deleted, not that it exited.
+  assert.equal(told.at(-1)?.deleted, true);
   assert.equal(cache.native.has(session.id), false);
   assert.equal(cache.agentTools.has(session.id), false);
 });

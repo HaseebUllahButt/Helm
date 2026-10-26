@@ -105,6 +105,8 @@ export interface Session {
   profileId: string;
   status: Status;
   alive?: boolean;
+  /** Set on the last update of a chat that was deleted, from any device. */
+  deleted?: boolean;
   createdAt?: number;
   updatedAt?: number;
   /** When the owner last opened it, on any device; the machine keeps it. */

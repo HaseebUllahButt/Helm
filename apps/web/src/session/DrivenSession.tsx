@@ -112,6 +112,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // Typing must not redraw the conversation, so the words live outside this
   // screen's state; only the composer listens to them.
   const [live] = useState(() => createLiveDraft(loadDraft(env.id, session.id)));
+  // Deleted here or on another device: leave the chat once, not twice.
+  const closed = useRef(false);
+  const closeOnce = useCallback(() => { if (closed.current) return; closed.current = true; onClosed(); }, [onClosed]);
+  useEffect(() => { if (session.deleted) closeOnce(); }, [session.deleted, closeOnce]);
   const editRevision = useRef(0);
   const setDraft = useCallback((v: string) => {
     editRevision.current += 1;
@@ -978,7 +982,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           onCancel={() => setAsk(null)}
           onConfirm={async () => {
             setAsk(null);
-            await call(async () => { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); });
+            await call(async () => { await client.rpc(env.id, 'session.kill', { id: session.id }); closeOnce(); });
           }}
         />
       )}

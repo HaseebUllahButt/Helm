@@ -303,8 +303,12 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     catch (e: any) { setError(errorMessage(e)); }
   };
 
+  // Deleted here or on another device: leave the chat once, not twice.
+  const closed = useRef(false);
+  const closeOnce = useCallback(() => { if (closed.current) return; closed.current = true; onClosed(); }, [onClosed]);
+  useEffect(() => { if (session.deleted) closeOnce(); }, [session.deleted, closeOnce]);
   const kill = async () => {
-    try { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); }
+    try { await client.rpc(env.id, 'session.kill', { id: session.id }); closeOnce(); }
     catch (e: any) { setError(errorMessage(e)); }
   };
 

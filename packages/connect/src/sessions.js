@@ -1983,6 +1983,7 @@ export class Sessions extends EventEmitter {
     return this.runtime.sendText(this.#handle(s), bytes);
   }
 
+  /** `deleted` on the last session event tells every device with this chat open to leave it. */
   async kill(id) {
     this.#rewinder.assertRewindUnlocked(id);
     // A row read out of a CLI's own history: there is no process to stop and
@@ -2006,7 +2007,7 @@ export class Sessions extends EventEmitter {
       await d?.kill?.();
       this.#forgetSession(id);
       this.#save();
-      this.emit('session', { ...s, status: 'exited', alive: false });
+      this.emit('session', { ...s, status: 'exited', alive: false, deleted: true });
       return { ok: true };
     }
     if (s.driver) {
@@ -2031,14 +2032,14 @@ export class Sessions extends EventEmitter {
       rmSync(join(HELM_DIR, 'agent-messages', id), { recursive: true, force: true });
       rmSync(join(HELM_DIR, 'uploads', id), { recursive: true, force: true });
       this.#delegation.updateTeam(s);
-      this.emit('session', { ...s, status: 'exited', alive: false });
+      this.emit('session', { ...s, status: 'exited', alive: false, deleted: true });
       return { ok: true };
     }
     if (s.pty) {
       await this.#terminal(s).close(id);
       this.#forgetSession(id);
       this.#save();
-      this.emit('session', { ...s, status: 'exited', alive: false });
+      this.emit('session', { ...s, status: 'exited', alive: false, deleted: true });
       return { ok: true };
     }
     await this.runtime.close(this.#handle(s));
