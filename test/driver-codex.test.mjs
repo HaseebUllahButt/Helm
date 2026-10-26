@@ -22,6 +22,24 @@ const make = (name, opts = {}) => {
   return { fake, driver, log: collect(driver) };
 };
 
+test('a fresh Codex helper sends its task without parent context and reports cached input separately', async () => {
+  const { fake, driver, log } = make('plain', { instructions: 'You are a helper.' });
+  try {
+    await driver.send('Inspect the task.');
+    const done = await log.until(e => e.type === 'turn.done');
+    const requests = fake.stdinLines();
+    const start = requests.find(m => m.method === 'thread/start');
+    const turn = requests.find(m => m.method === 'turn/start');
+    assert.equal(start.params.developerInstructions, 'You are a helper.');
+    assert.equal(start.params.threadId, undefined);
+    assert.deepEqual(turn.params.input, [{ type: 'text', text: 'Inspect the task.', text_elements: [] }]);
+    // These are recorded usage values, not an estimate of savings from the fake.
+    assert.equal(done.usage.input, 20386);
+    assert.equal(done.usage.cacheRead, 9984);
+    assert.equal(done.usage.inputIncludesCache, true);
+  } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
 test('Codex rejects a failed process start and permits a later retry', { timeout: 5000 }, async () => {
   const { fake, driver, log } = make('plain');
   const script = readFileSync(fake.cmd, 'utf8');
