@@ -41,7 +41,9 @@ export function findEntry(dir = join(dataHome(), 'applications'), profile = join
   for (const name of names) {
     let entry;
     try { entry = parseEntry(readFileSync(join(dir, name), 'utf8')); } catch { continue; }
-    if (entry.exec.includes('--app=') && entry.exec.split(/\s+/).includes(`--user-data-dir=${profile}`)) return entry;
+    // Helm's installer writes --app=<address>; Chromium's "install app" writes --app-id=<id>.
+    const args = entry.exec.split(/\s+/);
+    if (args.some((arg) => /^--app(?:-id)?=/.test(arg)) && args.includes(`--user-data-dir=${profile}`)) return entry;
   }
   return null;
 }
@@ -128,7 +130,8 @@ function raise(wmClass, env) {
 
 /** Start the Helm app, already pointed at the chat. */
 function launch(exec, hash, env) {
-  const parts = exec.split(/\s+/).filter(Boolean)
+  // A launcher's %U and similar stand for files to open; there are none.
+  const parts = exec.split(/\s+/).filter((arg) => arg && !/^%[a-zA-Z]$/.test(arg))
     .map((arg) => (arg.startsWith('--app=') && hash ? `${arg}${hash}` : arg));
   if (!parts.length) return;
   try {
