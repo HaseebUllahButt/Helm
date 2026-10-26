@@ -301,7 +301,7 @@ export class ClaudeDriver extends Driver {
       end: () => child.stdin.end(),
       kill: (s) => child.kill(s),
       onData: (cb) => child.stdout.on('data', (c) => cb(typeof c === 'string' ? c : c.toString('utf8'))),
-      onExit: (cb) => child.on('exit', (code, signal) => cb({ code, signal, stderr: tail.trim().split('\n').pop() || null })),
+      onExit: (cb) => child.on('close', (code, signal) => cb({ code, signal, stderr: tail.trim().split('\n').pop() || null })),
       detach: () => {},
     };
   }
@@ -357,6 +357,7 @@ export class ClaudeDriver extends Driver {
         // Messages handed over mid-turn that it never read die with it too.
         for (const input of this.#inputs.values()) this.push('input.failed', { ...input, error: 'Claude exited before reading this message.' });
         this.#inputs.clear();
+        this.off('init', markReady);
         markReady();
         // A prompt the CLI was holding open dies with it; say so.
         for (const requestId of [...this.pending.keys()]) {

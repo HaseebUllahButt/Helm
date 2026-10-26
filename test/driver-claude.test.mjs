@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rmSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { rmSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fakeCli, collect } from './helpers.mjs';
@@ -14,6 +14,20 @@ const make = (name, opts = {}) => {
   });
   return { fake, driver, log: collect(driver) };
 };
+
+test('Claude finishes a failed process start and permits a later retry', { timeout: 5000 }, async () => {
+  const { fake, driver, log } = make('plain');
+  const script = readFileSync(fake.cmd, 'utf8');
+  rmSync(fake.cmd);
+  try {
+    assert.deepEqual(await driver.availableCommands(), []);
+    assert.equal(driver.status, 'exited');
+    writeFileSync(fake.cmd, script, { mode: 0o755 });
+    await driver.send('hello');
+    await log.until(e => e.type === 'turn.done');
+    assert.equal(driver.status, 'idle');
+  } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
+});
 
 test('Claude starts one process when startup and the first send overlap', async () => {
   let opened = 0, exited;
