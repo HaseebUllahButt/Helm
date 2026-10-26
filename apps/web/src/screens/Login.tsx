@@ -169,7 +169,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
       <div className="auth">
         <div className="auth-card">
           <div className="auth-brand">
-            <img src="/icon.svg" alt="" />
+            <img src="/icon.svg?v=7" alt="" />
             <h1>helm</h1>
             <p>{busy ? 'joining your network…' : 'checking this device…'}</p>
           </div>
@@ -182,7 +182,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
     <div className="auth">
       <div className="auth-card">
         <div className="auth-brand">
-          <img src="/icon.svg" alt="" />
+          <img src="/icon.svg?v=7" alt="" />
           <h1>helm</h1>
           <p>{spin ? `Sign in to open ${spin.name}${spin.source ? `, shared from ${spin.source}` : ''}.` : 'All coding agents in one place'}</p>
         </div>

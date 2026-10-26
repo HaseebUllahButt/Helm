@@ -19,7 +19,7 @@ export class AppErrorBoundary extends Component<{
     return <main className="auth" role="alert">
       <div className="auth-card">
         <div className="auth-brand">
-          <img src="/icon.svg" alt="" />
+          <img src="/icon.svg?v=7" alt="" />
           <h1>{missingFile ? 'Reload Helm' : 'Helm cannot open this screen.'}</h1>
           <p>{missingFile
             ? 'Helm cannot load an app file. Reload Helm to get the latest version.'

@@ -70,7 +70,7 @@ export function ShareHop({ client, target, onDone }: { client: Client; target: S
     <div className="auth">
       <div className="auth-card">
         <div className="auth-brand">
-          <img src="/icon.svg" alt="" />
+          <img src="/icon.svg?v=7" alt="" />
           <h1>helm</h1>
           <p>{error ? `Helm cannot open ${target.name}: ${error}` : `Opening ${target.name}…`}</p>
         </div>

@@ -1,44 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- helm's mark: a ship's wheel caught mid-turn, drawn as plain geometry -
-       each spoke runs through the rim and widens into a round-ended handle.
-       The indigo handle is the king spoke, the one a helmsman marks to feel
-       when the wheel is centred, and indigo is the app's "you are here".
+  <!-- helm's mark: an open ship's wheel in one white on a black tile. The rim
+       is six-sided with a corner on each spoke, the handles end flat, and the
+       hub is a ring, so the wheel has air between every part.
        favicon.svg is the same wheel drawn heavier for 16-32px. -->
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#22262e"/>
-      <stop offset="1" stop-color="#101216"/>
-    </linearGradient>
-    <linearGradient id="silver" x1="0" y1="-200" x2="0" y2="200" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#f4f5f8"/>
-      <stop offset="1" stop-color="#c3c8d5"/>
-    </linearGradient>
-    <linearGradient id="hub" x1="0" y1="-200" x2="0" y2="200" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#9aa3ff"/>
-      <stop offset="1" stop-color="#6f7cf5"/>
-    </linearGradient>
-    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#000" flood-opacity=".45"/>
-    </filter>
-  </defs>
-  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
-  <rect x="1" y="1" width="510" height="510" rx="115" fill="none" stroke="#fff" stroke-opacity=".07" stroke-width="2"/>
-  <g transform="translate(256 256) rotate(-12)" filter="url(#lift)">
-    <g fill="url(#silver)">
-      <g transform="rotate(60)"><rect x="-15" y="-196" width="30" height="86" rx="15"/></g>
-      <g transform="rotate(120)"><rect x="-15" y="-196" width="30" height="86" rx="15"/></g>
-      <g transform="rotate(180)"><rect x="-15" y="-196" width="30" height="86" rx="15"/></g>
-      <g transform="rotate(240)"><rect x="-15" y="-196" width="30" height="86" rx="15"/></g>
-      <g transform="rotate(300)"><rect x="-15" y="-196" width="30" height="86" rx="15"/></g>
-      <rect x="-8" y="-100" width="16" height="200"/>
-      <rect x="-8" y="-100" width="16" height="200" transform="rotate(60)"/>
-      <rect x="-8" y="-100" width="16" height="200" transform="rotate(120)"/>
-      <circle r="37"/>
-    </g>
-    <circle r="100" fill="none" stroke="url(#silver)" stroke-width="30"/>
-    <g fill="url(#hub)">
-      <rect x="-15" y="-196" width="30" height="86" rx="15"/>
-      <circle r="16"/>
-    </g>
-  </g>
+  <rect width="512" height="512" rx="72" fill="#000"/>
+  <g transform="translate(256 256)" fill="#f4f4f2"><polygon points="-15.0,-112 15.0,-112 11.0,-204 -11.0,-204" transform="rotate(0)"/><polygon points="-15.0,-112 15.0,-112 11.0,-204 -11.0,-204" transform="rotate(60)"/><polygon points="-15.0,-112 15.0,-112 11.0,-204 -11.0,-204" transform="rotate(120)"/><polygon points="-15.0,-112 15.0,-112 11.0,-204 -11.0,-204" transform="rotate(180)"/><polygon points="-15.0,-112 15.0,-112 11.0,-204 -11.0,-204" transform="rotate(240)"/><polygon points="-15.0,-112 15.0,-112 11.0,-204 -11.0,-204" transform="rotate(300)"/><rect x="-8.0" y="-116" width="16" height="232" transform="rotate(0)"/><rect x="-8.0" y="-116" width="16" height="232" transform="rotate(60)"/><rect x="-8.0" y="-116" width="16" height="232" transform="rotate(120)"/><polygon points="0.00,-116.00 100.46,-58.00 100.46,58.00 0.00,116.00 -100.46,58.00 -100.46,-58.00" fill="none" stroke="#f4f4f2" stroke-width="24" stroke-linejoin="miter"/><polygon points="0.00,-34.00 29.44,-17.00 29.44,17.00 0.00,34.00 -29.44,17.00 -29.44,-17.00" fill="#000" stroke="#f4f4f2" stroke-width="16" stroke-linejoin="miter"/></g>
 </svg>

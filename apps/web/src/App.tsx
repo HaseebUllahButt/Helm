@@ -1105,7 +1105,7 @@ function Shell({ client, conn, onSignOut }: {
       <aside className={`sidebar${!showMain ? ' showing' : ''}${wide && sidebarCollapsed ? ' collapsed' : ''}`}>
         <div className="bar side">
           <div className="brand">
-            <img src="/favicon.svg" alt="" />
+            <img src="/favicon.svg?v=7" alt="" />
             <b className="wordmark">helm</b>
           </div>
           {/* Live is just the dot, even with some machines off: the machines
