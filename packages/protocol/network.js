@@ -14,7 +14,7 @@
  * only editable fields are a machine's own self-description and an explicit
  * revocation - neither of which two people race on.
  */
-import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch, realpathSync, renameSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch, realpathSync, renameSync, statSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
 import { hostname, homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
@@ -72,14 +72,24 @@ const write = (net, { joining = false } = {}) => {
   return net;
 };
 
+let networkCache = null;
+
 export function loadNetwork() {
-  if (!existsSync(NETWORK_FILE)) return null;
+  let info;
+  try { info = statSync(NETWORK_FILE, { bigint: true }); }
+  catch { networkCache = null; return null; }
+  // Check metadata on every read: revocations and writes from another
+  // process must be visible immediately, without waiting for a watcher.
+  const stamp = `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+  if (networkCache?.stamp === stamp) return structuredClone(networkCache.net);
   try {
     const net = JSON.parse(readFileSync(NETWORK_FILE, 'utf8'));
     if (isProductionDirectory() && (!net || typeof net.id !== 'string'
         || typeof net.self !== 'string' || typeof net.key !== 'string')) throw new Error();
-    return net;
+    networkCache = { stamp, net };
+    return structuredClone(net);
   } catch {
+    networkCache = null;
     if (isProductionDirectory()) {
       throw new Error('The existing Helm registration cannot be read. Restore network.json from a backup; it will not be replaced with a new network.');
     }
@@ -280,6 +290,7 @@ export async function hubCredential(net, base, { timeout = 15_000, signal } = {}
     body: JSON.stringify({ nonce }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
   });
+  if (!res.ok) await res.body?.cancel().catch(() => {});
   if (res.status === 404) {
     const err = new Error('that hub runs an older helm without the handshake - upgrade it');
     err.untrusted = true;

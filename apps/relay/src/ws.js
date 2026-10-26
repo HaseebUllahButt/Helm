@@ -675,6 +675,15 @@ export function createWsLayer() {
 
   function routeTunnel(from, msg) {
     if (msg.t === T.TUNNEL_OPEN) {
+      // Reusing a live source id would overwrite its return route and leave
+      // the first target stream alive until the whole socket disconnects.
+      const previousSid = from.sidMap?.get(msg.sid);
+      const previous = tunnels.get(previousSid);
+      if (previous) {
+        forgetTunnel(previousSid, previous);
+        send(previous.target, T.TUNNEL_CLOSE, { sid: previousSid, reason: 'duplicate stream id' });
+        return send(from, T.TUNNEL_CLOSE, { sid: msg.sid, reason: 'duplicate stream id' });
+      }
       // ssh knows environments by the Host alias, which is the name; resolve
       // it to an id so `ssh laptop` works without the caller knowing ids.
       let envId = msg.env;
