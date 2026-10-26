@@ -74,6 +74,7 @@ import { createBrowserRoutes } from './browser-routes.js';
 import { AgentMessages } from './agent-messages.js';
 import { InputDelivery } from './input-delivery.js';
 import { ChatEventStream } from './event-stream.js';
+import { SessionUpdates } from './session-updates.js';
 
 const RECONNECT_MIN = 250;
 const RECONNECT_MAX = 5000;
@@ -543,20 +544,20 @@ export class Daemon {
     }, WARM_DELAY_MS);
     warm.unref?.();
     this.sessions.on('session', (session) => {
-      this.#emit(E.SESSION_UPDATE, { session: wire(session) });
+      this.#updates.push({ session: wire(session) });
       this.browsers.sessionChanged(session);
       if (session.deleted) {
         try { for (const name of removeChatShares(session.id)) console.log(`[helm] [${session.id}] stopped its link ${name}`); }
         catch (error) { console.log(`[helm] [${session.id}] could not stop its links: ${error.message}`); }
       }
     });
-    this.sessions.on('discovery', () => this.#emit(E.SESSION_UPDATE, {}));
+    this.sessions.on('discovery', () => this.#updates.push({}));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
     this.sessions.on('exit', (e) => this.#emit(E.SESSION_EXIT, e));
     this.sessions.on('transcript', (ref) => this.#emit(E.SESSION_TRANSCRIPT, ref));
     this.sessions.on('status', ({ session, from, to }) => {
-      this.#emit(E.SESSION_UPDATE, { session: wire(session), transition: { from, to } });
+      this.#updates.push({ session: wire(session), transition: { from, to } });
       // The bell rings when the thread settles back to idle, not when it
       // pauses to ask: a completion notification means finished - a thread
       // that is merely blocked has its own notification already. Done,
@@ -574,7 +575,7 @@ export class Daemon {
         // in-app notice and the Needs-you card can show the question.
         let session = null;
         try { session = this.sessions.get(id); } catch { /* gone already */ }
-        if (session) this.#emit(E.SESSION_UPDATE, { session: { ...wire(session), ask: { ...askPreview(event), requestId: event.requestId } }, asked: true });
+        if (session) this.#updates.push({ session: { ...wire(session), ask: { ...askPreview(event), requestId: event.requestId } }, asked: true });
       }
       // The matching "needs you" is stale the moment anyone answers - on
       // this device, another, or the CLI itself. Hubs pass `resolve` through
@@ -729,6 +730,7 @@ export class Daemon {
     if (this.#stopped) return;
     this.#stopped = true;
     this.#eventStream.stop();
+    this.#updates.stop();
     this.inputDelivery?.stop();
     await this.executions.stop();
     await this.browsers?.stop();
@@ -1147,6 +1149,9 @@ export class Daemon {
     recipients: id => this.sessions.watcherRecipients(id),
     emit: (id, events, to) => this.#emit(E.SESSION_EVENT, { id, events: events.map(forWire) }, to),
   });
+
+  /** Chat updates without the ones that change nothing (session-updates.js). */
+  #updates = new SessionUpdates({ send: (payload) => this.#emit(E.SESSION_UPDATE, payload) });
 
   /**
    * Tool updates share a short batch. Text and questions flush it at once.
