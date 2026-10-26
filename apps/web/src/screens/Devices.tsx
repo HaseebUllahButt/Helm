@@ -58,7 +58,10 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
   // "nobody else can" the same fact instead of ten minutes apart.
   useEffect(() => {
     if (!invite) return;
+    let asking = false;
     const timer = setInterval(async () => {
+      if (asking) return;
+      asking = true;
       try {
         const r = await client.devices(pairingBase.current);
         setDevices(r.devices);
@@ -68,6 +71,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
           setArrived({ label: fresh.label, closed: await closeLink() });
         }
       } catch { /* the next tick tries again */ }
+      finally { asking = false; }
     }, 4_000);
     return () => clearInterval(timer);
   }, [client, invite, closeLink]);

@@ -31,8 +31,14 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   const refresh = useCallback(async () => listed(await call<Listed>('list', { warm: true })), [call, listed]);
   // The window is used directly, so the list follows it: titles, new tabs, a closed window.
   useEffect(() => {
-    void refresh().catch(e => setError(errorMessage(e)));
-    const timer = setInterval(() => { if (!document.hidden) void refresh().catch(() => {}); }, 2000);
+    // One read at a time: on a slow link the next tick waits for the last answer.
+    let reading = true;
+    void refresh().catch(e => setError(errorMessage(e))).finally(() => { reading = false; });
+    const timer = setInterval(() => {
+      if (document.hidden || reading) return;
+      reading = true;
+      void refresh().catch(() => {}).finally(() => { reading = false; });
+    }, 2000);
     return () => clearInterval(timer);
   }, [refresh]);
   // The agent opened a tab here: list it and follow it.

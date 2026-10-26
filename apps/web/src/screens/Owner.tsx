@@ -86,7 +86,12 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
   // While the keeper reads, look again every few seconds.
   useEffect(() => {
     if (!state?.keeper.running) return;
-    const timer = setInterval(() => { void load(true); }, 3000);
+    let reading = false;
+    const timer = setInterval(() => {
+      if (reading) return;
+      reading = true;
+      void load(true).finally(() => { reading = false; });
+    }, 3000);
     return () => clearInterval(timer);
   }, [state?.keeper.running, load]);
 
