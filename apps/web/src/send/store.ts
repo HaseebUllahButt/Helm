@@ -44,6 +44,9 @@ export class SendStore {
     if (!job?.id || !job.source?.machineId) return;
     const previous = this.snapshot.jobs.find(item => item.id === job.id && item.source.machineId === job.source.machineId);
     if (previous && sendTime(previous.updatedAt) > sendTime(job.updatedAt)) return;
+    // Polls mostly bring back what is already here. A new snapshot would
+    // redraw every screen that shows sends, the whole app among them.
+    if (previous && JSON.stringify(previous) === JSON.stringify(job)) return;
     // Equal snapshots from status/list must not announce completion twice.
     const wasPending = this.pending.has(job.id);
     if (sending(job)) this.pending.add(job.id); else this.pending.delete(job.id);
@@ -62,6 +65,7 @@ export class SendStore {
   };
   dismiss = (id: string) => this.publish({ ...this.snapshot, notices: this.snapshot.notices.filter(job => job.id !== id) });
   private error(env: string, error?: string) {
+    if (this.snapshot.errors[env] === error) return;
     const errors = { ...this.snapshot.errors };
     if (error) errors[env] = error; else delete errors[env];
     this.publish({ ...this.snapshot, errors });
