@@ -56,6 +56,14 @@ const BASE_ARGS = [
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const MAX_OUTPUT = 32_000;
+/** `<task-notification>` blocks: what background work ended, in the CLI's words. */
+export function taskNotices(text = '') {
+  const tag = (block, name) => block.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))?.[1]?.trim() ?? '';
+  return [...String(text).matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)].flatMap(([, block]) => {
+    const summary = tag(block, 'summary');
+    return summary ? [{ summary: summary.length > 200 ? `${summary.slice(0, 199)}…` : summary, status: tag(block, 'status') || 'completed' }] : [];
+  });
+}
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
 const stripAnsi = (s) => (typeof s === 'string' ? s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '') : s);
 const automaticDecision = (mode, kind) => {
@@ -130,6 +138,8 @@ export class ClaudeDriver extends Driver {
   #tasks = new Map();
   /** task_ids started and not yet ended: helpers, background commands, watches. */
   #running = new Set();
+  /** Background work that ended between turns: what the next wake-up is about. */
+  #woke = [];
 
   /**
    * Work Claude left running after its turn - a background command, a watch,
@@ -723,7 +733,10 @@ export class ClaudeDriver extends Driver {
       return;
     }
     if (m.subtype === 'task_notification') {
-      if (['completed', 'failed', 'stopped'].includes(m.status)) this.#running.delete(m.task_id);
+      if (['completed', 'failed', 'stopped'].includes(m.status)) {
+        this.#running.delete(m.task_id);
+        if (!this.#inTurn && m.summary) this.#woke.push({ summary: m.summary.length > 200 ? `${m.summary.slice(0, 199)}…` : m.summary, status: m.status });
+      }
       const id = this.#tasks.get(m.task_id) ?? m.tool_use_id;
       if (!id) return;
       if (nonAgentClaudeTask({ type: m.task_type, summary: m.summary })) this.#nonAgentTasks.add(id);
@@ -764,7 +777,12 @@ export class ClaudeDriver extends Driver {
   #wake(m) {
     this.#turnId = `wake-${m.uuid ?? randomUUID()}`;
     this.#inTurn = true;
-    this.push('turn.start', { turnId: this.#turnId, text: '', wake: true });
+    const cause = this.#woke.splice(0);
+    // Claude Code also hands the news over as the message that wakes it.
+    for (const n of m.type === 'user' ? taskNotices(resultText(m.message?.content)) : []) {
+      if (!cause.some((c) => c.summary === n.summary)) cause.push(n);
+    }
+    this.push('turn.start', { turnId: this.#turnId, text: '', wake: true, ...(cause.length ? { cause } : {}) });
     // The last turn said idle. Without this the chat reads "done" for the
     // whole wake-up while Claude runs tools.
     if (!this.pending.size) this.push('status', { status: 'working' });

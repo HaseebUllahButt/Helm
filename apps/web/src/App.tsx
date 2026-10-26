@@ -1550,7 +1550,8 @@ function Shell({ client, conn, onSignOut }: {
       {/* Another thread started waiting while this one was open. A tap on
           the toast is the whole journey to answering it. */}
       {toast && (
-        <NotificationToast session={toast.session} machine={envs.find((m) => m.id === toast.envId)?.name} onDismiss={() => setToast(null)}
+        <NotificationToast client={client} envId={toast.envId} session={toast.session} machine={envs.find((m) => m.id === toast.envId)?.name}
+          waiting={blocked.filter(({ env: e, s }) => !(e.id === toast.envId && s.id === toast.session.id)).length} onDismiss={() => setToast(null)}
           onOpen={() => { const t = toast; setToast(null); openSession(t.envId, t.session); }} />
       )}
 

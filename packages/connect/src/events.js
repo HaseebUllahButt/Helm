@@ -512,8 +512,8 @@ export class EventLog {
     if (!file) this.#files.set(id, file = new EventFile(this.#file(id), event => {
       // Exact text is needed to settle queued messages against provider echoes.
       if (isTurn(event)) {
-        const { seq, at, type, turnId, inputId, local, wake, queued, text } = event;
-        return { seq, at, type, turnId, inputId, local, wake, queued, text };
+        const { seq, at, type, turnId, inputId, local, wake, cause, queued, text } = event;
+        return { seq, at, type, turnId, inputId, local, wake, cause, queued, text };
       }
       return anchor(event);
     }));

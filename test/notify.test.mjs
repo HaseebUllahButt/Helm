@@ -66,8 +66,9 @@ test('a notification is branded and concise, with full command details left in t
     { id: 's1', title: 'aitink', engine: 'codex', cwd: '/home/me/aitink', envId: 'env1' },
     { type: 'permission.request', requestId: 'r7', command: 'rm -rf build' },
   );
-  assert.equal(n.title, 'Helm · Codex needs approval');
-  assert.equal(n.body, 'aitink');
+  assert.equal(n.title, 'aitink');
+  assert.equal(n.body, 'Codex needs your approval');
+  assert.doesNotMatch(n.body, /rm -rf/);
   assert.equal(n.tag, 'helm-s1-r7');
   // The tap has to land on the session that asked, so both halves travel.
   assert.equal(n.envId, 'env1');
@@ -76,18 +77,21 @@ test('a notification is branded and concise, with full command details left in t
 
 test('questions, plans and completions have distinct human labels', () => {
   const session = { id: 's1', title: 'Fix login', engine: 'claude', envId: 'e1' };
-  assert.equal(describeAsk(session, { kind: 'question', question: 'A long question' }).title, 'Helm · Claude Code has a question');
-  assert.equal(describeAsk(session, { kind: 'plan' }).title, 'Helm · Claude Code has a plan to review');
-  const done = describeDone(session, 123);
-  assert.deepEqual(done, { title: 'Helm · Claude Code finished', body: 'Fix login', tag: 'helm-done-s1-123', envId: 'e1', sessionId: 's1' });
+  const asked = describeAsk({ ...session, machine: 'laptop' }, { kind: 'question', questions: [{ question: 'Which **database** do I use for /home/me/app?' }] });
+  assert.equal(asked.title, 'Fix login');
+  assert.equal(asked.body, 'Claude Code has a question · laptop\nWhich database do I use for');
+  assert.equal(describeAsk(session, { kind: 'plan' }).body, 'Claude Code has a plan for you to check');
+  assert.equal(describeAsk(session, { kind: 'command', detail: 'rm -rf build' }).body, 'Claude Code wants to run a command');
+  assert.deepEqual(describeDone(session, 123), { title: 'Fix login', body: 'Claude Code finished', tag: 'helm-done-s1-123', envId: 'e1', sessionId: 's1' });
+  assert.equal(describeDone({ ...session, machine: 'vm' }, 1, '## Done.\nThe login works again.').body, 'Claude Code finished · vm\nDone.');
 });
 
 test('notification context removes addresses and paths and bounds long session titles', () => {
   const session = { id: 's1', engine: 'codex', title: 'Check https://private.test/path /home/me/project localhost:4317 192.168.1.1:3000' };
-  assert.equal(describeAsk(session, { command: 'curl https://secret.test', detail: '/home/me/file' }).body, 'Check');
-  assert.equal(describeDone({ ...session, title: 'x'.repeat(200) }).body.length, 72);
-  assert.equal(describeAsk({ cwd: '/home/me/project' }, {}).body, 'project');
-  assert.equal(describeAsk({ title: '/home/me/project' }, {}).body, 'Your chat');
+  assert.equal(describeAsk(session, { command: 'curl https://secret.test', detail: '/home/me/file' }).title, 'Check');
+  assert.equal(describeDone({ ...session, title: 'x'.repeat(200) }).title.length, 72);
+  assert.equal(describeAsk({ cwd: '/home/me/project' }, {}).title, 'project');
+  assert.equal(describeAsk({ title: '/home/me/project' }, {}).title, 'Your chat');
 });
 
 test('a push service that never answers does not hold anything up', async () => {

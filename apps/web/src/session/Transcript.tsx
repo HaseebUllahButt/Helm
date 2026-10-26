@@ -772,6 +772,15 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           <Markdown text={helper.text} className="prose" />
         </details>
       )}
+      {/* The agent started again by itself: say what ended, so the new
+          work does not seem to come from nowhere. */}
+      {head && !!turn.cause?.length && (
+        <div className="turn wake-cause" title="The agent started again after this background work ended.">
+          {turn.cause.map((c, i) => <p key={i} className={c.status === 'failed' ? 'failed' : undefined}>
+            <Icon name={c.status === 'failed' ? 'alert' : 'bolt'} size={13} /><span>{c.summary}</span>
+          </p>)}
+        </div>
+      )}
       {head && !helper && !display.printed && !!(turn.text || turn.attachments?.length) && (
         <div className={`turn user${queued ? ' queued' : ''}`} data-turn-id={turn.id}><div className="bubble">
           {display.to && <span className="turn-note">To {display.to}</span>}

@@ -35,8 +35,16 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 - **Tests:** `test/browser/sidebar-shelves`, `chat-home`; `test/seen-sync`.
 
 ## Alerts
-- **Not yet driven;** the hidden browser blocks notifications. For the
-  in-app pop-up, leave a fake-ask chat waiting and open a second chat.
+- **Rules:** the pop-up and system notices lead with the chat's name. Only a
+  command shown whole gets "Allow once" in the pop-up; anything cut, a file
+  change or a tool opens the chat. A system notice may carry a question or
+  the first line of a finished reply, never a command, address or path.
+- **Prove the pop-up (driven):** open one chat, then start another with
+  `$V rpc session.start` in `"mode":"default"` on a Claude account whose
+  `cmd` replays a fixture with a Bash `can_use_tool` (copy
+  `test/fixtures/claude/always.ndjson` and change the tool), and send it a
+  message with `$V rpc session.input`. It closes after 12 s.
+- **Not driven:** system notices; the hidden browser blocks them.
 - **Traps:** a tap can be lost while the app shows its sign-in screen.
 - **Tests:** `test/notify`, `desktop-notify`, `notification-route`, `push`;
   `test/browser/git-notifications`.

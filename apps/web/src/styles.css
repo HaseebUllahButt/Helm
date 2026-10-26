@@ -1779,28 +1779,39 @@ li.marked .usage-share-track { margin-left: 32px; }
   box-shadow: var(--shadow);
   animation: toast-in 0.32s var(--ease);
 }
+/* On a wide screen it sits under the chat's top bar, so the bar's own
+   buttons stay in reach. */
 @media (min-width: 600px) {
-  .toast { left: auto; right: 16px; top: 16px; width: 380px; }
+  .toast { left: auto; right: 16px; top: 60px; width: 400px; }
 }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-12px) scale(0.98); } }
-.toast-open {
-  display: flex; align-items: flex-start; gap: 12px; flex: 1; min-width: 0; margin: 0;
-  padding: 12px 4px 13px 13px; text-align: left; border: 0; border-radius: 0; background: transparent; color: var(--text);
-}
-.toast-open .mark { margin-top: 1px; }
-.toast .toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.toast-kind { display: flex; align-items: center; gap: 7px; font-size: var(--t-micro); font-weight: 650; color: var(--amber-text); letter-spacing: 0.01em; }
+.toast { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 12px 12px 14px; }
+.toast::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--amber); }
+.toast-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.toast .toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.toast-chat { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text); font-size: var(--t-body); font-weight: 600; line-height: 1.3; }
+.toast-where { font-size: var(--t-micro); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toast-kind { display: flex; align-items: center; gap: 7px; margin: 0; font-size: var(--t-meta); font-weight: 600; color: var(--amber-text); }
 .toast-kind i { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex: none; }
-.toast b {
-  display: -webkit-box; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--t-body); font-weight: 600;
-  line-height: 1.35; white-space: normal; overflow-wrap: anywhere; text-overflow: ellipsis;
-  -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+.toast-ask {
+  margin: 0; padding: 8px 10px; border-radius: 10px; background: var(--hover); color: var(--text);
+  font-size: var(--t-body); line-height: 1.4; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
-.toast b.mono { font: 500 13px/1.45 var(--mono); }
-.toast-more { color: var(--mutedfg); font-weight: 500; }
-.toast-where { font-size: var(--t-meta); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toast-ask.mono { font: 500 12.5px/1.5 var(--mono); background: var(--code-bg); }
+.toast-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.toast-actions button {
+  display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; margin: 0;
+  border-radius: 9px; border: 1px solid var(--line-2); background: var(--raised); color: var(--text);
+  font-size: var(--t-meta); font-weight: 600;
+}
+.toast-actions button:hover { background: var(--hover); }
+.toast-actions .toast-allow { background: var(--text); color: var(--bg); border-color: transparent; }
+.toast-actions .toast-allow:hover { background: color-mix(in srgb, var(--text) 85%, var(--bg)); }
+.toast-queue { margin-left: auto; font-size: var(--t-micro); color: var(--mutedfg); }
+.toast .error { margin: 0; font-size: var(--t-meta); }
 .toast-dismiss {
-  flex: none; width: 40px; height: 40px; margin: 6px 6px 0 0; padding: 0; border: 0; border-radius: 10px;
+  flex: none; width: 32px; height: 32px; margin: -4px -4px 0 0; padding: 0; border: 0; border-radius: 9px;
   display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--mutedfg);
 }
 .toast-dismiss:hover { color: var(--text); background: var(--hover); }
@@ -3776,6 +3787,11 @@ details.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
 /* Another agent's message in the chat: one plain line of quiet text - its
    short name, its words cut to fit, the time - with nothing around it. A tap
    shows the whole message under it. Never the owner's bubble. */
+/* What woke the agent: one quiet line each, above the work it started. */
+.turn.wake-cause { display: grid; gap: 2px; margin: 10px 0 4px; }
+.wake-cause p { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: var(--t-meta); line-height: 1.45; color: var(--mutedfg); }
+.wake-cause p svg { flex: none; margin-top: 2px; color: var(--sky); }
+.wake-cause p.failed, .wake-cause p.failed svg { color: var(--red); }
 .turn.helper-msg { display: block; margin: 4px 0 8px; font-size: var(--t-meta); color: var(--mutedfg); }
 .turn.helper-msg summary { display: flex; align-items: baseline; gap: 6px; min-width: 0; cursor: pointer; list-style: none; }
 .turn.helper-msg summary::-webkit-details-marker { display: none; }

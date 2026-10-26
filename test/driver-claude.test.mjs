@@ -271,6 +271,9 @@ test('a wake-up the CLI starts by itself is a turn of its own, not the last one 
   assert.equal(starts.length, 3);
   assert.equal(starts[0].text, 'Reply with exactly the words: hello from helm');
   assert.ok(starts.slice(1).every((e) => e.wake === true && e.text === '' && e.turnId.startsWith('wake-')));
+  // The chat says what woke the agent, in the CLI's own words.
+  assert.deepEqual(starts[1].cause, [{ summary: 'Background command "Run the lint check" completed (exit code 0)', status: 'completed' }]);
+  assert.equal(starts[2].cause, undefined, 'a notice with no summary adds nothing');
   // The last result is said twice; the second opens no turn and closes nothing.
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(log.of('turn.start').length, 3);

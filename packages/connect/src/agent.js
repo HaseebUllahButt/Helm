@@ -42,7 +42,7 @@ import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, publicShare } from './shares.js';
 import { publicHosts } from '@helm/protocol/share';
-import { brief, render, summaryLine, readThread, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
+import { brief, render, summaryLine, readThread, readSnapshot, writeSnapshot, mergeSnapshot, fold } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { HubMesh } from './hub-mesh.js';
@@ -1214,7 +1214,7 @@ export class Daemon {
     let session = null;
     try { session = this.sessions.get(id); } catch { /* gone already */ }
     if (session?.delegation) return;
-    const payload = describeAsk({ ...session, envId: this.id }, event);
+    const payload = describeAsk({ ...session, envId: this.id, machine: this.name }, event);
     // Each connected hub receives the small, already-redacted notification.
     // The hub that accepted the phone's subscription is the one that can
     // deliver it; a laptop's own local hub normally has no subscriptions.
@@ -1222,13 +1222,17 @@ export class Daemon {
   }
 
   /**
-   * A completion bell going off. Deliberately plainer than
-   * `describeAsk` - there is nothing to decide, so the notification carries
-   * the thread's name and that it finished, nothing more.
+   * A completion bell going off: the chat's name, and the first line of
+   * the agent's last words so the owner knows if it needs a look.
    */
   #notifyDone(session) {
+    let reply = '';
+    try {
+      const turn = fold(this.sessions.events.tail(session.id, 400)).turns.at(-1);
+      reply = turn?.items.filter((i) => i.kind === 'text' && i.text.trim()).at(-1)?.text ?? '';
+    } catch { /* the notice still says it finished */ }
     this.broadcastFrame(T.NOTIFY, {
-      payload: describeDone({ ...session, envId: this.id }),
+      payload: describeDone({ ...session, envId: this.id, machine: this.name }, Date.now(), reply),
     });
   }
 

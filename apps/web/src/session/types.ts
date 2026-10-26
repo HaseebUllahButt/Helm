@@ -136,6 +136,8 @@ export interface Turn {
   steered?: boolean;
   /** Answered by helm itself - complete on arrival, never a live turn. */
   local?: boolean;
+  /** The agent began it by itself, after this background work ended. */
+  cause?: { summary: string; status: string }[];
   /**
    * The turn still running when this one landed, and how many of its items
    * existed then: the chat renders this turn at that seam, so the running
@@ -327,6 +329,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         return;
       }
       const turn: Turn = { id, revision: e.seq, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, delivery: e.delivery, references: e.references, checkpoint: e.checkpoint };
+      if (Array.isArray(e.cause) && e.cause.length) turn.cause = e.cause;
       if (e.local) {
         turn.local = true;
         turn.insideOf = host?.id;
