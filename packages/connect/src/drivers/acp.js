@@ -183,7 +183,12 @@ export class AcpDriver extends Driver {
   async start() {
     if (this.#starting) return this.#starting;
     if (this.#pipe) return;
-    this.#starting = this.#start().finally(() => { this.#starting = null; });
+    this.#starting = this.#start().catch(async (error) => {
+      // A refused handshake leaves a live pipe without a usable session.
+      // Close that process before another caller can retry from initialize.
+      if (this.#pipe) await this.#stopPipe(this.#pipe, this.#exited);
+      throw error;
+    }).finally(() => { this.#starting = null; });
     return this.#starting;
   }
 
@@ -220,6 +225,9 @@ export class AcpDriver extends Driver {
     // A fresh agent reports the state it loaded before helm's choices are
     // applied below; that reporting must not pass for a change it made.
     this.#live = false;
+    this.#options = [];
+    this.#commands = [];
+    this.#imagePrompts = null;
     this.#bindPipe(pipe);
 
     // fs and terminal are left unadvertised on purpose: with no client to
@@ -966,15 +974,20 @@ export class AcpDriver extends Driver {
       try { await this.answer(requestId, { option: 'deny' }); } catch { /* already gone */ }
     }
     if (this.status === 'working') this.#notify('session/cancel', { sessionId: this.engineSessionId });
+    await this.#stopPipe(pipe, this.#exited);
+  }
+
+  /** Close one process, including a process whose startup failed. */
+  async #stopPipe(pipe, exited) {
     try { pipe.end(); } catch { /* closed */ }
-    const done = await waitForExit(this.#exited, 3000);
+    const done = await waitForExit(exited, 3000);
     if (!done) pipe.kill('SIGTERM');
-    const done2 = await waitForExit(this.#exited, 2000);
+    const done2 = await waitForExit(exited, 2000);
     if (!done2) pipe.kill('SIGKILL');
     // The exit notice crosses the host's socket when the process is hosted;
     // a dead socket would leave this promise waiting on a death nobody can
     // see, so the last wait is bounded too.
-    await waitForExit(this.#exited, 2000);
+    await waitForExit(exited, 2000);
   }
 
   /**

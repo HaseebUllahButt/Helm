@@ -90,3 +90,23 @@ for (const optionKind of ['allow_always', 'reject_always']) {
       { outcome: { outcome: 'selected', optionId: 'choice' } });
   });
 }
+
+for (const stage of ['init', 'session']) {
+  test(`ACP closes a failed ${stage} process and retries the full handshake`, async t => {
+    const { driver, log, sent, dir } = agent(t, { [stage]: `
+      if (!existsSync('failed-once')) {
+        writeFileSync('failed-once', String(process.pid));
+        return error('Please retry');
+      }
+    ` });
+    await assert.rejects(driver.send('hello'), /Please retry/);
+    assert.equal(driver.status, 'exited');
+    const failedPid = Number(readFileSync(join(dir, 'failed-once'), 'utf8'));
+    assert.throws(() => process.kill(failedPid, 0), { code: 'ESRCH' });
+    await driver.send('hello again');
+    assert.equal((await log.until(e => e.type === 'turn.done')).status, 'ok');
+    assert.equal(sent().filter(m => m.method === 'initialize').length, 2);
+    assert.equal(sent().filter(m => m.method === 'session/new').length, stage === 'init' ? 1 : 2);
+    assert.equal(sent().filter(m => m.method === 'session/prompt').length, 1);
+  });
+}
