@@ -58,12 +58,15 @@ export function parseCopyProxyArgs(args) {
   return { machine, targetFolder, mode, hostname: suffix[0], serverArgs: ['--server', suffix[3]] };
 }
 
-function connectSocket(url, token, ms) {
+function connectSocket(url, token, ms, signal) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
     const ws = new WebSocket(url, {
       headers: { authorization: `Bearer ${token}` },
       handshakeTimeout: ms,
     });
+    // Keep socket errors handled between connection setup and stream setup.
+    ws.on('error', () => {});
     ws.binaryTunnel = false;
     const welcome = raw => {
       try {
@@ -79,6 +82,8 @@ function connectSocket(url, token, ms) {
       try { ws.terminate(); } catch {}
       finish(new Error('the hub did not answer in time'));
     }, ms + 2_000);
+    const onAbort = () => finish(signal.reason);
+    signal?.addEventListener('abort', onAbort, { once: true });
     const onOpen = () => finish();
     const onError = (err) => finish(err);
     const onEarlyClose = () => finish(new Error('the hub socket closed before opening'));
@@ -91,6 +96,7 @@ function connectSocket(url, token, ms) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       ws.off('open', onOpen);
       ws.off('error', onError);
       ws.off('close', onEarlyClose);
@@ -150,7 +156,7 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
       output.removeListener?.('error', onStreamError);
       try { transport.close(); } catch {}
     }
-    const aborted = () => fail(new Error('send cancelled'));
+    const aborted = () => fail(signal.reason instanceof Error ? signal.reason : new Error('send cancelled'));
     signal?.addEventListener('abort', aborted, { once: true });
     function fail(err) {
       if (finished) return;
@@ -258,7 +264,7 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
         fail(new Error('unexpected copy packet'));
       }
     };
-    if (signal?.aborted) { fail(new Error('send cancelled')); return; }
+    if (signal?.aborted) { aborted(); return; }
     transport.onClose = () => fail(new Error(ready
       ? 'copy transport closed mid-transfer'
       : 'the link closed before the target answered'));
@@ -320,18 +326,46 @@ export async function copyProxy(args, deps = {}) {
     }
   };
   let iceTried = false;
+  const controller = new AbortController();
+  const signal = deps.signal ? AbortSignal.any([controller.signal, deps.signal]) : controller.signal;
+  const abortError = () => signal.reason instanceof Error ? signal.reason : new Error('send cancelled');
+  const checkAbort = () => { if (signal.aborted) throw abortError(); };
+  // A connection can finish after its caller stopped waiting. Close late
+  // private sockets, and never start a copy on them after timeout or cancel.
+  function waitForRoute(start, late) {
+    checkAbort();
+    return new Promise((resolve, reject) => {
+      let stopped = false;
+      const aborted = () => { stopped = true; reject(abortError()); };
+      signal.addEventListener('abort', aborted, { once: true });
+      Promise.resolve().then(() => { checkAbort(); return start(); }).then(value => {
+        signal.removeEventListener('abort', aborted);
+        if (stopped) { late?.(value); return; }
+        resolve(value);
+      }, error => {
+        signal.removeEventListener('abort', aborted);
+        reject(error);
+      });
+    });
+  }
 
   async function openWs(base) {
     const fresh = () => connect('/helm/ws').catch(async (err) => {
       if (err?.status === 404 || err?.status === 405) return connect('/ws');
       throw err;
     });
-    return deps.connections ? deps.connections.open(base, fresh) : fresh();
+    return waitForRoute(() => deps.connections ? deps.connections.open(base, fresh) : fresh(),
+      ws => { if (!deps.connections) { try { ws.close(); } catch {} } });
     async function connect(path) {
       timing('credential-start', { base });
-      const token = await credential(net, base, { timeout: bounded(HELLO_MS) });
+      // A shared attempt belongs to every waiting copy. One caller's
+      // cancellation must not cancel the socket for the other callers.
+      const connectionSignal = deps.connections ? undefined : signal;
+      const getToken = () => credential(net, base, { timeout: bounded(HELLO_MS), signal: connectionSignal });
+      const token = await (deps.connections ? getToken() : waitForRoute(getToken));
       timing('credential-ready', { base });
-      const ws = await openSocket(`${base.replace(/\/+$/, '')}${path}?role=client&binaryTunnel=1`, token, bounded(HANDSHAKE_MS));
+      if (!deps.connections) checkAbort();
+      const ws = await openSocket(`${base.replace(/\/+$/, '')}${path}?role=client&binaryTunnel=1`, token, bounded(HANDSHAKE_MS), connectionSignal);
       timing('socket-ready', { base }); return ws;
     }
   }
@@ -367,7 +401,7 @@ export async function copyProxy(args, deps = {}) {
       ws.removeListener('error', wsDead);
     };
     try {
-      await Promise.race([pc.ready, wsGone]);
+      await waitForRoute(() => Promise.race([pc.ready, wsGone]));
     } catch (err) {
       unwatch();
       ws.removeListener('message', onSignal);
@@ -378,7 +412,7 @@ export async function copyProxy(args, deps = {}) {
     try {
       return await runSession(transport, {
         request, cipher, sid: newSid(), peer, input, output, stderr,
-        readyMs: bounded(readyMs), onProof: deps.onProof, onReceipt: deps.onReceipt, signal: deps.signal, timing,
+        readyMs: bounded(readyMs), onProof: deps.onProof, onReceipt: deps.onReceipt, signal, timing,
         onReady: () => { clearBudget(); say(`Direct WebRTC: ${peer.name ?? peer.id}`); },
       });
     } finally {
@@ -393,7 +427,7 @@ export async function copyProxy(args, deps = {}) {
         const { request, cipher } = freshRequest();
         return await runSession(socketTransport(ws, !!deps.connections), {
           request, cipher, sid: newSid(), peer, input, output, stderr,
-          readyMs: bounded(readyMs), onProof: deps.onProof, onReceipt: deps.onReceipt, signal: deps.signal, timing,
+          readyMs: bounded(readyMs), onProof: deps.onProof, onReceipt: deps.onReceipt, signal, timing,
           extra: { targetOnly: true },
           onReady: () => { clearBudget(); deps.connections?.remember(peer.id, route); deps.onRoute?.('direct'); say(`Direct device connection: ${route.endpoint}`); },
         });
@@ -413,13 +447,13 @@ export async function copyProxy(args, deps = {}) {
         try {
           return await overWebRtc(ws);
         } catch (err) {
-          if (err.established || err.permanent || parsed.mode === 'direct') throw err;
+          if (signal.aborted || err.established || err.permanent || parsed.mode === 'direct') throw err;
         }
       }
       const { request, cipher } = freshRequest();
       return await runSession(socketTransport(ws, !!deps.connections), {
         request, cipher, sid: newSid(), peer, input, output, stderr,
-        readyMs: bounded(readyMs), onProof: deps.onProof, onReceipt: deps.onReceipt, signal: deps.signal, timing,
+        readyMs: bounded(readyMs), onProof: deps.onProof, onReceipt: deps.onReceipt, signal, timing,
         onReady: () => {
           clearBudget(); deps.connections?.remember(peer.id, route); deps.onRoute?.('relay');
           say(parsed.mode === 'relay'
@@ -449,11 +483,9 @@ export async function copyProxy(args, deps = {}) {
     const warm = deps.connections?.route(peer.id);
     if (warm) { const i = routes.findIndex(r => JSON.stringify(r) === JSON.stringify(warm)); if (i >= 0) routes.splice(i, 1); routes.unshift(warm); }
     let lastError = null;
-    const budgetDead = new Promise((_, reject) => {
-      budgetTimer = setTimeout(() => {
-        reject(Object.assign(new Error('no route answered inside the connection budget'), { budget: true }));
-      }, Math.max(1, budgetMs));
-    });
+    budgetTimer = setTimeout(() => {
+      controller.abort(Object.assign(new Error('no route answered inside the connection budget'), { budget: true }));
+    }, Math.max(1, budgetMs));
     try {
       for (const route of routes) {
         if (remaining() <= 0) {
@@ -461,10 +493,11 @@ export async function copyProxy(args, deps = {}) {
           break;
         }
         try {
-          return await Promise.race([runRoute(route), budgetDead]);
+          checkAbort();
+          return await runRoute(route);
         } catch (err) {
           lastError = err;
-          if (err.established || err.permanent || err.budget) throw err;
+          if (signal.aborted || err.established || err.permanent || err.budget) throw err;
         }
       }
       throw lastError ?? new Error('no route to the target');
