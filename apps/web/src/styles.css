@@ -3070,9 +3070,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tstat.unread { color: var(--ok); }
 .tstat.unread i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: var(--ok-glow); }
 .tstat.quiet { color: var(--mutedfg); font-weight: 450; }
-.tspin { animation: tspin 1.6s linear infinite; }
+/* .tspin turns from spinners.ts, five steps a second: a CSS animation drew 60 frames a second. */
 @keyframes tspin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .tspin { animation: none; } }
 
 /* What is live or wants you reads at full strength; a finished chat you have seen steps back. */
 .tri-row:is(.mood-working, .mood-needs, .mood-failed, .mood-unread) .tri-title { color: var(--text); }
