@@ -105,8 +105,10 @@ function abandonedLock(file) {
   try {
     const owner = JSON.parse(readFileSync(file, 'utf8'));
     if (Number.isInteger(owner.pid) && owner.pid > 0) {
+      // EPERM: after a reboot another user's process (containerd, say) took
+      // the number. The lock is always this user's, so its owner is gone.
       try { process.kill(owner.pid, 0); }
-      catch (error) { return error.code === 'ESRCH'; }
+      catch (error) { return error.code === 'ESRCH' || error.code === 'EPERM'; }
       const start = processStart(owner.pid);
       // A restarted daemon must not wait 30 minutes on its dead predecessor,
       // and a recycled PID must not count as that predecessor still running.

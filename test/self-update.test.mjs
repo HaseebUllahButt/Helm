@@ -115,6 +115,16 @@ test('an updater that died releases its lock immediately instead of blocking rec
   assert.equal(existsSync(lock), false);
 });
 
+test('a lock whose number now belongs to another user\'s process is released', { skip: process.getuid?.() === 0 }, async () => {
+  const { installed } = make();
+  const lock = join(process.env.HELM_DIR, 'update.lock');
+  // pid 1 is root's: the same answer as a reused number after a reboot.
+  writeFileSync(lock, JSON.stringify({ pid: 1, start: 'gone' }));
+  const result = await update(installed);
+  assert.match(result.reason, /already at/);
+  assert.equal(existsSync(lock), false);
+});
+
 test('a living updater owns its lock until it finishes', async () => {
   const { installed } = make();
   const lock = join(process.env.HELM_DIR, 'update.lock');
