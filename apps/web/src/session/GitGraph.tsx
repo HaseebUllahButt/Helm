@@ -201,8 +201,8 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
     };
     void load();
     const timer = setInterval(() => { if (!document.hidden) void load(); }, 15_000);
-    const off = client.on((id, kind) => {
-      if ((id === env.id && ['session.update', 'session.exit'].includes(kind)) || kind === 'connection') {
+    const off = client.on((id, kind, payload: any) => {
+      if ((id === env.id && ['session.update', 'session.exit'].includes(kind)) || (kind === 'connection' && payload?.online)) {
         clearTimeout(debounce);
         debounce = setTimeout(() => void load(), 600);
       }

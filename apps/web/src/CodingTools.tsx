@@ -63,7 +63,12 @@ export function CodingTools({ client, env }: { client: Client; env: Environment 
   const running = !!info?.running.length;
   useEffect(() => {
     if (!running) return;
-    const t = setInterval(() => { void load(false); }, 3_000);
+    let reading = false;
+    const t = setInterval(() => {
+      if (reading) return;
+      reading = true;
+      void load(false).finally(() => { reading = false; });
+    }, 3_000);
     return () => clearInterval(t);
   }, [running, load]);
 

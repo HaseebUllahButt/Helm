@@ -4,7 +4,7 @@ import { build } from 'esbuild';
 
 const bundle = await build({ entryPoints: ['apps/web/src/session/limits.ts'], bundle: true, write: false, format: 'esm' });
 const code = bundle.outputFiles[0].text;
-const { limitWindows, current } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+const { limitWindows, current, reportsLimits } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
 
 test("Claude's rate_limit_event reads as 5h and 7d percentages", () => {
   const limits = { claude: { rateLimitType: 'five_hour', unifiedWindows: {
@@ -26,4 +26,12 @@ test('null and malformed quota fields never become free allowance', () => {
   assert.deepEqual(limitWindows({ claude: { utilization: null } }), []);
   assert.deepEqual(limitWindows({ codex: { primary: { usedPercent: null, windowDurationMins: 300 } } }), []);
   assert.deepEqual(limitWindows({ claude: { utilization: '' } }), []);
+});
+
+test('a pushed limits event is noticed in the events list the machine sends', () => {
+  assert.equal(reportsLimits({ id: 'c', events: [{ seq: 4, type: 'item.delta' }, { seq: 5, type: 'limits', claude: {} }] }), true);
+  assert.equal(reportsLimits({ id: 'c', events: [{ seq: 4, type: 'item.delta' }] }), false);
+  assert.equal(reportsLimits({ id: 'c', event: { type: 'limits' } }), false, 'the machine never sends a single event');
+  assert.equal(reportsLimits(null), false);
+  assert.equal(reportsLimits({ events: [null] }), false);
 });

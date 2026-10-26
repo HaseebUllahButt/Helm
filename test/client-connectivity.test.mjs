@@ -75,8 +75,8 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     ...(location ? { location } : {}),
     ...(streams ? { DecompressionStream, TextDecoderStream } : {}),
     document,
-    navigator: { connection: { addEventListener: (kind, fn) => connection.set(kind, fn), removeEventListener: kind => connection.delete(kind) } },
-    window: { addEventListener: (kind, fn) => windows.set(kind, fn), removeEventListener: kind => windows.delete(kind) },
+    navigator: { userAgent: 'test', connection: { addEventListener: (kind, fn) => connection.set(kind, fn), removeEventListener: kind => connection.delete(kind) } },
+    window: { matchMedia: () => ({ matches: false }), addEventListener: (kind, fn) => windows.set(kind, fn), removeEventListener: kind => windows.delete(kind) },
     fetch: (url, init) => new Promise((resolve, reject) => {
       requests.push({ url, init });
       const base = new URL(url).origin, delay = delays[url] ?? delays[base] ?? 0;
@@ -93,7 +93,7 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
   const client = new context.module.exports.Client(endpoints, 'test-token');
   client.on((env, kind, payload) => events.push({ env, kind, payload }));
   const start = () => client.connect().catch(error => error.message);
-  return { client, sockets, peers, events, requests, timers, document, advance, start, parses: () => parses,
+  return { client, exports: context.module.exports, sockets, peers, events, requests, timers, document, advance, start, parses: () => parses,
     suspend: ms => { now += ms; },
     window: kind => windows.get(kind)?.(), network: () => connection.get('change')?.(), visible: () => documents.get('visibilitychange')?.() };
 }
@@ -1056,5 +1056,29 @@ test('just after waking, a read tries the web route after 0.5 s', async () => {
   await h.advance(200);
   assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 1);
   assert.equal((await read).fresh, true);
+  h.client.close();
+});
+
+test('signing in gives up on a stalled network instead of waiting for ever', async () => {
+  const h = harness({ delays: { 'http://stalled': Infinity } });
+  void h.exports.login('http://stalled', 'secret').catch(() => {});
+  await h.advance(1);
+  const request = h.requests.find(r => r.url.endsWith('/api/auth/login'));
+  assert.ok(request?.init?.signal, 'the sign-in request has a deadline');
+  h.client.close();
+});
+
+test('while the socket is down, the status poll says reachable once, not every 10 seconds', async () => {
+  let opened = 0;
+  const h = harness({ socket: () => (opened++ ? 'stall' : 'open') });
+  h.start(); await h.advance(10);
+  h.sockets[0].close();
+  // Each drop says why; the poll then says "reachable" once to clear it.
+  const drops = () => h.events.filter(e => e.kind === 'connection' && e.payload.error).length;
+  const told = () => h.events.filter(e => e.kind === 'connection' && !e.payload.online && e.payload.reachable && !e.payload.error).length;
+  await h.advance(60_000);
+  const machineReads = h.requests.filter(r => r.url.endsWith('/api/machines')).length;
+  assert.ok(machineReads >= 3, `the poll keeps reading machine status (${machineReads})`);
+  assert.ok(told() <= drops(), `reachable was told ${told()} times for ${drops()} drops`);
   h.client.close();
 });

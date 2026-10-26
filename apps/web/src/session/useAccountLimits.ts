@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Client } from '../client';
-import { current, limitWindows, rememberLimits, rememberedLimits, type LimitWindow } from './limits';
+import { current, limitWindows, rememberLimits, rememberedLimits, reportsLimits, type LimitWindow } from './limits';
 
 /** Shared by driven chats and terminals, using the actual account rather than a default login. */
 export function useAccountLimits(client: Client, env: string, engine: string, profileId?: string | null, live?: unknown) {
@@ -20,7 +20,7 @@ export function useAccountLimits(client: Client, env: string, engine: string, pr
     const timer = setInterval(read, 120_000);
     const off = client.on((machine, kind, payload) => {
       if ((kind === 'connection' && payload?.online) || (machine === env && kind === 'presence' && payload?.online)
-        || (machine === env && kind === 'session.event' && payload?.event?.type === 'limits')) void read();
+        || (machine === env && kind === 'session.event' && reportsLimits(payload))) void read();
     });
     return () => { active = false; clearInterval(timer); off(); };
   }, [client, env, engine, profileId, key]);

@@ -25,6 +25,9 @@ export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot 
   const where = machine || 'This machine';
   const report = message || text;
   if (!reportedErrors.has(report)) {
+    // Errors can name chats and requests, so the texts never repeat. Forget
+    // them now and then; a second log line costs nothing.
+    if (reportedErrors.size >= 200) reportedErrors.clear();
     reportedErrors.add(report);
     console.warn('Helm action failed:', error);
   }

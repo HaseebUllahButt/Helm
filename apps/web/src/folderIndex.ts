@@ -110,6 +110,13 @@ export function searchFolders(folders: Folder[], query: string, limit = 30): Fol
  * answer (listFolder) still replaces it.
  */
 const listed = new Map<string, DirEntry[]>();
+/** Folders opened lately. A long session opens many, and an old answer is only a head start. */
+const LISTED_MAX = 200;
+function rememberListed(key: string, entries: DirEntry[]) {
+  listed.delete(key);
+  listed.set(key, entries);
+  if (listed.size > LISTED_MAX) listed.delete(listed.keys().next().value!);
+}
 const kids = new WeakMap<FolderIndex, Map<string, DirEntry[]>>();
 
 export function knownInside(env: string, path: string): DirEntry[] | null {
@@ -136,7 +143,7 @@ export function knownInside(env: string, path: string): DirEntry[] | null {
 /** Ask the machine what is inside a folder, and remember the answer. */
 export async function listFolder(client: Client, env: string, path: string): Promise<{ path: string; entries: DirEntry[] }> {
   const r = await client.rpc<{ path: string; entries: DirEntry[] }>(env, 'fs.list', { path });
-  listed.set(`${env}\n${path}`, r.entries);
-  if (r.path !== path) listed.set(`${env}\n${r.path}`, r.entries);
+  rememberListed(`${env}\n${path}`, r.entries);
+  if (r.path !== path) rememberListed(`${env}\n${r.path}`, r.entries);
   return r;
 }

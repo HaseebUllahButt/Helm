@@ -17,6 +17,12 @@ export function current(windows: LimitWindow[], now = Date.now()): LimitWindow[]
   return windows.filter((w) => !w.resetsAt || w.resetsAt * 1000 > now);
 }
 
+/** A chat's pushed events (`session.event`, `{ id, events[] }`) carry a new limits report. */
+export function reportsLimits(payload: unknown): boolean {
+  const events = (payload as { events?: unknown } | null)?.events;
+  return Array.isArray(events) && events.some((event) => event?.type === 'limits');
+}
+
 const KEY = 'helm.limits.v1';
 type Store = Record<string, { windows: LimitWindow[]; at: number }>;
 

@@ -608,7 +608,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
               // breathes with your voice; transcribing dims it under a spinner.
               <button
                 className={`ctl icon mic${dictation.state === 'recording' ? ' rec' : ''}${dictation.state === 'working' ? ' busy' : ''}`}
-                style={dictation.state === 'recording' ? { '--lvl': Math.min(1, dictation.level * 6) } as React.CSSProperties : undefined}
+                ref={dictation.meter}
                 onClick={dictation.toggle}
                 disabled={dictation.state === 'working'}
                 title={dictation.state === 'recording' ? `Recording ${fmtSeconds(dictation.seconds)}. Select to stop.`

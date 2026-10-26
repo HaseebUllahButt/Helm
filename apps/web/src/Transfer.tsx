@@ -89,9 +89,14 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
 
   useEffect(() => {
     if (!taskResult) return;
-    let live = true;
-    const refresh = () => client.rpc<{ return: TaskReturnState }>(source.id, 'task.status', { handoffId })
-      .then((reply) => { if (live) setReturnState(reply.return); }).catch(() => {});
+    let live = true, asking = false;
+    const refresh = () => {
+      if (asking) return;
+      asking = true;
+      client.rpc<{ return: TaskReturnState }>(source.id, 'task.status', { handoffId })
+        .then((reply) => { if (live) setReturnState(reply.return); }).catch(() => {})
+        .finally(() => { asking = false; });
+    };
     void refresh();
     const timer = setInterval(refresh, 3000);
     return () => { live = false; clearInterval(timer); };

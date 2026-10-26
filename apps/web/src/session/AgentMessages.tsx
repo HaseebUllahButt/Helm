@@ -16,7 +16,9 @@ export function AgentMessages({ client, envId, parent, children }: { client: Cli
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
   useEffect(() => client.on((env, kind, payload: any) => {
-    if (env === envId && (kind === 'connection' || kind === 'agent.message'
+    // Back after a drop: messages sent meanwhile were missed. The connection
+    // event names no machine.
+    if ((kind === 'connection' && payload?.online) || (env === envId && kind === 'agent.message'
       && payload?.sessionIds?.some((id: string) => id === parent.id || children.some(c => c.id === id)))) setRevision(n => n + 1);
   }), [client, envId, parent.id, children]);
   useEffect(() => {
