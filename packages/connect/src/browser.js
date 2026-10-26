@@ -197,20 +197,22 @@ export class BrowserManager {
    * somewhere shows "about:blank" over a white page until the site answers,
    * while a tab Chromium opens at the address shows the address and Loading.
    * A new window's empty first tab goes once the real one is there.
-   * `helmGoing` marks a page already on its way.
+   * `helmGoing` marks a page already on its way. A site that has not
+   * answered within `wait` gets a plain tab that loads it, so the tab is
+   * listed while the site is slow.
    */
-  async newPage(context, url, { timeout = 15000 } = {}) {
+  async newPage(context, url, { wait = 2000 } = {}) {
     const spare = context.helmSpare; context.helmSpare = null;
     const going = context.helmWindow && url && url !== 'about:blank';
     if (spare && !spare.isClosed() && !going) return spare;
     if (!going) return context.newPage();
-    let page; try { page = await this.windowTab(context, url, timeout); } catch (error) { if (spare && !spare.isClosed()) context.helmSpare = spare; throw error; }
+    let page; try { page = await this.windowTab(context, url, wait); } catch (error) { if (spare && !spare.isClosed()) context.helmSpare = spare; throw error; }
     if (!page) { if (spare && !spare.isClosed()) return spare; return context.newPage(); }
     if (spare && !spare.isClosed()) await spare.close().catch(() => {});
     page.helmGoing = url; return page;
   }
-  /** Chromium opens the tab at `url`; Playwright hands the page over once the site first answers. Null when Chromium cannot be asked. */
-  async windowTab(context, url, timeout) {
+  /** Chromium opens the tab at `url`; Playwright hands the page over once the site first answers. Null when Chromium cannot be asked or the site is slow. */
+  async windowTab(context, url, wait) {
     const browser = context.browser?.(), first = context.pages().find(page => !page.isClosed());
     const cdp = browser ? await browser.newBrowserCDPSession() : first ? await context.newCDPSession(first) : null;
     if (!cdp) return null;
@@ -224,10 +226,10 @@ export class BrowserManager {
     try {
       ({ targetId: want } = await cdp.send('Target.createTarget', { url }));
       if (seen.has(want)) return seen.get(want);
-      const page = await Promise.race([arrived, new Promise(resolve => { timer = setTimeout(resolve, timeout); timer.unref?.(); })]);
+      const page = await Promise.race([arrived, new Promise(resolve => { timer = setTimeout(resolve, wait); timer.unref?.(); })]);
       if (page) return page;
       await cdp.send('Target.closeTarget', { targetId: want }).catch(() => {});
-      throw new Error(`Timeout ${timeout}ms exceeded.`);
+      return null;
     } finally { clearTimeout(timer); context.off('page', check); await cdp.detach().catch(() => {}); }
   }
   /**
@@ -400,7 +402,7 @@ export class BrowserManager {
       }
       // The tabs open together, each at its address. One whose site is slow
       // to answer opens empty and loads behind, as before.
-      const pages = await Promise.all(restore.map(({ context, kept, address }) => kept?.page || this.newPage(context, address, { timeout: 5000 }).catch(() => context.newPage())));
+      const pages = await Promise.all(restore.map(({ context, kept, address }) => kept?.page || this.newPage(context, address).catch(() => context.newPage())));
       for (const [index, { row, kept, address }] of restore.entries()) {
         const page = pages[index], tab = kept || this.register(sessionId, page);
         this.tabs.delete(tab.id); tab.id = row.id; tab.title = row.title || tab.title || ''; this.tabs.set(tab.id, tab);
@@ -458,7 +460,7 @@ export class BrowserManager {
     }
     if (engine !== 'chromium') throw new Error('unknown browser engine');
     const context = await this.context(sessionId);
-    let page; try { page = await this.newPage(context, url); } catch (error) { throw /Timeout \d+ms/.test(error.message) ? new Error(plainNavError(error, url)) : error; }
+    const page = await this.newPage(context, url);
     const tab = this.register(sessionId, page);
     // The owner watches the page load, as in any browser, so a tab opened
     // from the panel answers at once; only an agent waits for the page and

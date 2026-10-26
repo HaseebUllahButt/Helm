@@ -144,6 +144,18 @@ test('a new tab opens at its address, so it never sits on about:blank while the 
   assert.equal((await manager.list('one')).tabs.length, 3, 'a tab that could not open is closed');
 });
 
+test('a slow site still gets its tab at once, and it loads when the site answers', { timeout: 60000, skip: noChromium }, async t => {
+  let answer; const answered = new Promise(resolve => { answer = resolve; });
+  const slow = createServer((req, res) => void answered.then(() => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Late</title>late'); }));
+  await new Promise(resolve => slow.listen(0, '127.0.0.1', resolve)); t.after(() => { answer(); slow.closeAllConnections(); return new Promise(resolve => slow.close(resolve)); });
+  const { manager } = await setup(t), url = `http://127.0.0.1:${slow.address().port}/late`;
+  const { tab } = await manager.open('one', { url, viewer: 'v' });
+  assert.deepEqual((await manager.list('one')).tabs.map(listed => listed.id), [tab.id], 'the tab is listed while the site is silent');
+  answer();
+  await manager.tabs.get(tab.id).ready;
+  assert.equal(await manager.tabs.get(tab.id).page.title(), 'Late');
+});
+
 test('a window nobody used for a while is put away; its tabs sleep and come back', { timeout: 60000, skip: noChromium }, async t => {
   const { manager, url, windows } = await setup(t, { windowIdleMs: 60000 });
   const a = await manager.open('one', { url });
