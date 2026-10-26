@@ -40,6 +40,7 @@ import { SessionTitles } from './session-titles.js';
 import { SessionRewind } from './session-rewind.js';
 import { SessionSubagents } from './session-subagents.js';
 import { SessionDelegation } from './session-delegation.js';
+import { readCodexHelperHistory } from './delegation.js';
 import { SessionViewers } from './session-viewers.js';
 import { LimitRecovery } from './session-limits.js';
 import { SessionResume } from './session-resume.js';
@@ -1350,6 +1351,8 @@ export class Sessions extends EventEmitter {
       // would only cost it tokens.
       instructions: DRIVERS[s.driver]?.takesInstructions && !s.delegation?.hidden ? (this.delegationBrief?.(s) || null) : null,
       forkFrom: s.forkFrom,
+      helperFork: s.delegation?.codexFork,
+      helperHistory: s.delegation?.codexFork ? () => readCodexHelperHistory(join(this.events.dir, `${s.id}.jsonl`)) : null,
       transcript: s.transcript,
       monitorOnly: !!s.external,
       delegated: !!s.delegation,
@@ -1383,6 +1386,10 @@ export class Sessions extends EventEmitter {
     d.on('init', (info) => {
       if (!info) return;
       let changed = false;
+      if (s.delegation?.codexFork && d.engineSessionId && s.engineSessionId !== d.engineSessionId) {
+        s.engineSessionId = d.engineSessionId;
+        changed = true;
+      }
       for (const [key, target] of [['model', 'engineModel'], ['effort', 'engineEffort'], ['effortKeepsCache', 'effortKeepsCache'], ['modelSwitchSignal', 'modelSwitchSignal']]) {
         // A partial init must not erase settings another provider event reported.
         if (info[key] === undefined) continue;
@@ -1410,6 +1417,9 @@ export class Sessions extends EventEmitter {
     if (status === 'idle' && s.chatWorktree) setTimeout(() => void this.#worktrees.tidy(s), 3000).unref?.();
     clearTimeout(this.#reapers.get(s.id));
     this.#reapers.delete(s.id);
+    // An ephemeral helper stays loaded only while its native client stays
+    // connected. Helpers share one held proxy per Codex account.
+    if (s.delegation?.codexFork) return;
     if (status !== 'idle' || (s.shared && !s.delegation) || !this.#drivers.has(s.id)) return;
     const t = setTimeout(() => {
       this.#reapers.delete(s.id);
