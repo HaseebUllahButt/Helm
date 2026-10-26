@@ -360,10 +360,11 @@ class PiRpcDriver extends Driver {
    */
   #call(type, fields = {}, { timeout = 20_000, id = `helm-${++this.#seq}` } = {}) {
     return new Promise((resolve) => {
-      this.#calls.set(id, resolve);
+      const timer = timeout ? setTimeout(() => { if (this.#calls.delete(id)) resolve(null); }, timeout) : null;
+      timer?.unref?.();
+      this.#calls.set(id, response => { clearTimeout(timer); resolve(response); });
       try { this.#write({ id, type, ...fields }); }
-      catch (e) { this.#calls.delete(id); resolve(null); }
-      if (timeout) setTimeout(() => { if (this.#calls.delete(id)) resolve(null); }, timeout).unref?.();
+      catch (e) { clearTimeout(timer); this.#calls.delete(id); resolve(null); }
     });
   }
 

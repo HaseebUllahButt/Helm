@@ -386,10 +386,11 @@ export class ClaudeDriver extends Driver {
   #control(request) {
     const request_id = `helm-${++this.#controlSeq}`;
     return new Promise((resolve, reject) => {
-      this.#controls.set(request_id, resolve);
+      const timer = setTimeout(() => { if (this.#controls.delete(request_id)) resolve(null); }, 15_000);
+      timer.unref?.();
+      this.#controls.set(request_id, response => { clearTimeout(timer); resolve(response); });
       try { this.#write({ type: 'control_request', request_id, request }); }
-      catch (e) { this.#controls.delete(request_id); reject(e); }
-      setTimeout(() => { if (this.#controls.delete(request_id)) resolve(null); }, 15_000).unref?.();
+      catch (e) { clearTimeout(timer); this.#controls.delete(request_id); reject(e); }
     });
   }
 

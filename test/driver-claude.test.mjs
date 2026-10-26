@@ -70,6 +70,25 @@ async function modelControl(t, version = '2.1.302') {
       response: { ...response, request_id: writes.findLast(w => w.type === 'control_request').request_id } }) + '\n') };
 }
 
+test('Claude releases control timers after replies and exit', async t => {
+  const { driver, reply, exit } = await modelControl(t);
+  const timers = new Set();
+  t.mock.method(globalThis, 'setTimeout', () => {
+    const timer = { unref() {} }; timers.add(timer); return timer;
+  });
+  t.mock.method(globalThis, 'clearTimeout', timer => timers.delete(timer));
+  const selected = driver.setModel('sonnet');
+  assert.equal(timers.size, 1);
+  reply({ subtype: 'success' });
+  await selected;
+  assert.equal(timers.size, 0);
+  const changing = driver.setModel('opus');
+  assert.equal(timers.size, 1);
+  exit();
+  await assert.rejects(changing, /exited/);
+  assert.equal(timers.size, 0);
+});
+
 /** What Claude Code 2.1.302 sent for a switch in a real run against a stand-in API. */
 const switchHook = (over = {}) => ({ type: 'control_request', request_id: 'hook-1', request: { subtype: 'hook_callback',
   callback_id: 'helm-model-switch', input: { hook_event_name: 'PreModelSwitch', from_model: 'claude-opus-5-5',
