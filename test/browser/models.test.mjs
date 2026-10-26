@@ -4,6 +4,64 @@ import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
 import { readFile } from 'node:fs/promises';
 
+test('brain and task transfer menus receive new models without clearing the selected model', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { BrainView } from './apps/web/src/screens/Brain';
+    import { TaskTransferView } from './apps/web/src/Transfer';
+    const source = { id:'source', name:'Laptop', online:true, info:{} };
+    const target = { id:'target', name:'VM', online:true, info:{} };
+    const brain = { id:'brain', profileId:'devin', engine:'devin', model:'old-model', cwd:'/project' };
+    window.reads = [];
+    window.finish = {};
+    function clientFor(screen) {
+      let release;
+      const response = new Promise(resolve => { release = resolve; });
+      window.finish[screen] = () => release({ models:['old-model','future-model'], refreshing:false });
+      return {
+        transferPreview:async()=>({rootName:'project',preflight:{files:1,bytes:10,envFiles:[],warnings:[],skipped:0}}),
+        rpc:async(env,method,params)=>{
+          if (method === 'agent.list') return { agents:[{id:'devin',label:'Devin',available:true,models:['old-model']}] };
+          if (method === 'model.list') {
+            window.reads.push({screen,settled:!!params.settled});
+            return params.settled ? response : {models:['old-model'],refreshing:true};
+          }
+          return {};
+        },
+      };
+    }
+    createRoot(document.getElementById('brain')).render(<BrainView client={clientFor('brain')}
+      env={source} brain={brain} onBack={()=>{}} onStarted={()=>{}} onReplaced={()=>{}} />);
+    createRoot(document.getElementById('transfer')).render(<TaskTransferView client={clientFor('transfer')}
+      source={source} envs={[source,target]} folder='/project' initialTask initialTargetId='target'
+      onBack={()=>{}} onOpenSession={()=>{}} />);
+  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle:true, write:false, format:'iife', jsx:'automatic' });
+  const browser = await chromium.launch({ headless:true,
+    ...(process.env.HELM_TEST_CHROMIUM ? { executablePath:process.env.HELM_TEST_CHROMIUM } : {}),
+  });
+  try {
+    for (const width of [390,1280]) {
+      const page = await browser.newPage({ viewport:{width,height:844} });
+      try {
+        await page.setContent('<div id="brain"></div><div id="transfer"></div>');
+        await page.addScriptTag({ content:bundle.outputFiles[0].text });
+        await page.locator('#brain').getByRole('button', {name:/old-model/}).waitFor();
+        await page.locator('#transfer').getByText('Agent and machine options', {exact:true}).click();
+        await page.locator('#transfer').getByRole('combobox', {name:/^Model/}).selectOption('old-model');
+        await page.waitForFunction(() => ['brain','transfer'].every(screen =>
+          window.reads.some(read => read.screen === screen && read.settled)));
+        await page.evaluate(() => { window.finish.brain(); window.finish.transfer(); });
+        await page.locator('#brain').getByRole('button', {name:'future-model',exact:true}).waitFor();
+        await page.locator('#transfer').getByRole('option', {name:'future-model',exact:true}).waitFor({state:'attached'});
+        assert.equal(await page.locator('#transfer').getByRole('combobox', {name:/^Model/}).inputValue(), 'old-model');
+        for (const screen of ['brain','transfer']) assert.deepEqual(await page.evaluate(screen =>
+          window.reads.filter(read => read.screen === screen).map(read => read.settled), screen), [false,true]);
+      } finally { await page.close(); }
+    }
+  } finally { await browser.close(); }
+});
+
 test('Claude picker selects Opus 5.5 immediately and receives later catalog additions', async () => {
   const bundle = await build({
     stdin: { contents: `

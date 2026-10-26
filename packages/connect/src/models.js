@@ -45,6 +45,14 @@ let modelsDevInflight = null;
 const discoveries = new Map();
 const codexRetryAt = new Map();
 const codexRefreshes = new Map();
+const publicRefreshes = new Map();
+
+function pendingRefreshes(engine, key) {
+  return [inflight.get(key), publicRefreshes.get(key),
+    ...(engine === 'codex' ? [codexRefreshes.get(key), codexManifestInflight] : []),
+    ...(['claude', 'gemini'].includes(engine) ? [modelsDevInflight] : []),
+  ].filter(Boolean);
+}
 
 /**
  * `launcher` is the {cmd, args} of an account run through a wrapper script
@@ -53,11 +61,7 @@ const codexRefreshes = new Map();
 export async function listModels(engine, home, environment = {}, launcher = null, { settled = false } = {}) {
   const key = modelsKey(engine, home, launcher);
   if (settled) await modelsSettled(engine, home, launcher);
-  const answer = (value) => engine === 'codex'
-    ? { ...value, refreshing: !!(inflight.has(key) || codexRefreshes.has(key) || codexManifestInflight) }
-    : ['claude', 'gemini'].includes(engine)
-      ? { ...value, refreshing: !!modelsDevInflight }
-      : value;
+  const answer = (value) => ({ ...value, refreshing: pendingRefreshes(engine, key).length > 0 });
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return answer(hit.value);
   // Some CLIs take seconds to list (agy asks the server every time). A list
@@ -146,10 +150,10 @@ function refreshModels(key, engine, home, environment, launcher, hit) {
       // A transient provider or CLI failure should not make a previously known
       // model disappear from the picker. The next expiry will try discovery
       // again, while this answer keeps the app useful in the meantime.
-      if (hit?.value) return hit.value;
+      if (hit?.value) value = hit.value;
     }
     // An empty answer from a CLI that listed models before is a hiccup, not news.
-    if (!value.models?.length && hit?.value?.models?.length) return hit.value;
+    if (!value.models?.length && hit?.value?.models?.length) value = hit.value;
     cache.set(key, { at: Date.now(), value });
     return value;
   })().finally(() => inflight.delete(key));
@@ -159,9 +163,11 @@ function refreshModels(key, engine, home, environment, launcher, hit) {
 
 /** Rebuild already-listed account caches after an optional public catalog updates. */
 function refreshDiscoveredModels(engines) {
-  setImmediate(async () => {
-    for (const [key, discovery] of discoveries) {
-      if (!engines.has(discovery.engine)) continue;
+  for (const [key, discovery] of discoveries) {
+    if (!engines.has(discovery.engine) || publicRefreshes.has(key)) continue;
+    // Track this work before the public fetch ends. A waiting menu must not
+    // receive the old account cache between the fetch and its rebuild.
+    const job = (async () => {
       const current = inflight.get(key);
       if (current) await current.catch(() => {});
       const hit = cache.get(key);
@@ -169,8 +175,9 @@ function refreshDiscoveredModels(engines) {
         await refreshModels(key, discovery.engine, discovery.home,
           discovery.environment, discovery.launcher, hit);
       } catch { /* keep the prior account-specific answer */ }
-    }
-  });
+    })().finally(() => publicRefreshes.delete(key));
+    publicRefreshes.set(key, job);
+  }
 }
 
 async function codexModels(root, environment, key) {
@@ -623,15 +630,14 @@ export function newestFirst(ids, releasedAt = {}) {
 }
 
 /** Resolves once catalog refreshes already in progress have ended. */
-export function modelsSettled(engine, home, launcher = null) {
-  if (engine === 'codex') {
-    const key = modelsKey(engine, home, launcher);
-    return Promise.allSettled([codexManifestInflight, inflight.get(key), codexRefreshes.get(key)]);
-  }
-  if (engine) return modelsDevInflight ?? Promise.resolve();
-  return Promise.allSettled([
-    modelsDevInflight, codexManifestInflight, ...inflight.values(), ...codexRefreshes.values(),
-  ]);
+export async function modelsSettled(engine, home, launcher = null) {
+  const pending = () => engine ? pendingRefreshes(engine, modelsKey(engine, home, launcher)) : [
+    modelsDevInflight, codexManifestInflight, ...inflight.values(),
+    ...codexRefreshes.values(), ...publicRefreshes.values(),
+  ].filter(Boolean);
+  // A public fetch can start an account rebuild. Follow that work too,
+  // without waiting for another account's CLI or another provider.
+  for (let jobs = pending(); jobs.length; jobs = pending()) await Promise.allSettled(jobs);
 }
 
 /** Return stale public data immediately and refresh it once in the background. */

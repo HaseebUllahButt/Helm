@@ -12,6 +12,7 @@ export function followModelRefresh<T extends { refreshing?: boolean }>(
 ) {
   let stopped = false;
   let pending = false;
+  let refreshing = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const refresh = async (settled = false) => {
     if (stopped || pending) return;
@@ -20,10 +21,15 @@ export function followModelRefresh<T extends { refreshing?: boolean }>(
     try {
       const list = await fetchList(settled);
       if (stopped) return;
+      refreshing = !!list.refreshing;
       receive(list);
-      if (list.refreshing) timer = setTimeout(() => refresh(true), delayMs);
+      if (refreshing) timer = setTimeout(() => refresh(true), delayMs);
     } catch (error) {
-      if (!stopped) onError(error);
+      if (!stopped) {
+        onError(error);
+        // A lost follow-up must not leave an open menu on the old list.
+        if (refreshing) timer = setTimeout(() => refresh(true), delayMs);
+      }
     } finally {
       pending = false;
     }

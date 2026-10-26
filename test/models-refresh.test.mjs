@@ -157,10 +157,8 @@ test('Claude returns its local account answer before Models.dev and refreshes th
     barrier.release({ anthropic: { models: {
       'published-test-model': { name: 'Published test model', attachment: true },
     } } });
-    const refreshed = await until(async () => {
-      const current = await listModels('claude', home);
-      return current.models.includes('published-test-model') ? current : null;
-    });
+    const refreshed = await listModels('claude', home, {}, null, { settled: true });
+    assert.ok(refreshed.models.includes('published-test-model'));
     assert.equal(refreshed.labels['published-test-model'], 'Published test model');
     assert.equal(refreshed.refreshing, false);
   } finally {
@@ -170,6 +168,172 @@ test('Claude returns its local account answer before Models.dev and refreshes th
     await barrier.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// Change the cache age, not the test duration. Restore the clock before
+// asynchronous CLI or HTTP work runs.
+function expiredList(listModels, ...args) {
+  const now = Date.now;
+  Date.now = () => now() + 10 * 60_000 + 1;
+  try { return listModels(...args); } finally { Date.now = now; }
+}
+
+const CLI_LIST_STUB = `#!/usr/bin/env node
+const path = require('node:path');
+const name = path.basename(process.argv[1]);
+if (process.argv.includes('auth')) { console.log('[]'); process.exit(); }
+async function output() {
+  const payload = await (await fetch(process.env.TEST_MODEL_URL)).json();
+  if (payload.fail) process.exit(1);
+  if (payload.empty) return '';
+  switch (name) {
+    case 'opencode': case 'opencode2': return 'provider/future-model\\n';
+    case 'grok': return '- future-model\\n';
+    case 'pi': return 'provider model context max-out thinking images\\nprovider future-model 128k 8k yes yes\\n';
+    case 'omp': return JSON.stringify({models:[{selector:'provider/future-model',name:'Future model',thinking:['low','high']}]});
+    case 'kimi': return JSON.stringify({providers:[{models:[{id:'future-model',name:'Future model'}]}]});
+    case 'agy': return 'future-model\\tFuture model\\n';
+    default: return JSON.stringify([{id:'future-model',name:'Future model'}]);
+  }
+}
+if (name === 'codex') {
+  require('node:readline').createInterface({input:process.stdin}).on('line', async line => {
+    const req = JSON.parse(line);
+    if (req.id === undefined) return;
+    if (req.method === 'model/list') await output();
+    console.log(JSON.stringify({id:req.id,result:req.method === 'model/list' ? {data:[{model:'future-model',displayName:'Future model'}]} : {}}));
+  });
+} else output().then(result => process.stdout.write(result));
+`;
+
+test('every CLI provider marks an expired list as refreshing and returns its completed account list', async (t) => {
+  for (const engine of ['codex', 'opencode', 'opencode2', 'devin', 'grok', 'pi', 'omp', 'cursor', 'agy', 'kimi']) {
+    await t.test(engine, async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'helm-model-refresh-' + engine + '-'));
+      const bin = join(dir, 'bin');
+      const home = join(dir, 'account');
+      mkdirSync(bin);
+      mkdirSync(home);
+      executable(bin, engine === 'cursor' ? 'cursor-agent' : engine, CLI_LIST_STUB);
+      const barrier = await barrierServer('/models');
+      const environment = { PATH: bin + ':' + process.env.PATH, TEST_MODEL_URL: barrier.url,
+        HOME: home, XDG_DATA_HOME: join(home, 'data'), XDG_CACHE_HOME: join(home, 'cache') };
+      const prior = process.env.HELM_CODEX_MODEL_MANIFEST_URL;
+      process.env.HELM_CODEX_MODEL_MANIFEST_URL = 'http://127.0.0.1:1/unavailable';
+      try {
+        const { listModels, primeModels } = await import('../packages/connect/src/models.js?all-cli-' + engine);
+        primeModels(engine, home, null, { models: ['old-model'], labels: { 'old-model': 'Old model' } });
+        const old = await expiredList(listModels, engine, home, environment);
+        assert.deepEqual(old.models, ['old-model']);
+        assert.equal(old.refreshing, true, 'an open menu must follow every provider refresh');
+        await barrier.started;
+        let completed = false;
+        const next = listModels(engine, home, environment, null, { settled: true })
+          .then(list => { completed = true; return list; });
+        await new Promise(setImmediate);
+        assert.equal(completed, false, 'the follow-up waits for this provider');
+        barrier.release({});
+        const fresh = await next;
+        const id = ['opencode', 'opencode2', 'pi', 'omp'].includes(engine) ? 'provider/future-model' : 'future-model';
+        assert.deepEqual(fresh.models, [id], 'new model names need no Helm release');
+        assert.equal(fresh.refreshing, false);
+        assert.deepEqual(await listModels(engine, home, environment), fresh);
+      } finally {
+        if (prior === undefined) delete process.env.HELM_CODEX_MODEL_MANIFEST_URL;
+        else process.env.HELM_CODEX_MODEL_MANIFEST_URL = prior;
+        barrier.release({});
+        await barrier.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test('Claude and Gemini wait for their account rebuild after the shared public list arrives', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-model-public-'));
+  const barrier = await barrierServer('/catalog');
+  const prior = process.env.HELM_MODELS_DEV_URL;
+  process.env.HELM_MODELS_DEV_URL = barrier.url;
+  try {
+    const { listModels } = await import('../packages/connect/src/models.js?all-public');
+    const claude = await listModels('claude', join(dir, 'claude'));
+    const gemini = await listModels('gemini', join(dir, 'gemini'));
+    assert.equal(claude.refreshing, true);
+    assert.equal(gemini.refreshing, true);
+    await barrier.started;
+    const done = ['claude', 'gemini'].map(engine => listModels(engine, join(dir, engine), {}, null, { settled: true }));
+    barrier.release({
+      anthropic: { models: { 'claude-future-model': { name: 'Future Claude' } } },
+      google: { models: { 'gemini-future-model': { name: 'Future Gemini' } } },
+    });
+    const lists = await Promise.all(done);
+    assert.ok(lists[0].models.includes('claude-future-model'));
+    assert.ok(lists[1].models.includes('gemini-future-model'));
+    assert.ok(lists.every(list => list.refreshing === false));
+  } finally {
+    if (prior === undefined) delete process.env.HELM_MODELS_DEV_URL;
+    else process.env.HELM_MODELS_DEV_URL = prior;
+    barrier.release({});
+    await barrier.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a finished account does not wait for another account or provider', { timeout: 5000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-model-scoped-'));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  executable(bin, 'kimi', CLI_LIST_STUB);
+  executable(bin, 'devin', CLI_LIST_STUB);
+  const fast = await barrierServer('/fast');
+  const slow = await barrierServer('/slow');
+  const { listModels, primeModels, modelsSettled } = await import('../packages/connect/src/models.js?scoped-all');
+  try {
+    const environment = url => ({ PATH: bin + ':' + process.env.PATH, TEST_MODEL_URL: url });
+    const accounts = [['kimi', 'fast', fast], ['kimi', 'slow', slow], ['devin', 'other', slow]];
+    for (const [engine, home, server] of accounts) {
+      primeModels(engine, join(dir, home), null, { models: ['old-model'] });
+      assert.equal((await expiredList(listModels, engine, join(dir, home), environment(server.url))).refreshing, true);
+    }
+    await Promise.all([fast.started, slow.started]);
+    fast.release({});
+    const fresh = await listModels('kimi', join(dir, 'fast'), environment(fast.url), null, { settled: true });
+    assert.deepEqual(fresh.models, ['future-model']);
+    assert.equal(fresh.refreshing, false);
+    assert.equal((await listModels('kimi', join(dir, 'slow'))).refreshing, true);
+    assert.equal((await listModels('devin', join(dir, 'other'))).refreshing, true);
+  } finally {
+    fast.release({}); slow.release({});
+    await modelsSettled();
+    await Promise.all([fast.close(), slow.close()]);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('failed and empty refreshes keep usable models and finish without a retry loop', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-model-refresh-failure-'));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  executable(bin, 'kimi', CLI_LIST_STUB);
+  executable(bin, 'grok', CLI_LIST_STUB);
+  try {
+    const { listModels, primeModels } = await import('../packages/connect/src/models.js?failed-all');
+    for (const [engine, payload] of [['kimi', { fail: true }], ['grok', { empty: true }]]) {
+      const barrier = await barrierServer('/models');
+      try {
+        const home = join(dir, engine);
+        const environment = { PATH: bin + ':' + process.env.PATH, TEST_MODEL_URL: barrier.url };
+        primeModels(engine, home, null, { models: ['usable-model'] });
+        assert.equal((await expiredList(listModels, engine, home, environment)).refreshing, true);
+        await barrier.started;
+        barrier.release(payload);
+        const kept = await listModels(engine, home, environment, null, { settled: true });
+        assert.deepEqual(kept.models, ['usable-model']);
+        assert.equal(kept.refreshing, false);
+        assert.deepEqual(await listModels(engine, home, environment), kept);
+      } finally { barrier.release({}); await barrier.close(); }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('OpenCode tries usable local model rows before forced refresh, without its background service', async () => {

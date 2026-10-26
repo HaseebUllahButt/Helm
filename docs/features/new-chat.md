@@ -60,13 +60,16 @@
   old, with no refresh button yet. Without an approved list the picker
   shows only the newest of each line (`modelShelf.ts`); devin's
   "-high-fast" ids fold into one row plus thinking and speed chips.
-- **Codex catalog:** read the newest valid `model_catalog.json` or
-  `models_cache.json` in the account home. Return it at once, mark the
-  provider refresh as running, then let the open menu receive the completed
-  list. Wait only for that account's provider refresh and the public list.
-  Prove with a private Codex stub: open Agent defaults with Sol on disk,
-  release a held `model/list` response containing Terra, and check that
-  Terra appears without leaving the page. Check phone and desktop sizes.
+- **Catalog refresh:** every provider returns the usable list while it
+  refreshes, marks that work, and lets open menus receive the completed
+  account list. Public fetches include the account rebuilds they start.
+  One account never waits for another account's CLI. A failed refresh keeps
+  the usable list until the next expiry; a lost follow-up retries. Chat,
+  defaults, helpers, brain and task transfer menus use the same flow.
+  Codex reads the newest valid `model_catalog.json` or `models_cache.json`.
+  Prove with a private CLI stub: open Agent defaults with an old list,
+  release a held model reply with a new name, and check that the new name
+  appears without leaving the page. Check phone and desktop sizes.
 - **Tests:** `test/model-shelf`, `test/alias-accounts`, `native-account`, `profiles-refresh`,
   `engines`, `discover-wrapper`, `models`, `models-refresh`, `model-prefs`,
   `model-follow`, `project-settings`, `session-settings`;
