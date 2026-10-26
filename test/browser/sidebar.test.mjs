@@ -385,9 +385,10 @@ test('selected running threads have a distinct highlight on desktop and phone', 
     await first.click();
     assert.equal(await first.getAttribute('aria-current'), 'page');
     assert.equal(await second.getAttribute('aria-current'), null);
-    const style = await first.evaluate(element => ({ background: getComputedStyle(element).backgroundColor, outline: getComputedStyle(element).boxShadow }));
-    assert.notEqual(style.background, 'rgba(0, 0, 0, 0)');
-    assert.notEqual(style.outline, 'none');
+    // The app draws no outlines; the selected row is told by its fill.
+    const fill = (row) => row.evaluate(element => getComputedStyle(element).backgroundColor);
+    assert.notEqual(await fill(first), 'rgba(0, 0, 0, 0)');
+    assert.notEqual(await fill(first), await fill(second));
     if (width < 900) await page.setViewportSize({ width: 1280, height: 844 });
     await second.click();
     assert.equal(await first.getAttribute('aria-current'), null);

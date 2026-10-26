@@ -459,8 +459,11 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
             <button className="primary" disabled={busy || loading || !agent?.available || !task.trim()}>{busy ? 'Starting…' : 'Start helper'}</button>
           </div>
         </form>
-          : <button type="button" className="delegation-new" onClick={() => setComposing(true)}><Icon name="plus" size={16} />New task</button>}
-        {!nativeOnly && env.info?.agentMessages === true && <AgentMessages client={client} envId={env.id} parent={parent} children={children} />}
+          : null}
+        {!nativeOnly && (!composing || env.info?.agentMessages === true) && <div className="delegation-tools">
+          {!composing && <button type="button" className="delegation-new" onClick={() => setComposing(true)}><Icon name="plus" size={15} />New task</button>}
+          {env.info?.agentMessages === true && <AgentMessages client={client} envId={env.id} parent={parent} children={children} />}
+        </div>}
         <div className="delegation-branches" aria-label="Helper tasks">
           {!listed ? <p className="note" role="status">Loading tasks…</p>
             : !children.length && !natives.length && !composing && <p className="note">This chat has no helper tasks.</p>}
