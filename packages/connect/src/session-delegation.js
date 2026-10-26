@@ -3,7 +3,8 @@ import { getProfiles } from './profiles.js';
 import { nativeWorking } from './native-subagents.js';
 import { ENGINES } from './engines.js';
 import { startPrefs, subagentPrefs } from './settings.js';
-import { delegationMode, delegationOutput, isWakeTurn, turnOf } from './delegation.js';
+import { codexHelperFork, delegationMode, delegationOutput, isWakeTurn, turnOf } from './delegation.js';
+import { nativeCodexSocket } from './drivers/codex.js';
 import { addWorktree } from './git.js';
 import { authStatuses } from './auth.js';
 import { wire } from './session-wire.js';
@@ -158,7 +159,8 @@ export class SessionDelegation {
       depth++;
       ancestor = this.#core.index.get(ancestor.delegation.parentId);
     }
-    const profile = (await getProfiles()).find((p) => p.id === profileId && !p.disabled);
+    const profiles = await getProfiles();
+    const profile = profiles.find((p) => p.id === profileId && !p.disabled);
     if (!profile || !ENGINES[profile.engine]?.driver) throw new Error('choose a CLI account with a headless driver');
     if (['plan', 'readonly', 'read'].includes(parent?.mode) && (profile.args ?? []).some((arg) => /^--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo)(?:=|$)/.test(arg))) {
       throw new Error('that CLI profile bypasses permissions; choose a profile without bypass flags');
@@ -181,7 +183,10 @@ export class SessionDelegation {
       checkout = await addWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
       folder = checkout.path;
     }
+    const codexFork = codexHelperFork(parent, profiles.find(p => p.id === parent?.profileId), profile, folder, worktree,
+      profile.engine === 'codex' ? nativeCodexSocket(profile) : null);
     const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
+      ...(codexFork ? { codexFork } : {}),
       ...(checkout ? { worktree: checkout } : {}), ...(hidden && !parent ? { hidden: true } : {}) };
     const child = await this.#sessions.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
       title: clip(task.trim().split('\n')[0], 80), delegation });
@@ -201,8 +206,7 @@ export class SessionDelegation {
     this.#sessions.emit('session', child);
     this.updateTeam(child);
     if (parent) this.#sessions.emit('session', parent);
-    // The task is the bounded context. A child never silently copies the
-    // parent's transcript, credentials, or unrelated local conversations.
+    // Codex may keep the parent's context. Helm's own history starts here.
     try { await this.#sessions.input(child.id, task.trim()); }
     catch (error) {
       throw new Error(`subagent ${child.id} could not receive its task: ${error.message}; read it with helm delegate-result ${child.id}`);

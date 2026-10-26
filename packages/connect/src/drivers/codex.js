@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { codexProcId } from '../hosted-process.js';
 import { stageCodexRewind } from './rewind.js';
 import { Driver, readJsonLines, checkVersion } from './index.js';
@@ -13,6 +14,7 @@ import { modeFor } from '../modes.js';
 import { HELM_DIR, expand } from '../paths.js';
 import { codexSessionState } from '../transcript.js';
 import { formatReset, planName, quotaBar, windowLabel } from '../quota.js';
+import { codexHelperHistory } from '../delegation.js';
 
 /**
  * Codex, headless.
@@ -247,20 +249,20 @@ export class CodexServer {
    */
   #held = new Map();
 
-  constructor(cmd, env, log, procHost, nativeSocket = null) {
-    Object.assign(this, { cmd, env, log, procHost, nativeSocket });
-    this.procId = codexProcId(cmd, env);
+  constructor(cmd, env, log, procHost, nativeSocket = null, nativeProxy = false) {
+    Object.assign(this, { cmd, env, log, procHost, nativeSocket, nativeProxy });
+    this.procId = codexProcId(cmd, env) + (nativeProxy ? '-native' : '');
   }
 
-  static for(cmd, env, log, procHost, nativeSocket = null) {
+  static for(cmd, env, log, procHost, nativeSocket = null, nativeProxy = false) {
     const home = env.CODEX_HOME ?? '';
-    const key = `${cmd}|${home}|${nativeSocket ?? ''}`;
-    if (!servers.has(key)) servers.set(key, new CodexServer(cmd, env, log, procHost, nativeSocket));
+    const key = `${cmd}|${home}|${nativeSocket ?? ''}|${nativeProxy}`;
+    if (!servers.has(key)) servers.set(key, new CodexServer(cmd, env, log, procHost, nativeSocket, nativeProxy));
     else servers.get(key).procHost = procHost ?? servers.get(key).procHost;
     return servers.get(key);
   }
 
-  get nativeConnected() { return this.#socket?.readyState === WebSocket.OPEN; }
+  get nativeConnected() { return this.#socket?.readyState === WebSocket.OPEN || !!(this.nativeProxy && this.#pipe); }
 
   attach(driver) {
     // A fresh driver connects before thread/start gives it an id. Replace its
@@ -365,7 +367,7 @@ export class CodexServer {
     if (this.#child || this.#pipe || this.#socket?.readyState === WebSocket.OPEN) return this.#adopted;
     if (this.#starting) return this.#starting;
     this.#starting = (async () => {
-      if (this.nativeSocket) {
+      if (this.nativeSocket && !this.nativeProxy) {
         const ws = new WebSocket(`ws+unix://${this.nativeSocket}:/`);
         this.#socket = ws;
         ws.on('message', (raw) => {
@@ -405,7 +407,9 @@ export class CodexServer {
         if (!adopted) {
           this.#forgetHeld();
           await this.procHost.openProc(this.procId, {
-            cmd: this.cmd, args: ['app-server', '--stdio'], cwd: undefined, env: serverEnv(this.env),
+            cmd: this.nativeProxy ? process.execPath : this.cmd,
+            args: this.nativeProxy ? [fileURLToPath(new URL('../../bin/helm-codex-proxy.js', import.meta.url)), this.nativeSocket] : ['app-server', '--stdio'],
+            cwd: undefined, env: serverEnv(this.env),
           });
         }
         const pipe = this.procHost.procPipe(this.procId);
@@ -569,7 +573,7 @@ export async function nativeCodexThreads(profile, log = () => {}) {
       const read = await server.call('thread/read', { threadId: id, includeTurns: false });
       const thread = read.result?.thread;
       if (read.error || !thread) throw new Error(`thread ${id} could not be read: ${read.error?.message ?? 'no thread'}`);
-      return !thread.parentThreadId && thread.canAcceptDirectInput === true
+      return !thread.parentThreadId && !thread.ephemeral && thread.canAcceptDirectInput === true
         ? { ...thread, path: thread.path && existsSync(thread.path) ? thread.path : null, nativeSocket: socket, profileId: profile.id } : null;
     }));
     return { loaded: ids, threads: threads.filter(Boolean) };
@@ -708,19 +712,30 @@ export class CodexDriver extends Driver {
   #closedTurns = new Set();
   /** A compaction helm asked for runs as a turn of Codex's own; until then, not a wake-up. */
   #compactUntil = 0;
+  #helperSeed = '';
+  #helperFirst = false;
+  #helperForkUnavailable = false;
+  #helperSending = 0;
+  #continuingTurn = null;
 
   constructor(opts) {
     super({ engine: 'codex', ...opts });
     this.threadId = this.engineSessionId ?? null;
     this.monitorOnly = !!opts.monitorOnly;
-    this.nativeSocket = opts.nativeSocket || null;
+    this.helperFork = opts.helperFork || null;
+    this.helperHistory = opts.helperHistory || null;
+    this.nativeSocket = opts.nativeSocket || this.helperFork?.nativeSocket || null;
     this.instructions = opts.instructions || null;
+    for (const event of this.helperFork ? this.resumeEvents?.() ?? [] : []) {
+      if (event.type === 'turn.recover') this.#shownTurns.set(event.providerTurnId, event.turnId);
+    }
   }
 
   get nativeConnected() { return !!this.#server?.nativeConnected; }
 
   async #subscribeNative() {
     if (!this.nativeSocket || this.#nativeSubscribed) return;
+    if (this.helperFork) return;
     const res = await this.#server.call('thread/resume', { threadId: this.threadId, excludeTurns: true });
     if (!res.error) this.#nativeSubscribed = true;
   }
@@ -756,11 +771,19 @@ export class CodexDriver extends Driver {
       let state = await server.call('thread/read', { threadId: this.threadId, includeTurns: true }, 10_000);
       // Older ephemeral threads expose their live status but cannot list
       // persisted turns. A status-only read still proves whether they work.
-      if (state.error && /list_turns is not supported/i.test(state.error.message)) {
+      if (state.error && /list_turns is not supported|ephemeral threads do not support includeTurns/i.test(state.error.message)) {
         state = await server.call('thread/read', { threadId: this.threadId, includeTurns: false }, 10_000);
+      }
+      if (state.error && this.helperFork && this.#helperMissing(state.error)) {
+        this.#serverAdopted = false;
+        return this.#start();
       }
       if (state.error) throw new Error(`codex live thread read failed: ${state.error.message}`);
       const thread = state.result.thread;
+      if (this.helperFork && thread.status?.type === 'notLoaded') {
+        this.#serverAdopted = false;
+        return this.#start();
+      }
       // Settled during the gap, while another thread took the replay: the
       // thread no longer waits on anyone. A helper's questions wait on its
       // own thread, so only this one's are judged here.
@@ -769,7 +792,7 @@ export class CodexDriver extends Driver {
         && !flags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput')) {
         this.#dropRestored((e) => !e.parentId);
       }
-      await this.#restoreAgents(thread.turns);
+      await this.#restoreAgents(this.#helperTurns(thread.turns));
       this.#rolloutState = await codexSessionState(this.transcript);
       this.#usage = this.#rolloutState.usage ?? this.#usage;
       this.info = {
@@ -797,12 +820,45 @@ export class CodexDriver extends Driver {
     const common = this.#threadParams();
     // A newly opened TUI has a loaded thread before its first prompt creates
     // a rollout. Resume is invalid until then; direct input still works.
-    const nativeEmpty = this.nativeSocket && (!this.transcript || !existsSync(this.transcript));
-    const res = this.threadId
+    const nativeEmpty = this.nativeSocket && (this.helperFork || !this.transcript || !existsSync(this.transcript));
+    let forked = null;
+    if (!this.threadId && this.helperFork && this.nativeSocket && !this.#helperForkUnavailable) {
+      try {
+        // Changing developer instructions breaks the parent's cache prefix.
+        const { developerInstructions, ...inherited } = common;
+        if (!inherited.model) {
+          const config = await server.call('config/read', { cwd: this.cwd, includeLayers: false });
+          if (!config.result?.config?.model) throw new Error('Codex did not give the helper default model.');
+          inherited.model = config.result.config.model;
+        }
+        forked = await server.call('thread/fork', { ...inherited, threadId: this.helperFork.threadId,
+          ephemeral: true, excludeTurns: true });
+        if (forked.error) throw new Error(forked.error.message);
+        this.#helperFirst = true;
+      } catch (error) {
+        this.log(`Start the helper with a new Codex chat: ${error.message}`);
+        forked = null;
+      }
+    }
+    let res = forked ?? (this.threadId
       ? nativeEmpty
         ? await server.call('thread/read', { threadId: this.threadId, includeTurns: false })
         : await server.call('thread/resume', { threadId: this.threadId, excludeTurns: true, ...(this.nativeSocket ? {} : common) })
-      : await server.call('thread/start', common);
+      : await server.call('thread/start', common));
+    if (this.helperFork && this.threadId && res.result?.thread?.ephemeral === false) {
+      res = await server.call('thread/resume', { threadId: this.threadId, excludeTurns: true, ...common });
+    }
+    if (res.error && this.helperFork && this.threadId && this.#helperMissing(res.error)) {
+      const history = await this.helperHistory?.() || codexHelperHistory(this.resumeEvents?.() ?? []);
+      this.#helperSeed = `Continue this helper chat. Codex lost its earlier context. Use this helper's saved history below. Do not repeat completed work.\n\n${history}`;
+      this.#usage = null;
+      this.#nativeSubscribed = false;
+      this.#turnId = null;
+      this.#dropRestored(() => true);
+      for (const requestId of [...this.pending.keys()]) this.push('permission.resolved', { requestId, decision: 'cancelled' });
+      this.#requests.clear();
+      res = await server.call('thread/start', common);
+    }
     if (res.error) throw new Error(`codex ${this.threadId ? 'resume' : 'start'} failed: ${res.error.message}`);
     this.threadId = res.result.thread.id;
     this.engineSessionId = this.threadId;
@@ -843,8 +899,35 @@ export class CodexDriver extends Driver {
         this.push('status', { status: blocked ? 'blocked' : status?.type === 'active' ? 'working' : 'idle' });
       }
     }
-    await this.#restoreAgents(res.result.thread?.turns);
+    await this.#restoreAgents(this.#helperTurns(res.result.thread?.turns));
     this.emit('init', this.info);
+    if (this.#helperSeed && !this.#helperSending) {
+      const open = this.openTurn?.();
+      if (open && !String(open).startsWith('local-')) {
+        this.#continuingTurn = open;
+        await this.#sendText('Continue the task from the saved history.');
+      }
+    }
+  }
+
+  #helperMissing(error) { return /(?:no rollout found|thread not found|thread not loaded|unknown thread)/i.test(error?.message ?? ''); }
+
+  #helperTurns(turns) {
+    if (!this.helperFork) return turns;
+    const own = new Set((this.resumeEvents?.() ?? []).filter(e => e.type === 'turn.start').map(e => e.turnId));
+    for (const [provider, shown] of this.#shownTurns) if (own.has(shown)) own.add(provider);
+    return turns?.filter(turn => own.has(turn.id));
+  }
+
+  #mapContinuation(providerTurnId) {
+    if (!this.#continuingTurn || this.#shownTurns.get(providerTurnId) === this.#continuingTurn) return;
+    this.#shownTurns.set(providerTurnId, this.#continuingTurn);
+    this.push('turn.recover', { turnId: this.#continuingTurn, providerTurnId });
+  }
+
+  #helperInput(input) {
+    const note = this.#helperSeed || (this.#helperFirst ? this.helperFork?.note : '');
+    return note ? [{ type: 'text', text: note, text_elements: [] }, ...input] : input;
   }
 
   /**
@@ -856,8 +939,9 @@ export class CodexDriver extends Driver {
   async #reconcileSavedTurn(turns, revision) {
     const saved = this.openTurn?.();
     if (!saved || saved.startsWith('local-')) return null;
-    const known = turns?.find((turn) => turn.id === saved);
-    const outcome = known ? TURN_OUTCOME[known.status] ?? null : await codexTurnOutcome(this.transcript, saved);
+    const provider = [...this.#shownTurns].find(([, shown]) => shown === saved)?.[0] ?? saved;
+    const known = turns?.find((turn) => turn.id === provider);
+    const outcome = known ? TURN_OUTCOME[known.status] ?? null : await codexTurnOutcome(this.transcript, provider);
     if (!outcome || outcome === 'running') return saved;
     if (revision !== this.#turnStateRevision) return null;
     this.#closedTurns.add(saved);
@@ -884,6 +968,11 @@ export class CodexDriver extends Driver {
    */
   async #callThread(method, params) {
     const res = await this.#server.call(method, params);
+    if (res.error && this.helperFork && method === 'turn/start' && this.#helperMissing(res.error)) {
+      this.#started = false;
+      await this.#start();
+      return this.#server.call(method, { ...params, threadId: this.threadId, input: this.#helperInput(params.input) });
+    }
     if (!res.error || this.nativeSocket || !/thread not found/i.test(res.error.message)) return res;
     const resumed = await this.#server.call('thread/resume', { threadId: this.threadId, excludeTurns: true, ...this.#threadParams() });
     if (resumed.error) return res;
@@ -893,9 +982,9 @@ export class CodexDriver extends Driver {
   /** Initialize app-server for account reads without resuming the thread. */
   async #connectOnly() {
     if (this.#server) return this.#server;
-    const server = CodexServer.for(this.cmd, this.env, this.log, this.procHost, this.nativeSocket);
+    const server = CodexServer.for(this.cmd, this.env, this.log, this.procHost, this.nativeSocket, !!(this.helperFork && this.nativeSocket && this.procHost));
     // Before the replay below can settle one of them.
-    if (this.procHost && !this.nativeSocket && this.threadId) this.#restorePending();
+    if (this.procHost && (!this.nativeSocket || this.helperFork) && this.threadId) this.#restorePending();
     // Register before binding the pipe: ensure() synchronously replays the
     // host's buffered notifications, including completions during downtime.
     server.attach(this);
@@ -904,6 +993,12 @@ export class CodexDriver extends Driver {
       this.#server = server;
     } catch (err) {
       server.detach(this, { stop: false });
+      if (this.helperFork && this.nativeSocket && (!this.threadId || !existsSync(this.nativeSocket)
+        || ['ECONNREFUSED', 'ENOENT'].includes(err.code))) {
+        this.nativeSocket = null;
+        this.#helperForkUnavailable = true;
+        return this.#connectOnly();
+      }
       throw err;
     }
     // A server this daemon started never asked them: whoever did is gone.
@@ -958,7 +1053,12 @@ export class CodexDriver extends Driver {
   async send(text) {
     const command = slashCommand(text);
     if (command) return this.#runSlash(text, command, { sideband: sidebandCommand(command) });
-    await this.start();
+    this.#helperSending++;
+    try { await this.start(); return await this.#sendText(text); }
+    finally { this.#helperSending--; }
+  }
+
+  async #sendText(text) {
     // Per-turn overrides stick to the thread, so a mode or model changed
     // mid-session takes effect on the next message - the sandbox included,
     // which is the half that makes "act without asking" true rather than
@@ -966,7 +1066,7 @@ export class CodexDriver extends Driver {
     const policy = this.#policy();
     const params = {
       threadId: this.threadId,
-      input: [{ type: 'text', text, text_elements: [] }],
+      input: this.#helperInput([{ type: 'text', text, text_elements: [] }]),
       clientUserMessageId: randomUUID(),
       approvalPolicy: policy.approvalPolicy,
       sandboxPolicy: policy.sandboxPolicy,
@@ -992,6 +1092,17 @@ export class CodexDriver extends Driver {
     }
     this.#turnId = res.result.turn.id;
     this.#knownTurns.add(this.#turnId);
+    this.#helperSeed = '';
+    this.#helperFirst = false;
+    if (this.#continuingTurn) {
+      if (this.#closedTurns.has(this.#continuingTurn)) {
+        this.#turnId = null;
+        this.push('status', { status: 'idle' });
+      } else this.#mapContinuation(this.#turnId);
+      this.#continuingTurn = null;
+      if (this.#turnId) this.#nativeTurnStarts.add(this.#turnId);
+      return;
+    }
     await this.#subscribeNative();
     if (!this.nativeSocket || !this.#nativeTurnStarts.has(this.#turnId)) {
       this.push('turn.start', { turnId: this.#turnId, text });
@@ -1405,6 +1516,10 @@ export class CodexDriver extends Driver {
     this.killed = true;
     if (!this.#server) return;
     if (this.nativeSocket) {
+      if (this.helperFork) {
+        await this.interrupt();
+        await this.#server.call('thread/unsubscribe', { threadId: this.threadId }).catch(() => {});
+      }
       this.#server.detach(this);
       this.#server = null;
       this.push('status', { status: 'exited' });
@@ -1470,6 +1585,8 @@ export class CodexDriver extends Driver {
         default: return;
       }
     }
+    const continuing = p.turnId ?? p.turn?.id;
+    if (this.#continuingTurn && continuing) this.#mapContinuation(continuing);
     switch (method) {
       case 'thread/name/updated':
         if (typeof p.threadName === 'string' && p.threadName.trim()) {
@@ -1670,7 +1787,7 @@ export class CodexDriver extends Driver {
           ? entry.clientId === clientId
           : entry.text === text && (!turnId || entry.turnId === turnId));
         if (i < 0) {
-          if (this.nativeSocket && base.turnId && !this.#nativeTurnStarts.has(base.turnId)) {
+          if (this.nativeSocket && !this.helperFork && base.turnId && !this.#nativeTurnStarts.has(base.turnId)) {
             this.#nativeTurnStarts.add(base.turnId);
             this.push('turn.start', { turnId: base.turnId, text });
           }

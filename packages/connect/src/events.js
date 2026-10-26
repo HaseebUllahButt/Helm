@@ -132,7 +132,7 @@ function turnStartFor(events, from) {
 
 const isTurn = (e) => typeof e?.type === 'string' && e.type.startsWith('turn.');
 
-const TURN_CONTEXT = new Set(['turn.start', 'turn.edit', 'turn.images', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove']);
+const TURN_CONTEXT = new Set(['turn.start', 'turn.edit', 'turn.images', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove', 'turn.recover']);
 
 function pendingTickets(events) {
   const pending = new Map();
@@ -157,6 +157,7 @@ function pendingTickets(events) {
 function anchor(event) {
   const { seq, at, type, id, turnId, inputId, requestId, kind, parentId, name, queued, local, status, reason, checkpoint } = event;
   const result = { seq, at, type, id, turnId, inputId, requestId, kind, parentId, name, queued, local, status, reason, checkpoint };
+  if (type === 'turn.recover') result.providerTurnId = event.providerTurnId;
   if (kind === 'visual' && event.visual) result.visual = event.visual;
   if (type === 'turn.start' || type === 'turn.edit' || type === 'turn.images') {
     result.text = String(event.text ?? '').slice(0, 8000);
@@ -526,8 +527,8 @@ export class EventLog {
     if (!file) this.#files.set(id, file = new EventFile(this.#file(id), event => {
       // Exact text is needed to settle queued messages against provider echoes.
       if (isTurn(event)) {
-        const { seq, at, type, turnId, inputId, local, wake, cause, queued, text } = event;
-        return { seq, at, type, turnId, inputId, local, wake, cause, queued, text };
+        const { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId } = event;
+        return { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId };
       }
       return anchor(event);
     }));

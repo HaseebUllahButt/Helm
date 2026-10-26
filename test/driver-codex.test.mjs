@@ -40,6 +40,30 @@ test('a fresh Codex helper sends its task without parent context and reports cac
   } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
 });
 
+test('the Codex fork protocol sends a parent reference and preserves reported cache usage', async () => {
+  const { fake, driver, log } = make('plain');
+  const server = new CodexServer(fake.cmd, driver.env, () => {});
+  server.attach(driver);
+  driver.onNotification = driver.onNotification.bind(driver);
+  try {
+    await server.ensure();
+    const fork = await server.call('thread/fork', { threadId: 'parent-thread', ephemeral: false,
+      excludeTurns: true, cwd: fake.dir, model: 'helper-model' });
+    driver.threadId = fork.result.thread.id;
+    server.attach(driver);
+    const task = 'Inspect the task.';
+    await server.call('turn/start', { threadId: driver.threadId, input: [{ type: 'text', text: task, text_elements: [] }] });
+    const done = await log.until(e => e.type === 'turn.done');
+    assert.deepEqual(fake.stdinLines().filter(m => ['thread/start', 'thread/fork'].includes(m.method)).map(m => m.method), ['thread/fork']);
+    assert.equal(fake.stdinLines().find(m => m.method === 'thread/fork').params.threadId, 'parent-thread');
+    assert.equal(fake.stdinLines().find(m => m.method === 'turn/start').params.input[0].text, task);
+    // Recorded values check usage transport. Only real calls can measure savings.
+    assert.equal(done.usage.input, 20386);
+    assert.equal(done.usage.cacheRead, 9984);
+    assert.equal(done.usage.inputIncludesCache, true);
+  } finally { server.detach(driver); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
 test('Codex v2 activity keeps one card per child and nests each reply under the correct card', async () => {
   const { fake, driver, log } = make('subagent-v2');
   try {

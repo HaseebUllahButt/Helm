@@ -342,7 +342,7 @@ export class SessionResume {
       // of work that is done. Its next message rebuilds it.
       if (hosted && !nativeAlive && s.chatWorktree && !existsSync(expand(s.chatWorktree.path)) && !this.#inFlight(s)) {
         await this.#sessions.procs.close(procId).catch((err) => this.#sessions.log(`[${s.id}] could not close its agent: ${err.message}`));
-      } else if (nativeAlive || hosted) {
+      } else if (nativeAlive || hosted || s.delegation?.codexFork) {
         if (s.recovery?.kind === 'restart') delete s.recovery;
         const tail = this.#sessions.events.tail(s.id, 0);
         this.#restoreOpenTurns(s, tail, true);

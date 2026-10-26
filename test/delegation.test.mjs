@@ -19,13 +19,13 @@ process.env.HELM_TERMINALS_SOCKET = join(process.env.HELM_DIR, 'terminals.sock')
 process.env.HELM_NATIVE_SOCKET = join(process.env.HELM_DIR, 'native.sock');
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 const profiles = [
-  { id: 'codex-main', label: 'Codex personal', engine: 'codex', cmd: process.execPath, source: 'custom' },
+  { id: 'codex-main', label: 'Codex personal', engine: 'codex', cmd: process.execPath, env: { CODEX_HOME: join(process.env.HELM_DIR, 'codex-home') }, source: 'custom' },
   { id: 'claude-main', label: 'Claude personal', engine: 'claude', cmd: process.execPath,
     env: { CLAUDE_CONFIG_DIR: '~/.claude-test', PRIVATE_TOKEN: 'never-advertise-me' }, args: ['--secret', 'never-advertise-me'], source: 'custom' },
 ];
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ version: 1, profiles }));
 const { Sessions } = await import('../packages/connect/src/sessions.js');
-const { agentCatalog, parseAgentArgs, chooseAgent, delegationMode, delegationOutput, delegationNote } = await import('../packages/connect/src/delegation.js');
+const { agentCatalog, parseAgentArgs, chooseAgent, delegationMode, delegationOutput, delegationNote, codexHelperFork, codexHelperHistory, readCodexHelperHistory } = await import('../packages/connect/src/delegation.js');
 const { runAgentCommand } = await import('../packages/connect/src/agent-cli.js');
 const { M } = await import('@helm/protocol');
 
@@ -62,6 +62,53 @@ function setup(t, make = (opts) => new FakeDriver(opts), options = {}) {
   });
   return { sessions, drivers };
 }
+
+test('Codex forks require the same local account, folder and native daemon', () => {
+  const profile = profiles[0];
+  const parent = { id: 'parent', engine: 'codex', engineSessionId: 'parent-thread', cwd: process.env.HELM_DIR };
+  const fork = (p = parent, before = profile, after = profile, cwd = parent.cwd, worktree = false, socket = '/private/codex.sock') => codexHelperFork(p, before, after, cwd, worktree, socket);
+  assert.equal(fork().threadId, 'parent-thread');
+  assert.match(fork().note, /helper for chat parent/);
+  assert.equal(fork(null), null);
+  assert.equal(fork({ ...parent, engineSessionId: null }), null);
+  assert.equal(fork({ ...parent, engine: 'claude' }), null);
+  assert.equal(fork(parent, profile, profiles[1]), null);
+  assert.equal(fork(parent, profile, { ...profile, env: { CODEX_HOME: '/other/account' } }), null);
+  assert.equal(fork(parent, profile, { ...profile, env: { OPENAI_API_KEY: 'other-login' } }), null);
+  assert.equal(fork(parent, profile, { ...profile, wraps: 'codex' }), null);
+  assert.equal(fork(parent, profile, profile, '/different/folder'), null);
+  assert.equal(fork(parent, profile, profile, parent.cwd, true), null);
+  assert.equal(fork(parent, profile, profile, parent.cwd, false, null), null);
+});
+
+test('Codex recovery history leaves out queued tickets and keeps accepted tool results', () => {
+  const events = [
+    { type: 'turn.start', turnId: 'local-ticket', text: 'Unsent task' },
+    { type: 'turn.start', turnId: 'own-turn', text: 'Accepted task' },
+    { type: 'item.start', turnId: 'own-turn', id: 'tool', kind: 'command', name: 'exec', input: { command: 'echo saved' } },
+    { type: 'item.done', id: 'tool', output: 'Saved result' },
+  ];
+  const history = codexHelperHistory(events);
+  assert.match(history, /Accepted task/);
+  assert.match(history, /Saved result/);
+  assert.match(history, /echo saved/);
+  assert.doesNotMatch(history, /Unsent task/);
+});
+
+test('Codex recovery reads earlier work from the saved log', async t => {
+  const file = join(process.env.HELM_DIR, 'helper-recovery.jsonl');
+  t.after(() => rmSync(file, { force: true }));
+  writeFileSync(file, [
+    { type: 'turn.start', turnId: 'early', text: 'Earlier helper task' },
+    { type: 'item.start', turnId: 'early', id: 'reply', kind: 'text' },
+    { type: 'item.delta', id: 'reply', text: 'Earlier helper reply' },
+    ...Array.from({ length: 2400 }, () => ({ type: 'status', status: 'working' })),
+  ].map(e => JSON.stringify(e)).join('\n'));
+  const history = await readCodexHelperHistory(file);
+  assert.match(history, /Earlier helper task/);
+  assert.match(history, /Earlier helper reply/);
+  assert.equal(await readCodexHelperHistory(file + '.missing'), '');
+});
 
 test('native children keep an idle parent active, expose questions, and settle independently', async t => {
   const { sessions, drivers } = setup(t);

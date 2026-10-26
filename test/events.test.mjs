@@ -7,6 +7,19 @@ import { EventLog, activeTurnFromEvents } from '../packages/connect/src/events.j
 import { EventFile } from '../packages/connect/src/event-file.js';
 import { apply, emptyLog } from '../apps/web/src/session/types.ts';
 
+test('a recovered helper turn keeps its provider link after log retention and restart', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-recover-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = new EventLog(dir);
+  log.append('helper', { type: 'turn.start', turnId: 'shown', text: 'Continue the helper task' });
+  log.append('helper', { type: 'turn.recover', turnId: 'shown', providerTurnId: 'replacement' });
+  log.append('helper', { type: 'item.start', turnId: 'shown', id: 'output', kind: 'text' });
+  for (let n = 0; n < 2400; n++) log.append('helper', { type: 'item.delta', id: 'output', text: 'x' });
+  for (const reader of [log, new EventLog(dir)]) {
+    assert.equal(reader.tail('helper', 0).find(e => e.type === 'turn.recover')?.providerTurnId, 'replacement');
+  }
+});
+
 test('events are numbered, persisted, and replayable from a sequence number', () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-events-'));
   const log = new EventLog(dir);
