@@ -11,7 +11,8 @@
 //   session/prompt        emits one text chunk, waits FAKE_TURN_MS, then -
 //                         with FAKE_ASK - holds the turn on a permission
 //                         request until it is answered, and only then
-//                         resolves the prompt with stopReason end_turn
+//                         resolves the prompt with stopReason end_turn;
+//                         a prompt "run: <command>" asks for that command
 //   stdin ending          exits, like a real CLI
 if (process.argv.includes('--version')) {
   console.log('devin 3000.10.21');
@@ -56,10 +57,15 @@ async function onMessage(m) {
       await sleep(delay);
       if (ask) {
         const rid = `perm-${m.id}`;
+        const said = (m.params.prompt ?? []).map((part) => part.text ?? '').join('');
+        const asked = /(?:^|\n)run: ([^\n]+)/.exec(said)?.[1].trim();
+        const command = asked || 'echo hi';
+        // A real agent shows the tool call first; that marks it a command.
+        if (asked) out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Run a command', kind: 'execute', status: 'pending', rawInput: { command } } } });
         const answered = new Promise((resolve) => askReply.set(rid, resolve));
         out({ jsonrpc: '2.0', id: rid, method: 'session/request_permission', params: {
           sessionId: sid,
-          toolCall: { toolCallId: 'call-1', title: 'Run a command', rawInput: { command: 'echo hi' } },
+          toolCall: { toolCallId: 'call-1', title: 'Run a command', rawInput: { command } },
           options: [
             { optionId: 'allow_once', kind: 'allow_once', name: 'Allow' },
             { optionId: 'allow_always', kind: 'allow_always', name: 'Always allow' },

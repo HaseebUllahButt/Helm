@@ -1833,6 +1833,7 @@ li.marked .usage-share-track { margin-left: 32px; }
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
 .toast-ask.mono { font: 500 12.5px/1.5 var(--mono); background: var(--code-bg); }
+.toast-ask.whole { display: block; overflow: visible; }
 .toast-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .toast-actions button {
   display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; margin: 0;

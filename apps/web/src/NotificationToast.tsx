@@ -71,7 +71,8 @@ export function NotificationToast({ client, envId, session, machine, waiting = 0
       <button className="toast-dismiss" aria-label="Close notice" onClick={onDismiss}><Icon name="close" size={15} /></button>
     </div>
     <p className="toast-kind"><i />{who} {askAction(ask)}{ask?.more ? ` (+${ask.more} more)` : ''}</p>
-    {text && <p className={`toast-ask${ask?.kind === 'command' ? ' mono' : ''}`}>{text}</p>}
+    {/* A command you can allow from here always shows in full. */}
+    {text && <p className={`toast-ask${ask?.kind === 'command' ? ' mono' : ''}${canAllow ? ' whole' : ''}`}>{text}</p>}
     {error && <p className="error" role="alert">{error}</p>}
     <div className="toast-actions">
       {canAllow && <button className="toast-allow" disabled={busy} onClick={() => void allow()}>{busy ? 'Allowing…' : 'Allow once'}</button>}
