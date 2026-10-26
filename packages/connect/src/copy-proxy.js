@@ -489,13 +489,29 @@ export class CopyConnections {
   async open(base, connect) {
     let pending = this.sockets.get(base);
     if (!pending) {
-      pending = connect(); this.sockets.set(base, pending);
+      pending = Promise.resolve().then(connect);
+      this.sockets.set(base, pending);
       pending.then(ws => {
         ws.setMaxListeners(64);
-        ws.once('close', () => { if (this.sockets.get(base) === pending) this.sockets.delete(base); });
+        // The socket stays alive between streams, when no transport owns an
+        // error listener. A failed idle socket must leave the pool too.
+        const discard = () => {
+          if (this.sockets.get(base) === pending) this.sockets.delete(base);
+        };
+        ws.on('error', discard);
+        ws.once('close', discard);
       }, () => { if (this.sockets.get(base) === pending) this.sockets.delete(base); });
     }
-    return pending;
+    const ws = await pending;
+    if (ws.readyState !== WebSocket.OPEN) {
+      if (this.sockets.get(base) === pending) this.sockets.delete(base);
+      throw new Error('the copy socket closed before use');
+    }
+    return ws;
   }
-  close() { for (const pending of this.sockets.values()) pending.then(ws => ws.close(), () => {}); this.sockets.clear(); }
+  close() {
+    for (const pending of this.sockets.values()) pending.then(ws => ws.close(), () => {});
+    this.sockets.clear();
+    this.routes.clear();
+  }
 }
