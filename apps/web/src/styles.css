@@ -90,8 +90,12 @@
      halo, so it reads lit rather than grey. Light and navy keep green. */
   --ok:        #f7f7f7;
   --ok-glow:   0 0 6px rgb(255 255 255 / 45%);
-  --line:      rgb(235 235 235 / 9%);
-  --line-2:    rgb(235 235 235 / 15%);
+  --edge:      rgb(235 235 235 / 9%);
+  --edge-2:    rgb(235 235 235 / 15%);
+  /* No outlines (the owner's choice, 26 Oct 2026): every edge drawn with
+     these is invisible. Controls that need an edge to work use --edge. */
+  --line:      transparent;
+  --line-2:    transparent;
   --input:     rgb(235 235 235 / 14%);
 
   /* Text: four steps, and the main tool for hierarchy. Every one of them is
@@ -201,8 +205,8 @@
   --accent: rgb(134 214 219 / 7%);
   --hover: rgb(134 214 219 / 8%);
   --select: rgb(85 215 194 / 16%);
-  --line: rgb(134 214 219 / 9%);
-  --line-2: rgb(134 214 219 / 15%);
+  --edge: rgb(134 214 219 / 9%);
+  --edge-2: rgb(134 214 219 / 15%);
   --input: rgb(134 214 219 / 14%);
   --text: #edf8f7;
   --text-80: rgb(237 248 247 / 86%);
@@ -312,6 +316,24 @@ code, pre, kbd { font-family: var(--mono); }
   z-index: 20;
 }
 .sidebar .bar.side { background: inherit; padding-left: 14px; }
+
+/* The sunset band behind the sidebar's top bar (SidebarSunset.tsx). It
+   fades into the sidebar, so the bar above it has no fill and no edge. */
+.sidebar { position: relative; }
+.sidebar-sunset {
+  position: absolute; inset: 0 0 auto; height: 96px; z-index: 0; overflow: hidden; pointer-events: none;
+  mask-image: linear-gradient(to bottom, #000 0%, #000 52%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 52%, transparent 100%);
+}
+.sidebar-sunset svg { display: block; width: 100%; height: 100%; }
+.sidebar:has(.sidebar-sunset) .bar.side { background: none; border-bottom-color: transparent; }
+.sidebar:has(.sidebar-sunset) > :not(.sidebar-sunset) { position: relative; z-index: 1; }
+.sidebar.collapsed .sidebar-sunset { display: none; }
+:root {
+  --sunset-top: #12203a; --sunset-mid: #4b2130; --sunset-low: #b4452b; --sunset-horizon: #f08a3c;
+  --sunset-glow: #ff8a3d; --sunset-cloud: #ffc98a; --sunset-sea-top: #2b1b20; --sunset-sea: var(--sidebar);
+  --sunset-shine: #ffc070; --sunset-star: #ffffff;
+}
 .side-tools { display: flex; align-items: center; flex: none; }
 .side-tools .iconbtn { padding-inline: 6px; min-width: 30px; }
 .bar .titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -871,12 +893,12 @@ pre.snippet {
 .ctx-model { margin-top: 2px; color: var(--mutedfg); }
 .ctx-bar { display: flex; height: 10px; margin: 10px 0 8px; overflow: hidden; background: var(--muted); border: 1px solid var(--line); border-radius: 5px; }
 .ctx-bar i { display: block; height: 100%; min-width: 2px; }
-.ctx-bar i.reserved { margin-left: auto; background: repeating-linear-gradient(135deg, var(--line-2) 0 3px, transparent 3px 6px); }
+.ctx-bar i.reserved { margin-left: auto; background: repeating-linear-gradient(135deg, var(--edge-2) 0 3px, transparent 3px 6px); }
 .ctx-legend { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
 .ctx-legend li { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .ctx-legend li.dim { color: var(--mutedfg); }
 .ctx-legend li > i { flex: none; width: 8px; height: 8px; border-radius: 2px; }
-.ctx-legend li > i.reserved { background: repeating-linear-gradient(135deg, var(--line-2) 0 2px, transparent 2px 4px); border: 1px solid var(--line-2); }
+.ctx-legend li > i.reserved { background: repeating-linear-gradient(135deg, var(--edge-2) 0 2px, transparent 2px 4px); border: 1px solid var(--edge-2); }
 .ctx-legend li > i.free { background: var(--muted); border: 1px solid var(--line-2); }
 .ctx-legend .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-legend .pct { width: 3.2em; text-align: right; }
@@ -954,7 +976,7 @@ pre.snippet {
   background: var(--code-bg); border: 1px solid var(--line); font-size: 13.5px;
 }
 .md pre code { background: none; padding: 0; font-size: inherit; color: var(--text-80); }
-.md blockquote { border-left: 2px solid var(--line-2); padding-left: 0.8rem; color: var(--mutedfg); }
+.md blockquote { border-left: 2px solid var(--edge-2); padding-left: 0.8rem; color: var(--mutedfg); }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 1rem 0; }
 .md table { border-collapse: collapse; margin: 0.65rem 0; font-size: var(--t-meta); display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--line-2); padding: 4px 10px; text-align: left; }
@@ -1006,12 +1028,8 @@ pre.snippet {
 }
 .slab::after {
   content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  border: 1px solid var(--line-2); box-shadow: inset 0 1px rgb(255 255 255 / 4%);
-  transition: border-color 0.15s var(--ease);
+  box-shadow: inset 0 1px rgb(255 255 255 / 4%);
 }
-/* Typing lights the edge of the box you are typing into, in the hub's
-   indigo - the same signal as every other focus in the app. */
-.slab:focus-within::after { border-color: color-mix(in srgb, var(--primary-q) 55%, transparent); }
 .slab textarea {
   display: block; width: 100%; background: transparent; border: 0; box-shadow: none; resize: none;
   padding: 9px 14px 2px; min-height: 36px; max-height: 180px; line-height: 1.5; font-size: 16px; color: var(--text);
@@ -1370,7 +1388,7 @@ pre.snippet {
 .q-steps { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; }
 .q-dot {
   width: 7px; height: 7px; min-height: 0; padding: 0; margin: 0; border: 0; border-radius: 50%;
-  background: var(--line-2); flex: none; cursor: pointer;
+  background: var(--edge-2); flex: none; cursor: pointer;
   transition: width 0.2s var(--ease), background 0.2s var(--ease);
 }
 .q-dot.done { background: var(--mutedfg); }
@@ -1415,7 +1433,7 @@ pre.snippet {
 .q-opt:hover:not(:disabled) .q-go, .q-opt:focus-visible .q-go, .q-opt.on .q-go { opacity: 1; transform: none; }
 @media (hover: none) { .q-go { display: none; } }
 .q-box {
-  flex: none; align-self: center; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--line-2);
+  flex: none; align-self: center; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--edge-2);
   display: inline-flex; align-items: center; justify-content: center; color: #fff;
   transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
 }
@@ -1498,7 +1516,6 @@ pre.snippet {
 .limits-line .lw.warn, .limits-line .lw.warn b { color: var(--amber-text); }
 .limits-line .lw.bad, .limits-line .lw.bad b { color: var(--red); }
 @media (max-width: 359px) { .limits-caption { width: 100%; } }
-.slab.danger::after { border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .modesheet-note { padding: 0 8px 8px; font-size: var(--t-meta); color: var(--mutedfg); }
 /* A one-time, quiet note that a model joined the account by itself. */
 .model-news { display: flex; align-items: center; gap: 8px; margin: 0 4px 8px; padding: 6px 6px 6px 10px; border-radius: var(--radius-md); background: var(--bg); border: 1px solid var(--line); font-size: var(--t-meta); color: var(--text-dim); }
@@ -1628,7 +1645,7 @@ pre.snippet {
 .ctl.mic.busy svg { opacity: 0.35; }
 .ctl.mic.busy::after {
   content: ''; position: absolute; inset: 6px; border-radius: 50%;
-  border: 1.5px solid var(--line-2); border-top-color: var(--text-dim);
+  border: 1.5px solid var(--edge-2); border-top-color: var(--text-dim);
   animation: micspin 0.8s linear infinite;
 }
 @keyframes micspin { to { transform: rotate(360deg); } }
@@ -1842,7 +1859,7 @@ button.linkish:disabled { color: var(--icon); }
 /* The checkbox a row grows in select mode: a ring until it is picked. */
 .rowmain .check {
   width: 18px; height: 18px; border-radius: 50%; flex: none;
-  border: 1.5px solid var(--line-2); background: transparent;
+  border: 1.5px solid var(--edge-2); background: transparent;
 }
 .rowmain .check.on { background: var(--primary-q); border-color: var(--primary-q); box-shadow: inset 0 0 0 3px var(--card); }
 
@@ -2085,8 +2102,8 @@ button.sheet-editlink:hover { color: var(--text); }
   --accent:    rgb(26 29 36 / 6%);
   --hover:     rgb(26 29 36 / 6%);
   --select:    rgb(91 63 214 / 10%);
-  --line:      rgb(26 29 36 / 10%);
-  --line-2:    rgb(26 29 36 / 16%);
+  --edge:      rgb(26 29 36 / 10%);
+  --edge-2:    rgb(26 29 36 / 16%);
   --input:     rgb(26 29 36 / 18%);
   --text:      #1a1d24;
   --text-80:   rgb(26 29 36 / 86%);
@@ -2122,6 +2139,12 @@ button.sheet-editlink:hover { color: var(--text); }
 }
 
 /* The marks keep their dark tile and their own colours in every theme. */
+/* A daytime sunset: pale sky, peach and gold, no dark band on a light page. */
+:root[data-theme="light"] {
+  --sunset-top: #a9c8e8; --sunset-mid: #f1c8b8; --sunset-low: #f6a77b; --sunset-horizon: #f9c27a;
+  --sunset-glow: #ffb070; --sunset-cloud: #fff2e0; --sunset-sea-top: #eccab6; --sunset-shine: #fff4d6;
+  --sunset-star: #ffffff;
+}
 :root[data-theme="light"] .mark { background: #1d2027; }
 /* A letter mark takes its colour from the text token, which is dark here. */
 :root[data-theme="light"] .mark:not(.claude):not(.codex):not(.opencode):not(.opencode2):not(.devin):not(.agy):not(.grok):not(.cursor):not(.pi):not(.muse):not(.gemini):not(.kimi):not(.omp):not(.shell) { color: #b9bfcb; }
@@ -2397,7 +2420,7 @@ button.sheet-editlink:hover { color: var(--text); }
   display: inline-flex; align-items: center; justify-content: center; color: var(--pill-fg);
 }
 .viewedbox > span {
-  width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--line-2);
+  width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--edge-2);
   display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.12s var(--ease), border-color 0.12s var(--ease);
 }
@@ -3270,7 +3293,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .ctx-meter { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; flex: none; white-space: nowrap; color: var(--mutedfg); cursor: default; }
 .ctx-meter svg { display: block; flex: none; }
 .ctx-ring-bg, .ctx-ring { fill: none; stroke-width: 2; }
-.ctx-ring-bg { stroke: var(--line-2); }
+.ctx-ring-bg { stroke: var(--edge-2); }
 .ctx-ring { stroke: var(--hi); stroke-linecap: round; }
 .ctx-pct { color: var(--text-dim); font-weight: 550; font-variant-numeric: tabular-nums; }
 .ctx-meter.warn .ctx-ring { stroke: var(--amber); } .ctx-meter.warn .ctx-pct { color: var(--amber-text); }
@@ -3424,7 +3447,7 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 .todo-strip-chev { flex: none; color: var(--mutedfg); transition: transform 0.15s var(--ease); }
 .todo-strip.open .todo-strip-chev { transform: rotate(180deg); }
 .todo-segs { display: flex; gap: 3px; height: 3px; margin-top: 6px; }
-.todo-segs i { flex: 1 1 0; min-width: 3px; border-radius: 2px; background: var(--line-2); }
+.todo-segs i { flex: 1 1 0; min-width: 3px; border-radius: 2px; background: var(--edge-2); }
 .todo-segs i.completed { background: var(--ok); }
 .todo-segs i.in_progress { background: var(--primary-q); }
 .todo-strip-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; max-height: min(34dvh, 280px); overflow-y: auto; }
@@ -3642,7 +3665,7 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 .send-destination .section { margin: 4px 0 0; padding: 0; }
 .send-path { overflow-wrap: anywhere; white-space: normal; }
 .send-progress { display: flex; flex-direction: column; gap: 12px; padding-block: 12px; }
-.send-progress-line { height: 3px; width: 100%; background: var(--line); overflow: hidden; }
+.send-progress-line { height: 3px; width: 100%; background: var(--edge); overflow: hidden; }
 .send-progress-line > span { display: block; height: 100%; background: var(--primary-q); }
 .send-actions { display: flex; flex-direction: column; align-items: stretch; gap: 12px; margin-top: auto; padding-top: 20px; }
 .send-receipt .send-actions { margin-top: 0; padding-top: 0; }
@@ -3866,3 +3889,10 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
 .canvas-page-edit .ProseMirror:has(> p:only-child > br:only-child)::before { content: 'Start writing…'; position: absolute; color: var(--mutedfg); pointer-events: none; }
 .canvas-page-edit .ProseMirror table { border-collapse: collapse; }
 .canvas-page-edit .ProseMirror :is(td, th) > p { margin: 0; }
+
+/* No outlines (the owner's choice, 26 Oct 2026): buttons, fields, chips,
+   lists and boxes show by their fill alone, and focus draws no ring. The
+   lines that split the screen into parts (sidebar edge, top bars) stay. */
+:is(button, input, select, textarea, kbd, .bubble, .rows, .segmented, .banner, .palette-box, .chip, .chip-pick, .home-search, .home-compose) { border-color: transparent !important; }
+:focus-visible { outline: none !important; }
+.sidebar .thread-row.active, .sidebar .rowx .rowmain.thread-row.active, button.send { box-shadow: none !important; }

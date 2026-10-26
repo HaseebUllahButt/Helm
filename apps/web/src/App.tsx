@@ -15,6 +15,7 @@ import { StartingTerminalView } from './session/StartingTerminalView';
 import { beginTerminal, type StartingTerminal } from './startingTerminals';
 import { beginChat, forgetChat, onStartingChat, type StartingChat } from './startingChats';
 import { EngineMark } from './EngineMark';
+import { SidebarSunset } from './SidebarSunset';
 import { NotificationToast } from './NotificationToast';
 import { MachineUpdateNotice } from './MachineUpdateNotice';
 import { sending, useSends } from './send/store';
@@ -1103,6 +1104,7 @@ function Shell({ client, conn, onSignOut }: {
   return (
     <div className="shell">
       <aside className={`sidebar${!showMain ? ' showing' : ''}${wide && sidebarCollapsed ? ' collapsed' : ''}`}>
+        <SidebarSunset />
         <div className="bar side">
           <div className="brand">
             <img src="/favicon.svg?v=7" alt="" />
