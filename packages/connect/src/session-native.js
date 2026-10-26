@@ -221,6 +221,10 @@ export class NativeSessions {
   #nativeOffline = new Set();
   /** Native threads the last check found open in their terminal daemon. */
   nativeLoaded = new Set();
+  /** A Codex daemon has this chat's thread open, or has not said yet whether it has. */
+  holds(s) {
+    return !!s.nativeSocket && (!this.nativeDiscovered || this.nativeLoaded.has(s.engineSessionId) || this.nativeUnknown.has(s.profileId));
+  }
   /** Accounts whose native daemon is there but did not answer the last check. */
   nativeUnknown = new Set();
   async discoverNativeCodex(profiles) {

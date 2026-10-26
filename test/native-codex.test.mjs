@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
 import { WebSocketServer } from 'ws';
-import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,6 +25,7 @@ writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ vers
 ] }));
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { CodexDriver } = await import('../packages/connect/src/drivers/codex.js');
+const { UNUSED_MS } = await import('../packages/connect/src/session-worktrees.js');
 class Runtime extends EventEmitter { async listLive() { return new Map(); } }
 class OfflineHost extends EventEmitter { async ensure() { return false; } has() { return false; } hasProc() { return false; } nativeSessions() { return []; } detach() {} }
 const createSessions = () => new Sessions(new Runtime(), { terminals: new OfflineHost(), nativeHost: new OfflineHost(), procHost: new OfflineHost(), nativeDiscovery: true });
@@ -425,6 +427,30 @@ test('a native thread that cannot be read is unknown, not closed: its turn and q
   assert.equal(sessions.history(s.id).pending.length, 1, 'the question is still answerable');
   assert.equal(sessions.history(s.id).events.some((e) => e.type === 'turn.done' && e.turnId === 'asking-turn'), false);
   assert.equal(sessions.get(s.id).status, 'blocked');
+});
+
+test('a Codex thread still open in its daemon keeps its worktree until the daemon lets it go', async (t) => {
+  nativeId = '01a11111-0000-7000-8000-000000000016';
+  approved = true; activeTurn = null; loaded = true;
+  t.after(() => { loaded = true; });
+  const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const repo = join(root, 'worktree-repo');
+  mkdirSync(repo);
+  git(repo, 'init', '-q', '-b', 'main');
+  git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'first');
+  const path = join(root, 'worktree-chat');
+  git(repo, 'worktree', 'add', '-q', '-b', 'helm/chat-native', path, 'main');
+  const sessions = createSessions();
+  t.after(() => sessions.stop());
+  const s = (await sessions.list()).find((row) => row.engineSessionId === nativeId);
+  Object.assign(sessions.get(s.id), { updatedAt: 1, chatWorktree: { repo, path, branch: 'helm/chat-native', base: 'main', start: git(repo, 'rev-parse', 'main') } });
+  const later = Date.now() + UNUSED_MS;
+  assert.equal(await sessions.worktreeTidy(s.id, later), false, 'the thread is open: the folder stays');
+  assert.ok(existsSync(path));
+  loaded = false;
+  await sessions.list();
+  assert.equal(await sessions.worktreeTidy(s.id, later), true, 'the daemon closed it: an unused folder goes');
+  assert.ok(!existsSync(path));
 });
 
 test.after(async () => {
