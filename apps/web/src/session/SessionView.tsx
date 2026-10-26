@@ -64,6 +64,8 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
+  /** The messages last shown, as text: a read that brings back the same chat changes nothing. */
+  const shown = useRef({ id: '', text: '' });
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat && !nativeConversation(session.engine));
   // Git and Agents open the same panels a Helm chat has.
@@ -165,10 +167,17 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try {
       const r = await client.rpc<{ messages: Message[]; status?: Session['status'] }>(env.id, 'session.messages', { id: session.id }, 15_000);
       if (!mounted.current) return;
-      setMessages(r.messages);
+      // Most reads repeat the chat on screen. A new list redrew every
+      // message, rewrote the saved copy and, for a reader scrolled up,
+      // showed "new" when nothing was.
+      const text = JSON.stringify(r.messages);
+      if (shown.current.id !== session.id || shown.current.text !== text) {
+        shown.current = { id: session.id, text };
+        setMessages(r.messages);
+        saveMessages(env.id, session.id, r.messages);
+      }
       if (r.status) setStatus(r.status);
       setReadError(''); success = true;
-      saveMessages(env.id, session.id, r.messages);
     } catch (e: any) { if (mounted.current) setReadError(errorMessage(e)); }
     finally {
       reading.current = false;
@@ -258,8 +267,12 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       setDraft(current => current === body ? '' : current);
       await setImages(current => current.filter(image => !attachments.includes(image)));
       if (session.nativeChat && (result?.terminal || body.trimStart().startsWith('/'))) setNativeNotice(body.trim());
-      else setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now(),
-        attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) }] : m);
+      else {
+        // The next read replaces this guess, as it always did.
+        shown.current = { id: '', text: '' };
+        setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now(),
+          attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) }] : m);
+      }
       setTimeout(refresh, 600);
     } catch (e: any) { setError(errorMessage(e)); }
     finally { setSending(false); }
