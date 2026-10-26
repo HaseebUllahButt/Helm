@@ -332,9 +332,12 @@ function postJson(url, body, { timeout, signal }) {
   });
 }
 
+/** The sign-in request, kept on an object so a test can stand in for it. */
+export const hubHello = { post: postJson };
+
 export async function hubCredential(net, base, { timeout = 15_000, signal } = {}) {
   const nonce = randomBytes(24).toString('base64url');
-  const res = await postJson(`${base.replace(/\/+$/, '')}${HELLO_PATH}`, { nonce }, { timeout, signal });
+  const res = await hubHello.post(`${base.replace(/\/+$/, '')}${HELLO_PATH}`, { nonce }, { timeout, signal });
   if (res.status === 404) {
     const err = new Error('that hub runs an older helm without the handshake - upgrade it');
     err.untrusted = true;
