@@ -177,7 +177,7 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
   }, [path, tree]);
   useEffect(() => { if (shown && shown !== path) onPath(shown); }, [shown, path, onPath]);
 
-  return <SideDock label="Canvas" widthKey={WIDTH_KEY} className="canvas" share={0.5} onClose={onClose}>
+  return <SideDock label="Canvas" widthKey={WIDTH_KEY} className="canvas" share={0.5} escapeCloses onClose={onClose}>
     {visual ? <CanvasPage key={visual.ref} visual={visual} read={read} onBack={() => onVisual?.(null)} onClose={onClose} />
       : shown === undefined
       ? <div className="canvas-pad"><CanvasHead title="Not in this project" sub={path ?? ''} onBack={() => onPath(null)} onClose={onClose} /><div className="git-state">The canvas cannot open files outside this chat’s project.</div></div>

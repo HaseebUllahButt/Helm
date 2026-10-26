@@ -787,11 +787,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
             onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         )}
-        {agentCount > 0 && <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents"
-          onClick={() => setDetails('agents')}><Icon name="subagents" size={17} /><b className="cbadge quiet">{agentCount}</b></button>}
-        {!session.brain && canvas.open && <button className="iconbtn" title="Close canvas (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed
+        <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents (Ctrl/⌘ Shift A)"
+          onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
+        {!session.brain && <button className="iconbtn" title={`${canvas.open ? 'Close' : 'Open'} canvas (Ctrl/⌘ Shift D)`} aria-label="Canvas" aria-pressed={canvas.open}
           onClick={toggleCanvas}><Icon name="canvas" size={17} /></button>}
-        {(browser.open || browser.dot) && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={toggleBrowser}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
+        <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={toggleBrowser}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -808,9 +808,6 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         {/* Only what the buttons beside it do not already reach. */}
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
-            {!session.brain && <button aria-pressed={canvas.open} onClick={toggleCanvas}>{canvas.open ? 'Close canvas' : 'Open canvas'}<kbd>Ctrl/⌘ Shift D</kbd></button>}
-            <button className="browser-launch" aria-pressed={browser.open} onClick={toggleBrowser}>{browser.open ? 'Close browser' : 'Open browser'}<kbd>Ctrl/⌘ Shift B</kbd></button>
-            <button onClick={() => setDetails('agents')}>{agentCount > 0 ? `Agents (${agentCount})` : 'Agents'}</button>
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename chat</button>
             {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
             {!session.brain && onSendTask && !session.external && (

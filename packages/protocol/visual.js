@@ -26,24 +26,16 @@ function bootVisual(config) {
     document.documentElement.dataset.theme = theme.scheme || 'dark';
   };
   apply(config.theme);
-  // In the chat a lone picture stays small (see the style below); full size, it fills the frame.
+  // In the chat a lone picture fits a screen (see the style below); full size, it fills the frame.
   if (config.expanded) document.documentElement.style.setProperty('--helm-picture-max', '100vh');
   addEventListener('message', event => {
     if (event.source === parent && event.data?.type === 'helm.visual.theme' && event.data.token === config.token) apply(event.data.theme || {});
   });
   const send = detail => parent.postMessage({ type: 'helm.visual', token: config.token, ...detail }, '*');
-  let height = 0, pictureWidth = 0;
+  let height = 0;
   const measure = () => {
     const next = Math.ceil(Math.max(document.body?.scrollHeight || 0, document.body?.getBoundingClientRect().height || 0));
     if (next !== height) { height = next; send({ height }); }
-    // The width a lone picture wants, from its own size, so the chat can fit
-    // its frame to it. Never its width on screen: that follows the frame.
-    const picture = document.body?.children.length === 1 && document.body.firstElementChild;
-    if (picture?.tagName === 'IMG' && picture.naturalWidth && picture.naturalHeight) {
-      const most = parseFloat(getComputedStyle(picture).maxHeight);
-      const width = Math.ceil(Number.isFinite(most) ? Math.min(picture.naturalWidth, picture.naturalWidth * most / picture.naturalHeight) : picture.naturalWidth);
-      if (width !== pictureWidth) { pictureWidth = width; send({ picture: width }); }
-    }
   };
   addEventListener('DOMContentLoaded', () => { new ResizeObserver(measure).observe(document.body); measure(); });
   addEventListener('load', measure);
@@ -64,7 +56,7 @@ function bootVisual(config) {
 /** The same isolated document is used by the chat and the screenshot preview. */
 export function visualDocument(html, { token = '', theme = {}, expanded = false } = {}) {
   const values = JSON.stringify({ token, theme, expanded }).replace(/</g, '\\u003c');
-  const boot = `<meta http-equiv="Content-Security-Policy" content="${VISUAL_POLICY}"><meta name="referrer" content="no-referrer"><style>:root{color-scheme:dark;--bg:#14161b;--card:#1b1e24;--raised:#242831;--mutedfg:#9ba2b1;--primary-q:#8590ff;--amber:#e8b23f;--amber-text:#e8b23f;--sky:#8ec6e8;--emerald:#9bc9b6;--red:#e88a8a;--text:#e8eaef;--text-dim:#b9bfcb;--line:#353943;--primary:#8590ff}html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif}img,svg,canvas{max-width:100%}body>img:only-child{max-height:var(--helm-picture-max,520px);width:auto;margin:0 auto}</style><script>(${bootVisual.toString()})(${values})</script>`;
+  const boot = `<meta http-equiv="Content-Security-Policy" content="${VISUAL_POLICY}"><meta name="referrer" content="no-referrer"><style>:root{color-scheme:dark;--bg:#14161b;--card:#1b1e24;--raised:#242831;--mutedfg:#9ba2b1;--primary-q:#8590ff;--amber:#e8b23f;--amber-text:#e8b23f;--sky:#8ec6e8;--emerald:#9bc9b6;--red:#e88a8a;--text:#e8eaef;--text-dim:#b9bfcb;--line:#353943;--primary:#8590ff}html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif}img,svg,canvas{max-width:100%}body>img:only-child{display:block;max-height:var(--helm-picture-max,900px);width:auto;margin:0 auto}</style><script>(${bootVisual.toString()})(${values})</script>`;
   // Stored pages have been parsed and serialized on the machine first: the
   // first head here is the document head, never text inside an agent script.
   return html.replace(/<head>/i, `<head>${boot}`);

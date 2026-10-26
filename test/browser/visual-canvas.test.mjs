@@ -144,9 +144,8 @@ test('the agent opens the canvas once per request, a closed canvas stays closed,
   await page.getByRole('button', { name: 'Open Inline chart in canvas' }).waitFor();
   await request(page, 'a', agentBoard);
   assert.equal(await canvas(page).count(), 0, 'or after a reload');
-  // The ⋯ menu brings back what it showed.
-  await page.locator('.session-bar').getByRole('button', { name: 'more', exact: true }).click();
-  await page.locator('.session-bar .menu').getByRole('button', { name: /^Open canvas/ }).click();
+  // The Canvas button brings back what it showed.
+  await page.locator('.session-bar').getByRole('button', { name: 'Canvas', exact: true }).click();
   await page.frameLocator('.canvas iframe.visual-frame').getByText('Agent board').waitFor();
   await canvas(page).getByRole('button', { name: 'Close canvas' }).click();
   await canvas(page).waitFor({ state: 'detached' });
@@ -204,4 +203,22 @@ test('on a phone the canvas covers the chat and closes back to it', async t => {
   await page.frameLocator('.canvas iframe.visual-frame').getByText('Inline chart').waitFor();
   await page.keyboard.press('Escape');
   await sheet.waitFor({ state: 'detached' });
+});
+
+test('beside the chat, Escape closes the canvas from anywhere, but not while a menu is open', async t => {
+  const page = await open(t, 1280);
+  const bar = page.locator('.session-bar');
+  await bar.getByRole('button', { name: 'Canvas', exact: true }).click();
+  await canvas(page).waitFor();
+  const composer = page.locator('textarea').first();
+  await composer.fill('still here');
+  await page.keyboard.press('Escape');
+  await canvas(page).waitFor({ state: 'detached' });
+  assert.equal(await composer.inputValue(), 'still here', 'Escape leaves the draft alone');
+  await bar.getByRole('button', { name: 'Canvas', exact: true }).click();
+  await canvas(page).waitFor();
+  await bar.getByRole('button', { name: 'more', exact: true }).click();
+  await bar.locator('.menu').waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await canvas(page).isVisible(), true, 'an open menu keeps the canvas');
 });

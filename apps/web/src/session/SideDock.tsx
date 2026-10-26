@@ -30,10 +30,12 @@ export function useExclusiveDocks(canvas: { open: boolean; setOpen: (open: boole
  * browser and the canvas both open in one. Its width is dragged from the left
  * edge and remembered on this device; a double click there forgets it.
  */
-export function SideDock({ label, widthKey, className, share = 0.45, onClose, children }: {
+export function SideDock({ label, widthKey, className, share = 0.45, escapeCloses = false, onClose, children }: {
   label: string; widthKey: string; className: string;
   /** How much of the room it takes before the owner drags it. */
   share?: number;
+  /** Escape anywhere in the chat closes the column too, not only the phone sheet. */
+  escapeCloses?: boolean;
   onClose: () => void; children: ReactNode;
 }) {
   const wide = useWide();
@@ -51,6 +53,20 @@ export function SideDock({ label, widthKey, className, share = 0.45, onClose, ch
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [wide]);
+  // Beside the chat, Escape closes it from anywhere, unless something else
+  // wants the key: a dialog, an open menu, a terminal or the remote browser.
+  // On window, so every handler on the page has had its turn first.
+  useEffect(() => {
+    if (!wide || !escapeCloses) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+      if (document.querySelector('[aria-modal="true"], [aria-haspopup][aria-expanded="true"]')) return;
+      if ((e.target as HTMLElement).closest?.('.xterm, .browser-screen')) return;
+      e.preventDefault(); close.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [wide, escapeCloses]);
   // The chat makes room through its own padding; the dock sits in that gap.
   useLayoutEffect(() => {
     const main = box.current?.parentElement;

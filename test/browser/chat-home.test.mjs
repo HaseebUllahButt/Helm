@@ -141,12 +141,12 @@ for (const width of [1280,390]) test(`the header is the title and what needs a l
   const where=await bar.locator('.titles').getAttribute('title');
   assert.match(where,/^Laptop · .*helm-mobile-app · \$15\.29$/,'the hover note: machine, folder, cost');
   assert.ok(await noSideways(page),'no sideways scroll');
-  for (const name of ['more','Back']) assert.ok(await bar.getByRole('button',{name,exact:true}).isVisible(),`${name} is still there`);
-  for (const name of ['Canvas','Browser']) assert.equal(await bar.getByRole('button',{name,exact:true}).count(),0,`${name} waits in the menu`);
+  for (const name of ['Agents','Canvas','more','Back']) assert.ok(await bar.getByRole('button',{name,exact:true}).isVisible(),`${name} is in the bar`);
   await shot(page,`header-long-title-${width}.png`);
   await bar.getByRole('button',{name:'more',exact:true}).click();
   const menu=bar.locator('.menu');
-  for (const name of [/^Open canvas/,/^Open browser/,/^Agents/]) await menu.getByRole('button',{name}).waitFor();
+  await menu.getByRole('button',{name:'Rename chat'}).waitFor();
+  for (const name of [/^Open canvas/,/^Open browser/,/^Agents/]) assert.equal(await menu.getByRole('button',{name}).count(),0,'the bar has it, the menu does not repeat it');
   assert.equal(await menu.locator('.menu-facts').innerText(),where);
 });
 

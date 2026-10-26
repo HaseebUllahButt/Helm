@@ -23,7 +23,7 @@ before(async () => {
     import {SessionView} from './apps/web/src/App';
     const root=createRoot(document.getElementById('root'));
     const read=async ref=>{window.reads=(window.reads||0)+1;if(window.failRead)throw Error('Machine offline');return {html:window.visualHtml||${JSON.stringify(source)}}};
-    window.render=()=>root.render(<Transcript status="idle" loaded readVisual={read} turns={[{id:'local-visual-1',local:true,text:'',at:1,done:{status:'ok'},items:[{id:'visual-1',kind:'visual',text:'',status:'ok',startedAt:1,visual:{ref:'ref',title:'Desk clamp clearance',height:420,bytes:1000}}]}]}/>);
+    window.render=(ref='ref')=>root.render(<Transcript status="idle" loaded readVisual={read} turns={[{id:'local-visual-1',local:true,text:'',at:1,done:{status:'ok'},items:[{id:'visual-1',kind:'visual',text:'',status:'ok',startedAt:1,visual:{ref,title:'Desk clamp clearance',height:420,bytes:1000}}]}]}/>);
     const client={subscribe:()=>()=>{},on:()=>()=>{},rpc:async(env,method,p)=>{
       if(method==='session.visual'){window.lastVisualRead={env,...p};return read(p.ref)};
       if(method==='session.messages')return {messages:[{role:'assistant',text:'',tools:[],visual:{ref:'ref',title:'Native diagram',height:420,bytes:1000}}],status:'idle'};
@@ -203,4 +203,22 @@ test('snapshot policy blocks fetches and external scripts while allowing inline 
   await page.frameLocator('.visual-frame').getByText('Adjust').click();
   assert.equal(await page.frameLocator('.visual-frame').getByText('Works').count(), 1);
   assert.equal(requests, 0);
+});
+
+test('a lone wide picture spans the chat width with no scroll bar of its own', async t => {
+  const page = await open(t, 1280);
+  await page.evaluate(() => {
+    const c = document.createElement('canvas'); c.width = 1400; c.height = 900;
+    c.getContext('2d').fillRect(0, 0, 1400, 900);
+    window.visualHtml = `<!doctype html><html><head></head><body><img src="${c.toDataURL('image/png')}"></body></html>`;
+    window.render('wide');
+  });
+  const picture = page.frameLocator('.visual-frame').locator('body > img');
+  await picture.waitFor();
+  const reply = await page.locator('.visual-reply').boundingBox();
+  const room = await page.locator('.visual-reply').evaluate(el => el.parentElement.getBoundingClientRect().width);
+  assert.ok(reply.width >= room - 1, `the frame spans the chat (${reply.width} of ${room})`);
+  // The frame takes the picture's height once the page reports it.
+  const fits = () => picture.evaluate(img => img.complete && img.getBoundingClientRect().width >= innerWidth - 1 && document.documentElement.scrollHeight <= innerHeight + 1);
+  for (let tries = 0; !(await fits()); tries += 1) if (tries > 100) assert.fail('the picture never filled its frame without a scroll bar');
 });

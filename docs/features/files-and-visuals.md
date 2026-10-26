@@ -34,9 +34,11 @@
   `attach-tags`, `retain-assets`.
 
 ## Canvas (notes and docs beside the chat)
-- **Reach:** **Open canvas** in the chat's ⋯ menu, or Ctrl/⌘ Shift D. A wide
+- **Reach:** the Canvas button in the chat header, or Ctrl/⌘ Shift D. A wide
   screen gets a third column (shares the browser panel's slot, one at a
-  time); a phone gets a full-screen sheet. Open state and file are kept per
+  time); a phone gets a full-screen sheet. Escape closes either from
+  anywhere in the chat, unless a dialog, an open menu, a terminal or the
+  remote browser takes the key. Open state and file are kept per
   chat on the device. An agent's `helm canvas` opens it once per ask; closing
   it marks that ask closed on the chat (`session.canvas-closed`), so no other
   device or browser opens it again. A file name in a turn's "changed files" opens it there.
@@ -110,8 +112,9 @@
   $V wait "my visual"; $V shot /tmp/vis.png
   ```
 - **Proof:** "my visual ok" in the chat; "Expand my visual" opens it with
-  Source / Save. A tall picture (`$H render poster.jpg`) is at most 520 px
-  high in the chat and its frame shrinks to it; Expand and the canvas show it
+  Source / Save. A lone picture (`$H render shot.png`) spans the chat's
+  width, never wider than its own size and at most 900 px high, with no
+  scroll bar of its own (driven 2026-10-26); Expand and the canvas show it
   whole (driven 2026-10-22).
 - **Traps:** without `HELM_DIR` and `--session`, `render` posts into the
   owner's real chat.

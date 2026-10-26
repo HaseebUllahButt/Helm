@@ -432,9 +432,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
             Hiding it here made it look gone. The sheet says when there is no Git. */}
         <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
           onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
-        {!isShell && canvas.open && <button className="iconbtn" title="Close canvas (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed
+        {!isShell && <button className="iconbtn" title={`${canvas.open ? 'Close' : 'Open'} canvas (Ctrl/⌘ Shift D)`} aria-label="Canvas" aria-pressed={canvas.open}
           onClick={toggleCanvas}><Icon name="canvas" size={17} /></button>}
-        {!isShell && (browser.open || browser.dot) && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={toggleBrowser}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
+        {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={toggleBrowser}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'Show chat' : 'Show terminal'} aria-label={raw ? 'Show chat' : 'Show terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
@@ -442,7 +442,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         )}
         {/* A Claude terminal chat starts Helm helpers like any chat. Another
             CLI's terminal only lists the helpers that CLI ran itself. */}
-        {!isShell && agentCount > 0 && (
+        {!isShell && (agentCount > 0 || session.nativeChat || !!session.nativeCards?.length) && (
           <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents" onClick={() => setDetails('agents')}>
             <Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}
           </button>
@@ -461,9 +461,6 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           </div>
         ) : (
           <div className="menu" onClick={() => setMenu(false)}>
-            <button aria-pressed={canvas.open} onClick={toggleCanvas}>{canvas.open ? 'Close canvas' : 'Open canvas'}<kbd>Ctrl/⌘ Shift D</kbd></button>
-            <button className="browser-launch" aria-pressed={browser.open} onClick={toggleBrowser}>{browser.open ? 'Close browser' : 'Open browser'}<kbd>Ctrl/⌘ Shift B</kbd></button>
-            {(session.nativeChat || !!session.nativeCards?.length) && <button onClick={() => setDetails('agents')}>{agentCount > 0 ? `Agents (${agentCount})` : 'Agents'}</button>}
             <button onClick={() => setNaming(true)}>Rename chat</button>
             {session.nativeChat && <>
               <button disabled={settingBusy || sending || status === 'blocked' || !env.online} onClick={() => void nativeCommand('/permissions')}>Claude permissions</button>
