@@ -75,8 +75,8 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     ...(location ? { location } : {}),
     ...(streams ? { DecompressionStream, TextDecoderStream } : {}),
     document,
-    navigator: { connection: { addEventListener: (kind, fn) => connection.set(kind, fn), removeEventListener: kind => connection.delete(kind) } },
-    window: { addEventListener: (kind, fn) => windows.set(kind, fn), removeEventListener: kind => windows.delete(kind) },
+    navigator: { userAgent: 'test', connection: { addEventListener: (kind, fn) => connection.set(kind, fn), removeEventListener: kind => connection.delete(kind) } },
+    window: { matchMedia: () => ({ matches: false }), addEventListener: (kind, fn) => windows.set(kind, fn), removeEventListener: kind => windows.delete(kind) },
     fetch: (url, init) => new Promise((resolve, reject) => {
       requests.push({ url, init });
       const base = new URL(url).origin, delay = delays[url] ?? delays[base] ?? 0;
@@ -93,7 +93,7 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
   const client = new context.module.exports.Client(endpoints, 'test-token');
   client.on((env, kind, payload) => events.push({ env, kind, payload }));
   const start = () => client.connect().catch(error => error.message);
-  return { client, sockets, peers, events, requests, timers, document, advance, start, parses: () => parses,
+  return { client, exports: context.module.exports, sockets, peers, events, requests, timers, document, advance, start, parses: () => parses,
     suspend: ms => { now += ms; },
     window: kind => windows.get(kind)?.(), network: () => connection.get('change')?.(), visible: () => documents.get('visibilitychange')?.() };
 }
@@ -1056,5 +1056,14 @@ test('just after waking, a read tries the web route after 0.5 s', async () => {
   await h.advance(200);
   assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 1);
   assert.equal((await read).fresh, true);
+  h.client.close();
+});
+
+test('signing in gives up on a stalled network instead of waiting for ever', async () => {
+  const h = harness({ delays: { 'http://stalled': Infinity } });
+  void h.exports.login('http://stalled', 'secret').catch(() => {});
+  await h.advance(1);
+  const request = h.requests.find(r => r.url.endsWith('/api/auth/login'));
+  assert.ok(request?.init?.signal, 'the sign-in request has a deadline');
   h.client.close();
 });

@@ -2228,6 +2228,8 @@ export async function login(endpoint: string, password: string, local?: string) 
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ password, local, label: deviceLabel() }),
+    // A stalled network must not leave the sign-in button busy for ever.
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({} as any));
