@@ -260,7 +260,12 @@ export class TaskTransfers {
     const endActivity = beginTransferActivity();
     this.#bulk(net, target, params, intent, record, job)
       .then(() => { this.copying.delete(params.handoffId); })
-      .catch((error) => { job.error = error; record.bulk.error = String(error.message).slice(0, 500); this.#save(params.handoffId, record); })
+      .catch((error) => {
+        job.error = error;
+        record.bulk.error = String(error.message).slice(0, 500);
+        try { this.#save(params.handoffId, record); }
+        catch (saveError) { console.error(`[helm] Could not save task transfer status: ${saveError.message}`); }
+      })
       .finally(endActivity);
     return { sent: true, status: 'copying', handoffId: params.handoffId, targetMachineId: target.id,
       targetName: target.name, progress: { ...job.progress }, preflight: record.preflight };
