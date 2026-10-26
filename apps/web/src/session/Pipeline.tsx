@@ -48,7 +48,7 @@ export function usePipeline(client: Client, env: Environment, cwd: string, branc
     const visible = () => { if (!document.hidden) void load(); };
     document.addEventListener('visibilitychange', visible);
     const off = client.on((id, kind, payload: any) => {
-      if (kind === 'connection') { void load(); return; }
+      if (kind === 'connection') { if (payload?.online) void load(); return; }
       if (id !== env.id) return;
       if (kind === 'git.monitor' && payload.id === sessionId && payload.snapshot?.sha) {
         // A branch switch must not let an older watch overwrite the newly opened checkout.
