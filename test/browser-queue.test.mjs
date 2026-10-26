@@ -55,3 +55,19 @@ test('an action that expires while its page loads never reaches the page', async
   assert.equal(performed, false);
   assert.equal(manager.serial.size, 0);
 });
+
+
+test('a browser operation that never settles cannot block recovery forever', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { manager } = fixture(), started = deferred();
+  manager.perform = () => { started.resolve(); return new Promise(() => {}); };
+  const first = manager.run('chat', 'tab', { kind: 'look' });
+  const rejected = assert.rejects(first, /timed out/);
+  await started.promise;
+  t.mock.timers.tick(100); await rejected;
+  assert.equal(manager.serial.size, 1);
+  t.mock.timers.tick(100); await new Promise(setImmediate);
+  assert.equal(manager.serial.size, 0);
+  manager.perform = async () => ({ recovered: true });
+  assert.deepEqual(await manager.run('chat', 'tab', { kind: 'look' }), { recovered: true });
+});

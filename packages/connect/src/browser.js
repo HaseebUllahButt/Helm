@@ -512,9 +512,17 @@ export class BrowserManager {
     });
     const job = Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Browser action timed out; inspect the page before retrying.')), this.actionTimeoutMs); timer.unref?.(); })]);
     // A reply timeout does not stop a browser command already in flight.
-    // Keep later commands behind the real operation until it finishes.
-    this.serial.set(tab.id, operation);
-    void operation.finally(() => { if (this.serial.get(tab.id) === operation) this.serial.delete(tab.id); }).catch(() => {});
+    // Give it one more action timeout to finish before allowing recovery
+    // commands through: an evaluate call can otherwise block the tab forever.
+    let release;
+    const grace = new Promise(resolve => { release = resolve; });
+    const graceTimer = setTimeout(release, 2 * this.actionTimeoutMs); graceTimer.unref?.();
+    const serial = Promise.race([operation, grace]);
+    this.serial.set(tab.id, serial);
+    void serial.finally(() => {
+      clearTimeout(graceTimer);
+      if (this.serial.get(tab.id) === serial) this.serial.delete(tab.id);
+    }).catch(() => {});
     try { return await job; } finally { clearTimeout(timer); }
   }
   async look(tab, budget = 6000) {
