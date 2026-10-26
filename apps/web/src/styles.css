@@ -425,7 +425,7 @@ code, pre, kbd { font-family: var(--mono); }
 }
 .conn i { width: 7px; height: 7px; border-radius: 50%; background: var(--icon); }
 .conn.live i { background: var(--ok); box-shadow: var(--ok-glow); }
-.conn.reconnecting i, .conn.connecting i { background: var(--sky); animation: pulse 2s steps(6) infinite; }
+.conn.reconnecting i, .conn.connecting i { background: var(--sky); }
 .conn.offline { color: var(--red); }
 .conn.offline i { background: var(--red); }
 
@@ -643,7 +643,7 @@ code, pre, kbd { font-family: var(--mono); }
   font-size: var(--t-micro); font-weight: 650; background: var(--amber); color: var(--on-amber);
 }
 
-/* Status chips: dot plus word; pulse only for motion. */
+/* Status chips: a still dot plus a word. */
 .chip {
   display: inline-flex; align-items: center; gap: 5px; flex: none;
   font-size: var(--t-micro); font-weight: 550; letter-spacing: 0.01em; color: var(--mutedfg);
@@ -656,8 +656,6 @@ code, pre, kbd { font-family: var(--mono); }
 .chip.done { color: var(--ok); }
 .chip.exited { color: var(--mutedfg); }
 
-@keyframes pulse { 0%, 40% { opacity: 1 } 50%, 90% { opacity: 0.5 } 100% { opacity: 1 } }
-@media (prefers-reduced-motion: reduce) { .conn i, .shine { animation: none !important; } }
 
 .tag {
   font-size: 11px; font-weight: 550; padding: 1px 6px; border-radius: 5px;
@@ -945,19 +943,14 @@ pre.snippet {
 .sub-body { margin-left: 11px; padding-left: 12px; border-left: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 2px; }
 .actgroup.subagent > summary .aicon { color: var(--text-dim); }
 
-/* Motion is a highlight sweeping the words, not a spinner. */
+/* Work in progress is told in words and a clock, never by motion: an endless
+   animation redraws the window for as long as an agent works. */
 .working:not(.chip) { display: flex; align-items: baseline; min-height: 24px; padding: 4px 4px; font-size: var(--t-body); color: var(--mutedfg); }
-.shine {
-  color: transparent;
-  background-image: linear-gradient(to right, transparent, var(--text), transparent), linear-gradient(var(--mutedfg), var(--mutedfg));
-  background-size: 4.5rem 100%, 100% 100%; background-repeat: no-repeat; background-clip: text; -webkit-background-clip: text;
-  animation: shine 2.2s steps(30) infinite;
-}
+.shine { color: var(--mutedfg); }
 /* A compaction is a rule across the conversation, like the CLI's own. */
 .compaction { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-size: var(--t-meta); color: var(--mutedfg); }
 .compaction::before, .compaction::after { content: ''; flex: 1; border-top: 1px dashed var(--line-2); }
 .compaction.bad { color: var(--red); }
-@keyframes shine { from { background-position: -4.5rem 0, 0 0 } to { background-position: calc(100% + 4.5rem) 0, 0 0 } }
 @media (prefers-reduced-motion: reduce) { .shine { color: var(--mutedfg); background: none; } }
 
 /* What came before the screenful a chat opens on. Quiet: it is a door, not
@@ -1015,17 +1008,13 @@ pre.snippet {
   border-color: color-mix(in srgb, var(--amber) 32%, transparent);
   background: color-mix(in srgb, var(--amber) 8%, var(--card));
 }
-/* Compacting: a quiet bar over the composer with a strip that keeps moving. */
+/* Compacting: a quiet, still bar over the composer. */
 .docked.compacting { overflow: hidden; }
 .docked-meta { color: var(--mutedfg); font-variant-numeric: tabular-nums; }
 .compact-progress {
   position: absolute; left: 0; right: 0; top: 0; height: 2px;
-  background: linear-gradient(90deg, transparent, var(--sky), transparent);
-  background-size: 40% 100%; background-repeat: no-repeat;
-  animation: compact-progress 1.6s ease-in-out infinite;
+  background: var(--sky); opacity: .4;
 }
-@keyframes compact-progress { from { background-position: -40% 0 } to { background-position: 140% 0 } }
-@media (prefers-reduced-motion: reduce) { .compact-progress { animation: none; background: var(--sky); opacity: .4; } }
 .docked-text { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; color: var(--text-dim); font-weight: 500; }
 .docked-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 /* The one-tap answer to a blocked session: sized for a thumb, not a cursor. */
@@ -1337,9 +1326,7 @@ pre.snippet {
 
 .turn-meta { font-size: var(--t-micro); color: var(--mutedfg); padding: 4px 4px 0; font-family: var(--mono); }
 .turn-meta.bad { color: var(--red); }
-.prose.live > :last-child::after { content: ''; display: inline-block; width: 0.5em; height: 1em; margin-left: 2px; vertical-align: -0.15em; background: var(--text-dim); animation: caret 1s steps(2) infinite; }
-@keyframes caret { 50% { opacity: 0 } }
-@media (prefers-reduced-motion: reduce) { .prose.live > :last-child::after { animation: none; } }
+.prose.live > :last-child::after { content: ''; display: inline-block; width: 0.5em; height: 1em; margin-left: 2px; vertical-align: -0.15em; background: var(--text-dim); opacity: .6; }
 
 /* Stop: the same shape as send, only while the agent runs. Neutral: amber
    is "the agent needs you", and a running agent does not. */
@@ -3296,28 +3283,19 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .todo.completed .todo-text { text-decoration: line-through; text-decoration-color: var(--icon); opacity: .8; }
 .todo.completed .todo-box { border-color: var(--ok); background: var(--ok); color: var(--bg); }
 .todo.in_progress { color: var(--text); background: var(--accent); }
-.todo.in_progress .todo-box { border-color: var(--text-dim); border-top-color: transparent; animation: todo-spin 1.4s linear infinite; }
-.todo.in_progress .todo-text {
-  background-image: linear-gradient(to right, transparent, var(--text), transparent), linear-gradient(var(--text-80), var(--text-80));
-  background-size: 4.5rem 100%, 100% 100%; background-repeat: no-repeat; background-clip: text; -webkit-background-clip: text; color: transparent;
-  animation: shine 2.2s steps(30) infinite;
-}
+.todo.in_progress .todo-box { border-color: var(--text-dim); border-top-color: transparent; }
 .todo.ticked .todo-box { animation: todo-tick 0.35s var(--ease); }
 .todo.ticked .todo-box svg { animation: todo-draw 0.35s var(--ease); }
-@keyframes todo-spin { to { transform: rotate(360deg); } }
 @keyframes todo-tick { from { transform: scale(0.6); } 60% { transform: scale(1.18); } to { transform: scale(1); } }
 @keyframes todo-draw { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
   .todos-bar i { transition: none; }
-  .todo.in_progress .todo-box { animation: none; border-top-color: var(--text-dim); }
-  .todo.in_progress .todo-text { animation: none; background: none; color: var(--text); }
   .todo.ticked .todo-box, .todo.ticked .todo-box svg { animation: none; }
 }
 
 /* ---- working line + wrap-up (ideas 5/7) ---- */
 .working:not(.chip) { align-items: center; gap: 8px; }
-.pulse-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--mutedfg); animation: pulse-dot 1.6s ease-in-out infinite; }
-@keyframes pulse-dot { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
+.pulse-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--sky); }
 @media (prefers-reduced-motion: reduce) { .pulse-dot { animation: none; opacity: .7; } }
 
 
@@ -3369,8 +3347,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .work.live > .working { padding-left: 2px; padding-bottom: 2px; }
 .working-for { color: var(--text-dim); }
 .working-time { font-variant-numeric: tabular-nums; }
-.working-verb { font-size: var(--t-meta); }
-.working-verb::before { content: '·'; margin-right: 8px; display: inline-block; color: var(--mutedfg); -webkit-text-fill-color: var(--mutedfg); }
 .step-head {
   display: flex; align-items: center; gap: 6px; width: 100%; min-height: 28px; padding: 2px 4px 2px 2px;
   border-radius: var(--radius-sm); font-size: var(--t-body); line-height: 1.5; color: var(--mutedfg); text-align: left;
