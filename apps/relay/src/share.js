@@ -102,6 +102,7 @@ export function createShareRoute({ online, callEnv, openTcp }) {
   let loading = null;
   const misses = new Map();
   const tries = new Map(); // ip|name -> { n, until }
+  let sweepTriesAt = 0;
 
   const refresh = () => (loading ??= (async () => {
     const map = new Map();
@@ -120,6 +121,11 @@ export function createShareRoute({ online, callEnv, openTcp }) {
   })().finally(() => { loading = null; }));
 
   async function lookup(name) {
+    const now = Date.now();
+    if (now >= sweepTriesAt) {
+      for (const [key, attempt] of tries) if (attempt.until <= now) tries.delete(key);
+      sweepTriesAt = now + 60_000;
+    }
     const age = Date.now() - cache.at;
     // A warm HTTP tunnel can outlive its share. Check expiry here too:
     // pooling means there may be no new port-open check on the machine.
