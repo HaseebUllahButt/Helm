@@ -325,9 +325,15 @@ export class TaskTransfers {
             if (['failed', 'interrupted', 'cancelled'].includes(send.phase)) this.sendEngine.retry({ jobId: bulk.jobId }, net.self);
           }
           const timer = setInterval(() => {
-            const { job: send } = this.sendEngine.status({ jobId: bulk.jobId }, net.self);
-            job.progress = { phase: send.phase, folder: send.target.path, bytes: send.bytes.sent, total: send.bytes.total,
-              files: send.files, rate: send.rate, eta: send.eta, jobId: send.id };
+            try {
+              const { job: send } = this.sendEngine.status({ jobId: bulk.jobId }, net.self);
+              job.progress = { phase: send.phase, folder: send.target.path, bytes: send.bytes.sent, total: send.bytes.total,
+                files: send.files, rate: send.rate, eta: send.eta, jobId: send.id };
+            } catch {
+              // A removed machine or unreadable job must not throw from a
+              // timer. The wait below still owns the copy's final result.
+              clearInterval(timer);
+            }
           }, 250); timer.unref?.();
           let send;
           try { send = await this.sendEngine.wait(bulk.jobId); } finally { clearInterval(timer); }
