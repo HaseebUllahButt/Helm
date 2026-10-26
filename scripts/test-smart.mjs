@@ -34,6 +34,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runFolder, sweep, sweepCrashed } from './test-cleanup.mjs';
 
 const isFile = (f) => { try { return statSync(f).isFile() } catch { return false } };
 const kebab = (s) => s.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1-$2').toLowerCase();
@@ -353,7 +354,20 @@ async function main() {
 
   if (toRun.length) {
     const report = path.join(tmpdir(), `helm-check-${process.pid}.json`);
+    // Tests make their temporary files in a folder of this run's own, and
+    // whatever they leave running is stopped when the run ends.
+    const crashed = await sweepCrashed();
+    const scratch = runFolder();
+    env.TMPDIR = scratch;
+    const stop = () => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* best effort on exit */ } };
+    process.once('exit', stop);
     const r = await run(process.execPath, [...RUNNER, '--test-reporter=spec', '--test-reporter-destination=stdout', `--test-reporter=${reporter}`, `--test-reporter-destination=${report}`, ...toRun]);
+    const left = [...crashed, ...await sweep(scratch)];
+    process.off('exit', stop);
+    if (left.length) {
+      summary.push(`  stopped ${left.length} programs that tests left running:`);
+      for (const { command } of left.slice(0, 10)) summary.push(`    ${command.slice(0, 160)}`);
+    }
     let passed = {};
     try { passed = JSON.parse(readFileSync(report, 'utf8')) } catch {}
     rmSync(report, { force: true });
