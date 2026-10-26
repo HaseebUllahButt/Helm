@@ -2141,8 +2141,11 @@ export class Daemon {
       case M.BRAIN_SNAPSHOT: {
         // `cached` serves the picture this machine already had - the app uses
         // it to draw an offline machine's last-known threads without waiting
-        // for a refresh that only proves the machine is still down.
-        const snap = p.cached ? readSnapshot() : await this.refreshSnapshot();
+        // for a refresh that only proves the machine is still down. Those
+        // callers read only the snapshot: each open app asks once a minute
+        // while a machine is down, and the text was 50 KB of every 265 KB.
+        if (p.cached) return { snapshot: readSnapshot() };
+        const snap = await this.refreshSnapshot();
         return { text: render(snap, { roster: this.rosterState(snap) }), snapshot: snap };
       }
 

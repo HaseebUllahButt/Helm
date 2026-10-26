@@ -244,7 +244,7 @@ export const M = {
   OWNER_WORDS: 'owner.words',      // { since, read } -> { chats[] }  what the owner wrote here since
   BRAIN_DIGEST: 'brain.digest',    // {} -> { name, sessions[] }  this machine's line in the digest
   BRAIN_OPEN: 'brain.open',        // { profileId?, model?, mode? } -> { session }  start or resume it
-  BRAIN_SNAPSHOT: 'brain.snapshot',// {} -> { text, snapshot }  the whole network as the brain reads it
+  BRAIN_SNAPSHOT: 'brain.snapshot',// { cached? } -> { text, snapshot }  the whole network as the brain reads it; cached: the stored snapshot only, no text
   // Speech to text, on a machine that holds the key rather than on the device.
   VOICE_TRANSCRIBE: 'voice.transcribe', // { audio(base64), mime? } -> { text }
   VOICE_DIRECT: 'voice.direct',         // {} -> { key, model, prompt, endpoint }  so a device calls Groq itself

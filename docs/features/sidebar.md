@@ -33,8 +33,12 @@ until `text` starts with "helm / Search anything".
 - **Traps:** with `up --real`, Settled also holds the owner's real Claude
   chats (they arrive through Claude hooks), including the one running this
   check.
+- **Rules:** a machine sends a chat update only when it changes what the
+  app holds. Status goes at once; counter-only changes share one update
+  per chat per 0.5 s (`session-updates.js`).
 - **Tests:** `test/browser/sidebar`, `sidebar-shelves`, `sidebar-metadata`,
-  `offline-cache`; `test/seen-sync`, `inventory`, `inventory-active`.
+  `offline-cache`; `test/seen-sync`, `inventory`, `inventory-active`,
+  `session-updates`.
 
 ## Rename, archive, delete
 - **Sees:** each row has a ⋯ button ("actions for <title>") with **Rename
