@@ -6,11 +6,15 @@ const labels = {
 };
 export const agentLabel = (engine) => labels[engine] || 'Your agent';
 
-// Addresses and paths stay in the chat, never on a lock screen.
+// Addresses and paths stay in the chat, never on a lock screen. A link
+// keeps its words and loses its target; a path inside brackets or quotes
+// goes too.
 const scrub = (text) => String(text ?? '')
-  .replace(/https?:\/\/\S+|\b(?:localhost|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?\S*|(?:\b[\w.-]+:\d+)\S*/gi, '')
-  .replace(/(?:^|\s)(?:~?\/|[A-Z]:\\)\S+/gi, ' ')
-  .replace(/\s+/g, ' ').trim();
+  .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+  .replace(/(?:https?|file):\/\/\S+|\b(?:localhost|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?\S*|(?:\b[\w.-]+:\d+)\S*/gi, '')
+  .replace(/(^|[\s([{<"'`])(?:~?\/|[A-Z]:\\)[^\s)\]}>"'`]+/gi, '$1')
+  .replace(/\(\s*\)|\[\s*\]|\{\s*\}|<\s*>|"\s*"|'\s*'|`\s*`/g, '')
+  .replace(/\s+/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
 const cap = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 export function notificationContext(session) {

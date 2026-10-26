@@ -92,6 +92,12 @@ test('notification context removes addresses and paths and bounds long session t
   assert.equal(describeDone({ ...session, title: 'x'.repeat(200) }).title.length, 72);
   assert.equal(describeAsk({ cwd: '/home/me/project' }, {}).title, 'project');
   assert.equal(describeAsk({ title: '/home/me/project' }, {}).title, 'Your chat');
+  // A link keeps its words; a path in brackets or quotes goes too.
+  const said = (reply) => describeDone({ ...session, title: 'Fix login' }, 1, reply).body.split('\n')[1];
+  assert.equal(said('Fixed [login.ts](/home/me/private-client/login.ts).'), 'Fixed login.ts.');
+  assert.equal(said('Read [the docs](https://private.test/a) and ![pic](~/shots/a.png) here'), 'Read the docs and pic here');
+  assert.equal(said('See (/home/me/x.ts) and "C:\\Users\\me\\x.txt" now'), 'See and now');
+  assert.equal(said('Open file:///home/me/x.html, then check 3/4 and/or the rest'), 'Open then check 3/4 and/or the rest');
 });
 
 test('a push service that never answers does not hold anything up', async () => {
