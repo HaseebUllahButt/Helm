@@ -149,8 +149,10 @@ export function useWorkspaceData(client: Client, connected: boolean) {
   }, [loadSessions]);
 
   const setPresence = useCallback((envId: string, online: boolean, name?: string) => {
-    setEnvs((list) => list.map((env) => env.id === envId
-      ? { ...env, online, name: name ?? env.name } : env));
+    setEnvs((list) => list.some((env) => env.id === envId && (env.online !== online || (name ?? env.name) !== env.name))
+      ? list.map((env) => env.id === envId ? { ...env, online, name: name ?? env.name } : env)
+      // The same word again (the offline check repeats it every 10 s): nothing to redraw.
+      : list);
   }, []);
   const removeSession = useCallback((envId: string, sessionId: string) => {
     setSessions((all) => ({
