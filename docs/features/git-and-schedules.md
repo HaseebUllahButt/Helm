@@ -41,8 +41,10 @@ edited files in; with none, the Git sheet says so.
   and "worktree". Commit in the worktree, merge into main in `$W`, send one
   more message: the folder and branch are gone. Send again: it is back.
 - **Traps:** the agent's process runs in that folder, so Helm stops it
-  before removing a merged worktree; a rebuilt branch starts afresh.
-- **Tests:** `test/chat-worktree`.
+  before removing a merged worktree; a rebuilt branch starts afresh. A
+  Codex thread still open in its daemon keeps its folder: the native check
+  joins it again within 2.5 s and rebuilds it, which looped every 3 s.
+- **Tests:** `test/chat-worktree`, `native-codex`.
 
 ## CI / CD
 - **Not yet driven;** needs a GitHub repo and account. Merge needs an
