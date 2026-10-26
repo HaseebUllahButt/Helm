@@ -8,7 +8,7 @@ import { collect } from './helpers.mjs';
 
 // Run a real child with ACP over stdio. Each case controls the protocol,
 // without a real account, network access, or delays to order its messages.
-function agent(t, { init = '', session = '', prompt = '', ...opts } = {}) {
+function agent(t, { init = '', session = '', prompt = '', spec = {}, ...opts } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'helm-acp-protocol-'));
   const script = join(dir, 'agent.mjs');
   const input = join(dir, 'input.ndjson');
@@ -43,7 +43,7 @@ for await (const line of lines) {
 }
 
 `);
-  const driver = new AcpDriver({ engine: 'opencode', args: () => [script], acpMode: () => null }, {
+  const driver = new AcpDriver({ engine: 'opencode', args: () => [script], acpMode: () => null, ...spec }, {
     cmd: process.execPath, cwd: dir, mode: 'ask', ...opts,
   });
   t.after(() => driver.kill());
@@ -168,4 +168,38 @@ test('ACP replaces tool content when an update supplies an empty list', async t 
   const updates = log.of('item.update').filter(e => e.id === 'tool-1');
   assert.deepEqual(updates.at(-1).changes, []);
   assert.equal(log.of('item.done').find(e => e.id === 'tool-1').output, '');
+});
+
+test('ACP finds grouped model, mode and effort choices by category', async t => {
+  const configOptions = [
+    { id: 'provider_model', category: 'model', type: 'select', currentValue: 'model-a', options: [
+      { name: 'Provider', options: [{ value: 'model-a', name: 'Model A' }, { value: 'model-b', name: 'Model B' }] },
+    ] },
+    { id: 'approval_mode', category: 'mode', type: 'select', currentValue: 'build', options: [
+      { name: 'Modes', options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }] },
+    ] },
+    { id: 'thinking', category: 'thought_level', type: 'select', currentValue: 'low', options: [
+      { name: 'Thinking', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] },
+    ] },
+  ];
+  const { driver, log, sent } = agent(t, {
+    model: 'model-b', effort: 'high', mode: 'read',
+    spec: { effortId: 'effort', acpMode: mode => mode === 'read' ? 'plan' : 'build' },
+    session: `return reply({ sessionId: 'chat-1', configOptions: ${JSON.stringify(configOptions)} });`,
+    prompt: `update({ sessionUpdate: 'config_option_update', configOptions: ${JSON.stringify([configOptions[0]])} });`,
+  });
+  await driver.start();
+  assert.deepEqual(driver.catalog(), { models: ['model-a', 'model-b'],
+    labels: { 'model-a': 'Model A', 'model-b': 'Model B' },
+    current: 'model-b', efforts: ['low', 'high'], effort: 'high' });
+  assert.deepEqual(sent().filter(m => m.method === 'session/set_config_option').map(m => m.params), [
+    { sessionId: 'chat-1', configId: 'provider_model', value: 'model-b' },
+    { sessionId: 'chat-1', configId: 'approval_mode', value: 'plan' },
+    { sessionId: 'chat-1', configId: 'thinking', value: 'high' },
+  ]);
+  await driver.send('Switch the model');
+  await log.until(e => e.type === 'turn.done');
+  assert.equal(driver.model, 'model-a');
+  assert.equal(driver.catalog().current, 'model-a');
+  assert.deepEqual(driver.catalog().efforts, []);
 });

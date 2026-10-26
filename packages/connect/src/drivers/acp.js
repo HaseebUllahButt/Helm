@@ -396,8 +396,26 @@ export class AcpDriver extends Driver {
    * wire actually wants, so everything downstream (catalog, setModel,
    * setMode, refusal handling) treats them identically.
    */
+  #configOptions(result) {
+    const options = Array.isArray(result?.configOptions) ? result.configOptions : [];
+    const seen = new Set();
+    return options.flatMap((option) => {
+      if (!option?.id) return [];
+      // Categories describe the picker; ids are agent-defined wire values.
+      // Older agents omit categories, so their familiar ids still work.
+      const category = option.type == null || option.type === 'select' ? option.category : null;
+      const id = category === 'model' || category === 'mode' ? category
+        : category === 'thought_level' && this.spec.effortId ? this.spec.effortId : option.id;
+      if (seen.has(id)) return [];
+      seen.add(id);
+      return [{ ...option, id, _configId: option._configId ?? option.id,
+        options: (option.options ?? []).flatMap((entry) => Array.isArray(entry?.options) ? entry.options : [entry]),
+      }];
+    });
+  }
+
   #takeOptions(result) {
-    const merged = [...(Array.isArray(result?.configOptions) ? result.configOptions : [])];
+    const merged = this.#configOptions(result);
     // Agents that answer with both - devin does - carry modes/models as a
     // legacy mirror of the same pickers. They fill a picker only when
     // configOptions never carried one; overwriting it would silently switch
@@ -467,7 +485,7 @@ export class AcpDriver extends Driver {
     if (option?._legacy === 'session/set_model') {
       return this.#call('session/set_model', { sessionId: this.engineSessionId, modelId: value });
     }
-    return this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId, value });
+    return this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: option?._configId ?? configId, value });
   }
 
   #syncInfo() {
@@ -491,7 +509,7 @@ export class AcpDriver extends Driver {
       return;
     }
     const changed = this.#optionsChanged(r.result);
-    const responseOption = r.result?.configOptions?.find((o) => o?.id === 'model');
+    const responseOption = this.#configOptions(r.result).find((o) => o.id === 'model');
     const responseValue = Object.hasOwn(responseOption ?? {}, 'currentValue')
       ? responseOption.currentValue
       : Object.hasOwn(r.result?.models ?? {}, 'currentModelId') ? r.result.models.currentModelId : undefined;
@@ -523,7 +541,7 @@ export class AcpDriver extends Driver {
       return;
     }
     const changed = this.#optionsChanged(r.result);
-    const responseOption = r.result?.configOptions?.find((o) => o?.id === this.spec.effortId);
+    const responseOption = this.#configOptions(r.result).find((o) => o.id === this.spec.effortId);
     const responseValue = Object.hasOwn(responseOption ?? {}, 'currentValue') ? responseOption.currentValue : undefined;
     const current = this.#options.find((o) => o.id === this.spec.effortId)?.currentValue;
     const moved = current != null && current !== cachedValue;
