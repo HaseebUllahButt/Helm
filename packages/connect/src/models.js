@@ -662,6 +662,17 @@ export function parseOpencodeModelCache(catalog) {
   return { effortsByModel, labels, attachmentByModel };
 }
 
+/**
+ * OpenCode 2 answers a command through its background service, starting one
+ * when none runs, and that service stays up long after the answer. Asking for
+ * the model list would leave it running for good. `--standalone` uses a
+ * private server that exits with the command; OpenCode 1 has no such flag.
+ */
+async function opencodeExec(bin, args, options) {
+  try { return await exec(bin, [...args, '--standalone'], options); }
+  catch { return exec(bin, args, options); }
+}
+
 async function opencodeModels(root, bin = 'opencode', environment = {}) {
   let def = null;
   for (const name of ['opencode.jsonc', 'opencode.json']) {
@@ -679,7 +690,7 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
   try {
     // The normal command reads OpenCode's existing local catalog. Only try
     // its network-refresh path when there is no usable local answer.
-    ({ stdout } = await exec(bin, ['models'], {
+    ({ stdout } = await opencodeExec(bin, ['models'], {
       timeout: 8_000,
       env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
     }));
@@ -689,7 +700,7 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
   } catch {
     // `--refresh` is a fallback for an empty/broken local catalog, never the
     // first step on every picker request.
-    ({ stdout } = await exec(bin, ['models', '--refresh'], {
+    ({ stdout } = await opencodeExec(bin, ['models', '--refresh'], {
       timeout: 20_000,
       env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
     }));
@@ -754,7 +765,7 @@ async function refusedOpencodeKeys(bin, root, environment = {}) {
   const keys = new Map();
   try {
     // V2 keeps keys in its database and prints them with `auth export`.
-    const { stdout } = await exec(bin, ['auth', 'export'], {
+    const { stdout } = await opencodeExec(bin, ['auth', 'export'], {
       timeout: 8_000,
       env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
     });

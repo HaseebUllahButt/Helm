@@ -160,21 +160,25 @@ test('Claude returns its local account answer before Models.dev and refreshes th
   }
 });
 
-test('OpenCode tries usable local model rows before forced refresh', async () => {
+test('OpenCode tries usable local model rows before forced refresh, without its background service', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-model-opencode-'));
   const bin = join(dir, 'bin');
   const localHome = join(dir, 'local');
   const emptyHome = join(dir, 'empty');
+  const v1Home = join(dir, 'v1');
   mkdirSync(bin);
   mkdirSync(localHome);
   mkdirSync(emptyHome);
+  mkdirSync(v1Home);
   writeFileSync(join(localHome, 'models.txt'), 'provider/local-model\n');
+  writeFileSync(join(v1Home, 'models.txt'), 'provider/v1-model\n');
   const log = join(dir, 'calls.log');
   executable(bin, 'opencode', [
     '#!/usr/bin/env node',
     "const fs = require('node:fs');",
     "const path = require('node:path');",
     "fs.appendFileSync(process.env.OPENCODE_CALLS_PATH, process.argv.slice(2).join(' ') + '\\n');",
+    "if (process.env.XDG_CONFIG_HOME.endsWith('v1') && process.argv.includes('--standalone')) process.exit(1);",
     "if (process.argv.includes('--refresh')) { process.stdout.write('provider/refreshed-model\\n'); process.exit(0); }",
     "const local = path.join(process.env.XDG_CONFIG_HOME, 'models.txt');",
     "if (fs.existsSync(local)) process.stdout.write(fs.readFileSync(local, 'utf8'));",
@@ -187,15 +191,22 @@ test('OpenCode tries usable local model rows before forced refresh', async () =>
   process.env.OPENCODE_CALLS_PATH = log;
   try {
     const { listModels } = await import('../packages/connect/src/models.js?opencode-local-first');
+    const modelCalls = () => readFileSync(log, 'utf8').trim().split('\n').filter((l) => l.startsWith('models'));
     const local = await listModels('opencode', localHome);
     assert.deepEqual(local.models, ['provider/local-model']);
-    assert.equal(readFileSync(log, 'utf8').trim(), 'models');
+    assert.deepEqual(modelCalls(), ['models --standalone']);
 
     const refreshed = await listModels('opencode', emptyHome);
     assert.deepEqual(refreshed.models, ['provider/refreshed-model']);
-    assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [
-      'models', 'models', 'models --refresh',
+    assert.deepEqual(modelCalls(), [
+      'models --standalone', 'models --standalone', 'models --refresh --standalone',
     ]);
+    assert.ok(readFileSync(log, 'utf8').includes('auth export --standalone'));
+
+    // OpenCode 1 has no --standalone flag, so the plain command still answers.
+    const v1 = await listModels('opencode', v1Home);
+    assert.deepEqual(v1.models, ['provider/v1-model']);
+    assert.deepEqual(modelCalls().slice(3), ['models --standalone', 'models']);
   } finally {
     process.env.PATH = priorPath;
     if (priorLog === undefined) delete process.env.OPENCODE_CALLS_PATH;
