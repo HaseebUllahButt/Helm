@@ -52,6 +52,13 @@ const cameUpEmpty = new Set<string>();
 export const startedEmpty = (sessionId: string) => cameUpEmpty.has(sessionId);
 export const loadedChat = (sessionId: string) => { cameUpEmpty.delete(sessionId); };
 
+/**
+ * How each chat started here came up, by its placeholder's id and, once up,
+ * by its session id. An unused chat is let go when you leave it; going back
+ * to it starts the same chat again rather than an empty page.
+ */
+const origins = new Map<string, { info: StartInfo; run: () => Promise<Session> }>();
+
 const notify = (chat: StartingChat) => { for (const l of listeners) l(chat); };
 
 export function startingChat(id: string): StartingChat | undefined { return chats.get(id); }
@@ -66,8 +73,15 @@ export function beginChat(client: Client, info: StartInfo, run: () => Promise<Se
   const chat: StartingChat = { ...info, id: `start-${Date.now().toString(36)}-${++seq}`, state: 'starting', message: '', draft, since: Date.now() };
   chats.set(chat.id, chat);
   runs.set(chat.id, run);
+  origins.set(chat.id, { info, run });
   attempt(client, chat);
   return chat;
+}
+
+/** The same chat again, from a placeholder's id or a session id; undefined when it did not start here. */
+export function startAgain(client: Client, key: string, draft = ''): StartingChat | undefined {
+  const origin = origins.get(key);
+  return origin && beginChat(client, origin.info, origin.run, draft);
 }
 
 function attempt(client: Client, chat: StartingChat) {
@@ -76,6 +90,8 @@ function attempt(client: Client, chat: StartingChat) {
   runs.get(chat.id)!().then(
     async (session) => {
       chat.session = session;
+      const origin = origins.get(chat.id);
+      if (origin) origins.set(session.id, origin);
       // In before the chat opens, so it opens on the message rather than
       // empty for a moment. If it cannot go in, it waits in the box instead.
       const send = (data: string) => client.input(chat.envId, { id: session.id, data })
