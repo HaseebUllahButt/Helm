@@ -1,0 +1,17 @@
+{"id":1,"result":{"userAgent":"fake-codex/0.162.0"}}
+{"id":2,"result":{"thread":{"id":"parent-v2","turns":[]},"model":"helper-model"}}
+{"id":3,"result":{"turn":{"id":"turn-v2","status":"inProgress"}}}
+{"method":"turn/started","params":{"threadId":"parent-v2","turn":{"id":"turn-v2","status":"inProgress"}}}
+{"method":"item/started","params":{"threadId":"parent-v2","turnId":"turn-v2","item":{"type":"subAgentActivity","id":"start-a","kind":"started","agentThreadId":"child-a","agentPath":"root/a","model":"helper-model"}}}
+{"method":"item/completed","params":{"threadId":"parent-v2","turnId":"turn-v2","item":{"type":"subAgentActivity","id":"start-a","kind":"started","agentThreadId":"child-a","agentPath":"root/a","model":"helper-model"}}}
+{"method":"item/started","params":{"threadId":"child-a","turnId":"child-turn-a","item":{"type":"agentMessage","id":"reply-a","text":""}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"child-a","turnId":"child-turn-a","itemId":"reply-a","delta":"Result a"}}
+{"method":"item/completed","params":{"threadId":"child-a","turnId":"child-turn-a","item":{"type":"agentMessage","id":"reply-a","text":"Result a"}}}
+{"method":"item/completed","params":{"threadId":"parent-v2","turnId":"turn-v2","item":{"type":"subAgentActivity","id":"end-a","kind":"completed","agentThreadId":"child-a","agentPath":"root/a","model":"helper-model"}}}
+{"method":"item/started","params":{"threadId":"parent-v2","turnId":"turn-v2","item":{"type":"subAgentActivity","id":"start-b","kind":"started","agentThreadId":"child-b","agentPath":"root/b","model":"helper-model"}}}
+{"method":"item/completed","params":{"threadId":"parent-v2","turnId":"turn-v2","item":{"type":"subAgentActivity","id":"start-b","kind":"started","agentThreadId":"child-b","agentPath":"root/b","model":"helper-model"}}}
+{"method":"item/started","params":{"threadId":"child-b","turnId":"child-turn-b","item":{"type":"agentMessage","id":"reply-b","text":""}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"child-b","turnId":"child-turn-b","itemId":"reply-b","delta":"Result b"}}
+{"method":"item/completed","params":{"threadId":"child-b","turnId":"child-turn-b","item":{"type":"agentMessage","id":"reply-b","text":"Result b"}}}
+{"method":"item/completed","params":{"threadId":"parent-v2","turnId":"turn-v2","item":{"type":"subAgentActivity","id":"end-b","kind":"completed","agentThreadId":"child-b","agentPath":"root/b","model":"helper-model"}}}
+{"method":"turn/completed","params":{"threadId":"parent-v2","turn":{"id":"turn-v2","status":"completed"}}}

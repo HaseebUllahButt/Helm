@@ -40,6 +40,42 @@ test('a fresh Codex helper sends its task without parent context and reports cac
   } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
 });
 
+test('Codex v2 activity keeps one card per child and nests each reply under the correct card', async () => {
+  const { fake, driver, log } = make('subagent-v2');
+  try {
+    await driver.send('Use two helpers.');
+    await log.until(e => e.type === 'turn.done');
+    const cards = log.of('item.start').filter(e => e.kind === 'subagent');
+    assert.deepEqual(cards.map(e => [e.id, e.agent.id]), [['start-a', 'child-a'], ['start-b', 'child-b']]);
+    assert.deepEqual(log.of('item.start').filter(e => e.kind === 'text').map(e => [e.id, e.parentId]), [['reply-a', 'start-a'], ['reply-b', 'start-b']]);
+    assert.ok(log.of('subagent.status').some(e => e.id === 'start-a' && e.status === 'working'));
+    assert.ok(log.of('subagent.status').some(e => e.id === 'start-b' && e.status === 'working'));
+    for (const card of cards) {
+      assert.equal(log.of('subagent.status').findLast(e => e.id === card.id).status, 'idle');
+      assert.equal(log.of('item.done').filter(e => e.id === card.id).length, 1);
+    }
+    const { eventSubagents } = await import('../packages/connect/src/cli-subagents.js');
+    assert.deepEqual(eventSubagents(log.events, { engine: 'codex' }).map(c => [c.threadId, c.status]), [['child-a', 'done'], ['child-b', 'done']]);
+  } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
+test('Codex v2 interruption settles only its child and later activity keeps the same card', () => {
+  const driver = new CodexDriver({ cmd: 'unused', env: {}, cwd: '/tmp' });
+  driver.threadId = 'parent';
+  const log = collect(driver);
+  const item = { type: 'subAgentActivity', id: 'started', agentThreadId: 'child', agentPath: 'root/check', kind: 'started' };
+  const emit = (kind, id) => driver.onNotification('item/completed', { threadId: 'parent', item: { ...item, kind, id } });
+  emit('started', 'started');
+  emit('interrupted', 'stopped');
+  assert.equal(log.of('item.done').at(-1).status, 'interrupted');
+  emit('interacted', 'follow-up');
+  emit('completed', 'finished');
+  assert.equal(log.of('item.start').length, 1);
+  assert.equal(log.of('subagent.status').at(-1).status, 'idle');
+  assert.equal(log.of('item.done').at(-1).status, 'ok');
+  assert.equal(log.of('turn.done').length, 0, 'a child activity must not end the parent turn');
+});
+
 test('Codex rejects a failed process start and permits a later retry', { timeout: 5000 }, async () => {
   const { fake, driver, log } = make('plain');
   const script = readFileSync(fake.cmd, 'utf8');
@@ -219,6 +255,21 @@ test('reattaching Codex does not replay old helper failures and checks a survivi
   assert.equal(log.of('subagent.status').some(e => e.status === 'error'), false);
   assert.ok(writes.some(request => request.method === 'thread/read' && request.params.threadId === 'active-child'));
   assert.deepEqual(log.of('subagent.status').map(e => [e.id,e.status]), [['active-card','working'],['active-card','idle']]);
+});
+
+test('reattaching Codex v2 restores a live child alias without reviving finished children', async t => {
+  const activity = (id, child, kind) => ({ type: 'subAgentActivity', id, agentThreadId: child, agentPath: `root/${child}`, kind });
+  const thread = { status: { type: 'idle' }, turns: [{ id: 'stale-log-turn', status: 'completed', items: [
+    activity('old-card', 'old-child', 'started'), activity('old-end', 'old-child', 'completed'),
+    activity('live-card', 'live-child', 'started'),
+  ] }] };
+  const { driver, log, writes } = adoptedCodex(t, { thread });
+  await driver.start();
+  assert.deepEqual(log.of('subagent.status').map(e => [e.id, e.status]), [['live-card', 'working'], ['live-card', 'idle']]);
+  assert.ok(writes.some(r => r.method === 'thread/read' && r.params.threadId === 'live-child'));
+  assert.equal(writes.some(r => r.params.threadId === 'old-child'), false);
+  driver.onNotification('item/started', { threadId: 'live-child', turnId: 'child-turn', item: { type: 'agentMessage', id: 'reply' } });
+  assert.equal(log.of('item.start').at(-1).parentId, 'live-card');
 });
 
 test('older ephemeral Codex threads fall back to a live status read without replaying work', async (t) => {

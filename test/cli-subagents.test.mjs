@@ -214,6 +214,32 @@ test('a CLI with no readable records still shows the helpers its chat started, r
   await assert.rejects(sessions.messageNative(parent.id, 'sub1', 'More'), /cannot pass messages/);
 });
 
+test('Codex v2 children show their own reply and status through the Helm subagent view', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: workdir, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Use a child');
+  const { CodexDriver } = await import('../packages/connect/src/drivers/codex.js');
+  const source = new CodexDriver({ cmd: 'unused', env: {}, cwd: workdir });
+  source.threadId = parent.engineSessionId;
+  source.on('event', event => drivers.get(parent.id).emit('event', event));
+  const activity = { type: 'subAgentActivity', id: 'v2-start', kind: 'started', agentThreadId: 'v2-child', agentPath: 'root/check', model: 'small-model' };
+  source.onNotification('item/started', { threadId: source.threadId, turnId: 't1', item: activity });
+  source.onNotification('item/completed', { threadId: source.threadId, turnId: 't1', item: activity });
+  assert.equal(parent.team.working, 1);
+  const working = await sessions.nativeAgent(parent.id, 'v2-start');
+  assert.equal(working.agent.status, 'working');
+  assert.equal(working.agent.threadId, 'v2-child');
+  source.onNotification('item/started', { threadId: 'v2-child', turnId: 'child-turn', item: { type: 'agentMessage', id: 'v2-reply' } });
+  source.onNotification('item/agentMessage/delta', { threadId: 'v2-child', itemId: 'v2-reply', delta: 'The child reply.' });
+  source.onNotification('item/completed', { threadId: 'v2-child', item: { type: 'agentMessage', id: 'v2-reply', text: 'The child reply.' } });
+  source.onNotification('item/completed', { threadId: source.threadId, turnId: 't1', item: { ...activity, id: 'v2-end', kind: 'completed' } });
+  const done = await sessions.nativeAgent(parent.id, 'v2-start', { full: true });
+  assert.equal(done.agent.status, 'done');
+  assert.equal(parent.team.working, 0);
+  assert.ok(done.events.some(e => e.type === 'item.delta' && e.text === 'The child reply.'));
+  assert.equal(parent.nativeCards.length, 1);
+});
+
 test('finding the helpers a chat started does not re-read its whole log each time', async (t) => {
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: workdir, profileId: 'devin-main' });

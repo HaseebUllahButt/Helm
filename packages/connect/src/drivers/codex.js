@@ -1646,6 +1646,7 @@ export class CodexDriver extends Driver {
   }
 
   #onItemStarted(item, turnId, parentId) {
+    if (item?.type === 'subAgentActivity') return this.#agentActivity(item, turnId, parentId);
     if (!item) return;
     if (parentId) {
       const step = childStep(item);
@@ -1742,6 +1743,7 @@ export class CodexDriver extends Driver {
   }
 
   #onItemCompleted(item) {
+    if (item?.type === 'subAgentActivity') return this.#agentActivity(item);
     if (!item || item.type === 'userMessage') return;
     const known = this.#items.get(item.id);
     if (!known) {
@@ -1791,6 +1793,31 @@ export class CodexDriver extends Driver {
     }
   }
 
+  /** v2 reports the child's life, rather than a spawn tool's running state. */
+  #agentActivity(item, turnId, parentId) {
+    if (!parentId && turnId) this.#wake(turnId);
+    const threadId = item.agentThreadId;
+    if (!threadId || !['started', 'interacted', 'interrupted', 'completed'].includes(item.kind)) return;
+    const finished = ['completed', 'interrupted'].includes(item.kind);
+    const status = item.kind === 'interrupted' ? 'shutdown' : finished ? 'completed' : 'running';
+    let card = this.#subagentThreads.get(threadId);
+    if (!card) {
+      card = item.id;
+      this.#subagentThreads.set(threadId, card);
+      this.#server?.alias(threadId, this);
+      this.#items.set(card, { kind: 'subagent' });
+      this.push('item.start', { id: card, turnId: turnId ?? this.#turnId, parentId, kind: 'subagent', name: 'spawn_agent',
+        input: { description: item.agentPath, model: item.model }, agent: { id: threadId, status } });
+    }
+    this.push('subagent.status', { id: card, status: finished ? 'idle' : 'working' });
+    this.push('item.update', { id: card, agent: { id: threadId, status } });
+    if (!finished) this.#items.set(card, { kind: 'subagent' });
+    if (finished && this.#items.has(card)) {
+      this.push('item.done', { id: card, status: item.kind === 'interrupted' ? 'interrupted' : 'ok' });
+      this.#items.delete(card);
+    }
+  }
+
   async #restoreAgents(turns) {
     const active = new Map();
     const savedActive = new Set();
@@ -1809,6 +1836,13 @@ export class CodexDriver extends Driver {
       }
     }
     for (const turn of turns ?? []) for (const item of turn.items ?? []) {
+      if (item.type === 'subAgentActivity' && item.agentThreadId) {
+        const id = item.agentThreadId;
+        this.#subagentThreads.set(id, this.#subagentThreads.get(id) ?? item.id);
+        this.#server?.alias(id, this);
+        active.set(id, ['started', 'interacted'].includes(item.kind));
+        continue;
+      }
       if (!['collabAgentToolCall', 'collabToolCall', 'subAgentActivity'].includes(item.type)) continue;
       for (const [id, state] of Object.entries(item.agentsStates ?? {})) {
         const card = this.#subagentThreads.get(id) ?? (/spawn/i.test(item.tool ?? '') ? item.id : null);
