@@ -11,6 +11,15 @@ const MAX_FRAME = 64 * 1024 * 1024;
 export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, env, rtcConfig = nativeDirectConfig() }) {
   const pc = new RTCPeerConnection(rtcConfig);
   const channel = pc.createDataChannel('helm', { ordered: true });
+  const HIGH_WATER = 512 * 1024;
+  channel.bufferedAmountLowThreshold = HIGH_WATER / 2;
+  // A full send buffer wakes the sender when it drains, not 200 times a
+  // second. The slow recheck covers a close or a missed event.
+  const drained = () => new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); channel.removeEventListener('bufferedamountlow', done); resolve(); };
+    const timer = setTimeout(done, 250);
+    channel.addEventListener('bufferedamountlow', done);
+  });
   const negotiation = randomBytes(12).toString('hex');
   const candidates = [];
   const localCandidates = [];
@@ -96,9 +105,7 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
     const gid = randomBytes(12).toString('hex');
     for (let index = 0; index < count; index++) {
       const deadline = Date.now() + 120_000;
-      while (!closed && channel.readyState === 'open' && channel.bufferedAmount > 512 * 1024 && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
+      while (!closed && channel.readyState === 'open' && channel.bufferedAmount > HIGH_WATER && Date.now() < deadline) await drained();
       if (closed || channel.readyState !== 'open') throw Object.assign(new Error('direct channel closed'), { unsent: index === 0 });
       if (Date.now() >= deadline) throw Object.assign(new Error('direct channel backpressure did not drain'), { unsent: index === 0 });
       if (index === 0) onStart?.();
