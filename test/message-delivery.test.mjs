@@ -123,6 +123,17 @@ test('explicit held messages and slash commands are barriers to automatic mid-tu
   assert.equal(driver.steered.length, 1);
 });
 
+test('the chat stops reading "compacting" once the agent takes its next step, whatever closed the compaction', async (t) => {
+  const { sessions, session, driver } = await setup(t, 'claude');
+  driver.push('item.start', { id: 'compact-1', kind: 'tool', name: 'compact', turnId: driver.turnId, input: {} });
+  assert.ok(sessions.get(session.id).compacting);
+  // A helper's step runs beside it; the agent's own next step means it is over.
+  driver.push('item.start', { id: 'helper-step', kind: 'tool', name: 'Bash', parentId: 'agent', turnId: driver.turnId });
+  assert.ok(sessions.get(session.id).compacting);
+  driver.push('item.start', { id: 'git-status', kind: 'command', turnId: driver.turnId });
+  assert.equal(sessions.get(session.id).compacting, undefined);
+});
+
 test('OpenCode takes a message inside its running loop; other CLIs keep it for the reply\'s end', async (t) => {
   for (const engine of ['opencode', 'devin', 'opencode2', 'pi']) {
     await t.test(engine, async (t) => {

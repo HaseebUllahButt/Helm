@@ -344,9 +344,10 @@ export function apply(state: LogState, e: HelmEvent): void {
       if (!turn) return;
       if (turn.items.some((x) => x.id === e.id)) return;
       turn.revision = e.seq;
-      // One compaction runs at a time. A restart of helm mid-compaction left
-      // the old marker open, spinning on after the new one finished.
-      if (e.kind === 'tool' && (e.name === 'compact' || e.name === 'contextCompaction')) closeCompactions(state.turns, e.at, e.seq);
+      // One compaction runs at a time, and no other step runs during one. A
+      // restart of helm mid-compaction loses its end, so the next compaction
+      // or the next step of the agent's own closes it.
+      if (!e.parentId) closeCompactions(state.turns, e.at, e.seq);
       const item: Item = {
         id: e.id, kind: e.kind, turnId: e.turnId, text: '', status: 'streaming', startedAt: e.at,
         name: e.name, input: e.input, command: e.command, actions: e.actions, cwd: e.cwd, changes: e.changes,
@@ -480,6 +481,8 @@ export function apply(state: LogState, e: HelmEvent): void {
       state.status = e.status;
       // The process is gone, and every helper it was running went with it.
       if (e.status === 'exited') stopAgents(state.turns, e.seq);
+      // A stopped agent compacts nothing.
+      if (e.status === 'idle' || e.status === 'exited') closeCompactions(state.turns, e.at, e.seq);
       return;
     case 'limits':
       state.limits = { ...(state.limits ?? {}), ...e };

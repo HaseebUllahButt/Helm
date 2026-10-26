@@ -179,9 +179,11 @@ export class DriverEvents {
     if (e.type === 'input.failed') return this.#core.delivery.consumed(s, e.text, e.inputId, e.error || 'The CLI did not take this message.');
     // Compacting is part of where the thread stands - its row, its chip and
     // the bar over the composer say so, for every CLI - from the compaction
-    // item's start until it ends, or the CLI stops or exits.
+    // item's start until it ends, the agent takes its next step, or the CLI
+    // stops or exits.
     const compaction = e.type === 'item.start' && e.name === 'compact' && !e.parentId ? Date.now()
       : (e.type === 'item.done' && e.id === this.#compactions.get(s.id))
+        || (e.type === 'item.start' && !e.parentId)
         || (e.type === 'status' && ['idle', 'exited'].includes(e.status)) ? 0 : null;
     if (compaction != null && (!!compaction !== !!s.compacting)) {
       if (compaction) { s.compacting = compaction; this.#compactions.set(s.id, e.id); }
