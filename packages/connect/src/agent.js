@@ -2032,7 +2032,7 @@ export class Daemon {
         return this.inputDelivery.deliver(p, caller);
       case M.SESSION_INPUT:   return this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments, delivery: p.delivery, references: p.references });
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
-      case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });
+      case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit, known: typeof p.known === 'string' ? p.known : null });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
       case M.SESSION_DISCARD_EMPTY: return this.sessions.discardEmpty(p.id);
       case M.SESSION_TITLE:   return this.sessions.rename(p.id, p.title);

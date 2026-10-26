@@ -65,7 +65,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
   /** The messages last shown, as text: a read that brings back the same chat changes nothing. */
-  const shown = useRef({ id: '', text: '' });
+  const shown = useRef({ id: '', text: '', version: '' });
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat && !nativeConversation(session.engine));
   // Git and Agents open the same panels a Helm chat has.
@@ -165,16 +165,22 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     reading.current = true;
     let success = false;
     try {
-      const r = await client.rpc<{ messages: Message[]; status?: Session['status'] }>(env.id, 'session.messages', { id: session.id }, 15_000);
+      // The machine answers `unchanged` when the version we hold is current,
+      // so a quiet chat costs a few bytes, not the whole list.
+      const known = shown.current.id === session.id ? shown.current.version : '';
+      const r = await client.rpc<{ messages?: Message[]; unchanged?: boolean; version?: string; status?: Session['status'] }>(
+        env.id, 'session.messages', { id: session.id, ...(known ? { known } : {}) }, 15_000);
       if (!mounted.current) return;
       // Most reads repeat the chat on screen. A new list redrew every
       // message, rewrote the saved copy and, for a reader scrolled up,
       // showed "new" when nothing was.
-      const text = JSON.stringify(r.messages);
-      if (shown.current.id !== session.id || shown.current.text !== text) {
-        shown.current = { id: session.id, text };
-        setMessages(r.messages);
-        saveMessages(env.id, session.id, r.messages);
+      if (!r.unchanged && r.messages) {
+        const text = JSON.stringify(r.messages);
+        if (shown.current.id !== session.id || shown.current.text !== text) {
+          setMessages(r.messages);
+          saveMessages(env.id, session.id, r.messages);
+        }
+        shown.current = { id: session.id, text, version: r.version ?? '' };
       }
       if (r.status) setStatus(r.status);
       setReadError(''); success = true;
@@ -269,7 +275,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       if (session.nativeChat && (result?.terminal || body.trimStart().startsWith('/'))) setNativeNotice(body.trim());
       else {
         // The next read replaces this guess, as it always did.
-        shown.current = { id: '', text: '' };
+        shown.current = { id: '', text: '', version: '' };
         setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now(),
           attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) }] : m);
       }

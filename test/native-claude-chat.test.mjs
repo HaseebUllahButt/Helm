@@ -470,3 +470,27 @@ test('Claude takeover can select and leave dangerously-skip-permissions after th
     assert.equal((await sessions.setMode('native-test','default')).session.mode,'default');
   } finally{await sessions.stop();}
 });
+
+test('a native chat read that the app already holds answers unchanged, without the messages', async () => {
+  const host = new Host(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    const transcript = join(root, 'native-unchanged.jsonl');
+    const line = (text) => JSON.stringify({ type: 'user', message: { role: 'user', content: text }, timestamp: new Date().toISOString() }) + '\n';
+    writeFileSync(transcript, line('first question'));
+    sessions.get('native-test').transcript = transcript;
+    const full = await sessions.messages('native-test');
+    assert.equal(full.messages[0].text, 'first question');
+    assert.match(full.version, /^[\w-]{22}$/);
+    const same = await sessions.messages('native-test', { known: full.version });
+    assert.equal(same.unchanged, true);
+    assert.equal(same.messages, undefined);
+    assert.equal(same.version, full.version);
+    // A new message changes the version, and the list comes back whole.
+    writeFileSync(transcript, line('first question') + line('second question'));
+    const grown = await sessions.messages('native-test', { known: full.version });
+    assert.equal(grown.unchanged, undefined);
+    assert.deepEqual(grown.messages.map(m => m.text), ['first question', 'second question']);
+    assert.notEqual(grown.version, full.version);
+  } finally { await sessions.stop(); }
+});

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { getProfiles } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
@@ -75,7 +76,7 @@ export class SessionViewers {
    * the raw screen asks for it explicitly, and silently returning scrollback
    * here would make the chat view lie about what it is showing.
    */
-  async messages(id, { limit = 120 } = {}) {
+  async messages(id, { limit = 120, known = null } = {}) {
     const s = this.#sessions.get(id);
     if (s.driver) return { messages: [], source: 'events' };
     // A launched native process must be linked by process identity, never
@@ -125,11 +126,12 @@ export class SessionViewers {
         message.attachments = saved.attachments.map(image => ({ ...image, data: this.#sessions.events.attachment(id, image.ref) }));
       }
     }
-    return {
-      messages: withVisualMessages(messages, this.#sessions.events.tail(id, 0)),
-      status: s.status,
-      source: s.transcript,
-    };
+    const shown = withVisualMessages(messages, this.#sessions.events.tail(id, 0));
+    // The app reads a native chat every few seconds. When it already has
+    // these messages, say so instead of sending the whole list again.
+    const version = createHash('sha256').update(JSON.stringify(shown)).digest('base64url').slice(0, 22);
+    if (known === version) return { unchanged: true, version, status: s.status, source: s.transcript };
+    return { messages: shown, version, status: s.status, source: s.transcript };
   }
 
   async read(id, { lines = 200, source = 'recent', ansi = false } = {}) {
