@@ -316,6 +316,11 @@ async function up() {
       try { integrateNativeCommands(); } catch (err) { report(err); }
     } catch (err) { report(err); }
   }
+  if (platform() === 'linux') {
+    // A new logo reaches the launcher too, not only the app.
+    import('../src/desktop.js').then((m) => m.refreshAppIcons())
+      .catch((err) => console.error(`helm: app icons: ${err.message}`));
+  }
   useHubDb();
   const { up: bringUp } = await import('../src/serve.js');
   // A tunnel is opt-in now. It exists for the one case that genuinely needs
