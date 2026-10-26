@@ -4,8 +4,9 @@
 // just uses the window.
 import { existsSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { execFile, spawn } from 'node:child_process';
+import { hostname } from 'node:os';
+import { join, resolve } from 'node:path';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 /** A screen to open a window on: always on a Mac or Windows, a display on Linux. */
@@ -50,12 +51,29 @@ export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
 
 const PORT_FILE = 'DevToolsActivePort';
 
-/** The live Chromium using this profile, if any. Chromium's lock names its process. */
-function profilePid(profileDir) {
+/**
+ * The live Chromium using this profile, if any. Chromium's lock names its
+ * host and process. A lock left by a crash can name a process number that
+ * another program has since been given, so the process must be Chromium
+ * started on this profile.
+ */
+export function profilePid(profileDir) {
   let target; try { target = readlinkSync(join(profileDir, 'SingletonLock')); } catch { return null; }
-  const pid = Number(target.split('-').pop());
-  if (!Number.isInteger(pid) || pid < 1) return null;
-  try { process.kill(pid, 0); return pid; } catch (error) { return error.code === 'EPERM' ? pid : null; }
+  const cut = target.lastIndexOf('-'), pid = Number(target.slice(cut + 1));
+  if (cut < 1 || target.slice(0, cut) !== hostname() || !Number.isInteger(pid) || pid < 1) return null;
+  return runsProfile(pid, profileDir) ? pid : null;
+}
+
+// Chromium rewrites its command line as one string, so look for the flag
+// followed by a space or the end.
+function runsProfile(pid, profileDir) {
+  let command;
+  try {
+    command = process.platform === 'linux' ? readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ')
+      : execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 3000 });
+  } catch { return false; }
+  command = `${command.trimEnd()} `;
+  return [profileDir, resolve(profileDir)].some(dir => command.includes(`--user-data-dir=${dir} `));
 }
 const profileInUse = (profileDir) => process.platform === 'win32' || !!profilePid(profileDir);
 

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
@@ -10,7 +11,7 @@ process.env.HELM_NO_SERVICE = '1';
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
-const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow } = await import('../packages/connect/src/browser-window.js');
+const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow, stopWindow, profilePid } = await import('../packages/connect/src/browser-window.js');
 const { chromium } = await import('playwright');
 const realChromium = ['/usr/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
 // Playwright's own Chromium, else the system one Helm itself falls back to.
@@ -40,6 +41,31 @@ test('a screen is needed for a window: a display on Linux, always on a Mac or Wi
   assert.equal(canOpenWindow({ WAYLAND_DISPLAY: 'wayland-1' }, 'linux'), true);
   assert.equal(canOpenWindow({ DISPLAY: ':0' }, 'linux'), true);
   assert.equal(canOpenWindow({}, 'darwin'), true);
+});
+
+test('a lock left by a crash never closes another program that now has its process number', { skip: process.platform === 'win32' }, async t => {
+  const profile = mkdtempSync(join(process.env.HELM_DIR, 'lock-'));
+  const run = (...args) => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ...args], { stdio: 'ignore' });
+    t.after(() => child.kill('SIGKILL'));
+    return child;
+  };
+  const lock = (pid, host = hostname()) => { rmSync(join(profile, 'SingletonLock'), { force: true }); symlinkSync(`${host}-${pid}`, join(profile, 'SingletonLock')); };
+  const other = run();
+  lock(other.pid);
+  assert.equal(profilePid(profile), null);
+  assert.equal(await stopWindow(profile), false);
+  assert.equal(other.exitCode, null); assert.equal(other.signalCode, null);
+  // Another machine's lock in a synced folder is not this machine's process.
+  const owner = run(`--user-data-dir=${profile}`);
+  lock(owner.pid, 'elsewhere');
+  assert.equal(profilePid(profile), null);
+  // The browser that really runs this profile is still closed.
+  lock(owner.pid);
+  const exited = new Promise(done => owner.once('exit', done));
+  assert.equal(profilePid(profile), owner.pid);
+  assert.equal(await stopWindow(profile), true);
+  await exited;
 });
 
 test('tabs open in the thread’s own window, already signed in; the agent works there and its cursor shows', { timeout: 60000, skip: noChromium }, async t => {
