@@ -148,6 +148,18 @@ export class SessionViewers {
   #transcripts = new Map();
   #stopped = false;
 
+  /** Stop watches and release their saved state when a chat is removed. */
+  forget(id) {
+    this.#watching.delete(id);
+    const screen = this.#watchers.get(id);
+    clearTimeout(screen?.timer);
+    this.#watchers.delete(id);
+    const transcript = this.#transcripts.get(id);
+    clearInterval(transcript?.poll);
+    this.#transcripts.delete(id);
+    this.#core.external?.releaseTranscript?.(this.#core.index.get(id));
+  }
+
   /**
    * End every screen and transcript poll. A poll left running after the
    * daemon stopped kept saving the chat list over the next one's.

@@ -28,6 +28,8 @@ export class SessionDelegation {
   /** child id -> when its parent last asked for the result (`delegate-result --wait`). */
   #waiters = new Map();
 
+  forget(id) { this.#waiters.delete(id); }
+
   /**
    * A task with no thread to sit under - started from a plain shell, or whose
    * parent is gone - lists on its own. Hiding it left a whole VM team

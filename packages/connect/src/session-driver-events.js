@@ -35,6 +35,11 @@ export class DriverEvents {
   /** session id -> the last usage reading written to its log */
   #limits = new Map();
 
+  forget(id) {
+    this.#limits.delete(id);
+    this.#compactions.delete(id);
+  }
+
   onDriverEvent(s, d, e) {
     const current = this.#core.drivers.get(s.id);
     if (current !== d && (current || e.type !== 'status')) return;

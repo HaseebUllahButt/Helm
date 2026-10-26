@@ -81,6 +81,29 @@ class FakeDriver extends EventEmitter {
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
 
+test('deleting a driven chat releases its cached helpers and tool links', async t => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { SessionSubagents } = await import('../packages/connect/src/session-subagents.js');
+  const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  t.after(() => sessions.stop());
+  const session = await sessions.start({ cwd: '/tmp', profileId: 'codex' });
+  let cache, ready;
+  const refreshed = new Promise(resolve => { ready = resolve; });
+  const refresh = SessionSubagents.prototype.refreshNative;
+  t.mock.method(SessionSubagents.prototype, 'refreshNative', function(s, options) {
+    const work = refresh.call(this, s, options);
+    if (s.id === session.id) { cache = this; work.then(ready); }
+    return work;
+  });
+  FakeDriver.made.at(-1).push('item.start', { id: 'helper', kind: 'subagent', name: 'Task', turnId: 't1' });
+  await refreshed;
+  cache.agentTools.set(session.id, new Map([['helper', new Set(['tool'])]]));
+  assert.equal(cache.native.has(session.id), true);
+  await sessions.kill(session.id);
+  assert.equal(cache.native.has(session.id), false);
+  assert.equal(cache.agentTools.has(session.id), false);
+});
+
 test('explicit queue mode survives tool steps and supports edits, ordering, and context references', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');

@@ -12,7 +12,7 @@ function fixture(t, read) {
   });
   t.mock.method(globalThis, 'clearTimeout', timer => timers.delete(timer));
   const s = { id: 'chat' };
-  const sessions = Object.assign(new EventEmitter(), { get: () => s, runtime: { read },
+  const sessions = Object.assign(new EventEmitter(), { get: () => s, runtime: { read }, events: { last: () => 0 },
     unwatch() {}, watching: () => false });
   const viewers = new SessionViewers(sessions, { handle: () => s, index: new Map([[s.id, s]]),
     terminal: () => ({ unview() {} }) });
@@ -30,6 +30,17 @@ test('a failed first terminal read permits a fresh watch', async t => {
   await assert.rejects(viewers.attach('chat'), /read failed/);
   assert.equal((await viewers.attach('chat')).text, 'screen');
   assert.equal(timers.size, 1, 'the second attachment starts a live poll');
+});
+
+test('a removed chat releases its viewer leases and screen poll', async t => {
+  const { viewers, timers } = fixture(t, async () => ({ text: 'screen' }));
+  viewers.watch('chat', 'device');
+  await viewers.attach('chat');
+  assert.equal(viewers.watching('chat'), true);
+  assert.equal(timers.size, 1);
+  viewers.forget('chat');
+  assert.equal(viewers.watching('chat'), false);
+  assert.equal(timers.size, 0);
 });
 
 for (const action of ['detach', 'stop']) {
