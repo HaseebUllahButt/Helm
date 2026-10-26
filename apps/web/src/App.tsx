@@ -29,7 +29,7 @@ import { brainHost } from '@helm/protocol/brain-host';
 import { Client, LOOPBACK_HOST, type Environment, type Session, type Project, type NativeAgent } from './client';
 import { busyWord, needsAttention, runningThread, settledThread, unknownThread, listedThread } from './format';
 import { saveWorkspace, forgetWorkspace, workspaceScope } from './workspaceCache';
-import { useWorkspaceData } from './useWorkspaceData';
+import { sameSession, useWorkspaceData } from './useWorkspaceData';
 import { engineOf } from './engines';
 import { useViewingReport } from './useViewingReport';
 import { ownTerminal, byRecent, ago } from './screens/common';
@@ -730,14 +730,17 @@ function Shell({ client, conn, onSignOut }: {
     navigate([{ kind: 'env' }, { kind: 'session', session: s, reviewChildren: reviewChildren ? ++attentionVisit.current : undefined }], envId);
   };
   openSessionRef.current = openSession;
-  // A session that changed under an open view: refresh the machine's list and
-  // fold the new record into the stack, so the title in the bar and the title
-  // in the history entry behind it do not disagree.
+  // The pushed record already holds the change. Asking for every chat again
+  // here downloaded a whole list for each update to the open chat.
   const onSessionChanged = (envId: string) => (s: Session) => {
     recordSession(envId, s);
-    loadSessions(envId);
-    restate(nav.current.stack.map((v) => (
-      v.kind === 'session' && v.session.id === s.id ? { ...v, session: { ...v.session, ...s, recovery: s.recovery } } : v)));
+    let changed = false;
+    const next = nav.current.stack.map((v) => {
+      if (v.kind !== 'session' || v.session.id !== s.id || sameSession(v.session, s)) return v;
+      changed = true;
+      return { ...v, session: { ...v.session, ...s, recovery: s.recovery } };
+    });
+    if (changed) restate(next);
   };
   const push = (v: MainView) => navigate([...nav.current.stack, v]);
 

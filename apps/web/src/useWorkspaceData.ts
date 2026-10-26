@@ -22,7 +22,7 @@ function keepUnchanged<T extends { id: string }>(old: T[] | undefined, fresh: T[
   return same ? old : next;
 }
 
-function sameSession(known: Session, update: Session) {
+export function sameSession(known: Session, update: Session) {
   if (JSON.stringify(known.recovery) !== JSON.stringify(update.recovery)) return false;
   for (const [key, value] of Object.entries(update)) {
     const was = (known as unknown as Record<string, unknown>)[key];
@@ -126,7 +126,10 @@ export function useWorkspaceData(client: Client, connected: boolean) {
             return update ? { ...session, ...update, recovery: update.recovery } : session;
           })
           : result.sessions;
-        setSessions((current) => ({ ...current, [envId]: keepUnchanged(current[envId], list) }));
+        setSessions((current) => {
+          const kept = keepUnchanged(current[envId], list);
+          return kept === current[envId] ? current : { ...current, [envId]: kept };
+        });
         saveWorkspace(scope, { sessions: { [envId]: list } });
       })
       .catch(() => {
