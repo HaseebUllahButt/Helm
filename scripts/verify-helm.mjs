@@ -15,8 +15,8 @@
 // The skill in .agents/skills/verify-helm says when and how to use it.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, openSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, openSync, statSync, utimesSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -83,6 +83,7 @@ function writeFakeAccount(dir) {
 async function up() {
   const s = state();
   if (s && alive(s.daemon)) return say(`already up: ${s.url}  (copy "${name}")`);
+  await sweepStale();
   rmSync(ROOT, { recursive: true, force: true });
   const real = has('real');
   for (const d of ['helm', 'ssh', 'work', 'home']) mkdirSync(join(ROOT, d), { recursive: true, mode: 0o700 });
@@ -299,12 +300,20 @@ async function rpc(method, params) {
 }
 
 async function down() {
-  const s = state();
   const keep = has('keep');
+  const killed = await stopCopy(ROOT, state(), { keep });
+  say(`down: stopped ${killed.length} process${killed.length === 1 ? '' : 'es'}${keep ? `, kept ${ROOT}` : ', files removed'}.`);
+}
+
+/** Stop one copy's processes and, unless kept, remove its folder. Returns the processes stopped. */
+async function stopCopy(ROOT, s, { keep = false } = {}) {
   const killed = [];
   const stop = (pid, group) => { try { process.kill(group ? -pid : pid, 'SIGTERM'); killed.push(pid); } catch { /* gone */ } };
-  if (s?.browser) stop(s.browser.pid, true);
-  if (s?.daemon) stop(s.daemon, true);
+  // A saved process number can belong to another program by now.
+  const read = (pid, file) => { try { return readFileSync(`/proc/${pid}/${file}`, 'utf8'); } catch { return ''; } };
+  const copyName = basename(ROOT).slice('helm-verify-'.length);
+  if (s?.browser && read(s.browser.pid, 'cmdline').split('\0').join(' ').includes(`_hold --name ${copyName}`)) stop(s.browser.pid, true);
+  if (s?.daemon && read(s.daemon, 'environ').split('\0').includes(`HELM_DIR=${join(ROOT, 'helm')}`)) stop(s.daemon, true);
   // Terminal and agent hosts start as their own session leaders, and the
   // browser may outlive its holder. They are found by this copy's HELM_DIR
   // or folder, never by name: a name match can be the real laptop's host
@@ -330,8 +339,31 @@ async function down() {
   }
   await sleep(500);
   if (!keep) rmSync(ROOT, { recursive: true, force: true });
-  say(`down: stopped ${killed.length} process${killed.length === 1 ? '' : 'es'}${keep ? `, kept ${ROOT}` : ', files removed'}.`);
+  return killed;
 }
+
+/**
+ * Copies a chat forgot to take down: their Helm has stopped, or no command
+ * has used them for STALE_MS. Each `up` clears them, so a forgotten copy
+ * does not hold its daemon, browser and agents for days.
+ */
+const STALE_MS = 12 * 60 * 60_000;
+async function sweepStale() {
+  const base = dirname(ROOT);
+  for (const entry of readdirSync(base)) {
+    const root = join(base, entry);
+    if (!entry.startsWith('helm-verify-') || root === ROOT) continue;
+    let s = null, used = 0;
+    try { s = JSON.parse(readFileSync(join(root, 'state.json'), 'utf8')); used = statSync(join(root, 'state.json')).mtimeMs; } catch { continue; }
+    if (s?.daemon && alive(s.daemon) && Date.now() - used < STALE_MS) continue;
+    const why = s?.daemon && alive(s.daemon) ? 'unused for 12 hours' : 'its Helm had stopped';
+    const stopped = await stopCopy(root, s);
+    say(`cleared copy "${entry.slice('helm-verify-'.length)}": ${why}${stopped.length ? `, stopped ${stopped.length} processes` : ''}.`);
+  }
+}
+
+// Each command marks the copy as in use, so sweepStale leaves it alone.
+if (cmd !== 'down' && existsSync(STATE)) { try { const now = new Date(); utimesSync(STATE, now, now); } catch { /* best effort */ } }
 
 switch (cmd) {
   case 'up': await up(); break;

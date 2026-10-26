@@ -43,6 +43,11 @@ Report supported findings without a fixed count.
 - Never run `npm test`, `test:browser`, `test:network`, `check:full` or
   `--wide` unless the owner asks. No hosted server runs them for Helm.
 - New tests wait for an event or a state, never for a fixed time.
+- `test:smart` gives each run its own temporary folder, then stops what the
+  tests left running and deletes the folder. When it says it stopped
+  programs, fix the test that left them.
+- Clean up what you start: `verify-helm down`, `helm share stop` for links
+  you made, and your scratch folders.
 
 ## Working alongside other chats
 

@@ -78,6 +78,8 @@ its own copy, named after its Helm session; `--name <name>` picks another.
 - Never stop Helm processes by name (`pkill -f`, `systemctl stop
   helm-...`): that matches the owner's real Helm. `down` finds this copy's
   processes by its folder.
+- Always `down` when done. `up` also clears other copies whose Helm stopped
+  or that no command used for 12 hours.
 - Speed here is not the owner's speed: there is no network between machines.
 
 When the steps for a feature are wrong or missing, fix them in
