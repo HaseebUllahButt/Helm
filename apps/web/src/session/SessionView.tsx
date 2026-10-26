@@ -14,7 +14,7 @@ import { useAccountLimits } from './useAccountLimits';
 import { nativeConversation } from './nativeView';
 import { CompactionLine } from './Transcript';
 import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
-import { useChatKeys } from './chatKeys';
+import { useChatKeys, useDeleteKey } from './chatKeys';
 import { BrowserDock, useBrowserDock } from './BrowserDock';
 import { Canvas, chatPages, useCanvas } from './Canvas';
 import { useExclusiveDocks } from './SideDock';
@@ -373,6 +373,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     model: () => nativeControls.step('model'),
     ...(session.nativeChat ? { agents: () => setDetails((open) => open === 'agents' ? null : 'agents') } : {}),
   } : {});
+  useDeleteKey(isShell ? null : () => setKilling(true));
 
   useEffect(() => {
     if (!session.nativeChat || raw) return;
@@ -522,7 +523,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           body={isShell
             ? 'All programs in this terminal stop.'
             : session.nativeCli ? 'This stops the agent program on your laptop. Close this view to leave it running.' : 'The agent stops and this chat leaves Helm.'}
-          confirmLabel={isShell ? 'Close' : session.nativeCli ? 'Stop chat' : 'Delete'} danger
+          confirmLabel={isShell ? 'Close' : session.nativeCli ? 'Stop chat' : 'Delete'} danger confirmKey="Delete"
           onCancel={() => setKilling(false)}
           onConfirm={() => { setKilling(false); kill(); }}
         />

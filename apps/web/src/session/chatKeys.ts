@@ -56,3 +56,36 @@ export function useChatKeys(on: Partial<Record<ChatKey, () => void>>) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 }
+
+type DeleteTarget = { tagName?: string; value?: string; hasAttribute?: (name: string) => boolean; closest?: (selector: string) => unknown } | null;
+
+/**
+ * The Delete key deletes the chat in front of you, after the usual question.
+ * The owner asked for this one bare key. It never takes a key you type: not
+ * in a text box or a terminal, except an empty message box, where Delete has
+ * nothing else to do. A held key does not repeat into it.
+ */
+export function deleteKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey' | 'repeat'> & { isComposing?: boolean }, target: DeleteTarget): boolean {
+  if (e.key !== 'Delete' || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.repeat || e.isComposing) return false;
+  if (!target?.closest) return true;
+  if (target.closest('.xterm, input, select, [contenteditable]:not([contenteditable="false"])')) return false;
+  if (target.tagName === 'TEXTAREA') return !!target.hasAttribute?.('data-composer') && !target.value;
+  return true;
+}
+
+/** Listen for the Delete key while a chat is on screen and no sheet is up. */
+export function useDeleteKey(run: (() => void) | null) {
+  const handler = useRef(run);
+  handler.current = run;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // A sidebar row that has focus takes the key for its own chat.
+      if (e.defaultPrevented || !handler.current || !deleteKey(e, e.target as DeleteTarget)) return;
+      if ((e.target as HTMLElement | null)?.closest?.('.tri-row') || document.querySelector('[aria-modal="true"]')) return;
+      e.preventDefault();
+      handler.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+}

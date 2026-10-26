@@ -7,6 +7,7 @@ import { Client, type Environment, type Session, type ModelList } from '../clien
 import { money } from '../format';
 import { engineOf } from '../engines';
 import { shortPath } from './common';
+import { followModelRefresh } from '../modelRefresh';
 
 /**
  * What a machine's brain is made of.
@@ -47,9 +48,14 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
   // is what the running agent will actually accept.
   useEffect(() => {
     if (!brain || replacing || !env.online) return;
-    client.rpc(env.id, 'model.list', { profileId: brain.profileId, id: brain.id })
-      .then((r: any) => setModels(r))
-      .catch(() => {});
+    setModels(null);
+    const catalog = followModelRefresh<ModelList>(
+      (settled) => client.rpc<ModelList>(env.id, 'model.list', {
+        profileId: brain.profileId, id: brain.id, ...(settled ? { settled } : {}),
+      }, 45_000),
+      setModels, () => {},
+    );
+    return catalog.stop;
   }, [client, env.id, brain?.id, env.online, replacing]);
 
   const start = async (a: Account) => {

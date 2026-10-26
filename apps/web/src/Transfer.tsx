@@ -1,7 +1,7 @@
 import { errorMessage } from './errors';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  type Client, type Environment, type Session,
+  type Client, type Environment, type Session, type ModelList,
   type TransferPreview, type TransferReadiness, type TransferResult, type TaskTransferResult,
 } from './client';
 import { bytes } from './format';
@@ -11,6 +11,7 @@ import { TaskReturn } from './session/TaskReturn';
 import { SendView } from './send/SendView';
 import type { SendJob } from './client';
 import type { TaskReturnState } from './client';
+import { followModelRefresh } from './modelRefresh';
 
 const leaf = (p: string) => p.replace(/\/+$/, '').split('/').pop() || p;
 
@@ -118,6 +119,19 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
       .finally(() => { if (live) setAgentsLoading(false); });
     return () => { live = false; };
   }, [client, task, targetId, session?.profileId, locked]);
+
+  useEffect(() => {
+    if (!task || !targetId || !profileId || locked) return;
+    const catalog = followModelRefresh(
+      (settled) => client.rpc<ModelList>(targetId, 'model.list', {
+        profileId, all: true, ...(settled ? { settled } : {}),
+      }, 45_000),
+      (list) => setAgents((current) => current.map((agent) => agent.id === profileId
+        ? { ...agent, models: list.models, defaultModel: list.default } : agent)),
+      (err) => setError(errorMessage(err)),
+    );
+    return catalog.stop;
+  }, [client, task, targetId, profileId, locked]);
 
   useEffect(() => {
     let live = true;
