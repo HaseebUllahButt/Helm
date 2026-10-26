@@ -155,8 +155,8 @@ function pendingTickets(events) {
 
 /** Small identities outside the contiguous tail, never old tool payloads. */
 function anchor(event) {
-  const { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason, checkpoint } = event;
-  const result = { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason, checkpoint };
+  const { seq, at, type, id, turnId, inputId, requestId, kind, parentId, name, queued, local, status, reason, checkpoint } = event;
+  const result = { seq, at, type, id, turnId, inputId, requestId, kind, parentId, name, queued, local, status, reason, checkpoint };
   if (kind === 'visual' && event.visual) result.visual = event.visual;
   if (type === 'turn.start' || type === 'turn.edit' || type === 'turn.images') {
     result.text = String(event.text ?? '').slice(0, 8000);
@@ -185,7 +185,13 @@ function anchor(event) {
  */
 function retain(tail, older, full = event => event) {
   const first = tail[0]?.seq ?? 0;
-  const pending = pendingTickets([...older()].reverse().concat(tail));
+  const history = [...older()].reverse().concat(tail);
+  const pending = pendingTickets(history);
+  const questions = new Map();
+  for (const event of history) {
+    if (event.type === 'permission.request') questions.set(event.requestId, event);
+    else if (event.type === 'permission.resolved') questions.delete(event.requestId);
+  }
   const items = new Set(tail.filter(e => e.type.startsWith('item.')).map(e => e.id));
   const owners = new Set();
   for (const e of tail) {
@@ -196,6 +202,14 @@ function retain(tail, older, full = event => event) {
   const starts = new Set(tail.filter(e => e.type === 'item.start').map(e => e.id));
   const turns = new Set(tail.filter(e => TURN_CONTEXT.has(e.type)).map(e => `${e.turnId ?? e.seq}:${e.type}`));
   const context = [];
+  for (const question of questions.values()) {
+    if (question.seq >= first) continue;
+    const event = full(question);
+    context.push(event);
+    if (event.turnId) owners.add(event.turnId);
+    if (event.itemId) items.add(event.itemId);
+    if (event.parentId) items.add(event.parentId);
+  }
   let implicit = tail.some(e => e.type === 'item.start' && !e.turnId);
   for (const event of older()) {
     if (event.type !== 'item.start' || !items.has(event.id) || starts.has(event.id)) continue;
@@ -576,7 +590,7 @@ export class EventLog {
    * whole on start held a laptop with hundreds of them at full CPU, and the
    * session list waited behind it.
    *
-   * Questions count only in the newest KEEP lines, as `#open` keeps them.
+   * Unanswered questions stay until their answers arrive, however old they are.
    * Turn events come from the whole file, while `#open` keeps only the older
    * ones the tail still refers to. They differ only in older turns, and an
    * older turn left open is one the restart closes anyway.
@@ -624,12 +638,12 @@ export class EventLog {
       }
       hits = [...found].sort((a, b) => a - b);
     }
-    const turns = [], open = new Map(), from = starts.length - KEEP;
+    const turns = [], open = new Map();
     for (const i of hits) {
       let e;
       try { e = line(i); } catch { continue; }
       if (isTurn(e)) turns.push(e);
-      else if (i >= from) this.#track(open, e);
+      else this.#track(open, e);
     }
     if (!this.#pending.has(id)) this.#pending.set(id, open);
     if (cache) this.#glanced.set(id, { stamp, seq, turns });

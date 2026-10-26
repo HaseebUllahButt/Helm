@@ -174,6 +174,31 @@ test('pending permissions are derived from the log', () => {
   assert.deepEqual(log.pending('s').map((e) => e.requestId), ['r2']);
 });
 
+test('unanswered permissions survive long turns, eviction and a restart', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-permission-retention-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const live = new EventLog(dir);
+  const request = live.append('s', { type: 'permission.request', requestId: 'waiting', itemId: 'tool',
+    kind: 'command', title: 'Run a command', options: [{ id: 'allow' }],
+    codex: { id: 42, method: 'item/commandExecution/requestApproval' } });
+  live.append('s', { type: 'permission.request', requestId: 'answered' });
+  live.append('s', { type: 'permission.resolved', requestId: 'answered', decision: 'allow' });
+  for (let i = 0; i < 2400; i++) live.append('s', { type: 'item.delta', id: 'other', text: 'x' });
+  assert.deepEqual(live.pending('s'), [request]);
+  assert.deepEqual(live.since('s').filter(e => e.type === 'permission.request'), [request]);
+  for (let i = 0; i < 25; i++) live.append(`other-${i}`, { type: 'turn.start' });
+  for (const reader of [live, new EventLog(dir)]) {
+    assert.deepEqual(reader.glance('s').pending, [request]);
+    assert.deepEqual(reader.since('s').filter(e => e.type === 'permission.request'), [request]);
+    assert.deepEqual(reader.pending('s'), [request]);
+  }
+  live.append('s', { type: 'permission.resolved', requestId: 'waiting', decision: 'allow' });
+  for (let i = 0; i < 2400; i++) live.append('s', { type: 'item.delta', id: 'other', text: 'x' });
+  const cold = new EventLog(dir);
+  assert.deepEqual(cold.pending('s'), []);
+  assert.deepEqual(cold.since('s').filter(e => e.type.startsWith('permission.')), []);
+});
+
 test('the open turn is the last turn.start without a turn.done', () => {
   const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   assert.equal(log.openTurn('s'), null);

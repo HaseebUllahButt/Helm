@@ -12,6 +12,17 @@ function fixture(t) {
 }
 const line = event => JSON.stringify(event) + '\n';
 
+test('permission requests and answers remain available as old context', t => {
+  const file = fixture(t);
+  const rows = [
+    { seq: 1, type: 'permission.request', requestId: 'ask' },
+    { seq: 2, type: 'item.delta', id: 'text', text: 'more work' },
+    { seq: 3, type: 'permission.resolved', requestId: 'ask', decision: 'allow' },
+  ];
+  writeFileSync(file, rows.map(line).join(''));
+  assert.deepEqual([...new EventFile(file).refresh().view().contextBefore(rows.length)], [rows[0], rows[2]]);
+});
+
 test('byte positions preserve Unicode, legacy property order, corrupt lines and final records without newlines', t => {
   const file = fixture(t);
   const records = [

@@ -2,7 +2,7 @@ import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { scanEventPositions } from './log-index-native.js';
 
 const READ_BLOCK = 16 * 1024;
-const contextType = type => type?.startsWith('turn.') || type === 'item.start' || type === 'item.done';
+const contextType = type => type?.startsWith('turn.') || type?.startsWith('permission.') || type === 'item.start' || type === 'item.done';
 const lowerBound = (values, value) => {
   let lo = 0, hi = values.length;
   while (lo < hi) { const mid = Math.floor((lo + hi) / 2); if (values[mid] < value) lo = mid + 1; else hi = mid; }
