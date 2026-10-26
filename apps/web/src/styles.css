@@ -330,9 +330,9 @@ code, pre, kbd { font-family: var(--mono); }
 .sidebar:has(.sidebar-sunset) > :not(.sidebar-sunset) { position: relative; z-index: 1; }
 .sidebar.collapsed .sidebar-sunset { display: none; }
 :root {
-  --sunset-top: #12203a; --sunset-mid: #4b2130; --sunset-low: #b4452b; --sunset-horizon: #f08a3c;
-  --sunset-glow: #ff8a3d; --sunset-cloud: #ffc98a; --sunset-sea-top: #2b1b20; --sunset-sea: var(--sidebar);
-  --sunset-shine: #ffc070; --sunset-star: #ffffff;
+  --sunset-top: #0a1430; --sunset-mid: #13295a; --sunset-low: #2456a6; --sunset-horizon: #5b9be6;
+  --sunset-glow: #4f8fff; --sunset-cloud: #a9ccff; --sunset-sea-top: #0f1d3a; --sunset-sea: var(--sidebar);
+  --sunset-shine: #9cc6ff; --sunset-star: #ffffff;
 }
 .side-tools { display: flex; align-items: center; flex: none; }
 .side-tools .iconbtn { padding-inline: 6px; min-width: 30px; }
@@ -2139,10 +2139,10 @@ button.sheet-editlink:hover { color: var(--text); }
 }
 
 /* The marks keep their dark tile and their own colours in every theme. */
-/* A daytime sunset: pale sky, peach and gold, no dark band on a light page. */
+/* A daytime blue sky: pale blues, no dark band on a light page. */
 :root[data-theme="light"] {
-  --sunset-top: #a9c8e8; --sunset-mid: #f1c8b8; --sunset-low: #f6a77b; --sunset-horizon: #f9c27a;
-  --sunset-glow: #ffb070; --sunset-cloud: #fff2e0; --sunset-sea-top: #eccab6; --sunset-shine: #fff4d6;
+  --sunset-top: #8fb6e6; --sunset-mid: #aecbf0; --sunset-low: #c9dcf6; --sunset-horizon: #e1ecfb;
+  --sunset-glow: #9cc4ff; --sunset-cloud: #ffffff; --sunset-sea-top: #b9d0ee; --sunset-shine: #ffffff;
   --sunset-star: #ffffff;
 }
 :root[data-theme="light"] .mark { background: #1d2027; }
