@@ -259,7 +259,13 @@ export class AcpDriver extends Driver {
       this.#takeOptions(res.result);
       this.#takeCommands(res.result);
     } else {
-      if (res?.error) this.log(`${this.engine}: session/load failed (${res.error.message}); starting fresh`);
+      // A failed resume is not permission to replace the saved chat. The
+      // next message must retry that chat, with its history still intact.
+      if (res?.error) {
+        const message = `Helm cannot open the saved ${this.spec.label ?? this.engine} chat. ${res.error.message}`;
+        this.push('error', { message, kind: 'init' });
+        throw new Error(message);
+      }
       let created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
       if (created.error && this.spec.authMethod && !authenticated && this.#needsAuth(created.error)) {
         authenticated = await this.#authenticate();
@@ -308,9 +314,9 @@ export class AcpDriver extends Driver {
         const res = await this.#call(verb, { sessionId, cwd: this.cwd, mcpServers: [] });
         if (!res.error) return res;
         last = res;
-        // An auth refusal needs `authenticate`, not another verb - letting
-        // a fallback's method-not-found overwrite it would hide the ask.
-        if (this.spec.authMethod && this.#needsAuth(res.error)) return res;
+        // Only a missing method calls for a different verb. Auth, invalid
+        // parameters and load failures must keep their original error.
+        if (res.error.code !== -32601) return res;
       }
       return last;
     } finally {

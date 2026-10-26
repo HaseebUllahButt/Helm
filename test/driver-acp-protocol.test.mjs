@@ -8,7 +8,7 @@ import { collect } from './helpers.mjs';
 
 // Run a real child with ACP over stdio. Each case controls the protocol,
 // without a real account, network access, or delays to order its messages.
-function agent(t, { init = '', session = '', prompt = '', spec = {}, ...opts } = {}) {
+function agent(t, { init = '', session = '', load = '', resume = '', prompt = '', spec = {}, ...opts } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'helm-acp-protocol-'));
   const script = join(dir, 'agent.mjs');
   const input = join(dir, 'input.ndjson');
@@ -36,6 +36,8 @@ for await (const line of lines) {
     switch (m.method) {
       case 'initialize': { ${init} return reply({ protocolVersion: 1, agentCapabilities: {} }); }
       case 'session/new': { ${session} return reply({ sessionId: 'chat-1' }); }
+      case 'session/load': { ${load} return reply({}); }
+      case 'session/resume': { ${resume} return reply({}); }
       case 'session/prompt': { ${prompt} return reply({ stopReason: 'end_turn' }); }
       default: if (m.id != null) return reply({});
     }
@@ -202,4 +204,41 @@ test('ACP finds grouped model, mode and effort choices by category', async t => 
   assert.equal(driver.model, 'model-a');
   assert.equal(driver.catalog().current, 'model-a');
   assert.deepEqual(driver.catalog().efforts, []);
+});
+
+for (const code of [-32603, -32000, -32602]) {
+  test(`ACP keeps the saved chat when resume fails with ${code}`, async t => {
+    const { driver, sent } = agent(t, { engineSessionId: 'saved-chat',
+      load: `return error('Cannot load this chat', ${code});` });
+    await assert.rejects(driver.send('Continue'), /Cannot load this chat/);
+    assert.equal(driver.engineSessionId, 'saved-chat');
+    assert.equal(sent().filter(m => m.method === 'session/new').length, 0);
+    assert.equal(sent().filter(m => m.method === 'session/resume').length, 0);
+    assert.equal(sent().filter(m => m.method === 'session/prompt').length, 0);
+  });
+}
+
+test('ACP tries the other resume verb when the first method does not exist', async t => {
+  const { driver, log, sent } = agent(t, { engineSessionId: 'saved-chat',
+    load: `return error('Unknown method', -32601);` });
+  await driver.send('Continue');
+  assert.equal((await log.until(e => e.type === 'turn.done')).status, 'ok');
+  assert.equal(driver.engineSessionId, 'saved-chat');
+  assert.equal(sent().filter(m => m.method === 'session/new').length, 0);
+  assert.equal(sent().filter(m => m.method === 'session/resume').length, 1);
+});
+
+test('ACP retries the saved chat after a temporary resume error', async t => {
+  const { driver, log, sent } = agent(t, { engineSessionId: 'saved-chat', load: `
+    if (!existsSync('resume-failed-once')) {
+      writeFileSync('resume-failed-once', 'yes');
+      return error('Please retry');
+    }
+  ` });
+  await assert.rejects(driver.send('Continue'), /Please retry/);
+  await driver.send('Continue again');
+  assert.equal((await log.until(e => e.type === 'turn.done')).status, 'ok');
+  assert.equal(sent().filter(m => m.method === 'session/new').length, 0);
+  assert.equal(sent().filter(m => m.method === 'session/load').length, 2);
+  assert.equal(sent().find(m => m.method === 'session/prompt').params.sessionId, 'saved-chat');
 });
