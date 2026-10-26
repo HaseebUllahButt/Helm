@@ -297,12 +297,24 @@ export class ClaudeDriver extends Driver {
       tail = (tail + d).slice(-4000);
       if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d);
     });
+    let exitResult = null;
+    let exitHandler = null;
+    const finish = result => {
+      if (exitResult) return;
+      exitResult = result;
+      exitHandler?.(result);
+    };
+    child.on('exit', (code, signal) => finish({ code, signal, stderr: tail.trim().split('\n').pop() || null }));
+    child.on('error', err => finish({ code: -1, signal: null, stderr: err.message }));
     return {
       write: (d) => child.stdin.write(d),
       end: () => child.stdin.end(),
       kill: (s) => child.kill(s),
       onData: (cb) => child.stdout.on('data', (c) => cb(typeof c === 'string' ? c : c.toString('utf8'))),
-      onExit: (cb) => child.on('close', (code, signal) => cb({ code, signal, stderr: tail.trim().split('\n').pop() || null })),
+      onExit: cb => {
+        exitHandler = cb;
+        if (exitResult) queueMicrotask(() => cb(exitResult));
+      },
       detach: () => {},
     };
   }

@@ -47,6 +47,27 @@ test('a closed Claude input pipe reports an error without crashing Helm', { time
   assert.match(error.message, /EPIPE/);
 });
 
+test('Claude exits even while a child command keeps its output pipes open', { timeout: 5000 }, async t => {
+  const { fake, driver, log } = make('plain');
+  const script = join(fake.dir, 'parent-exit.mjs');
+  const pidFile = join(fake.dir, 'grandchild.pid');
+  writeFileSync(script, `import { spawn } from 'node:child_process';
+    import { writeFileSync } from 'node:fs';
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 'inherit', 'inherit'] });
+    writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'parent-exit' }));
+    process.exit(0);
+  `);
+  writeFileSync(fake.cmd, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 2.1.302; exit; fi\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)}\n`);
+  t.after(async () => {
+    try { process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGTERM'); } catch { /* already gone */ }
+    await driver.kill(); rmSync(fake.dir, { recursive: true, force: true });
+  });
+  await driver.start();
+  await log.until(e => e.type === 'status' && e.status === 'exited');
+  assert.doesNotThrow(() => process.kill(Number(readFileSync(pidFile, 'utf8')), 0));
+});
+
 test('Claude starts one process when startup and the first send overlap', async () => {
   let opened = 0, exited;
   const writes = [];
