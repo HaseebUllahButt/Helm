@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync, watch } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -130,7 +131,7 @@ export async function makeBundle({ have = [] } = {}, dir = ROOT) {
   for (const commit of have) {
     if (/^[0-9a-f]{7,40}$/.test(commit) && await git(['cat-file', '-e', `${commit}^{commit}`]).then(() => true, () => false)) known.push(`^${commit}`);
   }
-  const tmp = join(HELM_DIR, `bundle-${process.pid}-${Date.now()}.git`);
+  const tmp = join(HELM_DIR, `bundle-${process.pid}-${randomUUID()}.git`);
   try {
     // Nothing new to send is not an error: say so instead of an empty bundle.
     const head = await git(['rev-parse', 'HEAD']);
