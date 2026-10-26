@@ -424,6 +424,9 @@ export class CodexServer {
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         this.#child = child;
+        child.stdin.on('error', err => {
+          for (const d of this.#drivers.values()) d.push('error', { message: `Could not send input to Codex: ${err.message}`, kind: 'input' });
+        });
         this.#hosted = false;
         this.#adopted = false;
         let stderr = '';

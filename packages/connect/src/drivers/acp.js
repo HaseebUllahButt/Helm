@@ -536,6 +536,7 @@ export class AcpDriver extends Driver {
    * back so everything downstream is identical.
    */
   #localPipe(child) {
+    child.stdin.on('error', err => this.push('error', { message: `Could not send input to ${this.engine}: ${err.message}`, kind: 'input' }));
     child.stderr.setEncoding('utf8');
     let tail = '';
     child.stderr.on('data', (d) => { tail = (tail + d).slice(-4000); if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d); });

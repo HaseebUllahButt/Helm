@@ -163,6 +163,7 @@ export class AgyDriver extends Driver {
   // -------------------------------------------------------------- transport
 
   #localPipe(child) {
+    child.stdin.on('error', err => this.push('error', { message: `Could not send input to ${this.engine}: ${err.message}`, kind: 'input' }));
     child.stderr.setEncoding('utf8');
     let tail = '';
     child.stderr.on('data', (d) => {

@@ -29,6 +29,24 @@ test('Claude finishes a failed process start and permits a later retry', { timeo
   } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
 });
 
+test('a closed Claude input pipe reports an error without crashing Helm', { timeout: 10000 }, async t => {
+  const { fake, driver, log } = make('plain');
+  const script = join(fake.dir, 'closed-input.mjs');
+  writeFileSync(script, `import { closeSync } from 'node:fs';
+    closeSync(0);
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'closed-input' }));
+    setInterval(() => {}, 1000);
+  `);
+  writeFileSync(fake.cmd, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 2.1.302; exit; fi\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)}\n`);
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
+  const initialized = new Promise(resolve => driver.once('init', resolve));
+  await driver.start();
+  await initialized;
+  await driver.send('hello');
+  const error = await log.until(e => e.type === 'error' && e.kind === 'input');
+  assert.match(error.message, /EPIPE/);
+});
+
 test('Claude starts one process when startup and the first send overlap', async () => {
   let opened = 0, exited;
   const writes = [];

@@ -290,6 +290,7 @@ export class ClaudeDriver extends Driver {
   }
 
   #localPipe(child) {
+    child.stdin.on('error', err => this.push('error', { message: `Could not send input to Claude: ${err.message}`, kind: 'input' }));
     child.stderr.setEncoding('utf8');
     let tail = '';
     child.stderr.on('data', (d) => {
