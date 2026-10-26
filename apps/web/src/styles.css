@@ -396,6 +396,9 @@ code, pre, kbd { font-family: var(--mono); }
 .pad.column { max-width: var(--measure); width: 100%; margin: 0 auto; }
 @media (min-width: 900px) { .pad.column { padding: 22px 24px 40px; } }
 .side-pad { padding: 10px 10px 16px; flex: 1; }
+/* Zoomed in, the list's scrollbars came and went many times a second, and
+   every row shook sideways: keep the bar's room, never scroll sideways. */
+.sidebar > .scroll { overflow-x: hidden; scrollbar-gutter: stable; }
 /* Text only a screen reader needs. */
 .vh {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
