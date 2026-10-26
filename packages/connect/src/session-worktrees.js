@@ -142,7 +142,12 @@ export class SessionWorktrees {
    */
   async tidy(s, now = Date.now()) {
     // A branch of the chat (a fork) works in the same folder: all of them idle.
-    const idle = () => this.#sharing(s).every((o) => this.#core.index.get(o.id) === o && this.#sessions.canReturnTask(o.id));
+    // A Codex thread still open in its daemon is in use too. Removing its
+    // folder released Helm's link, the 2.5 s native check joined it again and
+    // rebuilt the folder, and 3 s later it went again: a full checkout and a
+    // dozen git commands every 3 s, for as long as Codex kept it open.
+    const idle = () => this.#sharing(s).every((o) => this.#core.index.get(o.id) === o && this.#sessions.canReturnTask(o.id)
+      && !this.#core.natives?.holds(o));
     if (this.#busy.has(s.id) || !s.chatWorktree || !idle()) return false;
     const merged = !this.#sharing(s).every((o) => now - (o.updatedAt || o.createdAt || now) >= UNUSED_MS);
     this.#busy.add(s.id);
