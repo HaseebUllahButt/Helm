@@ -58,17 +58,35 @@ function sendFrame(channel, frame) {
   }
 }
 
+const HIGH_WATER = 512 * 1024;
+
+function waitChannel(channel, event = 'bufferedamountlow') {
+  return new Promise(resolve => {
+    const events = [event, 'close', 'error'];
+    const done = () => {
+      clearTimeout(timer);
+      for (const name of events) channel.removeEventListener?.(name, done);
+      resolve();
+    };
+    // Native channels can miss an event during shutdown. Keep one slow
+    // recheck, instead of waking every five milliseconds on a slow link.
+    const timer = setTimeout(done, 250);
+    for (const name of events) channel.addEventListener?.(name, done);
+  });
+}
+
 async function sendBuffered(channel, frame) {
   if (!channel) return false;
+  channel.bufferedAmountLowThreshold = HIGH_WATER / 2;
   const deadline = Date.now() + 120_000;
   while (channel.readyState === 'connecting' && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitChannel(channel, 'open');
   }
   if (channel.readyState !== 'open') return false;
   const pieces = fragment(frame, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
   for (const piece of pieces) {
-    while (channel.readyState === 'open' && channel.bufferedAmount > 512 * 1024 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+    while (channel.readyState === 'open' && channel.bufferedAmount > HIGH_WATER && Date.now() < deadline) {
+      await waitChannel(channel);
     }
     if (channel.readyState !== 'open' || Date.now() >= deadline) return false;
     channel.send(piece);
@@ -95,6 +113,7 @@ export class DeflateLink {
 
   constructor(channel) {
     this.channel = channel;
+    channel.bufferedAmountLowThreshold = HIGH_WATER / 2;
     this.#z.on('data', (chunk) => this.#out.push(chunk));
     this.#z.on('error', () => {});
   }
@@ -108,8 +127,8 @@ export class DeflateLink {
       const bytes = Buffer.concat(this.#out.splice(0));
       const deadline = Date.now() + 120_000;
       for (let at = 0; at < bytes.length; at += DC_CHUNK_AT) {
-        while (this.channel.readyState === 'open' && this.channel.bufferedAmount > 512 * 1024 && Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, 5));
+        while (this.channel.readyState === 'open' && this.channel.bufferedAmount > HIGH_WATER && Date.now() < deadline) {
+          await waitChannel(this.channel);
         }
         if (this.channel.readyState !== 'open' || Date.now() >= deadline) return false;
         this.channel.send(bytes.subarray(at, at + DC_CHUNK_AT));

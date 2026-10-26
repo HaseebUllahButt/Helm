@@ -27,7 +27,7 @@ async function harness() {
   vm.runInNewContext(bundle.outputFiles[0].text, context);
   const hub = new context.module.exports.PeerHub(() => {}, async (...args) => { calls.push(args); return 'ok'; });
   await hub.signal('browser', { type: 'offer', sdp: 'test' }, null, 'device');
-  const channel = { readyState: 'open', bufferedAmount: 0, close() {}, send: raw => sent.push(typeof raw === 'string' ? JSON.parse(raw) : raw) };
+  const channel = Object.assign(new EventTarget(), { readyState: 'open', bufferedAmount: 0, close() {}, send: raw => sent.push(typeof raw === 'string' ? JSON.parse(raw) : raw) });
   pc.ondatachannel({ channel });
   return { hub, calls, sent, channel, fragments: maps.at(-1), parses: () => parses,
     send: frame => channel.onmessage({ data: JSON.stringify(frame) }) };
@@ -97,4 +97,19 @@ test('a direct event that cannot be sent drops the link', async t => {
   h.channel.close = () => { dropped = true; };
   h.hub.broadcast('session.update', { session: { id: 'c' } }, 'b:1');
   assert.equal(dropped, true);
+});
+
+
+test('a blocked direct reply resumes on its drain event without a polling tick', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = await harness(); t.after(() => h.hub.stop());
+  h.channel.bufferedAmount = 1024 * 1024;
+  h.send({ t: 'rpc', id: 'slow', method: 'ping' });
+  await new Promise(setImmediate);
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.channel.bufferedAmountLowThreshold, 256 * 1024);
+  h.channel.bufferedAmount = 0;
+  h.channel.dispatchEvent(new Event('bufferedamountlow'));
+  await new Promise(setImmediate);
+  assert.equal(h.sent[0].id, 'slow');
 });
