@@ -15,6 +15,23 @@ const make = (name, opts = {}) => {
   return { fake, driver, log: collect(driver) };
 };
 
+test('Claude starts one process when startup and the first send overlap', async () => {
+  let opened = 0, exited;
+  const writes = [];
+  const pipe = { onData() {}, onExit(fn) { exited = fn; },
+    write(raw) { writes.push(JSON.parse(raw)); },
+    end() { exited({ code: 0 }); }, kill() { exited({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: 'unused', cwd: '/tmp', procId: 'hosted', procHost: {
+    hasProc: () => false, openProc: async () => { opened++; }, procPipe: () => pipe,
+  } });
+  try {
+    await Promise.all([driver.start(), driver.start(), driver.send('hello')]);
+    assert.equal(opened, 1);
+    assert.equal(writes.filter(m => m.type === 'control_request').length, 1);
+    assert.equal(writes.filter(m => m.type === 'user').length, 1);
+  } finally { await driver.kill(); }
+});
+
 async function modelControl(t, version = '2.1.302') {
   let receive, exited;
   const writes = [];

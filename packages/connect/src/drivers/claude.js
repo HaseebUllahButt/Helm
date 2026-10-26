@@ -128,6 +128,7 @@ export class ClaudeDriver extends Driver {
   #hosted = false;
   #exited = null;
   #ready = null;
+  #starting = null;
   /**
    * `${messageId}#${index}` for text/thinking blocks, the tool_use id for
    * tools - one map per sidechain: a subagent's stream_events interleave
@@ -236,6 +237,13 @@ export class ClaudeDriver extends Driver {
   }
 
   async start() {
+    if (this.#starting) return this.#starting;
+    this.#starting = this.#start();
+    try { return await this.#starting; }
+    finally { this.#starting = null; }
+  }
+
+  async #start() {
     if (this.#pipe) return;
     assertFolder(this);
     await checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
