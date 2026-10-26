@@ -308,6 +308,7 @@ export class NativeSessions {
             this.#core.removedAt.delete(removed);
           }
           const existing = [...this.#core.index.values()].find((s) => s.engine === 'codex' && s.engineSessionId === thread.id);
+          if (existing?.delegation?.codexFork) continue;
           // An idle Helm conversation resumed in a normal terminal moves to
           // that daemon too. Never detach a private turn that is still active.
           if (existing?.driver && !existing.external && !existing.nativeSocket

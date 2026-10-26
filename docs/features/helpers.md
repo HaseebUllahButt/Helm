@@ -19,26 +19,50 @@ shows as a card inside its parent, never as its own row in Working.
   `todos`; `test/delegation`, `task-return`, `subagent-usage`.
 
 ## `helm delegate`
-- **Not yet driven** against the copy. Try
+- **Prove:** run against the private copy:
   `env HELM_SESSION_ID=<chat-id> HELM_DIR=/tmp/helm-verify-<you>/helm node
   packages/connect/bin/helm.js delegate fake --wait --json -- "hi"`: JSON
   with `"status": "done"` and the reply in `"output"`.
 - **Traps:** never unset `HELM_SESSION_ID` for real helpers (they would show
   as separate chats). Helpers sharing a folder can clash; use `--worktree`.
-  A finished helper frees its process after 30 s idle and resumes on a
-  follow-up. The "no nested CLI" rule is a request, not a lock.
+  A finished helper releases its process after 30 s idle and resumes on a
+  follow-up. A Codex helper that shares its parent's context keeps the
+  native connection open instead. The "no nested CLI" rule is a request,
+  not a lock.
 - **One result per task:** once the parent has the result, a helper that
   wakes by itself later (a background watcher timing out) never gives the
   parent another turn. Those relays were nearly all "stale watcher, nothing
   changed". Real news goes by `helm say`; the helper's brief says so.
-- **Tests:** `test/delegation`, `spawn-cli`, `cli-subagents`.
+- **Codex context:** a local helper on the same account and in the same
+  folder can start from its parent's cached context. This needs a running
+  native Codex daemon. Helm keeps the parent's instructions and puts the
+  helper note beside its first task. The helper view shows only its own
+  turns. Other accounts, engines, folders and worktrees use a new chat.
+  A failed fork also uses a new chat.
+- **Restart trap:** an ephemeral fork has no saved Codex history. Helm
+  holds one native connection per account on its process host. A Helm
+  restart keeps that connection. When Codex loses the fork, Helm starts a
+  saved Codex chat from that helper's own tasks, replies and tool results.
+  The Helm chat and its visible history stay the same. This recovery can
+  need fresh input tokens.
+- **Proof (driven 2026-10-27):** a private real helper reused cached input,
+  kept its Codex chat through a Helm restart and a process-host restart,
+  then recovered in the same Helm chat after a private Codex daemon restart.
+  Its phone view showed its own three tasks and replies.
+- **Tests:** `test/delegation`, `codex-helper-fork`, `driver-codex`,
+  `session-driver`, `native-codex`, `spawn-cli`, `cli-subagents`.
 
 ## The CLIs' own subagents
-- **Not yet driven;** needs a real Claude chat that starts a Task. They show
-  read only, "Stopped" after ten quiet minutes. A failed child puts the
-  parent in "Needs you".
+- **Codex proof (driven 2026-10-27):** a private real chat started one v2
+  child with `fork_turns="all"`. Agents showed one finished child. Its
+  view showed its own task and "OK" reply, including after a private
+  daemon restart. The child's input had no cached tokens, so Helm leaves
+  `multi_agent_v2` unchanged. Do not enable it merely because the child
+  cards work.
+- **Claude not yet driven;** needs a real Claude chat that starts a Task.
+  A failed child puts the parent in "Needs you".
 - **Tests:** `test/native-subagents`, `cli-subagents`;
-  `test/browser/subagents`, `orchestration`.
+  `driver-codex`; `test/browser/subagents`, `orchestration`.
 
 ## Messages between agents
 - **Reach:** Agents → **Messages between agents**. In a chat: `helm say
