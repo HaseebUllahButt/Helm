@@ -1749,7 +1749,7 @@ async function shareCmd() {
     const rows = await Promise.all(machines.map(async (m) => {
       try {
         const { shares } = m.id === net.self ? { shares: local.listShares().map(local.publicShare) }
-          : await hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 5000 });
+          : await hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 5000, budget: 6000 });
         return shares.map((x) => ({ ...x, machine: m.name }));
       } catch { return []; }
     }));
@@ -1795,7 +1795,7 @@ async function shareCmd() {
   // A name is the whole address, so it must be free across the network.
   if (name) {
     const others = Object.values(net.machines).filter((m) => m.id !== target && !net.revoked?.[m.id]);
-    const clash = (await Promise.all(others.map((m) => hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 4000 })
+    const clash = (await Promise.all(others.map((m) => hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 4000, budget: 5000 })
       .then(({ shares }) => shares.some((x) => x.name === name.toLowerCase()) ? m.name : null).catch(() => null)))).find(Boolean);
     if (clash) die(`"${name}" is already shared from ${clash}. Pick another name.`);
   }
@@ -1804,7 +1804,9 @@ async function shareCmd() {
   const hours = Number(strFlag('for'));
   if (strFlag('for') !== undefined && !(hours > 0)) die('--for takes a number of hours, e.g. --for 8.');
   const ttlMs = hours > 0 ? hours * 3_600_000 : undefined;
-  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true, ...(members ? { private: true } : {}), ...(flagOf('preserve-host') ? { preserveHost: true } : {}) });
+  // A link an agent makes for its own chat stops when that chat is deleted.
+  const chat = target === net.self && !keep ? process.env.HELM_SESSION_ID : undefined;
+  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true, ...(chat ? { chat } : {}), ...(members ? { private: true } : {}), ...(flagOf('preserve-host') ? { preserveHost: true } : {}) });
   const url = link(share.name);
   const ends = share.expiresAt ? `ends ${new Date(share.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (add --keep to keep it)` : 'kept until you stop it';
   console.log(`\n  ${url}\n  -> ${where}, port ${share.port}, ${ends}${share.password ? `\n  password: ${password}` : ''}`);

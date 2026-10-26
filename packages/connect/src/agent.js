@@ -40,7 +40,7 @@ import { allowDirectSignal } from './direct-auth.js';
 import { lanAddresses } from './net-addr.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
-import { listShares, addShare, removeShare, publicShare } from './shares.js';
+import { listShares, addShare, removeShare, removeChatShares, publicShare } from './shares.js';
 import { publicHosts } from '@helm/protocol/share';
 import { brief, render, summaryLine, readThread, readSnapshot, writeSnapshot, mergeSnapshot, fold } from './brain.js';
 import { forWire } from './events.js';
@@ -545,6 +545,10 @@ export class Daemon {
     this.sessions.on('session', (session) => {
       this.#emit(E.SESSION_UPDATE, { session: wire(session) });
       this.browsers.sessionChanged(session);
+      if (session.deleted) {
+        try { for (const name of removeChatShares(session.id)) console.log(`[helm] [${session.id}] stopped its link ${name}`); }
+        catch (error) { console.log(`[helm] [${session.id}] could not stop its links: ${error.message}`); }
+      }
     });
     this.sessions.on('discovery', () => this.#emit(E.SESSION_UPDATE, {}));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
