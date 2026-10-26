@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
@@ -44,16 +44,20 @@ let modelsDevCache = { at: 0, checkedAt: 0, catalog: null };
 let modelsDevInflight = null;
 const discoveries = new Map();
 const codexRetryAt = new Map();
+const codexRefreshes = new Map();
 
 /**
  * `launcher` is the {cmd, args} of an account run through a wrapper script
  * (discover.js wrappedEngine): its own binary can only be reached that way.
  */
-export async function listModels(engine, home, environment = {}, launcher = null) {
-  const answer = (value) => ['claude', 'gemini'].includes(engine)
-    ? { ...value, refreshing: !!modelsDevInflight }
-    : value;
+export async function listModels(engine, home, environment = {}, launcher = null, { settled = false } = {}) {
   const key = modelsKey(engine, home, launcher);
+  if (settled) await modelsSettled(engine, home, launcher);
+  const answer = (value) => engine === 'codex'
+    ? { ...value, refreshing: !!(inflight.has(key) || codexRefreshes.has(key) || codexManifestInflight) }
+    : ['claude', 'gemini'].includes(engine)
+      ? { ...value, refreshing: !!modelsDevInflight }
+      : value;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return answer(hit.value);
   // Some CLIs take seconds to list (agy asks the server every time). A list
@@ -196,10 +200,19 @@ async function codexModels(root, environment, key) {
 }
 
 function readCodexDiskCatalog(root) {
-  try {
-    const catalog = JSON.parse(readFileSync(join(root, 'model_catalog.json'), 'utf8'));
-    return Array.isArray(catalog?.models) && catalog.models.length ? catalog : null;
-  } catch { return null; }
+  // Codex versions use both names. Prefer the latest valid account cache;
+  // an old model_catalog.json must not hide a newer models_cache.json.
+  const catalogs = [];
+  for (const name of ['model_catalog.json', 'models_cache.json']) {
+    try {
+      const file = join(root, name);
+      const catalog = JSON.parse(readFileSync(file, 'utf8'));
+      if (Array.isArray(catalog?.models) && catalog.models.length) {
+        catalogs.push({ catalog, at: statSync(file).mtimeMs });
+      }
+    } catch { /* missing or incomplete cache */ }
+  }
+  return catalogs.sort((a, b) => b.at - a.at)[0]?.catalog ?? null;
 }
 
 function codexValue(catalog, def = null, effort = null) {
@@ -221,9 +234,9 @@ function codexValue(catalog, def = null, effort = null) {
 }
 
 function scheduleCodexRefresh(key, root, environment, def, effort) {
-  if (Date.now() < (codexRetryAt.get(key) ?? 0)) return;
+  if (codexRefreshes.has(key) || Date.now() < (codexRetryAt.get(key) ?? 0)) return;
   codexRetryAt.set(key, Date.now() + CODEX_RETRY_MS);
-  setImmediate(async () => {
+  const job = new Promise((resolve) => setImmediate(resolve)).then(async () => {
     try {
       const result = await codexCatalog(root, environment);
       if (!['app-server', 'debug'].includes(result?.source) || !result.catalog?.models?.length) return;
@@ -235,7 +248,8 @@ function scheduleCodexRefresh(key, root, environment, def, effort) {
       if (prior?.models?.length && !fresh.models.length) return;
       cache.set(key, { at: Date.now(), value: fresh });
     } catch { /* keep local data and throttle the next provider probe */ }
-  });
+  }).finally(() => codexRefreshes.delete(key));
+  codexRefreshes.set(key, job);
 }
 
 /**
@@ -608,9 +622,16 @@ export function newestFirst(ids, releasedAt = {}) {
     .map((x) => x.id);
 }
 
-/** Resolves once a public catalog refresh in progress has ended. */
-export function modelsSettled() {
-  return modelsDevInflight ?? Promise.resolve();
+/** Resolves once catalog refreshes already in progress have ended. */
+export function modelsSettled(engine, home, launcher = null) {
+  if (engine === 'codex') {
+    const key = modelsKey(engine, home, launcher);
+    return Promise.allSettled([codexManifestInflight, inflight.get(key), codexRefreshes.get(key)]);
+  }
+  if (engine) return modelsDevInflight ?? Promise.resolve();
+  return Promise.allSettled([
+    modelsDevInflight, codexManifestInflight, ...inflight.values(), ...codexRefreshes.values(),
+  ]);
 }
 
 /** Return stale public data immediately and refresh it once in the background. */

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,37 +80,47 @@ test('Codex serves disk data immediately and merges public refreshes that finish
     "      ? { data: [{ model: 'provider-model', displayName: 'Provider model', supportedReasoningEfforts: [{ reasoningEffort: 'xhigh' }], inputModalities: ['text', 'image'] }] }",
     "      : {};",
     "    const reply = JSON.stringify({ id: request.id, result }) + '\\n';",
-    "    if (request.method === 'model/list') setTimeout(() => process.stdout.write(reply), 200);",
+    "    if (request.method === 'model/list') fetch(process.env.TEST_CODEX_PROVIDER_URL).then(r => r.json()).then(() => process.stdout.write(reply));",
     "    else process.stdout.write(reply);",
     "  }",
     "});",
     '',
   ].join('\n'));
   const barrier = await barrierServer('/manifest');
+  const provider = await barrierServer('/provider');
   const priorPath = process.env.PATH;
   const priorManifest = process.env.HELM_CODEX_MODEL_MANIFEST_URL;
   process.env.PATH = bin + ':' + priorPath;
   process.env.HELM_CODEX_MODEL_MANIFEST_URL = barrier.url;
   try {
     const { listModels } = await import('../packages/connect/src/models.js?codex-fast-path');
+    const environment = { TEST_CODEX_PROVIDER_URL: provider.url };
     const began = Date.now();
-    const first = await listModels('codex', home);
+    const first = await listModels('codex', home, environment);
     assert.ok(Date.now() - began < 1000, 'disk catalog should not wait for public HTTP');
     assert.ok(first.models.includes('disk-model'));
     assert.equal(first.labels['disk-model'], 'Disk model label');
     assert.deepEqual(first.effortsByModel['disk-model'], ['low', 'high']);
     assert.equal(first.imagesByModel['disk-model'], false);
+    assert.equal(first.refreshing, true, 'the menu must request the completed Codex list');
     await barrier.started;
     barrier.release({ currentModels: { codex: ['public-model'] } });
     const withPublic = await until(async () => {
-      const current = await listModels('codex', home);
+      const current = await listModels('codex', home, environment);
       return current.models.includes('public-model') ? current : null;
     });
     assert.ok(withPublic.models.includes('disk-model'));
-    const withProvider = await until(async () => {
-      const current = await listModels('codex', home);
-      return current.models.includes('provider-model') ? current : null;
-    });
+    assert.equal(withPublic.refreshing, true, 'the provider refresh still runs after the public list arrives');
+    await provider.started;
+    let settled = false;
+    const completion = listModels('codex', home, environment, null, { settled: true })
+      .then((list) => { settled = true; return list; });
+    await new Promise(setImmediate);
+    assert.equal(settled, false, 'the settled request must wait for Codex');
+    provider.release({});
+    const withProvider = await completion;
+    assert.equal(withProvider.refreshing, false);
+    assert.ok(withProvider.models.includes('provider-model'));
     assert.ok(withProvider.models.includes('public-model'));
     assert.equal(withProvider.labels['provider-model'], 'Provider model');
     assert.deepEqual(withProvider.effortsByModel['provider-model'], ['xhigh']);
@@ -119,7 +129,9 @@ test('Codex serves disk data immediately and merges public refreshes that finish
     if (priorManifest === undefined) delete process.env.HELM_CODEX_MODEL_MANIFEST_URL;
     else process.env.HELM_CODEX_MODEL_MANIFEST_URL = priorManifest;
     barrier.release({ currentModels: { codex: ['test-cleanup'] } });
+    provider.release({});
     await barrier.close();
+    await provider.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -230,13 +242,57 @@ test('a failed Codex provider refresh leaves the usable account disk catalog cac
   process.env.PATH = bin + ':' + priorPath;
   process.env.HELM_CODEX_MODEL_MANIFEST_URL = 'http://127.0.0.1:1/unavailable';
   try {
-    const { listModels } = await import('../packages/connect/src/models.js?codex-failed-refresh');
+    const { listModels, modelsSettled } = await import('../packages/connect/src/models.js?codex-failed-refresh');
     const first = await listModels('codex', home);
-    await delay(100);
+    assert.equal(first.refreshing, true);
+    await modelsSettled();
     const second = await listModels('codex', home);
+    assert.equal(second.refreshing, false);
     assert.ok(first.models.includes('only-local-model'));
     assert.ok(second.models.includes('only-local-model'));
     assert.equal(second.labels['only-local-model'], 'Local model');
+  } finally {
+    process.env.PATH = priorPath;
+    if (priorManifest === undefined) delete process.env.HELM_CODEX_MODEL_MANIFEST_URL;
+    else process.env.HELM_CODEX_MODEL_MANIFEST_URL = priorManifest;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Codex reads either disk cache name and prefers the newest valid account catalog', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-model-codex-cache-'));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  executable(bin, 'codex', '#!/bin/sh\nexit 1\n');
+  const priorPath = process.env.PATH;
+  const priorManifest = process.env.HELM_CODEX_MODEL_MANIFEST_URL;
+  process.env.PATH = bin + ':' + priorPath;
+  process.env.HELM_CODEX_MODEL_MANIFEST_URL = 'http://127.0.0.1:1/unavailable';
+  try {
+    const { listModels, modelsSettled } = await import('../packages/connect/src/models.js?codex-cache-names');
+    for (const newest of ['model_catalog.json', 'models_cache.json']) {
+      const home = join(dir, newest);
+      mkdirSync(home);
+      for (const filename of ['model_catalog.json', 'models_cache.json']) {
+        const file = join(home, filename);
+        writeFileSync(file, JSON.stringify({ models: [{
+          model: filename === newest ? 'gpt-6.1-terra' : 'old-model',
+          display_name: 'GPT-6.1 Terra', supported_reasoning_levels: ['low', 'high'],
+        }] }));
+        utimesSync(file, 100, filename === newest ? 200 : 100);
+      }
+      const list = await listModels('codex', home);
+      assert.deepEqual(list.models, ['gpt-6.1-terra']);
+      assert.equal(list.labels['gpt-6.1-terra'], 'GPT-6.1 Terra');
+      assert.deepEqual(list.effortsByModel['gpt-6.1-terra'], ['low', 'high']);
+      await modelsSettled();
+    }
+    const home = join(dir, 'partial');
+    mkdirSync(home);
+    writeFileSync(join(home, 'model_catalog.json'), '{');
+    writeFileSync(join(home, 'models_cache.json'), JSON.stringify({ models: [{ model: 'gpt-6.1-terra' }] }));
+    assert.deepEqual((await listModels('codex', home)).models, ['gpt-6.1-terra']);
+    await modelsSettled();
   } finally {
     process.env.PATH = priorPath;
     if (priorManifest === undefined) delete process.env.HELM_CODEX_MODEL_MANIFEST_URL;

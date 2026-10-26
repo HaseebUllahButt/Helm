@@ -19,7 +19,7 @@ import { BASH_GUARD_MODES } from './pi-settings.js';
 import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
-import { listModels, mergeLiveModelCatalog, followNewModels, setAsideSignedOut, modelsSettled } from './models.js';
+import { listModels, mergeLiveModelCatalog, followNewModels, setAsideSignedOut } from './models.js';
 import { nativeControls, nativeModelChoices, nativeEffortChoices } from './native-controls.js';
 import { nativeClaudeAccount, nativeAccount } from './native-account.js';
 import { readProcess } from './takeover.js';
@@ -1855,7 +1855,6 @@ export class Daemon {
       case M.MODEL_LIST: {
         // A picker that saw `refreshing` asks once more and waits here,
         // rather than asking every second until the refresh ends.
-        if (p.settled === true) await modelsSettled();
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
         if (p.id) await this.sessions.refreshNativeSettings?.(p.id);
         const native = p.id ? this.sessions.get(p.id) : null;
@@ -1866,7 +1865,7 @@ export class Daemon {
           const engine = ENGINES[native.engine];
           const home = native.nativeHome ?? engine?.defaultHome;
           const hasModels = nativeModelChoices(native.engine);
-          const catalog = hasModels ? await listModels(native.engine, home, nativeEnv ?? {}) : { models: [] };
+          const catalog = hasModels ? await listModels(native.engine, home, nativeEnv ?? {}, null, { settled: p.settled === true }) : { models: [] };
           const prefs = account ? modelPrefs(account) : null;
           const filtered = applyModelPrefs(catalog, prefs, { all: !!p.all });
           const hasEffort = nativeEffortChoices(native.engine) && !!(catalog.efforts?.length || Object.keys(catalog.effortsByModel ?? {}).length);
@@ -1881,7 +1880,7 @@ export class Daemon {
         }
         if (native?.nativeChat && native.engine === 'claude') {
           const home = native.nativeHome ?? profile?.env?.CLAUDE_CONFIG_DIR ?? ENGINES.claude.defaultHome;
-          const catalog = await listModels('claude', home);
+          const catalog = await listModels('claude', home, {}, null, { settled: p.settled === true });
           // The account this terminal runs as, for its favorites and the
           // defaults new chats start with - the same tray a Helm chat has.
           let nativeEnv = null;
@@ -1905,6 +1904,7 @@ export class Daemon {
           spec.env?.[engine?.homeEnv] ?? engine?.defaultHome,
           spec.env,
           profile.wraps ? { cmd: spec.cmd, args: spec.args } : null,
+          { settled: p.settled === true },
         );
         // A live agent reports the pickers it actually has - real display
         // names, the levels this session offers - which beats what the CLI
