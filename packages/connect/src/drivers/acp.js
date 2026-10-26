@@ -68,6 +68,10 @@ const SUBAGENT_TOOL = /subagent|spawn.?agent|^task$/i;
 /** A turn this driver opened, as opposed to one of helm's own queue tickets. */
 const isDriverTurn = (turnId) => String(turnId).startsWith('turn-');
 
+/** The agent says the saved session does not exist (ACP "resource not found", or its own words). */
+const sessionGone = (error) => error?.code === -32002
+  || /\b(session|chat|conversation)\b.*\b(not found|does not exist|no longer exists|unknown|missing)\b|\bno such (session|chat)\b/i.test(error?.message ?? '');
+
 export class AcpDriver extends Driver {
   /**
    * The agent's stdio, whether the process is our own child or one the
@@ -260,11 +264,18 @@ export class AcpDriver extends Driver {
       this.#takeCommands(res.result);
     } else {
       // A failed resume is not permission to replace the saved chat. The
-      // next message must retry that chat, with its history still intact.
-      if (res?.error) {
+      // next message must retry that chat, with its history still intact -
+      // unless the agent says that chat no longer exists. Then every retry
+      // would fail the same way, so the chat goes on in a new session and
+      // says so; what was said before stays in Helm.
+      if (res?.error && !sessionGone(res.error)) {
         const message = `Helm cannot open the saved ${this.spec.label ?? this.engine} chat. ${res.error.message}`;
         this.push('error', { message, kind: 'init' });
         throw new Error(message);
+      }
+      if (res?.error) {
+        this.log(`${this.engine}: saved chat ${this.engineSessionId} is gone (${res.error.message}); starting a new session`);
+        this.push('error', { kind: 'resume', message: `${this.spec.label ?? this.engine} no longer has this chat's earlier session. The chat goes on in a new session. Earlier messages stay here, but the agent does not remember them.` });
       }
       let created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
       if (created.error && this.spec.authMethod && !authenticated && this.#needsAuth(created.error)) {

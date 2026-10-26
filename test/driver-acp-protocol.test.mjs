@@ -218,6 +218,16 @@ for (const code of [-32603, -32000, -32602]) {
   });
 }
 
+test('ACP goes on in a new session when the agent says the saved chat no longer exists, and says so', async t => {
+  const { driver, log, sent } = agent(t, { engineSessionId: 'saved-chat',
+    load: `return error('Session saved-chat not found', -32002);` });
+  await driver.send('Continue');
+  await log.until(e => e.type === 'turn.done');
+  assert.notEqual(driver.engineSessionId, 'saved-chat');
+  assert.equal(sent().filter(m => m.method === 'session/new').length, 1);
+  assert.ok(log.events.some(e => e.type === 'error' && e.kind === 'resume' && /no longer has this chat/.test(e.message)));
+});
+
 test('ACP tries the other resume verb when the first method does not exist', async t => {
   const { driver, log, sent } = agent(t, { engineSessionId: 'saved-chat',
     load: `return error('Unknown method', -32601);` });
