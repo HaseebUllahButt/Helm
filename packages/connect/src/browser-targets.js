@@ -37,6 +37,12 @@ export function normalizeAction(action) {
   if ('wait_for' in action) return { ...action, kind: 'wait', text: action.wait_for };
   if ('back' in action && action.back === true) return { ...action, kind: 'back' };
   if ('check' in action) { if (action.expect != null && typeof action.expect !== 'boolean') throw new Error('check expect must be true or false'); return { ...action, kind: 'check', expect: action.expect ?? true }; }
+  if ('evaluate' in action || typeof action.script === 'string') return { ...action, kind: 'evaluate', script: action.evaluate ?? action.script };
+  if ('upload' in action) return { ...action, kind: 'upload', ...targetFields(action.upload) };
+  if (typeof action.wait === 'string') return { ...action, kind: 'wait', selector: action.wait };
+  if ('resize' in action) return { ...action, kind: 'resize', ...(action.resize && typeof action.resize === 'object' ? action.resize : {}) };
+  if ('dialog' in action) return { ...action, kind: 'dialog', accept: action.accept ?? action.dialog === 'accept' };
+  for (const kind of ['forward', 'reload', 'console', 'network']) if (action[kind] === true) return { ...action, kind };
   return action;
 }
 

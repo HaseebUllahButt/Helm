@@ -91,8 +91,9 @@ const DETAILS = {
     act <tab> <JSON>  Run actions: '{"actions":[{"click":"the Save button"},{"check":"Saved"}]}'
                       Use exact page text or targets for checks.
                       Kinds: click, type, goto, check, key, scroll, hover, select,
-                      upload/files, evaluate/script, wait/selector, resize,
-                      dialog, console, network, back, forward, reload; or
+                      upload (with files), evaluate (page script), wait (CSS
+                      selector), resize, dialog, console, network, back,
+                      forward, reload; or
                       kind/ref, selector, role/name and coordinates.
                       A failed batch stops and lists candidate elements.
     flows / run       save a repeating batch with {{param}}, values, save_as
