@@ -998,7 +998,12 @@ export class Client {
           for (const env of r.environments) {
             this.emit(env.id, 'presence', { env: env.id, online: env.online, info: env.info, name: env.name });
           }
-          this.emit('', 'connection', { online: false, reachable: true, hub: this.relay });
+          // Said once. Each repeat redrew the app, and the machine list
+          // asked the hub again for what this poll had just read.
+          const told = this.told;
+          if (told?.online !== false || told.reachable !== true || told.error) {
+            this.emit('', 'connection', { online: false, reachable: true, hub: this.relay });
+          }
         })
         .catch(() => {});
     }, 10_000);
@@ -1386,7 +1391,13 @@ export class Client {
     this.refreshReachability();
   }
 
+  /** The connection state last told to the screens. */
+  private told: { online: boolean; reachable: boolean; error?: string } | null = null;
+
   private emit(env: string, kind: string, payload: any) {
+    if (kind === 'connection') {
+      this.told = { online: !!payload.online, reachable: payload.reachable ?? !!payload.online, error: payload.error };
+    }
     for (const l of this.listeners) l(env, kind, payload);
   }
 

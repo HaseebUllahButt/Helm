@@ -1067,3 +1067,18 @@ test('signing in gives up on a stalled network instead of waiting for ever', asy
   assert.ok(request?.init?.signal, 'the sign-in request has a deadline');
   h.client.close();
 });
+
+test('while the socket is down, the status poll says reachable once, not every 10 seconds', async () => {
+  let opened = 0;
+  const h = harness({ socket: () => (opened++ ? 'stall' : 'open') });
+  h.start(); await h.advance(10);
+  h.sockets[0].close();
+  // Each drop says why; the poll then says "reachable" once to clear it.
+  const drops = () => h.events.filter(e => e.kind === 'connection' && e.payload.error).length;
+  const told = () => h.events.filter(e => e.kind === 'connection' && !e.payload.online && e.payload.reachable && !e.payload.error).length;
+  await h.advance(60_000);
+  const machineReads = h.requests.filter(r => r.url.endsWith('/api/machines')).length;
+  assert.ok(machineReads >= 3, `the poll keeps reading machine status (${machineReads})`);
+  assert.ok(told() <= drops(), `reachable was told ${told()} times for ${drops()} drops`);
+  h.client.close();
+});
