@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Driver, checkVersion, assertFolder } from './index.js';
+import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
 import { modeFor } from '../modes.js';
 import { nonAgentClaudeTask } from '../claude-tasks.js';
 import { bareModel, compactWindow, configDir } from '../context-limit.js';
@@ -623,9 +623,9 @@ export class ClaudeDriver extends Driver {
       try { await this.answer(requestId, { option: 'deny', message: 'The chat ended.' }); } catch { /* already gone */ }
     }
     try { pipe.end(); } catch { /* closed */ }
-    const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    const done = await waitForExit(this.#exited, 3000);
     if (!done) pipe.kill('SIGTERM');
-    const done2 = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    const done2 = await waitForExit(this.#exited, 2000);
     if (!done2) pipe.kill('SIGKILL');
     await this.#exited;
   }

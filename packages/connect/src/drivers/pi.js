@@ -1,7 +1,7 @@
 import { piChatArgs, BASH_GUARD_MODES } from '../pi-settings.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Driver, checkVersion, assertFolder, cliVersion, semverLess } from './index.js';
+import { Driver, checkVersion, assertFolder, waitForExit, cliVersion, semverLess } from './index.js';
 
 /**
  * Pi and OMP, headless: `pi --mode rpc` / `omp --mode rpc`.
@@ -560,11 +560,11 @@ class PiRpcDriver extends Driver {
       try { await this.answer(requestId, { option: 'deny' }); } catch { /* already gone */ }
     }
     try { pipe.end(); } catch { /* closed */ }
-    const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    const done = await waitForExit(this.#exited, 3000);
     if (!done) pipe.kill('SIGTERM');
-    const done2 = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    const done2 = await waitForExit(this.#exited, 2000);
     if (!done2) pipe.kill('SIGKILL');
-    await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    await waitForExit(this.#exited, 2000);
   }
 
   /** Keep a hosted process alive while this daemon is being replaced. */
