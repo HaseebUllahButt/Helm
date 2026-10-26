@@ -93,11 +93,15 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
       if (at < 0) continue;
       browser = id; rest = (at ? asked.slice(0, at) : asked.slice(word.length)).replace(/[()]/g, ' ').trim().replace(/\s(in|on|from)$/, '').replace(/^\s*[/-]\s*/, ''); break;
     }
-    rest = rest.replace(/[\s/:-]+$/, '').replace(/^[\s/:-]+/, '').trim().replace(/^(the )?(default|main)( profile)?$/, 'default').replace(/ profile$/, '');
+    rest = rest.replace(/[\s/:-]+$/, '').replace(/^[\s/:-]+/, '').trim();
+    // A profile's own name comes first: "Main" is a profile called Main
+    // when there is one, else the browser's default profile.
+    const tries = [...new Set([rest, rest.replace(/ profile$/, ''), rest.replace(/^(the )?(default|main)( profile)?$/, 'default')])];
     const pool = choices.filter(p => !browser || p.browser === browser);
     const names = p => [p.directory, p.name, p.email].filter(Boolean).map(plain);
     const matches = !rest ? pool.filter(p => p.lastUsed)
-      : [v => v === rest, v => v.startsWith(rest), v => v.includes(rest)].map(fits => pool.filter(p => names(p).some(fits))).find(found => found.length) || [];
+      : [(v, t) => v === t, (v, t) => v.startsWith(t), (v, t) => v.includes(t)]
+        .flatMap(fits => tries.map(t => pool.filter(p => names(p).some(v => fits(v, t))))).find(found => found.length) || [];
     if (browser && !pool.length) throw new Error(`${BROWSERS.find(b => b[0] === browser)[1]} has no profiles on this machine. Profiles here: ${choices.map(label).join('; ') || 'none'}`);
     if (!matches.length) throw new Error(`No browser profile matches "${value}". Profiles here: ${choices.map(label).join('; ') || 'none'}`);
     return matches.find(p => p.readable) ? matches.filter(p => p.readable)[0] : matches[0];

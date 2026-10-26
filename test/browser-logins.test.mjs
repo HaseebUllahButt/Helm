@@ -37,6 +37,18 @@ test('discovers profiles, finds the one a person names, and rejects symlinks', a
   assert.equal((await reader.listProfiles()).length, 1);
 });
 
+test('"main" is a profile called Main when there is one, else the default profile', async t => {
+  const root = await config(t);
+  (await fixture(root)).db.close();
+  const reader = createLoginReader({ configHome: root, platform: 'linux', defaultBrowser: async () => null });
+  assert.equal((await reader.resolveProfile('main')).key, 'chromium:Default');
+  assert.equal((await reader.resolveProfile('the main profile')).key, 'chromium:Default');
+  (await fixture(root, { directory: 'Profile 1', name: 'Main' })).db.close();
+  assert.equal((await reader.resolveProfile('Main')).key, 'chromium:Profile 1');
+  assert.equal((await reader.resolveProfile('main profile')).key, 'chromium:Profile 1');
+  assert.equal((await reader.resolveProfile('default')).key, 'chromium:Default');
+});
+
 test('a name two browsers share means the everyday browser, then the latest used', async t => {
   const root = await config(t);
   for (const options of [{}, { browserPath: 'google-chrome', info: { active_time: 1700000000 } }, { browserPath: 'net.imput.helium', directory: 'Profile 7', name: 'Work', info: { user_name: 'me@example.test', active_time: 1600000000 } }]) (await fixture(root, options)).db.close();
