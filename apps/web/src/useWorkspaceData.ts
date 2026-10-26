@@ -4,14 +4,18 @@ import type { Client, Environment, Session } from './client';
 import { loadWorkspace, loadWorkspaceDurable, saveWorkspace, updateWorkspaceSession, workspaceScope } from './workspaceCache';
 import { useLiveInterval } from './useLiveInterval';
 
-/** Keep the old session objects when a fresh list contains the same data. */
-function keepUnchanged(old: Session[] | undefined, fresh: Session[]) {
+/**
+ * Keep the old objects when a fresh list holds the same data. Chat lists
+ * and machine checks mostly bring back what is here, and new objects
+ * redraw the whole app.
+ */
+function keepUnchanged<T extends { id: string }>(old: T[] | undefined, fresh: T[]) {
   if (!old?.length) return fresh;
-  const before = new Map(old.map((session) => [session.id, session]));
+  const before = new Map(old.map((item) => [item.id, item]));
   let same = old.length === fresh.length;
-  const next = fresh.map((session, index) => {
-    const was = before.get(session.id);
-    const kept = was && JSON.stringify(was) === JSON.stringify(session) ? was : session;
+  const next = fresh.map((item, index) => {
+    const was = before.get(item.id);
+    const kept = was && JSON.stringify(was) === JSON.stringify(item) ? was : item;
     if (kept !== old[index]) same = false;
     return kept;
   });
@@ -79,7 +83,7 @@ export function useWorkspaceData(client: Client, connected: boolean) {
       .then((result) => {
         if (!active.current) return;
         liveEnvsSeen.current = true;
-        setEnvs(result.environments);
+        setEnvs((current) => keepUnchanged(current, result.environments));
         setEnvError('');
         saveWorkspace(scope, { environments: result.environments });
       })
@@ -204,8 +208,8 @@ export function useWorkspaceData(client: Client, connected: boolean) {
         await Promise.all((liveIds ? liveIds.split(',') : []).map(async (id) => {
           try {
             const info = await client.rpc<Environment['info']>(id, 'env.info', {}, 8000);
-            if (!stopped && info.version) setEnvs((list) => list.map((env) => env.id === id
-              ? { ...env, info: { ...env.info, ...info } } : env));
+            if (!stopped && info.version) setEnvs((list) => keepUnchanged(list, list.map((env) => env.id === id
+              ? { ...env, info: { ...env.info, ...info } } : env)));
           } catch { /* keep the last known version through a reconnect */ }
         }));
       } finally { checking = false; }
