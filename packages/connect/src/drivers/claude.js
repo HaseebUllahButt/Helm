@@ -793,6 +793,12 @@ export class ClaudeDriver extends Driver {
       // A subagent's own prompt is not one of the owner's messages.
       if (m.parent_tool_use_id) return;
       let text = resultText(m.message?.content);
+      // Background news the CLI queued behind the owner's message comes back
+      // as a replay too. It wakes Claude; it is not a message from the owner.
+      if (/^\s*<task-notification>/.test(text) && !text.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim()) {
+        if (!this.#inTurn) this.#wake(m);
+        return;
+      }
       const record = localCommandRecord(text);
       if (record?.kind === 'note') return;
       if (record?.kind === 'output') {

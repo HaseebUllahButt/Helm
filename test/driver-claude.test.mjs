@@ -285,6 +285,20 @@ test('a wake-up the CLI starts by itself is a turn of its own, not the last one 
   await driver.kill();
 });
 
+test('a task notice the CLI replays is a wake-up, never a message from the owner', async () => {
+  // Background news queued behind the owner's message comes back marked as a
+  // replay. Read as a sent message, the chat showed the raw notice as the
+  // owner's own words.
+  const { driver, log } = make('wake-replay');
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done' && log.of('turn.done').length === 3);
+  const starts = log.of('turn.start');
+  assert.equal(starts.filter((e) => /task-notification/.test(e.text)).length, 0);
+  assert.equal(starts[1].wake, true);
+  assert.deepEqual(starts[1].cause, [{ summary: 'Background command "Run the lint check" completed (exit code 0)', status: 'completed' }]);
+  await driver.kill();
+});
+
 test('a wake-up turn reads as working until it finishes, not done', async (t) => {
   // A background subagent finishing makes Claude start a turn by itself.
   // The last turn just said idle; without a status of its own the chat
