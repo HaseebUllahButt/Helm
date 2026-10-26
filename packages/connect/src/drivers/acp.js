@@ -1260,12 +1260,16 @@ export class AcpDriver extends Driver {
 
     const id = p.toolCall?.toolCallId;
     const item = (id && this.#items.get(id)) || {};
-    const kind = item.kind === 'command' ? 'command' : item.kind === 'edit' ? 'edit' : 'tool';
+    // ACP permission requests carry a tool-call update. An agent need not
+    // send a tool_call first, and this update can refine an earlier card.
+    const changes = p.toolCall?.content === undefined ? (item.changes ?? []) : this.#changes(p.toolCall.content);
+    const kind = KIND[p.toolCall?.kind] ?? (item.kind === 'command' || item.kind === 'edit' ? item.kind
+      : p.toolCall?.rawInput?.command ? 'command' : changes.length ? 'edit' : 'tool');
     const tool = p.toolCall?._meta?.['cognition.ai/inferenceToolName'] ?? item.name ?? 'tool';
     const title = p.toolCall?.title || (kind === 'command' ? 'Run a command' : kind === 'edit' ? 'Edit files' : `${this.spec.label ?? this.engine} wants permission`);
     const detail = kind === 'command'
-      ? (item.command ?? p.toolCall?._meta?.['cognition.ai/editableCommand'] ?? title)
-      : kind === 'edit' ? { changes: item.changes ?? [] }
+      ? (p.toolCall?.rawInput?.command ?? p.toolCall?._meta?.['cognition.ai/editableCommand'] ?? item.command ?? title)
+      : kind === 'edit' ? { changes }
       : clip(JSON.stringify(p.toolCall?.rawInput ?? p.toolCall ?? {}, null, 2), 4000);
 
     // The mode may let helm answer this itself; then the phone never sees it.
@@ -1278,7 +1282,7 @@ export class AcpDriver extends Driver {
     }
 
     const shown = [];
-    const allow = options.find((o) => o.kind === 'allow_once') ?? options[0];
+    const allow = options.find((o) => o.kind === 'allow_once');
     if (allow) shown.push({ id: 'allow', role: 'allow', label: allow.name ?? 'Allow' });
     const always = options.find((o) => o.kind === 'allow_always');
     if (always) shown.push({ id: 'always', role: 'allow-always', label: always.name ?? 'Always allow' });
@@ -1289,7 +1293,7 @@ export class AcpDriver extends Driver {
     this.push('permission.request', {
       requestId, itemId: id, kind, tool, title, detail,
       parentId: p.toolCall?._meta?.['cognition.ai/subagent_context'] ? this.#lastSub : undefined,
-      options: shown, defaultTo: 'allow', allowEdit: false,
+      options: shown, defaultTo: allow || always ? 'allow' : 'deny', allowEdit: false,
       // What the wire needs to answer this - kept on the event so a daemon
       // that adopted the process mid-question can still complete the reply.
       acpId: m.id, acpOptions: options,
