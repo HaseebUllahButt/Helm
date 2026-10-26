@@ -1043,7 +1043,8 @@ pre.snippet {
    same place, invisible but for a box under each tag. Padding, font and
    wrapping must match .slab textarea exactly or the boxes drift. */
 .composer-field { position: relative; }
-.composer-field textarea { position: relative; }
+/* Native caret blinking redraws an idle chat too. Keep the insertion point visible and still. */
+.composer-field textarea { position: relative; caret-animation: manual; }
 .composer-marks {
   position: absolute; inset: 0; overflow: hidden; pointer-events: none;
   padding: 9px 14px 2px; line-height: 1.5; font-size: 16px;

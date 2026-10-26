@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
  * instead of each row waking on its own schedule. It runs at the fastest
  * pace anyone showing asks for (a seconds counter needs 1s, a "5m ago"
  * 15s), and each user is redrawn only when its own pace turns over. The
- * clock only exists while something is subscribed.
+ * clock only exists while something is subscribed and the page is visible.
  */
 const paces = new Map<(now: number) => void, number>();
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -15,7 +15,7 @@ let timerPace = 0;
 function schedule() {
   if (timer) clearTimeout(timer);
   timer = null;
-  if (!paces.size) return;
+  if (!paces.size || document.hidden) return;
   timerPace = Math.min(...paces.values());
   // To the next whole step on the wall clock, not one step from now.
   timer = setTimeout(() => {
@@ -26,6 +26,14 @@ function schedule() {
   }, timerPace - (Date.now() % timerPace) + 5);
 }
 
+function onVisibility() {
+  if (!document.hidden) {
+    const now = Date.now();
+    paces.forEach((_pace, tell) => tell(now));
+  }
+  schedule();
+}
+
 /** The time, redrawn every `ms` (on the whole step) while `active`. */
 export function useNow(ms = 15_000, active = true): number {
   const [now, setNow] = useState(() => Date.now());
@@ -34,11 +42,13 @@ export function useNow(ms = 15_000, active = true): number {
     const step = (t: number) => setNow((was) => (Math.floor(was / ms) === Math.floor(t / ms) ? was : t));
     // A clock switched on late must not show the time it was mounted at.
     step(Date.now());
+    if (!paces.size) document.addEventListener('visibilitychange', onVisibility);
     paces.set(step, ms);
     if (!timer || ms < timerPace) schedule();
     return () => {
       paces.delete(step);
-      if (!paces.size) schedule();
+      if (!paces.size) document.removeEventListener('visibilitychange', onVisibility);
+      if (!paces.size || ms === timerPace) schedule();
     };
   }, [ms, active]);
   return now;

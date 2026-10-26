@@ -104,7 +104,7 @@ test('chosen chat settings survive an immediate refresh and an older list respon
   await page.getByRole('button',{name:'model: opus',exact:true}).waitFor();
   await page.evaluate(() => {
     window.holdList=true;
-    window.emit('session.update',{session:window.current});
+    window.emit('session.update',{session:{...window.session('Other'),status:'exited'}});
   });
   await page.waitForFunction(() => typeof window.releaseList === 'function');
   await page.getByRole('button',{name:'model: opus',exact:true}).click();
@@ -454,4 +454,48 @@ test('many chat updates in a row are written to the device once, and a page hide
   assert.equal(result.view, 'Renamed 49');
   assert.equal(result.after, 2);
   assert.equal(result.saved, 'Last name');
+});
+
+test('open chat pushes update its header without fetching every chat again', async t => {
+  const { page } = await pageFor(t);
+  await page.evaluate(async () => {
+    await window.seed();
+    window.current = { ...window.session('Cached chat'), status: 'idle' };
+    window.envs = async () => ({ environments: [{ id: 'machine', name: 'Laptop', online: true, info: {} }] });
+    window.listCalls = 0;
+    window.reads = async (_env, method) => {
+      if (method === 'session.list') { window.listCalls++; return { sessions: [window.current] }; }
+      if (method === 'session.events') return { events: window.events(), last: 3, pending: [], session: { status: 'idle' } };
+      if (method === 'session.watch') return { last: 3, status: 'idle' };
+      return { ok: true, models: [], commands: [], projects: [], recent: [] };
+    };
+    window.mount(true);
+  });
+  await page.getByText('Saved response', { exact: true }).waitFor();
+  await page.waitForFunction(() => window.listCalls >= 2);
+  const result = await page.evaluate(async () => {
+    // Bring the navigation header from its saved working state to live idle.
+    window.emit('session.update', { session: window.current });
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const before = window.listCalls;
+    window.workspace.writeWorkspaces();
+    window.replaces = 0;
+    const replace = history.replaceState;
+    history.replaceState = function (...args) { window.replaces++; return replace.apply(this, args); };
+    for (let i = 0; i < 10; i++) window.emit('session.update', { session: structuredClone(window.current) });
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const repeats = window.replaces;
+    window.current = { ...window.current, title: 'New pushed title' };
+    window.emit('session.update', { session: window.current });
+    return { before, repeats };
+  });
+  await page.locator('.session-bar').getByText('New pushed title', { exact: true }).waitFor();
+  assert.equal(result.repeats, 0, 'equal pushes keep the open view');
+  assert.equal(await page.evaluate(() => window.listCalls), result.before, 'pushes need no full list read');
+  const saved = await page.evaluate(async () => {
+    window.workspace.writeWorkspaces();
+    return window.txn('kv', 'readonly', store => store.get('helm.workspace:' + window.scope));
+  });
+  assert.equal(saved.view.session.title, 'New pushed title');
+  assert.equal(saved.sessions.machine[0].title, 'New pushed title');
 });

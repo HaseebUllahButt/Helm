@@ -146,11 +146,22 @@ if (typeof window !== 'undefined') {
 export function updateWorkspaceSession(scope: string, envId: string, session: Session): void {
   const saved = current(scope);
   const list = saved.sessions[envId];
+  // Most pushes repeat a header, change only transcript fields, or concern
+  // a helper absent from these lists. None needs another whole-cache write.
+  const update = (known: Session): Session => {
+    const next = header({ ...known, ...session });
+    return JSON.stringify(header(known)) === JSON.stringify(next) ? known : next;
+  };
+  const index = list?.findIndex(s => s.id === session.id) ?? -1;
+  const known = index >= 0 ? list![index] : undefined;
+  const next = known ? update(known) : undefined;
   const view = saved.view?.envId === envId && saved.view.session.id === session.id
-    ? { ...saved.view, session: { ...saved.view.session, ...session } } : saved.view;
+    ? update(saved.view.session) : saved.view?.session;
+  if (next === known && view === saved.view?.session) return;
+  const sessions = list && next !== known ? list.map((s, i) => i === index ? next! : s) : undefined;
   saveWorkspace(scope, {
-    ...(list ? { sessions: { [envId]: list.map(s => s.id === session.id ? { ...s, ...session } : s) } } : {}),
-    view,
+    ...(sessions ? { sessions: { [envId]: sessions } } : {}),
+    ...(saved.view && view !== saved.view.session ? { view: { ...saved.view, session: view! } } : {}),
   });
 }
 
