@@ -22,6 +22,20 @@ const make = (name, opts = {}) => {
   return { fake, driver, log: collect(driver) };
 };
 
+test('Codex rejects a failed process start and permits a later retry', { timeout: 5000 }, async () => {
+  const { fake, driver, log } = make('plain');
+  const script = readFileSync(fake.cmd, 'utf8');
+  rmSync(fake.cmd);
+  try {
+    await assert.rejects(driver.start(), /ENOENT/);
+    assert.equal(driver.status, 'exited');
+    writeFileSync(fake.cmd, script, { mode: 0o755 });
+    await driver.send('hello');
+    await log.until(e => e.type === 'turn.done');
+    assert.equal(driver.status, 'idle');
+  } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
 test('Codex opens one thread when startup and the first send overlap', { timeout: 5000 }, async () => {
   const { fake, driver, log } = make('plain');
   try {

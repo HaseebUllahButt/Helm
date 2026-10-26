@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Driver, checkVersion, assertFolder } from './index.js';
+import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
 import { modeFor } from '../modes.js';
 
 /**
@@ -163,6 +163,7 @@ export class AgyDriver extends Driver {
   // -------------------------------------------------------------- transport
 
   #localPipe(child) {
+    child.stdin.on('error', err => this.push('error', { message: `Could not send input to ${this.engine}: ${err.message}`, kind: 'input' }));
     child.stderr.setEncoding('utf8');
     let tail = '';
     child.stderr.on('data', (d) => {
@@ -373,7 +374,7 @@ export class AgyDriver extends Driver {
       if (pipe) {
         try { pipe.end(); } catch { /* closed */ }
         pipe.kill?.('SIGTERM');
-        await Promise.race([this.#exited, new Promise((r) => setTimeout(r, 2000))]);
+        await waitForExit(this.#exited, 2000);
       }
       await this.start();
     } finally {
@@ -398,11 +399,11 @@ export class AgyDriver extends Driver {
     const pipe = this.#pipe;
     if (!pipe || this.#dead) return;
     try { pipe.end(); } catch { /* closed */ }
-    const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    const done = await waitForExit(this.#exited, 3000);
     if (!done) pipe.kill('SIGTERM');
-    const done2 = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    const done2 = await waitForExit(this.#exited, 2000);
     if (!done2) pipe.kill('SIGKILL');
-    await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    await waitForExit(this.#exited, 2000);
   }
 
   /** Keep a hosted process alive while this daemon is being replaced. */

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Driver, checkVersion, assertFolder } from './index.js';
+import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
 import { modeFor } from '../modes.js';
 import { nonAgentClaudeTask } from '../claude-tasks.js';
 import { bareModel, compactWindow, configDir } from '../context-limit.js';
@@ -128,6 +128,7 @@ export class ClaudeDriver extends Driver {
   #hosted = false;
   #exited = null;
   #ready = null;
+  #starting = null;
   /**
    * `${messageId}#${index}` for text/thinking blocks, the tool_use id for
    * tools - one map per sidechain: a subagent's stream_events interleave
@@ -236,6 +237,13 @@ export class ClaudeDriver extends Driver {
   }
 
   async start() {
+    if (this.#starting) return this.#starting;
+    this.#starting = this.#start();
+    try { return await this.#starting; }
+    finally { this.#starting = null; }
+  }
+
+  async #start() {
     if (this.#pipe) return;
     assertFolder(this);
     await checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
@@ -282,18 +290,31 @@ export class ClaudeDriver extends Driver {
   }
 
   #localPipe(child) {
+    child.stdin.on('error', err => this.push('error', { message: `Could not send input to Claude: ${err.message}`, kind: 'input' }));
     child.stderr.setEncoding('utf8');
     let tail = '';
     child.stderr.on('data', (d) => {
       tail = (tail + d).slice(-4000);
       if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d);
     });
+    let exitResult = null;
+    let exitHandler = null;
+    const finish = result => {
+      if (exitResult) return;
+      exitResult = result;
+      exitHandler?.(result);
+    };
+    child.on('exit', (code, signal) => finish({ code, signal, stderr: tail.trim().split('\n').pop() || null }));
+    child.on('error', err => finish({ code: -1, signal: null, stderr: err.message }));
     return {
       write: (d) => child.stdin.write(d),
       end: () => child.stdin.end(),
       kill: (s) => child.kill(s),
       onData: (cb) => child.stdout.on('data', (c) => cb(typeof c === 'string' ? c : c.toString('utf8'))),
-      onExit: (cb) => child.on('exit', (code, signal) => cb({ code, signal, stderr: tail.trim().split('\n').pop() || null })),
+      onExit: cb => {
+        exitHandler = cb;
+        if (exitResult) queueMicrotask(() => cb(exitResult));
+      },
       detach: () => {},
     };
   }
@@ -349,6 +370,7 @@ export class ClaudeDriver extends Driver {
         // Messages handed over mid-turn that it never read die with it too.
         for (const input of this.#inputs.values()) this.push('input.failed', { ...input, error: 'Claude exited before reading this message.' });
         this.#inputs.clear();
+        this.off('init', markReady);
         markReady();
         // A prompt the CLI was holding open dies with it; say so.
         for (const requestId of [...this.pending.keys()]) {
@@ -377,10 +399,11 @@ export class ClaudeDriver extends Driver {
   #control(request) {
     const request_id = `helm-${++this.#controlSeq}`;
     return new Promise((resolve, reject) => {
-      this.#controls.set(request_id, resolve);
+      const timer = setTimeout(() => { if (this.#controls.delete(request_id)) resolve(null); }, 15_000);
+      timer.unref?.();
+      this.#controls.set(request_id, response => { clearTimeout(timer); resolve(response); });
       try { this.#write({ type: 'control_request', request_id, request }); }
-      catch (e) { this.#controls.delete(request_id); reject(e); }
-      setTimeout(() => { if (this.#controls.delete(request_id)) resolve(null); }, 15_000).unref?.();
+      catch (e) { clearTimeout(timer); this.#controls.delete(request_id); reject(e); }
     });
   }
 
@@ -600,9 +623,9 @@ export class ClaudeDriver extends Driver {
       try { await this.answer(requestId, { option: 'deny', message: 'The chat ended.' }); } catch { /* already gone */ }
     }
     try { pipe.end(); } catch { /* closed */ }
-    const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    const done = await waitForExit(this.#exited, 3000);
     if (!done) pipe.kill('SIGTERM');
-    const done2 = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    const done2 = await waitForExit(this.#exited, 2000);
     if (!done2) pipe.kill('SIGKILL');
     await this.#exited;
   }

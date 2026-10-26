@@ -571,7 +571,7 @@ export class ExternalSessions {
       this.#takeovers.delete(id);
       this.#core.drivers.get(id)?.kill?.();
       this.#core.drivers.delete(id);
-      this.#core.index.delete(id);
+      this.#core.forgetSession(id);
       this.#core.save();
       this.#sessions.emit('session', { ...wire(s), takeover: null, status: 'exited', alive: false, movedTo: { ...wire(next), alive: true } });
       this.#sessions.emit('session', { ...wire(next), alive: true });

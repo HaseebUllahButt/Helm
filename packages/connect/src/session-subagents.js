@@ -44,6 +44,13 @@ export class SessionSubagents {
   /** sessionId -> (agent id -> tool calls that ran it): Claude reruns a helper under the SendMessage call that woke it. */
   agentTools = new Map();
 
+  /** Release records owned by a chat that was removed. */
+  forget(id) {
+    this.native.delete(id);
+    this.agentTools.delete(id);
+    this.#firstReads.delete(id);
+  }
+
   /** Whether Helm can find this session's own subagents: from its CLI's records, or from what its log saw start. */
   hasNative(s) { return SUBAGENT_ENGINES.has(s.engine) || !!s.spawned; }
 
@@ -143,6 +150,7 @@ export class SessionSubagents {
   async #readNative(s, n) {
     try {
       const agents = await this.#storedAgents(s, n);
+      if (this.native.get(s.id) !== n || this.#core.index.get(s.id) !== s) return;
       // What the chat's own log saw start: every helper of a CLI that keeps
       // no record Helm can read, and any not written down yet. One the
       // records already hold is the same helper - it only lends its tool

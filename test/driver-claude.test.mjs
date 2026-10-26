@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rmSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { rmSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fakeCli, collect } from './helpers.mjs';
@@ -14,6 +14,76 @@ const make = (name, opts = {}) => {
   });
   return { fake, driver, log: collect(driver) };
 };
+
+test('Claude finishes a failed process start and permits a later retry', { timeout: 5000 }, async () => {
+  const { fake, driver, log } = make('plain');
+  const script = readFileSync(fake.cmd, 'utf8');
+  rmSync(fake.cmd);
+  try {
+    assert.deepEqual(await driver.availableCommands(), []);
+    assert.equal(driver.status, 'exited');
+    writeFileSync(fake.cmd, script, { mode: 0o755 });
+    await driver.send('hello');
+    await log.until(e => e.type === 'turn.done');
+    assert.equal(driver.status, 'idle');
+  } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
+test('a closed Claude input pipe reports an error without crashing Helm', { timeout: 10000 }, async t => {
+  const { fake, driver, log } = make('plain');
+  const script = join(fake.dir, 'closed-input.mjs');
+  writeFileSync(script, `import { closeSync } from 'node:fs';
+    closeSync(0);
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'closed-input' }));
+    setInterval(() => {}, 1000);
+  `);
+  writeFileSync(fake.cmd, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 2.1.302; exit; fi\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)}\n`);
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
+  const initialized = new Promise(resolve => driver.once('init', resolve));
+  await driver.start();
+  await initialized;
+  await driver.send('hello');
+  const error = await log.until(e => e.type === 'error' && e.kind === 'input');
+  assert.match(error.message, /EPIPE/);
+});
+
+test('Claude exits even while a child command keeps its output pipes open', { timeout: 5000 }, async t => {
+  const { fake, driver, log } = make('plain');
+  const script = join(fake.dir, 'parent-exit.mjs');
+  const pidFile = join(fake.dir, 'grandchild.pid');
+  writeFileSync(script, `import { spawn } from 'node:child_process';
+    import { writeFileSync } from 'node:fs';
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 'inherit', 'inherit'] });
+    writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'parent-exit' }));
+    process.exit(0);
+  `);
+  writeFileSync(fake.cmd, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 2.1.302; exit; fi\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)}\n`);
+  t.after(async () => {
+    try { process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGTERM'); } catch { /* already gone */ }
+    await driver.kill(); rmSync(fake.dir, { recursive: true, force: true });
+  });
+  await driver.start();
+  await log.until(e => e.type === 'status' && e.status === 'exited');
+  assert.doesNotThrow(() => process.kill(Number(readFileSync(pidFile, 'utf8')), 0));
+});
+
+test('Claude starts one process when startup and the first send overlap', async () => {
+  let opened = 0, exited;
+  const writes = [];
+  const pipe = { onData() {}, onExit(fn) { exited = fn; },
+    write(raw) { writes.push(JSON.parse(raw)); },
+    end() { exited({ code: 0 }); }, kill() { exited({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: 'unused', cwd: '/tmp', procId: 'hosted', procHost: {
+    hasProc: () => false, openProc: async () => { opened++; }, procPipe: () => pipe,
+  } });
+  try {
+    await Promise.all([driver.start(), driver.start(), driver.send('hello')]);
+    assert.equal(opened, 1);
+    assert.equal(writes.filter(m => m.type === 'control_request').length, 1);
+    assert.equal(writes.filter(m => m.type === 'user').length, 1);
+  } finally { await driver.kill(); }
+});
 
 async function modelControl(t, version = '2.1.302') {
   let receive, exited;
@@ -38,6 +108,25 @@ async function modelControl(t, version = '2.1.302') {
     reply: response => receive(JSON.stringify({ type: 'control_response',
       response: { ...response, request_id: writes.findLast(w => w.type === 'control_request').request_id } }) + '\n') };
 }
+
+test('Claude releases control timers after replies and exit', async t => {
+  const { driver, reply, exit } = await modelControl(t);
+  const timers = new Set();
+  t.mock.method(globalThis, 'setTimeout', () => {
+    const timer = { unref() {} }; timers.add(timer); return timer;
+  });
+  t.mock.method(globalThis, 'clearTimeout', timer => timers.delete(timer));
+  const selected = driver.setModel('sonnet');
+  assert.equal(timers.size, 1);
+  reply({ subtype: 'success' });
+  await selected;
+  assert.equal(timers.size, 0);
+  const changing = driver.setModel('opus');
+  assert.equal(timers.size, 1);
+  exit();
+  await assert.rejects(changing, /exited/);
+  assert.equal(timers.size, 0);
+});
 
 /** What Claude Code 2.1.302 sent for a switch in a real run against a stand-in API. */
 const switchHook = (over = {}) => ({ type: 'control_request', request_id: 'hook-1', request: { subtype: 'hook_callback',

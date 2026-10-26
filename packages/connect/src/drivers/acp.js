@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { LineBuffer } from '../line-buffer.js';
 import { randomUUID } from 'node:crypto';
-import { Driver, checkVersion, assertFolder } from './index.js';
+import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
 import { modeFor, modesFor } from '../modes.js';
 
 /**
@@ -536,6 +536,7 @@ export class AcpDriver extends Driver {
    * back so everything downstream is identical.
    */
   #localPipe(child) {
+    child.stdin.on('error', err => this.push('error', { message: `Could not send input to ${this.engine}: ${err.message}`, kind: 'input' }));
     child.stderr.setEncoding('utf8');
     let tail = '';
     child.stderr.on('data', (d) => { tail = (tail + d).slice(-4000); if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d); });
@@ -859,6 +860,12 @@ export class AcpDriver extends Driver {
       this.push('input.failed', { text: input.text, inputId: input.inputId, error: res.error?.message || 'The run ended before reading this message.' });
     }
     this.#closeStream();
+    const plan = `plan-${turnId}`;
+    if (this.#items.delete(plan)) {
+      const reason = res.result?.stopReason;
+      this.push('item.done', { id: plan, status: res.error ? 'error' : reason === 'cancelled' ? 'declined'
+        : reason && reason !== 'end_turn' ? 'error' : 'ok' });
+    }
     this.compactionEnded(res.error ? 'error' : res.result?.stopReason === 'cancelled' ? 'declined' : 'ok', res.error?.message);
     this.#turnId = null;
     this.#promptId = null;
@@ -960,14 +967,14 @@ export class AcpDriver extends Driver {
     }
     if (this.status === 'working') this.#notify('session/cancel', { sessionId: this.engineSessionId });
     try { pipe.end(); } catch { /* closed */ }
-    const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    const done = await waitForExit(this.#exited, 3000);
     if (!done) pipe.kill('SIGTERM');
-    const done2 = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    const done2 = await waitForExit(this.#exited, 2000);
     if (!done2) pipe.kill('SIGKILL');
     // The exit notice crosses the host's socket when the process is hosted;
     // a dead socket would leave this promise waiting on a death nobody can
     // see, so the last wait is bounded too.
-    await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    await waitForExit(this.#exited, 2000);
   }
 
   /**

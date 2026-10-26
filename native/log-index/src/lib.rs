@@ -61,7 +61,11 @@ fn header(bytes: &[u8]) -> Result<Option<(f64, f64)>, ()> {
             let kind: String = serde_json::from_str(raw.get()).map_err(|_| ())?;
             if kind == "turn.start" {
                 2.0
-            } else if kind.starts_with("turn.") || kind == "item.start" || kind == "item.done" {
+            } else if kind.starts_with("turn.")
+                || kind.starts_with("permission.")
+                || kind == "item.start"
+                || kind == "item.done"
+            {
                 1.0
             } else {
                 0.0
@@ -80,6 +84,14 @@ pub fn scan_event_positions(bytes: Buffer) -> Float64Array {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_rows_keep_their_context() {
+        for kind in ["permission.request", "permission.resolved"] {
+            let body = format!(r#"{{"seq":1,"type":"{kind}"}}"#);
+            assert_eq!(header(body.as_bytes()), Ok(Some((1.0, 1.0))));
+        }
+    }
 
     #[test]
     fn unicode_offsets_and_unterminated_rows() {

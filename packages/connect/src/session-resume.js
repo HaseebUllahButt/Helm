@@ -54,7 +54,7 @@ export class SessionResume {
     for (const s of [...this.#core.index.values()]) {
       if (!s.pty) continue;
       if (this.#core.terminal(s).has(s.id)) continue;
-      this.#core.index.delete(s.id);
+      this.#core.forgetSession(s.id);
       changed = true;
       this.#sessions.emit('session', { ...s, status: 'exited', alive: false });
     }

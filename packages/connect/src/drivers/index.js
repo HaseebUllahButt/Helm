@@ -166,6 +166,14 @@ export function readJsonLines(stream, onMessage, onJunk = () => {}) {
   });
 }
 
+/** Wait for an exit or a deadline, without keeping a finished stop alive. */
+export async function waitForExit(exited, timeout) {
+  let timer;
+  try {
+    return await Promise.race([exited, new Promise(resolve => { timer = setTimeout(resolve, timeout, null); })]);
+  } finally { clearTimeout(timer); }
+}
+
 // ----------------------------------------------------------------- versions
 
 const versions = new Map();

@@ -1,7 +1,7 @@
 import { piChatArgs, BASH_GUARD_MODES } from '../pi-settings.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Driver, checkVersion, assertFolder, cliVersion, semverLess } from './index.js';
+import { Driver, checkVersion, assertFolder, waitForExit, cliVersion, semverLess } from './index.js';
 
 /**
  * Pi and OMP, headless: `pi --mode rpc` / `omp --mode rpc`.
@@ -220,6 +220,7 @@ class PiRpcDriver extends Driver {
   // -------------------------------------------------------------- transport
 
   #localPipe(child) {
+    child.stdin.on('error', err => this.push('error', { message: `Could not send input to ${this.engine}: ${err.message}`, kind: 'input' }));
     child.stderr.setEncoding('utf8');
     let tail = '';
     child.stderr.on('data', (d) => {
@@ -360,10 +361,11 @@ class PiRpcDriver extends Driver {
    */
   #call(type, fields = {}, { timeout = 20_000, id = `helm-${++this.#seq}` } = {}) {
     return new Promise((resolve) => {
-      this.#calls.set(id, resolve);
+      const timer = timeout ? setTimeout(() => { if (this.#calls.delete(id)) resolve(null); }, timeout) : null;
+      timer?.unref?.();
+      this.#calls.set(id, response => { clearTimeout(timer); resolve(response); });
       try { this.#write({ id, type, ...fields }); }
-      catch (e) { this.#calls.delete(id); resolve(null); }
-      if (timeout) setTimeout(() => { if (this.#calls.delete(id)) resolve(null); }, timeout).unref?.();
+      catch (e) { clearTimeout(timer); this.#calls.delete(id); resolve(null); }
     });
   }
 
@@ -558,11 +560,11 @@ class PiRpcDriver extends Driver {
       try { await this.answer(requestId, { option: 'deny' }); } catch { /* already gone */ }
     }
     try { pipe.end(); } catch { /* closed */ }
-    const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    const done = await waitForExit(this.#exited, 3000);
     if (!done) pipe.kill('SIGTERM');
-    const done2 = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    const done2 = await waitForExit(this.#exited, 2000);
     if (!done2) pipe.kill('SIGKILL');
-    await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    await waitForExit(this.#exited, 2000);
   }
 
   /** Keep a hosted process alive while this daemon is being replaced. */

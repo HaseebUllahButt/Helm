@@ -148,6 +148,18 @@ export class SessionViewers {
   #transcripts = new Map();
   #stopped = false;
 
+  /** Stop watches and release their saved state when a chat is removed. */
+  forget(id) {
+    this.#watching.delete(id);
+    const screen = this.#watchers.get(id);
+    clearTimeout(screen?.timer);
+    this.#watchers.delete(id);
+    const transcript = this.#transcripts.get(id);
+    clearInterval(transcript?.poll);
+    this.#transcripts.delete(id);
+    this.#core.external?.releaseTranscript?.(this.#core.index.get(id));
+  }
+
   /**
    * End every screen and transcript poll. A poll left running after the
    * daemon stopped kept saving the chat list over the next one's.
@@ -200,16 +212,23 @@ export class SessionViewers {
 
     const w = { last: '', expires: Date.now() + WATCH_TTL_MS, lines, ansi, busy: false, timer: null };
     this.#watchers.set(id, w);
-    const res = await this.#sessions.runtime.read(this.#core.handle(s), { lines, source: 'recent', ansi });
+    let res;
+    try { res = await this.#sessions.runtime.read(this.#core.handle(s), { lines, source: 'recent', ansi }); }
+    catch (error) {
+      if (this.#watchers.get(id) === w) this.#watchers.delete(id);
+      throw error;
+    }
     w.last = res.text ?? '';
+    if (this.#stopped || this.#watchers.get(id) !== w) return { text: w.last, session: s };
 
     const tick = async () => {
-      if (!this.#watchers.has(id)) return;
+      if (this.#watchers.get(id) !== w) return;
       if (Date.now() > w.expires) { this.#sessions.detach(id); return; }
       if (!w.busy) {
         w.busy = true;
         try {
           const r = await this.#sessions.runtime.read(this.#core.handle(s), { lines, source: 'recent', ansi });
+          if (this.#watchers.get(id) !== w) return;
           const text = r.text ?? '';
           if (text !== w.last) {
             const delta = text.startsWith(w.last)

@@ -424,21 +424,26 @@ export class CodexServer {
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         this.#child = child;
+        child.stdin.on('error', err => {
+          for (const d of this.#drivers.values()) d.push('error', { message: `Could not send input to Codex: ${err.message}`, kind: 'input' });
+        });
         this.#hosted = false;
         this.#adopted = false;
         let stderr = '';
         child.stderr.setEncoding('utf8');
         child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
         readJsonLines(child.stdout, (m) => this.#onMessage(m), (line) => this.log(`codex: ${line.slice(0, 200)}`));
-        child.on('exit', (code) => {
+        const finish = (code, detail = stderr, message = 'codex exited') => {
+          if (this.#child !== child) return;
           this.#child = null;
-          this.#starting = null;
-          for (const resolve of this.#calls.values()) resolve({ error: { message: 'codex exited' } });
+          for (const resolve of this.#calls.values()) resolve({ error: { message } });
           this.#calls.clear();
-          for (const d of this.#drivers.values()) d.serverExited(code, stderr);
-        });
+          for (const d of this.#drivers.values()) d.serverExited(code, detail);
+        };
+        child.on('exit', (code) => finish(code));
         child.on('error', (err) => {
           for (const d of this.#drivers.values()) d.push('error', { message: `could not start ${this.cmd}: ${err.message}`, kind: 'spawn' });
+          finish(-1, err.message, err.message);
         });
       }
       const init = await this.call('initialize', {

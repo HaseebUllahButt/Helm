@@ -222,7 +222,7 @@ export class Sessions extends EventEmitter {
       }
       // Its conversation lives on in the CLI's history list; a dead row
       // here would only be a second, unusable copy of it.
-      this.#index.delete(id);
+      this.#forgetSession(id);
       this.#save();
       this.emit('exit', { id, code });
       this.emit('session', { ...wire(s), status: 'exited', alive: false });
@@ -293,6 +293,7 @@ export class Sessions extends EventEmitter {
       inventory: this.#inventory.bind(this),
       handle: this.#handle.bind(this),
       save: this.#save.bind(this),
+      forgetSession: this.#forgetSession.bind(this),
       flush: () => this.flush(),
       startDriven: this.#startDriven.bind(this),
       driverStarts: this.#driverStarts,
@@ -317,6 +318,16 @@ export class Sessions extends EventEmitter {
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
+
+  #forgetSession(id) {
+    this.#subagents.forget(id);
+    this.#driverEvents.forget(id);
+    this.#delegation.forget(id);
+    this.#viewers.forget(id);
+    clearTimeout(this.#reapers.get(id));
+    this.#reapers.delete(id);
+    return this.#index.delete(id);
+  }
 
   // Usage limits (session-limits.js)
   accountLimits(profiles) { return this.#limitRecovery.accountLimits(profiles); }
@@ -1030,7 +1041,7 @@ export class Sessions extends EventEmitter {
       const fits = size?.cols > 0 && size?.rows > 0 ? { cols: size.cols, rows: size.rows } : {};
       await this.terminals.open(session.id, { cwd: dir, env, ...fits });
     } catch (err) {
-      this.#index.delete(session.id);
+      this.#forgetSession(session.id);
       throw err;
     }
     this.#save();
@@ -1157,10 +1168,8 @@ export class Sessions extends EventEmitter {
       // behind. The old path persisted the shell before awaiting ACP and
       // returned it with engineSessionId null when startup went wrong.
       this.#drivers.delete(session.id);
-      this.#index.delete(session.id);
+      this.#forgetSession(session.id);
       this.#deliveryState.clear(session.id);
-      clearTimeout(this.#reapers.get(session.id));
-      this.#reapers.delete(session.id);
       driver?.removeAllListeners?.('event');
       await Promise.resolve(driver?.kill?.()).catch(() => {});
       this.#dropQuickDir(session);
@@ -1995,7 +2004,7 @@ export class Sessions extends EventEmitter {
       const d = this.#drivers.get(id);
       this.#drivers.delete(id);
       await d?.kill?.();
-      this.#index.delete(id);
+      this.#forgetSession(id);
       this.#save();
       this.emit('session', { ...s, status: 'exited', alive: false });
       return { ok: true };
@@ -2012,7 +2021,7 @@ export class Sessions extends EventEmitter {
       this.#rewinder.providerRevisions.delete(id);
       clearTimeout(this.#reapers.get(id));
       if (d) await d.kill();
-      this.#index.delete(id);
+      this.#forgetSession(id);
       this.#dropQuickDir(s);
       await this.#worktrees.dropped(s);
       // On disk before its log goes, so a crash never lists a chat whose history is gone.
@@ -2027,14 +2036,14 @@ export class Sessions extends EventEmitter {
     }
     if (s.pty) {
       await this.#terminal(s).close(id);
-      this.#index.delete(id);
+      this.#forgetSession(id);
       this.#save();
       this.emit('session', { ...s, status: 'exited', alive: false });
       return { ok: true };
     }
     await this.runtime.close(this.#handle(s));
     if (!s.adopted) {
-      this.#index.delete(id);
+      this.#forgetSession(id);
       this.#save();
     }
     return { ok: true };

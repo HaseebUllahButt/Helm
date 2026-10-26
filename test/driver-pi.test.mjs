@@ -20,6 +20,31 @@ const make = (name, opts = {}, cls = PiDriver) => {
   return { fake, driver, log: collect(driver) };
 };
 
+test('pi-family releases read timers after immediate replies', async t => {
+  const timers = new Set();
+  t.mock.method(globalThis, 'setTimeout', () => {
+    const timer = { unref() {} }; timers.add(timer); return timer;
+  });
+  t.mock.method(globalThis, 'clearTimeout', timer => timers.delete(timer));
+  let receive, exited;
+  const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; },
+    write(raw) {
+      const { id, type } = JSON.parse(raw);
+      receive(JSON.stringify({ id, type: 'response', command: type, success: true,
+        data: { sessionId: 'kept', isStreaming: false } }) + '\n');
+    },
+    end() { exited({ code: 0 }); }, kill() { exited({ code: 0 }); },
+  };
+  const driver = new OmpDriver({ cmd: 'unused', cwd: '/tmp', procId: 'kept',
+    procHost: { hasProc: () => true, procPipe: () => pipe } });
+  try {
+    await driver.start();
+    assert.equal(timers.size, 0);
+    await driver.setModel('new-model');
+    assert.equal(timers.size, 0);
+  } finally { exited?.({ code: 0 }); }
+});
+
 test('pi: get_state seeds model/effort/title, prompt streams text exactly once', async () => {
   const { driver, log, fake } = make('plain', { model: 'opencode/spark-1' });
   await driver.send('say helm-ok');
