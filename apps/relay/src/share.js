@@ -161,6 +161,13 @@ export function createShareRoute({ online, callEnv, openTcp }) {
     let agent = agents.get(key);
     if (agent) return agent;
     agent = new http.Agent({ keepAlive: true, maxSockets: 8, maxFreeSockets: 4, timeout: 30_000 });
+    const retireEmpty = () => queueMicrotask(() => {
+      // Let the HTTP agent finish its close/error bookkeeping first. Empty
+      // pools must not retain every shared port ever opened by this hub.
+      if ([agent.sockets, agent.freeSockets, agent.requests].some(slots => Object.values(slots).some(list => list.length))) return;
+      if (agents.get(key) === agent) agents.delete(key);
+      agent.destroy();
+    });
     // openTcp's Duplex ignores setTimeout (media streams can idle). The
     // HTTP agent therefore cannot retire a pooled tunnel with its socket
     // timer. Close idle HTTP tunnels here, before the app's advertised
@@ -185,9 +192,9 @@ export function createShareRoute({ online, callEnv, openTcp }) {
         // The machine closing its end must free the slot, or the pool would
         // hand the next request a tunnel nobody is reading.
         stream.once('end', () => stream.destroy());
-        stream.once('close', () => clearIdle(stream));
+        stream.once('close', () => { clearIdle(stream); retireEmpty(); });
         done(null, stream);
-      }, (err) => done(err));
+      }, (err) => { done(err); retireEmpty(); });
     };
     agents.set(key, agent);
     return agent;
