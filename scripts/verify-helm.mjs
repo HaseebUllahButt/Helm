@@ -310,12 +310,21 @@ async function down() {
   // or folder, never by name: a name match can be the real laptop's host
   // (and pkill -f matches the shell running it).
   const mine = `HELM_DIR=${join(ROOT, 'helm')}`;
+  // A program run on this copy names it as an argument (`--user-data-dir=`).
+  // A shell command that only mentions the folder, such as the one running
+  // this, is not the copy's, and neither is anything that started us.
+  const inside = (arg) => arg.startsWith(`${ROOT}/`) || new RegExp(`^--[\\w-]+=${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`).test(arg);
+  const callers = new Set();
+  for (let pid = process.ppid; pid > 1 && !callers.has(pid);) {
+    callers.add(pid);
+    try { const stat = readFileSync(`/proc/${pid}/stat`, 'utf8'); pid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]); } catch { break; }
+  }
   await sleep(300);
   for (const pid of readdirSync('/proc').filter((p) => /^\d+$/.test(p)).map(Number)) {
-    if (pid === process.pid) continue;
+    if (pid === process.pid || callers.has(pid)) continue;
     try {
       const ours = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').includes(mine)
-        || readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(ROOT + '/');
+        || readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').some(inside);
       if (ours) stop(pid, false);
     } catch { /* not ours */ }
   }
