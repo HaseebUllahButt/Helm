@@ -42,7 +42,7 @@ export function StartingTerminalView({ client, env, openId, onBack }: {
               </div>
             </div>
           ) : (
-            <p role="status"><Icon name="think" size={12} className="tspin" />
+            <p role="status"><Icon name="think" size={12} />
               Opening a terminal on {env.name}…{waited >= 3 ? ` ${waited}s` : ''}</p>
           )}
         </div>

@@ -101,7 +101,9 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   await page.clock.runFor(5000);
   assert.match(await busy.locator('.tstat.working').innerText(), /^2m (09|1\d)s$/, 'the clock keeps counting');
   assert.equal(await busy.evaluate(e => getComputedStyle(e).opacity), '1');
-  assert.equal(await page.locator('.tstat.working svg.tspin').first().evaluate(e => getComputedStyle(e).animationName), 'tspin');
+  // A still dot marks the work; nothing on the shelf animates for ever.
+  assert.equal(await page.locator('.tstat.working i').first().evaluate(e => getComputedStyle(e).animationName), 'none');
+  assert.deepEqual(await page.evaluate(() => document.getAnimations().filter(a => a.effect?.getTiming().iterations === Infinity).map(a => a.animationName)), []);
 
   // Settled: one line each, newest first, an unopened finish shows a green dot.
   const settled = shelf(page, 'Settled');
@@ -217,13 +219,13 @@ test('Working folds to a count and still shows the chat you are in', async t => 
   assert.equal((await titlesIn(working)).length, 2);
 });
 
-test('reduced motion stills the spinner; the light theme keeps every status readable', async t => {
+test('the working mark is still; the light theme keeps every status readable', async t => {
   const { page, boot } = await pageFor(t, { width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await boot();
   await page.evaluate(mount);
-  await shelf(page, 'Running').locator('.tspin').first().waitFor();
-  assert.equal(await page.locator('.tspin').first().evaluate(e => getComputedStyle(e).animationName), 'none');
+  await shelf(page, 'Running').locator('.tstat.working i').first().waitFor();
+  assert.equal(await page.locator('.tstat.working i').first().evaluate(e => getComputedStyle(e).animationName), 'none');
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await page.waitForTimeout(500);
   for (const kind of ['working', 'unread']) {

@@ -700,7 +700,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
           {step === 'github' && gh?.login && !rows.length && (query.length < 2 ? (
             gh.repos.length ? null : <div className="empty quiet">{ghBusy ? 'Helm is checking GitHub.' : `${gh.login} has no GitHub projects.`}</div>
           ) : !finding || finding.state === 'looking' ? (
-            <div className="empty quiet"><Icon name="think" size={12} className="tspin" /> No match in your list. Helm is searching GitHub.</div>
+            <div className="empty quiet"><Icon name="think" size={12} /> No match in your list. Helm is searching GitHub.</div>
           ) : (
             <div className="empty quiet newchat-missing">
               <span>{finding.state === 'failed' ? finding.error : <><b>{gh.login}</b> cannot find a GitHub project called “{query}”.</>}</span>

@@ -286,7 +286,6 @@ code, pre, kbd { font-family: var(--mono); }
     position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%;
     border: 2px solid var(--sidebar); background: var(--sky);
   }
-  .rail-chat.rail-working .rail-dot { animation: pulse 2s steps(6) infinite; }
   .rail-chat.rail-need .rail-dot { background: var(--amber); }
   @media (prefers-reduced-motion: reduce) { .rail-chat.rail-working .rail-dot { animation: none; } }
   .main { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; }
@@ -652,14 +651,13 @@ code, pre, kbd { font-family: var(--mono); }
 .chip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .chip.blocked { color: var(--amber-text); }
 .chip.working { color: var(--sky); }
-.chip.working i { animation: pulse 2s steps(6) infinite; }
 .chip.dot-only { padding: 6px; }
 .chip.dot-only i { width: 8px; height: 8px; }
 .chip.done { color: var(--ok); }
 .chip.exited { color: var(--mutedfg); }
 
 @keyframes pulse { 0%, 40% { opacity: 1 } 50%, 90% { opacity: 0.5 } 100% { opacity: 1 } }
-@media (prefers-reduced-motion: reduce) { .chip.working i, .conn i, .shine { animation: none !important; } }
+@media (prefers-reduced-motion: reduce) { .conn i, .shine { animation: none !important; } }
 
 .tag {
   font-size: 11px; font-weight: 550; padding: 1px 6px; border-radius: 5px;
@@ -2734,7 +2732,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-status:hover { background: var(--hover); color: var(--text); }
 .delegation-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .delegation-status.state-working, .delegation-status.state-starting { color: var(--sky); }
-.delegation-status.state-working i, .delegation-status.state-starting i { animation: pulse 2s steps(6) infinite; }
 .delegation-status.state-blocked { color: var(--amber-text); }
 .delegation-status.state-error { color: var(--red); }
 .delegation-status.state-done i { background: var(--ok); box-shadow: var(--ok-glow); }
@@ -3063,6 +3060,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tstat { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; font-size: var(--t-micro); font-weight: 550; line-height: 1.35; font-variant-numeric: tabular-nums; }
 .tstat svg { opacity: 1; }
 .tstat.working { color: var(--sky); }
+/* A still dot, not a spinner: a turning icon redrew the window all day while any chat worked. The clock beside it shows the work going on. */
+.tstat.working i { width: 6px; height: 6px; border-radius: 50%; background: var(--sky); }
 /* The chat screen's ".working" line must not size the row's clock. */
 .tri-row .tstat.working { min-height: 0; padding: 0; gap: 5px; font-size: var(--t-micro); }
 .tstat.needs { color: var(--amber-text); font-weight: 650; }
@@ -3070,7 +3069,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tstat.unread { color: var(--ok); }
 .tstat.unread i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: var(--ok-glow); }
 .tstat.quiet { color: var(--mutedfg); font-weight: 450; }
-/* .tspin turns from spinners.ts, five steps a second: a CSS animation drew 60 frames a second. */
 @keyframes tspin { to { transform: rotate(360deg); } }
 
 /* What is live or wants you reads at full strength; a finished chat you have seen steps back. */

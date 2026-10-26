@@ -154,7 +154,7 @@ export function ThreadStatus({ s, mood, now }: { s: Thread; mood: ThreadMood; no
       : s.chatWorktree?.setup === 'running' ? 'setting up' : busyWord(s.status, s.compacting);
     return (
       <span className="tstat working" data-mood="working">
-        <Icon name="think" size={13} className="tspin" />
+        <i />
         <span className="tclock">{word === 'working' ? clock(tick - turnStart(s, tick)) : word === 'compacting' ? 'shortening chat history' : word}</span>
       </span>
     );
