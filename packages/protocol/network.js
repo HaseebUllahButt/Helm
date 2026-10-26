@@ -18,6 +18,8 @@ import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, 
 import { join, resolve, dirname, basename } from 'node:path';
 import { hostname, homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import {
   newNetworkKey, newNetworkId, newDeviceId, mintToken, verifyToken, ROLE, proofOf, checkProof,
 } from './identity.js';
@@ -282,22 +284,64 @@ export const oneTimeToken = (net, challenge) => mintToken(net.key, {
  * has no hello route, and falling back to the durable token for it would be
  * the very downgrade an impostor would ask for.
  */
+/**
+ * POST a small JSON body and read a small JSON answer. Not fetch: when fetch
+ * gives up on an address that does not answer, its connection keeps trying
+ * for ten more seconds, and a `helm` command that asked an offline machine
+ * stayed open that long after it was done. Giving up here closes it at once.
+ * Failures read as fetch's did, so every caller's retry rules stay the same.
+ */
+function postJson(url, body, { timeout, signal }) {
+  return new Promise((resolve, reject) => {
+    const data = Buffer.from(JSON.stringify(body));
+    let req, timer, settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', aborted);
+      req?.destroy();
+      if (error) reject(error); else resolve(value);
+    };
+    const aborted = () => finish(signal.reason ?? new DOMException('This operation was aborted', 'AbortError'));
+    if (signal?.aborted) { aborted(); return; }
+    let target;
+    try { target = new URL(url); } catch (cause) { finish(new TypeError('fetch failed', { cause })); return; }
+    const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
+    req = send(target, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': data.length } }, (res) => {
+      // Only a good answer is read; anything else is told by its status.
+      if (res.statusCode < 200 || res.statusCode >= 300) { finish(null, { status: res.statusCode, body: null }); return; }
+      const chunks = [];
+      let size = 0;
+      res.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > 64 * 1024) finish(null, { status: res.statusCode, body: null });
+        else chunks.push(chunk);
+      });
+      res.on('end', () => {
+        let parsed = null;
+        try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* not a hub's answer */ }
+        finish(null, { status: res.statusCode, body: parsed });
+      });
+      res.on('error', (cause) => finish(new TypeError('fetch failed', { cause })));
+    });
+    req.on('error', (cause) => finish(new TypeError('fetch failed', { cause })));
+    timer = setTimeout(() => finish(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), timeout);
+    signal?.addEventListener('abort', aborted, { once: true });
+    req.end(data);
+  });
+}
+
 export async function hubCredential(net, base, { timeout = 15_000, signal } = {}) {
   const nonce = randomBytes(24).toString('base64url');
-  const res = await fetch(`${base.replace(/\/+$/, '')}${HELLO_PATH}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ nonce }),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
-  });
-  if (!res.ok) await res.body?.cancel().catch(() => {});
+  const res = await postJson(`${base.replace(/\/+$/, '')}${HELLO_PATH}`, { nonce }, { timeout, signal });
   if (res.status === 404) {
     const err = new Error('that hub runs an older helm without the handshake - upgrade it');
     err.untrusted = true;
     throw err;
   }
-  if (!res.ok) throw new Error(`hub hello answered ${res.status}`);
-  const body = await res.json().catch(() => null);
+  if (res.status < 200 || res.status >= 300) throw new Error(`hub hello answered ${res.status}`);
+  const body = res.body;
   if (!body || body.net !== net.id || typeof body.challenge !== 'string'
       || !checkHubProof(net, nonce, body.proof)) {
     const err = new Error('that address answered, but not as a hub of this network - nothing was sent to it');
