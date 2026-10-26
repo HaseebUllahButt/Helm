@@ -22,6 +22,8 @@ const networkFailure = (error) => /offline|not connected|reach|ECONN|socket|time
 const line = (value, max) => typeof value === 'string' && value.length > 0
   && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 
+const FAILED_KEEP_MS = 15 * 60_000;
+
 export class TaskTransfers {
   constructor({ network, sessions, rpc, enqueue, directory = join(HELM_DIR, 'outgoing-tasks'), copy = runCopy, sendEngine }) {
     Object.assign(this, { network, sessions, rpc, enqueue, directory, copy, sendEngine });
@@ -30,6 +32,9 @@ export class TaskTransfers {
     // handoff id reads how far the copy got instead of waiting on it.
     this.copying = new Map();
     this.returning = new Map();
+    // A failed copy is told to the app that polls it, then forgotten: its
+    // failure stays in the saved record, and a later send resumes from there.
+    this.failedKeepMs = FAILED_KEEP_MS;
   }
 
   async send(params, caller) {
@@ -262,6 +267,8 @@ export class TaskTransfers {
       .then(() => { this.copying.delete(params.handoffId); })
       .catch((error) => {
         job.error = error;
+        job.preflight = null;
+        setTimeout(() => { if (this.copying.get(params.handoffId) === job) this.copying.delete(params.handoffId); }, this.failedKeepMs).unref?.();
         record.bulk.error = String(error.message).slice(0, 500);
         try { this.#save(params.handoffId, record); }
         catch (saveError) { console.error(`[helm] Could not save task transfer status: ${saveError.message}`); }
