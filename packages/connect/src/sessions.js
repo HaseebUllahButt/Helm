@@ -1937,6 +1937,15 @@ export class Sessions extends EventEmitter {
     return s;
   }
 
+  /** Live process roots, read only while the chat's Browser panel is open. */
+  async appProcessRoots(id) {
+    const s = this.get(id);
+    const terminal = this.#terminal(s);
+    const procId = s.driver === 'codex' ? null : (s.rewindProcId || s.id);
+    const pids = await Promise.all([terminal.pid?.(s.id), procId ? this.procs.pid?.(procId) : null]);
+    return [...new Set([s.nativePid, ...pids].filter(pid => Number.isInteger(pid) && pid > 0))];
+  }
+
   /**
    * The session a code handoff started, found by the handoff id on its
    * record - or, for sessions from before that field existed, its parent

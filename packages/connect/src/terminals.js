@@ -145,6 +145,11 @@ export class TerminalHost extends EventEmitter {
   /** True once a host has answered and it has a working pty. */
   get usable() { return this.#pty === true; }
 
+  async pid(id) {
+    if (!this.has(id) && !this.hasProc(id)) return null;
+    try { return (await this.#call({ t: 'process.pid', id })).pid; } catch { return null; }
+  }
+
   has(id) { return this.#ids.has(id); }
   list() { return [...this.#ids]; }
   nativeSessions() { return [...this.#nativeSessions.values()]; }
@@ -503,6 +508,7 @@ export class NativeHosts extends EventEmitter {
     await this.#adoptOlder();
     return ok;
   }
+  pid(id) { return this.#owner(id).pid(id); }
   has(id) { return this.#all().some((h) => h.has(id)); }
   list() { return this.#all().flatMap((h) => h.list()); }
   nativeSessions() { return this.#all().flatMap((h) => h.nativeSessions()); }

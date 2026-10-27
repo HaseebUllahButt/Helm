@@ -5,6 +5,7 @@ import BrowserLogins from './BrowserLogins';
 import { Icon } from '../Icon';
 
 type Tab = { id: string; engine: string; title: string; url: string; window?: boolean; asleep?: boolean; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[]; loading?: boolean; problem?: { url: string; message: string } | null };
+type RunningApp = { port: number; name: string; pid: number };
 type Listed = { tabs: Tab[]; canWindow?: boolean; open?: boolean };
 const host = (url: string) => { try { const u = new URL(url); return ['about:', 'chrome:'].includes(u.protocol) ? '' : u.host; } catch { return url; } };
 
@@ -15,6 +16,7 @@ const host = (url: string) => { try { const u = new URL(url); return ['about:', 
  * shows its tabs and, as text, what the agent sees.
  */
 export default function BrowserPanel({ client, env, session, onClose }: { client: Client; env: Environment; session: Session; onClose?: () => void }) {
+  const [apps, setApps] = useState<RunningApp[]>([]), [showApps, setShowApps] = useState(false);
   const [tabs, setTabs] = useState<Tab[]>([]), [chosen, setChosen] = useState(''), [address, setAddress] = useState('');
   const [canWindow, setCanWindow] = useState<boolean | null>(null), [open, setOpen] = useState(false);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [pageText, setPageText] = useState('');
@@ -41,6 +43,22 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
     }, 2000);
     return () => clearInterval(timer);
   }, [refresh]);
+  // The panel owns discovery. Closing it removes this timer; tab events
+  // and other browser users never start a machine scan.
+  useEffect(() => {
+    let stopped = false, reading = false;
+    const refreshApps = async () => {
+      if (stopped || reading || document.hidden) return;
+      reading = true;
+      try { const result = await call<{ apps: RunningApp[] }>('apps'); if (!stopped) setApps(result.apps); }
+      catch { /* The next panel read can recover after a reconnect. */ }
+      finally { reading = false; }
+    };
+    void refreshApps();
+    const timer = setInterval(() => void refreshApps(), 2000);
+    document.addEventListener('visibilitychange', refreshApps);
+    return () => { stopped = true; clearInterval(timer); document.removeEventListener('visibilitychange', refreshApps); };
+  }, [call]);
   // The agent opened a tab here: list it and follow it.
   useEffect(() => client.on((id, kind, payload: any) => {
     if (id !== env.id || kind !== 'browser.tab' || payload?.id !== session.id) return;
@@ -70,9 +88,9 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
       if (result.tab) setTabs(current => current.map(t => t.id === result.tab!.id ? result.tab! : t));
     } catch (e: any) { setError(errorMessage(e)); }
   };
-  const openTab = async (url?: string) => {
+  const openTab = async (url?: string, app = false) => {
     setBusy(true); setError('');
-    try { const result = await call<{ tab: Tab }>('open', { viewer: viewer.current, ...(url ? { url } : {}) }); setTabs(current => current.some(t => t.id === result.tab.id) ? current : [...current, result.tab]); setChosen(result.tab.id); }
+    try { const result = await call<{ tab: Tab }>(app ? 'openApp' : 'open', { viewer: viewer.current, ...(url ? { url } : {}) }); setTabs(current => current.some(t => t.id === result.tab.id) ? current : [...current, result.tab]); setChosen(result.tab.id); setPageText(''); }
     catch (e: any) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
   const closeTab = async (id: string) => { try { await call('close', { tabId: id }); await refresh(); } catch (e: any) { setError(errorMessage(e)); } };
@@ -98,7 +116,16 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
         {canWindow && <button className="bp-primary" disabled={busy} onClick={() => void show(chosen || undefined)}>{open ? 'Show window' : 'Open window'}</button>}
         <button disabled={busy || canWindow === null} onClick={() => void openTab()}>New tab</button>
         {tab && <button disabled={busy} onClick={() => void act({ kind: 'look' })}>Read page</button>}
+        {tabs.length > 0 && <button aria-expanded={showApps} onClick={() => setShowApps(value => !value)}>Running apps{apps.length ? ` (${apps.length})` : ''}</button>}
       </div>
+      {(!tabs.length || showApps) && <section className="bp-apps" aria-label="Running apps">
+        <strong>Running apps</strong>
+        {apps.length ? <ul className="bp-app-list">{apps.map(app => <li key={`${app.pid}:${app.port}`}>
+          <button className="bp-app-card" aria-label={`${app.name} · port ${app.port} · Open`} disabled={busy} onClick={() => void openTab(`http://localhost:${app.port}`, true)}>
+            <span className="bp-app-name">{app.name}</span><span>port {app.port}</span><span className="bp-app-open">Open</span>
+          </button>
+        </li>)}</ul> : <p className="note">No apps are running for this chat.</p>}
+      </section>}
       {tabs.length > 0 ? <ul className="bp-list" aria-label="Browser tabs">
         {tabs.map(t => <li key={t.id} className={`bp-item${t.id === chosen ? ' selected' : ''}`}>
           <button className="bp-item-main" aria-current={t.id === chosen} onClick={() => { setChosen(t.id); setPageText(''); if (canWindow && open) void show(t.id); }} title={t.url}>

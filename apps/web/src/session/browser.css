@@ -69,3 +69,10 @@
 .bp-problem{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:12px 14px;border-radius:var(--radius-xl);background:var(--accent);color:var(--text)}
 .bp-problem p{margin:0;font-size:13.5px;line-height:1.45}
 .bp-problem button{padding:7px 16px;border-radius:999px;background:var(--bg);color:var(--text);font-weight:550}
+
+.bp-apps{display:flex;flex-direction:column;gap:8px;padding:8px 2px}
+.bp-apps>strong{font-size:12.5px;font-weight:550;color:var(--text-dim);padding:0 8px}
+.bp-app-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.browser-panel .bp-app-card{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:10px 12px;background:var(--accent);text-align:left}
+.bp-app-name{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.bp-app-open{color:var(--primary-q);font-weight:550}

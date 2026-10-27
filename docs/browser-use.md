@@ -17,6 +17,17 @@ It controls web pages only, not desktop apps. Open it with a chat's
   owner's keyboard or mouse. The Helm panel is only a remote; nothing is
   streamed. A machine without a screen (the VM) uses a hidden Chromium,
   which is never started where windows can show.
+- **Running apps belongs to the open panel.** The panel asks the chat's
+  machine for TCP listeners every two seconds, and stops when closed or hidden.
+  Linux reads `/proc`; macOS uses `lsof` and process parents when available.
+  Other systems show no apps. Discovery sends no HTTP or TLS. Only a process
+  below the chat's agent or terminal, or inside its project folder, can appear.
+  Home folders and chats without a project never use folder ownership.
+  Shared Codex app-servers cannot assign all children to their first chat;
+  those apps need project ownership. Helm, agents and known control helpers
+  stay out. Opening a card checks ownership again, then opens localhost in
+  that chat's browser. No public link is made. Local terminal links use the
+  same check and keep their paths and queries.
 - **Owner and agent share the window.** When the owner clicks, types or
   scrolls, the agent's next step waits until they are still for 2.5 s (at
   most 20 s). Closing the window keeps its tabs as asleep; listing tabs

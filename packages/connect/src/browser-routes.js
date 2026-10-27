@@ -1,6 +1,8 @@
+import { discoverApps } from './browser-apps.js';
 import { BrowserManager } from './browser.js';
 
-export function createBrowserRoutes({ sessions, onOpen = () => {}, manager = new BrowserManager({ session: id => sessions.get(id), changed: onOpen }) } = {}) {
+export function createBrowserRoutes({ sessions, onOpen = () => {}, scanApps = discoverApps, manager = new BrowserManager({ session: id => sessions.get(id), changed: onOpen }) } = {}) {
+  const apps = async id => scanApps(sessions.get(id), { roots: await sessions.appProcessRoots?.(id) || [] });
   return {
     manager,
     stop: () => manager.stop(),
@@ -11,6 +13,15 @@ export function createBrowserRoutes({ sessions, onOpen = () => {}, manager = new
     },
     async dispatch(method, p) {
       if (!method.startsWith('browser.')) return undefined;
+      if (method === 'browser.apps') return { apps: await apps(p.id) };
+      if (method === 'browser.openApp') {
+        const url = new URL(p.url);
+        if (!['http:', 'https:'].includes(url.protocol) || !['localhost', '127.0.0.1'].includes(url.hostname) || url.username || url.password
+          || !(await apps(p.id)).some(app => app.port === +(url.port || (url.protocol === 'https:' ? 443 : 80)))) throw new Error('This app stopped or does not belong to this chat.');
+        const result = await manager.open(p.id, { url: url.href, viewer: p.viewer });
+        onOpen({ id: p.id, tabId: result.tab.id, ...(p.viewer ? { viewer: p.viewer } : {}) });
+        return result;
+      }
       if (method === 'browser.profiles') return manager.profiles(p.id);
       if (method === 'browser.importLogins') return manager.importLogins(p.id, p.profileKey);
       if (method === 'browser.loginDefault') return manager.loginDefault(p.id, p.profileKey);

@@ -13,10 +13,12 @@ function mountTerminal({ firstScreen } = {}) {
   const calls = [];
   let nextInterval = 0;
   let sessionListener;
+  let browserOpened = 0;
 
   class FakeXterm {
     static instance;
-    constructor() {
+    constructor(options) {
+      this.options = options;
       FakeXterm.instance = this;
       this.cols = 80;
       this.rows = 24;
@@ -24,6 +26,7 @@ function mountTerminal({ firstScreen } = {}) {
       this.writes = [];
       this.disposed = false;
     }
+    registerLinkProvider(provider) { this.links = provider; }
     loadAddon() {}
     open() {}
     attachCustomWheelEventHandler() {}
@@ -51,6 +54,7 @@ function mountTerminal({ firstScreen } = {}) {
     'react/jsx-runtime': jsxRuntime,
     '@xterm/xterm': { Terminal: FakeXterm },
     '@xterm/addon-fit': { FitAddon: FakeFitAddon },
+    './terminalLinks': { localTerminalUrl: text => text.startsWith('http://localhost:') ? text : null, terminalLocalLinks: () => [{ text: 'localhost:5173', url: 'http://localhost:5173/', range: {} }] },
     './startingTerminals': { takeFirstScreen: () => firstScreen },
   };
   const module = { exports: {} };
@@ -87,11 +91,12 @@ function mountTerminal({ firstScreen } = {}) {
     .then(({ code }) => {
       vm.runInNewContext(code, context, { filename: 'Terminal.tsx' });
       const component = module.exports.Terminal;
-      component({ client, env: 'machine-1', sessionId: 'session-1' });
+      component({ client, env: 'machine-1', sessionId: 'session-1', onOpenBrowser: () => browserOpened++ });
       refs[0].current = {};
       const cleanup = effects[0]();
       return Promise.resolve().then(() => Promise.resolve()).then(() => ({
         xterm: FakeXterm.instance,
+        browserOpened: () => browserOpened,
         calls,
         client,
         cleanup,
@@ -137,4 +142,20 @@ test('password-like PTY input is sent directly and never speculatively drawn', a
   } finally {
     cleanup();
   }
+});
+
+
+test('plain and OSC localhost links open the chat browser on its machine', async () => {
+  const { xterm, calls, browserOpened, cleanup } = await mountTerminal();
+  try {
+    xterm.links.provideLinks(1, links => links[0].activate());
+    xterm.options.linkHandler.activate({}, 'http://localhost:5173/path');
+    await new Promise(resolve => setImmediate(resolve));
+    const opens = calls.filter(call => call.method === 'browser.openApp');
+    assert.equal(opens.length, 2);
+    assert.ok(opens.every(call => call.env === 'machine-1' && call.params.id === 'session-1'));
+    assert.equal(opens[0].params.url, 'http://localhost:5173/');
+    assert.equal(opens[1].params.url, 'http://localhost:5173/path');
+    assert.equal(browserOpened(), 2);
+  } finally { cleanup(); }
 });

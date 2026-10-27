@@ -32,6 +32,21 @@ Design: [`docs/browser-use.md`](../browser-use.md).
   every check false, including control in pages and workers. Console reading
   was not active; see the design note before using it.
 
+## Running apps
+
+- **Reach:** Open Browser. With no tabs, Running apps shows its cards. With
+  tabs, use the small Running apps button beside New tab.
+- **Prove (private Linux, 2026-10-27):** Start a local web server inside a
+  fake chat's project folder. Open Browser, tap its card, and read the page.
+  Stop the server: its card goes away on the next scan. Close Browser: no
+  discovery timer remains. The browser opens localhost on the chat's machine.
+- **Traps:** Discovery reads sockets without requests. It lists TCP apps,
+  so a process that serves a binary protocol can have a card too. Project
+  ownership excludes the home folder and chats without a project. macOS
+  needs `lsof`. Shared Codex app-server children need project ownership.
+- **Tests:** `test/browser-apps`, `test/browser/browser-apps`,
+  `test/terminal-links`, `test/terminal-browser`, `test/terminal-host`.
+
 ## Logins, Show me, saved flows
 - **Prove Logins (driven 2026-10-25):** after `up`, write fake profiles into
   `/tmp/helm-verify-<you>/home/.config` with `fixture()` from

@@ -11,29 +11,14 @@ export function isDockKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' |
   return (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && !e.isComposing && e.key.toLowerCase() === 'b';
 }
 
-/** At a computer, the browser is the Chromium window itself, not a panel. */
-const atComputer = () => matchMedia('(pointer: fine)').matches;
-
-/**
- * The chat's browser. At a computer, Ctrl/Cmd+Shift+B and the Browser button
- * bring up the chat's Chromium window and nothing opens in Helm; only when the
- * chat's machine has no screen does the panel open instead. On a phone the
- * panel is the browser, remembered open per chat on this device. The agent
- * opening a tab puts a dot on the Browser button; on a wide touch screen it
- * opens the panel instead, once per tab, unless the owner closed it here.
- */
+/** The panel lists this chat's tabs and apps on the chat's machine. */
 export function useBrowserDock(client: Client, env: Environment, session: Session, enabled = true) {
   const key = openKey(env.id, session.id);
-  const [open, setOpenState] = useState(() => read(key) === '1' && !atComputer()), [dot, setDot] = useState(false);
+  const [open, setOpenState] = useState(() => read(key) === '1'), [dot, setDot] = useState(false);
   const isOpen = useRef(open); isOpen.current = open;
   const seen = useRef(new Set<string>());
   const setPanel = useCallback((next: boolean) => { isOpen.current = next; setOpenState(next); write(key, next ? '1' : '0'); if (next) setDot(false); }, [key]);
-  const setOpen = useCallback((next: boolean) => {
-    if (!next || isOpen.current || !atComputer()) { setPanel(next); return; }
-    setDot(false);
-    // No screen on the chat's machine (or Chromium would not start): the panel says so.
-    client.rpc(env.id, 'browser.show', { id: session.id }, 60000).catch(() => setPanel(true));
-  }, [client, env.id, session.id, setPanel]);
+  const setOpen = setPanel;
   useEffect(() => {
     if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
@@ -52,7 +37,7 @@ export function useBrowserDock(client: Client, env: Environment, session: Sessio
     if (!enabled || id !== env.id || kind !== 'browser.tab' || payload?.id !== session.id || payload.viewer || seen.current.has(payload.tabId)) return;
     seen.current.add(payload.tabId);
     if (isOpen.current) return;
-    if (matchMedia('(min-width: 1000px)').matches && !atComputer() && read(key) !== '0') setPanel(true); else setDot(true);
+    if (matchMedia('(min-width: 1000px)').matches && read(key) !== '0') setPanel(true); else setDot(true);
   }), [enabled, client, env.id, session.id, key, setPanel]);
   return { open, dot, setOpen, toggle: () => setOpen(!isOpen.current) };
 }
