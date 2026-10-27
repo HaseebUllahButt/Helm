@@ -22,7 +22,7 @@ before(async () => {
         openDirect:async()=>{}, route:async()=>null, usage:async()=>({totals:{},daily:[],groups:[],accounts:[],scan:{},at:Date.now()}),
         rpc:async(env,method,params)=>{
           window.calls.push({env,method,params});
-          if(method==='session.list') return {sessions:env==='laptop'?[{id:'pie1',title:'Lemon pie',cwd:'/work/pie',engine:'claude',profileId:'claude',driver:'claude',alive:true,status:'idle',turns:3,updatedAt:Date.now()-3600000}]:[]};
+          if(method==='session.list') return {sessions:env==='laptop'?(window.sessionRows ?? [{id:'pie1',title:'Lemon pie',cwd:'/work/pie',engine:'claude',profileId:'claude',driver:'claude',alive:true,status:'idle',turns:3,updatedAt:Date.now()-3600000}]):[]};
           if(method==='session.search'){
             if(window.searchReply) return window.searchReply(env,params);
             if(env==='laptop') return {results:!/lemon/.test(params.query)?[]:[
@@ -48,7 +48,7 @@ before(async () => {
 });
 after(async()=>browser?.close());
 
-async function pageFor(t, viewport = {width:390,height:844}) {
+async function pageFor(t, viewport = {width:390,height:844}, sessionRows) {
   const ctx = await browser.newContext({viewport});
   const page = await ctx.newPage();
   t.after(()=>page.close());
@@ -58,7 +58,7 @@ async function pageFor(t, viewport = {width:390,height:844}) {
   await page.route('http://helm-test/**',route=>route.fulfill({contentType:'text/html',body:'<div id="root"></div>'}));
   await page.goto('http://helm-test/');
   await page.addScriptTag({content:script});
-  await page.evaluate(()=>window.mount());
+  await page.evaluate((rows)=>{window.sessionRows=rows;window.mount();}, sessionRows);
   await page.locator('.sidebar').waitFor();
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.list'));
   return page;
@@ -105,6 +105,7 @@ test('one letter asks nothing; Enter on a found chat opens it', async t => {
 
 test('while the machines are looking, the box says so instead of "No matches"', async t => {
   const page = await pageFor(t);
+  await page.evaluate(() => { window.searchReply = async () => ({ results: [] }); });
   await page.keyboard.press('Control+k');
   const input = page.locator('.palette-input');
   await input.waitFor();
@@ -112,6 +113,72 @@ test('while the machines are looking, the box says so instead of "No matches"', 
   await page.getByText('Helm is searching your chats.').waitFor();
   await page.getByText('No matches').waitFor();
 });
+
+test('failed machine searches are named beside ready results', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.searchReply = async (env) => {
+      if (env === 'vm') {
+        await new Promise((resolve) => { window.failSearch = resolve; });
+        throw new Error('connection lost');
+      }
+      return { results: [{ id: 'ready', title: 'Ready result', cwd: '/work', engine: 'claude',
+        who: 'you', snippet: 'pelican', at: 300, updatedAt: 300 }] };
+    };
+  });
+  await page.keyboard.press('Control+k');
+  await page.locator('.palette-input').fill('pelican');
+  await page.waitForFunction(() => !!window.failSearch);
+  await page.getByRole('option').filter({ hasText: 'Ready result' }).waitFor();
+  await page.evaluate(() => window.failSearch());
+  await page.getByRole('status').filter({ hasText: 'Helm could not search chats on vm.' }).waitFor();
+  assert.equal(await page.getByRole('option').filter({ hasText: 'Ready result' }).count(), 1);
+  assert.deepEqual([...new Set((await searches(page)).map(([env]) => env))].sort(), ['laptop', 'vm']);
+});
+
+test('failed searches do not claim no matches and the next query clears the notice', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.searchReply = async (env, { query }) => {
+      if (query === 'pelican') throw new Error('connection lost');
+      return { results: [] };
+    };
+  });
+  await page.keyboard.press('Control+k');
+  const input = page.locator('.palette-input');
+  await input.fill('pelican');
+  await page.getByRole('status').filter({ hasText: 'Helm could not search chats on laptop, vm.' }).waitFor();
+  assert.equal(await page.getByText('No matches.', { exact: false }).count(), 0);
+  await input.fill('newword');
+  await page.getByText('No matches.', { exact: false }).waitFor();
+  assert.equal(await page.getByText('Helm could not search chats on', { exact: false }).count(), 0);
+});
+
+for (const width of [390, 1280]) {
+  test(`Show more reveals every local match and resets for a new query at ${width}px`, async t => {
+    const rows = Array.from({ length: 81 }, (_, i) => ({ id: `project-${i}`, title: `Review project ${i}`,
+      cwd: '/work', engine: 'claude', profileId: 'claude', driver: 'claude', alive: true, status: 'idle',
+      turns: 3, updatedAt: Date.now() - i }));
+    const page = await pageFor(t, { width, height: 844 }, rows);
+    await page.evaluate(() => { window.searchReply = async () => ({ results: [] }); });
+    await page.keyboard.press('Control+k');
+    const input = page.locator('.palette-input');
+    await input.fill('Review project');
+    const more = page.getByRole('button', { name: 'Show more', exact: true });
+    await more.waitFor();
+    assert.equal(await page.getByRole('option').count(), 40);
+    await input.press('Tab');
+    assert.equal(await more.evaluate((el) => el === document.activeElement), true);
+    await page.keyboard.press('Enter');
+    await page.getByRole('option').filter({ hasText: 'Review project 80' }).waitFor();
+    assert.equal(await page.getByRole('option').count(), 81);
+    assert.equal(await more.count(), 0);
+    assert.equal(await input.evaluate((el) => el === document.activeElement), true);
+    await input.fill('Review');
+    await more.waitFor();
+    assert.equal(await page.getByRole('option').count(), 40);
+  });
+}
 
 for (const width of [390, 1280]) {
   test(`ready machine results show before a held reply and merge newest first at ${width}px`, async t => {
@@ -180,4 +247,75 @@ test('a held reply from an earlier query cannot replace the current results', as
   assert.equal(await input.inputValue(), 'newword');
   assert.equal(await page.getByRole('option').filter({ hasText: 'Old result' }).count(), 0);
   assert.equal(await page.getByRole('option').filter({ hasText: 'Current result' }).count(), 2);
+});
+
+test('a failed held reply from an earlier query cannot add a failure notice', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.searchReply = async (env, { query }) => {
+      if (query === 'oldword' && env === 'vm') {
+        await new Promise((resolve) => { window.failOldSearch = resolve; });
+        window.oldFailed = true;
+        throw new Error('connection lost');
+      }
+      return { results: [] };
+    };
+  });
+  await page.keyboard.press('Control+k');
+  const input = page.locator('.palette-input');
+  await input.fill('oldword');
+  await page.waitForFunction(() => !!window.failOldSearch);
+  await input.fill('newword');
+  await page.getByText('No matches.', { exact: false }).waitFor();
+  await page.evaluate(() => window.failOldSearch());
+  await page.waitForFunction(() => window.oldFailed);
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  assert.equal(await page.getByText('Helm could not search chats on', { exact: false }).count(), 0);
+});
+
+test('a newer delayed result does not change the chat selected with the keys', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.searchReply = async (env) => {
+      if (env === 'vm') await new Promise((resolve) => { window.releaseNewer = resolve; });
+      const hit = (id, title, at) => ({ id, title, cwd: '/work', engine: 'claude', who: 'you',
+        snippet: 'pelican', at, updatedAt: at });
+      return { results: env === 'vm' ? [hit('newer', 'Newer result', 400)]
+        : [hit('ready-first', 'First ready', 300), hit('ready-chosen', 'Chosen ready', 200)] };
+    };
+  });
+  await page.keyboard.press('Control+k');
+  await page.locator('.palette-input').fill('pelican');
+  await page.waitForFunction(() => !!window.releaseNewer);
+  await page.getByRole('option').filter({ hasText: 'Chosen ready' }).waitFor();
+  await page.keyboard.press('ArrowDown');
+  assert.match(await page.locator('[role=option][aria-selected=true]').innerText(), /Chosen ready/);
+  await page.evaluate(() => window.releaseNewer());
+  await page.getByRole('option').filter({ hasText: 'Newer result' }).waitFor();
+  await page.keyboard.press('Enter');
+  assert.equal(await page.evaluate(() => history.state?.stack?.at(-1)?.session?.id), 'ready-chosen');
+});
+
+test('Try again reruns the same query without typing and clears the failure notice', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.searchReply = async (env) => {
+      if (env === 'laptop') return { results: [] };
+      if (!window.retryWorks) throw new Error('connection lost');
+      return { results: [{ id: 'recovered', title: 'Recovered result', cwd: '/work', engine: 'claude',
+        who: 'you', snippet: 'pelican', at: 300, updatedAt: 300 }] };
+    };
+  });
+  await page.keyboard.press('Control+k');
+  const input = page.locator('.palette-input');
+  await input.fill('pelican');
+  await page.getByRole('status').filter({ hasText: 'Helm could not search chats on vm.' }).waitFor();
+  assert.equal(await page.getByRole('listbox').locator('.banner').count(), 0);
+  await page.evaluate(() => { window.retryWorks = true; });
+  await page.getByRole('button', { name: 'Try again', exact: true }).click();
+  await page.getByRole('option').filter({ hasText: 'Recovered result' }).waitFor();
+  assert.equal(await input.inputValue(), 'pelican');
+  assert.equal(await input.evaluate((el) => el === document.activeElement), true);
+  assert.equal(await page.getByText('Helm could not search chats on', { exact: false }).count(), 0);
+  assert.deepEqual(await searches(page), [['laptop', 'pelican'], ['vm', 'pelican'], ['laptop', 'pelican'], ['vm', 'pelican']]);
 });

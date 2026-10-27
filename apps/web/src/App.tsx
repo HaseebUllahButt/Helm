@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
 import { useNow } from './useNow';
 import { isUnread, markSeen, seenHere, useSeenVersion } from './threadStatus';
-import { Palette, ShortcutsHelp, type PaletteItem } from './Palette';
+import { Palette, ShortcutsHelp, type PaletteItem, type PaletteSearchResults } from './Palette';
 import { NewChat } from './NewChat';
 import type { Account } from './accounts';
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
@@ -591,11 +591,14 @@ function Shell({ client, conn, onSignOut }: {
    * found this way opens like any other row; one whose title already matched
    * is marked `same` so the palette shows it once.
    */
-  const searchSaid = useCallback(async (query: string, onResults?: (items: PaletteItem[]) => void): Promise<PaletteItem[]> => {
+  const searchSaid = useCallback(async (query: string, onResults?: (results: PaletteSearchResults) => void): Promise<PaletteSearchResults> => {
     type Hit = { id: string; title: string; cwd: string; quick: boolean; engine: string; archived: boolean; who: 'you' | 'agent' | 'title'; snippet: string; at: number; updatedAt: number };
     const live = envs.filter((e) => e.online);
     const found: PaletteItem[] = [];
-    const newest = () => [...found].sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+    const failedMachines: string[] = [];
+    const results = (): PaletteSearchResults => ({
+      items: [...found].sort((a, b) => (b.at ?? 0) - (a.at ?? 0)), failedMachines: [...failedMachines],
+    });
     await Promise.all(live.map(async (e) => {
       try {
         const r = await client.rpc<{ results: Hit[] }>(e.id, 'session.search', { query, limit: 12 }, 8000);
@@ -609,10 +612,10 @@ function Shell({ client, conn, onSignOut }: {
             run: () => openSessionRef.current(e.id, session),
           };
         }));
-        onResults?.(newest());
-      } catch { /* Other machines can still answer. */ }
+      } catch { failedMachines.push(e.name); }
+      onResults?.(results());
     }));
-    return newest();
+    return results();
   }, [envs, client]);
 
   // The sidebar's ⋯: the machine screen's three, plus carrying on. The list

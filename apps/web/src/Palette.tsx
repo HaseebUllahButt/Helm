@@ -29,6 +29,11 @@ export interface PaletteItem {
   run: () => void;
 }
 
+export interface PaletteSearchResults {
+  items: PaletteItem[];
+  failedMachines: string[];
+}
+
 const GROUP = { thread: 'Chats', machine: 'Machines', action: 'Actions', said: 'Said in chats' } as const;
 
 /** Typing pauses this long before the machines are asked what was said. */
@@ -55,33 +60,37 @@ function score(item: PaletteItem, q: string): number {
 export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhere', placeholder = 'Search chats, machines, and actions' }: {
   items: PaletteItem[]; onClose: () => void; engineOf: (id?: string) => { cls: string };
   /** Asks the machines which chats said these words; the answers are listed under "Said in chats". */
-  search?: (query: string, onResults?: (items: PaletteItem[]) => void) => Promise<PaletteItem[]>;
+  search?: (query: string, onResults?: (results: PaletteSearchResults) => void) => Promise<PaletteSearchResults>;
   /** The same box, narrowed to one job (Ctrl+Shift+T: pick a device for a terminal). */
   heading?: string; placeholder?: string;
 }) {
   const dialog = useDialog(onClose);
   const listId = useId();
   const [q, setQ] = useState('');
-  const [at, setAt] = useState(0);
+  const [selection, setSelection] = useState<{ id: string | null; at: number }>({ id: null, at: 0 });
+  const [showAll, setShowAll] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   // What the machines found for the words typed, and whether they are still looking.
-  const [said, setSaid] = useState<{ q: string; items: PaletteItem[]; done: boolean }>({ q: '', items: [], done: true });
+  const [said, setSaid] = useState<PaletteSearchResults & { q: string; done: boolean }>({ q: '', items: [], failedMachines: [], done: true });
   const asking = !!search && q.trim().length >= SAID_MIN_CHARS && (said.q !== q.trim() || !said.done);
+  const failedMachines = said.q === q.trim() ? said.failedMachines : [];
 
   useEffect(() => {
     const query = q.trim();
     if (!search || query.length < SAID_MIN_CHARS) return;
     let stale = false;
-    setSaid({ q: query, items: [], done: false });
+    setSaid({ q: query, items: [], failedMachines: [], done: false });
     const timer = setTimeout(() => {
-      search(query, (found) => { if (!stale) setSaid({ q: query, items: found, done: false }); })
-        .then((found) => { if (!stale) setSaid({ q: query, items: found, done: true }); })
-        .catch(() => { if (!stale) setSaid({ q: query, items: [], done: true }); });
+      search(query, (found) => { if (!stale) setSaid({ ...found, q: query, done: false }); })
+        .then((found) => { if (!stale) setSaid({ ...found, q: query, done: true }); })
+        .catch(() => { if (!stale) setSaid({ q: query, items: [], failedMachines: [], done: true }); });
     }, SAID_AFTER_MS);
     return () => { stale = true; clearTimeout(timer); };
-  }, [q, search]);
+  }, [q, search, attempt]);
 
-  const local = useMemo(() => {
+  const matched = useMemo(() => {
     if (!q.trim()) {
       // Nothing typed: the actions, then the newest threads - what you are
       // most likely to have opened the palette for.
@@ -94,9 +103,10 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
       .map((item) => ({ item, s: score(item, q) }))
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s || (b.item.at ?? 0) - (a.item.at ?? 0))
-      .slice(0, 40)
       .map((x) => x.item);
   }, [items, q]);
+  const more = !!q.trim() && !showAll && matched.length > 40;
+  const local = useMemo(() => more ? matched.slice(0, 40) : matched, [matched, more]);
   // Chats found by their words come after the title matches, once, newest first.
   const shown = useMemo(() => {
     if (!q.trim() || said.q !== q.trim() || !said.items.length) return local;
@@ -104,8 +114,12 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
     return [...local, ...said.items.filter((item) => !item.same || !have.has(item.same))];
   }, [local, said, q]);
 
-  const selected = Math.max(0, Math.min(at, shown.length - 1));
+  const remembered = shown.findIndex((item) => item.id === selection.id);
+  const selected = remembered >= 0 ? remembered : Math.max(0, Math.min(selection.at, shown.length - 1));
+  const select = (at: number) => setSelection({ id: shown[at]?.id ?? null, at });
   useEffect(() => {
+    const id = shown[selected]?.id ?? null;
+    setSelection((current) => current.id === id && current.at === selected ? current : { id, at: selected });
     list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [selected, shown]);
 
@@ -116,24 +130,27 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
       <div className="palette-box" role="dialog" aria-modal="true" aria-label="Search and actions" ref={dialog} tabIndex={-1}>
         <div className="palette-heading"><span>{heading}</span><button className="iconbtn" onClick={onClose} aria-label="Close search and actions" title="Close"><Icon name="close" size={16} /></button></div>
         <input
-          className="palette-input" value={q} placeholder={placeholder}
+          ref={input} className="palette-input" value={q} placeholder={placeholder}
           autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
           role="combobox" aria-label={placeholder}
           aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
           aria-activedescendant={shown.length ? `${listId}-${selected}` : undefined}
-          onChange={(e) => { setQ(e.target.value); setAt(0); }}
+          onChange={(e) => { setQ(e.target.value); setSelection({ id: null, at: 0 }); setShowAll(false); }}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
             if (e.key === 'Escape') { e.preventDefault(); onClose(); }
-            else if (e.key === 'ArrowDown') { e.preventDefault(); setAt(shown.length ? (selected + 1) % shown.length : 0); }
-            else if (e.key === 'ArrowUp') { e.preventDefault(); setAt(shown.length ? (selected + shown.length - 1) % shown.length : 0); }
+            else if (e.key === 'ArrowDown') { e.preventDefault(); select(shown.length ? (selected + 1) % shown.length : 0); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); select(shown.length ? (selected + shown.length - 1) % shown.length : 0); }
             else if (e.key === 'Enter') { e.preventDefault(); go(shown[selected]); }
           }}
         />
+        {failedMachines.length > 0 && <div className="banner" role="status">Helm could not search chats on {failedMachines.join(', ')}.{' '}
+          <button className="linkish" onClick={() => { setAttempt((value) => value + 1); input.current?.focus(); }}>Try again</button>
+        </div>}
         <div className="palette-list" ref={list} role="listbox" id={listId} aria-label="Search results">
           {shown.length === 0 && (asking
             ? <div className="empty quiet" role="status">Helm is searching your chats.</div>
-            : <div className="empty quiet">No matches. Search for a machine, folder, chat name, or chat text.</div>)}
+            : !failedMachines.length && <div className="empty quiet">No matches. Search for a machine, folder, chat name, or chat text.</div>)}
           {shown.map((item, i) => {
             const head = i === 0 || shown[i - 1].group !== item.group;
             return (
@@ -141,7 +158,7 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
                 {head && <div className="palette-group">{GROUP[item.group]}</div>}
                 <button
                   role="option" id={`${listId}-${i}`} tabIndex={-1} aria-selected={i === selected} className={`palette-row${i === selected ? ' on' : ''}`}
-                  onMouseMove={() => setAt(i)} onClick={() => go(item)}
+                  onMouseMove={() => select(i)} onClick={() => go(item)}
                 >
                   {item.engine ? <EngineMark engine={engineOf(item.engine).cls} /> : <span className="pglyph"><Icon name={item.group === 'machine' ? 'machine' : 'forward'} size={15} /></span>}
                   <span className="grow">
@@ -153,6 +170,7 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
             );
           })}
         </div>
+        {more && <button className="palette-row" onClick={() => { setShowAll(true); input.current?.focus(); }}>Show more</button>}
       </div>
     </div>
   );
