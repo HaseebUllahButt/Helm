@@ -2,6 +2,9 @@
 
 A helper (subagent) is a second chat started by a chat, on any account. It
 shows as a card inside its parent, never as its own row in Working.
+Every helper has a parent chat: `helm delegate` from a plain shell or through
+`helm exec` is refused. Such a helper had no card, no reader for its result,
+and a project copy nobody kept. Another machine gets `helm spawn`.
 
 ## Start a subagent from the app
 - **Reach:** **Agents** in the chat header, or Ctrl/⌘+Shift+A.

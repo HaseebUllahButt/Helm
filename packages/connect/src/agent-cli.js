@@ -4,7 +4,7 @@ import { parseAgentArgs, chooseAgent } from './delegation.js';
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Injected RPC keeps argument and result behavior testable without a live hub. */
-export async function runAgentCommand(command, args, { rpc, self, cwd = process.cwd(),
+export async function runAgentCommand(command, args, { rpc, self,
   parentId = process.env.HELM_SESSION_ID, callerThreadId = process.env.CODEX_THREAD_ID,
   ownAccount = process.env.HELM_PROFILE_ID, write = console.log, sleep = pause } = {}) {
   const { options, words } = parseAgentArgs(args, {
@@ -36,6 +36,10 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
   if (command === 'delegate') {
     const [named, ...task] = words;
     if (!named || !task.join(' ').trim()) throw new Error('helm delegate <account|same> [--model <id>] [--wait] [--json] -- "<task>"');
+    // A helper belongs to the chat that asked for it. One started from a
+    // plain shell or through helm exec had no chat: no card, no result for
+    // anyone, and a project copy nobody kept, so it broke once it was removed.
+    if (!(options.parent ?? parentId)) throw new Error('helm delegate works inside a Helm chat only. To start work on another machine, use helm spawn.');
     // `same` is the account this chat runs as, so a helper needs no lookup.
     if (named === 'same' && !ownAccount) throw new Error('"same" works inside a Helm chat; name an account from helm agents');
     const account = named === 'same' ? ownAccount : named;
@@ -57,9 +61,8 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
       options.model = agent.cheapModel;
     }
     const { session } = await rpc(self, M.SESSION_DELEGATE, {
-      // Inside a Helm chat the child works in the chat's folder unless
-      // `--cwd` says otherwise; from a plain shell, where this runs.
-      id: options.parent ?? parentId, cwd: options.cwd ?? ((options.parent ?? parentId) ? undefined : cwd), profileId: agent.id,
+      // The child works in its parent's folder unless `--cwd` says otherwise.
+      id: options.parent ?? parentId, cwd: options.cwd, profileId: agent.id,
       model: options.model, mode: options.mode, effort: options.effort, task: task.join(' '),
       ...(options.worktree ? { worktree: true } : {}),
       // Background/native Codex threads can inherit another thread's Helm

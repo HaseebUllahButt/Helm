@@ -880,7 +880,7 @@ test('--worktree gives the child its own checkout on a helm/ branch, named after
   assert.doesNotMatch(run('branch', '--list', 'helm/refused-task').toString(), /refused-task/);
 });
 
-test('the CLI sends its own folder only when no parent chat decides it', async () => {
+test('helm delegate needs a parent chat; the parent folder wins unless --cwd names one', async () => {
   const calls = [];
   const rpc = async (_self, method, params) => {
     calls.push({ method, params });
@@ -888,7 +888,7 @@ test('the CLI sends its own folder only when no parent chat decides it', async (
     return { session: { id: 'child', engine: 'claude' } };
   };
   const run = (args, extra) => runAgentCommand('delegate', [...args, '--json', '--', 'Look'],
-    { rpc, self: 'self', cwd: '/shell', write: () => {}, sleep: async () => {}, ...extra });
+    { rpc, self: 'self', write: () => {}, sleep: async () => {}, ...extra });
   await run(['claude-main'], { parentId: 'parent' });
   assert.equal(calls.at(-1).params.cwd, undefined, 'inside a chat the parent folder wins');
   await run(['claude-main', '--cwd', '/worktree'], { parentId: 'parent' });
@@ -896,8 +896,13 @@ test('the CLI sends its own folder only when no parent chat decides it', async (
   assert.equal(calls.at(-1).params.worktree, undefined);
   await run(['claude-main', '--worktree'], { parentId: 'parent' });
   assert.equal(calls.at(-1).params.worktree, true);
-  await run(['claude-main'], { parentId: null });
-  assert.equal(calls.at(-1).params.cwd, '/shell');
+  // From a plain shell or through helm exec, a helper had no chat to show it
+  // or read its result, and its project copy broke once it was removed.
+  const asked = calls.length;
+  await assert.rejects(() => run(['claude-main', '--worktree'], { parentId: null }), /works inside a Helm chat only.*helm spawn/);
+  assert.equal(calls.length, asked, 'nothing reaches Helm');
+  await run(['claude-main', '--parent', 'chosen'], { parentId: null });
+  assert.equal(calls.at(-1).params.id, 'chosen');
 });
 
 test('agents get the tool instructions as standing instructions, not in the owner\'s message', async (t) => {
