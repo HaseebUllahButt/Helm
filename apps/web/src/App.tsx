@@ -483,8 +483,13 @@ function Shell({ client, conn, onSignOut }: {
   }, [client]);
 
 
+  // A wide screen opens on the first machine once. After that, no machine
+  // selected is the home the logo leads to, so it is never picked again.
+  const autoPickDone = useRef(false);
   useEffect(() => {
-    if (wide && !selected && envs.length) { autoPicked.current = envs[0].id; setSelected(envs[0].id); }
+    if (!wide || !envs.length || autoPickDone.current) return;
+    autoPickDone.current = true;
+    if (!selected) { restate(nav.current.stack, envs[0].id); autoPicked.current = envs[0].id; }
   }, [wide, selected, envs]);
 
   // Keys, on a keyboard. Every one needs Ctrl/Cmd - never a bare key, which
@@ -743,6 +748,10 @@ function Shell({ client, conn, onSignOut }: {
     if (changed) restate(next);
   };
   const push = (v: MainView) => navigate([...nav.current.stack, v]);
+  const goHome = () => {
+    if (nav.current.selected === null && nav.current.stack.length === 1 && nav.current.stack[0].kind === 'env') return;
+    navigate([{ kind: 'env' }], null);
+  };
 
   // A chat that was starting in the background is up: open it in place of
   // its placeholder, or, if nobody is looking and nothing was written, let
@@ -1155,9 +1164,13 @@ function Shell({ client, conn, onSignOut }: {
       <aside className={`sidebar${!showMain ? ' showing' : ''}${wide && sidebarCollapsed ? ' collapsed' : ''}`}>
         <SidebarSunset />
         <div className="bar side">
+          {/* The logo goes home: on a wide screen the machines overview,
+              on a phone this list. Nothing else leaves a machine. */}
           <div className="brand">
-            <img src="/favicon.svg?v=7" alt="" />
-            <b className="wordmark">helm</b>
+            <button type="button" className="brand-home" onClick={goHome} title="Home" aria-label="Home">
+              <img src="/favicon.svg?v=7" alt="" />
+              <b className="wordmark">helm</b>
+            </button>
           </div>
           {/* Live is just the dot, even with some machines off: the machines
               list below already says who is online. Words appear only when

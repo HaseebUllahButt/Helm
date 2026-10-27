@@ -3,6 +3,14 @@
 On a phone the sidebar is the Home screen. To get there, press `click Back`
 until `text` starts with "helm / Search anything".
 
+## Home (computer)
+- **Rules (owner, 2026-10-27):** the helm logo top left is the way home. A
+  wide screen opens on the first machine once; the logo then shows the
+  Machines overview, and no machine is picked again by itself.
+- **Prove (driven 2026-10-27):** `open --desktop`, start a fake chat,
+  `$V click Home`: the main pane starts with "Machines". Browser back
+  returns to the chat screen.
+
 ## Folded sidebar (computer only)
 - **Prove (driven 2026-10-17):** `open --desktop`, start a fake-ask chat and
   a fake-slow chat, `click "collapse sidebar"`, then
