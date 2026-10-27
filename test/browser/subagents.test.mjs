@@ -357,7 +357,7 @@ test('launch options stay folded until asked for, then create a linked child and
   const toggle = page.getByRole('button', {name:'Needs approval, details'});
   assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
   assert.equal(await page.locator('.delegation-group.active .delegation-branch').count(), 1);
-  assert.deepEqual(await page.locator('.sheet-actions button').allTextContents(), ['Deny', 'Allow'], 'safe visual order must also be the keyboard order');
+  assert.deepEqual(await page.locator('.sheet-actions button').allTextContents(), ['Decline', 'Approve'], 'safe visual order must also be the keyboard order');
   const request = await page.evaluate(() => JSON.parse(JSON.stringify(window.calls.find((c)=>c.method==='session.delegate'))));
   assert.deepEqual(request.params, {id:'parent',profileId:'claude-main',model:'opus',task:'Review the vulnerability'});
   assert.equal(await page.getByText('claude-main · opus', {exact:true}).count(),1);
@@ -368,7 +368,7 @@ test('launch options stay folded until asked for, then create a linked child and
   await toggle.click();
   await page.getByText('Read the diff', {exact:true}).waitFor();
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.list'&&c.params.parentId==='parent')));
-  await page.getByRole('button',{name:'Deny',exact:true}).click();
+  await page.getByRole('button',{name:'Decline',exact:true}).click();
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.answer'&&c.params.id==='child'&&c.params.decision.option==='deny')));
   await page.getByLabel('Message helper').fill('Keep the security checks intact');
   const messagesBeforeComposition = await page.evaluate(() => window.calls.filter((call) => call.method === 'session.agent-send').length);

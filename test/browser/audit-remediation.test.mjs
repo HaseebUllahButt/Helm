@@ -90,7 +90,7 @@ for (const action of ['change', 'type', 'unmount']) test(`question auto-submit c
   }
   await page.clock.runFor(200);
   assert.deepEqual(await page.evaluate(() => window.answers ?? []),
-    action === 'change' ? [{ option: 'allow', answers: { 'Which color?': 'Green' } }] : []);
+    action === 'change' ? [{ option: 'allow', answers: { 'Which color?': 'Green' }, answerLists: { 'Which color?': ['Green'] } }] : []);
 });
 
 test('a failed send does not overwrite a newer draft or its saved copy', async (t) => {

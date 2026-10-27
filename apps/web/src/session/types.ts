@@ -187,6 +187,8 @@ export interface Decision {
   option: 'allow' | 'always' | 'deny';
   message?: string;
   answers?: Record<string, string>;
+  /** Preserve commas inside one answer while older agents use the joined text. */
+  answerLists?: Record<string, string[]>;
   updatedInput?: any;
 }
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { writeFileSync, readFileSync, chmodSync, rmSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, readFileSync, chmodSync, rmSync, mkdtempSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
 
@@ -709,6 +709,39 @@ test('interrupt: turn/interrupt with the live turn id; the turn ends interrupted
   const sent = fake.stdinLines().find((l) => l.method === 'turn/interrupt');
   assert.deepEqual(sent.params, { threadId: driver.threadId, turnId: '01a09e7c-9ab1-7491-b3b0-3b1affd75fad' });
   await driver.kill();
+});
+
+test('question answers preserve commas and keep older clients working', async t => {
+  const { driver, log, fake } = make('plain');
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
+  await driver.send('hello');
+  await log.until(e => e.type === 'turn.done');
+  const question = 'Where should the task run?';
+  const cases = [
+    [{ answers: { [question]: 'Paris, France' }, answerLists: { [question]: ['Paris, France'] } }, ['Paris, France']],
+    [{ answerLists: { place: ['Yes, continue', 'Use cache'] } }, ['Yes, continue', 'Use cache']],
+    [{ answers: { [question]: 'Types, Lint' } }, ['Types', 'Lint']],
+  ];
+  for (const [index, [answer, expected]] of cases.entries()) {
+    const id = 9000 + index;
+    driver.onServerRequest({ id, method: 'item/tool/requestUserInput', params: {
+      threadId: driver.threadId, questions: [{ id: 'place', question, options: [] }],
+    } });
+    const ask = log.of('permission.request').at(-1);
+    await driver.answer(ask.requestId, { option: 'allow', ...answer });
+    // Wait for the fake process to read the reply, rather than waiting a fixed time.
+    await new Promise((resolve, reject) => {
+      const watcher = watch(fake.dir, () => check());
+      const timer = setTimeout(() => { watcher.close(); reject(new Error('Codex did not read the answer')); }, 3000);
+      const check = () => {
+        if (!fake.stdinLines().some(line => line.id === id && line.result)) return;
+        clearTimeout(timer); watcher.close(); resolve();
+      };
+      check();
+    });
+    assert.deepEqual(fake.stdinLines().find(line => line.id === id && line.result).result,
+      { answers: { place: { answers: expected } } });
+  }
 });
 
 test('simultaneous native Codex helpers keep separate request targets and settle separately', () => {
