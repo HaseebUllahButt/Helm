@@ -1803,7 +1803,9 @@ async function forwardOpen(net, { source, target, port }) {
     die(older(err, to) ?? `${to} did not start the forward: ${err.message}`);
   }
   const url = `http://localhost:${forward.localPort}`;
-  const ends = expiresAt ? `It ends at ${new Date(expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (add --keep to keep it)` : 'It stays until you stop it';
+  // In hours too: the time of day is this machine's clock, maybe not the owner's.
+  const left = expiresAt && Math.round((expiresAt - Date.now()) / 60_000);
+  const ends = expiresAt ? `It ends in ${left >= 120 ? `${Math.round(left / 60)} hours` : `${left} min`}, at ${new Date(expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} here (add --keep to keep it)` : 'It stays until you stop it';
   console.log(`\n  ${url}  on ${to}  ->  ${from}, port ${port}`);
   console.log(`  ${ends}. Stop it: helm forward stop ${id}`);
   console.log(`  Give the owner only this link: ${url}\n`);
