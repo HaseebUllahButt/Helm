@@ -238,12 +238,16 @@ test('helm forward carries a local port to the machine, and only to shared ports
   let refused = null;
   const no = await startForward(N.loadNetwork(), { target: MACHINE, port: 1, localPort: 0, hubs, onRefused: (e) => { refused = e; } });
   t.after(() => no.close());
-  const closed = await new Promise((resolve) => {
+  const answer = await new Promise((resolve) => {
     const s = tcpConnect({ host: '127.0.0.1', port: no.port });
-    s.on('close', () => resolve(true)); s.on('error', () => {});
+    let text = '';
+    s.on('data', (c) => { text += c; });
+    s.on('close', () => resolve(text)); s.on('error', () => {});
     s.write('GET / HTTP/1.1\r\n\r\n');
   });
-  assert.ok(closed);
+  // A browser gets a page that says why, then the connection closes.
+  assert.match(answer, /^HTTP\/1\.1 502 /);
+  assert.match(answer, /x-helm-forward: refused/);
   assert.match(refused?.message ?? '', /port not allowed/);
 });
 

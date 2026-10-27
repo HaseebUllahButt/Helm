@@ -16,6 +16,7 @@
     "./message-delivery": "./message-delivery.js",
     "./reliable-input": "./reliable-input.js",
     "./visual": "./visual.js",
-    "./brief": "./brief.js"
+    "./brief": "./brief.js",
+    "./owner-seen": "./owner-seen.js"
   }
 }

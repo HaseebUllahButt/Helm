@@ -26,7 +26,7 @@ for websites that cannot run inside a frame.
   `share-flow`, `tunnel-flow`, `tunnel-ports`, `caddy`, `proxy`;
   `test/browser/private-links`.
 
-## Private links and `helm forward`
+## Private links
 - **Prove:** `test/browser/private-spin-e2e` runs the real sign-in, share
   gate, daemon tunnels and plain Vite behind a private TLS gateway. It
   checks default localhost, IPv4, IPv6 and all-address listeners, exact
@@ -46,3 +46,22 @@ for websites that cannot run inside a frame.
   X-Forwarded-Host for apps that need it.
 - **Tests:** `test/share-private`, `share-links`, `loopback`, `tunnel-ports`;
   `test/browser/private-links`, `private-spin-e2e`.
+
+## `helm forward`: a dev server on the owner's machine
+- **Use:** the agent runs `helm forward <port>` on the machine with the app
+  and gives the owner only the `http://localhost:<port>` link it prints.
+  No --to: Helm picks the machine where the owner used the Helm app last
+  (`protocol/owner-seen.js`: the hub notes person-only RPCs from a device
+  served over loopback; agents and Caddy visits do not count).
+  `helm share <port> --to <machine>` is the same command.
+- **Design:** two halves with one id in `~/.helm/forwards.json`. `out` on
+  the app's machine allows that port for tunnels; `in` on the owner's
+  machine is a listener the Helm service owns. No Spin is made. Each
+  connection opens its own hub tunnel, so app restarts and network drops
+  heal on the next load. Failures give a 502 page naming the machine, the
+  port and the reason (`x-helm-forward: app|refused|unreachable`).
+- **Lifetime:** 3 hours unless --keep or --for. A restart reopens the
+  same local port. A stop on either machine removes its half and tells the
+  other; an away machine is told when it is back (`pending`). A refused
+  `in` half asks the other machine and goes if its half is gone.
+- **Tests:** `test/forward-service`, `share-private`, `tunnel-ports`.
