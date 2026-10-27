@@ -290,8 +290,7 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
   // A word that says more than the age does takes its place.
   const chip = mood === 'working' || mood === 'needs' || mood === 'failed' ? null
     : s.recovery?.kind === 'interrupted' ? <span className="chip exited">stopped</span>
-    : unknownThread(s) ? <StatusChip status="unknown" />
-    : s.externalActive || (s.shared && s.alive) ? <span className="chip">Ready</span> : null;
+    : unknownThread(s) ? <StatusChip status="unknown" /> : null;
   const title = <span className={`tri-title${name.cut ? ' cut' : ''}`} ref={fadeWhenCut}>{name.text}</span>;
   const status = note && slim ? <span className="tstat quiet" data-mood="quiet">{note}</span> : chip ?? <ThreadStatus s={s} mood={mood} now={now} />;
   const mark = <EngineMark engine={eng.cls} className="tri-mark" />;
