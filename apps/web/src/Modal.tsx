@@ -1,5 +1,5 @@
 import { useDialog } from './useDialog';
-import { useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 
 /**
  * helm's own confirm/ask sheets.
@@ -23,23 +23,23 @@ export function Sheet({ children, onClose, label, onKeyDown }: { children: React
 
 /**
  * "Are you sure?" - the destructive case gets a red verb, not an OK.
- * `confirmKey` answers yes from the keyboard: the key that asked, pressed again.
+ * `enterConfirms` puts focus on the yes button, so Enter answers yes. The key
+ * that asked never answers: a double press of Delete lost the owner's chats.
  */
-export function Confirm({ title, body, confirmLabel = 'Confirm', danger, busy, confirmKey, onCancel, onConfirm }: {
-  title: string; body?: ReactNode; confirmLabel?: string; danger?: boolean; busy?: boolean; confirmKey?: string;
+export function Confirm({ title, body, confirmLabel = 'Confirm', danger, busy, enterConfirms, onCancel, onConfirm }: {
+  title: string; body?: ReactNode; confirmLabel?: string; danger?: boolean; busy?: boolean; enterConfirms?: boolean;
   onCancel: () => void; onConfirm: () => void;
 }) {
-  const onKeyDown = confirmKey ? (e: KeyboardEvent) => {
-    if (e.key !== confirmKey || e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || busy) return;
-    e.preventDefault(); onConfirm();
-  } : undefined;
+  const yes = useRef<HTMLButtonElement>(null);
+  // Runs after the sheet focuses its first button.
+  useEffect(() => { if (enterConfirms) yes.current?.focus(); }, [enterConfirms]);
   return (
-    <Sheet onClose={onCancel} label={title} onKeyDown={onKeyDown}>
+    <Sheet onClose={onCancel} label={title}>
       <div className="modal-title">{title}</div>
       {body && <div className="modal-body">{body}</div>}
       <div className="modal-actions">
         <button className="ghost" onClick={onCancel} disabled={busy}>Cancel</button>
-        <button className={danger ? 'primary danger' : 'primary'} onClick={onConfirm} disabled={busy}>
+        <button ref={yes} className={danger ? 'primary danger' : 'primary'} onClick={onConfirm} disabled={busy}>
           {busy ? '…' : confirmLabel}
         </button>
       </div>

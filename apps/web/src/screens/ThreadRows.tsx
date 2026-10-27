@@ -169,7 +169,7 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete, en
             : adopted
               ? 'This closes the program in that terminal. Helm did not start it.'
               : 'This stops the agent. Helm permanently removes the chat.'}
-          confirmLabel={found ? 'Remove' : adopted ? 'Close' : 'Delete'} danger confirmKey="Delete"
+          confirmLabel={found ? 'Remove' : adopted ? 'Close' : 'Delete'} danger enterConfirms
           onCancel={() => setEnding(false)}
           onConfirm={() => { setEnding(false); onDelete(); }}
         />
