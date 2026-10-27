@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { M } from '@helm/protocol';
+import { locked } from './update.js';
 
 /**
  * `helm ship`: the rollout every Helm change ends with, as one command. It
@@ -24,10 +25,11 @@ const OFFLINE_MS = 45_000;
 
 export class ShipError extends Error {}
 
-function git(dir, args, { raw = false } = {}) {
+function git(dir, args, { raw = false, env } = {}) {
   try {
     const out = execFileSync('git', ['-C', dir, '-c', 'core.quotePath=false', ...args], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20,
+      ...(env ? { env: { ...process.env, ...env } } : {}),
     });
     return raw ? out : out.trim();
   } catch (err) {
@@ -98,6 +100,7 @@ function runCheck(dir) {
 export async function ship({
   cwd = process.cwd(), net, rpc, check = true, waitMs = 10 * 60_000, log = console.log,
   now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), checks = runCheck,
+  updateLock = locked,
 } = {}) {
   const top = git(cwd, ['rev-parse', '--show-toplevel']);
   const branch = git(top, ['branch', '--show-current']);
@@ -129,10 +132,13 @@ export async function ship({
         throw new ShipError(`Another merge is not finished in ${mainDir}. Wait for it, then run helm ship again.`);
       }
       try {
-        // Always a new merge commit: machines take a version only when its
-        // commit time is newer than theirs (version-sync.js), and a
-        // fast-forward keeps the branch commit's older time.
-        git(mainDir, ['merge', '--no-ff', '--no-edit', branch]);
+        // Always a new merge commit, timed after both parents: machines take
+        // a version only when its commit time is newer than theirs
+        // (version-sync.js). A fast-forward keeps the branch commit's time,
+        // and a merge in the same second as main's last commit ties it.
+        const after = Math.max(...[`main`, branch].map((ref) => Number(git(mainDir, ['log', '-1', '--format=%ct', ref])))) + 1;
+        const when = `${Math.max(Math.floor(now() / 1000), after)} +0000`;
+        git(mainDir, ['merge', '--no-ff', '--no-edit', branch], { env: { GIT_COMMITTER_DATE: when, GIT_AUTHOR_DATE: when } });
       } catch (err) {
         if (tryGit(mainDir, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']) !== null) tryGit(mainDir, ['merge', '--abort']);
         throw new ShipError(/CONFLICT/.test(err.message)
@@ -172,11 +178,27 @@ export async function ship({
       throw new ShipError(`${installed} has unsaved edits, so Helm cannot restart into the new version:\n` +
         `${theirs.map((l) => `    ${l.slice(3)}`).join('\n')}\n  They belong to another chat. Ask it to commit them, then run helm ship again.`);
     }
-    try {
-      git(installed, ['pull', '-q', '--ff-only', mainDir, 'main']);
-    } catch (err) {
-      throw new ShipError(`Git did not move ${installed} to main:\n${err.message}`);
+    // Under the update lock: moving the checkout while an update builds
+    // would leave an app built from the old commit under the new one.
+    let moved = null;
+    const until = now() + waitMs;
+    for (let told = false; !moved;) {
+      moved = await updateLock(async () => {
+        try {
+          git(installed, ['pull', '-q', '--ff-only', mainDir, 'main']);
+          return { done: true };
+        } catch (err) {
+          return { error: err };
+        }
+      });
+      if (moved?.reason) {
+        if (!told) { log('  Waiting for the update that runs on this machine…'); told = true; }
+        moved = null;
+        if (now() >= until) throw new ShipError(`An update still runs on this machine after ${Math.round(waitMs / 60_000)} min. Main has the change; run helm ship again later.`);
+        await sleep(STEP_MS);
+      }
     }
+    if (moved.error) throw new ShipError(`Git did not move ${installed} to main:\n${moved.error.message}`);
     log(`  Moved ${installed} to ${short(tip)}.`);
   }
 
@@ -213,7 +235,8 @@ export async function ship({
     await sleep(STEP_MS);
     await Promise.all([
       ...[...pending].map(async ([id, m]) => { m.info = await ask(id); }),
-      ...(now() - started < OFFLINE_MS ? [...unseen].map(async (id) => join(id, await ask(id))) : []),
+      // Asked to the end: a machine back after OFFLINE_MS is still checked.
+      ...[...unseen].map(async (id) => join(id, await ask(id))),
     ]);
   }
 

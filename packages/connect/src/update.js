@@ -81,7 +81,7 @@ export async function selfUpdate(dir = ROOT, opts = {}) {
  * `git reset`s and `npm install`s racing in one checkout is how a deploy
  * gets corrupted.
  */
-async function locked(work) {
+export async function locked(work) {
   const lock = join(HELM_DIR, 'update.lock');
   try {
     mkdirSync(HELM_DIR, { recursive: true });

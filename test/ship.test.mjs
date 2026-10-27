@@ -39,7 +39,7 @@ function repos() {
  * The network as `helm ship` sees it: this machine reports what its
  * installed checkout holds; `peer` copies it after `lag` more asks.
  */
-function network({ installed }, { lag = 1, peerWeb = null, offline = true, peerSync = null, restarting = 0 } = {}) {
+function network({ installed }, { lag = 1, peerWeb = null, offline = true, peerSync = null, restarting = 0, peerLag = null } = {}) {
   const head = () => git(installed, 'rev-parse', 'HEAD');
   const start = head();
   let asks = 0;
@@ -57,7 +57,7 @@ function network({ installed }, { lag = 1, peerWeb = null, offline = true, peerS
       return { name: 'Laptop', version: { full: v }, web: { commit: v } };
     }
     if (id === 'self') return { name: 'why', version: { full: head(), dir: installed }, web: { commit: head() } };
-    const v = !peerSync && asks++ >= lag ? head() : start;
+    const v = !peerSync && asks++ >= (peerLag ?? lag) ? head() : start;
     return { name: 'VM', version: { full: v }, web: { commit: peerWeb ?? v }, sync: peerSync };
   };
   return { net: { self: 'self', machines }, rpc };
@@ -70,7 +70,7 @@ function run(r, over = {}) {
   return {
     lines,
     result: ship({
-      cwd: r.wt, net, rpc, checks: async () => {}, log: (l) => lines.push(l),
+      cwd: r.wt, net, rpc, checks: async () => {}, log: (l) => lines.push(l), updateLock: (work) => work(),
       now: () => clock, sleep: async (ms) => { clock += ms; }, waitMs: 60_000, ...over.ship,
     }),
   };
@@ -203,4 +203,39 @@ test('main without origin is not reported as shipped', async () => {
   const out = await result;
   assert.equal(out.ok, false);
   assert.match(lines.join('\n'), /Main has no origin[\s\S]*but origin does not have it/);
+});
+
+test('waits for an update that already runs here before it moves the installed checkout', async () => {
+  const r = repos();
+  const before = git(r.installed, 'rev-parse', 'HEAD');
+  let busy = 2;
+  const seen = [];
+  const updateLock = async (work) => {
+    seen.push(git(r.installed, 'rev-parse', 'HEAD'));
+    return busy-- > 0 ? { updated: false, reason: 'an update is already running' } : work();
+  };
+  const { lines, result } = run(r, { network: { offline: false }, ship: { updateLock } });
+  const out = await result;
+  assert.equal(out.ok, true);
+  assert.deepEqual(seen, [before, before, before], 'the checkout stays put while the update runs');
+  assert.match(lines.join('\n'), /Waiting for the update that runs on this machine/);
+});
+
+test('a machine that comes back late is still checked while another one keeps ship waiting', async () => {
+  const r = repos();
+  // Laptop answers only after 60 s; VM needs 30 asks (about 90 s) to update.
+  const { lines, result } = run(r, { network: { offline: false, restarting: 20, peerLag: 30 }, ship: { waitMs: 10 * 60_000 } });
+  const out = await result;
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.offline, []);
+  assert.match(lines.join('\n'), /Laptop\s+ok: runs/);
+});
+
+test("the merge commit is newer than both parents, even in the same second", async () => {
+  const r = repos();
+  const parents = ['main', 'helm/x'].map((ref) => Number(git(r.main, 'log', '-1', '--format=%ct', ref)));
+  // The test clock starts at 0, far behind the commits: the merge must still be newer.
+  const { result } = run(r);
+  await result;
+  assert.ok(Number(git(r.main, 'log', '-1', '--format=%ct', 'main')) > Math.max(...parents));
 });
