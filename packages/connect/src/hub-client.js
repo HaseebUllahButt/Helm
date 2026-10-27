@@ -118,9 +118,11 @@ export const REPEATABLE = new Set([
   M.CODE_KEY, M.HANDOFF_STATUS, M.TASK_STATUS,
   M.SEND_PLAN, M.SEND_STATUS, M.SEND_LIST, M.SEND_RECEIPT,
   M.TRANSFER_PREVIEW, M.TRANSFER_VERIFY, M.DISPATCH_STATUS,
-  M.SHARE_LIST, M.MEDIA_INFO, M.MEDIA_ROOTS, M.MEDIA_LIST, M.MEDIA_TICKET,
+  M.SHARE_LIST, M.FORWARD_LIST, M.MEDIA_INFO, M.MEDIA_ROOTS, M.MEDIA_LIST, M.MEDIA_TICKET,
   // These accepts check their durable handoff/transfer identity themselves.
   M.HANDOFF_ACCEPT, M.TRANSFER_ACCEPT,
+  // Keyed by the forward's id: a second add or remove changes nothing.
+  M.FORWARD_ADD, M.FORWARD_REMOVE,
   M.SESSION_DELIVER,
 ]);
 export const NON_REPEATABLE = new Set(Object.values(M).filter(method => !REPEATABLE.has(method)));

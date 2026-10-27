@@ -133,8 +133,9 @@ export function bridge(hub, token, host, port, {
         if (receiver) receiver.write(msg.data);
         else if (!output.write(Buffer.from(msg.data, 'base64'))) ws.pause();
       } else if (msg.t === T.TUNNEL_CLOSE) {
+        // `far`: the hub or the far machine said why, not this side's socket.
         shutdown(open && (!msg.reason || msg.reason === 'closed')
-          ? null : new Error(msg.reason || 'tunnel refused'));
+          ? null : Object.assign(new Error(msg.reason || 'tunnel refused'), { far: true }));
       }
     });
     ws.on('unexpected-response', (_req, res) => {

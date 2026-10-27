@@ -45,8 +45,14 @@ export const USAGE = `helm - Control your coding agents from anywhere
     --preserve-host               Send the Spin host to the app instead of localhost
   helm share list | stop <name>   List or stop Spins
   helm share setup                Set up the VM to serve Spins
-  helm forward <machine> <port> [--local <port>]
-                                  Open another machine's shared port on this machine's localhost
+  helm share <port> --to <machine>  Same as helm forward <port> --to <machine>
+  helm forward <port> [--to <machine>] [--local <port>] [--for <hours>] [--keep]
+                                  Open a port of this machine on the owner's machine
+                                  as http://localhost:<port>. No public link.
+                                  Without --to: the machine the owner used last.
+  helm forward <machine> <port>   Open another machine's port on this machine's localhost
+  helm forward list | stop <id|port|all>
+                                  List or stop forwards (a stop removes both sides)
   helm remove <id>                  Remove a device or machine permanently
   helm leave                        Remove this machine from its network
 
@@ -169,7 +175,7 @@ Machines and devices
   dispatch         Send this folder and task when a machine connects
   dispatch-status  Show progress for a task sent to another machine
   verify           Check what a received folder still needs
-  forward          Open another machine's shared port on localhost
+  forward          Open a port on the owner's machine as a localhost link
   proxy            Connect through SSH ProxyCommand
 
 Chats and agents
@@ -241,7 +247,21 @@ const DETAILS = {
   share: `
   Spins are public links.
   Use --keep only when the owner asks for a link that stays open.
-  Run helm forward <machine> <port> to open another machine's shared port on this machine's localhost.`,
+  To show the owner a dev server, use helm forward <port> instead.
+  It needs no public link, and the app sees a localhost visit.`,
+
+  forward: `
+  Show the owner a dev server that runs on this machine:
+    helm forward <port>
+  Run it yourself. Do not ask the owner to run a command.
+  Helm opens the port on the machine the owner used last and prints it.
+  Add --to <machine> to pick the machine.
+  Give the owner only the http://localhost link that Helm prints.
+  The Helm service keeps the forward open after your shell ends,
+  after restarts and after the app restarts.
+  When the app is not running, the link shows a "not reachable" page.
+  It ends after 3 hours. Use --for <hours>, or --keep only when the owner asks.
+  Stop it with helm forward stop <id>. This removes both sides.`,
 
   spin: `
   This command runs helm share.

@@ -1,5 +1,6 @@
 import { WebSocketServer } from 'ws';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
+import { OWNER_METHODS, noteOwnerSeen } from '@helm/protocol/owner-seen';
 import { Duplex, PassThrough, Writable } from 'node:stream';
 import { TunnelSender, TunnelReceiver, TUNNEL_CHUNK, TUNNEL_SOCKET_LIMIT } from '../../../packages/connect/src/tunnel-flow.js';
 import { T, E, M, PROTOCOL_VERSION } from '@helm/protocol';
@@ -576,6 +577,7 @@ export function createWsLayer() {
         return;
 
       case T.RPC: {
+        if (sock.ownerHere && OWNER_METHODS.has(msg.method)) noteOwnerSeen();
         // Hub-owned methods are answered from this hub's own store and are
         // never dispatched to an environment.
         if (msg.method === M.DISPATCH_SUBMIT || msg.method === M.DISPATCH_STATUS) {
@@ -829,6 +831,7 @@ export function createWsLayer() {
     } else {
       sock.sub = auth.sub;
       sock.isMachine = !!auth.machine;
+      sock.ownerHere = !!auth.local && !auth.machine;
       clients.set(sock, new Set());
       markSeen(sock.sub);
       send(sock, T.WELCOME, { version: PROTOCOL_VERSION, role: 'client', ...(sock.binaryTunnel ? { binaryTunnel: 1 } : {}) });

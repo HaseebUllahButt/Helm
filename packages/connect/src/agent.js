@@ -41,6 +41,8 @@ import { lanAddresses } from './net-addr.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare } from './shares.js';
+import { Forwards, forwardedPorts } from './forwards.js';
+import { ownerSeenAt } from '@helm/protocol/owner-seen';
 import { publicHosts } from '@helm/protocol/share';
 import { brief, render, summaryLine, readThread, readSnapshot, writeSnapshot, mergeSnapshot, fold } from './brain.js';
 import { forWire } from './events.js';
@@ -411,6 +413,12 @@ export class Daemon {
     // would otherwise undo that rename on every restart.
     this.name = net.machines[net.self]?.name || name || hostname();
     this.copyReceiver = new CopyReceiver({ network: () => loadNetwork() ?? this.net });
+    // `helm forward`: ports of other machines on this machine's localhost.
+    this.forwards = new Forwards({
+      network: () => loadNetwork() ?? this.net,
+      rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 15_000, ...opts }),
+      log: (line) => console.error(`[helm] ${line}`),
+    });
     this.executions = new ExecutionJobs();
     this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id), appProcessRoots: id => this.sessions.appProcessRoots(id) } });
     this.cliUpdates = new CliUpdater({
@@ -510,6 +518,7 @@ export class Daemon {
       },
     });
     this.taskTransfers.start();
+    this.forwards.begin().catch((err) => console.error(`[helm] forwards: ${err.message}`));
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
     // path: a message must not wait on every machine answering. The refresh
@@ -748,6 +757,7 @@ export class Daemon {
     this.#stopWatchCheckout?.();
     this.cliUpdates?.stop();
     this.taskTransfers?.stop();
+    await this.forwards?.stop();
     await this.sendEngine?.stop();
     this.schedules?.stop();
     this.search?.close();
@@ -1512,6 +1522,8 @@ export class Daemon {
       this.schedules?.share()?.port,
       // Ports shared on purpose with `helm share`, and only those.
       ...listShares().map((share) => share.port),
+      // Ports forwarded on purpose to another machine with `helm forward`.
+      ...forwardedPorts(),
       ...(Array.isArray(extra) ? extra.map(Number) : []),
     ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
   }
@@ -1769,6 +1781,13 @@ export class Daemon {
       }
       case M.SHARE_REMOVE:
         return { removed: removeShare(p.name) };
+
+      case M.FORWARD_LIST:
+        return { forwards: this.forwards.list(), ownerSeenAt: ownerSeenAt(), features: ['forward'] };
+      case M.FORWARD_ADD:
+        return { forward: await this.forwards.add(p) };
+      case M.FORWARD_REMOVE:
+        return this.forwards.remove(String(p.id ?? ''), { notify: p.notify === true });
 
 
       case M.FS_LIST:   return fsApi.list(p.path);

@@ -97,6 +97,7 @@ export async function startRelay({
           return null;
         });
 
+  const LOCAL_HOST = /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])(:\d+)?$/;
   const loopback = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
 
   const server = createServer((req, res) => {
@@ -196,6 +197,10 @@ export async function startRelay({
         // queue, which a device token never may.
         wss.emit('connection', ws, req, {
           role: 'client', sub: claims.sub, machine: claims.role === ROLE.MACHINE,
+          // The app served by this machine to a browser on this machine.
+          // Caddy also comes over loopback, but with the public host and
+          // X-Forwarded-For.
+          local: loopback(req) && LOCAL_HOST.test(String(req.headers.host || '')) && !req.headers['x-forwarded-for'],
         })
       );
 

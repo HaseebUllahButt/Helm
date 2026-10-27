@@ -308,6 +308,9 @@ export const M = {
   SHARE_LIST: 'share.list',        // { forHub?, members? } -> { shares[], features? }  hashes and private links only for a hub that asks
   SHARE_ADD: 'share.add',          // { name?, port, password?, private? } -> { share }
   SHARE_REMOVE: 'share.remove',    // { name } -> { removed }
+  FORWARD_LIST: 'forward.list',    // {} -> { forwards[], ownerSeenAt }  ownerSeenAt: when the owner last used Helm in a browser on this machine
+  FORWARD_ADD: 'forward.add',      // { id, side: 'in'|'out', peer, port, localPort?, expiresAt? } -> { forward }  in: listen here; out: let the peer reach port here
+  FORWARD_REMOVE: 'forward.remove', // { id, notify? } -> { removed }  notify: tell the other machine to remove its side too
 
   // A round trip that does nothing, for measuring what one costs. The
   // terminal needs to know: how it draws depends on how far away you are.

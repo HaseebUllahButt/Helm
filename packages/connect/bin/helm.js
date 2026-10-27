@@ -1603,7 +1603,7 @@ async function shareCmd() {
   const shareLib = await import('@helm/protocol/share');
   const local = await import('../src/shares.js');
   const { checkSharePort } = await import('../src/loopback.js');
-  const args = rest.filter((a, i) => !a.startsWith('--') && !['--name', '--password', '--on', '--for'].includes(rest[i - 1]));
+  const args = rest.filter((a, i) => !a.startsWith('--') && !['--name', '--password', '--on', '--for', '--to'].includes(rest[i - 1]));
   const verb = /^\d+$/.test(args[0] ?? '') ? 'add' : (args.shift() ?? 'list');
   const on = strFlag('on');
   const target = on ? machineId(on) : net.self;
@@ -1654,6 +1654,7 @@ async function shareCmd() {
     return;
   }
 
+  if (verb === 'add' && flagOf('to') !== undefined) return forwardTo();
   if (verb !== 'add') die('usage: helm share <port> [--name <name>] [--password [pw]] [--private] [--for <hours>] [--keep] [--on <machine>] | list | stop <name> | setup');
   const port = Number(args[0]);
   if (target === net.self) await checkSharePort(port);
@@ -1709,43 +1710,156 @@ async function shareCmd() {
 }
 
 /**
- * `helm forward <machine> <port> [--local <port>]` - a port another machine
- * shared, on this machine's localhost, until Ctrl+C. See src/forward.js.
+ * `helm forward`: a port on one machine, on another machine's localhost.
+ *
+ *   helm forward <port> [--to <machine>]   this machine's port, on <machine>
+ *                                          (no --to: where the owner works)
+ *   helm forward <machine> <port>          <machine>'s port, here
+ *   helm forward list | stop <id|port|all>
+ *
+ * The Helm service on each side keeps it (src/forwards.js): it outlives
+ * this command, comes back after restarts and needs no public link.
  */
 async function forwardCmd() {
   const net = requireNetwork();
-  const args = rest.filter((a, i) => !a.startsWith('--') && rest[i - 1] !== '--local');
-  const usage = 'usage: helm forward <machine> <port> [--local <port>]';
-  if (args.length < 2) die(usage);
-  const target = machineId(args[0]);
-  const where = net.machines[target]?.name ?? args[0];
-  const port = Number(args[1]);
+  const valued = ['--local', '--to', '--for', '--on'];
+  const args = rest.filter((a, i) => !a.startsWith('--') && !valued.includes(rest[i - 1]));
+  const usage = 'usage: helm forward <port> [--to <machine>] [--local <port>] [--for <hours>] [--keep]\n'
+    + '       helm forward <machine> <port> [--local <port>] | list | stop <id|port|all>';
+  const verb = args[0];
+  if (verb === 'list' || verb === 'ls') return forwardList(net);
+  if (verb === 'stop' || verb === 'rm' || verb === 'remove') return forwardStop(net, args[1]);
+  if (!args.length) die(usage);
+  // `helm forward 5173 [--to why]`: from here. `helm forward Laptop 5173`: to here.
+  const pushing = /^\d+$/.test(args[0]);
+  if (!pushing && args.length < 2) die(usage);
+  const port = Number(pushing ? args[0] : args[1]);
   if (!Number.isInteger(port) || port < 1 || port > 65535) die(usage);
-  const wanted = strFlag('local');
-  const localPort = wanted === undefined ? port : Number(wanted);
-  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) die('--local takes a port, e.g. --local 3001.');
-  if (target === net.self) die(`That is this machine. Open http://localhost:${port}.`);
-  // Only what that machine shared on purpose. It checks again itself on
-  // every connection; asking here just gives a clear answer up front.
-  let shared;
-  try { ({ shares: shared } = await hubRpc(net, target, M.SHARE_LIST, {}, { timeout: 15_000 })); }
-  catch (err) { die(`Helm did not ask ${where} what it shares: ${err.message}`); }
-  if (!shared?.some((s) => s.port === port)) {
-    die(`${where} is not sharing port ${port}.\n  share it there first: helm share ${port} --private --on ${where}`);
+  const source = pushing ? net.self : machineId(args[0]);
+  const target = pushing ? (strFlag('to') ? machineId(strFlag('to')) : await ownerMachine(net)) : net.self;
+  await forwardOpen(net, { source, target, port });
+}
+
+/** `helm share <port> --to <machine>` is a forward. */
+async function forwardTo() {
+  const net = requireNetwork();
+  const port = Number(rest.find((a, i) => /^\d+$/.test(a) && rest[i - 1] !== '--to' && rest[i - 1] !== '--for'));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) die('usage: helm share <port> --to <machine>');
+  const to = flagOf('to');
+  const target = typeof to === 'string' ? machineId(to) : await ownerMachine(net);
+  await forwardOpen(net, { source: net.self, target, port });
+}
+
+const machineName = (net, id) => net.machines[id]?.name ?? id;
+
+/**
+ * The machine where the owner used the Helm app last (each hub notes it,
+ * see protocol/owner-seen.js). Says which one it picked.
+ */
+async function ownerMachine(net) {
+  const machines = Object.values(net.machines).filter((m) => !net.revoked?.[m.id]);
+  const seen = await Promise.all(machines.map(async (m) => {
+    try {
+      const r = await hubRpc(net, m.id, M.FORWARD_LIST, {}, { timeout: 5000, budget: 6000 });
+      return { id: m.id, at: Number(r?.ownerSeenAt) || 0 };
+    } catch { return { id: m.id, at: 0 }; }
+  }));
+  const best = seen.sort((a, b) => b.at - a.at)[0];
+  if (!best?.at) {
+    die(`Helm does not know which machine the owner uses. Add --to <machine>: ${machines.map((m) => m.name).join(', ')}.`);
   }
-  const { startForward } = await import('../src/forward.js');
-  let refusedOnce = false;
-  const fwd = await startForward(net, {
-    target, port, localPort, exact: wanted !== undefined,
-    onRefused: () => { if (!refusedOnce) { refusedOnce = true; console.log(`\n  ${where} stopped sharing port ${port}. It blocks new connections.`); } },
-    onError: (err) => console.error(`  ${err.message}`),
-  }).catch((err) => die(err.code === 'EADDRINUSE' ? `Port ${localPort} is already in use here. Pick another with --local.` : err.message));
-  console.log(`\n  http://localhost:${fwd.port}  ->  ${where}, port ${port}\n  Press Ctrl+C to stop.\n`);
-  await new Promise((resolve) => {
-    const stop = () => { fwd.close().then(resolve); };
-    process.once('SIGINT', stop);
-    process.once('SIGTERM', stop);
-  });
+  console.log(`\n  The owner used Helm on ${machineName(net, best.id)} last (${ago(best.at)}). Add --to <machine> to pick another.`);
+  return best.id;
+}
+
+async function forwardOpen(net, { source, target, port }) {
+  const from = machineName(net, source);
+  const to = machineName(net, target);
+  if (source === target) {
+    console.log(`\n  That is the same machine. Open http://localhost:${port} on ${to}.\n`);
+    return;
+  }
+  const keep = !!flagOf('keep');
+  const hours = Number(strFlag('for'));
+  if (strFlag('for') !== undefined && !(hours > 0)) die('--for takes a number of hours, e.g. --for 8.');
+  const { FORWARD_TTL_MS, newForwardId } = await import('../src/forwards.js');
+  const expiresAt = keep ? undefined : Date.now() + (hours > 0 ? hours * 3_600_000 : FORWARD_TTL_MS);
+  const wanted = strFlag('local');
+  const localPort = wanted === undefined ? undefined : Number(wanted);
+  if (wanted !== undefined && !(Number.isInteger(localPort) && localPort > 0 && localPort < 65536)) die('--local takes a port, e.g. --local 3001.');
+  if (source === net.self) {
+    const { checkSharePort } = await import('../src/loopback.js');
+    await checkSharePort(port).catch(() => console.log(`\n  Nothing runs on port ${port} here yet. The link shows a "not reachable" page until it does.`));
+  }
+  const id = newForwardId();
+  const call = (machine, method, params) => hubRpc(net, machine, method, params, { timeout: 15_000 });
+  const older = (err, who) => /unknown method/.test(err?.message || '') ? `${who} runs an older Helm without forwards. Update it first.` : null;
+  try { await call(source, M.FORWARD_ADD, { id, side: 'out', peer: target, port, expiresAt }); }
+  catch (err) { die(older(err, from) ?? `${from} did not open port ${port}: ${err.message}`); }
+  let forward;
+  try { ({ forward } = await call(target, M.FORWARD_ADD, { id, side: 'in', peer: source, port, localPort, expiresAt })); }
+  catch (err) {
+    await call(source, M.FORWARD_REMOVE, { id }).catch(() => {});
+    die(older(err, to) ?? `${to} did not start the forward: ${err.message}`);
+  }
+  const url = `http://localhost:${forward.localPort}`;
+  // In hours too: the time of day is this machine's clock, maybe not the owner's.
+  const left = expiresAt && Math.round((expiresAt - Date.now()) / 60_000);
+  const ends = expiresAt ? `It ends in ${left >= 120 ? `${Math.round(left / 60)} hours` : `${left} min`}, at ${new Date(expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} here (add --keep to keep it)` : 'It stays until you stop it';
+  console.log(`\n  ${url}  on ${to}  ->  ${from}, port ${port}`);
+  console.log(`  ${ends}. Stop it: helm forward stop ${id}`);
+  console.log(`  Give the owner only this link: ${url}\n`);
+}
+
+/** Both halves of every forward in the network, one line per forward. */
+async function forwardRows(net) {
+  const machines = Object.values(net.machines).filter((m) => !net.revoked?.[m.id]);
+  const answers = await Promise.all(machines.map(async (m) => {
+    try {
+      const { forwards } = await hubRpc(net, m.id, M.FORWARD_LIST, {}, { timeout: 5000, budget: 6000 });
+      return (forwards ?? []).map((f) => ({ ...f, holder: m.id }));
+    } catch { return []; }
+  }));
+  const byId = new Map();
+  for (const f of answers.flat()) {
+    const row = byId.get(f.id) ?? { id: f.id, holders: [] };
+    row.holders.push(f.holder);
+    if (f.side === 'in') Object.assign(row, { target: f.holder, source: f.peer, port: f.port, localPort: f.localPort, listening: f.listening, error: f.error, expiresAt: f.expiresAt });
+    else Object.assign(row, { source: f.holder, target: row.target ?? f.peer, port: row.port ?? f.port, expiresAt: row.expiresAt ?? f.expiresAt, out: true });
+    byId.set(f.id, row);
+  }
+  return [...byId.values()];
+}
+
+async function forwardList(net) {
+  const rows = await forwardRows(net);
+  if (!rows.length) { console.log('\n  No forwards are open. Run helm forward <port> [--to <machine>].\n'); return; }
+  console.log('');
+  for (const r of rows) {
+    const where = r.localPort ? `http://localhost:${r.localPort} on ${machineName(net, r.target)}` : `${machineName(net, r.target)} (did not answer)`;
+    const left = r.expiresAt ? `ends in ${Math.max(1, Math.round((r.expiresAt - Date.now()) / 60_000))} min` : 'kept';
+    const state = r.error ? `  not open: ${r.error}` : r.localPort && !r.out ? `  ${machineName(net, r.source)} did not answer` : '';
+    console.log(`  ${r.id}  ${where}  ->  ${machineName(net, r.source)}, port ${r.port}  ${left}${state}`);
+  }
+  console.log('');
+}
+
+async function forwardStop(net, which) {
+  if (!which) die('usage: helm forward stop <id|port|all>');
+  const rows = await forwardRows(net);
+  const hits = which === 'all' ? rows : rows.filter((r) => r.id.startsWith(which) || String(r.port) === which || String(r.localPort) === which);
+  if (!hits.length) die(`No forward matches "${which}". Run helm forward list.`);
+  for (const r of hits) {
+    // Either half can stop it: that machine tells the other one.
+    let done = false;
+    for (const holder of r.holders) {
+      try { await hubRpc(net, holder, M.FORWARD_REMOVE, { id: r.id, notify: true }, { timeout: 15_000 }); done = true; break; }
+      catch { /* try the other half */ }
+    }
+    const what = `${r.localPort ? `http://localhost:${r.localPort} on ` : ''}${machineName(net, r.target)} -> ${machineName(net, r.source)}, port ${r.port}`;
+    console.log(done ? `\n  Stopped ${what}.` : `\n  Could not stop ${what}: no machine answered.`);
+  }
+  console.log('');
 }
 
 /**
