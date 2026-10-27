@@ -1,6 +1,6 @@
 # Browser use
 
-Each chat has its own browser, run with Playwright on the chat's machine.
+Each chat has its own browser, run with Patchright on the chat's machine.
 It controls web pages only, not desktop apps. Open it with a chat's
 **Browser** button or Ctrl/⌘+Shift+B.
 
@@ -36,7 +36,9 @@ It controls web pages only, not desktop apps. Open it with a chat's
   unable to close.
 - **An agent gets the page when it goes quiet:** the load event, or half a
   second with no fetch in flight (at most 3 s). Slow pictures and adverts
-  no longer hold every step back.
+  no longer hold every step back. Pointer moves and scrolling return without
+  waiting for background traffic. The pointer stays visible without a pause
+  before each action.
 - **Show me** (`helm browser point`) highlights an element and changes
   nothing, so it works in read-only chats. Read-only agents can read,
   navigate, wait and check; a batch holding any change is refused before
@@ -55,10 +57,20 @@ It controls web pages only, not desktop apps. Open it with a chat's
 
 - Chromium must already be installed (an existing browser,
   `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at daemon
-  start, and loads no Playwright code until a browser is needed.
-- Hidden tabs prefer Playwright's `chromium_headless_shell` (fast, half the
-  memory). It has no `window.chrome`, so some bot checks refuse it; set
-  `HELM_CHROMIUM_PATH` to pin a full browser.
+  start, and loads no browser driver until a browser is needed.
+- Hidden tabs use full Chromium. The headless shell has no native PDF
+  plugins or `window.chrome`. Patchright avoids `Runtime.enable` in pages
+  and workers. Chromium's automation flag stays off. Hidden tabs use one
+  browser version for the user agent and client hints; the CDP connection
+  that sets them must stay open, since detaching resets them.
+- Console capture starts only when `helm browser act` asks for `console`.
+  It reads Chromium's current page buffer, then stops. Reading the console
+  can trigger a site's control checks. Logs from an earlier page are not
+  kept unless the agent read them before navigation.
+- The panel receives title and load changes with browser events. Its
+  two-second list check remains a fallback. A viewport screenshot captures
+  the visible page without waiting for fonts; a full-page screenshot still
+  waits for fonts.
 - Each chat's cookies and site storage are saved privately under
   `~/.helm/browser` and come back after a restart. Actions, half-done
   navigation and form contents are not replayed.

@@ -18,16 +18,23 @@ test('the panel is the window’s remote: it shows the window, drives it from th
   const manager = new BrowserManager({ session: sessions.get, launch: () => chromium.launch({ headless: true, ...pinned }), canWindow: true,
     launchWindow: async (dir, options) => { windows.push(options); return chromium.launchPersistentContext(dir, { headless: true, ...pinned }); } });
   manager.closeGraceMs = 50;
-  const routes = createBrowserRoutes({ sessions, manager }); let frontend;
+  let frontend, panelPage;
+  const changed = payload => { void panelPage?.evaluate(payload => window.browserEvent?.('laptop', 'browser.tab', payload), payload).catch(() => {}); };
+  manager.changed = changed;
+  const routes = createBrowserRoutes({ sessions, manager, onOpen: changed });
   const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(`<title>Page ${req.url}</title><h1>Page ${req.url}</h1>`); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}`;
   t.after(async () => { await frontend?.close(); await routes.stop(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
   const opened = await manager.open('viewer', { url: `${url}/one` });
-  const bundle = await build({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import BrowserPanel from './apps/web/src/session/BrowserPanel'; createRoot(document.getElementById('root')).render(<BrowserPanel client={{rpc:(env,method,params)=>window.request(method,params),on:()=>()=>{}}} env={{id:'laptop',name:'Laptop',online:true}} session={{id:'viewer',title:'Window'}}/>);`, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
+  const bundle = await build({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import BrowserPanel from './apps/web/src/session/BrowserPanel'; createRoot(document.getElementById('root')).render(<BrowserPanel client={{rpc:(env,method,params)=>window.request(method,params),on:fn=>{window.browserEvent=fn;return()=>{delete window.browserEvent;}}}} env={{id:'laptop',name:'Laptop',online:true}} session={{id:'viewer',title:'Window'}}/>);`, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   frontend = await chromium.launch({ headless: true, ...pinned });
   const css = (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') + '\n' + await readFile('apps/web/src/session/browser.css', 'utf8');
   const page = await frontend.newPage({ viewport: { width: 1280, height: 900 } });
+  panelPage = page;
+  // The initial list still runs. Every later browser change must arrive as
+  // an event, without the panel's two-second polling fallback.
+  await page.evaluate(() => { window.setInterval = () => 0; });
   const errors = [], shows = []; page.on('pageerror', error => errors.push(error.message));
   await page.exposeFunction('request', (method, params) => { if (method === 'browser.show') shows.push(params); return routes.dispatch(method, params); });
   await page.setContent('<html data-theme="dark"><body><div class="browser-dock" style="height:800px;margin:16px"><div id="root" style="display:contents"></div></div></body></html>');

@@ -22,8 +22,7 @@ test('in the window an agent click shows its cursor on the element centre, and p
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await manager.stop(); await new Promise(resolve => server.close(resolve)); });
   const { tab: opened } = await manager.open('pointer', { url: `http://127.0.0.1:${server.address().port}` });
-  const started = Date.now(); await manager.run('pointer', opened.id, { kind: 'click', selector: '#sign' }); const tab = manager.tabs.get(opened.id);
-  assert.ok(Date.now() - started >= 110, 'the owner gets a moment to follow the cursor');
+  await manager.run('pointer', opened.id, { kind: 'click', selector: '#sign' }); const tab = manager.tabs.get(opened.id);
   assert.deepEqual({ x: tab.pointer.x, y: tab.pointer.y, by: tab.pointer.by, label: tab.pointer.label }, { x: 380, y: 140, by: 'agent', label: 'Clicking “Sign in”' });
   assert.deepEqual(tab.pointer.box, { x: 300, y: 120, width: 160, height: 40 });
   const page = manager.tabs.get(opened.id).page; assert.equal(await page.textContent('#sign'), 'Done');
