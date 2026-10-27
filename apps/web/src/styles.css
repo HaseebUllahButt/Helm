@@ -3119,14 +3119,14 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 }
 .usage-window { color: var(--text-dim); }
 .usage-allowance b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); text-align: right; }
-.usage-allowance .usage-meter, .usage-window-meter { grid-column: 1 / -1; grid-row: 2; }
+.usage-allowance .usage-meter { grid-column: 1 / -1; grid-row: 2; }
 .usage-allowance small { grid-column: 1 / -1; color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.45; }
 .usage-allowance small em { font-style: normal; color: var(--red); font-weight: 550; }
-.usage-allowance.expired b { font-weight: 400; color: var(--text-dim); }
 .usage-allowance.dry .usage-meter span { background: var(--red); }
-.usage-allowance.dry b { color: var(--red); }
+.usage-account.idle { padding-block: 10px; }
+.usage-account.idle .usage-account-name b { font-weight: 500; color: var(--text-dim); }
 .usage-value {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
   margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line);
   font-size: var(--t-meta); color: var(--mutedfg);
 }

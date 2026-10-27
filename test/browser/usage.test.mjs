@@ -68,7 +68,7 @@ test('Usage shows reported allowance, expired and missing reports, and model-spe
   // The allowance, its pace and what it is worth are one account row: the
   // weekly meter is drawn once, not again in a separate plan card.
   const accounts = page.getByRole('region',{name:'Accounts'});
-  await accounts.getByText('Usage will reach the limit before the reset.',{exact:true}).waitFor();
+  await accounts.getByText('Runs out before the reset',{exact:true}).waitFor();
   assert.equal(await accounts.getByText('$16.50',{exact:true}).count(),1);
   assert.equal(await accounts.getByRole('meter',{name:'claude work 7d remaining'}).count(),1);
   assert.equal(await page.getByRole('region',{name:'Plan value'}).count(),0);
@@ -76,7 +76,9 @@ test('Usage shows reported allowance, expired and missing reports, and model-spe
   await accounts.getByPlaceholder('Example: 200').fill('200');
   await accounts.getByText('0.2×',{exact:true}).waitFor();
   await accounts.getByText('Plan $200/month',{exact:true}).waitFor();
-  assert.equal(await page.getByText('Waiting for a report',{exact:true}).count(),1);
+  // A window past its reset is not drawn: claude personal shows only its 5 hours.
+  assert.equal(await accounts.getByRole('meter',{name:'claude personal 7d remaining'}).count(),0);
+  assert.equal(await accounts.getByRole('meter',{name:'claude personal 5h remaining'}).count(),1);
   assert.equal(await page.getByText('Helm has no limit report yet.',{exact:true}).count(),1);
   await page.getByText('Helm has no limit reports from VM.',{exact:true}).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -177,9 +179,11 @@ test('one credential read on two machines is one row that keeps both report time
   const row = accounts.locator('.usage-account').filter({hasText:'claude personal'});
   await row.getByRole('meter').waitFor();
   assert.equal(await accounts.getByRole('meter').count(),1);
-  assert.match(await row.locator('.usage-account-name small').innerText(), /^Laptop 2m ago · VM 3h ago$/);
+  // The row shows the newest report time; each machine's time is in the tooltip.
+  assert.equal(await row.locator('.usage-account-name small').innerText(), '2m ago');
+  assert.equal(await row.locator('.usage-account-name small').getAttribute('title'), 'Laptop 2m ago · VM 3h ago');
   // Pace is measured from the newer reading: 30% at half the week is 60%.
-  await accounts.getByText(/estimated weekly usage: 60%/).waitFor();
+  assert.equal(await row.locator('.usage-allowance').getAttribute('title'), 'Estimated weekly usage: 60%');
 });
 
 test('the same account on two machines is one row showing the newest reading of each allowance', async t => {
@@ -199,7 +203,7 @@ test('the same account on two machines is one row showing the newest reading of 
   await accounts.getByRole('meter').first().waitFor();
   assert.equal(await accounts.locator('.usage-account').filter({has:page.getByRole('meter')}).count(), 2, 'one row per account, not per machine');
   const row = accounts.locator('.usage-account').first();
-  assert.match(await row.locator('.usage-account-name small').innerText(), /Laptop .* · VM /);
+  assert.match(await row.locator('.usage-account-name small').getAttribute('title'), /Laptop .* · VM /);
   // 5h from the VM (newer), the week from the laptop (newer).
   assert.equal(await row.getByRole('meter',{name:/5h remaining/}).getAttribute('aria-valuenow'), '30');
   assert.equal(await row.getByRole('meter',{name:/7d remaining/}).getAttribute('aria-valuenow'), '45');
