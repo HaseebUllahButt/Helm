@@ -55,7 +55,7 @@ function score(item: PaletteItem, q: string): number {
 export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhere', placeholder = 'Search chats, machines, and actions' }: {
   items: PaletteItem[]; onClose: () => void; engineOf: (id?: string) => { cls: string };
   /** Asks the machines which chats said these words; the answers are listed under "Said in chats". */
-  search?: (query: string) => Promise<PaletteItem[]>;
+  search?: (query: string, onResults?: (items: PaletteItem[]) => void) => Promise<PaletteItem[]>;
   /** The same box, narrowed to one job (Ctrl+Shift+T: pick a device for a terminal). */
   heading?: string; placeholder?: string;
 }) {
@@ -65,16 +65,18 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
   const [at, setAt] = useState(0);
   const list = useRef<HTMLDivElement>(null);
   // What the machines found for the words typed, and whether they are still looking.
-  const [said, setSaid] = useState<{ q: string; items: PaletteItem[] }>({ q: '', items: [] });
-  const asking = !!search && q.trim().length >= SAID_MIN_CHARS && said.q !== q.trim();
+  const [said, setSaid] = useState<{ q: string; items: PaletteItem[]; done: boolean }>({ q: '', items: [], done: true });
+  const asking = !!search && q.trim().length >= SAID_MIN_CHARS && (said.q !== q.trim() || !said.done);
 
   useEffect(() => {
     const query = q.trim();
     if (!search || query.length < SAID_MIN_CHARS) return;
     let stale = false;
+    setSaid({ q: query, items: [], done: false });
     const timer = setTimeout(() => {
-      search(query).then((found) => { if (!stale) setSaid({ q: query, items: found }); })
-        .catch(() => { if (!stale) setSaid({ q: query, items: [] }); });
+      search(query, (found) => { if (!stale) setSaid({ q: query, items: found, done: false }); })
+        .then((found) => { if (!stale) setSaid({ q: query, items: found, done: true }); })
+        .catch(() => { if (!stale) setSaid({ q: query, items: [], done: true }); });
     }, SAID_AFTER_MS);
     return () => { stale = true; clearTimeout(timer); };
   }, [q, search]);

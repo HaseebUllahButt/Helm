@@ -24,6 +24,7 @@ before(async () => {
           window.calls.push({env,method,params});
           if(method==='session.list') return {sessions:env==='laptop'?[{id:'pie1',title:'Lemon pie',cwd:'/work/pie',engine:'claude',profileId:'claude',driver:'claude',alive:true,status:'idle',turns:3,updatedAt:Date.now()-3600000}]:[]};
           if(method==='session.search'){
+            if(window.searchReply) return window.searchReply(env,params);
             if(env==='laptop') return {results:!/lemon/.test(params.query)?[]:[
               {id:'pie1',title:'Lemon pie',cwd:'/work/pie',quick:false,engine:'claude',archived:false,who:'you',snippet:'make the lemon pie shorter',at:200,updatedAt:200},
               {id:'tart9',title:'Weekend baking',cwd:'/work/tarts',quick:false,engine:'claude',archived:true,who:'agent',snippet:'…a lemon tart needs less sugar than a pie…',at:300,updatedAt:300},
@@ -110,4 +111,73 @@ test('while the machines are looking, the box says so instead of "No matches"', 
   await input.pressSequentially('zz');
   await page.getByText('Helm is searching your chats.').waitFor();
   await page.getByText('No matches').waitFor();
+});
+
+for (const width of [390, 1280]) {
+  test(`ready machine results show before a held reply and merge newest first at ${width}px`, async t => {
+    const page = await pageFor(t, { width, height: 844 });
+    await page.evaluate(() => {
+      window.searchReply = async (env) => {
+        if (env === 'vm') {
+          await new Promise((resolve) => { window.releaseSearch = resolve; });
+          window.slowFinished = true;
+        }
+        return { results: [{ id: env === 'vm' ? 'later' : 'ready', title: env === 'vm' ? 'Later result' : 'Ready result',
+          cwd: '/work', engine: 'claude', who: 'you', snippet: 'pelican', at: env === 'vm' ? 400 : 300, updatedAt: 300 }] };
+      };
+    });
+    await page.keyboard.press('Control+k');
+    await page.locator('.palette-input').fill('pelican');
+    await page.waitForFunction(() => !!window.releaseSearch);
+    await page.getByRole('option').filter({ hasText: 'Ready result' }).waitFor();
+    assert.equal(await page.evaluate(() => !!window.slowFinished), false, 'the other machine is still waiting');
+    await page.evaluate(() => window.releaseSearch());
+    await page.getByRole('option').filter({ hasText: 'Later result' }).waitFor();
+    assert.deepEqual(await page.locator('.palette-title').allInnerTexts(), ['Later result', 'Ready result']);
+  });
+}
+
+test('an empty ready reply keeps searching until the held machine finishes', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.searchReply = async (env) => {
+      if (env === 'vm') await new Promise((resolve) => { window.releaseSearch = resolve; });
+      else window.readyFinished = true;
+      return { results: [] };
+    };
+  });
+  await page.keyboard.press('Control+k');
+  await page.locator('.palette-input').fill('pelican');
+  await page.waitForFunction(() => window.readyFinished && !!window.releaseSearch);
+  await page.getByText('Helm is searching your chats.').waitFor();
+  assert.equal(await page.getByText('No matches.', { exact: false }).count(), 0);
+  await page.evaluate(() => window.releaseSearch());
+  await page.getByText('No matches.', { exact: false }).waitFor();
+});
+
+test('a held reply from an earlier query cannot replace the current results', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.searchReply = async (env, { query }) => {
+      if (query === 'oldword' && env === 'vm') {
+        await new Promise((resolve) => { window.releaseOldSearch = resolve; });
+        window.oldFinished = true;
+      }
+      return { results: [{ id: query + env, title: query === 'oldword' ? 'Old result' : 'Current result',
+        cwd: '/work', engine: 'claude', who: 'you', snippet: query, at: 300, updatedAt: 300 }] };
+    };
+  });
+  await page.keyboard.press('Control+k');
+  const input = page.locator('.palette-input');
+  await input.fill('oldword');
+  await page.waitForFunction(() => !!window.releaseOldSearch);
+  await page.getByRole('option').filter({ hasText: 'Old result' }).waitFor();
+  await input.fill('newword');
+  await page.getByRole('option').filter({ hasText: 'Current result' }).first().waitFor();
+  await page.evaluate(() => window.releaseOldSearch());
+  await page.waitForFunction(() => window.oldFinished);
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  assert.equal(await input.inputValue(), 'newword');
+  assert.equal(await page.getByRole('option').filter({ hasText: 'Old result' }).count(), 0);
+  assert.equal(await page.getByRole('option').filter({ hasText: 'Current result' }).count(), 2);
 });
