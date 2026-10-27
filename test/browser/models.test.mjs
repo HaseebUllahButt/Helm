@@ -173,12 +173,12 @@ test('favorite stars never select a model or change its default; explicit defaul
       await page.getByRole('checkbox',{name:'Favorite Model B'}).uncheck();
       assert.equal(await page.getByRole('button',{name:'Model C is the default for new chats'}).getAttribute('aria-pressed'),'true');
       await page.getByRole('checkbox',{name:'Favorite Model B'}).check();
-      await page.getByPlaceholder('search all models').fill('Model B');
+      await page.getByPlaceholder('Search models').fill('Model B');
       assert.equal(await page.getByText('Nothing matches.',{exact:true}).count(),0);
       const bounds = await page.getByRole('checkbox',{name:'Favorite Model B'}).boundingBox();
       assert.ok(bounds.x + bounds.width <= width);
       if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({path:process.env.HELM_TEST_SCREENSHOT_DIR+'/models-'+width+'.png'});
-      await page.getByPlaceholder('search all models').fill('');
+      await page.getByPlaceholder('Search models').fill('');
       await page.evaluate(()=>{window.failSave = true});
       await page.getByRole('button',{name:'Use Model B by default for new chats'}).click();
       await page.getByRole('alert').waitFor();
@@ -278,7 +278,7 @@ test('devin shows each model once; its thinking and speed chips pick the matchin
     // A favorite saved as one variant stars the whole model.
     assert.deepEqual(await page.getByRole('option').allTextContents(), ['Claude Opus 5.5', 'SWE-2']);
     await page.getByRole('button',{name:/2 more/}).click();
-    assert.deepEqual(await page.locator('.modesheet-label').allTextContents(), ['favorites', 'all', 'older', 'fusion pairs']);
+    assert.deepEqual(await page.locator('.modesheet-label').allTextContents(), ['older', 'fusion pairs']);
     await page.getByRole('option',{name:'Claude Opus 4.8',exact:true}).click();
     // No fast variant there: the level carries over, the speed cannot.
     assert.deepEqual(await page.evaluate(()=>window.picked), ['model','claude-opus-4-8-high']);
@@ -316,7 +316,7 @@ test('Claude with bare ids: the newest four, recent first, an old default waits 
     await page.addScriptTag({content:bundle.outputFiles[0].text});
     await page.locator('button[title="model: Opus 5.5"]').click();
     assert.deepEqual(await page.getByRole('option').allTextContents(), ['Fable 5.1', 'Haiku 5.5', 'Sonnet 5.5', 'Opus 5.5']);
-    assert.deepEqual(await page.locator('.modesheet-label').allTextContents(), ['recent', 'latest']);
+    assert.deepEqual(await page.locator('.modesheet-label').allTextContents(), []);
     assert.equal(await page.locator('.moderow.more').innerText(), '2 more\n›');
   } finally { await browser.close(); }
 });
