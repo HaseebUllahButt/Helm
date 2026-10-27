@@ -2023,8 +2023,11 @@ export class Daemon {
         if (!(loadNetwork() ?? this.net).machines?.[caller]) throw new Error('Agent messages must come from a paired machine.');
         return this.agentMessages.receive(p.message, caller);
       // Only the keeper starts a hidden helper; one asked for from outside is
-      // always a card in its chat, where the owner can see it.
-      case M.SESSION_DELEGATE: return this.sessions.delegate({ ...p, hidden: false, tour: false });
+      // always a card in its chat, where the owner can see it. A helper with
+      // no chat had no card and no one to read its result.
+      case M.SESSION_DELEGATE:
+        if (!p?.id) throw new Error('A helper needs the chat that starts it. To start work on another machine, use helm spawn.');
+        return this.sessions.delegate({ ...p, hidden: false, tour: false });
       case M.SESSION_DELEGATION_RESULT: {
         await this.sessionRecovery;
         const result = this.sessions.delegationResult(p.id, p);
