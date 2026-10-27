@@ -23,15 +23,20 @@ test('the app build names the commit it was built from', async () => {
   const plugin = stampBuild({ cwd: join(root, 'apps/web'), now: () => 5 });
   assert.equal(webBuild(dist), null, 'no stamp yet');
 
+  const build = async () => { plugin.buildStart(); await plugin.writeBundle({ dir: dist }); };
+  plugin.buildStart();
+  const head = git('rev-parse', 'HEAD');
+  // A commit made while the build runs does not stamp the older output.
+  git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'during');
   await plugin.writeBundle({ dir: dist });
-  assert.deepEqual(webBuild(dist), { commit: git('rev-parse', 'HEAD'), dirty: false, builtAt: 5 });
+  assert.deepEqual(webBuild(dist), { commit: head, dirty: false, builtAt: 5 });
 
   // Edits outside the app do not make the build differ from its commit.
   writeFileSync(join(root, 'notes.md'), 'x');
-  await plugin.writeBundle({ dir: dist });
+  await build();
   assert.equal(webBuild(dist).dirty, false);
   writeFileSync(join(root, 'apps/web/src/a.ts'), 'two');
-  await plugin.writeBundle({ dir: dist });
+  await build();
   assert.equal(webBuild(dist).dirty, true);
 });
 

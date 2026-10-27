@@ -39,14 +39,23 @@ function repos() {
  * The network as `helm ship` sees it: this machine reports what its
  * installed checkout holds; `peer` copies it after `lag` more asks.
  */
-function network({ installed }, { lag = 1, peerWeb = null, offline = true, peerSync = null } = {}) {
+function network({ installed }, { lag = 1, peerWeb = null, offline = true, peerSync = null, restarting = 0 } = {}) {
   const head = () => git(installed, 'rev-parse', 'HEAD');
   const start = head();
   let asks = 0;
-  const machines = { self: { name: 'why' }, peer: { name: 'VM' }, ...(offline ? { off: { name: 'HomePC' } } : {}) };
+  let laptopAsks = 0;
+  const machines = { self: { name: 'why' }, peer: { name: 'VM' }, ...(offline ? { off: { name: 'HomePC' } } : {}),
+    ...(restarting ? { laptop: { name: 'Laptop' } } : {}) };
   const rpc = async (_net, id, method) => {
     assert.equal(method, 'env.info');
     if (id === 'off') throw new Error('offline');
+    if (id === 'laptop') {
+      // Restarting when ship starts, then back on the old version, then the new one.
+      const k = laptopAsks++;
+      if (k < restarting) throw new Error('restarting');
+      const v = k < restarting + 2 ? start : head();
+      return { name: 'Laptop', version: { full: v }, web: { commit: v } };
+    }
     if (id === 'self') return { name: 'why', version: { full: head(), dir: installed }, web: { commit: head() } };
     const v = !peerSync && asks++ >= lag ? head() : start;
     return { name: 'VM', version: { full: v }, web: { commit: peerWeb ?? v }, sync: peerSync };
@@ -77,6 +86,7 @@ test('ships a branch: main, origin, the installed checkout and every online mach
   assert.equal(readFileSync(join(r.main, 'a.txt'), 'utf8'), 'two\n');
   assert.equal(git(r.origin, 'rev-parse', 'main'), tip);
   assert.equal(git(r.installed, 'rev-parse', 'HEAD'), tip);
+  assert.equal(git(r.main, 'rev-list', '--parents', '-n1', 'main').split(' ').length, 3, 'a merge commit, with a new time');
   assert.deepEqual(out.offline, ['HomePC']);
   const text = lines.join('\n');
   assert.match(text, /Skipped offline machines: HomePC/);
@@ -152,4 +162,45 @@ test('stops waiting for a machine whose sync note does not change', async () => 
   assert.match(text, /VM\s+stuck: runs \w{7}: Local changes are blocking automatic updates\./);
   assert.match(text, /Stuck: VM\./);
   assert.doesNotMatch(text, /Still waiting/);
+});
+
+test('a machine that is restarting when ship starts is waited for', async () => {
+  const r = repos();
+  const { lines, result } = run(r, { network: { offline: false, restarting: 3 } });
+  const out = await result;
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.offline, []);
+  const text = lines.join('\n');
+  assert.match(text, /Laptop\s+waiting: runs \w{7}/);
+  assert.match(text, /Laptop\s+ok: runs/);
+});
+
+test("refuses to touch another chat's unfinished merge in main", async () => {
+  const r = repos();
+  git(r.main, 'checkout', '-q', '-b', 'other');
+  commit(r.main, 'a.txt', 'theirs\n', 'other');
+  git(r.main, 'checkout', '-q', 'main');
+  commit(r.main, 'a.txt', 'mine\n', 'main side');
+  assert.throws(() => git(r.main, 'merge', 'other'));
+  writeFileSync(join(r.main, 'b.txt'), 'their fix in progress\n');
+  const { result } = run(r);
+  await assert.rejects(result, (e) => e instanceof ShipError && /Another merge is not finished/.test(e.message));
+  assert.equal(existsSync(join(r.main, '.git', 'MERGE_HEAD')), true);
+  assert.equal(readFileSync(join(r.main, 'b.txt'), 'utf8'), 'their fix in progress\n');
+});
+
+test('a copy that is not on a branch is refused', async () => {
+  const r = repos();
+  git(r.wt, 'checkout', '-q', '--detach');
+  const { result } = run(r);
+  await assert.rejects(result, (e) => e instanceof ShipError && /not on a branch/.test(e.message));
+});
+
+test('main without origin is not reported as shipped', async () => {
+  const r = repos();
+  git(r.main, 'remote', 'remove', 'origin');
+  const { lines, result } = run(r, { network: { offline: false } });
+  const out = await result;
+  assert.equal(out.ok, false);
+  assert.match(lines.join('\n'), /Main has no origin[\s\S]*but origin does not have it/);
 });

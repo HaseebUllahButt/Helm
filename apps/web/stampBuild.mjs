@@ -13,15 +13,20 @@ const git = (cwd, args) => {
  * (packages/connect/src/web-build.js reads it).
  */
 export function stampBuild({ now = Date.now, cwd = process.cwd() } = {}) {
+  let stamp = null;
   return {
     name: 'stamp-helm-build',
-    async writeBundle(options) {
-      if (!options.dir) return;
+    // Read before the sources are: a commit that lands during the build must
+    // not stamp output that was built without it.
+    buildStart() {
       const commit = git(cwd, ['rev-parse', 'HEAD']);
-      if (!commit) return;
       // Only edits to the app's own sources make the build differ from the commit.
       const dirty = Boolean(git(cwd, ['status', '--porcelain', '--', ':(top)apps/web', ':(top)packages/protocol', ':(top)packages/usage']));
-      await writeFile(join(options.dir, 'build.json'), `${JSON.stringify({ commit, dirty, builtAt: now() })}\n`);
+      stamp = commit ? { commit, dirty } : null;
+    },
+    async writeBundle(options) {
+      if (!options.dir || !stamp) return;
+      await writeFile(join(options.dir, 'build.json'), `${JSON.stringify({ ...stamp, builtAt: now() })}\n`);
     },
   };
 }

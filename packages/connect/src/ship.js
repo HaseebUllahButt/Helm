@@ -19,6 +19,8 @@ const STEP_MS = 3000;
 const INFO_MS = 8000;
 // A sync note that stays this long is not a passing restart.
 const STUCK_MS = 2 * 60_000;
+// A machine that is restarting when ship starts answers again within this.
+const OFFLINE_MS = 45_000;
 
 export class ShipError extends Error {}
 
@@ -105,6 +107,9 @@ export async function ship({
   }
   const edits = trackedEdits(top);
   if (edits.length) throw new ShipError(`Commit these files first:\n${edits.map((l) => `    ${l.slice(3)}`).join('\n')}`);
+  if (!branch && !includes([top], git(top, ['rev-parse', 'HEAD']), git(top, ['rev-parse', 'main']))) {
+    throw new ShipError('This copy is not on a branch. Run git switch -c <branch>, then helm ship again.');
+  }
   let pushed = true;
 
   if (branch && branch !== 'main') {
@@ -119,10 +124,17 @@ export async function ship({
         }
         log('  Checks passed.');
       }
+      // Another chat may be half way through a merge in main; aborting would lose its fixes.
+      if (tryGit(mainDir, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']) !== null) {
+        throw new ShipError(`Another merge is not finished in ${mainDir}. Wait for it, then run helm ship again.`);
+      }
       try {
-        git(mainDir, ['merge', '--no-edit', branch]);
+        // Always a new merge commit: machines take a version only when its
+        // commit time is newer than theirs (version-sync.js), and a
+        // fast-forward keeps the branch commit's older time.
+        git(mainDir, ['merge', '--no-ff', '--no-edit', branch]);
       } catch (err) {
-        tryGit(mainDir, ['merge', '--abort']);
+        if (tryGit(mainDir, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']) !== null) tryGit(mainDir, ['merge', '--abort']);
         throw new ShipError(/CONFLICT/.test(err.message)
           ? `Main changed the same lines. Run git merge main here, fix the clashes, commit, and run helm ship again.\n${err.message}`
           : `Git did not merge ${branch} into main:\n${err.message}`);
@@ -133,7 +145,8 @@ export async function ship({
   const tip = git(mainDir, ['rev-parse', 'main']);
 
   if (tryGit(mainDir, ['remote', 'get-url', 'origin']) === null) {
-    log('  Main has no origin, so nothing was pushed.');
+    pushed = false;
+    log('  ! Main has no origin, so nothing was pushed.');
   } else {
     try {
       git(mainDir, ['push', '-q', 'origin', 'main']);
@@ -170,17 +183,22 @@ export async function ship({
   const contains = (want, have) => includes(dirs, want, have);
   const ask = (id) => rpc(net, id, M.ENV_INFO, {}, { timeout: INFO_MS, budget: INFO_MS }).catch(() => null);
   const ids = Object.keys(net.machines ?? {});
-  const first = await Promise.all(ids.map(ask));
   const name = (id, info) => info?.name ?? net.machines[id]?.name ?? short(id);
-  // A machine that does not answer now is offline; one that stops answering later is restarting.
-  const pending = new Map(ids.flatMap((id, i) => (first[i] ? [[id, { name: name(id, first[i]), info: first[i], shown: null, note: null, since: 0 }]] : [])));
-  const offline = ids.filter((id, i) => !first[i]).map((id) => name(id));
-  if (offline.length) log(`  Skipped offline machines: ${offline.join(', ')}.`);
-  const width = Math.max(...[...pending.values()].map((m) => m.name.length), 4);
+  const width = Math.max(...ids.map((id) => name(id).length), 4);
+  const pending = new Map();
+  // Machines that have not answered yet. One that answers later joins the
+  // wait; one still silent after OFFLINE_MS is offline and skipped.
+  const unseen = new Set(ids);
+  const join = (id, info) => {
+    if (!info || !unseen.delete(id)) return;
+    pending.set(id, { name: name(id, info), info, shown: null, note: null, since: 0 });
+  };
   log(`  Waiting for each machine to run ${short(tip)}…`);
 
-  const deadline = now() + waitMs;
+  const started = now();
+  const deadline = started + waitMs;
   const done = new Map();
+  (await Promise.all(ids.map(ask))).forEach((info, i) => join(ids[i], info));
   for (;;) {
     for (const [id, m] of pending) {
       const s = machineState(m.info, tip, contains);
@@ -190,11 +208,17 @@ export async function ship({
       if (line !== m.shown) { log(line); m.shown = line; }
       if (s.state === 'ok' || stuck) { done.set(id, { ...s, stuck }); pending.delete(id); }
     }
-    if (!pending.size || now() >= deadline) break;
+    const waitingOffline = unseen.size > 0 && now() - started < OFFLINE_MS;
+    if ((!pending.size && !waitingOffline) || now() >= deadline) break;
     await sleep(STEP_MS);
-    await Promise.all([...pending].map(async ([id, m]) => { m.info = await ask(id); }));
+    await Promise.all([
+      ...[...pending].map(async ([id, m]) => { m.info = await ask(id); }),
+      ...(now() - started < OFFLINE_MS ? [...unseen].map(async (id) => join(id, await ask(id))) : []),
+    ]);
   }
 
+  const offline = [...unseen].map((id) => name(id));
+  if (offline.length) log(`  Skipped offline machines: ${offline.join(', ')}.`);
   const late = [...pending.values()].map((m) => m.name);
   const stuck = [...done].filter(([, s]) => s.stuck).map(([id]) => name(id));
   if (late.length) log(`  ! Still waiting after ${Math.round(waitMs / 60_000)} min: ${late.join(', ')}.`);
