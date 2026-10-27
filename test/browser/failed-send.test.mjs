@@ -12,7 +12,9 @@ before(async () => {
       import React from 'react'; import { createRoot } from 'react-dom/client';
       import { DrivenSession } from './apps/web/src/session/DrivenSession';
       window.sends=[]; window.answers=[]; window.deliveryIds=[];
-      const client={input:(env,params,_timeout,messageId)=>{window.deliveryIds.push(messageId);return client.rpc(env,'session.input',params);},on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
+      const listeners=new Set();
+      window.emitTurn=(turn)=>listeners.forEach(fn=>fn('laptop','session.event',{id:'failed-send-test',events:[{seq:1,at:Date.now(),type:'turn.start',turnId:'local-confirmed',queued:true,...turn}]}));
+      const client={input:(env,params,_timeout,messageId)=>{window.deliveryIds.push(messageId);return client.rpc(env,'session.input',params);},on:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
         if(method==='session.messages')return {messages:[],status:'idle'};
         if(method==='session.events')return {events:[],pending:[],last:0,session:{status:'idle'}};
         if(method==='model.list')return {models:[],default:null};
@@ -201,4 +203,71 @@ test('retry keeps a replacement file and its caption in the draft', async t => {
   assert.equal(await box.inputValue(), replacementDraft);
   assert.equal(await p.locator('.attach-preview').count(), 1);
   assert.deepEqual(await p.evaluate(() => window.sends[1].attachments), await p.evaluate(() => window.sends[0].attachments));
+});
+
+for (const when of ['before', 'after']) test(`a matching delivery ${when} a lost reply confirms that send only`, async t => {
+  const p = await browser.newPage(); t.after(() => p.close());
+  await p.route('http://helm.test/**', r => r.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
+  await p.goto('http://helm.test/'); await p.addScriptTag({ content: script });
+  const box = p.locator('textarea');
+  await box.fill('continue');
+  await p.getByRole('button', { name: 'send', exact: true }).click();
+  await p.waitForFunction(() => window.sends.length === 1);
+  const confirm = async () => {
+    await p.evaluate(() => window.emitTurn({ text: 'continue', messageId: window.deliveryIds[0] }));
+    await p.locator('.queued-row').waitFor();
+  };
+  if (when === 'before') await confirm();
+  await p.evaluate(() => window.answers[0].reject(Object.assign(new Error('reply lost'), { code: 'timeout' })));
+  if (when === 'after') { await p.locator('.failed-send').waitFor(); await confirm(); }
+  await p.locator('.failed-send').waitFor({ state: 'detached' });
+  await p.waitForFunction(() => document.querySelector('textarea').value === '');
+  await box.fill('continue');
+  await p.getByRole('button', { name: 'send', exact: true }).click();
+  await p.waitForFunction(() => window.sends.length === 2);
+  assert.notEqual(...await p.evaluate(() => window.deliveryIds), 'an intentional repeat gets a new identity');
+  await p.evaluate(() => window.answers[1].resolve({ ok: true }));
+});
+
+for (const identified of [true, false]) test(`another device's matching words cannot confirm a failed send (identified: ${identified})`, async t => {
+  const p = await browser.newPage(); t.after(() => p.close());
+  await p.route('http://helm.test/**', r => r.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
+  await p.goto('http://helm.test/'); await p.addScriptTag({ content: script });
+  const box = p.locator('textarea');
+  await box.fill('continue'); await p.getByRole('button', { name: 'send', exact: true }).click();
+  await p.waitForFunction(() => window.sends.length === 1);
+  await box.fill('keep this newer draft');
+  await p.evaluate(identified => window.emitTurn({ text: 'continue', ...(identified ? { messageId: 'b'.repeat(32) } : {}) }), identified);
+  await p.locator('.queued-row').waitFor();
+  await p.evaluate(() => window.answers[0].reject(Object.assign(new Error('reply lost'), { code: 'timeout' })));
+  const card = p.locator('.failed-send'); await card.waitFor();
+  assert.equal(await box.inputValue(), 'keep this newer draft');
+  await card.getByRole('button', { name: 'Retry send' }).click();
+  await p.waitForFunction(() => window.sends.length === 2);
+  assert.equal(...await p.evaluate(() => window.deliveryIds), 'the safe retry retains its identity');
+  await p.evaluate(() => window.answers[1].resolve({ ok: true }));
+  await card.waitFor({ state: 'detached' });
+});
+
+test('a late attached-message confirmation keeps newer writing and removes the sent image draft', async t => {
+  const p = await browser.newPage(); t.after(() => p.close());
+  await p.route('http://helm.test/**', r => r.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
+  await p.goto('http://helm.test/'); await p.addScriptTag({ content: script });
+  const box = p.locator('textarea'); await box.waitFor();
+  await p.waitForFunction(() => !document.querySelector('.attach-status'));
+  await p.evaluate(async () => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 32;
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const dt = new DataTransfer(); dt.items.add(new File([blob], 'picture.png', { type: 'image/png' }));
+    document.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await p.locator('.attach-preview').waitFor();
+  await p.getByRole('button', { name: 'send', exact: true }).click();
+  await p.waitForFunction(() => window.sends.length === 1);
+  await p.evaluate(() => window.answers[0].reject(Object.assign(new Error('reply lost'), { code: 'timeout' })));
+  await p.locator('.failed-send').waitFor(); await box.fill('keep this newer draft [Image #1]');
+  await p.evaluate(() => window.emitTurn({ text: window.sends[0].data, messageId: window.deliveryIds[0], attachments: window.sends[0].attachments }));
+  await p.locator('.queued-row').waitFor(); await p.locator('.failed-send').waitFor({ state: 'detached' });
+  await p.locator('.slab .attach-preview').waitFor({ state: 'detached' });
+  assert.equal(await box.inputValue(), 'keep this newer draft [Image #1]');
 });

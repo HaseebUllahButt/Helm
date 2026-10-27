@@ -20,26 +20,35 @@ export function QueueEdit({ turn, busy, onCancel, onSave }: {
   const [images, setImages] = useState<Image[]>(() => (turn.attachments ?? [])
     .filter((a) => a.data).map((a) => ({ filename: a.filename, mime: a.mime, data: a.data! })));
   const [error, setError] = useState('');
+  const [preparing, setPreparing] = useState(false);
+  const pendingImages = useRef(0);
   const box = useRef<HTMLTextAreaElement>(null);
   const file = useRef<HTMLInputElement>(null);
 
   const add = async (files: File[]) => {
     const picked = files.filter(looksLikeImage);
-    if (!picked.length) return;
+    if (!picked.length || busy) return;
+    pendingImages.current += 1;
+    setPreparing(true);
     setError('');
-    const at = box.current?.selectionStart ?? text.length;
-    const ready: Image[] = [];
-    for (const f of picked) {
-      try { const p = await prepareImage(f); ready.push({ filename: p.name, mime: p.mime, data: p.data }); }
-      catch (e: any) { setError(`${f.name}: ${errorMessage(e)}`); }
+    try {
+      const at = box.current?.selectionStart ?? text.length;
+      const ready: Image[] = [];
+      for (const f of picked) {
+        try { const p = await prepareImage(f); ready.push({ filename: p.name, mime: p.mime, data: p.data }); }
+        catch (e: any) { setError(`${f.name}: ${errorMessage(e)}`); }
+      }
+      if (!ready.length) return;
+      const labels = ready.map((_, i) => `[Image #${images.length + i + 1}]`).join(' ');
+      setImages((now) => [...now, ...ready]);
+      setText((now) => {
+        const pre = now.slice(0, at), post = now.slice(at);
+        return `${pre}${pre && !/\s$/.test(pre) ? ' ' : ''}${labels}${/^\s/.test(post) ? '' : ' '}${post}`;
+      });
+    } finally {
+      pendingImages.current -= 1;
+      setPreparing(pendingImages.current > 0);
     }
-    if (!ready.length) return;
-    const labels = ready.map((_, i) => `[Image #${images.length + i + 1}]`).join(' ');
-    setImages((now) => [...now, ...ready]);
-    setText((now) => {
-      const pre = now.slice(0, at), post = now.slice(at);
-      return `${pre}${pre && !/\s$/.test(pre) ? ' ' : ''}${labels}${/^\s/.test(post) ? '' : ' '}${post}`;
-    });
   };
   const remove = (index: number) => {
     const gone = index + 1;
@@ -49,6 +58,7 @@ export function QueueEdit({ turn, busy, onCancel, onSave }: {
   };
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
+    if (busy || pendingImages.current) return;
     if (text.trim() || images.length) onSave(text.trim(), images);
   };
 
@@ -72,15 +82,16 @@ export function QueueEdit({ turn, busy, onCancel, onSave }: {
             const files = clipboardImages(event.clipboardData);
             if (files.length) { event.preventDefault(); void add(files); }
           }} />
+        {preparing && <p className="note" role="status">Preparing images…</p>}
         {error && <div className="error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="ghost queue-edit-add" disabled={busy} onClick={() => file.current?.click()}>
+          <button type="button" className="ghost queue-edit-add" disabled={busy || preparing} onClick={() => file.current?.click()}>
             <Icon name="image" size={14} /> Add image
           </button>
           <input ref={file} type="file" accept={IMAGE_ACCEPT} multiple hidden onChange={(e) => { if (e.target.files?.length) void add(Array.from(e.target.files)); e.target.value = ''; }} />
           <span className="spacer" />
           <button type="button" className="ghost" onClick={onCancel} disabled={busy}>Cancel</button>
-          <button type="submit" className="primary" disabled={busy || (!text.trim() && !images.length)}>{busy ? '…' : 'Save'}</button>
+          <button type="submit" className="primary" disabled={busy || preparing || (!text.trim() && !images.length)}>{busy ? '…' : 'Save'}</button>
         </div>
       </form>
     </Sheet>

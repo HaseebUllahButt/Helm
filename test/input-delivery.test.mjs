@@ -54,6 +54,7 @@ test('a crash before input resumes the pending message without a waiting caller'
   restarted.resume();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(received.data, request.data);
+  assert.equal(received.opts.messageId, request.messageId, 'restart preserves the confirmation identity');
   assert.match(received.opts.turnId, /^local-message-[a-f0-9]{64}$/);
   assert.deepEqual(await restarted.deliver(request), { ok: true });
 });
@@ -176,4 +177,22 @@ test('inbox acknowledgement waits for acceptance and removes only its queued tic
   assert.equal(await f.inbox.acknowledge(request.id,request.messageId,'different-sender'),false);
   await new InputDelivery(f.sessions,{dir:f.dir}).deliver(request,'agent:local:reviewer');
   assert.equal(sends,1);
+});
+
+test('pending records from older daemons still recover without a confirmation identity', async t => {
+  let rejectInput, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const f = setup(t, () => new Promise((_resolve, reject) => { rejectInput = reject; entered(); }));
+  const sending = f.inbox.deliver(request);
+  await started;
+  f.inbox.stop(); rejectInput(new Error('disconnected'));
+  await assert.rejects(sending, { code: 'delivery_pending' });
+  const path = join(f.dir, 'pending', readdirSync(join(f.dir, 'pending'))[0]);
+  const old = JSON.parse(readFileSync(path)); delete old.messageId; writeFileSync(path, JSON.stringify(old));
+  let received;
+  f.sessions.input = async (_id, _text, opts) => { received = opts; return { ok: true }; };
+  const restarted = new InputDelivery(f.sessions, { dir: f.dir });
+  await restarted.deliver(request);
+  assert.equal(received.messageId, undefined);
+  assert.match(received.turnId, /^local-message-/);
 });

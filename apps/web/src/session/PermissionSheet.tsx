@@ -22,7 +22,7 @@ export type AskVariant = 'sheet' | 'banner';
 export interface QuestionHandle { submit: (text: string) => 'sent' | 'wait' }
 
 /** Said the way people say it, whatever the CLI's own word was. */
-const plainLabel = (label: string, banner: boolean) => banner ? (label === 'Allow' ? 'Approve' : label === 'Deny' ? 'Decline' : label) : label;
+const plainLabel = (label: string) => label === 'Allow' ? 'Approve' : label === 'Deny' ? 'Decline' : label;
 
 /**
  * What a tool was given, as "name: value" lines a person can read; only a
@@ -82,9 +82,9 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
     <button className="primary" disabled={busy || !edited.trim()} onClick={() => answer('allow', updatedInput())}>
       {p.kind === 'plan' ? 'Approve edited plan' : 'Allow edited command'}
     </button>
-  ) : <button className="primary" disabled={busy} onClick={() => answer('allow')}>{plainLabel(allow.label, banner)}</button>);
-  const alwaysButton = always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{plainLabel(always.label, banner)}</button>;
-  const denyButton = deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{plainLabel(deny.label, banner)}</button>;
+  ) : <button className="primary" disabled={busy} onClick={() => answer('allow')}>{plainLabel(allow.label)}</button>);
+  const alwaysButton = always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{plainLabel(always.label)}</button>;
+  const denyButton = deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{plainLabel(deny.label)}</button>;
 
   return (
     <div className={`sheet ${p.kind}${banner ? ' banner' : ''}`}>
@@ -155,6 +155,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
           placeholder={p.kind === 'plan' ? 'What should change? (optional)' : 'Add a note (optional)'}
         />
       )}
+      {note.trim() && <p className="note">Approve lets this step run before the agent reads your note. Decline to request a change.</p>}
       {/* Built in the order it is seen, so Tab walks the buttons the way the
           eye does. A prompt whose safe answer is "no" leads with Deny; it
           used to get there with row-reverse, which left Allow first in the
@@ -246,12 +247,12 @@ function QuestionSheet({ permission: p, onAnswer, busy, variant, onHandle }: {
   const key = (q: Question) => q.question;
 
   const answersWith = (pickedNow: Record<string, string[]>, otherNow: Record<string, string>) => {
-    const out: Record<string, string> = {};
+    const out: Record<string, string[]> = {};
     for (const q of questions) {
       const chosen = pickedNow[key(q)] ?? [];
       const free = (otherNow[key(q)] ?? '').trim();
       const all = free ? [...chosen, free] : chosen;
-      if (all.length) out[key(q)] = all.join(', ');
+      if (all.length) out[key(q)] = all;
     }
     return out;
   };
@@ -265,11 +266,15 @@ function QuestionSheet({ permission: p, onAnswer, busy, variant, onHandle }: {
   useEffect(() => cancelAdvance, []);
   // A send that failed leaves the card up; it can be tried again.
   useEffect(() => { if (!busy) sent.current = false; }, [busy]);
-  const advance = (now: Record<string, string>) => {
+  const advance = (now: Record<string, string[]>) => {
     if (busy || sent.current) return;
     const open = questions.findIndex((x) => !now[key(x)]);
     // Two quick taps must not answer twice.
-    if (open < 0) { sent.current = true; onAnswer({ option: 'allow', answers: now }); return; }
+    if (open < 0) {
+      sent.current = true;
+      onAnswer({ option: 'allow', answers: Object.fromEntries(Object.entries(now).map(([key, values]) => [key, values.join(', ')])), answerLists: now });
+      return;
+    }
     setStep(open);
   };
 
@@ -308,9 +313,8 @@ function QuestionSheet({ permission: p, onAnswer, busy, variant, onHandle }: {
     return 'sent';
   };
 
-  // Digits and Enter, for whoever is at a keyboard - never while a text box
-  // has the cursor, where they are just typing. The composer counts as free
-  // while it is empty: there a digit is a choice, not the start of a message.
+  // Ctrl/Cmd+Alt keeps answer keys separate from typing and browser tab keys.
+  // A filled text box always keeps its keys.
   const keys = useRef({ q, confirm, choose, submitText });
   keys.current = { q, confirm, choose, submitText };
   useEffect(() => {
@@ -323,10 +327,10 @@ function QuestionSheet({ permission: p, onAnswer, busy, variant, onHandle }: {
       const el = e.target as HTMLElement | null;
       const emptyComposer = el?.tagName === 'TEXTAREA' && el.hasAttribute('data-composer') && !(el as HTMLTextAreaElement).value;
       if (!emptyComposer && (/^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName ?? '') || el?.isContentEditable)) return;
-      if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector('[aria-modal="true"]')) return;
+      if (e.defaultPrevented || e.getModifierState('AltGraph') || !(e.ctrlKey || e.metaKey) || !e.altKey || e.shiftKey || e.repeat || e.isComposing || document.querySelector('[aria-modal="true"]')) return;
       const { q, confirm, choose } = keys.current;
       if (!q) return;
-      const n = Number(e.key);
+      const n = Number(/^Digit([1-9])$/.exec(e.code)?.[1] ?? e.key);
       if (n >= 1 && n <= q.options.length) { e.preventDefault(); choose(q, q.options[n - 1].label); }
       else if (e.key === 'Enter') { e.preventDefault(); confirm(); }
     };
@@ -373,8 +377,7 @@ function QuestionSheet({ permission: p, onAnswer, busy, variant, onHandle }: {
             return (
               <button key={o.label} role={q.multiSelect ? 'checkbox' : 'radio'} aria-checked={on} disabled={busy}
                 className={`q-opt${on ? ' on' : ''}${q.multiSelect ? ' multi' : ''}`} onClick={() => choose(q, o.label)}>
-                {/* Its number is its key on a keyboard, and a plain count on a phone. */}
-                <kbd className="q-num">{i + 1}</kbd>
+                <kbd className="q-num" title={`Choose answer ${i + 1} (Ctrl/⌘ Alt ${i + 1})`}>{i + 1}</kbd>
                 <span className="grow">
                   <span className="q-label">{o.label}</span>
                   {o.description && <span className="q-desc">{o.description}</span>}

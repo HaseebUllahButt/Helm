@@ -357,7 +357,7 @@ test('launch options stay folded until asked for, then create a linked child and
   const toggle = page.getByRole('button', {name:'Needs approval, details'});
   assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
   assert.equal(await page.locator('.delegation-group.active .delegation-branch').count(), 1);
-  assert.deepEqual(await page.locator('.sheet-actions button').allTextContents(), ['Deny', 'Allow'], 'safe visual order must also be the keyboard order');
+  assert.deepEqual(await page.locator('.sheet-actions button').allTextContents(), ['Decline', 'Approve'], 'safe visual order must also be the keyboard order');
   const request = await page.evaluate(() => JSON.parse(JSON.stringify(window.calls.find((c)=>c.method==='session.delegate'))));
   assert.deepEqual(request.params, {id:'parent',profileId:'claude-main',model:'opus',task:'Review the vulnerability'});
   assert.equal(await page.getByText('claude-main · opus', {exact:true}).count(),1);
@@ -368,7 +368,7 @@ test('launch options stay folded until asked for, then create a linked child and
   await toggle.click();
   await page.getByText('Read the diff', {exact:true}).waitFor();
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.list'&&c.params.parentId==='parent')));
-  await page.getByRole('button',{name:'Deny',exact:true}).click();
+  await page.getByRole('button',{name:'Decline',exact:true}).click();
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.answer'&&c.params.id==='child'&&c.params.decision.option==='deny')));
   await page.getByLabel('Message helper').fill('Keep the security checks intact');
   const messagesBeforeComposition = await page.evaluate(() => window.calls.filter((call) => call.method === 'session.agent-send').length);
@@ -899,5 +899,40 @@ test('a terminal chat has the Git button and the full Agents panel', async () =>
     // With no helpers yet it is still in the bar, as in a Helm chat.
     await view.locator('.bar').getByRole('button', {name:'Agents',exact:true}).click();
     await view.getByRole('dialog', {name:'Agents'}).getByRole('button', {name:/New task/}).waitFor();
+  } finally { await view.close(); }
+});
+
+test('helper message drafts survive card changes and another helper send', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react'; import {createRoot} from 'react-dom/client';
+    import {Subagents} from './apps/web/src/session/Subagents';
+    const parent={id:'parent',engine:'codex',profileId:'fake',title:'Parent'};
+    const children=['first','second'].map(id=>({id,title:id,engine:'codex',profileId:'fake',status:'done',delegation:{parentId:'parent',status:'done'}}));
+    const client={on:()=>()=>{},rpc:async(env,method,params)=>{
+      if(method==='session.list')return {sessions:children};
+      if(method==='agent.list')return {agents:[]};
+      if(method==='session.delegation-result')return {status:'done',complete:true,output:'Finished.'};
+      if(method==='session.agent-send')return new Promise(resolve=>window.finishSend=()=>resolve({ok:true}));
+      return {ok:true};
+    }};
+    createRoot(document.getElementById('root')).render(<Subagents client={client} env={{id:'local',name:'Laptop',online:true,info:{agentMessages:true}}} parent={parent} embedded onClose={()=>{}} />);
+  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
+  const view = await browser.newPage();
+  try {
+    await view.setContent('<div id="root"></div>'); await view.addScriptTag({ content: bundle.outputFiles[0].text });
+    const first = view.locator('[data-task="first"]'), second = view.locator('[data-task="second"]');
+    await first.click(); await view.getByLabel('Message helper').fill('First draft');
+    await second.click(); await view.getByLabel('Message helper').fill('Second draft');
+    await first.click();
+    assert.equal(await view.getByLabel('Message helper').inputValue(), 'First draft');
+    await view.getByRole('button', { name: 'Send message', exact: true }).click();
+    await view.waitForFunction(() => !!window.finishSend);
+    await second.click();
+    assert.equal(await view.getByLabel('Message helper').inputValue(), 'Second draft');
+    await view.evaluate(() => window.finishSend());
+    await view.getByRole('button', { name: 'Send message', exact: true }).waitFor();
+    await view.waitForFunction(() => !document.querySelector('.delegation-follow textarea').disabled);
+    assert.equal(await view.getByLabel('Message helper').inputValue(), 'Second draft');
+    await first.click(); assert.equal(await view.getByLabel('Message helper').inputValue(), '');
   } finally { await view.close(); }
 });

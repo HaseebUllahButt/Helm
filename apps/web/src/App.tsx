@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
 import { useNow } from './useNow';
 import { isUnread, markSeen, seenHere, useSeenVersion } from './threadStatus';
-import { Palette, ShortcutsHelp, type PaletteItem } from './Palette';
+import { Palette, ShortcutsHelp, type PaletteItem, type PaletteSearchResults } from './Palette';
 import { NewChat } from './NewChat';
 import type { Account } from './accounts';
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
@@ -591,13 +591,18 @@ function Shell({ client, conn, onSignOut }: {
    * found this way opens like any other row; one whose title already matched
    * is marked `same` so the palette shows it once.
    */
-  const searchSaid = useCallback(async (query: string): Promise<PaletteItem[]> => {
+  const searchSaid = useCallback(async (query: string, onResults?: (results: PaletteSearchResults) => void): Promise<PaletteSearchResults> => {
     type Hit = { id: string; title: string; cwd: string; quick: boolean; engine: string; archived: boolean; who: 'you' | 'agent' | 'title'; snippet: string; at: number; updatedAt: number };
     const live = envs.filter((e) => e.online);
-    const found = await Promise.all(live.map(async (e) => {
+    const found: PaletteItem[] = [];
+    const failedMachines: string[] = [];
+    const results = (): PaletteSearchResults => ({
+      items: [...found].sort((a, b) => (b.at ?? 0) - (a.at ?? 0)), failedMachines: [...failedMachines],
+    });
+    await Promise.all(live.map(async (e) => {
       try {
         const r = await client.rpc<{ results: Hit[] }>(e.id, 'session.search', { query, limit: 12 }, 8000);
-        return (r.results ?? []).map((hit): PaletteItem => {
+        found.push(...(r.results ?? []).map((hit): PaletteItem => {
           const known = sessionsNow.current[e.id]?.find((s) => s.id === hit.id);
           const session = known ?? ({ id: hit.id, title: hit.title, cwd: hit.cwd, quick: hit.quick, engine: hit.engine, archived: hit.archived, updatedAt: hit.updatedAt } as Session);
           const who = hit.who === 'you' ? 'You: ' : hit.who === 'agent' ? 'Agent: ' : '';
@@ -606,10 +611,11 @@ function Shell({ client, conn, onSignOut }: {
             sub: `${hit.snippet ? `${who}${hit.snippet}` : hit.quick ? 'quick chat' : hit.cwd} · ${e.name}${hit.archived ? ' · archived' : ''}`,
             run: () => openSessionRef.current(e.id, session),
           };
-        });
-      } catch { return []; }
+        }));
+      } catch { failedMachines.push(e.name); }
+      onResults?.(results());
     }));
-    return found.flat().sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+    return results();
   }, [envs, client]);
 
   // The sidebar's ⋯: the machine screen's three, plus carrying on. The list

@@ -66,6 +66,9 @@ its own copy, named after its Helm session; `--name <name>` picks another.
 
 ## Traps
 
+- Build the web app before `up` if `apps/web/dist/index.html` is missing:
+  `npm --workspace @helm/web run build`. A copy started before the first
+  build serves a missing page until `restart`, even after the build exists.
 - The copy has its own home (`/tmp/helm-verify-<name>/home`). With
   `up --real` it uses the real home and shows **the owner's real chats,
   terminals, spend and search results**: never delete, stop, rename or

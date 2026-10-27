@@ -160,6 +160,7 @@ function anchor(event) {
   if (type === 'turn.recover') result.providerTurnId = event.providerTurnId;
   if (kind === 'visual' && event.visual) result.visual = event.visual;
   if (type === 'turn.start' || type === 'turn.edit' || type === 'turn.images') {
+    if (event.messageId) result.messageId = event.messageId;
     result.text = String(event.text ?? '').slice(0, 8000);
     if (event.delivery) result.delivery = event.delivery;
     if (event.references) result.references = event.references;
@@ -527,8 +528,8 @@ export class EventLog {
     if (!file) this.#files.set(id, file = new EventFile(this.#file(id), event => {
       // Exact text is needed to settle queued messages against provider echoes.
       if (isTurn(event)) {
-        const { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId } = event;
-        return { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId };
+        const { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId, messageId } = event;
+        return { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId, ...(messageId ? { messageId } : {}) };
       }
       return anchor(event);
     }));

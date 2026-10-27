@@ -119,6 +119,8 @@ export interface TurnEnd {
 }
 
 export interface Turn {
+  /** Stable identity of the owner's send, also kept when the CLI echoes it. */
+  messageId?: string;
   checkpoint?: string;
   id: string;
   /** Last event that changed this turn; items are mutated while streaming. */
@@ -187,6 +189,8 @@ export interface Decision {
   option: 'allow' | 'always' | 'deny';
   message?: string;
   answers?: Record<string, string>;
+  /** Preserve commas inside one answer while older agents use the joined text. */
+  answerLists?: Record<string, string[]>;
   updatedInput?: any;
 }
 
@@ -330,7 +334,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         }
         return;
       }
-      const turn: Turn = { id, revision: e.seq, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, delivery: e.delivery, references: e.references, checkpoint: e.checkpoint };
+      const turn: Turn = { id, messageId: e.messageId, revision: e.seq, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, delivery: e.delivery, references: e.references, checkpoint: e.checkpoint };
       if (Array.isArray(e.cause) && e.cause.length) turn.cause = e.cause;
       if (e.local) {
         turn.local = true;

@@ -66,6 +66,10 @@ The owner uses the external Chromium window. Helm has no browser panel.
 - Chromium must already be installed (an existing browser,
   `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at daemon
   start, and loads no browser driver until a browser is needed.
+- Readiness and launch use the same system browser list, including macOS
+  Chrome. `HELM_WINDOW_CHROMIUM` selects only the visible browser;
+  `HELM_CHROMIUM_PATH` selects the hidden browser.
+- Chats share no tab limit. Keep every saved tab when Helm restarts.
 - Hidden tabs use full Chromium. The headless shell has no native PDF
   plugins or `window.chrome`. Patchright avoids `Runtime.enable` in pages
   and workers. Chromium's automation flag stays off. Hidden tabs use one

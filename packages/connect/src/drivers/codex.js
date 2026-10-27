@@ -1532,8 +1532,10 @@ export class CodexDriver extends Driver {
       case 'item/tool/requestUserInput': {
         const answers = {};
         for (const q of raw.params.questions ?? []) {
+          const list = decision.answerLists?.[q.question] ?? decision.answerLists?.[q.id];
           const a = decision.answers?.[q.question] ?? decision.answers?.[q.id];
-          if (a != null) answers[q.id] = { answers: String(a).split(',').map((s) => s.trim()).filter(Boolean) };
+          if (Array.isArray(list) && list.every(value => typeof value === 'string')) answers[q.id] = { answers: list };
+          else if (a != null) answers[q.id] = { answers: String(a).split(',').map((s) => s.trim()).filter(Boolean) };
         }
         result = { answers };
         break;

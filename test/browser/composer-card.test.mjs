@@ -138,7 +138,7 @@ test('the task strip is hidden once its turn is done and everything is ticked, n
   assert.match(await stopped.locator('.todo-strip-count').innerText(), /2\/5/);
 });
 
-test('a question sits in the card and a number key answers it, even from the empty box', async (t) => {
+test('question shortcuts require Ctrl or Cmd and Alt, while number keys remain text', async (t) => {
   const page = await open(t, 'question');
   const banner = page.locator('.slab .sheet.banner.question');
   await banner.waitFor();
@@ -149,19 +149,39 @@ test('a question sits in the card and a number key answers it, even from the emp
   await shot(page, 'composer-question-1280.png');
   await page.locator('.slab textarea').focus();
   await page.keyboard.press('2');
+  assert.equal(await page.locator('.slab textarea').inputValue(), '2');
+  assert.equal(await page.evaluate(() => window.calls.some(c => c.method === 'session.answer')), false);
+  await page.locator('.slab textarea').fill('');
+  const altGraph = await page.locator('.slab textarea').evaluate(el => {
+    const event = new KeyboardEvent('keydown', { key: '@', code: 'Digit2', ctrlKey: true, altKey: true, modifierAltGraph: true, bubbles: true, cancelable: true });
+    el.dispatchEvent(event);
+    return { altGraph: event.getModifierState('AltGraph'), prevented: event.defaultPrevented };
+  });
+  assert.deepEqual(altGraph, { altGraph: true, prevented: false });
+  await page.locator('.slab textarea').evaluate(el => {
+    const event = new KeyboardEvent('keydown', { key: '2', code: 'Digit2', ctrlKey: true, altKey: true, bubbles: true, cancelable: true });
+    event.preventDefault(); el.dispatchEvent(event);
+  });
+  assert.equal(await page.evaluate(() => window.calls.some(c => c.method === 'session.answer')), false);
+  await page.keyboard.press('Control+Alt+2');
   await answered(page);
-  assert.deepEqual(await decisionOf(page), { option: 'allow', answers: { 'Which cache should the scan use?': 'Scan again' } });
-  assert.equal(await page.locator('.slab textarea').inputValue(), '', 'the digit was a choice, not text');
+  assert.deepEqual(await decisionOf(page), { option: 'allow', answers: { 'Which cache should the scan use?': 'Scan again' }, answerLists: { 'Which cache should the scan use?': ['Scan again'] } });
+  assert.equal(await page.locator('.slab textarea').inputValue(), '');
+  const mac = await open(t, 'question');
+  await mac.locator('.slab .sheet.banner.question').waitFor();
+  await mac.keyboard.press('Meta+Alt+2');
+  await answered(mac);
+  assert.equal((await decisionOf(mac)).answers['Which cache should the scan use?'], 'Scan again');
 });
 
 test('typing into the composer while a question is open answers it instead of sending a message', async (t) => {
   const page = await open(t, 'question');
   await page.locator('.slab .sheet.banner.question').waitFor();
   const area = page.locator('.slab textarea');
-  await area.fill('3 files');
+  await area.pressSequentially('3 files, please');
   await page.keyboard.press('Enter');
   await answered(page);
-  assert.deepEqual(await decisionOf(page), { option: 'allow', answers: { 'Which cache should the scan use?': '3 files' } });
+  assert.deepEqual(await decisionOf(page), { option: 'allow', answers: { 'Which cache should the scan use?': '3 files, please' }, answerLists: { 'Which cache should the scan use?': ['3 files, please'] } });
   assert.equal(await page.evaluate(() => window.calls.some((c) => c.method === 'session.input')), false, 'not sent as a new message');
   assert.equal(await area.inputValue(), '');
 });
@@ -169,7 +189,7 @@ test('typing into the composer while a question is open answers it instead of se
 test('several questions go one by one; a multi-select needs its own Send', async (t) => {
   const two = await open(t, 'two');
   await two.locator('.slab .sheet.banner.question').waitFor();
-  await two.keyboard.press('1');
+  await two.keyboard.press('Control+Alt+1');
   await two.getByText('How loud?').waitFor();
   await two.locator('.slab textarea').fill('Whisper');
   await two.keyboard.press('Enter');
@@ -177,12 +197,13 @@ test('several questions go one by one; a multi-select needs its own Send', async
   assert.deepEqual((await decisionOf(two)).answers, { 'Which cache?': 'Disk', 'How loud?': 'Whisper' });
   const multi = await open(t, 'multi');
   await multi.locator('.slab .sheet.banner.question').waitFor();
-  await multi.keyboard.press('1');
-  await multi.keyboard.press('3');
+  await multi.keyboard.press('Control+Alt+1');
+  await multi.keyboard.press('Control+Alt+3');
   assert.equal(await multi.evaluate(() => window.calls.some((c) => c.method === 'session.answer')), false);
   await multi.getByRole('button', { name: 'Send', exact: true }).click();
   await answered(multi);
   assert.deepEqual((await decisionOf(multi)).answers, { 'Which checks should run?': 'Types, Lint' });
+  assert.deepEqual((await decisionOf(multi)).answerLists, { 'Which checks should run?': ['Types', 'Lint'] });
 });
 
 test('Shift Tab walks every permission mode, bypass included, and comes back round', async (t) => {
@@ -221,6 +242,7 @@ test('on the card the title has its own line and the note box opens only when as
   assert.equal(await banner.locator('.sheet-note').count(), 0);
   await banner.getByRole('button', { name: 'Add a note' }).click();
   await banner.locator('.sheet-note').fill('use the fast suite');
+  await banner.getByText('Approve lets this step run before the agent reads your note. Decline to request a change.').waitFor();
   await banner.getByRole('button', { name: 'Decline', exact: true }).click();
   await answered(page);
   const decision = await decisionOf(page);

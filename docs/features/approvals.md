@@ -6,13 +6,16 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 - **Prove (driven 2026-10-15):**
   ```sh
   $V click "Ask anything"; $V type "please ask"; $V click send
-  $V wait "TOOL APPROVAL"; $V click Approve; $V wait "done."
+  $V wait "Command approval"; $V click Approve; $V wait "done."
   ```
-  Decline: send again, `$V wait "TOOL APPROVAL"; $V click Decline`.
-- **Proof:** Approve: the card goes and the reply shows. Decline: "You
-  stopped this task." and **Continue**.
+  Decline: send again, `$V wait "Command approval"; $V click Decline`.
+- **Proof:** Approve: the card goes and the reply shows. Decline: the turn
+  says "stopped".
 - **Traps:** "Always allow" is remembered by the agent, not by Helm, and the
   fake agent asks every time, so it cannot prove it.
+- **Notes:** Approve can run the step before the agent reads the note.
+  Decline to request a change. Helm sends the note as the next owner message
+  when the agent cannot take text with its answer. Claude decline already takes the note.
 - **Tests:** `test/browser/composer-card`, `child-requests`;
   `test/local-answer`, `driver-acp`, `driver-claude`, `driver-codex`.
 
@@ -30,6 +33,11 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
   `events`; `test/browser/codex-review`.
 
 ## Questions
+- **Keys:** Ctrl/⌘+Alt+1 through 9 choose an answer. Ordinary digits remain
+  text, including in an empty composer. AltGraph remains a typing key.
+- **Answers:** keep the selected answers as a list for Codex. Keep the
+  joined text for older agents. A comma inside one answer never creates
+  another answer in updated Codex copies.
 - **Not yet driven;** the fake agent never asks questions, so use a real
   chat you made. To look at the card alone, run `test/browser/composer-card`
   with `HELM_TEST_SCREENSHOT_DIR` set. Several questions are sent only when
@@ -41,7 +49,7 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 ## "Needs you" on Home
 - **Prove (driven, except Snooze):** in a fake-ask chat:
   ```sh
-  $V click "Ask anything"; $V type "need me"; $V click send; $V wait "TOOL APPROVAL"
+  $V click "Ask anything"; $V type "need me"; $V click send; $V wait "Command approval"
   $V click Back                       # repeat until text starts with "helm"
   $V click "Review and allow"; $V click Approve; $V wait "done."
   ```

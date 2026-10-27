@@ -9,7 +9,7 @@ import { normalizeAction, readOnlyAction, resolveTarget } from './browser-target
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } from './browser-identity.js';
 import * as browserLogins from './browser-logins.js';
-import { canOpenWindow, launchWindow as openWindow, windowProfile, windowName, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
+import { canOpenWindow, systemChromium, launchWindow as openWindow, windowProfile, windowName, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -43,7 +43,7 @@ export const plainNavError = (error, url) => {
   if (code === 'ERR_TOO_MANY_REDIRECTS') return `${host} keeps sending the browser in circles.`;
   return `Could not open ${host}${code ? ` (${code.slice(4).toLowerCase().replace(/_/g, ' ')})` : ''}.`;
 };
-const executable = () => process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM || ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
+const executable = () => process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM || systemChromium();
 const LAUNCH = { headless: true, channel: 'chromium', ignoreDefaultArgs: ignoredBrowserArgs, args: [...browserArgs, '--disk-cache-size=33554432', '--disable-component-update'], timeout: 15000 };
 // Full Chromium keeps the same plugins, languages and window.chrome as a window.
 async function launchChromium() {
@@ -397,7 +397,7 @@ export class BrowserManager {
       let rows; try { rows = JSON.parse(await readFile(join(this.directory, sessionId, 'tabs.json'), 'utf8')); } catch { return; }
       if (!Array.isArray(rows)) return;
       const restore = [];
-      for (const row of rows.slice(0, 24)) {
+      for (const row of rows) {
         if (row.engine !== 'chromium' || !/^[a-f0-9]{16}$/.test(row.id)) continue;
         if (this.tabs.has(row.id)) continue;
         const context = await this.context(sessionId);
@@ -435,7 +435,7 @@ export class BrowserManager {
   async persistTabs(sessionId) { clearTimeout(this.persistTimers?.get(sessionId)); this.persistTimers?.delete(sessionId); const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); await writeFile(join(folder, 'tabs.json'), JSON.stringify([...[...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t)), ...[...this.orphans?.values() || []].filter(o => o.sessionId === sessionId && !this.tabs.has(o.row.id)).map(o => o.row)]), { mode: 0o600 }); }
   /** What a closed window, or a restart, left: the saved tab list. */
   async savedRows(sessionId) {
-    try { const rows = JSON.parse(await readFile(join(this.directory, sessionId, 'tabs.json'), 'utf8')); return Array.isArray(rows) ? rows.filter(row => row?.engine === 'chromium' && /^[a-f0-9]{16}$/.test(row.id)).slice(0, 24) : []; } catch { return []; }
+    try { const rows = JSON.parse(await readFile(join(this.directory, sessionId, 'tabs.json'), 'utf8')); return Array.isArray(rows) ? rows.filter(row => row?.engine === 'chromium' && /^[a-f0-9]{16}$/.test(row.id)) : []; } catch { return []; }
   }
   async list(sessionId) {
     this.owner(sessionId);
@@ -450,7 +450,6 @@ export class BrowserManager {
     await this.recover(sessionId); return answer(live()); }
   async open(sessionId, { url = 'about:blank', engine = 'chromium' } = {}) {
     await this.recover(sessionId); url = httpUrl(url);
-    if (this.tabs.size >= 24) throw new Error('close a browser tab before opening another (24 tab limit)');
     if (engine === 'bowser') {
       if ([...this.tabs.values()].some(t => t.engine === 'bowser' && t.sessionId !== sessionId)) throw new Error('Bowser is shared; close its Helm tab in the other thread first');
       const existing = [...this.tabs.values()].find(t => t.engine === 'bowser' && t.sessionId === sessionId);
@@ -905,6 +904,6 @@ export class BrowserManager {
 }
 
 /** A machine with no browser to start gets no browser note: it would only steer the agent to a tool that fails. */
-export function browserReady() { return !!(executable() || hasPlaywrightChromium() || bowserBin()); }
+export function browserReady() { return !!(process.env.HELM_WINDOW_CHROMIUM || executable() || hasPlaywrightChromium() || bowserBin()); }
 
 export function browserNote({ bowser = !!bowserBin() } = {}) { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, the owner uses external Chromium.${bowser ? ' Bowser Computer Use is installed: --engine bowser.' : ''} For an owner step, point with helm browser point; do not click. Never ask for passwords. Suggest helm browser profiles and helm browser logins "<profile>" to copy logins. Respect the request on signed-in sites.]`; }
