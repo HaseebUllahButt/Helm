@@ -68,7 +68,10 @@ test('Usage shows reported allowance, expired and missing reports, and model-spe
   // The allowance, its pace and what it is worth are one account row: the
   // weekly meter is drawn once, not again in a separate plan card.
   const accounts = page.getByRole('region',{name:'Accounts'});
-  await accounts.getByText('Runs out before the reset',{exact:true}).waitFor();
+  // 40% left at 60% per half week: it runs out in about 2d 8h, past 48h, so
+  // as a day and clock time.
+  const out = new Date(Date.now() + (2 * 24 + 8) * 3600000).toLocaleString(undefined, {weekday:'short'});
+  await accounts.getByText(new RegExp(`^Runs out ${out} \\d`)).waitFor();
   assert.equal(await accounts.getByText('$16.50',{exact:true}).count(),1);
   assert.equal(await accounts.getByRole('meter',{name:'claude work 7d remaining'}).count(),1);
   assert.equal(await page.getByRole('region',{name:'Plan value'}).count(),0);
@@ -183,7 +186,7 @@ test('one credential read on two machines is one row that keeps both report time
   assert.equal(await row.locator('.usage-account-name small').innerText(), '2m ago');
   assert.equal(await row.locator('.usage-account-name small').getAttribute('title'), 'Laptop 2m ago · VM 3h ago');
   // Pace is measured from the newer reading: 30% at half the week is 60%.
-  assert.equal(await row.locator('.usage-allowance').getAttribute('title'), 'Estimated weekly usage: 60%');
+  assert.equal(await row.locator('.usage-allowance').getAttribute('title'), 'At this pace: 60% used by the reset');
 });
 
 test('the same account on two machines is one row showing the newest reading of each allowance', async t => {

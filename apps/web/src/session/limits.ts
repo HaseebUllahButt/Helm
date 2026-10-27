@@ -49,15 +49,17 @@ export function rememberLimits(account: string, windows: LimitWindow[]) {
  */
 export function resetPhrase(resetsAt?: number, now = Date.now()) {
   if (!resetsAt) return '';
-  const at = resetsAt * 1000;
-  const left = at - now;
-  if (left <= 0) return 'resets now';
+  return resetsAt * 1000 <= now ? 'resets now' : `resets ${whenPhrase(resetsAt * 1000, now)}`;
+}
+
+/** "in 2h 3m, at 3:20 PM" or "Wed 3:00 AM" for a time still ahead, in milliseconds. */
+export function whenPhrase(at: number, now = Date.now()) {
   const when = new Date(at);
   const today = when.toDateString() === new Date(now).toDateString();
   const clock = when.toLocaleString(undefined, today ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-  const minutes = Math.round(left / 60_000);
-  if (minutes >= 48 * 60) return `resets ${clock}`;
+  const minutes = Math.round((at - now) / 60_000);
+  if (minutes >= 48 * 60) return clock;
   const d = Math.floor(minutes / 1440), h = Math.floor(minutes / 60) % 24, m = minutes % 60;
   const wait = d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
-  return `resets in ${wait}, ${today ? 'at ' : ''}${clock}`;
+  return `in ${wait}, ${today ? 'at ' : ''}${clock}`;
 }
