@@ -227,7 +227,9 @@ const DETAILS = {
     --wait --json    Wait for the result, then print it as JSON.
     --cwd <folder>   Run in another folder.
     --worktree       Use a separate project copy on a new helm/ branch.
-                     Merge the branch yourself, then remove the branch and copy.
+                     Merge the branch when you want the work.
+                     Never remove the copy: Helm removes it once merged,
+                     or after an hour of quiet, and keeps an unmerged branch.
     --mode --effort --timeout <ms>   Use options that the account supports.
   Helm closes helper software after 30 seconds without work.
   A follow-up message resumes the same chat.

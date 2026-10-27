@@ -14,10 +14,12 @@ process.env.HELM_NO_SERVICE = '1';
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
   version: 1,
-  profiles: [{ id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: [], env: {}, source: 'alias' }],
+  profiles: [{ id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: [], env: {}, source: 'alias' },
+    // Its sign-in check does not ask a real Claude, so a helper can start.
+    { id: 'helper', label: 'Helper', engine: 'claude', cmd: process.execPath, args: [], env: {}, source: 'custom' }],
 }));
 
-const { linkCheckout, worktreePlan, worktreeNote, keepReason } = await import('../packages/connect/src/chat-worktree.js');
+const { linkCheckout, worktreePlan, worktreeNote, keepReason, restoreChatWorktree } = await import('../packages/connect/src/chat-worktree.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { UNUSED_MS } = await import('../packages/connect/src/session-worktrees.js');
 const { EventLog } = await import('../packages/connect/src/events.js');
@@ -65,6 +67,10 @@ class FakeDriver extends EventEmitter {
   async start() { this.started = true; }
   async send(text) { this.sent = (this.sent ?? []).concat(text); }
   async kill() { this.killed = true; }
+  finish(turnId = this.engineSessionId) {
+    this.emit('event', { type: 'turn.done', turnId, status: 'ok' });
+    this.emit('event', { type: 'status', status: 'idle' });
+  }
 }
 
 let n = 0;
@@ -267,8 +273,78 @@ test('a chat quiet for an hour loses a worktree it never committed to', async ()
 
   const busy = await s.start({ cwd: dir, profileId: 'claudea' });
   git(busy.cwd, 'commit', '-q', '--allow-empty', '-m', 'mine');
-  assert.equal(await s.worktreeTidy(busy.id, s.get(busy.id).updatedAt + UNUSED_MS), false, 'unmerged commits keep it');
+  assert.equal(await s.worktreeTidy(busy.id), false, 'unmerged commits keep it while the chat is in use');
   await s.stop();
+});
+
+test('quiet for an hour with unmerged commits, the folder goes and the branch stays until merged', async () => {
+  const dir = repo();
+  const { sessions: s, drivers } = sessions();
+  const chat = await s.start({ cwd: dir, profileId: 'claudea' });
+  const w = () => s.get(chat.id).chatWorktree;
+  writeFileSync(join(chat.cwd, 'mine.txt'), 'only on the branch\n');
+  git(chat.cwd, 'add', 'mine.txt');
+  git(chat.cwd, 'commit', '-qm', 'mine');
+  const later = () => s.get(chat.id).updatedAt + UNUSED_MS;
+  writeFileSync(join(chat.cwd, '.gitignore'), 'node_modules/\n.env\ndist/\n*.db\n');
+  git(chat.cwd, 'commit', '-qam', 'ignore dist and databases');
+  // Files git ignores may be a local database made there.
+  writeFileSync(join(chat.cwd, 'local.db'), 'rows');
+  assert.equal(await s.worktreeTidy(chat.id, later()), false, 'an ignored file of its own keeps the folder');
+  rmSync(join(chat.cwd, 'local.db'));
+  mkdirSync(join(chat.cwd, 'dist'));
+  writeFileSync(join(chat.cwd, 'dist', 'app.js'), '');
+
+  assert.equal(await s.worktreeTidy(chat.id, later()), true, 'built output does not keep it');
+  assert.ok(!existsSync(chat.cwd), 'the folder is gone');
+  assert.equal(git(dir, 'rev-parse', '--verify', `refs/heads/${w().branch}`).length, 40, 'the branch keeps the work');
+  assert.equal(w().parked, true);
+  assert.equal(await s.worktreeTidy(chat.id, later()), false, 'an unmerged parked branch stays');
+
+  // Merged later: the branch goes too, and a message rebuilds from the base.
+  git(dir, 'merge', '-q', '--no-edit', w().branch);
+  assert.equal(await s.worktreeTidy(chat.id, later()), true);
+  assert.throws(() => git(dir, 'rev-parse', '--verify', `refs/heads/${w().branch}`), 'the merged branch is deleted');
+  assert.equal(w().parked, undefined);
+  await s.input(chat.id, 'carry on');
+  await until(() => drivers.length === 2);
+  assert.ok(existsSync(join(chat.cwd, 'mine.txt')));
+  await s.stop();
+});
+
+test('a helper started with --worktree gets the record a chat has: linked, tidied and rebuilt', async () => {
+  const dir = repo({ config: null });
+  const { sessions: s, drivers } = sessions();
+  const parent = await s.start({ cwd: dir, profileId: 'claudea' });
+  const { session } = await s.delegate({ id: parent.id, profileId: 'helper', task: 'Fix the login bug', worktree: true });
+  const w = () => s.get(session.id).chatWorktree;
+  assert.equal(w().branch, 'helm/fix-the-login-bug');
+  assert.equal(w().start, git(dir, 'rev-parse', 'HEAD'));
+  assert.deepEqual(s.get(session.id).delegation.worktree, { path: w().path, branch: w().branch, base: 'main', repo: w().repo });
+  assert.ok(existsSync(join(session.cwd, 'node_modules', 'dep')), 'packages are linked, not installed');
+  assert.match(worktreeNote(s.get(session.id)), /the chat that started you merges it.*Never remove this worktree/);
+
+  // The parent merges; the folder and branch go; a follow-up rebuilds them.
+  git(session.cwd, 'commit', '-q', '--allow-empty', '-m', 'fix');
+  git(dir, 'merge', '-q', '--no-edit', w().branch);
+  drivers.find((d) => d.cwd === session.cwd).finish(s.events.activeTurn(session.id).turnId);
+  await until(() => s.worktreeTidy(session.id));
+  assert.ok(!existsSync(session.cwd));
+  const before = drivers.length;
+  await s.input(session.id, 'one more thing');
+  await until(() => drivers.length > before);
+  assert.ok(existsSync(session.cwd), 'the helper works again instead of failing on a missing folder');
+  await s.stop();
+});
+
+test('a chat rebuilt after its branch and its base branch went starts from the current branch', async () => {
+  // An old helper made from its parent's branch, both merged and deleted since.
+  const dir = repo({ config: null });
+  const record = { repo: dir, path: `${dir}-old-helper`, branch: 'helm/old-helper', base: 'helm/parent-gone', start: null };
+  const rebuilt = await restoreChatWorktree(record);
+  assert.equal(rebuilt.base, 'main');
+  assert.equal(rebuilt.start, git(dir, 'rev-parse', 'HEAD'));
+  assert.equal(git(record.path, 'branch', '--show-current'), 'helm/old-helper');
 });
 
 test('a folder removed by hand comes back from its branch; deleting a chat keeps unmerged work', async () => {

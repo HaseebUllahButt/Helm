@@ -56,6 +56,14 @@ edited files in; with none, the Git sheet says so.
   a linked worktree, or the checkout Helm runs from. Only the branch is
   renamed after the chat; the folder keeps its `-chat-<id>` name because
   the CLI files its conversation under that path.
+- **End of a copy:** Helm removes the folder and branch once the branch is
+  merged. After an hour of quiet with commits not merged and nothing else in
+  the folder (ignored files count, built output does not), the folder goes
+  and the branch stays ("parked") until it is merged. A message rebuilds
+  the folder, from the current branch if the base is gone. A helper made
+  with `helm delegate --worktree` gets the same record; agents never remove
+  these copies by hand, because a helper whose folder was gone failed on
+  every message.
 - **Prove (driven 2026-10-20):** make `$W` as above with
   `{"worktrees":"per-chat","setup":"sleep 45"}` and a `node_modules/x`.
   `session.start` in `$W` returns a `cwd` of `$W-chat-<id>`; open it: the
@@ -67,7 +75,7 @@ edited files in; with none, the Git sheet says so.
   before removing a merged worktree; a rebuilt branch starts afresh. A
   Codex thread still open in its daemon keeps its folder: the native check
   joins it again within 2.5 s and rebuilds it, which looped every 3 s.
-- **Tests:** `test/chat-worktree`, `native-codex`.
+- **Tests:** `test/chat-worktree`, `native-codex`, `delegation`.
 
 ## CI / CD
 - **Not yet driven;** needs a GitHub repo and account. Merge needs an

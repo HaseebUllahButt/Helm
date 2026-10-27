@@ -5,7 +5,7 @@ import { ENGINES } from './engines.js';
 import { startPrefs, subagentPrefs } from './settings.js';
 import { codexHelperFork, delegationMode, delegationOutput, isWakeTurn, turnOf } from './delegation.js';
 import { nativeCodexSocket } from './drivers/codex.js';
-import { addWorktree } from './git.js';
+import { makeHelperWorktree } from './chat-worktree.js';
 import { authStatuses } from './auth.js';
 import { wire } from './session-wire.js';
 import { clip } from './session-text.js';
@@ -180,16 +180,17 @@ export class SessionDelegation {
     // Made after every check above, so a refused request leaves no checkout.
     let checkout = null;
     if (worktree) {
-      checkout = await addWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
+      checkout = await makeHelperWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
       folder = checkout.path;
     }
     const codexFork = !tour && codexHelperFork(parent, profiles.find(p => p.id === parent?.profileId), profile, folder, worktree,
       profile.engine === 'codex' ? nativeCodexSocket(profile) : null);
     const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent && !tour, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
       ...(codexFork ? { codexFork } : {}),
-      ...(checkout ? { worktree: checkout } : {}), ...(hidden && !parent ? { hidden: true } : {}) };
+      ...(checkout ? { worktree: { path: checkout.path, branch: checkout.branch, base: checkout.base, repo: checkout.repo } } : {}),
+      ...(hidden && !parent ? { hidden: true } : {}) };
     const child = await this.#sessions.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
-      title: clip(task.trim().split('\n')[0], 80), delegation });
+      title: clip(task.trim().split('\n')[0], 80), delegation, helperWorktree: checkout });
     if (parent && (parent.stopGeneration ?? 0) !== parentGeneration) {
       await this.#sessions.kill(child.id);
       throw new Error('the parent stopped before this task could start');
