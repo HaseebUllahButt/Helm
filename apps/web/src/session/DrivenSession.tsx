@@ -41,10 +41,8 @@ import { LimitsLine } from './LimitsLine';
 import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { useChatKeys } from './chatKeys';
-import { BrowserDock, useBrowserDock } from './BrowserDock';
 import { Canvas, chatPages, useCanvas } from './Canvas';
 import { CanvasContext } from './VisualReply';
-import { useExclusiveDocks } from './SideDock';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
 
 const ENGINE_LABEL: Record<string, string> = {
@@ -132,10 +130,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [sentFirst, setSentFirst] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [details, setDetails] = useState<DetailsTab | null>(reviewChildren ? 'agents' : null);
-  const browser = useBrowserDock(client, env, session);
-  // The canvas and the browser panel share the column beside the chat: one at a time.
   const canvas = useCanvas(client, env, session, !session.brain);
-  useExclusiveDocks(canvas, browser);
   const canvasVisuals = useMemo(() => session.brain ? undefined : { shown: canvas.open ? canvas.visual?.ref : undefined, show: canvas.showVisual },
     [session.brain, canvas.open, canvas.visual?.ref, canvas.showVisual]);
   useEffect(() => { if (reviewChildren) setDetails('agents'); }, [reviewChildren]);
@@ -765,8 +760,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents"
           onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
         {!session.brain && <button className="iconbtn" title="Open canvas: notes and documents (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
-          onClick={() => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); }}><Icon name="canvas" size={17} /></button>}
-        <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={() => { if (!browser.open) canvas.setOpen(false); browser.toggle(); }}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
+          onClick={canvas.toggle}><Icon name="canvas" size={17} /></button>}
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -886,11 +880,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         </div>}
       </LiveComposer>
 
-      {canvas.open && !session.brain
-        ? <Canvas client={client} env={env} cwd={canvasCwd} changed={canvasCwd === gitCwd ? changedPaths : []} path={canvas.path} onPath={canvas.setPath}
+      {canvas.open && !session.brain && <Canvas client={client} env={env} cwd={canvasCwd} changed={canvasCwd === gitCwd ? changedPaths : []} path={canvas.path} onPath={canvas.setPath}
           visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)}
-          pages={chatPages(log.turns.flatMap((turn) => turn.items.map((item) => item.visual && { visual: item.visual, at: item.startedAt })))} />
-        : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
+          pages={chatPages(log.turns.flatMap((turn) => turn.items.map((item) => item.visual && { visual: item.visual, at: item.startedAt })))} />}
       {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}

@@ -53,7 +53,7 @@ before(async () => {
     createRoot(document.getElementById('root')).render(<Chat/>);
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   script = bundle.outputFiles[0].text;
-  css = (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') + await readFile('apps/web/src/session/browser.css', 'utf8');
+  css = (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') + await readFile('apps/web/src/session/side-dock.css', 'utf8');
   browser = await chromium.launch({ headless: true, ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
 });
 after(async () => { await browser?.close(); rmSync(process.env.HELM_DIR, { recursive: true, force: true }); });

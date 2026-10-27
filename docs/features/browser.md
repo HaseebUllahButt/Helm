@@ -1,23 +1,27 @@
 # Browser for chats
 
-Each chat has its own browser: a real Chromium window beside Helm on a
-machine with a screen, hidden on the VM. Helm's panel is only a remote.
+Each chat has its own browser. On a machine with a screen, the owner uses
+an external Chromium window. The VM uses hidden Chromium for agent commands.
+Helm has no browser panel, Browser button, or browser shortcut.
 Design: [`docs/browser-use.md`](../browser-use.md).
 
-## Open the browser panel
-- **Reach:** chat header **Browser**, or Ctrl/⌘+Shift+B. Computers only: a
-  phone has no way in, on purpose (the owner does not watch the browser from
-  the phone).
-- **Prove (panel driven 2026-10-15, tabs not yet driven):**
-  `$V click Browser; $V text` shows "No tabs yet. Agents on verify-<you>
-  browse here…" (the phone-size browser is not a touch screen).
-- **Traps:** do not open tabs from the private copy on the laptop: a tab may
-  open a real Chromium window on the owner's screen. On niri the window
-  needs the `helm-browser` window rule.
-- **Tests:** `test/agent-browser`, `browser-window`, `browser-smarts` (each
-  also under `test/browser/`).
+## Open the external browser
 
-## Logins, Show me, saved flows
-- **Not yet driven;** Logins reads real browser profiles.
-- **Tests:** `test/browser-logins`, `test/browser/browser-logins`,
-  `test/agent-browser`, `browser-smarts`.
+- **Reach:** Run `helm browser open <url>` in a chat. Use `--session <chat-id>`
+  outside a chat. Run `helm browser tabs` to list tabs.
+- **Prove:** In a private Helm, open a chat with the fake agent. Check the
+  header at phone and desktop sizes. Open a local test page with the CLI.
+  Check that Helm keeps the chat visible and sends no browser requests.
+  Use `tabs`, `look`, `act`, `point`, `screenshot`, and `close` on that tab.
+- **Traps:** Do not open private test tabs on the owner's screen. Use hidden
+  Chromium for tests. On niri, the external window needs the `helm-browser`
+  window rule. A machine without a screen cannot show the owner a window.
+- **Tests:** `test/agent-browser`, `browser-window`, `browser-smarts`,
+  `test/browser/agent-browser`, and `test/browser/browser-smarts`.
+
+## Logins and saved flows
+
+- **Reach:** Run `helm browser profiles`, then `helm browser logins "<profile>"`.
+  Add `--default` to use those logins for new chats.
+- **Not driven:** Copying real browser logins needs the owner's profiles.
+- **Tests:** `test/browser-logins`, `test/agent-browser`, and `test/browser-smarts`.

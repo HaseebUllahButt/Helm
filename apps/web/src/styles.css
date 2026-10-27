@@ -1,5 +1,5 @@
 @import '@xterm/xterm/css/xterm.css';
-@import './session/browser.css';
+@import './session/side-dock.css';
 
 /* Saved visual replies: controls belong to Helm; the page stays isolated. */
 .visual-reply { position: relative; margin: 12px 0; border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; background: var(--bg); }
@@ -1147,9 +1147,6 @@ pre.snippet {
 .termkeys button:active { background: var(--accent); }
 .termkeys button[aria-pressed="true"] { background: var(--primary); border-color: transparent; color: #fff; }
 @media (pointer: fine) { .termkeys { display: none; } }
-/* The chat's browser is a window on the agent's machine; a phone has no
-   use for its remote, so the header button stays on computers. */
-@media (pointer: coarse) { .browser-launch { display: none; } }
 .selection-copied {
   position: fixed; left: 0; right: 0; margin: 0 auto; width: fit-content;
   bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 80; pointer-events: none;
@@ -3742,7 +3739,7 @@ details.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
 
 /* ------------------------------------------------------------------ canvas */
 
-/* Notes and docs beside the chat (session/Canvas.tsx), in the browser's column. */
+/* Notes and docs beside the chat (session/Canvas.tsx). */
 .canvas-pad { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px 24px; }
 .canvas-head { display: flex; align-items: center; gap: 6px; min-height: 40px; margin: 0 -6px 8px 0; }
 .canvas-head > .iconbtn:first-child { margin-left: -8px; }

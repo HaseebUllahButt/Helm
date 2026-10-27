@@ -1,8 +1,8 @@
 # Browser use
 
 Each chat has its own browser, run with Playwright on the chat's machine.
-It controls web pages only, not desktop apps. Open it with a chat's
-**Browser** button or Ctrl/⌘+Shift+B.
+It controls web pages. Open a tab with `helm browser open <url>`.
+The owner uses the external Chromium window. Helm has no browser panel.
 
 ## Decisions
 
@@ -14,8 +14,8 @@ It controls web pages only, not desktop apps. Open it with a chat's
   chat's browser is a real Chromium window with its own profile folder (a
   new chat starts with the default profile's logins). The agent drives it
   from inside Chromium, never through the desktop, so it never takes the
-  owner's keyboard or mouse. The Helm panel is only a remote; nothing is
-  streamed. A machine without a screen (the VM) uses a hidden Chromium,
+  owner's keyboard or mouse. Helm does not show or stream the page.
+  A machine without a screen (the VM) uses a hidden Chromium,
   which is never started where windows can show.
 - **Owner and agent share the window.** When the owner clicks, types or
   scrolls, the agent's next step waits until they are still for 2.5 s (at
@@ -49,18 +49,18 @@ It controls web pages only, not desktop apps. Open it with a chat's
 - Saved flows are kept only when every step succeeds, in 0600 files at
   `~/.helm/browser/flows/<name>.json`. Use names or selectors in flows, not
   element numbers: numbers change between visits.
-- Downloads over 8 MiB (up to 128 MiB) stay on the machine only while the
-  tab is open; closing the tab removes them.
+- Downloads stay on the machine while the tab is open. Closing the tab
+  removes them. Each file can hold up to 128 MiB.
 
 ## Logins
 
-**Logins** in the panel copies only cookies from a Chromium, Chrome, Brave,
-Edge or Vivaldi profile on the chat's machine (`helm browser profiles`,
-`helm browser logins "<profile>" [--default]`). The machine default stores
+`helm browser profiles` lists browser profiles on the chat's machine.
+`helm browser logins "<profile>" [--default]` copies cookies from a
+Chromium, Chrome, Brave, Edge or Vivaldi profile. The machine default stores
 only the profile name; cookies live only in each chat's private storage.
 
 - Sites that also need local storage or device-bound keys may still ask to
-  sign in through the viewer.
+  sign in through the external Chromium window.
 - Linux reads basic, libsecret and KWallet keys; unlock the keyring if
   copying fails. macOS keychain is best effort. Windows app-bound encrypted
   logins cannot be imported.

@@ -14,9 +14,7 @@ import { nativeConversation } from './nativeView';
 import { CompactionLine } from './Transcript';
 import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
 import { useChatKeys } from './chatKeys';
-import { BrowserDock, useBrowserDock } from './BrowserDock';
 import { Canvas, chatPages, useCanvas } from './Canvas';
-import { useExclusiveDocks } from './SideDock';
 import { prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
 import { loadDraft, saveDraft } from '../draftStore';
@@ -71,10 +69,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const [details, setDetails] = useState<DetailsTab | null>(null);
   const team = useThreadTeam(client, env.id, session.id);
   const agentCount = team.length + (session.nativeCards?.length ?? 0);
-  const browser = useBrowserDock(client, env, session, !isShell);
-  // The canvas and the browser panel share the column beside the chat: one at a time.
   const canvas = useCanvas(client, env, session, !isShell);
-  useExclusiveDocks(canvas, browser);
   const canvasVisuals = useMemo(() => isShell ? undefined : { shown: canvas.open ? canvas.visual?.ref : undefined, show: canvas.showVisual },
     [isShell, canvas.open, canvas.visual?.ref, canvas.showVisual]);
   const [status, setStatus] = useState(session.status);
@@ -433,8 +428,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
           onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         {!isShell && <button className="iconbtn" title="Open canvas: notes and documents (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
-          onClick={() => { if (!canvas.open) browser.setOpen(false); canvas.toggle(); }}><Icon name="canvas" size={17} /></button>}
-        {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={() => { if (!browser.open) canvas.setOpen(false); browser.toggle(); }}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
+          onClick={canvas.toggle}><Icon name="canvas" size={17} /></button>}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'Show chat' : 'Show terminal'} aria-label={raw ? 'Show chat' : 'Show terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
@@ -477,11 +471,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       {details && <ThreadDetails client={client} env={env} session={session} tab={details} nativeOnly={!session.nativeChat}
         git={git.status} gitCwd={session.quick ? '' : session.cwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
-      {!isShell && (canvas.open
-        ? <Canvas client={client} env={env} cwd={session.quick ? '' : session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}
+      {!isShell && canvas.open && <Canvas client={client} env={env} cwd={session.quick ? '' : session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}
           visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)}
-          pages={chatPages((messages ?? []).map((m) => m.visual && { visual: m.visual, at: typeof m.at === 'number' ? m.at : Date.parse(m.at ?? '') }))} />
-        : browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />)}
+          pages={chatPages((messages ?? []).map((m) => m.visual && { visual: m.visual, at: typeof m.at === 'number' ? m.at : Date.parse(m.at ?? '') }))} />}
 
       {/* Every open terminal on this machine, one tap apart. */}
       {isShell && terminals.length > 1 && (
