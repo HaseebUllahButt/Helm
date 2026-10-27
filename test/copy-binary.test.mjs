@@ -85,7 +85,7 @@ async function transfer(t, { sourceBinary = true, targetBinary = true, oldTarget
     await new Promise(resolve => server.close(resolve));
     await new Promise(resolve => layer.wss.close(resolve));
   });
-  const payload = randomBytes(2 * 1024 * 1024 + 173), input = new PassThrough(), output = [];
+  const payload = Buffer.concat([Buffer.from('rsync\0.\0/tmp/fixture-copy/\0\0'), randomBytes(2 * 1024 * 1024 + 173)]), input = new PassThrough(), output = [];
   input.end(payload);
   const notices = [];
   const result = await copyProxy(['--machine', 'bb22', '--target-folder', '/tmp/fixture-copy', direct ? '--direct' : '--relay', '--', 'bb22', 'rsync', '--server', '-slogDtpre.iLsfxCIvu'], {

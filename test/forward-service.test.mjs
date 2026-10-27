@@ -326,3 +326,21 @@ async function fakeMachine(id) {
   return ws;
 }
 
+
+
+test('changing a forward destination replaces its listener', async t => {
+  const opened = [], closed = [];
+  const f = make({ start: async (_net, options) => {
+    opened.push(options);
+    return { port: 45678, close: async () => { closed.push(options.port); } };
+  } });
+  t.after(() => f.stop());
+  const id = 'eeeeeeee';
+  await f.add({ id, side: 'in', peer: SOURCE, port: APP, localPort: 45678 });
+  await f.add({ id, side: 'in', peer: SOURCE, port: APP + 1, localPort: 45678 });
+  assert.deepEqual(opened.map(x => x.port), [APP, APP + 1]);
+  assert.deepEqual(closed, [APP]);
+  await f.add({ id, side: 'out', peer: SOURCE, port: APP });
+  assert.deepEqual(closed, [APP, APP + 1], 'an outgoing half has no local listener');
+  await f.remove(id);
+});

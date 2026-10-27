@@ -47,7 +47,10 @@ export function addShare({ name, port, password, keep, ttlMs, private: members, 
   if (!picked) throw new Error(`a link name is ${NAME_RULE}`);
   if (members && password) throw new Error('a private link opens only for your own Helm devices; it takes no password');
   const now = Date.now();
-  const length = Number(ttlMs) > 0 ? Number(ttlMs) : DEFAULT_TTL_MS;
+  const length = ttlMs == null ? DEFAULT_TTL_MS : Number(ttlMs);
+  if (!(length > 0) || !Number.isFinite(new Date(now + length).getTime())) {
+    throw new Error('Enter a valid link duration. Use --keep for a link with no end time.');
+  }
   const share = {
     name: picked, port: wanted, createdAt: now,
     ...(keep ? {} : { expiresAt: now + length }),
@@ -79,3 +82,19 @@ export function removeChatShares(chat) {
 
 /** What a client may see: never the hash itself. */
 export const publicShare = ({ lock, ...s }) => ({ ...s, password: !!lock });
+
+
+/** Check other current machines before the app creates a named link. */
+export async function assertShareNameAvailable(name, network, listRemote, presence) {
+  const wanted = shareName(name);
+  if (!wanted) return;
+  const peers = Object.values(network?.machines ?? {})
+    .filter(machine => machine.id !== network.self && !network.revoked?.[machine.id] && presence?.[machine.id]?.online !== false);
+  const clashes = await Promise.all(peers.map(async machine => {
+    try {
+      const { shares = [] } = await listRemote(machine.id);
+      return shares.some(share => share.name === wanted);
+    } catch { return false; } // an offline machine cannot reserve a new public name
+  }));
+  if (clashes.some(Boolean)) throw new Error('Another machine uses this link name. Choose another name.');
+}

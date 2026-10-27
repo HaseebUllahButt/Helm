@@ -93,40 +93,99 @@ function withoutOurCookie(header) {
   return kept.length ? kept.join('; ') : null;
 }
 
-const clientIp = (req) => String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '';
+function clientIp(req) {
+  const address = req.socket.remoteAddress || '';
+  // Only the local HTTPS proxy may report a visitor's address. Take its
+  // last entry, never an entry a visitor put before it.
+  if (['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address)) {
+    return String(req.headers['x-forwarded-for'] || '').split(',').at(-1).trim() || address;
+  }
+  return address;
+}
 
-function readForm(req, limit = 4096) {
+export function readForm(req, limit = 4096) {
   return new Promise((resolve, reject) => {
-    let body = '';
+    let body = '', bytes = 0, finished = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      req.off('data', data); req.off('end', end); req.off('error', fail); req.off('aborted', aborted);
+    };
+    const fail = (error) => {
+      if (finished) return;
+      finished = true; cleanup(); req.destroy(); reject(error);
+    };
+    const data = chunk => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > limit) { fail(new Error('The request is too large.')); return; }
+      body += chunk;
+    };
+    const end = () => { finished = true; cleanup(); resolve(new URLSearchParams(body)); };
+    const aborted = () => fail(new Error('The request stopped.'));
+    const timer = setTimeout(() => fail(new Error('The request took too long.')), 10_000);
+    timer.unref?.();
     req.setEncoding('utf8');
-    req.on('data', (c) => { body += c; if (body.length > limit) { reject(new Error('too large')); req.destroy(); } });
-    req.on('end', () => resolve(new URLSearchParams(body)));
-    req.on('error', reject);
+    req.on('data', data); req.once('end', end); req.once('error', fail); req.once('aborted', aborted);
   });
 }
 
 export function createShareRoute({ online, callEnv, openTcp }) {
-  let cache = { at: 0, map: new Map() };
+  let cache = { map: new Map() };
+  const sources = new Map();
+  let sequence = 0, nextDiscoveryAt = 0;
   let loading = null;
+  const checking = new Map();
   const misses = new Map();
   const tries = new Map(); // ip|name -> { n, until }
   let sweepTriesAt = 0;
 
-  const refresh = () => (loading ??= (async () => {
+  function rebuild() {
     const map = new Map();
-    await Promise.all([...online.keys()].map(async (env) => {
-      try {
-        // `members`: this hub keeps private links private, so it may see them.
-        const { shares } = await callEnv(env, 'share.list', { forHub: true, members: true }, { timeout: 4000 });
-        for (const s of shares ?? []) {
-          if (s.expiresAt != null && !(s.expiresAt > Date.now())) continue;
-          if (!map.has(s.name)) map.set(s.name, { ...s, env });
-        }
-      } catch { /* an older daemon, or one that is going away */ }
-    }));
-    cache = { at: Date.now(), map };
+    for (const [env, source] of sources) for (const s of source.shares) {
+      if (s.expiresAt != null && !(s.expiresAt > Date.now())) continue;
+      const before = map.get(s.name);
+      if (before) map.set(s.name, { ...before, conflict: true });
+      else map.set(s.name, { ...s, env, checkedAt: source.at });
+    }
+    cache = { map };
+  }
+
+  async function readSource(env, apply = true) {
+    const order = ++sequence, at = Date.now();
+    let shares = [];
+    try {
+      const answer = await callEnv(env, 'share.list', { forHub: true, members: true }, { timeout: 4000 });
+      if (Array.isArray(answer?.shares)) shares = answer.shares;
+    } catch { /* no current access decision: refuse until the source answers */ }
+    const source = { env, shares, at, order };
+    if (apply) { acceptSource(source); rebuild(); }
+    return source;
+  }
+
+  function acceptSource({ env, ...source }) {
+    if ((sources.get(env)?.order ?? 0) < source.order) sources.set(env, source);
+  }
+
+  // Public unknown names share one discovery per second. A new link waits
+  // for that discovery on its first visit instead of getting a false 404.
+  const refresh = () => (loading ??= (async () => {
+    const wait = nextDiscoveryAt - Date.now();
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    nextDiscoveryAt = Date.now() + 1000;
+    for (const env of sources.keys()) if (!online.has(env)) sources.delete(env);
+    const answers = await Promise.all([...online.keys()].map(env => readSource(env, false)));
+    for (const answer of answers) acceptSource(answer);
+    rebuild();
     for (const [name, at] of misses) if (cache.map.has(name) || Date.now() - at >= MISS_MS) misses.delete(name);
   })().finally(() => { loading = null; }));
+
+  // Refresh a known link only at its source. A slow unrelated machine
+  // must not delay this app's access check. Join simultaneous checks.
+  function refreshSource(env) {
+    if (checking.has(env)) return checking.get(env);
+    const work = readSource(env).finally(() => checking.delete(env));
+    checking.set(env, work);
+    return work;
+  }
 
   async function lookup(name) {
     const now = Date.now();
@@ -134,25 +193,28 @@ export function createShareRoute({ online, callEnv, openTcp }) {
       for (const [key, attempt] of tries) if (attempt.until <= now) tries.delete(key);
       sweepTriesAt = now + 60_000;
     }
-    const age = Date.now() - cache.at;
     // A warm HTTP tunnel can outlive its share. Check expiry here too:
     // pooling means there may be no new port-open check on the machine.
     const known = cache.map.get(name);
     if (known?.expiresAt != null && !(known.expiresAt > Date.now())) cache.map.delete(name);
-    // A known name is answered from memory and checked again behind the
-    // request: asking every machine costs a round trip, which on a slow link
-    // was most of a page load. A stopped share can be served once more from
-    // memory - and then its machine refuses the tunnel anyway.
+    // A warm tunnel can still reach a stopped or newly protected app.
+    // Once this access decision expires, refresh it before serving bytes.
     if (cache.map.has(name)) {
-      if (age > CACHE_MS) refresh().catch(() => {});
-      return cache.map.get(name);
+      if (Date.now() - known.checkedAt > CACHE_MS) {
+        if (known.conflict) await refresh();
+        else {
+          await refreshSource(known.env);
+          void refresh().catch(() => {});
+        }
+      }
+      return cache.map.get(name) ?? null;
     }
     // Check a new name on its first visit even if another link just warmed
     // the cache. Otherwise freshly created spins fail once with a 404.
     if (Date.now() - (misses.get(name) ?? 0) < MISS_MS) return null;
     await refresh();
     const share = cache.map.get(name) ?? null;
-    if (!share) misses.set(name, Date.now());
+    if (!share && misses.size < 1024) misses.set(name, Date.now());
     return share;
   }
 
@@ -332,11 +394,13 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     if (seen && seen.until > now && seen.n >= 8) {
       return signIn(res, share.name, '/', 'Wait a few minutes before trying again.', 429);
     }
+    // Reserve the attempt before reading a body: parallel or unfinished
+    // requests must not all reuse the same old count.
+    tries.set(key, { n: (seen && seen.until > now ? seen.n : 0) + 1, until: now + 10 * 60_000 });
     let form;
     try { form = await readForm(req); } catch { return signIn(res, share.name, '/', 'The request did not arrive. Try again.', 400); }
     const safeNext = safeSharePath(form.get('next'));
     if (!checkSharePassword(form.get('password') || '', share.lock)) {
-      tries.set(key, { n: (seen && seen.until > now ? seen.n : 0) + 1, until: now + 10 * 60_000 });
       return signIn(res, share.name, safeNext, 'The password is incorrect.');
     }
     tries.delete(key);
@@ -360,6 +424,10 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     const share = await lookup(name);
     if (!share) {
       page(res, 404, 'Link not found', `<h1>No link called “${esc(name)}”</h1><p>Check that the computer is online and still shares this link.</p>`);
+      return true;
+    }
+    if (share.conflict) {
+      page(res, 409, 'Link name in use', '<h1>Two machines use this link name</h1><p>Stop one link or give it another name, then try again.</p>');
       return true;
     }
     const path = req.url || '/';
@@ -420,6 +488,7 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     const refuse = (code, text) => { socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`); socket.destroy(); };
     const share = await lookup(name);
     if (!share) { refuse(404, 'Not Found'); return true; }
+    if (share.conflict) { refuse(409, 'Conflict'); return true; }
     if (!unlocked(req, share, base)) { refuse(401, 'Unauthorized'); return true; }
     let stream;
     try { stream = await openTcp(share.env, share.port); }
@@ -444,7 +513,8 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
   async function ask(req, res) {
     const domain = new URL(req.url, 'http://localhost').searchParams.get('domain') || '';
     const name = nameFor({ headers: { host: domain } });
-    const ok = !!name && !!(await lookup(name));
+    const share = name ? await lookup(name) : null;
+    const ok = !!share && !share.conflict;
     res.writeHead(ok ? 200 : 404, { 'content-type': 'text/plain' });
     res.end(ok ? 'ok' : 'no');
   }

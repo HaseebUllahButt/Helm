@@ -40,7 +40,7 @@ import { allowDirectSignal } from './direct-auth.js';
 import { lanAddresses } from './net-addr.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
-import { listShares, addShare, removeShare, removeChatShares, publicShare } from './shares.js';
+import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
 import { Forwards, forwardedPorts } from './forwards.js';
 import { ownerSeenAt } from '@helm/protocol/owner-seen';
 import { publicHosts } from '@helm/protocol/share';
@@ -1771,11 +1771,14 @@ export class Daemon {
         // an older hub would not know the flag and serve it to anyone.
         if (p.forHub && !caller) return { shares: p.members ? shares : shares.filter((s) => !s.private) };
         // `features` tells the app and CLI this machine can make private links.
-        return { shares: shares.map(this.#shareView), features: ['private'] };
+        return { shares: shares.map(this.#shareView), features: ['private', 'name-check'] };
       }
       case M.SHARE_ADD: {
         const taken = (p.replace ? [] : listShares()).find((x) => x.name === String(p.name ?? '').toLowerCase());
         if (taken) throw new Error(`"${taken.name}" is already shared from here (port ${taken.port}); use replace`);
+        const shareNetwork = loadNetwork() ?? this.net;
+        await assertShareNameAvailable(p.name, shareNetwork, env =>
+          hubRpc(shareNetwork, env, M.SHARE_LIST, {}, { timeout: 4000, budget: 5000 }), this.sendPresence());
         await checkSharePort(Number(p.port));
         return { share: this.#shareView(addShare(p)) };
       }

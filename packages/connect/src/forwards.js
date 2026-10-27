@@ -151,7 +151,8 @@ export class Forwards {
       write(data);
       if (side === 'in') {
         const held = this.#listeners.get(forward.id);
-        if (held?.fwd && held.localPort === forward.localPort) {
+        if (held?.fwd && held.localPort === forward.localPort
+          && before?.side === 'in' && before.peer === forward.peer && before.port === forward.port) {
           // The same forward again: keep the listener, take the new end time.
         } else {
           await this.#close(forward.id);
@@ -163,6 +164,8 @@ export class Forwards {
             throw new Error(l.error);
           }
         }
+      } else {
+        await this.#close(forward.id);
       }
       this.#schedule();
       return this.#view(read().forwards.find((f) => f.id === forward.id) ?? forward);

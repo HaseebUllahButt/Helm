@@ -1675,8 +1675,11 @@ async function shareCmd() {
   if (password === true) password = shareLib.randomShareName() + shareLib.randomShareName();
   const name = strFlag('name');
   if (name && !shareLib.shareName(name)) die(`Use ${shareLib.NAME_RULE} for the link name.`);
-  // A name is the whole address, so it must be free across the network.
-  if (name) {
+  // New remote daemons check names themselves. Local writes and older
+  // daemons still need this check; do not repeat a slow network lookup.
+  const remoteNameCheck = name && target !== net.self
+    && (await hubRpc(net, target, M.SHARE_LIST, {}, { timeout: 4000, budget: 5000 })).features?.includes('name-check');
+  if (name && !remoteNameCheck) {
     const others = Object.values(net.machines).filter((m) => m.id !== target && !net.revoked?.[m.id]);
     const clash = (await Promise.all(others.map((m) => hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 4000, budget: 5000 })
       .then(({ shares }) => shares.some((x) => x.name === name.toLowerCase()) ? m.name : null).catch(() => null)))).find(Boolean);
