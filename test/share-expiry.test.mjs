@@ -8,7 +8,7 @@ import { join } from 'node:path';
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-shares-'));
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 
-const { addShare, listShares, removeShare, removeChatShares, DEFAULT_TTL_MS } = await import('../packages/connect/src/shares.js');
+const { addShare, listShares, removeShare, removeChatShares, DEFAULT_TTL_MS, assertShareNameAvailable } = await import('../packages/connect/src/shares.js');
 
 test('a new share ends after 3 hours by default', () => {
   const s = addShare({ name: 'spin-default', port: 3000 });
@@ -42,4 +42,29 @@ test('deleting a chat stops the short links it made, never a kept one or another
   assert.deepEqual(listShares().map((x) => x.name).filter((n) => n.startsWith('spin-')).sort(), ['spin-kept-mine', 'spin-owner', 'spin-theirs']);
   assert.deepEqual(removeChatShares('chat-a'), []);
   for (const name of ['spin-kept-mine', 'spin-theirs', 'spin-owner']) removeShare(name);
+});
+
+
+test('a non-finite lifetime cannot silently create a kept public link', () => {
+  for (const ttlMs of [Infinity, 'Infinity', '1e999', NaN, 'wrong', -1, 0, 1e20]) {
+    assert.throws(() => addShare({ name: 'spin-invalid-time', port: 3000, ttlMs }), /valid link duration/);
+    assert.ok(!listShares().some(s => s.name === 'spin-invalid-time'));
+  }
+});
+
+
+test('a named Spin cannot take a name used by another current machine', async () => {
+  const network = { self: 'a', machines: { a: { id: 'a' }, b: { id: 'b' }, c: { id: 'c' } }, revoked: { c: true } };
+  const asked = [];
+  await assert.rejects(assertShareNameAvailable('Taken', network, async id => {
+    asked.push(id); return { shares: [{ name: 'taken' }] };
+  }), /Another machine uses this link name/);
+  assert.deepEqual(asked, ['b']);
+  await assertShareNameAvailable('new', network, async () => ({ shares: [{ name: 'taken' }] }));
+});
+
+
+test('named Spin creation skips known offline machines without a network wait', async () => {
+  const network = { self: 'a', machines: { a: { id: 'a' }, b: { id: 'b' } } };
+  await assertShareNameAvailable('new', network, () => assert.fail('offline machine was asked'), { b: { online: false } });
 });

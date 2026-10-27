@@ -10,7 +10,7 @@ for websites that cannot run inside a frame.
 - **Prove:** start a test app on port 5173, then:
   ```sh
   $V rpc share.add '{"port":5173,"name":"mytest"}'   # "url": null here
-  $V key Control+Shift+s; $V click "Public links"; $V text
+  $V key Control+Shift+s; $V click "Spins"; $V text
   $V click Stop; $V rpc share.list                    # "shares": []
   ```
 - **Proof:** "mytest · port 5173 · open to anyone with the link · ends in 2h
@@ -23,7 +23,7 @@ for websites that cannot run inside a frame.
   A link made from a chat (`HELM_SESSION_ID`) on its own machine notes that
   chat; deleting the chat stops it. Kept links never belong to a chat.
 - **Tests:** `test/share-links`, `share-private`, `share-expiry`,
-  `share-flow`, `tunnel-flow`, `tunnel-ports`, `caddy`, `proxy`;
+  `share-flow`, `share-recovery`, `share-input`, `tunnel-flow`, `tunnel-ports`, `caddy`, `proxy`;
   `test/browser/private-links`.
 
 ## Private links
@@ -38,6 +38,19 @@ for websites that cannot run inside a frame.
   destination across that change and reloads, and carry it when opening
   local Helm. A newly created name must refresh the hub's share list even
   when another spin just warmed its cache.
+- **Access checks:** a known link keeps its decision for at most five seconds.
+  The next request checks the source machine before it uses an old tunnel.
+  A slow unrelated machine does not delay that check. Old discovery replies
+  cannot replace newer source replies. Unknown names share one discovery per
+  second; a new name can wait up to one second on its first visit.
+- **Names:** app and CLI creation check other online machines. Offline
+  machines do not reserve names. If two machines later report the same name,
+  the hub refuses both links with a clear conflict page. Warm links find a
+  later conflict through background discovery. This is not a central name
+  reservation, so simultaneous creates can still conflict.
+- **Sign-in traffic:** form bodies have a 4 KiB byte limit and a ten-second
+  deadline. Attempts count before the body arrives. Only the local HTTPS
+  proxy can supply a visitor address. These checks do not stop network floods.
 - **App hosts:** Helm sends `Host: localhost:<port>` for HTTP and
   WebSockets. The link host goes nowhere else: X-Forwarded-Host, Forwarded
   and similar headers are dropped, and Origin/Referer on the link become

@@ -11,7 +11,7 @@ test('copy receiver takes absolute and home destinations and only receiving rsyn
   assert.equal(cleanCopyFolder('~/dev/x'), '~/dev/x');
   for (const folder of ['relative', '/tmp/x\ncommand']) assert.throws(() => cleanCopyFolder(folder));
   assert.deepEqual(validateCopyServerArgs(['--server', '-slogDtpre.iLsfxCIvu']), ['--server', '-slogDtpre.iLsfxCIvu']);
-  for (const args of [['--sender', '-s'], ['--server', '-s', '/tmp'], ['--server', '-s;sh'], ['--server', '--daemon']]) {
+  for (const args of [['--sender', '-s'], ['--server', '-s', '/tmp'], ['--server', '-s;sh'], ['--server', '--daemon'], ['--server', '-sKlogDtpre.iLsfxCIvu'], ['--server', '-sLb'], ['--server', '-sb']]) {
     assert.throws(() => validateCopyServerArgs(args));
   }
 });

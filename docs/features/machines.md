@@ -51,8 +51,14 @@ owner's home or network to bypass this check.
 - **Traps:** if exec says the command may have started, never rerun it;
   read it with `exec-status`. Output keeps only the last 256 KB for an hour.
   `helm copy` needs rsync 3.2.3+ on both ends; a break resumes on rerun.
+  With protected arguments, rsync receives its folder and options inside
+  the byte stream. Check those before passing them to rsync, and bind the
+  folder to the signed request. A Send must also match its approved stage.
+  Plain copy still permits the sender to choose an absolute destination;
+  this check is not a general file sandbox. Unsupported options fail with
+  no retry, so a newer rsync needs a reviewed allowlist change.
 - **Tests:** `test/execution`, `execution-rpc`, `copy`,
-  `copy-transport`, `bulk-transfer`.
+  `copy-transport`, `copy-arguments`, `copy-binary`, `bulk-transfer`.
 
 ## Saved CLI conversations and Take over
 - **Rules:** a saved Claude, Codex, OpenCode or Pi conversation opens with

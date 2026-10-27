@@ -8,6 +8,7 @@ import { homedir } from 'node:os';
 import { T } from '@helm/protocol';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { codeKeyInfo, signHandoffDigest, verifyHandoffSignature } from './code-transfer.js';
+import { CopyArguments } from './copy-arguments.js';
 import { SendReceiver } from './send-receiver.js';
 import { TunnelSender, TunnelReceiver, TUNNEL_WINDOW, COPY_WINDOW } from './tunnel-flow.js';
 
@@ -15,7 +16,7 @@ const MACHINE_ID = /^[a-f0-9]{1,64}$/;
 const COPY_ID = /^[a-f0-9]{24}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const B64URL = /^[A-Za-z0-9_-]+$/;
-const SERVER_FLAGS = /^-s[A-Za-z.]{0,126}$/;
+const SERVER_FLAGS = /^-s[logDtprRznv]*(?:e\.[A-Za-z]{1,100})?$/;
 const MAX_REQUEST = 8 * 1024;
 const MAX_FOLDER = 1024;
 const MAX_STREAMS = 8;
@@ -300,6 +301,7 @@ export class CopyReceiver {
       window: copyWindow(request.window),
       cipher,
       child,
+      input: new CopyArguments(request.targetFolder),
       release: beginTransferActivity(),
       sender: null,
       receiver: null,
@@ -347,8 +349,10 @@ export class CopyReceiver {
     }
     if (stream.binary) stream.cipher.useBinary();
     const fail = (err) => this.#teardown(stream, err?.message || 'copy stream failed');
+    stream.input.on('error', error => this.#teardown(stream, error.message, true, true));
+    stream.input.pipe(stream.child.stdin);
     stream.receiver = new TunnelReceiver(
-      stream.child.stdin,
+      stream.input,
       (bytes) => this.#send(stream, { type: 'ack', bytes }),
       fail,
       { window: COPY_WINDOW },
@@ -391,7 +395,7 @@ export class CopyReceiver {
     } else if (packet.type === 'end') {
       if (stream.ended) return this.#teardown(stream, 'unexpected copy packet');
       stream.ended = true;
-      try { stream.child.stdin.end(); } catch {}
+      try { stream.input.end(); } catch {}
     } else {
       this.#teardown(stream, 'unexpected copy packet');
     }
@@ -421,7 +425,7 @@ export class CopyReceiver {
     if (stream.onError) child.removeListener('error', stream.onError);
     if (stream.onSpawn) child.removeListener('spawn', stream.onSpawn);
     if (stream.onClose) child.removeListener('close', stream.onClose);
-    for (const std of [child.stdin, child.stdout, child.stderr]) {
+    for (const std of [stream.input, child.stdin, child.stdout, child.stderr]) {
       try { std?.destroy(); } catch {}
     }
     if (notify && reason) refuse(stream.link, stream.sid, reason, permanent);
