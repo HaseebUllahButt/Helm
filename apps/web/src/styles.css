@@ -2475,15 +2475,19 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
    default, and - with a mouse - the row under the pointer. */
 @media (hover: hover) {
   .rowfav .picker-default:not(.on):not(.here) { opacity: 0; }
-  .rowfav:hover .picker-default, .rowfav:focus-within .picker-default { opacity: 1; }
+  .rowfav:is(:hover, :focus-within) .picker-default:not(.on):not(.here) { opacity: 1; }
 }
 @media (hover: none) { .rowfav .picker-default:not(.on):not(.here) { visibility: hidden; } }
+/* Likewise an empty star: a filled one marks a favorite, an empty one shows
+   only under the pointer. A phone keeps it, as it cannot hover. */
+@media (hover: hover) {
+  .rowfav .favorite-toggle:not(.on) { opacity: 0; }
+  .rowfav:is(:hover, :focus-within) .favorite-toggle:not(.on) { opacity: 1; }
+}
 .favorite-toggle { position: relative; flex: none; width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; border-radius: var(--radius-sm); color: var(--icon); }
 .favorite-toggle:hover { background: var(--accent); }
 .favorite-toggle input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .picker-default:focus-visible, .favorite-toggle:focus-within { outline: 2px solid var(--primary-q); outline-offset: -2px; }
-.modesheet-legend { display: flex; align-items: center; gap: 6px; padding: 0 12px 8px; color: var(--mutedfg); font-size: var(--t-micro); }
-.modesheet-legend span { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
 .modesheet-label { padding: 8px 12px 2px; font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--mutedfg); }
 
 

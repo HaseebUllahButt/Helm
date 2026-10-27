@@ -270,12 +270,13 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     const providers = [...new Set([...ids, ...more].map(providerOf))];
     const sectioned = providers.length > 1;
     if (sectioned) more = providers.flatMap((p) => more.filter((m) => providerOf(m) === p));
+    // The short list needs no headings: recent rows lead, the rest follow.
     const choice = (m: string, folded = false): Choice => {
-      const section = recent.length && !folded && recent.includes(m) ? 'recent'
+      const section = !folded && recent.includes(m) ? undefined
         : sectioned ? providerOf(m) || undefined
-        : folded ? heading?.(m) : recent.length ? 'latest' : undefined;
+        : folded ? heading?.(m) : undefined;
       const label = name(m);
-      return { id: m, label: sectioned && section !== 'recent' && section ? label.replace(/\s*\(([^)]*)\)$/, (all, p) => p.toLowerCase() === section.toLowerCase() ? '' : all) : label, section };
+      return { id: m, label: section && sectioned ? label.replace(/\s*\(([^)]*)\)$/, (all, p) => p.toLowerCase() === section.toLowerCase() ? '' : all) : label, section };
     };
     const choices = ids.map((m) => choice(m));
     const rest = more.map((m) => choice(m, true));
@@ -575,18 +576,15 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
       </div>
       {note && <div className="modesheet-note">{note}</div>}
       {!!news?.length && <ModelNews news={news} onSeen={onNewsSeen} />}
-      {onDefault && <div className="modesheet-legend">Defaults apply to {defaultsFor}{favKey && <span><Icon name="star" size={13} /> favorites only</span>}</div>}
       {search && (
         <input
           ref={filter} aria-label={`Search ${title}`}
-          className="sheetfilter" value={query} placeholder="search all models"
+          className="sheetfilter" value={query} placeholder="Search models"
           autoCapitalize="off" autoCorrect="off" autoComplete="off"
           onChange={(e) => setQuery(e.target.value)}
         />
       )}
-      {favorites.length > 0 && <div className="modesheet-label">favorites</div>}
       {favorites.map(row)}
-      {favorites.length > 0 && main.length > 0 && !main[0].section && <div className="modesheet-label">all</div>}
       {headed(main)}
       {rest.length > 0 && (q || expanded ? headed(rest, main.at(-1)?.section) : (
         <button type="button" className="moderow more" onClick={() => setExpanded(true)}>
