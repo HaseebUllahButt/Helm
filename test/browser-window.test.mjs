@@ -1,17 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-browser-window-'));
 process.env.HELM_NO_SERVICE = '1';
-test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
+test.after(() => rm(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow } = await import('../packages/connect/src/browser-window.js');
 const { chromium } = await import('playwright');
-const realChromium = ['/usr/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
+const realChromium = [process.env.HELM_TEST_CHROMIUM, '/usr/bin/chromium', '/usr/bin/google-chrome', chromium.executablePath()].find(path => path && existsSync(path));
 // Playwright's own Chromium, else the system one Helm itself falls back to.
 const starts = options => chromium.launch({ headless: true, ...options }).then(browser => browser.close().then(() => true), () => false);
 const pinned = process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM }
@@ -102,16 +103,6 @@ test('a closed window keeps its tabs asleep; listing does not reopen it, the age
   assert.equal(windows.length, 2); assert.equal((await manager.list('one')).open, true);
 });
 
-test('Show window opens an empty thread with one blank tab; without a screen it says so plainly', { timeout: 60000, skip: noChromium }, async t => {
-  const { manager } = await setup(t);
-  const shown = await manager.show('one');
-  assert.equal(shown.open, true); assert.equal(shown.tabs.length, 1);
-  assert.equal((await manager.show('one', shown.tabs[0].id)).tabs.length, 1, 'showing again opens nothing new');
-  const { manager: headless } = await setup(t, { canWindow: false });
-  await assert.rejects(headless.show('one'), /no screen/i);
-  assert.equal((await headless.list('one')).canWindow, false);
-});
-
 test('saving a window’s sign-ins never flashes a tab, even with frames from other sites', { timeout: 60000, skip: noChromium }, async t => {
   const { manager, url } = await setup(t);
   // The same server under another name is another site, framed in the page.
@@ -132,10 +123,11 @@ test('saving a window’s sign-ins never flashes a tab, even with frames from ot
   assert.ok(JSON.parse(readFileSync(join(manager.directory, 'one', 'storage.json'), 'utf8')).cookies.some(c => c.name === 'who'));
 });
 
-test('a Helm restart leaves the window open; the next Helm takes its tabs back without reloading them', { timeout: 90000, skip: !realChromium && 'no system Chromium' }, async t => {
-  // The real way of starting a window, kept off the screen for the test.
+test('a Helm restart leaves the window open; the next Helm takes its tabs back without reloading them', { timeout: 90000, skip: !realChromium && 'no Chromium installed' }, async t => {
+  // Start a separate browser, hidden for the test. Disable its sandbox as
+  // Playwright does for the other hidden test browsers.
   const wrapper = join(process.env.HELM_DIR, 'chromium-headless');
-  writeFileSync(wrapper, `#!/bin/sh\nexec ${realChromium} --headless=new "$@"\n`, { mode: 0o755 });
+  writeFileSync(wrapper, `#!/bin/sh\nexec ${realChromium} --headless=new --no-sandbox "$@"\n`, { mode: 0o755 });
   const before = process.env.HELM_WINDOW_CHROMIUM; process.env.HELM_WINDOW_CHROMIUM = wrapper;
   t.after(() => { if (before === undefined) delete process.env.HELM_WINDOW_CHROMIUM; else process.env.HELM_WINDOW_CHROMIUM = before; });
   const { manager, url } = await setup(t, { launchWindow });
@@ -154,7 +146,11 @@ test('a Helm restart leaves the window open; the next Helm takes its tabs back w
     const { chromium: pw } = await import('playwright');
     const port = Number(readFileSync(join(folder, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
     const browser = await pw.connectOverCDP(`http://127.0.0.1:${port}`).catch(() => null);
-    await browser?.newBrowserCDPSession().then(s => s.send('Browser.close')).catch(() => {});
+    if (browser) {
+      const disconnected = new Promise(resolve => browser.once('disconnected', resolve));
+      await browser.newBrowserCDPSession().then(s => s.send('Browser.close')).catch(() => {});
+      await disconnected;
+    }
     for (let i = 0; i < 50 && windowOpen(folder); i++) await new Promise(done => setTimeout(done, 100));
   });
   const listed = await next.list('one');

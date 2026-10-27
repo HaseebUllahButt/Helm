@@ -4,8 +4,7 @@
 // just uses the window.
 import { existsSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 
 /** A screen to open a window on: always on a Mac or Windows, a display on Linux. */
 export const canOpenWindow = (env = process.env, platform = process.platform) =>
@@ -100,24 +99,8 @@ async function startWindow(chromium, executable, profileDir, args) {
 export const NEW_TAB = 'chrome://newtab/';
 
 export const windowProfile = (directory, sessionId) => join(directory, sessionId, 'window');
-/** Each thread's window has its own app id, so Show window finds the right one. */
+/** Each chat's window has its own app id for desktop window rules. */
 export const windowName = (sessionId) => `helm-browser-${String(sessionId).replace(/[^\w-]/g, '').slice(0, 40)}`;
-
-/**
- * Give a thread's window the keyboard, when the owner asked to see it. Only
- * niri needs telling (its rule keeps these windows from taking focus by
- * themselves); elsewhere bringing the tab forward is enough.
- */
-export async function focusWindow(name, { env = process.env, run = promisify(execFile) } = {}) {
-  if (!/niri/i.test(env.XDG_CURRENT_DESKTOP || '') && !env.NIRI_SOCKET) return false;
-  try {
-    const { stdout } = await run('niri', ['msg', '-j', 'windows'], { timeout: 3000 });
-    const window = JSON.parse(stdout).find(w => w.app_id === name);
-    if (!window) return false;
-    await run('niri', ['msg', 'action', 'focus-window', '--id', String(window.id)], { timeout: 3000 });
-    return true;
-  } catch { return false; }
-}
 
 /**
  * Runs in every page of a window: tells Helm when the owner clicks, types or

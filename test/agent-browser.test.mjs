@@ -20,7 +20,7 @@ test('browser is lazy and actions cannot cross thread boundaries', async () => {
   let launched = 0;
   const manager = new BrowserManager({ session: sid => ['one', 'two'].includes(sid) ? { id: sid } : null, launch: () => { launched++; throw new Error('unexpected launch'); } });
   assert.deepEqual((await manager.list('one')).tabs, []); assert.equal(launched, 0);
-  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], console: [], network: [], viewers: new Map() }; manager.tabs.set('tab', tab);
+  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
   await assert.rejects(manager.run('two', 'tab', { kind: 'look' }), /not found/);
   assert.deepEqual(await manager.run('one', 'tab', { kind: 'console' }), { entries: [] });
   await manager.stop();
@@ -54,7 +54,7 @@ test('Bowser EPIPE rejects its requests without an unhandled stream error', asyn
 
 test('download retention evicts old files and rejects oversized completed downloads', async () => {
   const manager = new BrowserManager({ session: sid => ({ id: sid }) });
-  const tab = { id: 'download-tab', sessionId: 'downloads', engine: 'bowser', downloads: [], viewers: new Map() }; manager.tabs.set(tab.id, tab);
+  const tab = { id: 'download-tab', sessionId: 'downloads', engine: 'bowser', downloads: [] }; manager.tabs.set(tab.id, tab);
   const folder = join(process.env.HELM_DIR, 'download-fixture'); mkdirSync(folder);
   for (let i = 0; i < 3; i++) { const path = join(folder, String(i)); writeFileSync(path, ''); truncateSync(path, 128 * 1024 * 1024); tab.downloads.push({ id: String(i), name: String(i), path, at: i, status: i < 2 ? 'ready' : 'pending' }); }
   await manager.finishDownload(tab, tab.downloads[2]); assert.equal(tab.downloads[0].status, 'expired'); assert.equal(existsSync(tab.downloads[0].path), false);
@@ -64,7 +64,7 @@ test('download retention evicts old files and rejects oversized completed downlo
 
 test('a read-only agent can inspect a tab but cannot mutate it through browser CLI', async () => {
   const manager = new BrowserManager({ session: sid => ({ id: sid, mode: 'readonly' }) });
-  manager.tabs.set('tab', { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], console: [], viewers: new Map() });
+  manager.tabs.set('tab', { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], console: [] });
   await assert.rejects(manager.run('one', 'tab', { kind: 'type', text: 'no' }), /read-only/);
   await assert.rejects(manager.run('one', 'tab', { kind: 'dialog', accept: true }), /read-only/);
   await assert.rejects(manager.run('one', 'tab', { kind: 'batch', actions: [{ kind: 'evaluate', script: '1' }] }), /read-only/);
@@ -77,17 +77,16 @@ test('CLI resolves explicitly selected remote thread and writes returned screens
   assert.equal(calls[0][0], 'laptop'); assert.equal(calls[0][2].id, 'remote'); assert.equal(readFileSync(out, 'utf8'), 'hello');
 });
 
-const streamPage = (acks = []) => {
-  const cdp = new EventEmitter(); cdp.detach = async () => {}; cdp.send = async (method, params) => { if (method === 'Page.screencastFrameAck') acks.push(params.sessionId); };
+const fakePage = () => {
+  const cdp = new EventEmitter(); cdp.detach = async () => {}; cdp.send = async () => {};
   const page = { u: 'http://x/1', url() { return this.u; }, viewportSize: () => ({ width: 1280, height: 800 }), title: async () => 'Title', mouse: { click: async () => {}, move: async () => {} }, goto: async function (u) { this.u = u; }, evaluate: async function () { return { title: 'Title', url: this.u, text: '', elements: [] }; }, context: () => ({ newCDPSession: async () => cdp }) };
   return { cdp, page };
 };
-const paint = (cdp, data, sessionId) => cdp.emit('Page.screencastFrame', { data, sessionId });
 const tick = ms => new Promise(resolve => setTimeout(resolve, ms));
-const fakeTab = (page, extra = {}) => ({ id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], lastUsed: Date.now(), sequence: 0, console: [], network: [], ...extra });
+const fakeTab = (page, extra = {}) => ({ id: 'tab', sessionId: 'one', engine: 'chromium', page, downloads: [], lastUsed: Date.now(), console: [], network: [], ...extra });
 
 test('tab list writes are coalesced after busy bursts but never lost on navigation, close or stop', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json'), { page } = streamPage(); let closed = 0;
+  const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json'), { page } = fakePage(); let closed = 0;
   const context = { storageState: async () => ({ cookies: [], origins: [] }), close: async () => { closed++; } };
   const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); let writes = 0; const write = manager.persistTabs.bind(manager);
   manager.persistTabs = async sid => { writes++; return write(sid); };
@@ -109,7 +108,7 @@ test('tab list writes are coalesced after busy bursts but never lost on navigati
 });
 
 test('a crashed browser does not let a held write erase the saved tab list', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json'), { page } = streamPage();
+  const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json'), { page } = fakePage();
   const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.recovered.set('one', Promise.resolve());
   const tab = fakeTab(page); manager.tabs.set('tab', tab);
   await manager.persistTabs('one'); await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 });
@@ -144,16 +143,16 @@ test('Chromium dying before Helm keeps the tab list, and a page closing on its o
 });
 
 test('sign-ins are saved while the owner works, at most every 15 seconds', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), { page } = streamPage(); let saves = 0, now = 1_000_000;
+  const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), { page } = fakePage(); let saves = 0, now = 1_000_000;
   const context = { storageState: async () => { saves++; return { cookies: [], origins: [] }; }, close: async () => {} };
   const manager = new BrowserManager({ directory, session: sid => ({ id: sid }), now: () => now });
   manager.recovered.set('one', Promise.resolve()); manager.contexts.set('one', Promise.resolve(context));
-  const tab = fakeTab(page); tab.viewers.set('v', now); manager.tabs.set('tab', tab);
+  const tab = fakeTab(page); manager.tabs.set('tab', tab);
   await manager.sweep(); assert.equal(saves, 0, 'nothing done, nothing to save');
   await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 }); await manager.sweep(); assert.equal(saves, 1, 'saved after the owner acted');
   now += 5000; await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 }); await manager.sweep(); assert.equal(saves, 1, 'not again within 15 seconds');
-  now += 11000; tab.viewers.set('v', now); await manager.sweep(); assert.equal(saves, 2, 'the later action is saved once the 15 seconds pass');
-  now += 20000; tab.viewers.set('v', now); await manager.sweep(); assert.equal(saves, 2, 'no action since, no save');
+  now += 11000; await manager.sweep(); assert.equal(saves, 2, 'the later action is saved once the 15 seconds pass');
+  now += 20000; await manager.sweep(); assert.equal(saves, 2, 'no action since, no save');
   await manager.stop(); rmSync(directory, { recursive: true, force: true });
 });
 
@@ -170,30 +169,11 @@ test('the address bar takes a host, a local dev server or words to search', asyn
   assert.match(httpUrl('javascript:alert(1)'), /^https:\/\/www\.bing\.com\//, 'a script address is only ever searched for');
 });
 
-test('a tab says it is loading from the main page request until the page loads', async () => {
-  const manager = new BrowserManager({ directory: mkdtempSync(join(tmpdir(), 'helm-load-')), session: sid => ({ id: sid }) });
-  const main = {}, page = Object.assign(new EventEmitter(), { url: () => 'http://x/', viewportSize: () => ({ width: 800, height: 600 }), mainFrame: () => main });
-  const tab = manager.register('one', page), request = (frame, nav = true) => ({ isNavigationRequest: () => nav, frame: () => frame, resourceType: () => 'document' });
-  page.emit('request', request({}, true)); assert.equal(manager.metadata(tab).loading, false, 'a frame inside the page is not the page loading');
-  page.emit('request', request(main, false)); assert.equal(manager.metadata(tab).loading, false);
-  page.emit('request', request(main)); assert.equal(manager.metadata(tab).loading, true);
-  page.emit('load'); assert.equal(manager.metadata(tab).loading, false);
-  page.emit('request', request(main)); page.emit('requestfailed', Object.assign(request(main), { failure: () => ({ errorText: 'x' }), url: () => 'http://x/', method: () => 'GET' })); assert.equal(manager.metadata(tab).loading, false, 'a failed load ends too');
-  page.emit('close');
-});
-
-test('the owner does not wait for a page to load, and a page that cannot be reached is said in plain words', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'helm-go-')), { page, cdp } = streamPage();
+test('an agent waits for navigation and gets a failed load in plain words', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'helm-go-')), { page, cdp } = fakePage();
   const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.recovered.set('one', Promise.resolve());
   let fail; page.goto = function (u) { return new Promise((resolve, reject) => { fail = () => reject(new Error(`page.goto: net::ERR_NAME_NOT_RESOLVED at ${u}\nCall log:\n\u001b[2m  - navigating to "${u}"\u001b[22m`)); }); };
-  const tab = fakeTab(page, { control: 'phone', controlEpoch: 1 }); manager.tabs.set('tab', tab);
-  const started = Date.now(); await manager.run('one', 'tab', { kind: 'navigate', url: 'eat.nowhere.test' }, 'phone', 1);
-  assert.ok(Date.now() - started < 500, 'the owner gets the tab back while the page is still loading');
-  assert.equal(manager.metadata(tab).url, 'https://eat.nowhere.test/', 'the address shows where it is going');
-  fail(); await tick(5);
-  assert.deepEqual(manager.metadata(tab).problem, { url: 'https://eat.nowhere.test/', message: "Can't find eat.nowhere.test. Check the address." });
-  // An agent waits for the page and gets the same sentence, not Playwright's log.
-  tab.control = null; tab.controlEpoch = 2;
+  const tab = fakeTab(page); manager.tabs.set('tab', tab);
   const agent = manager.run('one', 'tab', { kind: 'navigate', url: 'eat.nowhere.test' });
   await tick(5); assert.equal(manager.metadata(tab).problem, null, 'a new try clears the old message'); fail();
   await assert.rejects(agent, error => error.message === "Can't find eat.nowhere.test. Check the address.");
@@ -220,7 +200,7 @@ test('Playwright’s own browser is tried first; a pinned path wins; the system 
   } finally { chromium.launch = real; for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 });
 
-test('real browser isolation, batched actions, uploads, the owner answering a dialog, and restart restore', { timeout: 60000 }, async t => {
+test('real browser isolation, batched actions, uploads, answering a dialog, and restart restore', { timeout: 60000 }, async t => {
   const { chromium } = await import('playwright');
   const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Browser test</title><label>Name<input id="name"></label><button onclick="document.querySelector(\'output\').textContent=document.querySelector(\'input\').value">Save</button><output></output><input type="file" id="upload"><script>console.log("ready")</script>'); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -241,7 +221,7 @@ test('real browser isolation, batched actions, uploads, the owner answering a di
   assert.deepEqual(readdirSync(join(directory, 'one', 'uploads')), []);
   const page = manager.tabs.get(first.tab.id).page, observed = page.waitForEvent('dialog');
   const alert = manager.run('one', first.tab.id, { kind: 'evaluate', script: 'alert("Need input"); "dismissed"' });
-  await observed; await manager.run('one', first.tab.id, { kind: 'dialog', accept: false }, 'phone'); assert.equal((await alert).value, 'dismissed');
+  await observed; await manager.run('one', first.tab.id, { kind: 'dialog', accept: false }); assert.equal((await alert).value, 'dismissed');
   await manager.run('one', first.tab.id, { kind: 'resize', width: 390, height: 844 });
   await assert.rejects(manager.run('one', second.tab.id, { kind: 'look' }), /not found/);
   const savedId = first.tab.id; await manager.stop();
@@ -274,8 +254,7 @@ test('the agent’s cursor is drawn in a window tab only, and point guides witho
   assert.deepEqual(guided.tab.pointer, undefined, 'tab answers no longer carry a cursor');
   assert.deepEqual(tab.pointer, { x: 140, y: 50, box, action: 'point', label: '“Sign in”', by: 'guide', note: 'Click here to approve', seq: 3, at: clock });
   assert.equal(drawn.at(-1).guide, true); assert.equal(clicks, 2, 'point never clicks'); assert.equal(scrolled, 0, 'point never scrolls');
-  await manager.run('one', 'tab', { kind: 'hover', x: 2, y: 2 }, 'phone'); assert.equal(tab.pointer?.by, 'guide', 'owner hovering keeps the guide');
-  await manager.run('one', 'tab', { kind: 'click', x: 2, y: 2 }, 'phone'); assert.equal(tab.pointer, null, 'owner clicking clears the guide');
+  clock += 400; manager.ownerInput(page); assert.equal(tab.pointer, null, 'input in the external window clears the guide');
   await assert.rejects(manager.run('one', 'tab', { kind: 'point', x: 5000, y: 20 }), /not on screen/);
   await assert.rejects(manager.run('one', 'tab', { kind: 'point' }), /choose a target/);
   manager.tabs.set('read', { ...tab, id: 'read', sessionId: 'reader', pointer: null }); await manager.run('reader', 'read', { kind: 'point', selector: 'button' });
@@ -285,16 +264,26 @@ test('the agent’s cursor is drawn in a window tab only, and point guides witho
   await manager.stop();
 });
 
-test('browser point CLI builds a guide action and opening a tab tells the chat', async () => {
+test('browser point CLI builds a guide action', async () => {
   const calls = [];
   const rpc = async (...args) => { calls.push(args); return {}; };
   await runBrowserCommand(['point', 'tab', '3', '--note', 'Approve here'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
   await runBrowserCommand(['point', 'tab', 'button.primary'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
   assert.deepEqual(calls.map(c => c[2].action), [{ kind: 'point', ref: 3, note: 'Approve here' }, { kind: 'point', selector: 'button.primary' }]);
   await assert.rejects(runBrowserCommand(['point', 'tab'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} }), /element number or CSS selector/);
-  const opened = [], manager = { open: async () => ({ tab: { id: 'new' } }), stop: async () => {} };
-  const routes = createBrowserRoutes({ sessions: { get: () => ({}) }, manager, onOpen: payload => opened.push(payload) });
-  await routes.dispatch('browser.open', { id: 's1', url: 'about:blank' }); await routes.dispatch('browser.open', { id: 's1', viewer: 'owner' });
-  assert.deepEqual(opened, [{ id: 's1', tabId: 'new' }, { id: 's1', tabId: 'new', viewer: 'owner' }]);
 });
 
+test('browser routes keep CLI commands and reject removed panel controls', async () => {
+  const calls = [];
+  const manager = Object.fromEntries(['open', 'list', 'run', 'close'].map(name => [name, (...args) => { calls.push([name, ...args]); return { ok: true }; }]));
+  const routes = createBrowserRoutes({ manager });
+  await routes.dispatch('browser.open', { id: 'one', url: 'about:blank' });
+  await routes.dispatch('browser.list', { id: 'one' });
+  await routes.dispatch('browser.action', { id: 'one', tabId: 'tab', action: { kind: 'look' } });
+  await routes.dispatch('browser.close', { id: 'one', tabId: 'tab' });
+  assert.deepEqual(calls, [
+    ['open', 'one', { id: 'one', url: 'about:blank' }], ['list', 'one'],
+    ['run', 'one', 'tab', { kind: 'look' }], ['close', 'one', 'tab'],
+  ]);
+  for (const method of ['browser.show', 'browser.download']) await assert.rejects(routes.dispatch(method, { id: 'one' }), /unknown browser method/);
+});

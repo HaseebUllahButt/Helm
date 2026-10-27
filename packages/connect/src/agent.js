@@ -410,7 +410,7 @@ export class Daemon {
     this.name = net.machines[net.self]?.name || name || hostname();
     this.copyReceiver = new CopyReceiver({ network: () => loadNetwork() ?? this.net });
     this.executions = new ExecutionJobs();
-    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id) }, onOpen: payload => this.#emit(E.BROWSER_TAB, payload) });
+    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id) } });
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),
       // Only asked on Windows, where a running program can not be replaced.
