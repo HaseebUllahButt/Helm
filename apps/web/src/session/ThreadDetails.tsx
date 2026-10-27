@@ -9,7 +9,7 @@ import type { GitStatus } from './gitStatus';
 // loads the first time the Git button is tapped, not with every chat.
 const ChangesPanel = lazy(() => import('./Changes').then((m) => ({ default: m.ChangesPanel })));
 
-/** Git and the browser have their own buttons in the chat header; this panel is the agents. */
+/** Git and the canvas have their own buttons in the chat header; this panel is the agents. */
 export type DetailsTab = 'agents' | 'changes';
 
 export function ThreadDetails({ client, env, session, tab, git, gitCwd = session.cwd, reloadGit, onClose, onOpen, onOpenNative, reviewAttention = false, onNativeAttention, nativeOnly = false }: {

@@ -44,7 +44,8 @@ test('a terminal survives the daemon that started it', opts, async (t) => {
 
   const seen = [];
   first.on('data', (d) => seen.push(d.text));
-  await first.open('t1', { cwd: dir });
+  const opened = await first.open('t1', { cwd: dir });
+  assert.equal(await first.pid('t1'), opened.pid);
   await first.view('t1', { cols: 100, rows: 30 });
 
   // Something long-running: the kind of thing losing would actually hurt.
@@ -58,6 +59,7 @@ test('a terminal survives the daemon that started it', opts, async (t) => {
   // Its replacement finds the terminal still there.
   const second = new TerminalHost();
   assert.equal(await second.ensure(), true);
+  assert.equal(await second.pid('t1'), opened.pid);
   assert.deepEqual(second.list(), ['t1'], 'the terminal should have outlived the first daemon');
 
   const replay = await second.view('t1', { cols: 100, rows: 30 });
@@ -70,7 +72,8 @@ test('a terminal survives the daemon that started it', opts, async (t) => {
 
   await second.close('t1');
   assert.equal(second.has('t1'), false);
-  second.detach();
+  await second.shutdown();
+  await until(() => !existsSync(SOCKET_PATH));
 });
 
 test('a stale socket does not stop a new host from starting', opts, async (t) => {

@@ -48,6 +48,21 @@ const app = http.createServer((req, res) => {
 new WebSocketServer({ server: app }).on('connection', (ws) => ws.on('message', (m) => ws.send(`echo:${m}`)));
 await new Promise((r) => app.listen(0, '127.0.0.1', r));
 const APP = app.address().port;
+
+// A dev server like the owner's Express app: any host that is not local,
+// in Host or in a forwarding header, gets "Invalid host".
+const LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+const strict = http.createServer((req, res) => {
+  const forwarded = /host=([^;,\s]+)/i.exec(req.headers.forwarded || '')?.[1];
+  const hosts = [req.headers.host, req.headers['x-forwarded-host'], req.headers['x-original-host'], forwarded].filter(Boolean);
+  const origins = [req.headers.origin, req.headers.referer].filter(Boolean).map((u) => new URL(u).host);
+  if (![...hosts, ...origins].every((h) => LOCAL.test(h))) { res.writeHead(400); res.end('Invalid host'); return; }
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ headers: req.headers }));
+});
+new WebSocketServer({ server: strict }).on('connection', (ws) => ws.send('strict-ok'));
+await new Promise((r) => strict.listen(0, '127.0.0.1', r));
+const STRICT = strict.address().port;
 const LOCK = hashSharePassword('open sesame');
 
 const shared = [
@@ -55,10 +70,11 @@ const shared = [
   { name: 'locked', port: APP, lock: LOCK },
   { name: 'gone', port: 1 }, // shared, but nothing listens there
   { name: 'original-host', port: APP, preserveHost: true },
+  { name: 'strict', port: STRICT },
 ];
 const machine = await fakeMachine('aa11bb22cc33', shared);
 
-test.after(() => { machine.close(); app.close(); hub.stop(); rmSync(base, { recursive: true, force: true }); });
+test.after(() => { machine.close(); app.close(); strict.close(); hub.stop(); rmSync(base, { recursive: true, force: true }); });
 
 function request(host, path = '/', { method = 'GET', headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
@@ -79,7 +95,7 @@ test('a shared port answers on its name, as a local visit', async () => {
   const seen = JSON.parse(r.text);
   assert.equal(seen.url, '/page?x=1');
   assert.equal(seen.host, `localhost:${APP}`, 'dev servers only trust a local Host');
-  assert.equal(seen.fwd, 'app.links.test');
+  assert.equal(seen.fwd, undefined, 'the link host stays out of X-Forwarded-Host');
   assert.equal(seen.cookie, 'theirs=1');
 
   const posted = await request('app.links.test', '/form', { method: 'POST', body: 'a=1&b=2', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
@@ -118,6 +134,28 @@ test('an unknown name, or a dead app, says so in words', async () => {
   assert.equal(dead.headers.refresh, '3');
   // helm itself is untouched on the bare host.
   assert.equal((await request('127.0.0.1', '/api/version')).headers['content-type'], 'application/json');
+});
+
+test('an app that refuses other hosts sees only a local visit, even behind Caddy', async () => {
+  // What Caddy adds in front of the hub, plus what a browser sends.
+  const r = await request('strict.links.test', '/page', { headers: {
+    accept: 'text/html', 'x-forwarded-host': 'strict.links.test', forwarded: 'for=1.2.3.4;host=strict.links.test;proto=https',
+    'x-original-host': 'strict.links.test', 'x-forwarded-for': '1.2.3.4', 'x-forwarded-proto': 'https',
+    origin: 'https://strict.links.test', referer: 'https://strict.links.test/start?a=1',
+  } });
+  assert.equal(r.status, 200, r.text);
+  const { headers } = JSON.parse(r.text);
+  assert.equal(headers.host, `localhost:${STRICT}`);
+  assert.equal(headers.origin, `http://localhost:${STRICT}`);
+  assert.equal(headers.referer, `http://localhost:${STRICT}/start?a=1`);
+  assert.equal(headers['x-forwarded-for'], '1.2.3.4');
+  assert.ok(!JSON.stringify(headers).includes('strict.links.test'), JSON.stringify(headers));
+
+  // Live reload and other websockets get the same local headers.
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/`, { headers: { host: 'strict.links.test', 'x-forwarded-host': 'strict.links.test' }, origin: 'https://strict.links.test' });
+  const first = await new Promise((resolve, reject) => { ws.once('message', (m) => resolve(String(m))); ws.once('unexpected-response', (_q, res) => reject(new Error(`answered ${res.statusCode}`))); ws.once('error', reject); });
+  ws.close();
+  assert.equal(first, 'strict-ok');
 });
 
 test('preserve-host keeps the original host when an app needs it', async () => {

@@ -6,8 +6,10 @@ the code, `git log` or `helm help` shows is not repeated here.
 ## Development and rollout
 
 - Requested Helm work is done only when it is verified, committed, pushed to
-  main and installed on every reachable machine. Check the source checkout,
-  installed checkout, running daemon and served web build separately.
+  main and installed on every reachable machine. Run `helm ship` from your
+  worktree: it merges, pushes, and waits until each online machine runs the
+  new commit and serves an app built from it. Fix what it reports; never
+  call the work shipped while it fails.
 - Develop in the source checkout or a worktree. Temporary scripts go under
   ~/.helm, never inside an installed checkout.
 - Installed copies often hold other chats' unsaved edits. Never reset or stash
@@ -25,8 +27,10 @@ survive the restart; fix interruptions instead of waiting for chats or transfers
 
 For any change the owner can see in the app, try it in a private Helm
 (`verify-helm`), take a screenshot with `verify-helm shot`, and inspect it.
-Keep proof screenshots private unless the owner asks to see them.
-Say what you could not check.
+Then show the owner one proof in the chat: a before and after picture for
+a change in looks, or a short clip for a change in behaviour (the skill
+says how). Keep every other screenshot private. Say what you could not
+check.
 
 Use plain text for reviews and progress reports. Create or publish a visual
 only when the owner asks. Skills must follow the owner's chosen format.

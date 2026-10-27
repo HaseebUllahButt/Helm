@@ -5,7 +5,7 @@ import { ENGINES } from './engines.js';
 import { startPrefs, subagentPrefs } from './settings.js';
 import { codexHelperFork, delegationMode, delegationOutput, isWakeTurn, turnOf } from './delegation.js';
 import { nativeCodexSocket } from './drivers/codex.js';
-import { addWorktree } from './git.js';
+import { makeHelperWorktree } from './chat-worktree.js';
 import { authStatuses } from './auth.js';
 import { wire } from './session-wire.js';
 import { clip } from './session-text.js';
@@ -133,8 +133,8 @@ export class SessionDelegation {
   }
 
   /** A task owned by its orchestrator, with durable output and configurable permissions. */
-  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId, worktree = false, hidden = false }) {
-    if (typeof task !== 'string' || !task.trim() || task.length > 32_000) {
+  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId, worktree = false, hidden = false, tour = false }) {
+    if (typeof task !== 'string' || !task.trim() || (!tour && task.length > 32_000)) {
       throw new Error('a subagent task must contain 1–32000 characters');
     }
     const parent = id ? this.#sessions.get(id) : null;
@@ -180,16 +180,17 @@ export class SessionDelegation {
     // Made after every check above, so a refused request leaves no checkout.
     let checkout = null;
     if (worktree) {
-      checkout = await addWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
+      checkout = await makeHelperWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
       folder = checkout.path;
     }
-    const codexFork = codexHelperFork(parent, profiles.find(p => p.id === parent?.profileId), profile, folder, worktree,
+    const codexFork = !tour && codexHelperFork(parent, profiles.find(p => p.id === parent?.profileId), profile, folder, worktree,
       profile.engine === 'codex' ? nativeCodexSocket(profile) : null);
-    const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
+    const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent && !tour, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
       ...(codexFork ? { codexFork } : {}),
-      ...(checkout ? { worktree: checkout } : {}), ...(hidden && !parent ? { hidden: true } : {}) };
+      ...(checkout ? { worktree: { path: checkout.path, branch: checkout.branch, base: checkout.base, repo: checkout.repo } } : {}),
+      ...(hidden && !parent ? { hidden: true } : {}) };
     const child = await this.#sessions.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
-      title: clip(task.trim().split('\n')[0], 80), delegation });
+      title: clip(task.trim().split('\n')[0], 80), delegation, helperWorktree: checkout });
     if (parent && (parent.stopGeneration ?? 0) !== parentGeneration) {
       await this.#sessions.kill(child.id);
       throw new Error('the parent stopped before this task could start');

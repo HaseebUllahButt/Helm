@@ -41,6 +41,14 @@ const HOP = new Set([
   'te', 'trailer', 'proxy-authorization', 'proxy-authenticate',
 ]);
 
+// Set again by the hub itself, so a visitor cannot choose them.
+const FORWARDED = new Set(['x-forwarded-proto', 'x-forwarded-for']);
+// Headers that tell an app which host the visitor used. Only a share with
+// --preserve-host lets the app see them.
+const HOST_HEADERS = new Set([
+  'x-forwarded-host', 'forwarded', 'x-original-host', 'x-host', 'x-forwarded-server', 'x-real-host',
+]);
+
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 /** The few pages the hub itself shows on a link: a sign-in, or what is wrong. */
@@ -277,22 +285,43 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     res.end();
   }
 
-  /** The request as the shared app should see it. */
+  /**
+   * The request as the shared app should see it.
+   *
+   * Dev servers (Vite, Next, webpack, Express host checks) refuse a host they
+   * do not know, and some read it from X-Forwarded-Host or Forwarded, not
+   * Host. So unless the share asks to keep it, the link's own host reaches
+   * the app nowhere: Host is localhost:<port>, the forwarding host headers
+   * are dropped, and an Origin or Referer on the link is made local too.
+   */
   function upstreamHeaders(req, share) {
+    const keepHost = !!share.preserveHost;
     const out = {};
     for (let i = 0; i < req.rawHeaders.length; i += 2) {
       const k = req.rawHeaders[i], lk = k.toLowerCase();
-      if (HOP.has(lk) || lk === 'host' || lk === 'cookie') continue;
+      if (HOP.has(lk) || lk === 'host' || lk === 'cookie' || FORWARDED.has(lk)) continue;
+      if (!keepHost && HOST_HEADERS.has(lk)) continue;
       out[k] = out[k] != null ? `${out[k]}, ${req.rawHeaders[i + 1]}` : req.rawHeaders[i + 1];
     }
     const cookie = withoutOurCookie(req.headers.cookie);
     if (cookie) out.Cookie = cookie;
-    // Dev servers (Vite, Next, webpack) refuse a Host they do not know; to
-    // the app, this is a local visit. Where it really came from is below.
-    out.Host = share.preserveHost ? req.headers.host : `localhost:${share.port}`;
-    out['X-Forwarded-Host'] = req.headers.host || '';
     out['X-Forwarded-Proto'] = 'https';
     out['X-Forwarded-For'] = clientIp(req);
+    if (keepHost) {
+      out.Host = req.headers.host;
+      out['X-Forwarded-Host'] = req.headers.host || '';
+      return out;
+    }
+    out.Host = `localhost:${share.port}`;
+    const linkOrigin = `https://${String(req.headers.host || '').toLowerCase()}`;
+    const local = `http://localhost:${share.port}`;
+    for (const k of Object.keys(out)) {
+      const lk = k.toLowerCase();
+      if (lk !== 'origin' && lk !== 'referer') continue;
+      const v = String(out[k]);
+      if (v.toLowerCase() === linkOrigin) out[k] = local;
+      else if (v.toLowerCase().startsWith(`${linkOrigin}/`)) out[k] = local + v.slice(linkOrigin.length);
+    }
     return out;
   }
 

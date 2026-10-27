@@ -130,7 +130,7 @@ export function cheapModel(engine, models = []) {
  * their parent's context; other engines and accounts start a new chat.
  */
 export function delegationNote() {
-  return '[Helm helpers: Do the work yourself by default. For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself. Keep your helpers: the owner reads them under this chat. When done, remove the worktrees, branches and scratch folders you made, and delete (helm delete) only test chats that are not helpers.]';
+  return '[Helm helpers: Do the work yourself by default. For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself. Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]';
 }
 
 /**
@@ -186,7 +186,7 @@ export function helmBrief(net, { parentId = null } = {}) {
     .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
   if (!self?.name || !others.length) return toolNotes(parentId);
-  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}. Reach them through helm (helm exec, helm copy, helm spawn), not SSH: helm help lists every command and helm <command> --help explains one. Never rerun a helm exec that may have started; read it with helm exec-status. Links from helm share (spins) end after 3 hours; add --keep only when the owner asks.]
+  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}. Reach them through helm (helm exec, helm copy, helm spawn), not SSH: helm help lists every command and helm <command> --help explains one. Never rerun a helm exec that may have started; read it with helm exec-status. Links from helm share (spins) end after 3 hours; add --keep only when the owner asks. To show the owner a dev server, run helm forward <port> yourself; send only the localhost link it prints.]
 ${toolNotes(parentId)}`;
 }
 
@@ -288,24 +288,7 @@ export function trackDelegationReply(session, event) {
   }
 }
 
-/** Flags consume their values; task words after -- are always literal. */
-export function parseAgentArgs(args, { values = [], switches = [] } = {}) {
-  const options = {}, words = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === '--') { words.push(...args.slice(i + 1)); break; }
-    if (!arg.startsWith('--')) { words.push(arg); continue; }
-    const name = arg.slice(2);
-    if (Object.hasOwn(options, name)) throw new Error(`--${name} was given more than once`);
-    if (switches.includes(name)) options[name] = true;
-    else if (values.includes(name)) {
-      const value = args[++i];
-      if (!value || value.startsWith('--')) throw new Error(`--${name} needs a value`);
-      options[name] = value;
-    } else throw new Error(`unknown option: ${arg}`);
-  }
-  return { options, words };
-}
+export { parseAgentArgs } from './agent-args.js';
 
 export function chooseAgent(agents, account) {
   const exact = agents.find((p) => p.id === account);

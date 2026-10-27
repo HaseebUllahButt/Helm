@@ -6,8 +6,8 @@ import { existsSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
-import { execFile, execFileSync, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileSync, spawn } from 'node:child_process';
+import { browserArgs, ignoredBrowserArgs } from './browser-identity.js';
 
 /** A screen to open a window on: always on a Mac or Windows, a display on Linux. */
 export const canOpenWindow = (env = process.env, platform = process.platform) =>
@@ -27,10 +27,10 @@ export const systemChromium = () => [
  * (niri: `window-rule { match app-id=r#"^helm-browser"# open-focused false }`).
  */
 export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
-  const { chromium } = await import('playwright');
+  const { chromium } = await import('patchright-core');
   // No component downloads: each chat's profile would fetch its own ~150 MB
   // of speech, DRM and model files, and starting is slower while it does.
-  const args = ['--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', '--disable-component-update', `--class=${name}`];
+  const args = [...browserArgs, '--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', '--disable-component-update', `--class=${name}`];
   if (process.platform === 'linux') args.push('--ozone-platform-hint=auto');
   const running = await attachWindow(chromium, profileDir);
   if (running) return running;
@@ -40,11 +40,11 @@ export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
   // Chromium's own sandbox stays on, so no "--no-sandbox" warning bar either;
   // only a machine where the sandbox cannot start goes without it. A window
   // started this way closes when Helm does.
-  const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ['--enable-automation'], args, timeout: 15000 };
+  const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ignoredBrowserArgs, args, timeout: 15000 };
   const attempts = [...(system ? [{ executablePath: system }, { executablePath: system, chromiumSandbox: false }] : []), {}, { chromiumSandbox: false }];
   let failure;
   for (const extra of attempts) {
-    try { return await chromium.launchPersistentContext(profileDir, { ...options, ...extra }); } catch (error) { failure = error; }
+    try { const context = await chromium.launchPersistentContext(profileDir, { ...options, ...extra }); context.helmPatched = true; return context; } catch (error) { failure = error; }
   }
   throw failure;
 }
@@ -86,11 +86,11 @@ export async function stopWindow(profileDir) {
   return true;
 }
 
-// What Chromium downloads or caches again by itself; sign-ins, history and
-// site storage stay.
+// Remove component downloads and graphics files. Keep cached site files and
+// compiled scripts, so reopening a chat does not fetch and compile them again.
 const REFETCHED = ['component_crx_cache', 'WasmTtsEngine', 'WidevineCdm', 'OnDeviceHeadSuggestModel', 'OptimizationHints', 'ActorSafetyLists',
   'hyphen-data', 'ZxcvbnData', 'GPUPersistentCache', 'GrShaderCache', 'ShaderCache', 'BrowserMetrics', 'BrowserMetrics-spare.pma',
-  'Default/Cache', 'Default/Code Cache', 'Default/GPUCache', 'Default/DawnGraphiteCache', 'Default/DawnWebGPUCache'];
+  'Default/GPUCache', 'Default/DawnGraphiteCache', 'Default/DawnWebGPUCache'];
 
 /** Free a closed window's disk space. A window that is open is left alone. */
 export async function trimProfile(profileDir) {
@@ -108,6 +108,7 @@ async function connectWindow(chromium, port, timeout) {
   const context = browser.contexts()[0];
   if (!context) { await browser.close().catch(() => {}); throw new Error('Chromium has no window'); }
   context.helmDetach = () => browser.close();
+  context.helmPatched = true;
   return context;
 }
 
@@ -126,7 +127,10 @@ async function attachWindow(chromium, profileDir) {
  */
 async function startWindow(chromium, executable, profileDir, args) {
   rmSync(join(profileDir, PORT_FILE), { force: true });
-  const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', ...args, NEW_TAB];
+  // Open the first window at the requested page, after its logins and input
+  // hooks are ready. An unused New Tab page also makes the driver set up a
+  // second page before it can start the one the owner asked for.
+  const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--no-startup-window', ...args];
   const scoped = process.platform === 'linux' && !process.env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
   for (const [command, list] of [...(scoped ? [[scoped, ['--user', '--scope', '--collect', '--quiet', executable, ...argv]]] : []), [executable, argv]]) {
     const child = spawn(command, list, { detached: true, stdio: 'ignore' });
@@ -143,24 +147,8 @@ async function startWindow(chromium, executable, profileDir, args) {
 export const NEW_TAB = 'chrome://newtab/';
 
 export const windowProfile = (directory, sessionId) => join(directory, sessionId, 'window');
-/** Each thread's window has its own app id, so Show window finds the right one. */
+/** Each chat's window has its own app id for desktop window rules. */
 export const windowName = (sessionId) => `helm-browser-${String(sessionId).replace(/[^\w-]/g, '').slice(0, 40)}`;
-
-/**
- * Give a thread's window the keyboard, when the owner asked to see it. Only
- * niri needs telling (its rule keeps these windows from taking focus by
- * themselves); elsewhere bringing the tab forward is enough.
- */
-export async function focusWindow(name, { env = process.env, run = promisify(execFile) } = {}) {
-  if (!/niri/i.test(env.XDG_CURRENT_DESKTOP || '') && !env.NIRI_SOCKET) return false;
-  try {
-    const { stdout } = await run('niri', ['msg', '-j', 'windows'], { timeout: 3000 });
-    const window = JSON.parse(stdout).find(w => w.app_id === name);
-    if (!window) return false;
-    await run('niri', ['msg', 'action', 'focus-window', '--id', String(window.id)], { timeout: 3000 });
-    return true;
-  } catch { return false; }
-}
 
 /**
  * Runs in every page of a window: tells Helm when the owner clicks, types or

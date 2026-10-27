@@ -14,6 +14,7 @@ import { HELM_DIR, expand } from '../src/paths.js';
 import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
 import { hubRpc, hubBroadcastRpc, mergeQueueReceipts } from '../src/hub-client.js';
+import { USAGE, OVERVIEW, commandHelp, wantsHelp } from '../src/help.js';
 import { reliableInput } from '@helm/protocol/reliable-input';
 import {
   render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot, findNetworkSession,
@@ -38,126 +39,7 @@ const rest = leadingFlag ? [first, ...others] : others;
 
 const die = (msg) => { console.error(`helm: ${msg}`); exit(1); };
 
-const USAGE = `helm - Control your coding agents from anywhere
-
-  helm setup [https-url]             Set up this VM as your Helm home
-  helm open                          Open the app here, signed in
-  helm app [--remove]                Add Helm to this desktop's applications
-
-  helm add controller                Add a phone or browser to control machines
-  helm add pc                        Add a computer to run agents and control machines
-  helm add vm                        Add a VM that other machines connect to
-  helm join                          Paste a private link to join a network
-  helm join <private-link>           Join a network with the copied link
-  helm start                         Start Helm in the background
-
-  helm join <CODE> <home-url> --foreground   Run Helm in this terminal
-  helm status                        Show the network and agent software
-  helm network-repair                Keep connections working when large network packets fail on Linux
-
-  helm up [--port N] [--tunnel]      Run Helm in this terminal
-  helm up --tunnel --domain <d>     Make a fixed public link (needs a free ngrok account)
-  helm up --tunnel --temporary      Make a temporary public link without an account
-  helm up --advertise <url>         Set the public address for this machine
-  helm up --host <address>          Set the local address (default 0.0.0.0)
-  helm up --install                 Start Helm each time this machine starts
-
-  helm link [minutes]               Add a phone or browser, like 'helm add controller'
-  helm join <CODE> --at <url>       Join a network, like 'helm join CODE url'
-
-  helm devices                      controllers that can drive this network
-  helm browser open <url>            browse with your agent (Chromium or --engine bowser)
-  helm browser tabs | look <id>      list tabs or read text and numbered controls
-  helm machines                     machines in this network
-  helm redesignate [machine] <kind> what a machine is for: pc or vm
-  helm spin <port> [options]         same as helm share; make a public link
-  helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
-    Make a Spin, a public link that ends after 3 hours unless you use --keep.
-                                  The link opens a port on this machine through your VM.
-    --private                     Limit access to devices signed in to your Helm
-    --preserve-host               Send the Spin host to the app instead of localhost
-  helm share list | stop <name>   List or stop Spins
-  helm share setup                Set up the VM to serve Spins
-  helm forward <machine> <port> [--local <port>]
-                                  Open another machine's shared port on this machine's localhost
-  helm remove <id>                  Remove a device or machine permanently
-  helm leave                        Remove this machine from its network
-
-  helm login [minutes]              Make a temporary password to sign in a device
-  helm status                       Show machines, links and agent software
-  helm profiles [--refresh]         List agent accounts on this machine
-  helm agents [--json] [--refresh]  List command line accounts, sign-in status and model IDs
-  helm run -- <command> [args]      Run a command here through Helm
-  helm exec <machine> [--cwd <path>] -- <command> [args]
-                                    Run a command on another machine through Helm
-    --env NAME=value               Set a command environment value (repeat this flag for more values)
-    --timeout <milliseconds>       Set the command time limit (default 15 minutes)
-  helm exec-status <machine> <id> [--wait] [--json]
-                                    Read command output after a connection loss
-  helm exec-cancel <machine> <id>   Stop a command started earlier
-  helm antigravity [install|login|status|remove]   Install or manage the Google Antigravity agent
-
-  helm brain                       Open the Helm brain on the VM
-  helm digest [--json]              Show every machine, folder and running chat
-  helm search <words...> [--json]   Find chats with these words on every machine, newest first
-  helm thread <id> [-n 40]          Read recent messages from a chat
-  helm delete <id>                  Delete a chat
-  helm pickup [chat-id] [-n 3]      Show where earlier project chats stopped on every machine
-                                    Show requests, unfinished work, commits and unsaved changes
-  helm say <id> <text...>           Send a message from this agent (a plain prompt outside a chat)
-  helm reply <message-id> <text...> Reply to an agent message
-  helm messages [chat-id] [--json]  Read messages in this chat and its Agents
-  helm canvas <file | https://…> [--title <text>] [--session <id>]
-                                    Open a project file, saved picture or live page beside the chat
-  helm render <file.html | picture.png> [--title <text>] [--height <px>] [--session <id>]
-                                    Save a picture, HTML page or screenshot in this chat
-  helm preview <file.html> [--output <file.png>] [--width <px>] [--appearance dark|light]
-                                    screenshot a visual and report JavaScript errors
-  helm chat <account> [-- text]    share a live agent between this terminal and the app
-  helm chat --attach <id>          reconnect to the same managed session
-  helm chat <account> --resume <id> continue a native conversation after its CLI closes
-  helm chat <account> --quick      a chat with no folder, for a small question
-  helm integrate [--remove]        manage automatic control of normal CLI commands
-  helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
-  helm spawn <machine> - <account> <text...>          the same, as a quick chat with no folder
-    --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
-  helm delegate <account> --model <id> --wait --json -- "<task>"
-                                    Start a helper in this folder
-  helm delegate-result <id> [--wait] [--json]   Read the helper result or approval request
-  helm handoff <machine> [text...]  Move code and this task to another machine
-    --handoff-id <id>               Continue a stopped task move with the same ID
-  helm dispatch <machine> [text...]  Send this folder and task when the other machine connects
-  helm dispatch-status <id>         Show progress for a task sent to another machine
-  helm send-task <machine> --account <id> [text...]  Send files, .env and a task directly
-    --no-env --allow-skipped --handoff-id <id>       Control .env files, skipped files and retries
-  helm receive <source> [minutes]   Allow this machine to receive one folder from <source>
-  helm send <machine> [folder] --grant <token>
-                                  Send a folder with the receiving machine's permission
-    --target-folder <folder>        Set the folder on the receiving machine
-    --include-env                   Include .env files with access for the receiving user only
-    --dry-run                       Preview files to send without permission from the receiving machine
-    --allow-skipped                 Send files and allow skipped files
-  helm copy <machine> <file-or-folder> [--target-folder <path>]
-                                  Copy through Helm and resume if stopped (needs rsync 3.2.3+ on both machines)
-    --target-folder <path>          Set the destination (default: same path; ~ means the other machine's home folder)
-    --exclude <pattern>             Skip matching files (repeat this flag for more patterns)
-    --dry-run                       Preview the copy, including hidden files
-    --direct | --relay | --ssh      Pick a connection (default: Helm picks one)
-    --retries <0-5>                 Set retries after connection loss (default: 2)
-  helm verify <folder> [-- cmd...]  Check what a received folder still needs
-
-  helm dictate [--to <id>]          Start recording; run again to stop and turn speech into text
-  helm proxy <host>                 Connect through SSH ProxyCommand (used by ~/.ssh/config)
-  helm self-update                  Get the newest Helm and restart it on this machine
-  helm service install|uninstall    Install or remove the background service
-
-Add devices from Settings, or run 'helm add' on a joined machine.
-Paste a computer's private join link into 'helm join'.
-A control device stays signed in until you remove it.
-Passwords add devices and expire in minutes.
-Run helm help <command> or helm <command> --help for details.
-`;
-const usage = () => console.log(USAGE);
+const usage = () => console.log(OVERVIEW);
 
 const flagOf = (name, fallback) => {
   const i = rest.indexOf(`--${name}`);
@@ -1721,7 +1603,7 @@ async function shareCmd() {
   const shareLib = await import('@helm/protocol/share');
   const local = await import('../src/shares.js');
   const { checkSharePort } = await import('../src/loopback.js');
-  const args = rest.filter((a, i) => !a.startsWith('--') && !['--name', '--password', '--on', '--for'].includes(rest[i - 1]));
+  const args = rest.filter((a, i) => !a.startsWith('--') && !['--name', '--password', '--on', '--for', '--to'].includes(rest[i - 1]));
   const verb = /^\d+$/.test(args[0] ?? '') ? 'add' : (args.shift() ?? 'list');
   const on = strFlag('on');
   const target = on ? machineId(on) : net.self;
@@ -1772,6 +1654,7 @@ async function shareCmd() {
     return;
   }
 
+  if (verb === 'add' && flagOf('to') !== undefined) return forwardTo();
   if (verb !== 'add') die('usage: helm share <port> [--name <name>] [--password [pw]] [--private] [--for <hours>] [--keep] [--on <machine>] | list | stop <name> | setup');
   const port = Number(args[0]);
   if (target === net.self) await checkSharePort(port);
@@ -1827,43 +1710,156 @@ async function shareCmd() {
 }
 
 /**
- * `helm forward <machine> <port> [--local <port>]` - a port another machine
- * shared, on this machine's localhost, until Ctrl+C. See src/forward.js.
+ * `helm forward`: a port on one machine, on another machine's localhost.
+ *
+ *   helm forward <port> [--to <machine>]   this machine's port, on <machine>
+ *                                          (no --to: where the owner works)
+ *   helm forward <machine> <port>          <machine>'s port, here
+ *   helm forward list | stop <id|port|all>
+ *
+ * The Helm service on each side keeps it (src/forwards.js): it outlives
+ * this command, comes back after restarts and needs no public link.
  */
 async function forwardCmd() {
   const net = requireNetwork();
-  const args = rest.filter((a, i) => !a.startsWith('--') && rest[i - 1] !== '--local');
-  const usage = 'usage: helm forward <machine> <port> [--local <port>]';
-  if (args.length < 2) die(usage);
-  const target = machineId(args[0]);
-  const where = net.machines[target]?.name ?? args[0];
-  const port = Number(args[1]);
+  const valued = ['--local', '--to', '--for', '--on'];
+  const args = rest.filter((a, i) => !a.startsWith('--') && !valued.includes(rest[i - 1]));
+  const usage = 'usage: helm forward <port> [--to <machine>] [--local <port>] [--for <hours>] [--keep]\n'
+    + '       helm forward <machine> <port> [--local <port>] | list | stop <id|port|all>';
+  const verb = args[0];
+  if (verb === 'list' || verb === 'ls') return forwardList(net);
+  if (verb === 'stop' || verb === 'rm' || verb === 'remove') return forwardStop(net, args[1]);
+  if (!args.length) die(usage);
+  // `helm forward 5173 [--to why]`: from here. `helm forward Laptop 5173`: to here.
+  const pushing = /^\d+$/.test(args[0]);
+  if (!pushing && args.length < 2) die(usage);
+  const port = Number(pushing ? args[0] : args[1]);
   if (!Number.isInteger(port) || port < 1 || port > 65535) die(usage);
-  const wanted = strFlag('local');
-  const localPort = wanted === undefined ? port : Number(wanted);
-  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) die('--local takes a port, e.g. --local 3001.');
-  if (target === net.self) die(`That is this machine. Open http://localhost:${port}.`);
-  // Only what that machine shared on purpose. It checks again itself on
-  // every connection; asking here just gives a clear answer up front.
-  let shared;
-  try { ({ shares: shared } = await hubRpc(net, target, M.SHARE_LIST, {}, { timeout: 15_000 })); }
-  catch (err) { die(`Helm did not ask ${where} what it shares: ${err.message}`); }
-  if (!shared?.some((s) => s.port === port)) {
-    die(`${where} is not sharing port ${port}.\n  share it there first: helm share ${port} --private --on ${where}`);
+  const source = pushing ? net.self : machineId(args[0]);
+  const target = pushing ? (strFlag('to') ? machineId(strFlag('to')) : await ownerMachine(net)) : net.self;
+  await forwardOpen(net, { source, target, port });
+}
+
+/** `helm share <port> --to <machine>` is a forward. */
+async function forwardTo() {
+  const net = requireNetwork();
+  const port = Number(rest.find((a, i) => /^\d+$/.test(a) && rest[i - 1] !== '--to' && rest[i - 1] !== '--for'));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) die('usage: helm share <port> --to <machine>');
+  const to = flagOf('to');
+  const target = typeof to === 'string' ? machineId(to) : await ownerMachine(net);
+  await forwardOpen(net, { source: net.self, target, port });
+}
+
+const machineName = (net, id) => net.machines[id]?.name ?? id;
+
+/**
+ * The machine where the owner used the Helm app last (each hub notes it,
+ * see protocol/owner-seen.js). Says which one it picked.
+ */
+async function ownerMachine(net) {
+  const machines = Object.values(net.machines).filter((m) => !net.revoked?.[m.id]);
+  const seen = await Promise.all(machines.map(async (m) => {
+    try {
+      const r = await hubRpc(net, m.id, M.FORWARD_LIST, {}, { timeout: 5000, budget: 6000 });
+      return { id: m.id, at: Number(r?.ownerSeenAt) || 0 };
+    } catch { return { id: m.id, at: 0 }; }
+  }));
+  const best = seen.sort((a, b) => b.at - a.at)[0];
+  if (!best?.at) {
+    die(`Helm does not know which machine the owner uses. Add --to <machine>: ${machines.map((m) => m.name).join(', ')}.`);
   }
-  const { startForward } = await import('../src/forward.js');
-  let refusedOnce = false;
-  const fwd = await startForward(net, {
-    target, port, localPort, exact: wanted !== undefined,
-    onRefused: () => { if (!refusedOnce) { refusedOnce = true; console.log(`\n  ${where} stopped sharing port ${port}. It blocks new connections.`); } },
-    onError: (err) => console.error(`  ${err.message}`),
-  }).catch((err) => die(err.code === 'EADDRINUSE' ? `Port ${localPort} is already in use here. Pick another with --local.` : err.message));
-  console.log(`\n  http://localhost:${fwd.port}  ->  ${where}, port ${port}\n  Press Ctrl+C to stop.\n`);
-  await new Promise((resolve) => {
-    const stop = () => { fwd.close().then(resolve); };
-    process.once('SIGINT', stop);
-    process.once('SIGTERM', stop);
-  });
+  console.log(`\n  The owner used Helm on ${machineName(net, best.id)} last (${ago(best.at)}). Add --to <machine> to pick another.`);
+  return best.id;
+}
+
+async function forwardOpen(net, { source, target, port }) {
+  const from = machineName(net, source);
+  const to = machineName(net, target);
+  if (source === target) {
+    console.log(`\n  That is the same machine. Open http://localhost:${port} on ${to}.\n`);
+    return;
+  }
+  const keep = !!flagOf('keep');
+  const hours = Number(strFlag('for'));
+  if (strFlag('for') !== undefined && !(hours > 0)) die('--for takes a number of hours, e.g. --for 8.');
+  const { FORWARD_TTL_MS, newForwardId } = await import('../src/forwards.js');
+  const expiresAt = keep ? undefined : Date.now() + (hours > 0 ? hours * 3_600_000 : FORWARD_TTL_MS);
+  const wanted = strFlag('local');
+  const localPort = wanted === undefined ? undefined : Number(wanted);
+  if (wanted !== undefined && !(Number.isInteger(localPort) && localPort > 0 && localPort < 65536)) die('--local takes a port, e.g. --local 3001.');
+  if (source === net.self) {
+    const { checkSharePort } = await import('../src/loopback.js');
+    await checkSharePort(port).catch(() => console.log(`\n  Nothing runs on port ${port} here yet. The link shows a "not reachable" page until it does.`));
+  }
+  const id = newForwardId();
+  const call = (machine, method, params) => hubRpc(net, machine, method, params, { timeout: 15_000 });
+  const older = (err, who) => /unknown method/.test(err?.message || '') ? `${who} runs an older Helm without forwards. Update it first.` : null;
+  try { await call(source, M.FORWARD_ADD, { id, side: 'out', peer: target, port, expiresAt }); }
+  catch (err) { die(older(err, from) ?? `${from} did not open port ${port}: ${err.message}`); }
+  let forward;
+  try { ({ forward } = await call(target, M.FORWARD_ADD, { id, side: 'in', peer: source, port, localPort, expiresAt })); }
+  catch (err) {
+    await call(source, M.FORWARD_REMOVE, { id }).catch(() => {});
+    die(older(err, to) ?? `${to} did not start the forward: ${err.message}`);
+  }
+  const url = `http://localhost:${forward.localPort}`;
+  // In hours too: the time of day is this machine's clock, maybe not the owner's.
+  const left = expiresAt && Math.round((expiresAt - Date.now()) / 60_000);
+  const ends = expiresAt ? `It ends in ${left >= 120 ? `${Math.round(left / 60)} hours` : `${left} min`}, at ${new Date(expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} here (add --keep to keep it)` : 'It stays until you stop it';
+  console.log(`\n  ${url}  on ${to}  ->  ${from}, port ${port}`);
+  console.log(`  ${ends}. Stop it: helm forward stop ${id}`);
+  console.log(`  Give the owner only this link: ${url}\n`);
+}
+
+/** Both halves of every forward in the network, one line per forward. */
+async function forwardRows(net) {
+  const machines = Object.values(net.machines).filter((m) => !net.revoked?.[m.id]);
+  const answers = await Promise.all(machines.map(async (m) => {
+    try {
+      const { forwards } = await hubRpc(net, m.id, M.FORWARD_LIST, {}, { timeout: 5000, budget: 6000 });
+      return (forwards ?? []).map((f) => ({ ...f, holder: m.id }));
+    } catch { return []; }
+  }));
+  const byId = new Map();
+  for (const f of answers.flat()) {
+    const row = byId.get(f.id) ?? { id: f.id, holders: [] };
+    row.holders.push(f.holder);
+    if (f.side === 'in') Object.assign(row, { target: f.holder, source: f.peer, port: f.port, localPort: f.localPort, listening: f.listening, error: f.error, expiresAt: f.expiresAt });
+    else Object.assign(row, { source: f.holder, target: row.target ?? f.peer, port: row.port ?? f.port, expiresAt: row.expiresAt ?? f.expiresAt, out: true });
+    byId.set(f.id, row);
+  }
+  return [...byId.values()];
+}
+
+async function forwardList(net) {
+  const rows = await forwardRows(net);
+  if (!rows.length) { console.log('\n  No forwards are open. Run helm forward <port> [--to <machine>].\n'); return; }
+  console.log('');
+  for (const r of rows) {
+    const where = r.localPort ? `http://localhost:${r.localPort} on ${machineName(net, r.target)}` : `${machineName(net, r.target)} (did not answer)`;
+    const left = r.expiresAt ? `ends in ${Math.max(1, Math.round((r.expiresAt - Date.now()) / 60_000))} min` : 'kept';
+    const state = r.error ? `  not open: ${r.error}` : r.localPort && !r.out ? `  ${machineName(net, r.source)} did not answer` : '';
+    console.log(`  ${r.id}  ${where}  ->  ${machineName(net, r.source)}, port ${r.port}  ${left}${state}`);
+  }
+  console.log('');
+}
+
+async function forwardStop(net, which) {
+  if (!which) die('usage: helm forward stop <id|port|all>');
+  const rows = await forwardRows(net);
+  const hits = which === 'all' ? rows : rows.filter((r) => r.id.startsWith(which) || String(r.port) === which || String(r.localPort) === which);
+  if (!hits.length) die(`No forward matches "${which}". Run helm forward list.`);
+  for (const r of hits) {
+    // Either half can stop it: that machine tells the other one.
+    let done = false;
+    for (const holder of r.holders) {
+      try { await hubRpc(net, holder, M.FORWARD_REMOVE, { id: r.id, notify: true }, { timeout: 15_000 }); done = true; break; }
+      catch { /* try the other half */ }
+    }
+    const what = `${r.localPort ? `http://localhost:${r.localPort} on ` : ''}${machineName(net, r.target)} -> ${machineName(net, r.source)}, port ${r.port}`;
+    console.log(done ? `\n  Stopped ${what}.` : `\n  Could not stop ${what}: no machine answered.`);
+  }
+  console.log('');
 }
 
 /**
@@ -1921,11 +1917,14 @@ async function leave() {
 
 // `helm help <command>` and `helm <command> --help` print that command's
 // usage and details. run and chat pass their arguments on to another program.
-const { commandHelp, wantsHelp } = await import('../src/help.js');
 const helpFor = cmd === 'help' || cmd === '--help' || cmd === '-h' ? rest[0]
   : cmd && !['run', 'chat'].includes(cmd) && wantsHelp(rest) ? cmd : null;
 
 try {
+  if (helpFor === '--all') {
+    console.log(USAGE);
+    exit(0);
+  }
   if (helpFor) {
     const text = commandHelp(helpFor, USAGE);
     if (!text) die(`No command "${helpFor}" - helm help lists them all.`);
@@ -1935,7 +1934,7 @@ try {
   switch (cmd) {
     case 'run':
       if (!rest.includes('--') && rest.some(arg => ['--help', '-h'].includes(arg))) {
-        usage();
+        console.log(commandHelp('run', USAGE));
         break;
       }
       if (rest.includes('--') || rest.some(arg => ['--heavy', '--cwd', '--timeout', '--env'].includes(arg))) {
@@ -2072,6 +2071,20 @@ try {
       console.log(r.restarting?.length
         ? `  Helm updated. ${r.restarting.join(', ')} restart now and keep active chats.`
         : '  Helm updated. Restart Helm to use the update.');
+      break;
+    }
+
+    case 'ship': {
+      const { ship, ShipError } = await import('../src/ship.js');
+      const minutes = Number(strFlag('wait', '10'));
+      if (!(minutes > 0)) die('--wait takes a number of minutes');
+      try {
+        const r = await ship({ net: requireNetwork(), rpc: hubRpc, check: !rest.includes('--no-check'), waitMs: minutes * 60_000 });
+        if (!r.ok) exit(1);
+      } catch (err) {
+        if (!(err instanceof ShipError)) throw err;
+        die(err.message);
+      }
       break;
     }
 

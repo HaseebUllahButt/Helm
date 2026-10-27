@@ -13,7 +13,7 @@ import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
 import { StartingTerminalView } from './session/StartingTerminalView';
 import { beginTerminal, type StartingTerminal } from './startingTerminals';
-import { beginChat, forgetChat, onStartingChat, startAgain, type StartingChat } from './startingChats';
+import { beginChat, forgetChat, onStartingChat, sendWhenReady, startAgain, type StartingChat } from './startingChats';
 import { loadDraft } from './draftStore';
 import { EngineMark } from './EngineMark';
 import { SidebarSunset } from './SidebarSunset';
@@ -38,6 +38,7 @@ import { whereOf, HomeRow, StatusChip, Fold, NeedCard, NEVER_SNOOZE, when, Paged
 import { shareHopTarget, clearShareHop, ShareHop } from './screens/ShareHop';
 import { type Auth, Login } from './screens/Login';
 import { EnvView } from './screens/EnvView';
+import { Home } from './screens/Home';
 import { BrainView } from './screens/Brain';
 import { Start } from './screens/Start';
 import { SessionView } from './session/SessionView';
@@ -483,8 +484,13 @@ function Shell({ client, conn, onSignOut }: {
   }, [client]);
 
 
+  // A wide screen opens on the first machine once. After that, no machine
+  // selected is the home the logo leads to, so it is never picked again.
+  const autoPickDone = useRef(false);
   useEffect(() => {
-    if (wide && !selected && envs.length) { autoPicked.current = envs[0].id; setSelected(envs[0].id); }
+    if (!wide || !envs.length || autoPickDone.current) return;
+    autoPickDone.current = true;
+    if (!selected) { restate(nav.current.stack, envs[0].id); autoPicked.current = envs[0].id; }
   }, [wide, selected, envs]);
 
   // Keys, on a keyboard. Every one needs Ctrl/Cmd - never a bare key, which
@@ -629,6 +635,9 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const env = envs.find((e) => e.id === selected) ?? null;
+  /** The machine open before Home, where Home's box starts. */
+  const lastMachine = useRef<string | null>(null);
+  if (selected) lastMachine.current = selected;
   const view = stack[stack.length - 1];
   const viewSession = view.kind === 'session'
     ? (sessions[selected ?? ''] ?? []).find(s => s.id === view.session.id) ?? view.session : null;
@@ -743,6 +752,10 @@ function Shell({ client, conn, onSignOut }: {
     if (changed) restate(next);
   };
   const push = (v: MainView) => navigate([...nav.current.stack, v]);
+  const goHome = () => {
+    if (nav.current.selected === null && nav.current.stack.length === 1 && nav.current.stack[0].kind === 'env') return;
+    navigate([{ kind: 'env' }], null);
+  };
 
   // A chat that was starting in the background is up: open it in place of
   // its placeholder, or, if nobody is looking and nothing was written, let
@@ -1086,7 +1099,6 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [envs, openTerminalOn]);
-  const runningCount = envs.reduce((total, machine) => total + workingThreadsOn(machine).length, 0);
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
   // older work stays available on its machine and through search.
@@ -1155,9 +1167,13 @@ function Shell({ client, conn, onSignOut }: {
       <aside className={`sidebar${!showMain ? ' showing' : ''}${wide && sidebarCollapsed ? ' collapsed' : ''}`}>
         <SidebarSunset />
         <div className="bar side">
+          {/* The logo goes home: on a wide screen the machines overview,
+              on a phone this list. Nothing else leaves a machine. */}
           <div className="brand">
-            <img src="/favicon.svg?v=7" alt="" />
-            <b className="wordmark">helm</b>
+            <button type="button" className="brand-home" onClick={goHome} title="Home" aria-label="Home">
+              <img src="/favicon.svg?v=7" alt="" />
+              <b className="wordmark">helm</b>
+            </button>
           </div>
           {/* Live is just the dot, even with some machines off: the machines
               list below already says who is online. Words appear only when
@@ -1407,45 +1423,17 @@ function Shell({ client, conn, onSignOut }: {
             ], envId)}
           />
         ) : !env ? (
-          // A wide screen with no machine open yet: the machines themselves,
-          // as large rows, rather than a whisper in an empty pane.
-          <div className="scroll"><div className="pad column chooser">
-            <h2 className="screen-title">Machines</h2>
-            {/* The rows below show each machine and its dot; the readout
-                only says what is running and what waits for the owner. */}
-            {(runningCount > 0 || blocked.length > 0) && <p className="readout">
-              {runningCount > 0 && `${runningCount} running`}
-              {runningCount > 0 && blocked.length > 0 && ' · '}
-              {blocked.length > 0 && <span className="attention">{blocked.length} {blocked.length === 1 ? 'needs' : 'need'} you</span>}
-            </p>}
-            {envs.length > 0 ? (
-              <div className="rows plain">
-                {envs.map((e) => {
-                  const waiting = waitingCountOn(e);
-                  return (
-                    <button key={e.id} className={`row tall machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
-                      <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-                      <span className="grow">
-                        <span className="rt"><span className="rt-text">{e.name}</span></span>
-                        <span className="rm">
-                          {e.online
-                            ? activityOn(e, 'No chats are running.')
-                            : e.lastSeen ? `Offline · seen ${ago(e.lastSeen)}` : 'Never connected'}
-                        </span>
-                      </span>
-                      {waiting > 0 && <span className="badge">{waiting}</span>}
-                      <span className="chev"><Icon name="forward" size={15} /></span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="empty quiet">
-                {envError ? 'The connecting machine did not answer.' : 'You have no machines yet.'}
-                {!error && <div className="note">Run <code>helm add pc</code> on a machine in your network.</div>}
-              </div>
-            )}
-          </div></div>
+          // A wide screen with no machine open: Home, where the logo leads.
+          <Home
+            client={client} near={lastMachine.current}
+            machines={envs.map((e) => ({ env: e, running: workingThreadsOn(e).length, waiting: e.online ? waitingCountOn(e) : 0 }))}
+            onOpenMachine={openEnv}
+            onStart={(info, run, message) => {
+              const chat = beginChat(client, info, run);
+              if (message) sendWhenReady(chat.id, message);
+              navigate([{ kind: 'env' }, { kind: 'starting', startId: chat.id }], info.envId);
+            }}
+          />
         ) : view.kind === 'brain' ? (
           <BrainView
             key={env.id}

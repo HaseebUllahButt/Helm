@@ -26,6 +26,29 @@ edited files in; with none, the Git sheet says so.
   same tree.
 - **Tests:** `test/git`, `git-head`; `test/browser/inline-diff`.
 
+## Optional change tours
+- **Reach:** open a chat's **Git** screen. Choose **Uncommitted edits** or
+  **Branch compared with main**, then press **Tour**. In **Graph**, open a
+  commit and press **Tour this commit**. Opening Git never starts a helper.
+- **Rules:** the helper uses the chat's account and its small model when one
+  is available. The diff is a saved copy, treated as data. The helper has no
+  inherited parent context and sends no result into the parent's conversation.
+  It runs outside the repo, so repo instructions do not enter its prompt.
+  Changed files without a valid stop appear under **Also changed**. Secrets
+  stay hidden. Tours stay on the machine under `git-tours`, outside the repo.
+  Saved tours use the exact change, including its base and content. Old tours
+  keep their saved excerpts and say they are old; reads never replace them.
+- **Prove (driven 2026-10-27):** use the private copy and a fake chat in a
+  throwaway repo. Change two text files, add one file and `.env`. Press
+  **Tour**. See the stops, **Needs your decision**, and **Also changed**.
+  Use **Next**, close and reopen the tour, and check that no helper starts.
+  Use **fake-slow** with a new change to see **Stop writing** and stop it.
+  Choose the branch comparison, then tour a commit from **Graph**. Tour an
+  older commit and see its old-tour notice. Check phone and computer sizes.
+- **Tests:** `test/git-tour.test.mjs`, `test/delegation.test.mjs`;
+  `test/driver-acp.test.mjs` covers the fake agent's transport.
+  `test/browser/git-notifications.test.mjs` checks the tour controls at both sizes.
+
 ## A worktree per chat (`helm.json`)
 - **Rules:** a repo opts in with a committed `helm.json` at its root:
   `{"worktrees": "per-chat", "setup": "<optional command>"}`. Never for
@@ -33,6 +56,14 @@ edited files in; with none, the Git sheet says so.
   a linked worktree, or the checkout Helm runs from. Only the branch is
   renamed after the chat; the folder keeps its `-chat-<id>` name because
   the CLI files its conversation under that path.
+- **End of a copy:** Helm removes the folder and branch once the branch is
+  merged. After an hour of quiet with commits not merged and nothing else in
+  the folder (ignored files count, built output does not), the folder goes
+  and the branch stays ("parked") until it is merged. A message rebuilds
+  the folder, from the current branch if the base is gone. A helper made
+  with `helm delegate --worktree` gets the same record; agents never remove
+  these copies by hand, because a helper whose folder was gone failed on
+  every message.
 - **Prove (driven 2026-10-20):** make `$W` as above with
   `{"worktrees":"per-chat","setup":"sleep 45"}` and a `node_modules/x`.
   `session.start` in `$W` returns a `cwd` of `$W-chat-<id>`; open it: the
@@ -44,7 +75,7 @@ edited files in; with none, the Git sheet says so.
   before removing a merged worktree; a rebuilt branch starts afresh. A
   Codex thread still open in its daemon keeps its folder: the native check
   joins it again within 2.5 s and rebuilds it, which looped every 3 s.
-- **Tests:** `test/chat-worktree`, `native-codex`.
+- **Tests:** `test/chat-worktree`, `native-codex`, `delegation`.
 
 ## CI / CD
 - **Not yet driven;** needs a GitHub repo and account. Merge needs an

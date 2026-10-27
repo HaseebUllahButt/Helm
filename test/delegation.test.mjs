@@ -850,29 +850,6 @@ test('no account by that name lists the accounts that do exist', () => {
   assert.throws(() => chooseAgent([{ id: 'claudes', engine: 'claude' }, { id: 'a1', engine: 'agy' }], 'pc'), /no CLI account "pc" here; accounts: claudes, a1/);
 });
 
-test('helm help <command> prints that command and its relatives, and --help before -- asks for it', async () => {
-  const { commandHelp, wantsHelp } = await import('../packages/connect/src/help.js');
-  const usage = [
-    'helm - title', '',
-    '  helm exec <machine> -- <command>', '                                    run there',
-    '    --env NAME=value               environment',
-    '  helm exec-status <machine> <id>   read it later',
-    '  helm execute-not <x>              unrelated',
-    '  helm say <id> <text...>           send a message', '',
-  ].join('\n');
-  const exec = commandHelp('exec', usage);
-  assert.match(exec, /helm exec <machine>/);
-  assert.match(exec, /--env NAME=value/);
-  assert.match(exec, /helm exec-status/);
-  assert.match(exec, /Do not rerun a command/);
-  assert.doesNotMatch(exec, /execute-not|helm say/);
-  assert.equal(commandHelp('nosuch', usage), null);
-  assert.equal(commandHelp('', usage), null);
-  assert.ok(wantsHelp(['--help']));
-  assert.ok(wantsHelp(['same', '-h']));
-  assert.ok(!wantsHelp(['same', '--', 'explain --help to me']), 'task words after -- are literal');
-});
-
 test('a child works in the folder the caller names, else where its parent does', async (t) => {
   const { sessions } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
@@ -903,7 +880,7 @@ test('--worktree gives the child its own checkout on a helm/ branch, named after
   assert.doesNotMatch(run('branch', '--list', 'helm/refused-task').toString(), /refused-task/);
 });
 
-test('the CLI sends its own folder only when no parent chat decides it', async () => {
+test('helm delegate needs a parent chat; the parent folder wins unless --cwd names one', async () => {
   const calls = [];
   const rpc = async (_self, method, params) => {
     calls.push({ method, params });
@@ -911,7 +888,7 @@ test('the CLI sends its own folder only when no parent chat decides it', async (
     return { session: { id: 'child', engine: 'claude' } };
   };
   const run = (args, extra) => runAgentCommand('delegate', [...args, '--json', '--', 'Look'],
-    { rpc, self: 'self', cwd: '/shell', write: () => {}, sleep: async () => {}, ...extra });
+    { rpc, self: 'self', write: () => {}, sleep: async () => {}, ...extra });
   await run(['claude-main'], { parentId: 'parent' });
   assert.equal(calls.at(-1).params.cwd, undefined, 'inside a chat the parent folder wins');
   await run(['claude-main', '--cwd', '/worktree'], { parentId: 'parent' });
@@ -919,8 +896,13 @@ test('the CLI sends its own folder only when no parent chat decides it', async (
   assert.equal(calls.at(-1).params.worktree, undefined);
   await run(['claude-main', '--worktree'], { parentId: 'parent' });
   assert.equal(calls.at(-1).params.worktree, true);
-  await run(['claude-main'], { parentId: null });
-  assert.equal(calls.at(-1).params.cwd, '/shell');
+  // From a plain shell or through helm exec, a helper had no chat to show it
+  // or read its result, and its project copy broke once it was removed.
+  const asked = calls.length;
+  await assert.rejects(() => run(['claude-main', '--worktree'], { parentId: null }), /works inside a Helm chat only.*helm spawn/);
+  assert.equal(calls.length, asked, 'nothing reaches Helm');
+  await run(['claude-main', '--parent', 'chosen'], { parentId: null });
+  assert.equal(calls.at(-1).params.id, 'chosen');
 });
 
 test('agents get the tool instructions as standing instructions, not in the owner\'s message', async (t) => {
@@ -1206,6 +1188,25 @@ test('the browser note rides along only where a browser can start', async () => 
   assert.match(browserNote({ bowser: true }), /--engine bowser/);
 });
 
+// Every chat pays for these notes before it does any work, and every message
+// carries the reminder. Lower the numbers when the text shrinks; raise them
+// only when the owner wants the new text.
+test('the notes every agent gets match the committed size', async () => {
+  const { helmBrief } = await import('../packages/connect/src/delegation.js');
+  const { browserNote } = await import('../packages/connect/src/browser.js');
+  const { worktreeNote } = await import('../packages/connect/src/chat-worktree.js');
+  const { readFileSync } = await import('node:fs');
+  const budget = JSON.parse(readFileSync(new URL('./agent-context-budget.json', import.meta.url), 'utf8'));
+  const net = { self: 'a', machines: { a: { id: 'a', name: 'Laptop' }, b: { id: 'b', name: 'VM', kind: 'vm' }, c: { id: 'c', name: 'HomePC', kind: 'pc' } } };
+  // The browser note depends on this machine; count the version without Bowser.
+  const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:')).join('\n');
+  const notes = [brief, browserNote({ bowser: false }), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
+  assert.deepEqual(
+    { notesBytes: Buffer.byteLength(notes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
+    { notesBytes: budget.notesBytes, reminderBytes: budget.reminderBytes },
+  );
+});
+
 test('a helper with no thread to sit under lists on its own, and its team nests under it', async (t) => {
   const { sessions, drivers } = setup(t);
   // `helm delegate` from a plain shell: no parent. Its own children have it as parent.
@@ -1340,4 +1341,18 @@ test('reading five helper replies removes their real parent queue tickets withou
   await messages.send({id:child.id,to:{env:'local',id:parent.id},text:'Update 0',messageId:ids[0]});
   assert.equal(sessions.events.tail(parent.id,0).filter(e=>e.type==='turn.start'&&e.source==='agent').length,5);
   assert.deepEqual(await messages.collectResult({id:child.id,parentId:parent.id,consume:true}),[]);
+});
+
+test('tour helpers stay visible and do not send their JSON to the parent', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'codex-main', mode: 'readonly',
+    task: 'Write a Git review tour.\n' + 'data '.repeat(7000), tour: true });
+  assert.equal(sessions.get(child.id).delegation.notifyParent, false);
+  assert.equal(sessions.get(child.id).delegation.codexFork, undefined);
+  assert.equal(sessions.get(child.id).delegation.hidden, undefined);
+  drivers.get(child.id).finish();
+  assert.equal(sessions.delegationResult(child.id).status, 'done');
+  assert.equal(drivers.get(parent.id).sent, undefined);
+  assert.ok((await sessions.list({ parentId: parent.id })).some(s => s.id === child.id));
 });

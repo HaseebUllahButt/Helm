@@ -1,13 +1,13 @@
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { parseAgentArgs } from './delegation.js';
+import { parseAgentArgs } from './agent-args.js';
 
 export async function runBrowserCommand(args, { rpc, self, findSession, env = process.env, print = console.log } = {}) {
   const { words, options } = parseAgentArgs(args, { values: ['session', 'engine', 'output', 'budget', 'note'], switches: ['full-page', 'default', 'clear-default'] });
   const [command = 'tabs', tabId, source] = words;
-  if (['help', '--help'].includes(command)) { print('helm browser open <url> [--engine chromium|bowser] | tabs | look <tab> | act <tab> <JSON> | flows | run <tab> <name> key=value ... | point <tab> <element # or CSS selector> [--note <text>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default [--session <thread>]'); return; }
+  if (['help', '--help'].includes(command)) { print('helm browser open <url> [--engine chromium|bowser] | tabs | look <tab> | act <tab> <JSON> | flows | run <tab> <name> key=value ... | point <tab> <element # or CSS selector> [--note <text>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default [--session <chat-id>]'); return; }
   const sessionId = options.session || env.HELM_SESSION_ID || env.HELM_NATIVE_SESSION;
-  if (!sessionId) throw new Error('run browser commands in a Helm chat, or pass --session <thread>');
+  if (!sessionId) throw new Error('run browser commands in a Helm chat, or pass --session <chat-id>');
   const target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
   const id = target.session.id;
   let result;

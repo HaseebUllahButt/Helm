@@ -41,6 +41,8 @@ import { lanAddresses } from './net-addr.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare } from './shares.js';
+import { Forwards, forwardedPorts } from './forwards.js';
+import { ownerSeenAt } from '@helm/protocol/owner-seen';
 import { publicHosts } from '@helm/protocol/share';
 import { brief, render, summaryLine, readThread, readSnapshot, writeSnapshot, mergeSnapshot, fold } from './brain.js';
 import { forWire } from './events.js';
@@ -53,9 +55,10 @@ import { TaskTransfers } from './task-transfer.js';
 import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { CliUpdater } from './cli-updates.js';
-import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, watchCheckout } from './update.js';
+import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, rebuildStaleApp, watchCheckout } from './update.js';
 import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
+import { GitTours } from './git-tour.js';
 import { worktreeNote } from './chat-worktree.js';
 import { createGithubMonitor } from './github.js';
 import { createGithubRepos } from './github-repos.js';
@@ -71,6 +74,7 @@ import { ExecutionJobs } from './execution.js';
 import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
 import { InputDelivery } from './input-delivery.js';
 import { ChatEventStream } from './event-stream.js';
@@ -359,7 +363,7 @@ export class Daemon {
       const running = (await this.#versionP)?.full;
       const net = loadNetwork() ?? this.net;
       const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
-        syncFromBundle, net, id: this.id, rpc: hubRpc });
+        rebuildStaleApp, syncFromBundle, net, id: this.id, rpc: hubRpc });
       this.syncNote = r.note ?? null;
       if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting now'); }
     } catch (err) {
@@ -409,8 +413,14 @@ export class Daemon {
     // would otherwise undo that rename on every restart.
     this.name = net.machines[net.self]?.name || name || hostname();
     this.copyReceiver = new CopyReceiver({ network: () => loadNetwork() ?? this.net });
+    // `helm forward`: ports of other machines on this machine's localhost.
+    this.forwards = new Forwards({
+      network: () => loadNetwork() ?? this.net,
+      rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 15_000, ...opts }),
+      log: (line) => console.error(`[helm] ${line}`),
+    });
     this.executions = new ExecutionJobs();
-    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id) }, onOpen: payload => this.#emit(E.BROWSER_TAB, payload) });
+    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id), appProcessRoots: id => this.sessions.appProcessRoots(id) } });
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),
       // Only asked on Windows, where a running program can not be replaced.
@@ -452,6 +462,10 @@ export class Daemon {
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
       emit: payload => this.#emit('agent.message', payload) });
     if (brainHost((loadNetwork() ?? this.net).machines)?.id !== this.id) this.sessions.retireBrains();
+    this.gitTours = new GitTours({ sessions: this.sessions, agents: async (id) => {
+      const profiles = (await getProfiles()).filter(p => p.id === id);
+      return agentCatalog(profiles, await authStatuses(profiles));
+    } });
     this.github = createGithubMonitor({
       context: gitq.githubContext, watchFile: join(HELM_DIR, 'github-watches.json'),
       accountFile: join(HELM_DIR, 'github-accounts.json'),
@@ -504,6 +518,7 @@ export class Daemon {
       },
     });
     this.taskTransfers.start();
+    this.forwards.begin().catch((err) => console.error(`[helm] forwards: ${err.message}`));
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
     // path: a message must not wait on every machine answering. The refresh
@@ -742,6 +757,7 @@ export class Daemon {
     this.#stopWatchCheckout?.();
     this.cliUpdates?.stop();
     this.taskTransfers?.stop();
+    await this.forwards?.stop();
     await this.sendEngine?.stop();
     this.schedules?.stop();
     this.search?.close();
@@ -1506,6 +1522,8 @@ export class Daemon {
       this.schedules?.share()?.port,
       // Ports shared on purpose with `helm share`, and only those.
       ...listShares().map((share) => share.port),
+      // Ports forwarded on purpose to another machine with `helm forward`.
+      ...forwardedPorts(),
       ...(Array.isArray(extra) ? extra.map(Number) : []),
     ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
   }
@@ -1625,8 +1643,9 @@ export class Daemon {
       case M.EXEC_READ: return this.executions.read(p, caller ?? this.id);
       case M.EXEC_CANCEL: return this.executions.cancel(p, caller ?? this.id);
       case M.ENV_INFO:
-        return { ...(await this.describe()), name: this.name };
+        return { ...(await this.describe()), name: this.name, web: webBuild() };
 
+      case M.GIT_TOUR: return this.gitTours.dispatch(p);
       case M.GIT_STATUS: return gitq.status(p.cwd);
       case M.GIT_GRAPH: return gitq.graph(p.cwd, await this.sessions.list());
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
@@ -1762,6 +1781,13 @@ export class Daemon {
       }
       case M.SHARE_REMOVE:
         return { removed: removeShare(p.name) };
+
+      case M.FORWARD_LIST:
+        return { forwards: this.forwards.list(), ownerSeenAt: ownerSeenAt(), features: ['forward'] };
+      case M.FORWARD_ADD:
+        return { forward: await this.forwards.add(p) };
+      case M.FORWARD_REMOVE:
+        return this.forwards.remove(String(p.id ?? ''), { notify: p.notify === true });
 
 
       case M.FS_LIST:   return fsApi.list(p.path);
@@ -1997,8 +2023,11 @@ export class Daemon {
         if (!(loadNetwork() ?? this.net).machines?.[caller]) throw new Error('Agent messages must come from a paired machine.');
         return this.agentMessages.receive(p.message, caller);
       // Only the keeper starts a hidden helper; one asked for from outside is
-      // always a card in its chat, where the owner can see it.
-      case M.SESSION_DELEGATE: return this.sessions.delegate({ ...p, hidden: false });
+      // always a card in its chat, where the owner can see it. A helper with
+      // no chat had no card and no one to read its result.
+      case M.SESSION_DELEGATE:
+        if (!p?.id) throw new Error('A helper needs the chat that starts it. To start work on another machine, use helm spawn.');
+        return this.sessions.delegate({ ...p, hidden: false, tour: false });
       case M.SESSION_DELEGATION_RESULT: {
         await this.sessionRecovery;
         const result = this.sessions.delegationResult(p.id, p);

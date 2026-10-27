@@ -125,6 +125,7 @@ export const M = {
   // for the same reason as a rename: `kind` lives on its own roster record.
   MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }
   // What a session did to its folder, as git sees it.
+  GIT_TOUR: 'git.tour',            // { sessionId, cwd, scope: edits|branch|commit, hash?, action: get|start|stop }
   GIT_STATUS: 'git.status',        // { cwd } -> { repo, branch?, ahead?, behind?, files[], worktree?, head? }
   GIT_GRAPH: 'git.graph',          // { cwd } -> bounded commit ancestry and live agents by checkout
   GIT_DIFF: 'git.diff',            // { cwd, path } -> { path, diff, truncated }
@@ -307,6 +308,9 @@ export const M = {
   SHARE_LIST: 'share.list',        // { forHub?, members? } -> { shares[], features? }  hashes and private links only for a hub that asks
   SHARE_ADD: 'share.add',          // { name?, port, password?, private? } -> { share }
   SHARE_REMOVE: 'share.remove',    // { name } -> { removed }
+  FORWARD_LIST: 'forward.list',    // {} -> { forwards[], ownerSeenAt }  ownerSeenAt: when the owner last used Helm in a browser on this machine
+  FORWARD_ADD: 'forward.add',      // { id, side: 'in'|'out', peer, port, localPort?, expiresAt? } -> { forward }  in: listen here; out: let the peer reach port here
+  FORWARD_REMOVE: 'forward.remove', // { id, notify? } -> { removed }  notify: tell the other machine to remove its side too
 
   // A round trip that does nothing, for measuring what one costs. The
   // terminal needs to know: how it draws depends on how far away you are.
@@ -324,7 +328,6 @@ export const M = {
 export const E = {
   SEND_UPDATE: 'send.update', // { job } source-owned durable send progress
   GIT_MONITOR: 'git.monitor',      // { id, snapshot, watching } background GitHub watch update
-  BROWSER_TAB: 'browser.tab',      // { id, tabId, viewer? } a browser tab opened in a chat
   // Terminal output, pushed while a viewer is attached.
   //
   // From a pty helm owns this is the raw byte stream, appended as it arrives.

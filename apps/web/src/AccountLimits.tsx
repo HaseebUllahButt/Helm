@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Client, Environment } from './client';
 import type { LimitWindow } from './session/limits';
-import { resetPhrase } from './session/limits';
+import { resetPhrase, whenPhrase } from './session/limits';
 import { EngineMark } from './EngineMark';
 
 export interface LimitAccount {
@@ -62,7 +62,8 @@ const PLAN_KEY = 'helm.plans.v1';
 const readPlans = (): Record<string, number> => {
   try { return JSON.parse(localStorage.getItem(PLAN_KEY) || '{}') ?? {}; } catch { return {}; }
 };
-const WEEK_MS = 7 * 86_400_000;
+/** How long each allowance window lasts, to measure pace. */
+const WINDOW_MS: Record<string, number> = { '5h': 5 * 3_600_000, '7d': 7 * 86_400_000 };
 /** The allowance windows as a person says them. */
 const WINDOW_NAMES: Record<string, string> = { '5h': '5 hours', '7d': 'Week' };
 const money = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`;
@@ -124,7 +125,9 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
     }
     rows.push({ key: `${env.id}:${account.account}`, account, members: [account], machines: [{ env, at: newest(account.windows) }], windows: account.windows, spends: [] });
   }
-  rows.sort((a, b) => Number(!!b.windows.length) - Number(!!a.windows.length));
+  // Accounts with a live allowance first; stale and silent ones sink.
+  const fresh = (r: Row) => Number(r.windows.some(w => !w.resetsAt || w.resetsAt * 1000 > now)) * 2 + Number(!!r.windows.length);
+  rows.sort((a, b) => fresh(b) - fresh(a));
 
   // Spend is counted per login home. It belongs to an account row only when
   // exactly one account uses that home; a shared home gets a line of its own.
@@ -157,51 +160,59 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
     <h2 className="section">Accounts</h2>
     {shown.length > 0 && <div className="usage-panel">{shown.map(row => {
       const a = row.account;
-      return <div className="usage-account" key={row.key}>
+      // A window past its reset says nothing true about now, so it is not
+      // drawn. An account with nothing live and nothing spent is one line.
+      const live = row.windows.filter(w => !w.resetsAt || w.resetsAt * 1000 > now);
+      const spends = row.spends.filter(s => s.costUsd > 0 || plans[s.key]);
+      const at = Math.max(0, ...row.machines.map(m => m.at));
+      const where = row.machines.map(({ env: m, at }) => `${m.name}${failed[m.id] ? ' (unavailable)' : ''}${at ? ` ${age(at, now)} ago` : ''}`).join(' · ');
+      return <div className={`usage-account${!row.shared && !live.length && !spends.length ? ' idle' : ''}`} key={row.key}>
         <div className="usage-account-name">
           <EngineMark engine={a.engine} className="usage-share-mark" />
           <b>{a.engine} <span>{nameOf(a)}</span></b>
-          <small title={a.aliases.join(', ')}>
+          <small title={row.shared ? a.aliases.join(', ') : where}>
             {row.shared ? (row.shared.length ? `Shared by ${row.shared.join(', ')}` : 'Helm has no account report.')
-              : row.machines.map(({ env: m, at }, i) => <span key={m.id} title={at ? new Date(at).toLocaleString() : undefined}>
-                {i > 0 && ' · '}{m.name}{failed[m.id] ? ' (unavailable)' : ''}{at ? `${row.machines.length > 1 ? '' : ' · reported'} ${age(at, now)} ago` : ''}
-              </span>)}
+              : !row.windows.length ? 'Helm has no limit report yet.'
+              : !live.length ? 'No report since the reset'
+              : at ? (now - at < 60_000 ? 'just now' : `${age(at, now)} ago`) : where}
           </small>
         </div>
-        {!row.shared && !row.windows.length && <p className="usage-limits-note">Helm has no limit report yet.</p>}
-        {row.windows.length > 0 && <div className="usage-account-windows">
-          {row.windows.map(w => {
-            const expired = !!w.resetsAt && w.resetsAt * 1000 <= now;
+        {live.length > 0 && <div className="usage-account-windows">
+          {live.map(w => {
             const left = Math.round((100 - w.used) * 10) / 10;
-            // How far through the week the reading was taken: pace is use
-            // so far over time so far. A first-hour reading is kept from
-            // claiming a thousand percent.
-            const elapsed = w.label === '7d' && !expired && w.resetsAt
-              ? Math.min(1, Math.max(0.05, 1 - (w.resetsAt * 1000 - w.at) / WEEK_MS)) : 0;
+            // How far through the window the reading was taken: pace is use
+            // so far over time so far. A reading in the window's first
+            // twentieth is kept from claiming a thousand percent.
+            const span = WINDOW_MS[w.label];
+            const elapsed = span && w.resetsAt
+              ? Math.min(1, Math.max(0.05, 1 - (w.resetsAt * 1000 - w.at) / span)) : 0;
             const pace = elapsed ? w.used / elapsed : 0;
-            return <div className={`usage-allowance${expired ? ' expired' : ''}${pace > 100 ? ' dry' : ''}`} key={w.label}>
+            // At that pace, when the rest is used up.
+            const out = pace > 100 ? w.at + (100 - w.used) / w.used * elapsed * span : 0;
+            return <div className={`usage-allowance${pace > 100 ? ' dry' : ''}`} key={w.label}
+              title={pace > 0 ? `At this pace: ${Math.round(pace)}% used by the reset` : undefined}>
               <span className="usage-window">{WINDOW_NAMES[w.label] ?? w.label}</span>
-              {expired ? <span className="usage-window-meter" /> : <div className="usage-meter" role="meter" aria-label={`${a.engine} ${nameOf(a)} ${w.label} remaining`}
-                aria-valuemin={0} aria-valuemax={100} aria-valuenow={left}><span style={{ width: `${left}%` }} /></div>}
-              <b>{expired ? 'Waiting for a report' : `${left}% left`}</b>
+              <div className="usage-meter" role="meter" aria-label={`${a.engine} ${nameOf(a)} ${w.label} remaining`}
+                aria-valuemin={0} aria-valuemax={100} aria-valuenow={left}><span style={{ width: `${left}%` }} /></div>
+              <b>{left}% left</b>
               <small>
-                {expired ? 'The reset time passed.' : resetPhrase(w.resetsAt, now) || 'Helm has no reset time.'}
-                {pace > 100 ? <> · <em>Usage will reach the limit before the reset.</em></> : pace > 0 ? ` · estimated weekly usage: ${Math.round(pace)}%` : ''}
+                {resetPhrase(w.resetsAt, now) || 'Helm has no reset time.'}
+                {out > 0 && <> · <em>{out > now ? `Runs out ${whenPhrase(out, now)}` : 'Used up now at this pace'}</em></>}
               </small>
             </div>;
           })}
         </div>}
-        {row.spends.map(s => {
+        {spends.map(s => {
           const weekly = perWeek === null ? null : s.costUsd * perWeek;
-          const week = row.windows.find(w => w.label === '7d' && w.resetsAt && w.resetsAt * 1000 > now);
+          const week = live.find(w => w.label === '7d' && w.resetsAt);
           // What the whole week's allowance buys at API rates, from this
           // week's spend and how much of the allowance it used.
           const worth = weekly !== null && week && week.used > 0 && s.alone ? weekly / (week.used / 100) : null;
           const price = plans[s.key];
           const weeklyPrice = price ? (price * 12) / 52 : null;
           return <div className="usage-value" key={s.key}>
-            <span><b>{money(s.costUsd)}{s.unpriced ? '+' : ''}</b> at pay-per-use prices{weekly !== null && win !== '7d' ? ` · ≈ ${money(weekly)} a week` : ''}</span>
-            {worth !== null && <span>Full weekly allowance ≈ <b>{money(worth)}</b></span>}
+            <span><b>{money(s.costUsd)}{s.unpriced ? '+' : ''}</b> at pay-per-use prices{weekly !== null && win !== '7d' ? ` · ≈ ${money(weekly)} a week` : ''}
+              {worth !== null && <> · full week ≈ <b>{money(worth)}</b></>}</span>
             {weekly !== null && weeklyPrice && <span><b className="usage-plan-mult">{(weekly / weeklyPrice).toFixed(1)}×</b> the plan price</span>}
             <details className="usage-plan">
               <summary>{price ? `Plan $${price}/month` : 'Add plan price'}</summary>

@@ -15,7 +15,11 @@ import { collapse, expand } from './paths.js';
  * gets a sibling checkout on a new branch from the repo's current branch,
  * made usable at once (dependencies linked, never installed), and its folder
  * is removed again once its branch is merged back and the chat is idle, or
- * after an hour of quiet when it never committed anything.
+ * after an hour of quiet when it never committed anything. After an hour of
+ * quiet with all its work committed but not merged, the folder goes and the
+ * branch stays ("parked"); the next message rebuilds the folder from it.
+ * A helper started with `helm delegate --worktree` gets the same record
+ * (older helpers do not).
  */
 
 const exec = promisify(execFile);
@@ -67,6 +71,19 @@ export async function makeChatWorktree(plan, id) {
   const path = expand(made.path);
   const links = linkCheckout(plan.root, path);
   return { record: { repo: collapse(plan.root), path: made.path, branch: made.branch, base, start }, cwd: plan.rel ? join(path, plan.rel) : path, links };
+}
+
+/**
+ * A helper's own checkout (`helm delegate --worktree`): the record a chat's
+ * worktree has, so Helm tidies, parks and rebuilds it the same way. Agents
+ * removed these by hand, and a helper whose folder was gone failed on every
+ * message.
+ */
+export async function makeHelperWorktree(cwd, name) {
+  const made = await addWorktree(cwd, name);
+  const path = expand(made.path);
+  linkCheckout(expand(made.repo), path);
+  return { ...made, start: await git(path, ['rev-parse', 'HEAD']) };
 }
 
 /** Caches a tool writes into; shared with the main checkout they would mix two trees' builds. */
@@ -215,13 +232,29 @@ export async function keepReason(record, { merged = true } = {}) {
   if (!base) return 'no base';
   const inBase = await exec('git', ['-C', dir, 'merge-base', '--is-ancestor', tip, base]).then(() => true, () => false);
   if (!inBase) return 'unmerged';
+  return await uncommitted(record) ? 'uncommitted' : null;
+}
+
+/** Built output a tool makes again; a parked folder may lose it. */
+const REBUILT = /(^|\/)(dist|build|out|coverage|\.next|\.nuxt|\.turbo|\.cache|\.vite|\.vite-temp|__pycache__|\.pytest_cache)$|\.(tsbuildinfo|pyc)$/;
+
+/**
+ * Whether the folder holds work its branch does not: changes, new files,
+ * and with `ignored` also files git ignores (a local database, an .env made
+ * there). Links Helm made and `node_modules` do not count; with `ignored`,
+ * built output does not either. A merged chat's ignored files go with it;
+ * a parked one keeps its folder for them.
+ */
+export async function uncommitted(record, { ignored = false } = {}) {
+  const dir = expand(record.path);
   const main = await mainCheckout(dir);
-  const raw = await git(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=normal']);
-  const changes = raw.split('\0').filter(Boolean).filter((line) => {
-    if (!line.startsWith('?? ')) return true;
-    return !helmLink(join(dir, line.slice(3).replace(/\/$/, '')), main);
+  const raw = await git(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=normal', ...(ignored ? ['--ignored'] : [])]);
+  return raw.split('\0').filter(Boolean).some((line) => {
+    if (!line.startsWith('?? ') && !line.startsWith('!! ')) return true;
+    const rel = line.slice(3).replace(/\/$/, '');
+    if (helmLink(join(dir, rel), main)) return false;
+    return line.startsWith('?? ') || !REBUILT.test(rel);
   });
-  return changes.length ? 'uncommitted' : null;
 }
 
 /** A `node_modules` folder or a link into the main checkout: what linkCheckout made. */
@@ -240,14 +273,29 @@ async function mainCheckout(dir) {
   try { return realpathSync(common.replace(/\/\.git\/?$/, '')); } catch { return null; }
 }
 
-/** Remove the folder and its branch. Callers check keepReason first. */
-export async function removeChatWorktree(record) {
+/**
+ * Remove the folder and its branch, or with `keepBranch` only the folder.
+ * Callers check keepReason (and uncommitted, to park) first.
+ */
+export async function removeChatWorktree(record, { keepBranch = false } = {}) {
   const dir = expand(record.path);
   const repo = expand(record.repo);
   // --force: the links and node_modules Helm made are untracked files, and
   // keepReason has already said that nothing else is.
   await git(repo, ['worktree', 'remove', '--force', dir]);
-  await git(repo, ['branch', '-D', record.branch]).catch(() => {});
+  if (!keepBranch) await git(repo, ['branch', '-D', record.branch]).catch(() => {});
+}
+
+/** A parked branch merged into its base since: nothing is left to keep. */
+export async function dropMergedBranch(record) {
+  if (existsSync(expand(record.path))) return false;
+  const repo = expand(record.repo);
+  const tip = await git(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${record.branch}`]).catch(() => null);
+  if (!tip) return true;
+  const base = await git(repo, ['rev-parse', '--verify', '--quiet', `${record.base}^{commit}`]).catch(() => null);
+  if (!base || !await exec('git', ['-C', repo, 'merge-base', '--is-ancestor', tip, base]).then(() => true, () => false)) return false;
+  await git(repo, ['branch', '-D', record.branch]);
+  return true;
 }
 
 /**
@@ -261,20 +309,25 @@ export async function restoreChatWorktree(record) {
   if (existsSync(dir)) return null;
   const repo = expand(record.repo);
   await git(repo, ['worktree', 'prune']).catch(() => {});
+  // A base branch deleted since (a helper's parent, merged) gives way to
+  // what the repo has checked out now.
+  const base = await git(repo, ['rev-parse', '--verify', '--quiet', `${record.base}^{commit}`]).then(() => record.base, () => baseOf(repo));
   let start = record.start;
   if (await branchExists(repo, record.branch)) await git(repo, ['worktree', 'add', dir, record.branch]);
   else {
     // Its work is already in the base; from here only new commits count.
-    await git(repo, ['worktree', 'add', '-b', record.branch, dir, record.base]);
+    await git(repo, ['worktree', 'add', '-b', record.branch, dir, base]);
     start = await git(dir, ['rev-parse', 'HEAD']);
   }
   linkCheckout(repo, dir);
-  return { ...record, start };
+  const { parked, ...rest } = record;
+  return { ...rest, base, start };
 }
 
 /** The one line an agent in such a worktree is told. */
 export function worktreeNote(s) {
   const w = s?.chatWorktree;
   if (!w) return '';
+  if (s.delegation) return `[Helm worktree: This helper has its own git worktree and branch (git branch --show-current), made from ${w.base}. Commit all your work there before you finish; the chat that started you merges it. Never remove this worktree or its branch: Helm removes the worktree once the branch is merged, or after an hour of quiet, and keeps an unmerged branch.]`;
   return `[Helm worktree: This chat has its own git worktree and branch (git branch --show-current), made from ${w.base}. When your work is verified, merge it into ${w.base} in ${w.repo} yourself and resolve any clashes. Helm removes this worktree once it is merged.]`;
 }

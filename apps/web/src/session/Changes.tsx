@@ -4,6 +4,7 @@ import type { GitFile, GitStatus } from './gitStatus';
 import { DiffView } from './CodeView';
 import { FilesPanel } from './Files';
 import { GitGraph } from './GitGraph';
+import { GitTour, type TourTarget } from './GitTour';
 import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
 import { Pipeline, usePipeline } from './Pipeline';
@@ -44,6 +45,8 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
   // The badge that opened this counted changed files, so that is where it
   // lands; with nothing changed the graph is the news. Either is one tab away.
   const [tab, setTab] = useState<Tab>(() => ((status.files?.length ?? 0) + (status.more ?? 0) > 0 ? 'changes' : 'graph'));
+  const [tour, setTour] = useState<TourTarget | null>(null);
+  const [tourScope, setTourScope] = useState<'edits' | 'branch'>(() => status.files?.length ? 'edits' : 'branch');
   const [refresh, setRefresh] = useState(0);
   const [wrap, setWrap] = useState(() => window.matchMedia('(max-width: 599px)').matches);
   const files = status.files ?? [];
@@ -93,6 +96,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
   const sync = [status.ahead ? `${status.ahead} ahead` : '', status.behind ? `${status.behind} behind` : ''].filter(Boolean).join(', ');
 
   const pick = (next: Tab, focus = false) => {
+    setTour(null);
     setTab(next);
     if (focus) document.getElementById(`git-${next}-tab`)?.focus();
   };
@@ -130,6 +134,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
             </a>
           )}
         </div>
+        {sessionId && <div className="tour-launch"><label><select aria-label="Tour change" value={tourScope} onChange={e => setTourScope(e.target.value as 'edits' | 'branch')}><option value="edits">Uncommitted edits</option><option value="branch">Branch compared with main</option></select></label><button className="ghost" onClick={() => setTour({ scope: tourScope })}>Tour</button></div>}
         <div className="git-tabs" role="tablist" aria-label="Git views" onKeyDown={(event) => {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
           event.preventDefault();
@@ -141,7 +146,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
               aria-label={name === 'pipeline' ? 'Build checks' : undefined}
               // Only the open view's panel is drawn; pointing at the others
               // sent screen readers to an element that does not exist.
-              aria-controls={tab === name ? `git-${name}-panel` : undefined} onClick={() => pick(name)}>
+              aria-controls={!tour && tab === name ? `git-${name}-panel` : undefined} onClick={() => pick(name)}>
               {name === 'graph' ? 'Graph' : name === 'changes' ? 'Changes' : name === 'files' ? 'Files' : 'Build checks'}
               {name === 'changes' && total > 0 && <>{' '}<span className="git-count">{total}</span></>}
               {name === 'pipeline' && monitor.snapshot?.checksState && ['failure', 'pending'].includes(monitor.snapshot.checksState) && <span className={`pipeline-dot ${monitor.snapshot.checksState}`} aria-label={monitor.snapshot.checksState === 'failure' ? 'Checks failed' : 'Checks running'} />}
@@ -150,8 +155,8 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
         </div>
       </div></div>
       <div className="scroll"><div className="pad column">
-        {tab === 'graph' ? <div id="git-graph-panel" role="tabpanel" aria-labelledby="git-graph-tab">
-          <GitGraph client={client} env={env} cwd={cwd} refreshKey={`${status.head?.commit}:${refresh}`} onOpen={onOpen} wrap={wrap} />
+        {tour && sessionId ? <GitTour key={`${tour.scope}:${tour.hash ?? ''}`} client={client} env={env} cwd={cwd} sessionId={sessionId} target={tour} wrap={wrap} onClose={() => setTour(null)} /> : tab === 'graph' ? <div id="git-graph-panel" role="tabpanel" aria-labelledby="git-graph-tab">
+          <GitGraph client={client} env={env} cwd={cwd} refreshKey={`${status.head?.commit}:${refresh}`} onOpen={onOpen} wrap={wrap} onTour={sessionId ? hash => setTour({ scope: 'commit', hash }) : undefined} />
         </div> : tab === 'files' ? <div id="git-files-panel" role="tabpanel" aria-labelledby="git-files-tab">
           <FilesPanel client={client} env={env} cwd={cwd} refreshKey={`${status.head?.commit}:${refresh}`} changed={changedPaths} wrap={wrap}
             open={viewing} onOpen={setViewing} onChanges={showChanges} />

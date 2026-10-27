@@ -2,6 +2,9 @@
 
 A helper (subagent) is a second chat started by a chat, on any account. It
 shows as a card inside its parent, never as its own row in Working.
+Every helper has a parent chat: `helm delegate` from a plain shell or through
+`helm exec` is refused. Such a helper had no card, no reader for its result,
+and a project copy nobody kept. Another machine gets `helm spawn`.
 
 ## Start a subagent from the app
 - **Reach:** **Agents** in the chat header, or Ctrl/⌘+Shift+A.
@@ -24,7 +27,8 @@ shows as a card inside its parent, never as its own row in Working.
   packages/connect/bin/helm.js delegate fake --wait --json -- "hi"`: JSON
   with `"status": "done"` and the reply in `"output"`.
 - **Traps:** never unset `HELM_SESSION_ID` for real helpers (they would show
-  as separate chats). Helpers sharing a folder can clash; use `--worktree`.
+  as separate chats). Helpers sharing a folder can clash; use `--worktree` (its copy ends as
+  in git-and-schedules.md, "A worktree per chat").
   A finished helper releases its process after 30 s idle and resumes on a
   follow-up. A Codex helper that shares its parent's context keeps the
   native connection open instead. The "no nested CLI" rule is a request,

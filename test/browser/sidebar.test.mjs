@@ -354,12 +354,13 @@ test('Running counts only working threads and excludes idle native sessions', as
   await page.locator('.main.showing .session-bar').filter({ hasText: 'Stale work' }).waitFor();
   await page.goBack();
   await page.locator('.sidebar.showing').waitFor();
-  const readout = await page.locator('.main .chooser .readout').textContent();
+  const readout = await page.locator('.main .home .home-state').textContent();
   assert.match(readout, /1 running/);
   assert.match(readout, /1 needs you/);
-  const chooserRows = page.locator('.main .chooser .row.machine');
-  assert.equal(await chooserRows.filter({ hasText: 'laptop' }).locator('.rm').textContent(), '1 running');
-  assert.equal(await chooserRows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'No chats are running.');
+  const homeRows = page.locator('.main .home .row.machine');
+  assert.equal(await homeRows.filter({ hasText: 'laptop' }).locator('.rm').textContent(), '1 running');
+  assert.equal(await homeRows.filter({ hasText: 'laptop' }).locator('.badge').textContent(), '1');
+  assert.equal(await homeRows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'Nothing is running.');
   const machineSummaries = await rows.locator('.rm').allTextContents();
   const runningTotal = machineSummaries.reduce((total, text) => total + (+(/^(\d+) running$/.exec(text)?.[1] ?? 0)), 0);
   assert.equal(runningTotal, +(/(\d+) running/.exec(readout)[1]), 'sidebar per-machine counts add up to the readout');
@@ -369,6 +370,42 @@ test('Running counts only working threads and excludes idle native sessions', as
   assert.ok(await done.getByText('Shared stopped', { exact: true }).isVisible());
   await rows.filter({ hasText: 'vm' }).click();
   await page.locator('.main.showing h1').filter({ hasText: 'vm' }).waitFor();
+});
+
+test('the logo opens Home: a quick chat box with chips, and a row per machine', async t => {
+  const { page, boot } = await pageFor(t, { width: 1280, height: 900 });
+  await boot();
+  await page.evaluate(() => {
+    const session = (id, title, status) => ({ id, title, cwd: '/project', engine: 'codex', profileId: 'codex', driver: 'codex', turns: 1, status, alive: true, updatedAt: Date.now() });
+    window.started = [];
+    window.mount(window.makeClient([
+      { id: 'laptop', name: 'Laptop', online: true, info: {} },
+      { id: 'vm', name: 'VM', online: false, lastSeen: Date.now() - 2 * 3600_000, info: {} },
+    ], { laptop: [session('one', 'Build the API', 'working')] }, 'http://helm-test', {
+      'profile.list': { profiles: [{ id: 'codex', engine: 'codex' }] },
+      'session.start': () => {
+        window.started.push(true);
+        return { session: { id: 'quick', title: 'Quick chat', quick: true, cwd: '/tmp/q', engine: 'codex', profileId: 'codex', driver: 'codex', turns: 0, status: 'idle', alive: true, updatedAt: Date.now() } };
+      },
+    }));
+  });
+  // A wide screen opens on the first machine once.
+  await page.getByText('What should we build on', { exact: false }).waitFor();
+  await page.getByRole('button', { name: 'Home' }).click();
+  await page.getByRole('heading', { name: 'What should we build?' }).waitFor();
+  const rows = page.locator('.home .row.machine');
+  assert.equal(await rows.filter({ hasText: 'Laptop' }).locator('.rm').textContent(), '1 running');
+  assert.equal(await rows.filter({ hasText: 'VM' }).locator('.rm').textContent(), 'Offline · seen 2h ago');
+  // The box starts on the machine open before Home, with its agent.
+  await page.getByRole('button', { name: 'Machine: Laptop' }).waitFor();
+  await page.getByRole('button', { name: 'Agent: Codex' }).waitFor();
+  await page.getByRole('textbox', { name: 'Ask anything' }).fill('Add a health check');
+  await page.keyboard.press('Enter');
+  await page.locator('.main').getByText('Add a health check').first().waitFor();
+  assert.equal((await page.evaluate(() => window.started)).length, 1, 'a quick chat starts with no folder step');
+  await page.getByRole('button', { name: 'Home' }).click();
+  await rows.filter({ hasText: 'Laptop' }).click();
+  await page.getByText('What should we build on', { exact: false }).waitFor();
 });
 
 test('selected running threads have a distinct highlight on desktop and phone', async testContext => {

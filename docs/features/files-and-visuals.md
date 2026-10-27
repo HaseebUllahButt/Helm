@@ -25,8 +25,7 @@
   "[Image #1] …" with one preview left, the second picture.
 - **Rule:** a file dragged over the chat covers it with a "Drop to attach"
   card (`.drop-cover`, portalled into `.main`). The cover takes no pointer
-  events, so the drop still lands on the chat. A drag onto the sidebar,
-  browser panel or a terminal removes it.
+  events, so the drop still lands on the chat. A drag onto the sidebar or a terminal removes it.
 - **Prove the drop (driven 2026-10-24):** `eval` a `dragover` with a
   `DataTransfer` file on `.main`, `shot`, then a `drop`. Proof: the card,
   then the file in the box and no card.
@@ -35,10 +34,8 @@
 
 ## Canvas (notes and docs beside the chat)
 - **Reach:** the Canvas button in the chat header, or Ctrl/⌘ Shift D. A wide
-  screen gets a third column (shares the browser panel's slot, one at a
-  time); a phone gets a full-screen sheet. Escape closes either from
-  anywhere in the chat, unless a dialog, an open menu, a terminal or the
-  remote browser takes the key. Open state and file are kept per
+  screen gets a third column; a phone gets a full-screen sheet. Escape closes it from
+  anywhere in the chat, unless a dialog, an open menu or a terminal takes the key. Open state and file are kept per
   chat on the device. An agent's `helm canvas` opens it once per ask; closing
   it marks that ask closed on the chat (`session.canvas-closed`), so no other
   device or browser opens it again. A file name in a turn's "changed files" opens it there.

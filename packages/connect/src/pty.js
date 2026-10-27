@@ -57,6 +57,8 @@ export class Terminals extends EventEmitter {
   /** id -> { pty, ring, pending, timer, viewUntil, cols, rows } */
   #live = new Map();
 
+  pid(id) { return this.#live.get(id)?.pty.pid ?? null; }
+
   has(id) { return this.#live.has(id); }
 
   /** Which terminals are still running - what a reconnecting daemon asks. */
