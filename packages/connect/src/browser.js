@@ -64,7 +64,18 @@ const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 const MAX_THREAD_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 const POINTER_WORDS = { click: 'Clicking', hover: 'Pointing at', type: 'Typing into', select: 'Choosing in', upload: 'Uploading into', drag: 'Dragging', scroll: 'Scrolling', point: '' };
 const POINTER_CLEARS = ['navigate', 'back', 'forward', 'reload', 'resize'];
-const elementName = el => (el.getAttribute('aria-label') || el.labels?.[0]?.innerText || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (['submit', 'button', 'reset'].includes(el.type) ? el.value : '') || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+const pointerTarget = el => {
+  const view = el.ownerDocument.defaultView, rect = el.getBoundingClientRect();
+  const name = (el.getAttribute('aria-label') || el.labels?.[0]?.innerText || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (['submit', 'button', 'reset'].includes(el.type) ? el.value : '') || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+  let clipped = false;
+  for (let parent = el.parentElement || el.getRootNode().host; parent && !clipped; parent = parent.parentElement || parent.getRootNode().host) {
+    const style = view.getComputedStyle(parent), box = parent.getBoundingClientRect();
+    clipped = style.overflowX !== 'visible' && (rect.left < box.left || rect.right > box.right)
+      || style.overflowY !== 'visible' && (rect.top < box.top || rect.bottom > box.bottom);
+  }
+  return { name, main: view === view.top, clipped, viewport: { width: view.innerWidth, height: view.innerHeight },
+    box: rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null };
+};
 
 /** One persistent stdio bridge to the owner's Bowser. Closing it leaves Bowser intact. */
 export class BowserBridge {
@@ -193,7 +204,7 @@ export class BrowserManager {
       await context.exposeBinding('__helmOwnerInput', ({ page }) => this.ownerInput(page));
       await context.addInitScript(WINDOW_PAGE_SCRIPT);
     } catch (error) { await context.close().catch(() => {}); throw error; }
-    // A new window opens with one blank tab: the first tab Helm needs takes it.
+    // Some browser launchers open a blank tab: the first tab Helm needs takes it.
     // A window still open from before a restart keeps its tabs as they are.
     context.helmSpare = context.helmAttached ? null : context.pages()[0] || null;
     if (context.helmAttached) for (const page of context.pages()) this.register(sessionId, page).adopted = true;
@@ -630,6 +641,13 @@ export class BrowserManager {
     if (kind === 'point' && tab.engine === 'bowser') throw new Error('pointing works in isolated Chromium tabs, not Bowser');
     if (tab.engine === 'bowser') return this.bowserAction(tab, action);
     const page = tab.page;
+    // Resolve a plain target once. Both the pointer and the action use the
+    // same element, without reading the whole page a second time.
+    if (typeof action.target === 'string' && !/^\d+$/.test(action.target.trim())
+      && action.ref == null && !action.selector && !action.role && !action.name && action.x == null) {
+      const { elements } = await this.look(tab, 0);
+      action = { ...action, ref: resolveTarget(text(action.target, 500), elements, kind).ref };
+    }
     await this.aim(tab, action);
     if (kind === 'point') return { tab: this.metadata(tab) };
     if (['navigate', 'back', 'forward', 'reload'].includes(kind)) await this.go(tab, kind, action);
@@ -668,18 +686,32 @@ export class BrowserManager {
     const kind = action.kind;
     if (POINTER_CLEARS.includes(kind)) { if (tab.pointer) { tab.pointer = null; void tab.page.evaluate(clearPointer).catch(() => {}); } return; }
     if (!Object.hasOwn(POINTER_WORDS, kind) || kind !== 'point' && !tab.window) return;
-    const { width, height } = await this.viewSize(tab);
+    let size = tab.page.viewportSize();
+    const view = async () => size ||= await this.viewSize(tab);
     let x = kind === 'drag' ? action.toX : action.x, y = kind === 'drag' ? action.toY : action.y, box, name = '';
-    if (kind === 'scroll' && x == null) { x = Math.round(width / 2); y = Math.round(height / 2); }
+    if (kind === 'scroll' && x == null) { const { width, height } = await view(); x = Math.round(width / 2); y = Math.round(height / 2); }
     else if (x == null && !(kind === 'type' && !(action.ref || action.selector || action.name || action.role || action.target != null))) {
       let target; try {
         target = await this.target(tab, action);
-        if (!['point', 'upload'].includes(kind)) await target.scrollIntoViewIfNeeded({ timeout: 500 });
-        const timeout = kind === 'point' ? 5000 : 500, [found, label] = await Promise.all([target.boundingBox({ timeout }), target.evaluate(elementName, undefined, { timeout }).catch(() => '')]);
-        if (found) { box = { x: Math.round(found.x), y: Math.round(found.y), width: Math.round(found.width), height: Math.round(found.height) }; x = Math.round(found.x + found.width / 2); y = Math.round(found.y + found.height / 2); name = label; }
+        const timeout = kind === 'point' ? 5000 : 500;
+        let info = await target.evaluate(pointerTarget, undefined, { timeout });
+        if (info.main) size = info.viewport;
+        let found = info.main ? info.box : await target.boundingBox({ timeout });
+        const { width, height } = await view();
+        // A visible target needs no separate scroll and stability check:
+        // Chromium's action still checks that it can click or type there.
+        if (!['point', 'upload'].includes(kind) && (!info.main || info.clipped || !found
+          || found.x < 0 || found.y < 0 || found.x + found.width > width || found.y + found.height > height)) {
+          await target.scrollIntoViewIfNeeded({ timeout: 500 });
+          info = await target.evaluate(pointerTarget, undefined, { timeout });
+          if (info.main) size = info.viewport;
+          found = info.main ? info.box : await target.boundingBox({ timeout });
+        }
+        if (found) { box = { x: Math.round(found.x), y: Math.round(found.y), width: Math.round(found.width), height: Math.round(found.height) }; x = Math.round(found.x + found.width / 2); y = Math.round(found.y + found.height / 2); name = info.name; }
       } catch (error) { if (kind === 'point') throw error; } finally { if (target?.dispose) await target.dispose(); }
     }
     if (kind === 'point') tab.guide = action.x == null ? action : null;
+    const { width, height } = await view();
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > width || y > height) { if (kind === 'point') throw new Error('that spot is not on screen; scroll to it first'); return; }
     const note = kind === 'point' && action.note != null ? text(action.note, 300).trim() : '';
     const verb = kind === 'click' ? action.button === 'right' ? 'Right-clicking' : action.double ? 'Double-clicking' : 'Clicking' : kind === 'scroll' ? (action.dy ?? 500) < 0 ? 'Scrolling up' : 'Scrolling down' : POINTER_WORDS[kind];
@@ -850,8 +882,8 @@ export class BrowserManager {
   }
   /**
    * Some time after Helm starts: folders of chats deleted while it was down
-   * go, after a day untouched, and closed windows give back the space
-   * Chromium fills again by itself.
+   * go, after a day untouched. Closed windows lose component downloads and
+   * graphics files. Cached site files stay ready for the next visit.
    */
   async tidy() {
     let names; try { names = readdirSync(this.directory); } catch { return; }

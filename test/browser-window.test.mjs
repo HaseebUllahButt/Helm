@@ -12,7 +12,7 @@ process.env.HELM_NO_SERVICE = '1';
 test.after(() => rm(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
-const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow, stopWindow, profilePid } = await import('../packages/connect/src/browser-window.js');
+const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow, stopWindow, profilePid, trimProfile } = await import('../packages/connect/src/browser-window.js');
 const { chromium } = await import('playwright');
 const realChromium = [process.env.HELM_TEST_CHROMIUM, '/usr/bin/chromium', '/usr/bin/google-chrome', chromium.executablePath()].find(path => path && existsSync(path));
 // Playwright's own Chromium, else the system one Helm itself falls back to.
@@ -33,7 +33,7 @@ const setup = async (t, extra = {}) => {
     canWindow: true, ownerQuietMs: 400, ...extra,
   });
   manager.closeGraceMs = 50;
-  t.after(async () => { await manager.stop(); await new Promise(resolve => server.close(resolve)); });
+  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   return { manager, url, windows };
 };
 
@@ -42,6 +42,58 @@ test('a screen is needed for a window: a display on Linux, always on a Mac or Wi
   assert.equal(canOpenWindow({ WAYLAND_DISPLAY: 'wayland-1' }, 'linux'), true);
   assert.equal(canOpenWindow({ DISPLAY: ':0' }, 'linux'), true);
   assert.equal(canOpenWindow({}, 'darwin'), true);
+});
+
+test('a native browser starts at the requested page with copied logins already present', { timeout: 60000, skip: noChromium }, async t => {
+  const wrapper = join(process.env.HELM_DIR, 'chromium-first-page');
+  writeFileSync(wrapper, `#!/bin/sh\nexec ${realChromium} --headless=new --no-sandbox "$@"\n`, { mode: 0o755 });
+  const before = process.env.HELM_WINDOW_CHROMIUM;
+  process.env.HELM_WINDOW_CHROMIUM = wrapper;
+  t.after(() => { if (before === undefined) delete process.env.HELM_WINDOW_CHROMIUM; else process.env.HELM_WINDOW_CHROMIUM = before; });
+  let cookie;
+  const server = createServer((req, res) => { cookie ??= req.headers.cookie || ''; res.setHeader('Content-Type', 'text/html'); res.end('<title>Signed in</title><button>Ready</button>'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'first-')), session: id => ({ id }), canWindow: true, launchWindow });
+  const folder = windowProfile(manager.directory, 'one');
+  t.after(async () => { await manager.stop(); await stopWindow(folder); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  mkdirSync(join(manager.directory, 'one'), { recursive: true });
+  writeFileSync(join(manager.directory, 'one', 'storage.json'), JSON.stringify({ cookies: [{ name: 'who', value: 'owner', domain: '127.0.0.1', path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' }], origins: [] }));
+  const context = await manager.context('one');
+  assert.equal(context.pages().length, 0, 'no unused New Tab page starts');
+  const opened = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}` });
+  assert.match(cookie, /who=owner/, 'the first page request has the copied login');
+  assert.equal(context.pages().length, 1);
+  assert.ok(opened.elements.some(element => element.name === 'Ready'));
+});
+
+test('profile cleanup keeps site caches for the next visit', async () => {
+  const folder = mkdtempSync(join(process.env.HELM_DIR, 'cache-'));
+  for (const name of ['Default/Cache', 'Default/Code Cache', 'component_crx_cache']) {
+    mkdirSync(join(folder, name), { recursive: true });
+    writeFileSync(join(folder, name, 'kept'), 'cached data');
+  }
+  await trimProfile(folder);
+  assert.equal(readFileSync(join(folder, 'Default/Cache/kept'), 'utf8'), 'cached data');
+  assert.equal(readFileSync(join(folder, 'Default/Code Cache/kept'), 'utf8'), 'cached data');
+  assert.equal(existsSync(join(folder, 'component_crx_cache')), false);
+});
+
+test('reopening a sleeping window reuses its cached site files', { timeout: 60000, skip: noChromium }, async t => {
+  let assets = 0;
+  const server = createServer((req, res) => {
+    if (req.url === '/asset.js') { assets++; res.setHeader('Cache-Control', 'max-age=3600'); res.setHeader('Content-Type', 'text/javascript'); res.end('window.assetReady = true;'); }
+    else { res.setHeader('Content-Type', 'text/html'); res.end('<title>Cached page</title><script src=/asset.js></script>'); }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { manager } = await setup(t);
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const opened = await manager.open('cache', { url: `http://127.0.0.1:${server.address().port}` });
+  assert.equal(await manager.get('cache', opened.tab.id).page.evaluate(() => window.assetReady), true);
+  assert.equal(assets, 1);
+  await manager.putAway('cache');
+  await manager.run('cache', opened.tab.id, { kind: 'look' });
+  assert.equal(await manager.get('cache', opened.tab.id).page.evaluate(() => window.assetReady), true);
+  assert.equal(assets, 1, 'reopening does not download the same script again');
 });
 
 test('a lock left by a crash never closes another program that now has its process number', { skip: process.platform === 'win32' }, async t => {
@@ -111,14 +163,17 @@ test('the agent waits while the owner is using the window, then carries on', { t
 
 test('a closed window keeps its tabs asleep; listing does not reopen it, the agent’s next step does', { timeout: 60000, skip: noChromium }, async t => {
   const { manager, url, windows } = await setup(t);
+  // Use the real grace period: closing Chromium under load can take more
+  // than the shortened 50 ms used by the other tests.
+  delete manager.closeGraceMs;
   const a = await manager.open('one', { url }), b = await manager.open('one', { url: `${url}/#b` }), c = await manager.open('one', { url: `${url}/#c` });
   // Closing one tab closes just that tab.
   await manager.tabs.get(c.tab.id).page.close();
-  await new Promise(resolve => setTimeout(resolve, 100));
+  while (!t.signal.aborted && (await manager.savedRows('one')).length !== 2) await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual((await manager.list('one')).tabs.map(tab => tab.id).sort(), [a.tab.id, b.tab.id].sort());
   // The owner closes the whole window.
   await (await manager.contexts.get('one')).close();
-  await new Promise(resolve => setTimeout(resolve, 150));
+  while (!t.signal.aborted && manager.contexts.has('one')) await new Promise(resolve => setTimeout(resolve, 20));
   const after = await manager.list('one');
   assert.equal(after.open, false); assert.equal(windows.length, 1, 'looking at the list does not open a window');
   assert.deepEqual(after.tabs.map(tab => [tab.id, tab.asleep]).sort(), [[a.tab.id, true], [b.tab.id, true]].sort());

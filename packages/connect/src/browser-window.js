@@ -86,11 +86,11 @@ export async function stopWindow(profileDir) {
   return true;
 }
 
-// What Chromium downloads or caches again by itself; sign-ins, history and
-// site storage stay.
+// Remove component downloads and graphics files. Keep cached site files and
+// compiled scripts, so reopening a chat does not fetch and compile them again.
 const REFETCHED = ['component_crx_cache', 'WasmTtsEngine', 'WidevineCdm', 'OnDeviceHeadSuggestModel', 'OptimizationHints', 'ActorSafetyLists',
   'hyphen-data', 'ZxcvbnData', 'GPUPersistentCache', 'GrShaderCache', 'ShaderCache', 'BrowserMetrics', 'BrowserMetrics-spare.pma',
-  'Default/Cache', 'Default/Code Cache', 'Default/GPUCache', 'Default/DawnGraphiteCache', 'Default/DawnWebGPUCache'];
+  'Default/GPUCache', 'Default/DawnGraphiteCache', 'Default/DawnWebGPUCache'];
 
 /** Free a closed window's disk space. A window that is open is left alone. */
 export async function trimProfile(profileDir) {
@@ -127,7 +127,10 @@ async function attachWindow(chromium, profileDir) {
  */
 async function startWindow(chromium, executable, profileDir, args) {
   rmSync(join(profileDir, PORT_FILE), { force: true });
-  const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', ...args, NEW_TAB];
+  // Open the first window at the requested page, after its logins and input
+  // hooks are ready. An unused New Tab page also makes the driver set up a
+  // second page before it can start the one the owner asked for.
+  const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--no-startup-window', ...args];
   const scoped = process.platform === 'linux' && !process.env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
   for (const [command, list] of [...(scoped ? [[scoped, ['--user', '--scope', '--collect', '--quiet', executable, ...argv]]] : []), [executable, argv]]) {
     const child = spawn(command, list, { detached: true, stdio: 'ignore' });
