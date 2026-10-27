@@ -1,8 +1,8 @@
 # Browser use
 
 Each chat has its own browser, run with Patchright on the chat's machine.
-It controls web pages only, not desktop apps. Open it with a chat's
-**Browser** button or Ctrl/⌘+Shift+B.
+Open a tab with `helm browser open <url>`.
+The owner uses the external Chromium window. Helm has no browser panel.
 
 ## Decisions
 
@@ -14,20 +14,12 @@ It controls web pages only, not desktop apps. Open it with a chat's
   chat's browser is a real Chromium window with its own profile folder (a
   new chat starts with the default profile's logins). The agent drives it
   from inside Chromium, never through the desktop, so it never takes the
-  owner's keyboard or mouse. The Helm panel is only a remote; nothing is
-  streamed. A machine without a screen (the VM) uses a hidden Chromium,
+  owner's keyboard or mouse. Helm does not show or stream the page. A machine without a screen (the VM) uses a hidden Chromium,
   which is never started where windows can show.
-- **Running apps belongs to the open panel.** The panel asks the chat's
-  machine for TCP listeners every two seconds, and stops when closed or hidden.
-  Linux reads `/proc`; macOS uses `lsof` and process parents when available.
-  Other systems show no apps. Discovery sends no HTTP or TLS. Only a process
-  below the chat's agent or terminal, or inside its project folder, can appear.
-  Home folders and chats without a project never use folder ownership.
-  Shared Codex app-servers cannot assign all children to their first chat;
-  those apps need project ownership. Helm, agents and known control helpers
-  stay out. Opening a card checks ownership again, then opens localhost in
-  that chat's browser. No public link is made. Local terminal links use the
-  same check and keep their paths and queries.
+- **Local terminal links use the chat's machine.** Opening a local link
+  checks that its server still belongs to the chat, then opens its address
+  in the external Chromium window. No public link is made. Discovery runs
+  only when the owner opens a link. Paths and queries stay intact.
 - **Owner and agent share the window.** When the owner clicks, types or
   scrolls, the agent's next step waits until they are still for 2.5 s (at
   most 20 s). Closing the window keeps its tabs as asleep; listing tabs
@@ -78,24 +70,22 @@ It controls web pages only, not desktop apps. Open it with a chat's
   It reads Chromium's current page buffer, then stops. Reading the console
   can trigger a site's control checks. Logs from an earlier page are not
   kept unless the agent read them before navigation.
-- The panel receives title and load changes with browser events. Its
-  two-second list check remains a fallback. A viewport screenshot captures
-  the visible page without waiting for fonts; a full-page screenshot still
-  waits for fonts.
+- A viewport screenshot captures the visible page without waiting for fonts.
+  A full-page screenshot still waits for fonts.
 - Each chat's cookies and site storage are saved privately under
   `~/.helm/browser` and come back after a restart. Actions, half-done
   navigation and form contents are not replayed.
 - Saved flows are kept only when every step succeeds, in 0600 files at
   `~/.helm/browser/flows/<name>.json`. Use names or selectors in flows, not
   element numbers: numbers change between visits.
-- Downloads over 8 MiB (up to 128 MiB) stay on the machine only while the
-  tab is open; closing the tab removes them.
+- Downloads stay on the machine while the tab is open. Closing the tab
+  removes them. Each file can hold up to 128 MiB.
 
 ## Logins
 
-**Logins** in the panel copies only cookies from a Helium, Chromium, Chrome,
-Brave, Edge or Vivaldi profile on the chat's machine (`helm browser profiles`,
-`helm browser logins "<profile>" [--default]`). The machine default stores
+`helm browser profiles` lists browser profiles on the chat's machine.
+`helm browser logins "<profile>" [--default]` copies cookies from a Helium,
+Chromium, Chrome, Brave, Edge or Vivaldi profile. The machine default stores
 only the profile name; cookies live only in each chat's private storage.
 
 - A profile is found by any name a person uses: the browser ("helium"),
@@ -107,7 +97,7 @@ only the profile name; cookies live only in each chat's private storage.
   `helium-browser-flags.conf`.
 
 - Sites that also need local storage or device-bound keys may still ask to
-  sign in through the viewer.
+  sign in through the external Chromium window.
 - Linux reads basic, libsecret and KWallet keys; unlock the keyring if
   copying fails. macOS keychain is best effort. Windows app-bound encrypted
   logins cannot be imported.

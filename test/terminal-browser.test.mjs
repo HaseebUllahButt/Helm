@@ -13,7 +13,6 @@ function mountTerminal({ firstScreen } = {}) {
   const calls = [];
   let nextInterval = 0;
   let sessionListener;
-  let browserOpened = 0;
 
   class FakeXterm {
     static instance;
@@ -91,12 +90,11 @@ function mountTerminal({ firstScreen } = {}) {
     .then(({ code }) => {
       vm.runInNewContext(code, context, { filename: 'Terminal.tsx' });
       const component = module.exports.Terminal;
-      component({ client, env: 'machine-1', sessionId: 'session-1', onOpenBrowser: () => browserOpened++ });
+      component({ client, env: 'machine-1', sessionId: 'session-1' });
       refs[0].current = {};
       const cleanup = effects[0]();
       return Promise.resolve().then(() => Promise.resolve()).then(() => ({
         xterm: FakeXterm.instance,
-        browserOpened: () => browserOpened,
         calls,
         client,
         cleanup,
@@ -146,7 +144,7 @@ test('password-like PTY input is sent directly and never speculatively drawn', a
 
 
 test('plain and OSC localhost links open the chat browser on its machine', async () => {
-  const { xterm, calls, browserOpened, cleanup } = await mountTerminal();
+  const { xterm, calls, cleanup } = await mountTerminal();
   try {
     xterm.links.provideLinks(1, links => links[0].activate());
     xterm.options.linkHandler.activate({}, 'http://localhost:5173/path');
@@ -156,6 +154,5 @@ test('plain and OSC localhost links open the chat browser on its machine', async
     assert.ok(opens.every(call => call.env === 'machine-1' && call.params.id === 'session-1'));
     assert.equal(opens[0].params.url, 'http://localhost:5173/');
     assert.equal(opens[1].params.url, 'http://localhost:5173/path');
-    assert.equal(browserOpened(), 2);
   } finally { cleanup(); }
 });

@@ -79,17 +79,16 @@ test('macOS uses lsof with process parents and folders; missing lsof and other s
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('only a panel apps request scans; opening checks the port still belongs to that chat', async () => {
-  const scans = [], opens = [], notices = [];
-  const routes = createBrowserRoutes({ sessions: { get: id => ({ id }), appProcessRoots: () => [123] }, scanApps: async (session, options) => { scans.push([session.id, options]); return [{ name: 'vite', port: 5173, pid: 2 }]; }, manager: { list: () => ({ tabs: [] }), open: async (id, p) => { opens.push([id, p]); return { tab: { id: 'tab' } }; } }, onOpen: notice => notices.push(notice) });
+test('a terminal link checks the port still belongs to that chat before opening the external browser', async () => {
+  const scans = [], opens = [];
+  const routes = createBrowserRoutes({ sessions: { get: id => ({ id }), appProcessRoots: () => [123] }, scanApps: async (session, options) => { scans.push([session.id, options]); return [{ name: 'vite', port: 5173, pid: 2 }]; }, manager: { list: () => ({ tabs: [] }), open: async (id, p) => { opens.push([id, p]); return { tab: { id: 'tab' } }; } } });
   await routes.dispatch('browser.list', { id: 'fake' }); assert.equal(scans.length, 0);
-  assert.equal((await routes.dispatch('browser.apps', { id: 'fake' })).apps[0].port, 5173);
-  assert.deepEqual(scans[0], ['fake', { roots: [123] }]);
+  await assert.rejects(routes.dispatch('browser.apps', { id: 'fake' }), /unknown browser method/);
   await assert.rejects(routes.dispatch('browser.openApp', { id: 'fake', url: 'http://localhost:5174' }), /stopped/);
   await assert.rejects(routes.dispatch('browser.openApp', { id: 'fake', url: 'http://example.com:5173' }), /stopped/);
   assert.equal(opens.length, 0);
   await routes.dispatch('browser.openApp', { id: 'fake', url: 'http://127.0.0.1:5173/path?q=1' });
-  assert.equal(opens[0][0], 'fake'); assert.equal(opens[0][1].url, 'http://127.0.0.1:5173/path?q=1'); assert.equal(notices[0].tabId, 'tab');
+  assert.equal(opens[0][0], 'fake'); assert.equal(opens[0][1].url, 'http://127.0.0.1:5173/path?q=1'); assert.deepEqual(scans[0], ['fake', { roots: [123] }]);
 });
 
 test('a browser that rewrote its command line into one string is never an app', async () => {

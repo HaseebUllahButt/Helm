@@ -4,16 +4,14 @@ import { mkdtemp, readFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { build } from 'esbuild';
 import { chromium } from '@playwright/test';
 
-const directory = await mkdtemp(join(tmpdir(), 'helm-browser-viewer-'));
+const directory = await mkdtemp(join(tmpdir(), 'helm-browser-pointer-'));
 process.env.HELM_DIR = directory; process.env.HELM_NO_SERVICE = '1';
 // No real windows on the screen of the machine running the tests.
 delete process.env.WAYLAND_DISPLAY; delete process.env.DISPLAY;
 for (const [key, file] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(directory, file);
 const { BrowserManager } = await import('../../packages/connect/src/browser.js');
-const { createBrowserRoutes } = await import('../../packages/connect/src/browser-routes.js');
 
 test('in the window an agent click shows its cursor on the element centre, and point only highlights', { timeout: 60000 }, async t => {
   const pinned = process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {};

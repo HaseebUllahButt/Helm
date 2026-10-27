@@ -13,22 +13,8 @@ export function useWide() {
   return wide;
 }
 
-/** The panel just opened takes the shared column, including keyboard and file links. */
-export function useExclusiveDocks(canvas: { open: boolean; setOpen: (open: boolean) => void }, browser: { open: boolean; setOpen: (open: boolean) => void }) {
-  const previous = useRef({ canvas: false, browser: false });
-  useEffect(() => {
-    const before = previous.current;
-    previous.current = { canvas: canvas.open, browser: browser.open };
-    if (!canvas.open || !browser.open) return;
-    if (!before.canvas) browser.setOpen(false);
-    else canvas.setOpen(false);
-  }, [canvas.open, browser.open]);
-}
-
-/**
- * A column beside the chat on a wide screen, the whole screen on a phone: the
- * browser and the canvas both open in one. Its width is dragged from the left
- * edge and remembered on this device; a double click there forgets it.
+/** A column beside the chat on a wide screen, or a full screen on a phone.
+ * Drag its left edge to set its width. Double-click to use the default width.
  */
 export function SideDock({ label, widthKey, className, share = 0.45, escapeCloses = false, onClose, children }: {
   label: string; widthKey: string; className: string;
@@ -49,19 +35,19 @@ export function SideDock({ label, widthKey, className, share = 0.45, escapeClose
     const sheet = box.current;
     if (wide || !sheet) return;
     sheet.focus();
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && [...document.querySelectorAll('[aria-modal="true"]')].at(-1) === sheet && !(e.target as HTMLElement).closest?.('.browser-screen, textarea')) { e.preventDefault(); close.current(); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && [...document.querySelectorAll('[aria-modal="true"]')].at(-1) === sheet && !(e.target as HTMLElement).closest?.('textarea')) { e.preventDefault(); close.current(); } };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [wide]);
   // Beside the chat, Escape closes it from anywhere, unless something else
-  // wants the key: a dialog, an open menu, a terminal or the remote browser.
+  // wants the key: a dialog, an open menu, or a terminal.
   // On window, so every handler on the page has had its turn first.
   useEffect(() => {
     if (!wide || !escapeCloses) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
       if (document.querySelector('[aria-modal="true"], [aria-haspopup][aria-expanded="true"]')) return;
-      if ((e.target as HTMLElement).closest?.('.xterm, .browser-screen')) return;
+      if ((e.target as HTMLElement).closest?.('.xterm')) return;
       e.preventDefault(); close.current();
     };
     window.addEventListener('keydown', onKey);

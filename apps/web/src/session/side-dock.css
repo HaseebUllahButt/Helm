@@ -1,0 +1,10 @@
+/* Docked beside the chat on a wide screen; the whole screen on a phone. */
+.with-side-dock{padding-right:var(--side-dock-w)}
+.side-dock{background:var(--bg);display:flex;flex-direction:column;min-width:0}
+.side-dock-side{position:absolute;top:0;right:0;bottom:0;width:var(--side-dock-w);border-left:1px solid var(--line);z-index:25}
+.side-dock-full{position:fixed;inset:0;z-index:65;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);outline:none}
+.side-dock-handle{position:absolute;left:-4px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:5;touch-action:none}
+.side-dock-handle::after{content:"";position:absolute;left:3px;top:0;bottom:0;width:2px;background:transparent;transition:background .15s}
+.side-dock-handle:hover::after,.side-dock-handle:focus-visible::after,.side-dock-dragging .side-dock-handle::after{background:var(--primary-q)}
+.side-dock-handle:focus-visible{outline:none}
+.side-dock-dragging{cursor:col-resize;user-select:none}

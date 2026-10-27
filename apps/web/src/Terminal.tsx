@@ -50,11 +50,10 @@ const TERMKEYS: TermKey[] = [
  * redrew and the text replaces what we have.
  */
 
-export function Terminal({ client, env, sessionId, onOpenBrowser }: {
-  client: Client; env: string; sessionId: string; onOpenBrowser?: () => void;
+export function Terminal({ client, env, sessionId }: {
+  client: Client; env: string; sessionId: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const openBrowser = useRef(onOpenBrowser); openBrowser.current = onOpenBrowser;
   const term = useRef<Xterm | null>(null);
   const [note, setNote] = useState('');
   const [armed, setArmed] = useState<'ctrl' | 'alt' | null>(null);
@@ -108,7 +107,7 @@ export function Terminal({ client, env, sessionId, onOpenBrowser }: {
     if (!host.current) return;
 
     const openLocal = (url: string) => {
-      client.rpc(env, 'browser.openApp', { id: sessionId, url }, 60_000).then(() => openBrowser.current?.()).catch(() => setNote('This app stopped or does not belong to this chat.'));
+      client.rpc(env, 'browser.openApp', { id: sessionId, url }, 60_000).catch(() => setNote('This app stopped or does not belong to this chat.'));
     };
     const xterm = new Xterm({
       linkHandler: { activate: (_event, text) => { const url = localTerminalUrl(text); if (url) openLocal(url); else window.open(text, '_blank', 'noopener,noreferrer'); } },
