@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Client, Environment } from './client';
 import type { LimitWindow } from './session/limits';
-import { resetPhrase } from './session/limits';
+import { resetPhrase, whenPhrase } from './session/limits';
 import { EngineMark } from './EngineMark';
 
 export interface LimitAccount {
@@ -62,7 +62,8 @@ const PLAN_KEY = 'helm.plans.v1';
 const readPlans = (): Record<string, number> => {
   try { return JSON.parse(localStorage.getItem(PLAN_KEY) || '{}') ?? {}; } catch { return {}; }
 };
-const WEEK_MS = 7 * 86_400_000;
+/** How long each allowance window lasts, to measure pace. */
+const WINDOW_MS: Record<string, number> = { '5h': 5 * 3_600_000, '7d': 7 * 86_400_000 };
 /** The allowance windows as a person says them. */
 const WINDOW_NAMES: Record<string, string> = { '5h': '5 hours', '7d': 'Week' };
 const money = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`;
@@ -179,21 +180,24 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
         {live.length > 0 && <div className="usage-account-windows">
           {live.map(w => {
             const left = Math.round((100 - w.used) * 10) / 10;
-            // How far through the week the reading was taken: pace is use
-            // so far over time so far. A first-hour reading is kept from
-            // claiming a thousand percent.
-            const elapsed = w.label === '7d' && w.resetsAt
-              ? Math.min(1, Math.max(0.05, 1 - (w.resetsAt * 1000 - w.at) / WEEK_MS)) : 0;
+            // How far through the window the reading was taken: pace is use
+            // so far over time so far. A reading in the window's first
+            // twentieth is kept from claiming a thousand percent.
+            const span = WINDOW_MS[w.label];
+            const elapsed = span && w.resetsAt
+              ? Math.min(1, Math.max(0.05, 1 - (w.resetsAt * 1000 - w.at) / span)) : 0;
             const pace = elapsed ? w.used / elapsed : 0;
+            // At that pace, when the rest is used up.
+            const out = pace > 100 ? w.at + (100 - w.used) / w.used * elapsed * span : 0;
             return <div className={`usage-allowance${pace > 100 ? ' dry' : ''}`} key={w.label}
-              title={pace > 0 ? `Estimated weekly usage: ${Math.round(pace)}%` : undefined}>
+              title={pace > 0 ? `At this pace: ${Math.round(pace)}% used by the reset` : undefined}>
               <span className="usage-window">{WINDOW_NAMES[w.label] ?? w.label}</span>
               <div className="usage-meter" role="meter" aria-label={`${a.engine} ${nameOf(a)} ${w.label} remaining`}
                 aria-valuemin={0} aria-valuemax={100} aria-valuenow={left}><span style={{ width: `${left}%` }} /></div>
               <b>{left}% left</b>
               <small>
                 {resetPhrase(w.resetsAt, now) || 'Helm has no reset time.'}
-                {pace > 100 && <> · <em>Runs out before the reset</em></>}
+                {out > 0 && <> · <em>{out > now ? `Runs out ${whenPhrase(out, now)}` : 'Used up now at this pace'}</em></>}
               </small>
             </div>;
           })}
