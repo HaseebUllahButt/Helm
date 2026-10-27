@@ -46,18 +46,14 @@
    shared tokens so surfaces, text, and controls change together.
    =========================================================================== */
 
-/* One display face, for names of places - machines, screen titles, the
-   wordmark - and nowhere else. Archivo, semi-expanded at 600: it reads like a
-   name lettered on a hull. 11 KB, Latin only, OFL (fonts/archivo-OFL.txt).
-   Everything else stays in the system face, which is the most legible thing a
-   phone has outdoors and costs nothing to load. */
-/* Inter for the app around the conversations - lists, machines, settings,
-   titles - so every device shows the same type. Variable, Latin only, 48 KB,
-   OFL (fonts/inter-OFL.txt). A conversation keeps the system face below: long
-   reading on a phone is what that face is tuned for. */
+/* Archivo, semi-expanded at 600, for the wordmark only: it reads like a
+   name lettered on a hull. 11 KB, Latin only, OFL (fonts/archivo-OFL.txt). */
+/* Geist for the whole app, conversations too: every device shows the same
+   type, and on Linux the system face is a plain Arial copy. Variable, Latin
+   only, 29 KB, OFL (fonts/geist-OFL.txt). */
 @font-face {
-  font-family: "Inter";
-  src: url("/fonts/inter-latin-var.woff2") format("woff2");
+  font-family: "Geist";
+  src: url("/fonts/geist-latin-var.woff2") format("woff2");
   font-weight: 100 900; font-style: normal; font-display: swap;
 }
 @font-face {
@@ -167,7 +163,7 @@
   --measure:   46rem;
 
   --system: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --sans: "Inter", var(--system);
+  --sans: "Geist", var(--system);
   --display: var(--sans);
   --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   --ease: cubic-bezier(0.2, 0, 0, 1);
@@ -2836,8 +2832,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 }
 .makedefault:hover { text-decoration: underline; }
 
-/* The conversation itself keeps the system face. */
-.chat-wrap, .chat, .composer-wrap { font-family: var(--system); }
 /* The wordmark stays lettered like a hull. */
 .brand .wordmark, .auth-brand h1 { font-family: "Helm Display", var(--sans); }
 
