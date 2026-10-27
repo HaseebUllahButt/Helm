@@ -1,6 +1,4 @@
-import { existsSync } from 'node:fs';
-import { join as pathJoin, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join as pathJoin } from 'node:path';
 import { hostname } from 'node:os';
 import { startRelay } from '@helm/relay';
 import {
@@ -10,16 +8,7 @@ import {
 import { Daemon } from './agent.js';
 import { lanAddresses } from './net-addr.js';
 import { HELM_DIR } from './paths.js';
-
-/** Where the built PWA lives when running from a checkout. */
-function findWebRoot() {
-  const here = dirname(fileURLToPath(import.meta.url));
-  for (const rel of ['../../../apps/web/dist', '../web/dist', './web']) {
-    const dir = pathJoin(here, rel);
-    if (existsSync(pathJoin(dir, 'index.html'))) return dir;
-  }
-  return null;
-}
+import { findWebRoot } from './web-build.js';
 
 /**
  * Bring this machine up as a member of a network.

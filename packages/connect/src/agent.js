@@ -71,6 +71,7 @@ import { ExecutionJobs } from './execution.js';
 import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
 import { InputDelivery } from './input-delivery.js';
 import { ChatEventStream } from './event-stream.js';
@@ -1625,7 +1626,7 @@ export class Daemon {
       case M.EXEC_READ: return this.executions.read(p, caller ?? this.id);
       case M.EXEC_CANCEL: return this.executions.cancel(p, caller ?? this.id);
       case M.ENV_INFO:
-        return { ...(await this.describe()), name: this.name };
+        return { ...(await this.describe()), name: this.name, web: webBuild() };
 
       case M.GIT_STATUS: return gitq.status(p.cwd);
       case M.GIT_GRAPH: return gitq.graph(p.cwd, await this.sessions.list());

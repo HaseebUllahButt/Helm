@@ -116,6 +116,9 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm dictate [--to <id>]          Start recording; run again to stop and turn speech into text
   helm proxy <host>                 Connect through SSH ProxyCommand (used by ~/.ssh/config)
   helm self-update                  Get the newest Helm and restart it on this machine
+  helm ship                         Merge this branch into main, push it and install it on every online machine
+    --no-check                      Skip npm run check before the merge
+    --wait <minutes>                Wait this long for the machines to restart (default: 10)
   helm service install|uninstall    Install or remove the background service
 
 Add devices from Settings, or run 'helm add' on a joined machine.
@@ -145,6 +148,7 @@ Set up this machine
   status           Show machines, links and agent software
   network-repair   Fix connections when large packets fail on Linux
   self-update      Get the newest Helm and restart it here
+  ship             Merge, push and install a Helm change everywhere
   service          Install or remove the background service
   antigravity      Install or manage the Google Antigravity agent
   leave            Remove this machine from its network

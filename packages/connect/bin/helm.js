@@ -1960,6 +1960,20 @@ try {
       break;
     }
 
+    case 'ship': {
+      const { ship, ShipError } = await import('../src/ship.js');
+      const minutes = Number(strFlag('wait', '10'));
+      if (!(minutes > 0)) die('--wait takes a number of minutes');
+      try {
+        const r = await ship({ net: requireNetwork(), rpc: hubRpc, check: !rest.includes('--no-check'), waitMs: minutes * 60_000 });
+        if (!r.ok) exit(1);
+      } catch (err) {
+        if (!(err instanceof ShipError)) throw err;
+        die(err.message);
+      }
+      break;
+    }
+
     case 'restart-services': {
       const { restartServices } = await import('../src/update.js');
       await restartServices(rest);

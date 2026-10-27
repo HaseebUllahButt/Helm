@@ -6,8 +6,10 @@ the code, `git log` or `helm help` shows is not repeated here.
 ## Development and rollout
 
 - Requested Helm work is done only when it is verified, committed, pushed to
-  main and installed on every reachable machine. Check the source checkout,
-  installed checkout, running daemon and served web build separately.
+  main and installed on every reachable machine. Run `helm ship` from your
+  worktree: it merges, pushes, and waits until each online machine runs the
+  new commit and serves an app built from it. Fix what it reports; never
+  call the work shipped while it fails.
 - Develop in the source checkout or a worktree. Temporary scripts go under
   ~/.helm, never inside an installed checkout.
 - Installed copies often hold other chats' unsaved edits. Never reset or stash
