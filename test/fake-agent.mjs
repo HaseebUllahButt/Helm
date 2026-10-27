@@ -53,6 +53,20 @@ async function onMessage(m) {
       return reply({});
     case 'session/prompt': {
       const sid = m.params.sessionId;
+      const prompt = (m.params.prompt ?? []).map(part => part.text ?? '').join('');
+      if (prompt.includes('Write a Git review tour.\n')) {
+        const from = prompt.indexOf('BEGIN_UNTRUSTED_CHANGE_JSON\n');
+        const to = prompt.lastIndexOf('\nEND_UNTRUSTED_CHANGE_JSON');
+        const change = JSON.parse(prompt.slice(from + 'BEGIN_UNTRUSTED_CHANGE_JSON\n'.length, to));
+        const stops = change.files.filter(file => file.hunks.length).slice(0, 2).map((file, index) => ({
+          path: file.path, hunk: 0, title: index ? 'Check the supporting change' : 'Read the main change',
+          summary: 'The file has new text. Check that this text gives the result you want.',
+          decision: index ? '' : 'Keep this change?',
+        }));
+        await sleep(delay);
+        out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify({ stops }) } } } });
+        return reply({ stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5 } });
+      }
       out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working on it ' } } } });
       await sleep(delay);
       if (ask) {

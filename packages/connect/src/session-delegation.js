@@ -133,8 +133,8 @@ export class SessionDelegation {
   }
 
   /** A task owned by its orchestrator, with durable output and configurable permissions. */
-  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId, worktree = false, hidden = false }) {
-    if (typeof task !== 'string' || !task.trim() || task.length > 32_000) {
+  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId, worktree = false, hidden = false, tour = false }) {
+    if (typeof task !== 'string' || !task.trim() || (!tour && task.length > 32_000)) {
       throw new Error('a subagent task must contain 1–32000 characters');
     }
     const parent = id ? this.#sessions.get(id) : null;
@@ -183,9 +183,9 @@ export class SessionDelegation {
       checkout = await addWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
       folder = checkout.path;
     }
-    const codexFork = codexHelperFork(parent, profiles.find(p => p.id === parent?.profileId), profile, folder, worktree,
+    const codexFork = !tour && codexHelperFork(parent, profiles.find(p => p.id === parent?.profileId), profile, folder, worktree,
       profile.engine === 'codex' ? nativeCodexSocket(profile) : null);
-    const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
+    const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent && !tour, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
       ...(codexFork ? { codexFork } : {}),
       ...(checkout ? { worktree: checkout } : {}), ...(hidden && !parent ? { hidden: true } : {}) };
     const child = await this.#sessions.start({ cwd: folder, profileId, model, effort, mode: selectedMode,

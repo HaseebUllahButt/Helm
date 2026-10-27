@@ -174,8 +174,8 @@ function Through({ row, width }: { row: GraphRow; width: number }) {
   );
 }
 
-export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }: {
-  client: Client; env: Environment; cwd: string; refreshKey: string; onOpen?: (s: Session) => void; wrap?: boolean;
+export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false, onTour }: {
+  client: Client; env: Environment; cwd: string; refreshKey: string; onOpen?: (s: Session) => void; wrap?: boolean; onTour?: (hash: string) => void;
 }) {
   const [data, setData] = useState<GitGraphData | null>(null);
   const [error, setError] = useState('');
@@ -364,6 +364,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
                     : 'error' in d ? <div className="git-state bad" role="status">{d.error}</div>
                     : <>
                       <div className="git-detail-subject">{d.subject}</div>
+                      {onTour && <button className="ghost" onClick={() => onTour(d.hash)}>Tour this commit</button>}
                       {d.body && <div className="git-detail-body">{d.body}</div>}
                       <div className="git-detail-meta">
                         <span>{d.author}</span>

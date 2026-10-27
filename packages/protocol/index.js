@@ -125,6 +125,7 @@ export const M = {
   // for the same reason as a rename: `kind` lives on its own roster record.
   MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }
   // What a session did to its folder, as git sees it.
+  GIT_TOUR: 'git.tour',            // { sessionId, cwd, scope: edits|branch|commit, hash?, action: get|start|stop }
   GIT_STATUS: 'git.status',        // { cwd } -> { repo, branch?, ahead?, behind?, files[], worktree?, head? }
   GIT_GRAPH: 'git.graph',          // { cwd } -> bounded commit ancestry and live agents by checkout
   GIT_DIFF: 'git.diff',            // { cwd, path } -> { path, diff, truncated }

@@ -56,6 +56,7 @@ import { CliUpdater } from './cli-updates.js';
 import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, rebuildStaleApp, watchCheckout } from './update.js';
 import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
+import { GitTours } from './git-tour.js';
 import { worktreeNote } from './chat-worktree.js';
 import { createGithubMonitor } from './github.js';
 import { createGithubRepos } from './github-repos.js';
@@ -453,6 +454,10 @@ export class Daemon {
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
       emit: payload => this.#emit('agent.message', payload) });
     if (brainHost((loadNetwork() ?? this.net).machines)?.id !== this.id) this.sessions.retireBrains();
+    this.gitTours = new GitTours({ sessions: this.sessions, agents: async (id) => {
+      const profiles = (await getProfiles()).filter(p => p.id === id);
+      return agentCatalog(profiles, await authStatuses(profiles));
+    } });
     this.github = createGithubMonitor({
       context: gitq.githubContext, watchFile: join(HELM_DIR, 'github-watches.json'),
       accountFile: join(HELM_DIR, 'github-accounts.json'),
@@ -1628,6 +1633,7 @@ export class Daemon {
       case M.ENV_INFO:
         return { ...(await this.describe()), name: this.name, web: webBuild() };
 
+      case M.GIT_TOUR: return this.gitTours.dispatch(p);
       case M.GIT_STATUS: return gitq.status(p.cwd);
       case M.GIT_GRAPH: return gitq.graph(p.cwd, await this.sessions.list());
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
@@ -1999,7 +2005,7 @@ export class Daemon {
         return this.agentMessages.receive(p.message, caller);
       // Only the keeper starts a hidden helper; one asked for from outside is
       // always a card in its chat, where the owner can see it.
-      case M.SESSION_DELEGATE: return this.sessions.delegate({ ...p, hidden: false });
+      case M.SESSION_DELEGATE: return this.sessions.delegate({ ...p, hidden: false, tour: false });
       case M.SESSION_DELEGATION_RESULT: {
         await this.sessionRecovery;
         const result = this.sessions.delegationResult(p.id, p);
