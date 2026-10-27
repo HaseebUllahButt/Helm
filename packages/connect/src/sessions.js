@@ -451,6 +451,10 @@ export class Sessions extends EventEmitter {
         // Its setup command died with the daemon: it runs again from the
         // start once resumed, and what was sent meanwhile still waits.
         if (s.chatWorktree?.setup === 'running') s.status = 'starting';
+        // A helper's copy made before helpers had this record: Helm tidies
+        // and rebuilds it too. Its start is unknown, so a branch with no
+        // commits counts as merged.
+        if (s.delegation?.worktree && !s.chatWorktree) s.chatWorktree = { ...s.delegation.worktree, start: null };
         this.#index.set(s.id, s);
       }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
@@ -838,7 +842,7 @@ export class Sessions extends EventEmitter {
     try { return await this.#start(options); } finally { this.flush(); }
   }
 
-  async #start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null, size = null }) {
+  async #start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null, size = null, helperWorktree = null }) {
     if (originAutomationId != null) {
       if (!/^[A-Za-z0-9._:-]{1,120}$/.test(originAutomationId)) throw new Error('invalid automation identity');
       const existing = this.findAutomationSession(originAutomationId);
@@ -905,7 +909,7 @@ export class Sessions extends EventEmitter {
     // A repo whose helm.json asks for it gives every new chat its own
     // worktree (session-worktrees.js); made once the chat has its id.
     const own = await this.#worktrees.plan({ cwd, quick, brain, clone, delegation });
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning, own });
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning, own, chatWorktree: helperWorktree });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);

@@ -130,7 +130,7 @@ export function cheapModel(engine, models = []) {
  * their parent's context; other engines and accounts start a new chat.
  */
 export function delegationNote() {
-  return '[Helm helpers: Do the work yourself by default. For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself. Keep your helpers: the owner reads them under this chat. When done, remove the worktrees, branches and scratch folders you made, and delete (helm delete) only test chats that are not helpers.]';
+  return '[Helm helpers: Do the work yourself by default. For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself. Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]';
 }
 
 /**

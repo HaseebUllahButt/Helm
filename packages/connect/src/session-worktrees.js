@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { expand } from './paths.js';
-import { keepReason, makeChatWorktree, removeChatWorktree, renameChatBranch, repoConfig, restoreChatWorktree, runSetup, worktreePlan } from './chat-worktree.js';
+import { dropMergedBranch, keepReason, makeChatWorktree, removeChatWorktree, renameChatBranch, repoConfig, restoreChatWorktree, runSetup, uncommitted, worktreePlan } from './chat-worktree.js';
 
 /** How often idle chats are checked for a branch merged back. */
 const SWEEP_MS = 2 * 60_000;
@@ -99,7 +99,8 @@ export class SessionWorktrees {
 
   /** The chat has a name: the branch takes it while it holds no commits. */
   async titled(s) {
-    if (!s.chatWorktree || this.#busy.has(s.id)) return;
+    // A helper's branch is named after its task already, and its parent was told that name.
+    if (!s.chatWorktree || s.delegation || this.#busy.has(s.id)) return;
     this.#busy.add(s.id);
     try {
       const branch = await renameChatBranch(s.chatWorktree, s.title);
@@ -138,7 +139,9 @@ export class SessionWorktrees {
    * An idle chat whose branch is merged into its base loses its folder and
    * branch. Uncommitted changes, unmerged commits, or a branch with no work
    * of its own (the chat may still be starting on it) keep them; the last
-   * only until the chat has been quiet for UNUSED_MS.
+   * only until the chat has been quiet for UNUSED_MS. Quiet that long with
+   * unmerged commits and nothing else in the folder, the chat is parked: the
+   * folder goes, the branch stays, and the branch goes once it is merged.
    */
   async tidy(s, now = Date.now()) {
     // A branch of the chat (a fork) works in the same folder: all of them idle.
@@ -149,19 +152,42 @@ export class SessionWorktrees {
     const idle = () => this.#sharing(s).every((o) => this.#core.index.get(o.id) === o && this.#sessions.canReturnTask(o.id)
       && !this.#core.natives?.holds(o));
     if (this.#busy.has(s.id) || !s.chatWorktree || !idle()) return false;
-    const merged = !this.#sharing(s).every((o) => now - (o.updatedAt || o.createdAt || now) >= UNUSED_MS);
+    const quiet = this.#sharing(s).every((o) => now - (o.updatedAt || o.createdAt || now) >= UNUSED_MS);
+    const merged = !quiet;
+    // What to do with the folder: null keeps it, 'park' keeps only the branch.
+    const verdict = async () => {
+      const reason = await keepReason(s.chatWorktree, { merged });
+      if (!reason) return 'remove';
+      if (reason === 'unmerged' && quiet && !await uncommitted(s.chatWorktree, { ignored: true })) return 'park';
+      return null;
+    };
     this.#busy.add(s.id);
     const path = s.chatWorktree.path;
     let removed = null;
     try {
-      if (await keepReason(s.chatWorktree, { merged })) return false;
+      if (s.chatWorktree.parked) {
+        // A message now waits, then rebuilds the folder from base if the branch went.
+        this.#removing.set(path, new Promise((resolve) => { removed = resolve; }));
+        if (!await dropMergedBranch(s.chatWorktree)) return false;
+        for (const o of this.#sharing(s)) delete o.chatWorktree.parked;
+        this.#core.save();
+        this.#sessions.log(`[${s.id}] removed merged branch ${s.chatWorktree.branch}`);
+        return true;
+      }
+      const action = await verdict();
+      if (!action) return false;
       this.#removing.set(path, new Promise((resolve) => { removed = resolve; }));
       // The agent's process sits in that folder: let it go first. Its
       // conversation stays, and the next message rebuilds the folder.
       for (const o of this.#sharing(s)) await this.#sessions.release(o.id);
-      if (this.#core.index.get(s.id) !== s || !idle() || await keepReason(s.chatWorktree, { merged })) return false;
-      await removeChatWorktree(s.chatWorktree);
-      this.#sessions.log(`[${s.id}] removed ${merged ? 'merged' : 'unused'} worktree ${s.chatWorktree.path} (${s.chatWorktree.branch})`);
+      if (this.#core.index.get(s.id) !== s || !idle() || await verdict() !== action) return false;
+      const park = action === 'park';
+      await removeChatWorktree(s.chatWorktree, { keepBranch: park });
+      if (park) {
+        for (const o of this.#sharing(s)) o.chatWorktree = { ...o.chatWorktree, parked: true };
+        this.#core.save();
+      }
+      this.#sessions.log(`[${s.id}] removed ${park ? 'parked' : merged ? 'merged' : 'unused'} worktree ${s.chatWorktree.path} (${s.chatWorktree.branch}${park ? ' kept' : ''})`);
       for (const o of this.#sharing(s)) this.#sessions.emit('session', o);
       return true;
     } catch (err) {
