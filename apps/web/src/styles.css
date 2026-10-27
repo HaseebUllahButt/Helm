@@ -3618,9 +3618,11 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 
 .pad.column.home { padding-top: 10vh; }
 .home .home-state .attention { color: var(--amber-text); }
-/* The start box: the same plate as the machine's New chat card, with room to type. */
+/* The start box: the message box's plate and chips, with its sheets docked
+   above it the same way. */
 .home-ask {
-  display: flex; flex-direction: column; gap: 6px; padding: 12px 10px 8px 14px;
+  position: relative; z-index: 1;
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 10px 10px 14px;
   border-radius: var(--radius-xl); background: var(--raised); border: 1px solid var(--line-2);
   box-shadow: 0 1px 2px rgb(0 0 0 / 20%), 0 10px 30px -14px rgb(0 0 0 / 45%);
   transition: border-color 0.12s var(--ease);
@@ -3634,51 +3636,23 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 .home-ask textarea:focus { outline: none; box-shadow: none; }
 .home-ask textarea::placeholder { color: var(--mutedfg); }
 .home-ask-bar { display: flex; align-items: center; gap: 10px; }
-.home-pick-slot { position: relative; flex: none; }
-.home-pick {
-  display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px;
-  border-radius: 999px; border: 1px solid var(--line-2); color: var(--text-80); font-size: var(--t-meta); font-weight: 500;
+.home-ask-wrap { position: relative; }
+/* A chip's list drops under the box, over the machine rows, so the box
+   never moves while you pick. */
+.home-ask-wrap > .modesheet {
+  position: absolute; z-index: 5; top: calc(100% + 6px); left: 0; right: 0; margin: 0; padding: 8px;
+  border-radius: var(--radius-xl); border-bottom: 1px solid var(--line-2);
+  box-shadow: var(--shadow); max-height: min(420px, 50vh);
 }
-.home-pick:hover:not(:disabled), .home-pick[aria-expanded="true"] { background: var(--hover); color: var(--text); }
-.home-pick:disabled { opacity: 0.5; }
-.home-pick-menu { left: 0; right: auto; top: calc(100% + 6px); }
-.home-pick-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.home-pick-menu .check { display: inline-flex; color: var(--primary-q); }
-.home-ask-hint { flex: 1; min-width: 0; font-size: var(--t-meta); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-chips { flex-wrap: wrap; overflow: visible; }
+.home-chip-rest, .home-chip-rest .chips { display: contents; }
 .home-send {
   width: 32px; height: 32px; flex: none; border-radius: 10px;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--pill-bg); color: var(--pill-fg);
 }
 .home-send:disabled { opacity: 0.4; }
-/* One card per machine: its name, one line of news, and the chats behind it. */
-.home-machines { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
-.home-mcard {
-  display: flex; flex-direction: column; min-width: 0; padding: 4px 4px 8px;
-  border-radius: var(--radius-xl); background: var(--raised); border: 1px solid var(--line);
-}
-.home-mcard.offline { background: none; border-style: dashed; border-color: color-mix(in srgb, var(--text) 16%, transparent); }
-.home-mcard.waits { border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
-.home-mhead {
-  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 8px 0;
-  border-radius: var(--radius-md); text-align: left;
-}
-.home-mhead .mdot { margin: 0; }
-.home-mname { flex: 1; min-width: 0; font-weight: 600; font-size: var(--t-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-mhead .chev { opacity: 0; transition: opacity 0.12s var(--ease); }
-.home-mcard:hover .home-mhead .chev, .home-mhead:focus-visible .chev { opacity: 1; }
-.home-msaid { margin: 0; padding: 0 8px 0 24px; font-size: var(--t-meta); color: var(--mutedfg); }
-.home-msaid.attention { color: var(--amber-text); }
-.home-mcard.offline .home-mname { color: var(--mutedfg); }
-.home-mchats { display: flex; flex-direction: column; margin-top: 6px; }
-.home-mchat {
-  display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 4px 8px;
-  border-radius: var(--radius-md); text-align: left; font-size: var(--t-meta); color: var(--text-80);
-}
-.home-mchat:hover, .home-mhead:hover { background: var(--hover); color: var(--text); }
-.home-mchat .tag { color: var(--amber-text); background: color-mix(in srgb, var(--amber) 16%, transparent); }
-.home-mchat-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-mmore { align-self: flex-start; margin: 2px 8px 0; font-size: var(--t-meta); color: var(--mutedfg); }
+.home .rows .row.machine.offline .rt-text { color: var(--mutedfg); }
 
 /* New chat asks the empty chat's question, at the top of the box. */
 .newchat-greeting {

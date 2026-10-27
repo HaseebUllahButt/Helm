@@ -215,7 +215,7 @@ function Shell({ client, conn, onSignOut }: {
   const [toast, setToast] = useState<Toast | null>(null);
   const [palette, setPalette] = useState(false);
   /** The keyboard new-chat box; a folder skips straight to the agent picker. */
-  const [newChat, setNewChat] = useState<{ envId?: string; folder?: string; quick?: boolean; draft?: string; message?: string } | null>(null);
+  const [newChat, setNewChat] = useState<{ envId?: string; folder?: string; quick?: boolean; draft?: string } | null>(null);
   const [lastFolder, setLastFolder] = useState<{ envId: string; folder: string } | null>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(`helm.last-folder:${scope}`) || 'null');
@@ -635,6 +635,9 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const env = envs.find((e) => e.id === selected) ?? null;
+  /** The machine open before Home, where Home's box starts. */
+  const lastMachine = useRef<string | null>(null);
+  if (selected) lastMachine.current = selected;
   const view = stack[stack.length - 1];
   const viewSession = view.kind === 'session'
     ? (sessions[selected ?? ''] ?? []).find(s => s.id === view.session.id) ?? view.session : null;
@@ -1422,14 +1425,14 @@ function Shell({ client, conn, onSignOut }: {
         ) : !env ? (
           // A wide screen with no machine open: Home, where the logo leads.
           <Home
-            machines={envs.map((e) => ({
-              env: e,
-              waiting: e.online ? blocked.filter((x) => x.env.id === e.id).map((x) => x.s) : [],
-              running: workingThreadsOn(e),
-            }))}
+            client={client} near={lastMachine.current}
+            machines={envs.map((e) => ({ env: e, running: workingThreadsOn(e).length, waiting: e.online ? waitingCountOn(e) : 0 }))}
             onOpenMachine={openEnv}
-            onOpenChat={(envId, s) => openSession(envId, s)}
-            onStart={(envId, message) => setNewChat({ envId, message })}
+            onStart={(info, run, message) => {
+              const chat = beginChat(client, info, run);
+              if (message) sendWhenReady(chat.id, message);
+              navigate([{ kind: 'env' }, { kind: 'starting', startId: chat.id }], info.envId);
+            }}
           />
         ) : view.kind === 'brain' ? (
           <BrainView
@@ -1621,7 +1624,7 @@ function Shell({ client, conn, onSignOut }: {
           client={client} envs={envs} envId={newChat.envId} initialFolder={newChat.folder} quick={newChat.quick} near={selected} engineOf={engineOf}
           onFolder={rememberChatFolder}
           onClose={() => setNewChat(null)}
-          onStarting={(info, run) => { const chat = beginChat(client, info, run, newChat.draft); if (newChat.message) sendWhenReady(chat.id, newChat.message); navigate([{ kind: 'env' }, { kind: 'starting', startId: chat.id }], info.envId); }}
+          onStarting={(info, run) => { const chat = beginChat(client, info, run, newChat.draft); navigate([{ kind: 'env' }, { kind: 'starting', startId: chat.id }], info.envId); }}
         />
       )}
       {help && <ShortcutsHelp onClose={() => setHelp(false)} />}

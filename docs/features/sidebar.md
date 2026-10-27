@@ -6,14 +6,16 @@ until `text` starts with "helm / Search anything".
 ## Home (computer)
 - **Rules (owner, 2026-10-27):** the helm logo top left is the way home. A
   wide screen opens on the first machine once; after that no machine is
-  picked by itself. Home has one "What should we build?" box with a machine
-  picker, and one card per machine (online dot, one line of news, up to 3
-  chats). Chat lists stay in the sidebar. The box text is sent by itself
-  once the new chat's agent is up (`sendWhenReady`).
-- **Prove (driven 2026-10-27):** `open --desktop`, start a fake-ask chat,
-  `$V click Home`: "What should we build?" and a card with "needs you".
-  Type in "Ask anything", Enter, quick chat, `fake`: the chat opens with
-  that message and "done.".
+  picked by itself. Home is a quick-chat box and one plain row per machine
+  (no cards: chats stay in the sidebar). The box starts on the machine open
+  before Home and has the message box's chips: machine, agent, model,
+  thinking, permissions. Enter starts the quick chat at once and sends the
+  text when the agent is up (`sendWhenReady`). A chip's list drops under the
+  box, so the box never moves.
+- **Prove (driven 2026-10-27):** `open --desktop`, `$V click Home`, open the
+  agent chip, pick `fake-ask`, set permissions to Read only, type, Enter:
+  the chat opens with the text and its chip says "read". With `up --real`
+  the model and thinking chips list the account's models; start nothing.
 
 ## Folded sidebar (computer only)
 - **Prove (driven 2026-10-17):** `open --desktop`, start a fake-ask chat and
