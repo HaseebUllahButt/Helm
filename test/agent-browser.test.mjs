@@ -54,9 +54,12 @@ test('tabs from one chat do not block another and all saved tabs survive recover
       return Object.assign(new EventEmitter(), {
         context: () => context, url: () => 'about:blank', viewportSize: () => viewport,
         setViewportSize: async value => { viewport = value; },
+        title: async () => 'New tab', close: async () => {},
       });
     } };
     manager.context = async () => context;
+    manager.settle = async () => {};
+    manager.look = async () => ({});
     t.after(() => manager.stop());
     return manager;
   };

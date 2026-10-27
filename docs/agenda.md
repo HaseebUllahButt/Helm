@@ -47,7 +47,7 @@ These are proposals, not claims about measured time savings.
 A VM at home can use the home's internet connection.
 A hosted VM normally uses the host provider's connection.
 Neither location guarantees that a website accepts automation.
-Use a full installed browser where the lighter hidden browser fails.
+The current browser already uses full Chromium. Prove its behavior on the target websites.
 Give the owner a clear blocked step instead of retrying human checks indefinitely.
 
 ## Support more operating systems
@@ -57,7 +57,7 @@ Give the owner a clear blocked step instead of retrying human checks indefinitel
 2. Test macOS on a real Mac.
    Background startup exists. Check restart, browser discovery, window control and saved sign-ins.
    The browser discovery regression test uses a simulated Mac filesystem.
-   “Show window” currently raises a window only on niri. Prove it on each supported desktop.
+   Prove the external browser window on each supported desktop.
 3. Treat native Windows as a separate project.
    It still needs background startup, a Windows shell, process connections and browser cleanup.
    Windows browser sign-in copying also needs its own supported path.

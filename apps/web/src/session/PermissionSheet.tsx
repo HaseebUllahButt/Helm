@@ -155,6 +155,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
           placeholder={p.kind === 'plan' ? 'What should change? (optional)' : 'Add a note (optional)'}
         />
       )}
+      {note.trim() && <p className="note">Approve lets this step run before the agent reads your note. Decline to request a change.</p>}
       {/* Built in the order it is seen, so Tab walks the buttons the way the
           eye does. A prompt whose safe answer is "no" leads with Deny; it
           used to get there with row-reverse, which left Allow first in the

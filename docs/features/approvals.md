@@ -13,6 +13,9 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
   says "stopped".
 - **Traps:** "Always allow" is remembered by the agent, not by Helm, and the
   fake agent asks every time, so it cannot prove it.
+- **Notes:** Approve can run the step before the agent reads the note.
+  Decline to request a change. Helm sends the note as the next owner message
+  when the agent cannot take text with its answer. Claude decline already takes the note.
 - **Tests:** `test/browser/composer-card`, `child-requests`;
   `test/local-answer`, `driver-acp`, `driver-claude`, `driver-codex`.
 

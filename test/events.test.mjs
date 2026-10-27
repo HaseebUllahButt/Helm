@@ -20,6 +20,24 @@ test('a recovered helper turn keeps its provider link after log retention and re
   }
 });
 
+test('send identity survives a long turn being trimmed and reopened', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-message-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = new EventLog(dir);
+  const messageId = 'saved-owner-message';
+  log.append('s', { type: 'turn.start', turnId: 'owner', text: 'Continue', messageId });
+  log.append('s', { type: 'item.start', id: 'reply', turnId: 'owner', kind: 'text' });
+  for (let n = 0; n < 6000; n++) log.append('s', { type: 'item.delta', id: 'reply', text: 'x' });
+  for (const reader of [log, new EventLog(dir)]) {
+    assert.equal(reader.since('s').find(event => event.type === 'turn.start')?.messageId, messageId);
+    const events = reader.window('s', { tail: 20 }).events;
+    assert.equal(events.find(event => event.type === 'turn.start')?.messageId, messageId);
+    const state = emptyLog();
+    for (const event of events) apply(state, event);
+    assert.equal(state.turns.find(turn => turn.id === 'owner')?.messageId, messageId);
+  }
+});
+
 test('events are numbered, persisted, and replayable from a sequence number', () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-events-'));
   const log = new EventLog(dir);

@@ -242,6 +242,7 @@ test('on the card the title has its own line and the note box opens only when as
   assert.equal(await banner.locator('.sheet-note').count(), 0);
   await banner.getByRole('button', { name: 'Add a note' }).click();
   await banner.locator('.sheet-note').fill('use the fast suite');
+  await banner.getByText('Approve lets this step run before the agent reads your note. Decline to request a change.').waitFor();
   await banner.getByRole('button', { name: 'Decline', exact: true }).click();
   await answered(page);
   const decision = await decisionOf(page);
