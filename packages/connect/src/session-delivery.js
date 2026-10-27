@@ -35,7 +35,7 @@ export class SessionDelivery {
    * a bare newline - has to reach the pane untouched, whereas the chat view
    * wants a whole message handed to the agent as a prompt.
    */
-  async input(id, text, { raw = false, attachments = [], turnId: requestedTurnId = null, delivery = 'auto', references = [], source = 'user' } = {}) {
+  async input(id, text, { raw = false, attachments = [], turnId: requestedTurnId = null, messageId, delivery = 'auto', references = [], source = 'user' } = {}) {
     this.#core.rewinder.assertRewindUnlocked(id);
     const s = this.#sessions.get(id);
     const stopGeneration = s.stopGeneration ?? 0;
@@ -253,6 +253,7 @@ export class SessionDelivery {
       this.#core.rewinder.assertRewindUnlocked(id);
       const event = this.#sessions.events.append(id, {
         type: 'turn.start', turnId, text: commandText, queued: busy,
+        ...(messageId ? { messageId } : {}),
         delivery, references, referenceContext, ...(source === 'agent' ? { source } : {}),
         ...(introduce ? { introduce: true } : {}),
         ...(sideband ? { local: true } : {}),

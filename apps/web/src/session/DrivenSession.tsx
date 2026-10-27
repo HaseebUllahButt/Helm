@@ -52,7 +52,7 @@ const ENGINE_LABEL: Record<string, string> = {
 
 type Attachment = { name: string; mime: string; data: string; url: string };
 /** Words whose send failed after the composer had moved on, kept until sent or dismissed. */
-type FailedSend = { id: string; messageId: string; body: string; references: string[]; attachments: Attachment[]; error: string; retrying?: boolean; before: Set<string> };
+type FailedSend = { id: string; messageId: string; body: string; references: string[]; attachments: Attachment[]; error: string; retrying?: boolean; restoredRevision?: number };
 const rejectedDelivery = (error: { code?: string }) => !!error.code && !retryableDelivery(error);
 
 /**
@@ -328,12 +328,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       setPreparingImages((count) => Math.max(0, count - 1));
     }
   };
-  // The answer to a send can be lost on the way back while the message itself
-  // arrived. A new turn with the same words in the chat proves it arrived.
+  // A lost reply is confirmed only by this send's identity. Other devices
+  // can send the same words, pictures or references as a separate message.
   const turnsNow = useRef(log.turns);
   turnsNow.current = log.turns;
-  const arrivedSince = (before: Set<string>, body: string) => !!body.trim() && turnsNow.current.some((turn) =>
-    !before.has(turn.id) && (splitNote(turn.text).text ?? turn.text ?? '').trim() === body.trim());
+  const arrived = (messageId: string) => turnsNow.current.some((turn) => turn.messageId === messageId);
   const sendText = async (body: string, atts: Attachment[], sentReferences = references) => {
     const fingerprint = JSON.stringify([env.id, session.id, body, atts.map(a => [a.name, a.mime, a.data]), sentReferences.map(item => item.id)]);
     const messageId = retryDeliveryIds.current.get(fingerprint) ?? newMessageId();
@@ -342,8 +341,6 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     if (!atts.length) setDraft('');
     if (atts.length) setSendingImages(true);
     const clearedAt = editRevision.current;
-    // Turns already in the chat: a new one with these words means it arrived.
-    const before = new Set(log.turns.map((turn) => turn.id));
     try {
       await client.input(env.id, { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 120_000, messageId);
       retryDeliveryIds.current.delete(fingerprint);
@@ -354,8 +351,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       }
     }
     catch (e: any) {
-      if (!atts.length && !rejectedDelivery(e) && arrivedSince(before, body)) {
+      if (!rejectedDelivery(e) && arrived(messageId)) {
         retryDeliveryIds.current.delete(fingerprint);
+        if (atts.length) {
+          if (editRevision.current === clearedAt) setDraft('');
+          await setAttachments(current => current.filter(image => !atts.includes(image)));
+        }
         return;
       }
       // An explicit rejection can start a new attempt on the owner's next
@@ -378,18 +379,28 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         // Keep the complete request, even if the owner edits the restored
         // draft. Retrying an unknown result must use the same identity.
         failedSendSeq.current += 1;
-        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), attachments: atts, error: problem, before };
+        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), attachments: atts, error: problem, ...(restore ? { restoredRevision: editRevision.current } : {}) };
         setFailedSends((current) => [...current.filter(item => item.messageId !== messageId), failed]);
       }
     } finally { if (atts.length) setSendingImages(false); }
   };
-  // A card whose words show up later in the chat was sent after all.
+  // The log mutates its turns in place. Its sequence changes when a late
+  // confirmation arrives, even when the turns array stays the same.
   useEffect(() => {
-    const arrived = failedSends.filter((failed) => arrivedSince(failed.before, failed.body));
-    if (!arrived.length) return;
-    setFailedSends((current) => current.filter((failed) => !arrived.some((item) => item.id === failed.id)));
-    setError((current) => arrived.some((failed) => failed.error === current) ? '' : current);
-  }, [log.turns, failedSends]);
+    const confirmed = failedSends.filter((failed) => arrived(failed.messageId));
+    if (!confirmed.length) return;
+    const ids = new Set(confirmed.map((failed) => failed.messageId));
+    for (const [fingerprint, messageId] of retryDeliveryIds.current) {
+      if (ids.has(messageId)) retryDeliveryIds.current.delete(fingerprint);
+    }
+    if (confirmed.some((failed) => failed.restoredRevision === editRevision.current)) {
+      setDraft(''); setReferences([]);
+    }
+    const sentImages = new Set(confirmed.flatMap((failed) => failed.attachments));
+    if (sentImages.size) void setAttachments(current => current.filter(image => !sentImages.has(image)));
+    setFailedSends((current) => current.filter((failed) => !ids.has(failed.messageId)));
+    setError((current) => confirmed.some((failed) => failed.error === current) ? '' : current);
+  }, [log.last, failedSends]);
   /** Sends exactly what failed - never whatever is in the composer now. */
   const retryFailedSend = async (failed: FailedSend) => {
     if (retryingSends.current.has(failed.id)) return;

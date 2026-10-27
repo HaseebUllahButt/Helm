@@ -186,3 +186,26 @@ test('removing a file chip takes its label out of the draft',async t=>{
   await p.waitForFunction(()=>!document.querySelector('.attach-preview'));
   assert.equal(await p.locator('textarea').inputValue(),'');
 });
+
+test('a waiting edit cannot save while its pasted image is still loading', async t => {
+  const p = await pageFor(t); await p.evaluate(() => window.showQueue());
+  await p.getByRole('button', { name: 'Save', exact: true }).waitFor();
+  await p.evaluate(async () => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 32;
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const decode = window.createImageBitmap.bind(window);
+    window.createImageBitmap = (...args) => new Promise(resolve => { window.releaseImage = () => resolve(decode(...args)); });
+    const dt = new DataTransfer(); dt.items.add(new File([blob], 'queued.png', { type: 'image/png' }));
+    document.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    document.querySelector('form').requestSubmit();
+  });
+  await p.getByRole('status').filter({ hasText: 'Preparing images' }).waitFor();
+  assert.equal(await p.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+  assert.equal(await p.evaluate(() => window.saved), undefined, 'even a same-event submit must wait');
+  await p.evaluate(() => window.releaseImage());
+  await p.locator('.attach-preview img').waitFor();
+  await p.getByRole('button', { name: 'Save', exact: true }).click();
+  await p.waitForFunction(() => !!window.saved);
+  assert.equal(await p.evaluate(() => window.saved.attachments.length), 1);
+  assert.match(await p.evaluate(() => window.saved.text), /Image #1/);
+});

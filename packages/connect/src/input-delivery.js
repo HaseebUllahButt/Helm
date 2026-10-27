@@ -72,7 +72,7 @@ export class InputDelivery {
       // The record outlives a crash, so the chat it names must as well.
       this.sessions.flush?.();
       for (const folder of ['pending', 'receipts']) mkdirSync(join(this.dir, folder), { recursive: true, mode: 0o700 });
-      this.#write(paths.pending, { key, digest, request, generation: session.stopGeneration ?? 0 });
+      this.#write(paths.pending, { key, digest, request, messageId, generation: session.stopGeneration ?? 0 });
     }
     return this.#apply(pending ?? this.#read(paths.pending));
   }
@@ -99,7 +99,7 @@ export class InputDelivery {
           if (!session.driver || session.external || session.nativeChat || session.nativeCli) {
             throw failure('the accepted message no longer has its original driven session', 'delivery_failed');
           }
-          result = await this.sessions.input(id, data, { ...options, turnId });
+          result = await this.sessions.input(id, data, { ...options, turnId, ...(record.messageId ? { messageId: record.messageId } : {}) });
         }
       } catch (err) {
         // Shutdown can detach a writer mid-await. Keep the pending record;

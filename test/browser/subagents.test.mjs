@@ -901,3 +901,38 @@ test('a terminal chat has the Git button and the full Agents panel', async () =>
     await view.getByRole('dialog', {name:'Agents'}).getByRole('button', {name:/New task/}).waitFor();
   } finally { await view.close(); }
 });
+
+test('helper message drafts survive card changes and another helper send', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react'; import {createRoot} from 'react-dom/client';
+    import {Subagents} from './apps/web/src/session/Subagents';
+    const parent={id:'parent',engine:'codex',profileId:'fake',title:'Parent'};
+    const children=['first','second'].map(id=>({id,title:id,engine:'codex',profileId:'fake',status:'done',delegation:{parentId:'parent',status:'done'}}));
+    const client={on:()=>()=>{},rpc:async(env,method,params)=>{
+      if(method==='session.list')return {sessions:children};
+      if(method==='agent.list')return {agents:[]};
+      if(method==='session.delegation-result')return {status:'done',complete:true,output:'Finished.'};
+      if(method==='session.agent-send')return new Promise(resolve=>window.finishSend=()=>resolve({ok:true}));
+      return {ok:true};
+    }};
+    createRoot(document.getElementById('root')).render(<Subagents client={client} env={{id:'local',name:'Laptop',online:true,info:{agentMessages:true}}} parent={parent} embedded onClose={()=>{}} />);
+  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
+  const view = await browser.newPage();
+  try {
+    await view.setContent('<div id="root"></div>'); await view.addScriptTag({ content: bundle.outputFiles[0].text });
+    const first = view.locator('[data-task="first"]'), second = view.locator('[data-task="second"]');
+    await first.click(); await view.getByLabel('Message helper').fill('First draft');
+    await second.click(); await view.getByLabel('Message helper').fill('Second draft');
+    await first.click();
+    assert.equal(await view.getByLabel('Message helper').inputValue(), 'First draft');
+    await view.getByRole('button', { name: 'Send message', exact: true }).click();
+    await view.waitForFunction(() => !!window.finishSend);
+    await second.click();
+    assert.equal(await view.getByLabel('Message helper').inputValue(), 'Second draft');
+    await view.evaluate(() => window.finishSend());
+    await view.getByRole('button', { name: 'Send message', exact: true }).waitFor();
+    await view.waitForFunction(() => !document.querySelector('.delegation-follow textarea').disabled);
+    assert.equal(await view.getByLabel('Message helper').inputValue(), 'Second draft');
+    await first.click(); assert.equal(await view.getByLabel('Message helper').inputValue(), '');
+  } finally { await view.close(); }
+});

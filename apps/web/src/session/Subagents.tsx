@@ -58,7 +58,9 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   const [selected, setSelected] = useState('');
   const [result, setResult] = useState<DelegationResult | null>(null);
   const [permissions, setPermissions] = useState<Permission[]>([]);
-  const [message, setMessage] = useState('');
+  const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
+  const message = messageDrafts[selected] ?? '';
+  const setMessage = (text: string) => setMessageDrafts((all) => ({ ...all, [selected]: text }));
   const [sending, setSending] = useState(false);
   const messageAttempt = useRef<{ id: string; target: string; text: string } | null>(null);
   const [acting, setActing] = useState('');
@@ -242,7 +244,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   }, [client, env.id, parent.id, nativeOpen, openNative?.status, openNative?.last]);
 
   const select = (id: string) => {
-    setSelected(id); setResult(null); setPermissions([]); setMessage(''); setNotice(''); setError(null);
+    setSelected(id); setResult(null); setPermissions([]); setNotice(''); setError(null);
   };
   const added = (session: Session) => {
     setSessions((all) => [...all.filter((existing) => existing.id !== session.id), session]);

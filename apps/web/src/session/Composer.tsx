@@ -142,8 +142,9 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   const sameTiming = queued.length > 0 && queued.every((item) => !item.delivered && timing(item.turn) === timing(queued[0].turn))
     ? timing(queued[0].turn).toLowerCase() : '';
   const hints = [onReference && referenceOptions.length ? (narrow ? '@ chats' : '@ to attach a chat') : '', commands?.length ? (narrow ? '/ commands' : '/ for commands') : ''].filter(Boolean);
+  const canSendWaiting = !!onSendQueued && queued.some((item) => !item.delivered);
   const placeholder = ask === 'question' ? (narrow ? 'Answer above or type an answer' : 'Answer the question above or type an answer')
-    : ask === 'approval' ? (narrow ? 'Select an answer above or reply' : 'Select an answer above or tell the agent what to do')
+    : ask === 'approval' ? (narrow ? (canSendWaiting ? 'Replies wait, or use Send now' : 'Replies wait for approval') : `Select an answer above. Replies wait for approval${canSendWaiting ? ', or use Send now.' : '.'}`)
     : waiting ? 'Reply to the agent…'
     : ['Ask anything', ...hints].join(', ');
   const historyAt = useRef<number | null>(null);
@@ -496,7 +497,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
                         no CLI can - so the buttons go. Edit covers
                         taking it back; arrows only when there is an order. */}
                     {item.delivered ? <span className="queued-sent">Sent to agent</span> : <div className="queue-actions">
-                      {onEditQueued
+                      {onEditQueued && !item.turn.text.trimStart().startsWith('/')
                         ? <button disabled={busy} aria-label={`Edit waiting message: ${name}`} onClick={() => onEditQueued(item.turn)}>Edit</button>
                         : onWithdrawQueued && <button disabled={busy} onClick={() => onWithdrawQueued(item.turn)} title={`Return to draft: ${name}`} aria-label={`Return waiting message to draft: ${name}`}>Return to draft</button>}
                       {onMoveQueued && queued.length > 1 && <><button disabled={busy || index === 0 || queued[index - 1]?.delivered} aria-label={`Move up: ${name}`} onClick={() => onMoveQueued(item.turn, -1)}>↑</button><button disabled={busy || index === queued.length - 1} aria-label={`Move down: ${name}`} onClick={() => onMoveQueued(item.turn, 1)}>↓</button></>}
