@@ -533,7 +533,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           body={isShell
             ? 'All programs in this terminal stop.'
             : session.nativeCli ? 'This stops the agent program on your laptop. Close this view to leave it running.' : 'The agent stops and this chat leaves Helm.'}
-          confirmLabel={isShell ? 'Close' : session.nativeCli ? 'Stop chat' : 'Delete'} danger confirmKey="Delete"
+          confirmLabel={isShell ? 'Close' : session.nativeCli ? 'Stop chat' : 'Delete'} danger enterConfirms
           onCancel={() => setKilling(false)}
           onConfirm={() => { setKilling(false); kill(); }}
         />

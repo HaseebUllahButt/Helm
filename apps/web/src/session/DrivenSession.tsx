@@ -978,7 +978,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         <Confirm
           title={session.nativeCodex ? `Remove "${session.title}" from Helm?` : `Delete "${session.title}"?`}
           body={session.nativeCodex ? 'It stays in Codex and its terminal keeps running.' : 'The agent stops and this chat leaves Helm.'}
-          confirmLabel={session.nativeCodex ? 'Remove' : 'Delete'} danger busy={busy} confirmKey="Delete"
+          confirmLabel={session.nativeCodex ? 'Remove' : 'Delete'} danger busy={busy} enterConfirms
           onCancel={() => setAsk(null)}
           onConfirm={async () => {
             setAsk(null);
