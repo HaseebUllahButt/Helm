@@ -1337,3 +1337,17 @@ test('reading five helper replies removes their real parent queue tickets withou
   assert.equal(sessions.events.tail(parent.id,0).filter(e=>e.type==='turn.start'&&e.source==='agent').length,5);
   assert.deepEqual(await messages.collectResult({id:child.id,parentId:parent.id,consume:true}),[]);
 });
+
+test('tour helpers stay visible and do not send their JSON to the parent', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'codex-main', mode: 'readonly',
+    task: 'Write a Git review tour.\n' + 'data '.repeat(7000), tour: true });
+  assert.equal(sessions.get(child.id).delegation.notifyParent, false);
+  assert.equal(sessions.get(child.id).delegation.codexFork, undefined);
+  assert.equal(sessions.get(child.id).delegation.hidden, undefined);
+  drivers.get(child.id).finish();
+  assert.equal(sessions.delegationResult(child.id).status, 'done');
+  assert.equal(drivers.get(parent.id).sent, undefined);
+  assert.ok((await sessions.list({ parentId: parent.id })).some(s => s.id === child.id));
+});
