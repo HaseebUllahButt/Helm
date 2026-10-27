@@ -18,7 +18,8 @@ import { collapse, expand } from './paths.js';
  * after an hour of quiet when it never committed anything. After an hour of
  * quiet with all its work committed but not merged, the folder goes and the
  * branch stays ("parked"); the next message rebuilds the folder from it.
- * A helper started with `helm delegate --worktree` gets the same record.
+ * A helper started with `helm delegate --worktree` gets the same record
+ * (older helpers do not).
  */
 
 const exec = promisify(execFile);
