@@ -15,8 +15,6 @@ before(async () => {
     import React from 'react';
     import { createRoot } from 'react-dom/client';
     import { Transcript } from './apps/web/src/session/Transcript';
-    import { verbAt } from './apps/web/src/session/TurnPulse';
-    window.verbAt = verbAt;
     const root = createRoot(document.getElementById('root'));
     const t0 = 1_790_000_000_000;
     const step = (id, extra) => ({ id, text: '', status: 'ok', startedAt: t0, doneAt: t0 + 1000, ...extra });
@@ -60,26 +58,17 @@ after(async () => { await browser?.close(); });
 
 const shot = (name) => shots && page.screenshot({ path: join(shots, name) });
 
-test('a working turn says how long it has worked, with a verb, and no bare "Working…"', async () => {
+test('a working turn says how long it has worked, and only its clock moves', async () => {
   await page.evaluate(() => window.renderWorking(false));
   const line = page.locator('.working');
   await line.waitFor();
   const text = (await line.innerText()).replace(/\s+/g, ' ');
-  assert.match(text, /^Working for 4\ds [A-Z][a-z' ]+…$/);
-  assert.doesNotMatch(text, /^Working…/);
+  assert.match(text, /^Working for 4\ds$/);
   assert.equal(await line.locator('.pulse-dot').count(), 1);
+  assert.deepEqual(await page.evaluate(() => document.getAnimations().filter(a => a.effect?.getTiming().iterations === Infinity).map(a => a.animationName)), []);
   const before = Number((await line.locator('.working-time').innerText()).replace('s', ''));
   await page.waitForFunction((n) => Number(document.querySelector('.working-time').textContent.replace('s', '')) > n, before, { timeout: 4000 });
   await shot('turn-pulse-working.png');
-});
-
-test('the status uses plain words throughout the turn', async () => {
-  const seq = await page.evaluate(() => [0, 4, 5, 9, 10, 100].map((s) => window.verbAt('w1', s)));
-  assert.equal(seq[0], seq[1], 'steady within a few seconds');
-  assert.equal(seq[2], seq[3]);
-  assert.ok(seq.every((label) => label === 'Working'));
-  const all = await page.evaluate(() => new Set(Array.from({ length: 20 }, (_, i) => window.verbAt('w1', i * 5))).size);
-  assert.equal(all, 1, 'keeps the same clear status');
 });
 
 test('blocked on you still says so', async () => {

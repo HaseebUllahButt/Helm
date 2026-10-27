@@ -328,6 +328,21 @@ test("a terminal Claude's own busy/idle word fixes what hooks miss, never a newe
   } finally { await sessions.stop(); }
 });
 
+test('a terminal Claude stays blank until the first message', async () => {
+  class FreshHost extends Host { nativeSessions() { return [{ id: 'native-blank', engine: 'claude', nativeChat: true, cwd: root, createdAt: 1 }]; } }
+  const sessions = create(new FreshHost());
+  try {
+    await sessions.hooks;
+    assert.equal(sessions.get('native-blank').blank, true);
+    await sendHook('native-blank', { hook_event_name: 'SessionStart', session_id: 'conv-blank', transcript_path: join(root, 'conv-blank.jsonl') });
+    assert.equal(sessions.get('native-blank').blank, true);
+    await sendHook('native-blank', { hook_event_name: 'UserPromptSubmit' });
+    assert.equal(sessions.get('native-blank').blank, false);
+    await sendHook('native-blank', { hook_event_name: 'Stop' });
+    assert.equal(sessions.get('native-blank').blank, false);
+  } finally { await sessions.stop(); }
+});
+
 /** Claude's own shift+tab ring, drawing its footer the way 2.1.295 does. */
 class CycleHost extends Host {
   ring = ['auto mode', 'manual mode', 'accept edits', 'plan mode'];
@@ -454,4 +469,28 @@ test('Claude takeover can select and leave dangerously-skip-permissions after th
     assert.equal(host.ring[host.at],'bypass permissions');
     assert.equal((await sessions.setMode('native-test','default')).session.mode,'default');
   } finally{await sessions.stop();}
+});
+
+test('a native chat read that the app already holds answers unchanged, without the messages', async () => {
+  const host = new Host(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    const transcript = join(root, 'native-unchanged.jsonl');
+    const line = (text) => JSON.stringify({ type: 'user', message: { role: 'user', content: text }, timestamp: new Date().toISOString() }) + '\n';
+    writeFileSync(transcript, line('first question'));
+    sessions.get('native-test').transcript = transcript;
+    const full = await sessions.messages('native-test');
+    assert.equal(full.messages[0].text, 'first question');
+    assert.match(full.version, /^[\w-]{22}$/);
+    const same = await sessions.messages('native-test', { known: full.version });
+    assert.equal(same.unchanged, true);
+    assert.equal(same.messages, undefined);
+    assert.equal(same.version, full.version);
+    // A new message changes the version, and the list comes back whole.
+    writeFileSync(transcript, line('first question') + line('second question'));
+    const grown = await sessions.messages('native-test', { known: full.version });
+    assert.equal(grown.unchanged, undefined);
+    assert.deepEqual(grown.messages.map(m => m.text), ['first question', 'second question']);
+    assert.notEqual(grown.version, full.version);
+  } finally { await sessions.stop(); }
 });

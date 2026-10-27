@@ -60,3 +60,42 @@ test('reconnect refreshes once and does not overlap an outstanding request', asy
     assert.equal(failures, 1);
   } finally { catalog.stop(); }
 });
+
+test('the follow-up asks the machine to answer when its refresh is done', async () => {
+  const asked = [];
+  let done;
+  const completed = new Promise((resolve) => { done = resolve; });
+  const catalog = followModelRefresh(async (settled) => {
+    asked.push(settled);
+    return { models: [], refreshing: asked.length === 1 };
+  }, (list) => { if (!list.refreshing) done(); }, (error) => assert.fail(String(error)), 5);
+  try {
+    await completed;
+    assert.deepEqual(asked, [false, true]);
+    await catalog.refresh();
+    assert.deepEqual(asked, [false, true, false], 'a reconnect asks for the catalog as it is now');
+  } finally { catalog.stop(); }
+});
+
+test('a lost follow-up retries until the open menu receives the completed list', async () => {
+  const asked = [];
+  const seen = [];
+  const errors = [];
+  let done;
+  const completed = new Promise(resolve => { done = resolve; });
+  const catalog = followModelRefresh(async settled => {
+    asked.push(settled);
+    if (asked.length === 1) return { models: ['old-model'], refreshing: true };
+    if (asked.length === 2) throw new Error('connection lost');
+    return { models: ['new-model'], refreshing: false };
+  }, list => {
+    seen.push(list.models);
+    if (!list.refreshing) done();
+  }, error => errors.push(error.message), 1);
+  try {
+    await completed;
+    assert.deepEqual(asked, [false, true, true]);
+    assert.deepEqual(seen, [['old-model'], ['new-model']]);
+    assert.deepEqual(errors, ['connection lost']);
+  } finally { catalog.stop(); }
+});

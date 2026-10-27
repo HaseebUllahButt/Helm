@@ -121,10 +121,11 @@ export const M = {
   CLI_UPDATE: 'cli.update',        // { engine? } -> { started, busy?, results[] }  now, one tool or all
   CLI_AUTO_UPDATE: 'cli.autoUpdate', // { on } -> { auto }  this machine's setting, on by default
   ENV_BUNDLE: 'env.bundle',        // { have } -> { head, bundle }  this machine's saved version, for another to take
-  // What a machine is for ('pc' | 'vm' | 'nas'), asked of the machine itself
+  // What a machine is for ('pc' | 'vm'), asked of the machine itself
   // for the same reason as a rename: `kind` lives on its own roster record.
   MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }
   // What a session did to its folder, as git sees it.
+  GIT_TOUR: 'git.tour',            // { sessionId, cwd, scope: edits|branch|commit, hash?, action: get|start|stop }
   GIT_STATUS: 'git.status',        // { cwd } -> { repo, branch?, ahead?, behind?, files[], worktree?, head? }
   GIT_GRAPH: 'git.graph',          // { cwd } -> bounded commit ancestry and live agents by checkout
   GIT_DIFF: 'git.diff',            // { cwd, path } -> { path, diff, truncated }
@@ -174,7 +175,7 @@ export const M = {
   CONTEXT_LIMIT: 'account.contextLimit', // { profileId | account, model, window: number|null } -> { matched, window, limits }  Claude's "compact at" size; omit window to only read
   PICKER_PREFS: 'picker.prefs',    // { hidden?, last?, favs? } -> { picker }  what the new-session picker shows, shared by every device
   SESSION_LIST: 'session.list',    // { projects?: true } -> { sessions[], projects?: { [folder]: keys[] } }  keys: project-key.js
-  SESSION_START: 'session.start',  // { cwd | quick: true, profileId, model?, effort?, mode?, speed?, title?, parent?, clone?: { repo, login? } } -> { session }  quick: no folder; runs in an empty ~/.helm/quick/<id> removed on delete. clone: the repo is cloned into cwd first; the chat is there at once with session.clone { repo, state, percent, error? }
+  SESSION_START: 'session.start',  // { cwd | quick: true, profileId, model?, effort?, mode?, speed?, title?, parent?, clone?: { repo, login? }, attach?: { cols, rows, watcher } } -> { session, attach?: { text, pty } }  attach: a new terminal's first screen in the same reply, its watcher already viewing. quick: no folder; runs in an empty ~/.helm/quick/<id> removed on delete. clone: the repo is cloned into cwd first; the chat is there at once with session.clone { repo, state, percent, error? }
   SESSION_CLONE_RETRY: 'session.cloneRetry', // { id } -> { ok }: clone again (or start the agent again) after session.clone failed
   SESSION_LINK:  'session.link',   // { id, child } -> { session }  durable parent/child handoff link
   SESSION_AGENT_MESSAGES: 'session.agent-messages', // { id, before?, limit? } -> { messages, next }
@@ -244,7 +245,7 @@ export const M = {
   OWNER_WORDS: 'owner.words',      // { since, read } -> { chats[] }  what the owner wrote here since
   BRAIN_DIGEST: 'brain.digest',    // {} -> { name, sessions[] }  this machine's line in the digest
   BRAIN_OPEN: 'brain.open',        // { profileId?, model?, mode? } -> { session }  start or resume it
-  BRAIN_SNAPSHOT: 'brain.snapshot',// {} -> { text, snapshot }  the whole network as the brain reads it
+  BRAIN_SNAPSHOT: 'brain.snapshot',// { cached? } -> { text, snapshot }  the whole network as the brain reads it; cached: the stored snapshot only, no text
   // Speech to text, on a machine that holds the key rather than on the device.
   VOICE_TRANSCRIBE: 'voice.transcribe', // { audio(base64), mime? } -> { text }
   VOICE_DIRECT: 'voice.direct',         // {} -> { key, model, prompt, endpoint }  so a device calls Groq itself
@@ -302,23 +303,11 @@ export const M = {
   DISPATCH_SUBMIT: 'dispatch.submit', // { targetMachineId, params } -> queue receipt
   DISPATCH_STATUS: 'dispatch.status', // { handoffId } -> queue receipt
 
-  // A machine designated 'nas'. Browsing is RPC (small JSON, fits the
-  // channel), but the bytes themselves are not: streaming is real HTTP at
-  // /media/<machine>/stream on any hub, which a <video> element can speak
-  // directly. `media.ticket` mints the short-lived credential that URL
-  // carries, because a media element cannot set an Authorization header.
   // Public links: a name, a local port, maybe a password (protocol/share.js).
   // The hub asks every machine for its list when a link is opened.
   SHARE_LIST: 'share.list',        // { forHub?, members? } -> { shares[], features? }  hashes and private links only for a hub that asks
   SHARE_ADD: 'share.add',          // { name?, port, password?, private? } -> { share }
   SHARE_REMOVE: 'share.remove',    // { name } -> { removed }
-
-  MEDIA_INFO: 'media.info',        // {} -> { kind, port, roots[] }   the media listener's loopback port
-  MEDIA_ROOTS: 'media.roots',      // {} -> { roots[] }   the shared-folder allowlist
-  MEDIA_ROOT_ADD: 'media.root_add',    // { path } -> { roots[] }
-  MEDIA_ROOT_REMOVE: 'media.root_remove', // { path } -> { roots[] }
-  MEDIA_LIST: 'media.list',        // { root, path? } -> { root, path, entries[] }
-  MEDIA_TICKET: 'media.ticket',    // {} -> { ticket, expiresAt }  scoped to caller + this nas
 
   // A round trip that does nothing, for measuring what one costs. The
   // terminal needs to know: how it draws depends on how far away you are.

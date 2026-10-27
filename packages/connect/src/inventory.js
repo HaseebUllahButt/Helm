@@ -103,8 +103,9 @@ function procs() {
   const list = processList();
   // Only processes that look like one of the CLIs. Reading every descriptor
   // of every process (a browser alone holds hundreds) was most of a chat
-  // list pass on Linux too, not only for lsof on macOS.
-  const names = /claude|codex|opencode|devin|grok|cursor|pi|omp|muse|gemini|kimi|agy|antigravity/;
+  // list pass on Linux too, not only for lsof on macOS. Names must stand
+  // alone: a bare `pi` or `omp` matched every Chromium (`--crashpad-handler-pid`).
+  const names = /(?:^|[\s/._@-])(?:claude|codex|opencode|devin|grok|cursor|pi|omp|muse|gemini|kimi|agy|antigravity)(?:$|[\s/._@-])/;
   const candidates = list.filter(({ argv }) => names.test(argv.slice(0, 3).join(' '))).map((p) => p.pid);
   const files = new Map();
   for (const f of openFiles(candidates, (path) => /\.(jsonl|db)$/.test(path))) {

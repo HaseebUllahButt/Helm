@@ -1,7 +1,11 @@
 # Machines, devices and moving work
 
-Each private copy starts with one machine ("verify-<you>"). To test work
-between machines, pair two private copies only with each other.
+Each private copy starts with one machine ("verify-<you>"). Pair two private
+copies only with each other to test work between machines. For automatic task
+returns, keep each private `HELM_DIR` inside its private `HOME`. The default
+verify-helm folders are siblings, so a custom private daemon needs a containing
+home. Return materialization refuses folders outside that home. Never use the
+owner's home or network to bypass this check.
 
 ## Machines and devices
 - **Prove (driven 2026-10-15):** `$V text` on Home shows "verify-<you>" and

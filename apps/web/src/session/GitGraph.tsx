@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Client, Environment, Session } from '../client';
 import { EngineMark } from '../EngineMark';
@@ -173,8 +174,8 @@ function Through({ row, width }: { row: GraphRow; width: number }) {
   );
 }
 
-export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }: {
-  client: Client; env: Environment; cwd: string; refreshKey: string; onOpen?: (s: Session) => void; wrap?: boolean;
+export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false, onTour }: {
+  client: Client; env: Environment; cwd: string; refreshKey: string; onOpen?: (s: Session) => void; wrap?: boolean; onTour?: (hash: string) => void;
 }) {
   const [data, setData] = useState<GitGraphData | null>(null);
   const [error, setError] = useState('');
@@ -195,13 +196,13 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
       try {
         const r = await client.rpc<GitGraphData>(env.id, 'git.graph', { cwd }, 25_000);
         if (!stale) { setData(r); setError(''); }
-      } catch (e: any) { if (!stale) setError(e.message || 'Helm cannot load Git history.'); }
+      } catch (e: any) { if (!stale) setError(errorMessage(e, { fallback: 'Helm cannot load Git history.' })); }
       finally { inFlight = false; }
     };
     void load();
     const timer = setInterval(() => { if (!document.hidden) void load(); }, 15_000);
-    const off = client.on((id, kind) => {
-      if ((id === env.id && ['session.update', 'session.exit'].includes(kind)) || kind === 'connection') {
+    const off = client.on((id, kind, payload: any) => {
+      if ((id === env.id && ['session.update', 'session.exit'].includes(kind)) || (kind === 'connection' && payload?.online)) {
         clearTimeout(debounce);
         debounce = setTimeout(() => void load(), 600);
       }
@@ -221,7 +222,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
       const r = await client.rpc<{ sessions: Session[] }>(env.id, 'session.list');
       const session = r.sessions.find((s) => s.id === agent.id);
       if (session) onOpen(session); else setError('This agent stopped. Refresh the graph.');
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
   };
 
   const toggle = (hash: string) => {
@@ -235,7 +236,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
       .then((r) => setDetails((d) => ({ ...d, [hash]: r })))
       .catch((e: any) => setDetails((d) => ({
         ...d,
-        [hash]: { error: /unknown|not supported|no handler/i.test(e.message ?? '') ? 'Update Helm on this machine to see commit changes.' : (e.message || 'Helm cannot read this commit.') },
+        [hash]: { error: /unknown|not supported|no handler/i.test(e.message ?? '') ? 'Update Helm on this machine to see commit changes.' : errorMessage(e, { machine: env.name, fallback: 'Helm cannot read this commit.' }) },
       })));
   };
 
@@ -245,7 +246,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
     client.rpc<CommitDetail>(env.id, 'git.commit', { cwd, hash, path }, 20_000)
       .then((r) => setFileDiff((f) => f && f.hash === hash && f.path === path
         ? { hash, path, diff: (r.diff ?? '').replace(/^[\s\S]*?(?=^@@)/m, ''), truncated: r.truncated } : f))
-      .catch((e: any) => setFileDiff((f) => f && f.hash === hash && f.path === path ? { hash, path, diff: '', error: e.message } : f));
+      .catch((e: any) => setFileDiff((f) => f && f.hash === hash && f.path === path ? { hash, path, diff: '', error: errorMessage(e) } : f));
   };
 
   const jump = (hash: string) => {
@@ -283,7 +284,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
     <div className={`git-empty${retry ? ' bad' : ''}`} role={retry ? 'alert' : undefined}>
       <span className="git-empty-icon"><Icon name={icon} size={18} /></span>
       <b>{title}</b>
-      {text && <span>{text}</span>}
+      {text && text !== title && <span>{text}</span>}
       {retry && <button className="ghost" onClick={() => { setError(''); setAttempt((count) => count + 1); }}>Try again</button>}
     </div>
   );
@@ -363,6 +364,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
                     : 'error' in d ? <div className="git-state bad" role="status">{d.error}</div>
                     : <>
                       <div className="git-detail-subject">{d.subject}</div>
+                      {onTour && <button className="ghost" onClick={() => onTour(d.hash)}>Tour this commit</button>}
                       {d.body && <div className="git-detail-body">{d.body}</div>}
                       <div className="git-detail-meta">
                         <span>{d.author}</span>

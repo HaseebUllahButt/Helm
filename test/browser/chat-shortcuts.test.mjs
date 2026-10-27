@@ -157,11 +157,11 @@ test('the model sheet takes the keyboard: type to search, arrows, Enter, Esc', a
   await page.waitForFunction(() => window.current.effort === 'medium');
 });
 
-test('tok/s shows beside working while text streams, and goes when it stops', async t => {
+test('tok/s is a hover note on working while text streams, and goes when it stops', async t => {
   const page = await open(t, { width: 390, height: 844 });
   const chip = page.locator('.session-bar .chip.working');
   await chip.waitFor();
-  assert.match(await chip.textContent(), /^working$/);
+  assert.equal(await chip.textContent(), '', 'only a dot, no word');
   await page.evaluate(() => window.emit([{ type: 'item.start', id: 'msg#0', kind: 'text', turnId: 't1' }]));
   // 400 characters a second for three seconds: about 100 tokens a second.
   await page.evaluate(async () => {
@@ -170,12 +170,13 @@ test('tok/s shows beside working while text streams, and goes when it stops', as
       await new Promise(r => setTimeout(r, 100));
     }
   });
-  const text = await chip.textContent();
-  const rate = Number(/· (\d+) tok\/s$/.exec(text)?.[1]);
+  assert.equal(await chip.textContent(), '', 'the bar stays a dot');
+  const text = await chip.getAttribute('title') ?? '';
+  const rate = Number(/^Working.* · (\d+) tok\/s$/.exec(text)?.[1]);
   assert.ok(rate >= 70 && rate <= 130, `a sensible rate, got "${text}"`);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'fits a phone');
   const shot = process.env.HELM_SHOT_DIR;
   if (shot) await page.screenshot({ path: `${shot}/tok-s-phone.png`, clip: { x: 0, y: 0, width: 390, height: 120 } });
   // A tool running is not writing.
-  await page.waitForFunction(() => /^working$/.test(document.querySelector('.session-bar .chip.working')?.textContent ?? ''), null, { timeout: 5000 });
+  await page.waitForFunction(() => !document.querySelector('.session-bar .chip.working')?.title.includes('tok/s'), null, { timeout: 5000 });
 });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createReplayBuffer } from '../src/replay-buffer.js';
 import { nativeLaunchSettings } from '../src/native-settings.js';
 /**
  * The terminal host.
@@ -14,6 +15,7 @@ import { nativeLaunchSettings } from '../src/native-settings.js';
  * the service it was started from; `terminals.js` handles that when spawning.
  */
 import { createServer } from 'node:net';
+import { LineBuffer } from '../src/line-buffer.js';
 import { spawn } from 'node:child_process';
 import { existsSync, unlinkSync, mkdirSync, chmodSync } from 'node:fs';
 import { HELM_DIR } from '../src/paths.js';
@@ -72,7 +74,7 @@ setInterval(() => {
 function procOut(id, data) {
   if (clients.size === 0) {
     const p = procs.get(id);
-    if (p) p.backlog = (p.backlog + data).slice(-PROC_BACKLOG_MAX);
+    if (p) p.backlog.append(data);
     return;
   }
   broadcast({ t: 'proc.data', id, data });
@@ -87,7 +89,7 @@ function procOpen(msg) {
       env: msg.env ? { ...process.env, ...msg.env } : process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const proc = { child, errTail: '', backlog: '' };
+    const proc = { child, errTail: '', backlog: createReplayBuffer(PROC_BACKLOG_MAX, { trimLine: false }) };
     let spawned = false;
     procs.set(msg.id, proc);
 
@@ -97,6 +99,7 @@ function procOpen(msg) {
     child.stderr.on('data', (d) => { proc.errTail = (proc.errTail + d).slice(-4000); });
 
     const remove = () => {
+      proc.backlog.clear();
       procs.delete(msg.id);
       armIdleExit();
     };
@@ -132,6 +135,7 @@ function procOpen(msg) {
 
 function procDrop() {
   for (const p of procs.values()) {
+    p.backlog.clear();
     try { p.child.kill('SIGTERM'); } catch { /* already gone */ }
   }
   procs.clear();
@@ -186,6 +190,7 @@ async function handle(msg, viewer) {
     case 'resize':  terminals.resize(msg.id, msg.cols, msg.rows, viewer); return { ok: true };
     // The pty's own exit event reports the end, once.
     case 'close':   nativeSessions.delete(msg.id); terminals.close(msg.id); armIdleExit(); return { ok: true };
+    case 'process.pid': return { pid: terminals.pid(msg.id) ?? procs.get(msg.id)?.child.pid ?? null };
     case 'list':    return { ids: terminals.list() };
 
     // Pipe-stdio processes, held on the same terms as the ptys.
@@ -227,16 +232,15 @@ const server = createServer((sock) => {
   // hand it anything those processes said while nobody was listening.
   send(sock, { t: 'hello', pty: !!pty, reason: pty ? null : ptyUnavailable(), ids: terminals.list(), procs: [...procs.keys()], nativeSessions: [...nativeSessions.values()] });
   for (const [id, p] of procs) {
-    if (p.backlog) { send(sock, { t: 'proc.data', id, data: p.backlog }); p.backlog = ''; }
+    const backlog = p.backlog.text();
+    if (backlog) { send(sock, { t: 'proc.data', id, data: backlog }); p.backlog.clear(); }
   }
 
-  let buffer = '';
+  const lines = new LineBuffer();
   sock.on('data', async (chunk) => {
-    buffer += chunk;
-    let cut;
-    while ((cut = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, cut);
-      buffer = buffer.slice(cut + 1);
+    lines.write(chunk);
+    let line;
+    while ((line = lines.read()) !== null) {
       if (!line.trim()) continue;
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }

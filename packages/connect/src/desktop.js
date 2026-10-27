@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, accessSync, constants } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, readdirSync, rmSync, accessSync, constants } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -171,6 +172,51 @@ export function installApp({ url, browser, profile = 'Default' }) {
   run('gtk-update-icon-cache', ['-f', '-t', join(dataHome(), 'icons', 'hicolor')]);
 
   return { file, icons: icons.length, browser: bin, url, windowed: !!bin };
+}
+
+/**
+ * Launcher icons are copies, made once: ours at `helm app`, and Chromium's
+ * own when the owner installs Helm from the app window's menu. Chromium never
+ * redraws its copy, so a new logo reached the app and never the launcher.
+ * Each start puts the current logo in both, once per logo.
+ */
+export function refreshAppIcons() {
+  if (platform() !== 'linux') return { refreshed: 0 };
+  const from = assets();
+  const big = join(from, 'icon-512.png');
+  if (!existsSync(big)) return { refreshed: 0 };
+  const stamp = join(HELM_DIR, 'app-icons.stamp');
+  const logo = createHash('sha256').update(readFileSync(big)).digest('hex');
+  try { if (readFileSync(stamp, 'utf8') === logo) return { refreshed: 0 }; } catch { /* first start */ }
+
+  let refreshed = existsSync(join(appsDir(), ENTRY)) ? installIcons().length : 0;
+  const magick = which('magick') || which('convert');
+  const svg = join(from, 'icon.svg');
+  const rsvg = which('rsvg-convert');
+  let entries = [];
+  try { entries = readdirSync(appsDir()).filter((f) => f.startsWith('chrome-') && f.endsWith('.desktop')); } catch { /* no launchers */ }
+  for (const name of entries) {
+    const text = readFileSync(join(appsDir(), name), 'utf8');
+    // Only apps installed from Helm's own window profile are Helm.
+    if (!text.includes(`--user-data-dir=${windowProfile()} `)) continue;
+    const icon = text.match(/^Icon=(.+)$/m)?.[1]?.trim();
+    if (!icon || icon.includes('/')) continue;
+    let sizes = [];
+    try { sizes = readdirSync(join(dataHome(), 'icons', 'hicolor')).filter((s) => /^\d+x\d+$/.test(s)); } catch { /* none */ }
+    for (const size of sizes) {
+      const dest = join(iconDir(size), `${icon}.png`);
+      if (!existsSync(dest)) continue;
+      const px = size.split('x')[0];
+      const drawn = (magick && run(magick, [big, '-resize', `${px}x${px}`, dest]))
+        || (rsvg && existsSync(svg) && run(rsvg, ['-w', px, '-h', px, '-o', dest, svg]));
+      if (!drawn) copyFileSync(big, dest);
+      refreshed += 1;
+    }
+  }
+  if (refreshed) run('gtk-update-icon-cache', ['-f', '-t', join(dataHome(), 'icons', 'hicolor')]);
+  mkdirSync(HELM_DIR, { recursive: true });
+  writeFileSync(stamp, logo);
+  return { refreshed };
 }
 
 /** Take the launcher and its icons away again. */

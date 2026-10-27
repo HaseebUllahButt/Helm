@@ -87,11 +87,11 @@ test('a paired controller can read the network and invite every kind of computer
   assert.equal(network.id, net.id);
 
   assert.equal((await post('/api/invite', {}, null)).status, 401);
-  for (const role of ['pc', 'vm', 'nas']) {
+  for (const [role, want] of [['pc', 'pc'], ['vm', 'vm'], ['nas', 'pc']]) {
     const res = await post('/api/invite', { role }, DEVICE);
     assert.equal(res.status, 200);
     const invitation = await res.json();
-    assert.equal(invitation.role, role);
+    assert.equal(invitation.role, want);
     assert.match(invitation.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
   }
   const invite = await (await post('/api/invite', {}, MACHINE)).json();
@@ -129,7 +129,7 @@ test('a device paired at one hub can still probe the others', async () => {
   });
   assert.equal(probed.status, 200);
   assert.equal(probed.headers.get('access-control-allow-origin'), 'https://1-2-3-4.sslip.io');
-  assert.equal(probed.headers.get('vary'), 'Origin');
+  assert.match(probed.headers.get('vary'), /\bOrigin\b/);
 
   // A near-miss on that name is still a stranger.
   const near = await fetch(`${BASE}/api/network`, {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { getProfiles } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
@@ -54,6 +55,20 @@ export class SessionViewers {
     return viewers.size > 0;
   }
 
+  /** Only devices with an open view receive this chat's live body. */
+  recipients(id) {
+    if (!this.watching(id)) return [];
+    const recipients = new Set();
+    for (const watcher of this.#watching.get(id).keys()) {
+      try {
+        const identity = JSON.parse(watcher);
+        if (!Array.isArray(identity) || typeof identity[0] !== 'string' || identity[0] === 'legacy') return null;
+        recipients.add(identity[0]);
+      } catch { return null; } // An older caller still receives its normal stream.
+    }
+    return [...recipients];
+  }
+
   /**
    * The session as a conversation.
    *
@@ -61,7 +76,7 @@ export class SessionViewers {
    * the raw screen asks for it explicitly, and silently returning scrollback
    * here would make the chat view lie about what it is showing.
    */
-  async messages(id, { limit = 120 } = {}) {
+  async messages(id, { limit = 120, known = null } = {}) {
     const s = this.#sessions.get(id);
     if (s.driver) return { messages: [], source: 'events' };
     // A launched native process must be linked by process identity, never
@@ -111,11 +126,12 @@ export class SessionViewers {
         message.attachments = saved.attachments.map(image => ({ ...image, data: this.#sessions.events.attachment(id, image.ref) }));
       }
     }
-    return {
-      messages: withVisualMessages(messages, this.#sessions.events.tail(id, 0)),
-      status: s.status,
-      source: s.transcript,
-    };
+    const shown = withVisualMessages(messages, this.#sessions.events.tail(id, 0));
+    // The app reads a native chat every few seconds. When it already has
+    // these messages, say so instead of sending the whole list again.
+    const version = createHash('sha256').update(JSON.stringify(shown)).digest('base64url').slice(0, 22);
+    if (known === version) return { unchanged: true, version, status: s.status, source: s.transcript };
+    return { messages: shown, version, status: s.status, source: s.transcript };
   }
 
   async read(id, { lines = 200, source = 'recent', ansi = false } = {}) {
@@ -133,6 +149,18 @@ export class SessionViewers {
   /** id -> { expires, path, poll } for transcripts being watched */
   #transcripts = new Map();
   #stopped = false;
+
+  /** Stop watches and release their saved state when a chat is removed. */
+  forget(id) {
+    this.#watching.delete(id);
+    const screen = this.#watchers.get(id);
+    clearTimeout(screen?.timer);
+    this.#watchers.delete(id);
+    const transcript = this.#transcripts.get(id);
+    clearInterval(transcript?.poll);
+    this.#transcripts.delete(id);
+    this.#core.external?.releaseTranscript?.(this.#core.index.get(id));
+  }
 
   /**
    * End every screen and transcript poll. A poll left running after the
@@ -186,16 +214,23 @@ export class SessionViewers {
 
     const w = { last: '', expires: Date.now() + WATCH_TTL_MS, lines, ansi, busy: false, timer: null };
     this.#watchers.set(id, w);
-    const res = await this.#sessions.runtime.read(this.#core.handle(s), { lines, source: 'recent', ansi });
+    let res;
+    try { res = await this.#sessions.runtime.read(this.#core.handle(s), { lines, source: 'recent', ansi }); }
+    catch (error) {
+      if (this.#watchers.get(id) === w) this.#watchers.delete(id);
+      throw error;
+    }
     w.last = res.text ?? '';
+    if (this.#stopped || this.#watchers.get(id) !== w) return { text: w.last, session: s };
 
     const tick = async () => {
-      if (!this.#watchers.has(id)) return;
+      if (this.#watchers.get(id) !== w) return;
       if (Date.now() > w.expires) { this.#sessions.detach(id); return; }
       if (!w.busy) {
         w.busy = true;
         try {
           const r = await this.#sessions.runtime.read(this.#core.handle(s), { lines, source: 'recent', ansi });
+          if (this.#watchers.get(id) !== w) return;
           const text = r.text ?? '';
           if (text !== w.last) {
             const delta = text.startsWith(w.last)

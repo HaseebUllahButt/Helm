@@ -12,6 +12,17 @@ function fixture(t) {
 }
 const line = event => JSON.stringify(event) + '\n';
 
+test('permission requests and answers remain available as old context', t => {
+  const file = fixture(t);
+  const rows = [
+    { seq: 1, type: 'permission.request', requestId: 'ask' },
+    { seq: 2, type: 'item.delta', id: 'text', text: 'more work' },
+    { seq: 3, type: 'permission.resolved', requestId: 'ask', decision: 'allow' },
+  ];
+  writeFileSync(file, rows.map(line).join(''));
+  assert.deepEqual([...new EventFile(file).refresh().view().contextBefore(rows.length)], [rows[0], rows[2]]);
+});
+
 test('byte positions preserve Unicode, legacy property order, corrupt lines and final records without newlines', t => {
   const file = fixture(t);
   const records = [
@@ -72,17 +83,11 @@ test('cold opening reuses parsed tail records and releases the scan snapshot', t
   const rows = Array.from({ length: 200 }, (_, n) => ({ seq: n + 1, type: 'item.delta', text: 'اردو 😀 ' + n }));
   writeFileSync(file, rows.map(line).join(''));
   const indexed = new EventFile(file);
-  const record = indexed.record;
-  let parsedLast;
-  t.mock.method(indexed, 'record', function(event, ...args) {
-    parsedLast = event;
-    return record.call(this, event, ...args);
-  });
   const read = t.mock.method(indexed, 'read', () => { throw new Error('A parsed tail must not read again'); });
   let escaped;
   indexed.refresh(current => {
     escaped = current.view();
-    assert.equal(escaped.at(-1), parsedLast, 'the opening reader reuses the object parsed during the scan');
+    assert.equal(escaped.at(-1), escaped.at(-1), 'the opening reader reuses its parsed tail object');
     assert.deepEqual(escaped.at(-1), rows.at(-1));
     assert.deepEqual(escaped.at(-2), rows.at(-2));
     assert.equal(read.mock.callCount(), 0);

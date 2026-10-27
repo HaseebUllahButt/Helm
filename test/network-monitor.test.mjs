@@ -80,3 +80,28 @@ test('stop discards delayed samples; concurrent checks observe the final network
   const delayed = stopped.start(); stopped.stop(); release('new'); await delayed;
   assert.equal(changes, 1);
 });
+
+test('with the kernel feed running, ticks sample once a minute but still notice a wake', async context => {
+  const until = async (ok) => { while (!ok()) await new Promise(resolve => setImmediate(resolve)); };
+  const watcher = new EventEmitter(); watcher.stdout = new EventEmitter(); watcher.kill = () => {};
+  let now = 0, samples = 0, ticks = 0;
+  const changes = [];
+  const monitor = new NetworkMonitor(reason => changes.push(reason), { sample: async () => { samples++; return 'wifi'; },
+    now: () => { ticks++; return now; }, observe: () => watcher, every: 1 });
+  context.after(() => monitor.stop());
+  await monitor.start();
+  assert.equal(samples, 1);
+  // Many ticks inside the minute: the clock moves, no `ip` runs.
+  for (let i = 1; i <= 10; i++) { const seen = ticks; now = i * 5000; await until(() => ticks > seen); }
+  assert.equal(samples, 1);
+  assert.deepEqual(changes, []);
+  // A minute after the last sample, one full sample.
+  { now = 61_000; await until(() => samples === 2); }
+  // A long gap between ticks is a wake, sampled at once.
+  { now = 200_000; await until(() => changes.length === 1); }
+  assert.deepEqual(changes, ['woke from sleep']);
+  // The feed ends: every tick samples again.
+  watcher.emit('exit');
+  const before = samples; now += 1000;
+  await until(() => samples > before);
+});

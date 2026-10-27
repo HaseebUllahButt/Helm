@@ -190,7 +190,7 @@ for (const size of sizes) {
     const page=await fixture(size,{cancelDelay:true});
     try {
       await begin(page);await change(page,{phase:'failed',error:'VM needs more free space.'});
-      await page.getByText('VM needs more free space.',{exact:true}).waitFor();await shot(page,'failed');
+      await page.getByText('Free some space on VM. Try again.',{exact:true}).waitFor();await shot(page,'failed');
       await page.getByRole('button',{name:'Retry',exact:true}).click();
       await page.getByRole('status').filter({hasText:'Helm is sending files.'}).waitFor();
       assert.deepEqual(await page.evaluate(()=>window.calls.find(call=>call.method==='send.retry')),{env:'source',method:'send.retry',params:{jobId:'job-1'}});
@@ -357,6 +357,6 @@ test('an older target warning stays visible on its completion receipt', async ()
     await begin(page);
     await change(page,{...donePatch,error:'Older target: atomic publication is unavailable.'});
     await page.getByRole('button',{name:'Open folder there',exact:true}).waitFor();
-    await page.getByRole('status').filter({hasText:'Older target: atomic publication is unavailable.'}).waitFor();
+    await page.getByRole('status').filter({hasText:'Update Helm on VM before the next file send.'}).waitFor();
   } finally {await page.cleanup();}
 });

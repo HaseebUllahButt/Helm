@@ -6,7 +6,7 @@ import { transform } from 'esbuild';
 
 const source = readFileSync(new URL('../apps/web/src/Terminal.tsx', import.meta.url), 'utf8');
 
-function mountTerminal() {
+function mountTerminal({ firstScreen } = {}) {
   const refs = [];
   const effects = [];
   const intervals = new Map();
@@ -16,7 +16,8 @@ function mountTerminal() {
 
   class FakeXterm {
     static instance;
-    constructor() {
+    constructor(options) {
+      this.options = options;
       FakeXterm.instance = this;
       this.cols = 80;
       this.rows = 24;
@@ -24,6 +25,7 @@ function mountTerminal() {
       this.writes = [];
       this.disposed = false;
     }
+    registerLinkProvider(provider) { this.links = provider; }
     loadAddon() {}
     open() {}
     attachCustomWheelEventHandler() {}
@@ -51,6 +53,8 @@ function mountTerminal() {
     'react/jsx-runtime': jsxRuntime,
     '@xterm/xterm': { Terminal: FakeXterm },
     '@xterm/addon-fit': { FitAddon: FakeFitAddon },
+    './terminalLinks': { localTerminalUrl: text => text.startsWith('http://localhost:') ? text : null, terminalLocalLinks: () => [{ text: 'localhost:5173', url: 'http://localhost:5173/', range: {} }] },
+    './startingTerminals': { takeFirstScreen: () => firstScreen },
   };
   const module = { exports: {} };
   const context = {
@@ -99,6 +103,22 @@ function mountTerminal() {
     });
 }
 
+test('a terminal opened from here draws the screen its start brought, without asking again', async () => {
+  const firstScreen = { watcher: 'w-1', text: '$ ', cols: 100, rows: 30, later: [{ text: 'hi', reset: false }] };
+  const { xterm, calls, cleanup } = await mountTerminal({ firstScreen });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(xterm.writes, ['<reset>', '$ ', 'hi']);
+    assert.equal(calls.filter((call) => call.method === 'session.attach').length, 0);
+    // It opened at a guess of the size; the real one follows.
+    const resize = calls.find((call) => call.method === 'session.resize');
+    assert.deepEqual({ ...resize?.params }, { id: 'session-1', cols: 80, rows: 24 });
+  } finally {
+    cleanup();
+  }
+  assert.equal(calls.find((call) => call.method === 'session.detach')?.params.watcher, 'w-1');
+});
+
 test('password-like PTY input is sent directly and never speculatively drawn', async () => {
   const { xterm, calls, emitOutput, cleanup } = await mountTerminal();
   try {
@@ -120,4 +140,19 @@ test('password-like PTY input is sent directly and never speculatively drawn', a
   } finally {
     cleanup();
   }
+});
+
+
+test('plain and OSC localhost links open the chat browser on its machine', async () => {
+  const { xterm, calls, cleanup } = await mountTerminal();
+  try {
+    xterm.links.provideLinks(1, links => links[0].activate());
+    xterm.options.linkHandler.activate({}, 'http://localhost:5173/path');
+    await new Promise(resolve => setImmediate(resolve));
+    const opens = calls.filter(call => call.method === 'browser.openApp');
+    assert.equal(opens.length, 2);
+    assert.ok(opens.every(call => call.env === 'machine-1' && call.params.id === 'session-1'));
+    assert.equal(opens[0].params.url, 'http://localhost:5173/');
+    assert.equal(opens[1].params.url, 'http://localhost:5173/path');
+  } finally { cleanup(); }
 });

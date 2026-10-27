@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { txn } from './idb';
 import type { Client } from './client';
 
@@ -60,7 +61,7 @@ export function watchAccounts(
       void saveAccounts(env, r);
       apply(r, true);
     })
-    .catch((e) => { if (!stale) onError(e.message); });
+    .catch((e) => { if (!stale) onError(errorMessage(e)); });
   return () => { stale = true; };
 }
 

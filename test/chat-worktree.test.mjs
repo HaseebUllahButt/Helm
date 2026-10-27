@@ -232,6 +232,27 @@ test('a merged, idle chat loses its worktree; unmerged or uncommitted work keeps
   await s.stop();
 });
 
+test('a chat opened while its folder is being removed starts no agent there', async () => {
+  // The app asks for the command menu again as the agent is let go. The
+  // folder still existed, so an agent started in it, found it gone a
+  // moment later and wrote a red "can't access working directory" error.
+  const dir = repo();
+  const { sessions: s, drivers } = sessions();
+  const chat = await s.start({ cwd: dir, profileId: 'claudea' });
+  git(chat.cwd, 'commit', '-q', '--allow-empty', '-m', 'feature');
+  git(dir, 'merge', '-q', '--no-edit', s.get(chat.id).chatWorktree.branch);
+  const tidy = s.worktreeTidy(chat.id);
+  await until(() => drivers[0].killed);
+  assert.deepEqual(await s.commands(chat.id), []);
+  assert.equal(drivers.length, 1, 'the menu started no agent');
+  const sent = s.input(chat.id, 'one more thing');
+  await tidy;
+  await sent;
+  await until(() => drivers.length === 2);
+  assert.ok(existsSync(chat.cwd), 'a message waits for the removal, then gets its folder back');
+  await s.stop();
+});
+
 test('a chat quiet for an hour loses a worktree it never committed to', async () => {
   const dir = repo();
   const { sessions: s } = sessions();
@@ -270,4 +291,38 @@ test('a folder removed by hand comes back from its branch; deleting a chat keeps
   await s.kill(empty.id);
   assert.ok(!existsSync(empty.cwd), 'a chat that did nothing takes its worktree along');
   await s.stop();
+});
+
+test('a restart closes an idle agent whose folder was removed by hand, and does not rebuild it', async () => {
+  const dir = repo();
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-gone'));
+  const closed = [];
+  const drivers = [];
+  const make = () => new Sessions(new StubRuntime(), {
+    events,
+    // Every hosted agent outlived the old daemon.
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => true, procPipe: () => null, close: async (id) => { closed.push(id); } }),
+    makeDriver: (engine, opts) => { const d = new FakeDriver({ engine, ...opts }); drivers.push(d); return d; },
+  });
+  const first = make();
+  const chat = await first.start({ cwd: dir, profileId: 'claudea' });
+  const kept = await first.start({ cwd: dir, profileId: 'claudea' });
+  first.flush();
+  git(dir, 'worktree', 'remove', '--force', chat.cwd);
+
+  const next = make();
+  drivers.length = 0;
+  await next.resume();
+  assert.ok(!existsSync(chat.cwd), 'the folder stays gone');
+  assert.ok(closed.includes(chat.id), 'its agent is closed');
+  assert.ok(!closed.includes(kept.id) && drivers.some((d) => d.env.HELM_SESSION_ID === kept.id), 'the other one is reattached');
+  assert.ok(!drivers.some((d) => d.env.HELM_SESSION_ID === chat.id));
+  assert.equal(next.get(chat.id).status, 'idle');
+
+  await next.input(chat.id, 'carry on');
+  await until(() => drivers.some((d) => d.env.HELM_SESSION_ID === chat.id));
+  assert.ok(existsSync(chat.cwd), 'its next message rebuilds the folder');
+  assert.ok(existsSync(kept.cwd));
+  await next.stop();
+  await first.stop();
 });

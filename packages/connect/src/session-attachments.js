@@ -65,9 +65,9 @@ export function saveUploads(sessionId, files, root = join(HELM_DIR, 'uploads')) 
   if (!files.length) return '';
   const dir = join(root, sessionId, randomBytes(6).toString('hex'));
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const lines = files.map(({ filename, data }) => {
+  const lines = files.map(({ filename, data }, index) => {
     const name = basename(filename).replace(/[\x00-\x1f/\\]/g, '_').replace(/^\.+/, '') || 'file';
-    const path = join(dir, name);
+    const path = join(dir, `${index + 1}-${name}`);
     writeFileSync(path, Buffer.from(data, 'base64'), { mode: 0o600 });
     return `[File: ${filename}]: ${JSON.stringify(path)}`;
   });

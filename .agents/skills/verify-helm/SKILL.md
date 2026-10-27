@@ -28,7 +28,7 @@ $V down                     # stops only what this copy started, deletes it
 
 Use `$V restart` to replace only the private daemon while its agents keep running.
 
-Also: `text`, `key <key>`, `upload <file>...`, `eval <js>`, `size <w> <h>`,
+Also: `record start|stop`, `compare`, `text`, `key <key>`, `upload <file>...`, `eval <js>`, `size <w> <h>`,
 `open '#open=<machine>/<chat>'` or `open '#devices'`, `open --desktop`
 (1280x800, mouse and hover; `open --phone` goes back - each starts a fresh
 browser of that kind, `size` alone keeps the phone's touch rules), `logs [n]`, `status`, and `rpc <method> [json]` to set up state
@@ -41,7 +41,16 @@ its own copy, named after its Helm session; `--name <name>` picks another.
 2. Drive it as the owner would, at phone size first, then `size 1280 800`
    if it has a desktop layout.
 3. Look at every screenshot. Read `errors` before saying done.
-4. Report what you drove and saw, and name what you could not drive.
+4. Show the owner one proof in the chat, so they see it work in seconds.
+   Keep every other screenshot private.
+   - A change to how a screen looks: `$V shot before.png` before you edit
+     the code, `$V shot after.png` after, then
+     `$V compare before.png after.png pair.png --before "Before: <what>" --after "After: <what>"`.
+   - A change to how something works (clicks, sends, approvals): `$V record
+     start`, do the steps, `$V record stop clip.webp`. Keep it under about
+     15 s; over 2 MB it is too big to show.
+   - Show it with `helm render <file> --title "<what it proves>"`.
+5. Report what you drove and saw, and name what you could not drive.
    "Tests pass" is not "it works".
 
 ## Accounts
@@ -77,6 +86,8 @@ its own copy, named after its Helm session; `--name <name>` picks another.
 - Never stop Helm processes by name (`pkill -f`, `systemctl stop
   helm-...`): that matches the owner's real Helm. `down` finds this copy's
   processes by its folder.
+- Always `down` when done. `up` also clears other copies whose Helm stopped
+  or that no command used for 12 hours.
 - Speed here is not the owner's speed: there is no network between machines.
 
 When the steps for a feature are wrong or missing, fix them in

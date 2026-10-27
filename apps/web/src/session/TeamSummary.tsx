@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useState } from 'react';
 import { Client, type Session } from '../client';
 import { EngineMark } from '../EngineMark';
@@ -97,7 +98,7 @@ export function TeamSummary({ team, onManage, onOpen, onReview, onStop }: {
       const state = stateOf(session);
       const finished = session.delegation?.finishedAt;
       const elapsed = Math.max(0, Math.floor(((finished || now) - (session.createdAt || now)) / 60000));
-      const result = session.delegation?.summary || session.recovery?.message;
+      const result = session.delegation?.summary || (session.recovery?.message ? errorMessage(session.recovery.message) : undefined);
       return <li key={session.id} style={{ marginLeft: Math.min(depth, 3) * 14 }}>
         <button className="team-task" onClick={() => onOpen ? onOpen(session) : onManage()}>
           <EngineMark engine={session.engine} /><span className="team-task-copy"><b>{session.title}</b><small>{session.model || session.engineModel || session.engine} · {elapsed < 1 ? '<1m' : `${elapsed}m`}</small></span>

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, symlinkSync, rmSync, existsSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { snapshotBaseline, applyReturnedSnapshot } from '../packages/connect/src/task-return.js';
@@ -52,4 +53,42 @@ test('Git checkpoints are deterministic across storage locations and isolate del
   after.files.find((file) => file.path === 'script').mode = 0o755;
   const final = taskCheckpoint(first, after, base);
   assert.deepEqual(checkpointChanges(first, base, final), ['new', 'remove', 'script']);
+});
+
+test('batched Git input keeps historical commits and exact binary and Unicode file bytes', () => {
+  const directory = join(root, 'git-binary');
+  const empty = taskCheckpoint(directory, snapshot({}));
+  assert.equal(empty, 'eae7ed87595145448ac8218b2001237c3e5c8395');
+  const bytes = Buffer.from('zero\0\n');
+  const input = { files: [{ path: 'space اردو 😀', mode: 0o644, data: bytes.toString('base64url') }] };
+  const commit = taskCheckpoint(directory, input);
+  assert.equal(commit, 'd100ccc98dbf83398fda5c05a43ebd82dc4d348a');
+  const git = (...args) => execFileSync('git', ['--git-dir', join(directory, 'repo.git'), ...args]);
+  assert.deepEqual(git('show', `${commit}:space اردو 😀`), bytes);
+  assert.equal(git('cat-file', '-p', commit).toString(),
+    `tree ${git('rev-parse', `${commit}^{tree}`).toString().trim()}\nauthor Helm <task@helm.local> 946684800 +0000\ncommitter Helm <task@helm.local> 946684800 +0000\n\nHelm task checkpoint\n`);
+  assert.equal(statSync(directory).mode & 0o777, 0o700);
+  assert.deepEqual(readdirSync(directory), ['repo.git']);
+  const child = taskCheckpoint(directory, snapshot({ new: 'next' }), 'refs/heads/task');
+  assert.equal(git('rev-parse', `${child}^`).toString().trim(), commit);
+});
+
+test('a failed Git batch keeps its previous saved point and removes private input', () => {
+  const directory = join(root, 'git-failure');
+  const base = taskCheckpoint(directory, snapshot({ app: 'keep' }));
+  const head = () => execFileSync('git', ['--git-dir', join(directory, 'repo.git'), 'rev-parse', 'refs/heads/task'], { encoding: 'utf8' }).trim();
+  for (const files of [
+    [{ path: '../outside', data: '' }],
+    [{ path: 'same', data: '' }, { path: 'same', data: '' }],
+    [{ path: 'a', data: '' }, { path: 'a/b', data: '' }],
+    [{ path: '.git/config', data: '' }],
+    [{ path: 'nested/.git/config', data: '' }],
+    [{ path: '.GIT/config', data: '' }],
+  ]) {
+    assert.throws(() => taskCheckpoint(directory, { files }, base));
+    assert.equal(head(), base);
+    assert.equal(readdirSync(directory).some(name => name.startsWith('input-')), false);
+  }
+  assert.throws(() => taskCheckpoint(directory, snapshot({ app: 'new' }), `${base}\nreset refs/heads/task`));
+  assert.equal(head(), base);
 });

@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import type { Client, Environment } from './client';
 import { Icon } from './Icon';
@@ -36,7 +37,7 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
     client.rpc<{ shares: Share[]; features?: string[] }>(env.id, 'share.list')
       .then((r) => { setShares(r.shares); setCanPrivate(!!r.features?.includes('private')); setError(''); })
       // A machine on an older Helm has no links to list.
-      .catch((e) => { setShares([]); if (!/unknown|not supported|method/i.test(e.message)) setError(e.message); });
+      .catch((e) => { setShares([]); if (!/unknown|not supported|method/i.test(e.message)) setError(errorMessage(e)); });
   }, [client, env.id]);
   useEffect(() => { if (env.online) load(); }, [env.online, load]);
 
@@ -49,13 +50,13 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
         : { port: Number(port), name: name.trim() || undefined, password: password || undefined });
       setAdding(false); setPort(''); setName(''); setPassword(''); setMembers(false);
       load();
-    } catch (err: any) { setError(err.message); }
+    } catch (err: any) { setError(errorMessage(err)); }
     finally { setBusy(false); }
   };
   const stop = async (s: Share) => {
     setBusy(true); setError('');
     try { await client.rpc(env.id, 'share.remove', { name: s.name }); load(); }
-    catch (err: any) { setError(err.message); }
+    catch (err: any) { setError(errorMessage(err)); }
     finally { setBusy(false); }
   };
   /**

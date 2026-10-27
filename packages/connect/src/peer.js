@@ -1,4 +1,5 @@
 import { RTCPeerConnection } from 'node-datachannel/polyfill';
+import { constants, createDeflateRaw } from 'node:zlib';
 import { nativeDirectConfig } from './direct-config.js';
 import { encodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
 
@@ -17,9 +18,9 @@ import { encodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../../prot
  * what a chat history can be - an old session's `session.events` reply is
  * easily megabytes. Anything over CHUNK_AT is fragmented into small
  * `dc-chunk` frames and reassembled on the other side (see client.ts, which
- * implements the same wire format). The relay path has no such limit, so a
- * direct copy that still fails to send is simply dropped: the hub already
- * carries the same event.
+ * implements the same wire format). The relay path has no such limit. A
+ * frame that still fails to send drops the link, and the app falls back to
+ * the hub.
  */
 export const DC_CHUNK_AT = 16_000;
 export const DC_CHUNK_TYPE = 'dc-chunk';
@@ -51,29 +52,94 @@ function sendFrame(channel, frame) {
     for (const piece of fragment(frame, gid)) channel.send(piece);
     return true;
   } catch {
-    // "Message size exceeds" or a racing close: the relay carries the same
-    // event, so dropping this copy is correct. RPC replies have no relay
-    // copy; the caller times out and retries over the hub.
+    // "Message size exceeds" or a racing close. The caller drops the link:
+    // the app relies on it alone while it is up (PeerHub.broadcast).
     return false;
   }
 }
 
+const HIGH_WATER = 512 * 1024;
+
+function waitChannel(channel, event = 'bufferedamountlow') {
+  return new Promise(resolve => {
+    const events = [event, 'close', 'error'];
+    const done = () => {
+      clearTimeout(timer);
+      for (const name of events) channel.removeEventListener?.(name, done);
+      resolve();
+    };
+    // Native channels can miss an event during shutdown. Keep one slow
+    // recheck, instead of waking every five milliseconds on a slow link.
+    const timer = setTimeout(done, 250);
+    for (const name of events) channel.addEventListener?.(name, done);
+  });
+}
+
 async function sendBuffered(channel, frame) {
   if (!channel) return false;
+  channel.bufferedAmountLowThreshold = HIGH_WATER / 2;
   const deadline = Date.now() + 120_000;
   while (channel.readyState === 'connecting' && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitChannel(channel, 'open');
   }
   if (channel.readyState !== 'open') return false;
   const pieces = fragment(frame, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
   for (const piece of pieces) {
-    while (channel.readyState === 'open' && channel.bufferedAmount > 512 * 1024 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+    while (channel.readyState === 'open' && channel.bufferedAmount > HIGH_WATER && Date.now() < deadline) {
+      await waitChannel(channel);
     }
     if (channel.readyState !== 'open' || Date.now() >= deadline) return false;
     channel.send(piece);
   }
   return true;
+}
+
+/**
+ * One compressed stream for everything a browser hears on its channel.
+ *
+ * The hub compresses what it relays; a direct link sent every frame in full,
+ * and live chat updates repeat the same fields frame after frame. A browser
+ * that says `{ t: 'hello', zip: 'deflate-raw' }` gets one raw deflate stream
+ * of newline-ended JSON frames in binary messages. The compression memory is
+ * kept between frames, each frame is flushed so it arrives at once, and the
+ * bytes may be split anywhere (the browser reads them as a stream). All
+ * sends go through one queue, because the bytes must reach the browser in
+ * the order they were compressed.
+ */
+export class DeflateLink {
+  #z = createDeflateRaw({ windowBits: 14, memLevel: 8 });
+  #out = [];
+  #queue = Promise.resolve(true);
+
+  constructor(channel) {
+    this.channel = channel;
+    channel.bufferedAmountLowThreshold = HIGH_WATER / 2;
+    this.#z.on('data', (chunk) => this.#out.push(chunk));
+    this.#z.on('error', () => {});
+  }
+
+  /** Resolves false when the frame could not be sent; the link is then broken. */
+  send(frame) {
+    const run = this.#queue.then(async (ok) => {
+      if (!ok) return false;
+      this.#z.write(`${frame}\n`);
+      await new Promise((resolve) => this.#z.flush(constants.Z_SYNC_FLUSH, resolve));
+      const bytes = Buffer.concat(this.#out.splice(0));
+      const deadline = Date.now() + 120_000;
+      for (let at = 0; at < bytes.length; at += DC_CHUNK_AT) {
+        while (this.channel.readyState === 'open' && this.channel.bufferedAmount > HIGH_WATER && Date.now() < deadline) {
+          await waitChannel(this.channel);
+        }
+        if (this.channel.readyState !== 'open' || Date.now() >= deadline) return false;
+        this.channel.send(bytes.subarray(at, at + DC_CHUNK_AT));
+      }
+      return true;
+    }).catch(() => false);
+    this.#queue = run;
+    return run;
+  }
+
+  close() { this.#z.close(); }
 }
 
 const TUNNEL_TYPES = new Set(['tunnel.open', 'tunnel.ack', 'tunnel.data', 'tunnel.close']);
@@ -261,6 +327,15 @@ export class PeerHub {
    */
   async #onMessage(peer, msg) {
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+    if (msg.t === 'hello') {
+      // Only browsers, which hear events here, ask; machines never do.
+      if (msg.zip === 'deflate-raw' && !peer.zip && peer.channel && (!this.events || this.events(peer.device))) {
+        peer.zip = new DeflateLink(peer.channel);
+      }
+      return;
+    }
+    // Tunnel frames are their own binary format and would break the stream.
+    if (peer.zip && TUNNEL_TYPES.has(msg.t)) return;
     if (TUNNEL_TYPES.has(msg.t)) {
       if (!this.onTunnel) {
         if (msg.t === 'tunnel.open') {
@@ -278,7 +353,7 @@ export class PeerHub {
       // each fragmented frame together: interleaving more than eight would
       // evict still-live assemblies at the caller and silently lose replies.
       const frame = JSON.stringify({ t: 'rpcResult', ...body });
-      const run = (peer.sendChain ?? Promise.resolve()).then(() => sendBuffered(peer.channel, frame));
+      const run = (peer.sendChain ?? Promise.resolve()).then(() => peer.zip ? peer.zip.send(frame) : sendBuffered(peer.channel, frame));
       peer.sendChain = run.catch(() => {});
       return run.then(ok => {
         if (!ok) this.drop(peer.id, peer);
@@ -298,11 +373,17 @@ export class PeerHub {
   }
 
   /** Push an event to every connected client that took the direct route. */
-  broadcast(kind, payload, eid) {
+  broadcast(kind, payload, eid, to) {
     const frame = JSON.stringify({ t: 'event', kind, payload, eid });
     for (const peer of this.#peers.values()) {
+      if (Array.isArray(to) && !to.includes(peer.device)) continue;
       if (this.events && !this.events(peer.device)) continue;
-      sendFrame(peer.channel, frame);
+      if (peer.channel?.readyState !== 'open') continue;
+      // The app stops the hub's copy while this link is up, so a lost frame
+      // would be lost for good. Dropping the link makes the app take the hub
+      // copy back and reload what it missed.
+      if (peer.zip) void peer.zip.send(frame).then((ok) => { if (!ok) this.drop(peer.id, peer); });
+      else if (!sendFrame(peer.channel, frame)) this.drop(peer.id, peer);
     }
   }
 
@@ -314,6 +395,7 @@ export class PeerHub {
     clearTimeout(peer.disconnectedTimer);
     peer.fragments?.clear();
     peer.tunnelFrames?.clear();
+    peer.zip?.close();
     try { peer.channel?.close(); peer.pc.close(); } catch { /* already torn down */ }
     const transport = peer.transport;
     peer.transport = null;

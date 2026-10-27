@@ -88,7 +88,7 @@ test('generated directories are informational and never gate the send', () => {
   const report = TC.transferPreflight(CT.createCodeSnapshot(src));
   assert.equal(report.requiresAcknowledgement, false);
   const setup = report.warnings.filter((w) => w.code === 'generated-setup');
-  assert.ok(setup.some((w) => /dependencies/i.test(w.message)));
+  assert.ok(setup.some((w) => /required packages/i.test(w.message)));
   assert.ok(setup.some((w) => /git history/i.test(w.message)));
   assert.ok(setup.some((w) => /build output/i.test(w.message)));
   assert.ok(setup.some((w) => /python environment/i.test(w.message)));

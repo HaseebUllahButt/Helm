@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { expand } from './paths.js';
-import { keepReason, makeChatWorktree, removeChatWorktree, renameChatBranch, restoreChatWorktree, runSetup, worktreePlan } from './chat-worktree.js';
+import { keepReason, makeChatWorktree, removeChatWorktree, renameChatBranch, repoConfig, restoreChatWorktree, runSetup, worktreePlan } from './chat-worktree.js';
 
 /** How often idle chats are checked for a branch merged back. */
 const SWEEP_MS = 2 * 60_000;
@@ -21,6 +21,10 @@ export class SessionWorktrees {
   #timer = null;
   /** Chats whose worktree is being checked or removed right now. */
   #busy = new Set();
+  /** Worktree folders being removed, from their agents' release to the end. */
+  #removing = new Map();
+  /** Stops the setup commands running now when the daemon goes away. */
+  #stopping = new AbortController();
   constructor(sessions, core) {
     this.#sessions = sessions;
     this.#core = core;
@@ -48,19 +52,39 @@ export class SessionWorktrees {
     this.#sessions.emit('event', { id: s.id, event });
   }
 
-  /** The repo's setup command, while the chat says it is setting up. */
+  /**
+   * The repo's setup command, while the chat says it is setting up. False
+   * when the daemon stopped it: the chat stays "setting up" on disk, and the
+   * next daemon runs it again from the start (`setupCommand`).
+   */
   async setup(s, command) {
-    const result = await runSetup(command, expand(s.chatWorktree.path));
-    if (this.#core.index.get(s.id) !== s) return;
+    const signal = this.#stopping.signal;
+    let result;
+    try {
+      // A folder removed since it was made (a restart, by hand) comes back first.
+      await this.ensure(s);
+      result = command ? await runSetup(command, expand(s.chatWorktree.path), { signal }) : { ok: true };
+    } catch (err) { result = { ok: false, output: err.message }; }
+    if (signal.aborted) return false;
+    if (this.#core.index.get(s.id) !== s) return false;
     if (result.ok) delete s.chatWorktree.setup;
     else {
       s.chatWorktree.setup = 'failed';
       this.say(s, `The setup command in helm.json failed, so the agent starts without it.\n${result.output.slice(-1500)}`);
     }
+    return true;
+  }
+
+  /** The setup command a chat's worktree asks for now, read from its own helm.json. */
+  setupCommand(s) {
+    return repoConfig(expand(s.chatWorktree.path))?.setup ?? repoConfig(expand(s.chatWorktree.repo))?.setup ?? null;
   }
 
   /** Before an agent starts: a chat reopened after its folder was removed gets it back. */
   async ensure(s) {
+    // A removal under way still shows the folder: an agent started now
+    // finds it gone a moment later and fails.
+    await this.#removing.get(s.chatWorktree?.path);
     if (!s.chatWorktree || existsSync(expand(s.chatWorktree.path))) return;
     let record;
     try { record = await restoreChatWorktree(s.chatWorktree); }
@@ -69,6 +93,9 @@ export class SessionWorktrees {
     for (const o of this.#sharing(s)) o.chatWorktree = { ...record, setup: o.chatWorktree.setup };
     this.#core.save();
   }
+
+  /** Whether the chat's folder is being removed right now. */
+  removing(s) { return this.#removing.has(s.chatWorktree?.path); }
 
   /** The chat has a name: the branch takes it while it holds no commits. */
   async titled(s) {
@@ -94,7 +121,12 @@ export class SessionWorktrees {
     void this.sweep();
   }
 
-  stop() { clearInterval(this.#timer); this.#timer = null; }
+  stop() {
+    clearInterval(this.#timer);
+    this.#timer = null;
+    this.#stopping.abort();
+    this.#stopping = new AbortController();
+  }
 
   async sweep() {
     for (const s of [...this.#core.index.values()]) {
@@ -110,12 +142,20 @@ export class SessionWorktrees {
    */
   async tidy(s, now = Date.now()) {
     // A branch of the chat (a fork) works in the same folder: all of them idle.
-    const idle = () => this.#sharing(s).every((o) => this.#core.index.get(o.id) === o && this.#sessions.canReturnTask(o.id));
+    // A Codex thread still open in its daemon is in use too. Removing its
+    // folder released Helm's link, the 2.5 s native check joined it again and
+    // rebuilt the folder, and 3 s later it went again: a full checkout and a
+    // dozen git commands every 3 s, for as long as Codex kept it open.
+    const idle = () => this.#sharing(s).every((o) => this.#core.index.get(o.id) === o && this.#sessions.canReturnTask(o.id)
+      && !this.#core.natives?.holds(o));
     if (this.#busy.has(s.id) || !s.chatWorktree || !idle()) return false;
     const merged = !this.#sharing(s).every((o) => now - (o.updatedAt || o.createdAt || now) >= UNUSED_MS);
     this.#busy.add(s.id);
+    const path = s.chatWorktree.path;
+    let removed = null;
     try {
       if (await keepReason(s.chatWorktree, { merged })) return false;
+      this.#removing.set(path, new Promise((resolve) => { removed = resolve; }));
       // The agent's process sits in that folder: let it go first. Its
       // conversation stays, and the next message rebuilds the folder.
       for (const o of this.#sharing(s)) await this.#sessions.release(o.id);
@@ -127,7 +167,10 @@ export class SessionWorktrees {
     } catch (err) {
       this.#sessions.log(`[${s.id}] could not remove its worktree: ${err.message}`);
       return false;
-    } finally { this.#busy.delete(s.id); }
+    } finally {
+      this.#busy.delete(s.id);
+      if (removed) { this.#removing.delete(path); removed(); }
+    }
   }
 
   /** Chats in the same worktree as `s`, itself included. */

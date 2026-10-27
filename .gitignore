@@ -11,3 +11,7 @@ dist/
 
 # Scratch scripts from driving the app by hand; never part of the tree.
 *-tmp.mjs
+
+# Rust log reader outputs are built for the current machine.
+native/log-index/target/
+native/log-index/*.node

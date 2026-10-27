@@ -34,7 +34,7 @@ export function reportedMode(engine, info) {
   if (['danger-full-access','dangerFullAccess'].includes(sandbox) && approval === 'never') return 'full';
   if (['workspace-write','workspaceWrite'].includes(sandbox)) {
     if (approval === 'never') return 'edit';
-    if (approval === 'on-request') return 'ask';
+    if (approval === 'on-request') return ['auto_review', 'guardian_subagent'].includes(info.approvalsReviewer) ? 'auto-review' : 'ask';
   }
   if (['read-only','readOnly'].includes(sandbox) && approval === 'untrusted') return 'readonly';
   return undefined;

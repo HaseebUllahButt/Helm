@@ -1,8 +1,9 @@
+import { errorMessage } from '../errors';
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { useNow, waitingSince } from '../useNow';
-import { ThreadStatus, moodOf, isUnread, useSeenVersion, wrappedUp } from '../threadStatus';
+import { ThreadStatus, moodOf, isUnread, useSeenVersion } from '../threadStatus';
 import { plainProblem } from '../session/problem';
 import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
@@ -10,6 +11,7 @@ import { chatFolder, type Session } from '../client';
 import { shownTitle, unknownThread } from '../format';
 import { engineOf } from '../engines';
 import { fadeWhenCut } from '../fadeWhenCut';
+import { deleteKey } from '../session/chatKeys';
 
 /**
  * A section that can be put away, with what it holds counted on the header.
@@ -23,7 +25,7 @@ import { fadeWhenCut } from '../fadeWhenCut';
  */
 export function Fold({ title, count, note, noteTone, hint, kind, shelf = false, peek, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, children }: {
   title: string; count: number; openWhen?: boolean; children: ReactNode;
-  /** The sidebar's way: sentence case, a hairline, and the count only once it is folded away. */
+  /** The sidebar's way: sentence case, quiet, and the count only once it is folded away. */
   shelf?: boolean;
   /** What stays on show when a shelf is folded - the chat you are in. */
   peek?: ReactNode;
@@ -74,7 +76,6 @@ export function Fold({ title, count, note, noteTone, hint, kind, shelf = false, 
           <span className="fold-title" title={hint}>{title}</span>
           {count > 0 && (!shelf || !open || attention) && <span className="count">{count}</span>}
           {note && <span className={`note-inline${noteTone ? ` ${noteTone}` : ''}`}>{note}</span>}
-          {shelf && <span className="shelf-rule" aria-hidden="true" />}
         </button>
         {actions && <span className="fold-actions">{actions}</span>}
       </div>
@@ -110,8 +111,10 @@ export function PagedRows<T extends { s: { id: string } }>({ items, isSelected, 
  * The ⋯ on a thread row: continue, rename, archive, delete. One component, so
  * the sidebar's rows and the machine screen's rows offer the same things.
  */
-export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: {
+export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete, ending: askedToEnd, setEnding: setAskedToEnd }: {
   s: Session; onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void;
+  /** The delete question, when the row asks it (its Delete key). */
+  ending?: boolean; setEnding?: (on: boolean) => void;
 }) {
   const eng = engineOf(s.engine);
   const adopted = s.adopted;
@@ -119,7 +122,9 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: 
   const [menu, setMenu] = useState(false);
   useDismiss(menu, useCallback(() => setMenu(false), []));
   const [naming, setNaming] = useState(false);
-  const [ending, setEnding] = useState(false);
+  const [endingHere, setEndingHere] = useState(false);
+  const ending = askedToEnd ?? endingHere;
+  const setEnding = setAskedToEnd ?? setEndingHere;
   return (
     <>
       <button
@@ -164,7 +169,7 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: 
             : adopted
               ? 'This closes the program in that terminal. Helm did not start it.'
               : 'This stops the agent. Helm permanently removes the chat.'}
-          confirmLabel={found ? 'Remove' : adopted ? 'Close' : 'Delete'} danger
+          confirmLabel={found ? 'Remove' : adopted ? 'Close' : 'Delete'} danger enterConfirms
           onCancel={() => setEnding(false)}
           onConfirm={() => { setEnding(false); onDelete(); }}
         />
@@ -219,7 +224,7 @@ export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Sessi
   const dismiss = async () => {
     setDismissing(true); setDismissError('');
     try { await onDismiss(); }
-    catch (error: any) { setDismissError(error?.message || 'Helm cannot clear this failure alert. Try again.'); }
+    catch (error: any) { setDismissError(errorMessage(error, { fallback: 'Helm cannot clear this failure alert. Try again.' })); }
     finally { setDismissing(false); }
   };
   const eng = engineOf(s.engine);
@@ -265,12 +270,13 @@ export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Sessi
 }
 
 /**
- * A chat in the sidebar. Title and what it is doing on the first line; where
- * it runs, and the agent, on the second. A settled chat shrinks to one line.
+ * A chat in the sidebar. A settled chat is one line: the title, one status
+ * at the right edge (its age, "new", or a word that says more), and the
+ * agent. A running chat adds a second line: its folder, machine and branch.
  */
 export function HomeRow({ s, machine, onOpen, note, selected = false, slim = false, actions }: {
   s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean;
-  /** One line: the title and when it wrapped up. */
+  /** One line: the title, its status and the agent. */
   slim?: boolean;
   /** Rename, archive, delete - the same ⋯ the machine screen's rows have. */
   actions?: { onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void };
@@ -279,46 +285,37 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
   useSeenVersion();
   const eng = engineOf(s.engine);
   const mood = moodOf(s, isUnread(s));
-  // Work going on in the background steps back; what wants you does not.
-  const recede = mood === 'working' && !selected;
   const name = shownTitle(s.title);
+  const where = [whereOf(s), machine, s.branch, eng.label].filter(Boolean).join(' · ');
+  // A word that says more than the age does takes its place.
+  const chip = mood === 'working' || mood === 'needs' || mood === 'failed' ? null
+    : s.recovery?.kind === 'interrupted' ? <span className="chip exited">stopped</span>
+    : unknownThread(s) ? <StatusChip status="unknown" />
+    : s.externalActive || (s.shared && s.alive) ? <span className="chip">Ready</span> : null;
   const title = <span className={`tri-title${name.cut ? ' cut' : ''}`} ref={fadeWhenCut}>{name.text}</span>;
-  const className = `row tall rowx tri-row mood-${mood}${slim ? ' slim' : ''}${selected ? ' active' : ''}${recede ? ' recede' : ''}`;
-  if (slim) {
-    return (
-      <div className={className}>
-        <button className={`rowmain thread-row tri slim${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
-          {title}
-          <span className="slim-when">{(() => { const w = wrappedUp(s.updatedAt, now); return <><span className="slim-pre">{w.lead}</span>{w.rest}</>; })()}</span>
-          {mood === 'unread' && <ThreadStatus s={s} mood={mood} now={now} />}
-          <EngineMark engine={eng.cls} className="tri-mark" />
-        </button>
-        {actions && <ThreadActions s={s} {...actions} />}
-      </div>
-    );
-  }
+  const status = note && slim ? <span className="tstat quiet" data-mood="quiet">{note}</span> : chip ?? <ThreadStatus s={s} mood={mood} now={now} />;
+  const mark = <EngineMark engine={eng.cls} className="tri-mark" />;
+  // A row with focus takes the Delete key for its own chat, before the open chat can.
+  const [ending, setEnding] = useState(false);
   return (
-    <div className={className}>
-    <button className={`rowmain thread-row tri${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
-      <span className="tri-top">
-        {title}
-        <ThreadStatus s={s} mood={mood} now={now} />
-      </span>
-      <span className="tri-bot">
-        <Icon name={s.quick ? 'bolt' : 'folder'} size={12} />
-        <span className="tri-where">{[whereOf(s), machine].filter(Boolean).join(' · ')}</span>
-        {note && <span className="tri-note">{note}</span>}
-        {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
-        <span className="tri-end">
-          {/* Stopped by the owner part-way: finished with, but not finished. */}
-          {s.recovery?.kind === 'interrupted' && mood !== 'working' ? <span className="chip exited">stopped</span>
-            : unknownThread(s) ? <StatusChip status="unknown" />
-            : mood !== 'working' && (s.externalActive || (s.shared && s.alive)) ? <span className="chip">Ready</span> : null}
-          <EngineMark engine={eng.cls} className="tri-mark" />
-        </span>
-      </span>
-    </button>
-    {actions && <ThreadActions s={s} {...actions} />}
+    <div className={`row tall rowx tri-row mood-${mood}${slim ? ' slim' : ''}${selected ? ' active' : ''}`}>
+      <button
+        className={`rowmain thread-row tri${slim ? ' slim' : ''}${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}
+        onKeyDown={actions?.onDelete ? (e) => { if (deleteKey(e, e.currentTarget)) { e.preventDefault(); setEnding(true); } } : undefined}
+        title={`${s.title}\n${where}`} data-where={where}
+      >
+        {slim ? <>{title}{status}{mark}</> : <>
+          <span className="tri-top">{title}{status}</span>
+          <span className="tri-bot">
+            <Icon name={s.quick ? 'bolt' : 'folder'} size={12} />
+            <span className="tri-where">{[whereOf(s), machine].filter(Boolean).join(' · ')}</span>
+            {note && <span className="tri-note">{note}</span>}
+            {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
+            <span className="tri-end">{mark}</span>
+          </span>
+        </>}
+      </button>
+      {actions && <ThreadActions s={s} {...actions} ending={ending} setEnding={setEnding} />}
     </div>
   );
 }

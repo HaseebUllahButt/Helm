@@ -8,7 +8,13 @@
   `$V click Auto` after.
 - **Traps:** appearance is kept per device. An installed app keeps the old
   icon and style until closed and reopened.
-- **Tests:** `test/browser/global-keys`, `ui`, `appearance`.
+  Optional screens load when opened. A failed app file leaves Back and
+  Reload Helm in the current pane. Use Reload Helm, then reopen the screen;
+  browsers can keep a failed import until the page reloads.
+- **Prove a failed file (driven 2026-10-23):** block the preferences app file
+  in the private browser, open Your preferences, use Back, then Reload Helm.
+  Reopen Your preferences after the reload; the editor appears.
+- **Tests:** `test/browser/global-keys`, `ui`, `appearance`, `deferred-screen`.
 
 ## Your preferences and the keeper
 - **Reach:** Settings → Your preferences.

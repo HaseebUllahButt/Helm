@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { gzip } from 'node:zlib';
 import { q, now, newId, newInviteCode } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, issueDevice, revoke,
@@ -193,19 +194,32 @@ function allowedOrigin(req, net) {
 }
 
 const reply = (res, code, body, origin = null) => {
-  res.writeHead(code, {
+  const text = JSON.stringify(body);
+  const headers = {
     'content-type': 'application/json',
     'cache-control': 'no-store',
     // Origin decides the body's audience, so it decides the cached copy too.
-    vary: 'Origin',
+    vary: 'Origin, Accept-Encoding',
     ...(origin ? {
       'access-control-allow-origin': origin,
       'access-control-allow-headers': 'content-type, authorization',
       'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
     } : {}),
     ...SECURITY_HEADERS,
+  };
+  // The web route is the app's backup for reads, and a page of chat history
+  // can be 1 MB of JSON. Compress it for a client that accepts that.
+  if (text.length < 1024 || !/\bgzip\b/.test(res.req?.headers?.['accept-encoding'] ?? '')) {
+    res.writeHead(code, headers);
+    res.end(text);
+    return;
+  }
+  gzip(text, { level: 6 }, (error, zipped) => {
+    if (res.headersSent || res.destroyed) return;
+    if (error) { res.writeHead(code, headers); res.end(text); return; }
+    res.writeHead(code, { ...headers, 'content-encoding': 'gzip' });
+    res.end(zipped);
   });
-  res.end(JSON.stringify(body));
 };
 
 export const readBody = (req, maxBytes = 1_000_000) =>
@@ -707,7 +721,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       // The kind the inviter says the machine will be. Anything outside the
       // set quietly becomes 'pc', the kind with no extra duties - an invite
       // must never mint something the network does not have a meaning for.
-      const role = ['vm', 'nas'].includes(body.role) ? body.role : 'pc';
+      const role = body.role === 'vm' ? 'vm' : 'pc';
       const code = newInviteCode();
       const expiresAt = now() + INVITE_TTL_MS;
       q.inviteInsert.run(code, expiresAt, role);

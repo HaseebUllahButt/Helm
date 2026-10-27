@@ -1,6 +1,6 @@
 ---
 name: pause-and-pickup
-description: Stop Helm work at a clean point, or continue earlier work. Use when the owner says stop, pause, hand over, wrap up, or asks to continue, resume or pick up earlier work.
+description: Stop Helm work at a clean point, or continue earlier work. Use when the owner says stop, pause, hand over, wrap up, or asks to continue, resume, pick up or take over earlier work.
 ---
 
 # Pause and pick up
@@ -22,6 +22,8 @@ holds what is left. Helm keeps both, and `helm pickup` reads them back.
 
 1. `helm pickup` (or `helm pickup <chat-id>`): the earlier chats here, what
    they left, commits since, uncommitted files, and chats running now.
-2. `helm thread <id>` shows more of one chat. Re-run what it calls proven if
-   your work builds on it.
-3. Leave files a running chat is editing alone; `helm say <id>` asks it.
+2. `helm thread <id>` shows more of one chat. Treat what it left as context,
+   not proof: check the code, and re-run what it calls proven if your work
+   builds on it. Do not keep its approach only because it is already built.
+3. Keep its commits and their authors. Add your fixes as new commits.
+4. Leave files a running chat is editing alone; `helm say <id>` asks it.

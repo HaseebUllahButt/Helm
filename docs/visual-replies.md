@@ -1,5 +1,9 @@
 # Visual replies
 
+Use plain text by default. Publish a visual only when the owner asks.
+Reviews have no fixed finding count. Keep verification screenshots private
+unless the owner asks to see them.
+
 An agent can publish a small HTML page (a diagram, chart or interactive
 model) inside the chat. It is a saved snapshot: stopping the agent or
 restarting Helm does not remove it. It works in managed and native CLI

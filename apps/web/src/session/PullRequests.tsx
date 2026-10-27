@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useRef, useState } from 'react';
 import type { Client, Environment } from '../client';
 
@@ -19,19 +20,19 @@ export function PullRequests({ client, env, cwd, account, onChanged }: { client:
   useEffect(() => {
     let stale = false;
     if (env.online) client.rpc<{ pullRequests: PR[]; more: boolean }>(env.id, 'git.prs', { cwd, state, page }, 60000)
-      .then(value => { if (!stale) { setList(value.pullRequests); setMore(value.more); } }).catch(e => { if (!stale) setError(e.message); });
+      .then(value => { if (!stale) { setList(value.pullRequests); setMore(value.more); } }).catch(e => { if (!stale) setError(errorMessage(e)); });
     return () => { stale = true; };
   }, [client, env.id, env.online, cwd, account, state, page, revision]);
   useEffect(() => {
     let stale = false; setDetail(null); setConfirmMerge(false); setBody(''); setInlinePath('');
     if (number && env.online) client.rpc<Detail>(env.id, 'git.pr-detail', { cwd, number }, 60000)
-      .then(value => { if (!stale) setDetail(value); }).catch(e => { if (!stale) setError(e.message); });
+      .then(value => { if (!stale) setDetail(value); }).catch(e => { if (!stale) setError(errorMessage(e)); });
     return () => { stale = true; };
   }, [client, env.id, env.online, cwd, account, number, revision]);
   useEffect(() => {
     let stale = false;
     if (publishing && env.online) client.rpc<{ files: { path: string; originalPath?: string }[] }>(env.id, 'git.status', { cwd }, 15000)
-      .then(value => { if (!stale) { setFiles(value.files); setPaths([]); } }).catch(e => { if (!stale) setError(e.message); });
+      .then(value => { if (!stale) { setFiles(value.files); setPaths([]); } }).catch(e => { if (!stale) setError(errorMessage(e)); });
     return () => { stale = true; };
   }, [client, env.id, env.online, cwd, publishing, revision]);
   const act = async (method: string, params: object) => {
@@ -42,7 +43,7 @@ export function PullRequests({ client, env, cwd, account, onChanged }: { client:
       setNotice(result.completed ? `Completed: ${result.completed.join(', ')}.` : 'GitHub action completed.');
       if (result.pr) setNumber(result.pr.number);
       setRevision(r => r + 1); setConfirmMerge(false); onChanged();
-    } catch (e: any) { if (epoch === identity.current) { setError(e.message); setRevision(r => r + 1); onChanged(); } }
+    } catch (e: any) { if (epoch === identity.current) { setError(errorMessage(e)); setRevision(r => r + 1); onChanged(); } }
     finally { setBusy(false); }
   };
   const needsCommit = ['commit', 'publish'].includes(publishAction), needsPR = ['create', 'publish'].includes(publishAction);

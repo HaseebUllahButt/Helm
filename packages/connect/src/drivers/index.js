@@ -43,13 +43,15 @@ import { execFile } from 'node:child_process';
 
 // A model streams a few words at a time; a phone on a bad route does not want
 // a WebSocket frame for each. Deltas to the same item are merged for this
-// long before they leave the daemon. Nobody can tell 50ms from 0.
+// long before they leave the daemon. The first piece after a pause goes at
+// once: holding it made every reply's first word 50 ms late.
 export const COALESCE_MS = 50;
 
 export class Driver extends EventEmitter {
   /** itemId -> buffered text */
   #buffer = new Map();
   #flushTimer = null;
+  #flushedAt = 0;
   /** The open compaction item, if the CLI is compacting. */
   #compaction = null;
 
@@ -72,6 +74,11 @@ export class Driver extends EventEmitter {
   /** Emit one event, merging text deltas per item. */
   push(type, payload) {
     if (type === 'item.delta') {
+      if (!this.#flushTimer && Date.now() - this.#flushedAt >= COALESCE_MS) {
+        this.#flushedAt = Date.now();
+        this.emit('event', { type, id: payload.id, text: payload.text });
+        return;
+      }
       this.#buffer.set(payload.id, (this.#buffer.get(payload.id) ?? '') + payload.text);
       if (!this.#flushTimer) {
         this.#flushTimer = setTimeout(() => this.flush(), COALESCE_MS);
@@ -111,6 +118,7 @@ export class Driver extends EventEmitter {
 
   flush() {
     if (this.#flushTimer) { clearTimeout(this.#flushTimer); this.#flushTimer = null; }
+    if (this.#buffer.size) this.#flushedAt = Date.now();
     for (const [id, text] of this.#buffer) this.emit('event', { type: 'item.delta', id, text });
     this.#buffer.clear();
   }
@@ -129,7 +137,12 @@ export class Driver extends EventEmitter {
   // default speaks the /compact both CLIs understand as user text.
   async compact(hint) { return this.send('/compact' + (hint ? ` ${hint}` : '')); }
   async answer(_requestId, _decision) { throw new Error('not implemented'); }
-  async interrupt() { throw new Error('not implemented'); }
+  /**
+   * Stop the reply in flight. `background`: the owner pressed Stop, so the
+   * commands, watches and helpers the CLI left running stop too, where the
+   * CLI can stop them. Left alone, each one wakes the agent when it ends.
+   */
+  async interrupt(_options = {}) { throw new Error('not implemented'); }
   async setModel(_model) { throw new Error('not implemented'); }
   async setMode(_mode) { throw new Error('not implemented'); }
   async kill() { throw new Error('not implemented'); }
@@ -151,6 +164,14 @@ export function readJsonLines(stream, onMessage, onJunk = () => {}) {
       onMessage(msg);
     }
   });
+}
+
+/** Wait for an exit or a deadline, without keeping a finished stop alive. */
+export async function waitForExit(exited, timeout) {
+  let timer;
+  try {
+    return await Promise.race([exited, new Promise(resolve => { timer = setTimeout(resolve, timeout, null); })]);
+  } finally { clearTimeout(timer); }
 }
 
 // ----------------------------------------------------------------- versions

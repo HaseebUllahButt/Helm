@@ -38,12 +38,12 @@ function valid(value: any): value is WorkspaceSnapshot {
 /** Small headers, never transcript bodies, keys or provider settings. */
 function header(s: Session): Session {
   const { id, title, cwd, engine, profileId, status, driver, pty, model, engineModel, mode, effort, engineEffort, permissionControl,
-    speed, alive, createdAt, updatedAt, seenAt, team, recovery, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared, nativeCards, context } = s;
+    speed, alive, createdAt, updatedAt, seenAt, team, recovery, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, blank, nativeChat, shared, nativeCards, context } = s;
   // seenAt, team and recovery decide which shelf a chat sits on and whether
   // it is new; a saved row without them was sorted differently from the
   // same chat live.
   return { id, title: title?.slice(0, 300), cwd, engine, profileId, status, driver, pty,
-    model, engineModel, mode, effort, engineEffort, permissionControl, speed, alive, createdAt, updatedAt, seenAt, team, recovery, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared,
+    model, engineModel, mode, effort, engineEffort, permissionControl, speed, alive, createdAt, updatedAt, seenAt, team, recovery, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, blank, nativeChat, shared,
     // How full the chat is: the ring under the composer, before the machine answers.
     context,
     // A chat's own helpers, so its Agents count is right before the machine answers.
@@ -146,11 +146,22 @@ if (typeof window !== 'undefined') {
 export function updateWorkspaceSession(scope: string, envId: string, session: Session): void {
   const saved = current(scope);
   const list = saved.sessions[envId];
+  // Most pushes repeat a header, change only transcript fields, or concern
+  // a helper absent from these lists. None needs another whole-cache write.
+  const update = (known: Session): Session => {
+    const next = header({ ...known, ...session });
+    return JSON.stringify(header(known)) === JSON.stringify(next) ? known : next;
+  };
+  const index = list?.findIndex(s => s.id === session.id) ?? -1;
+  const known = index >= 0 ? list![index] : undefined;
+  const next = known ? update(known) : undefined;
   const view = saved.view?.envId === envId && saved.view.session.id === session.id
-    ? { ...saved.view, session: { ...saved.view.session, ...session } } : saved.view;
+    ? update(saved.view.session) : saved.view?.session;
+  if (next === known && view === saved.view?.session) return;
+  const sessions = list && next !== known ? list.map((s, i) => i === index ? next! : s) : undefined;
   saveWorkspace(scope, {
-    ...(list ? { sessions: { [envId]: list.map(s => s.id === session.id ? { ...s, ...session } : s) } } : {}),
-    view,
+    ...(sessions ? { sessions: { [envId]: sessions } } : {}),
+    ...(saved.view && view !== saved.view.session ? { view: { ...saved.view, session: view! } } : {}),
   });
 }
 

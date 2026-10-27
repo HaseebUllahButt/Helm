@@ -14,10 +14,12 @@
  * only editable fields are a machine's own self-description and an explicit
  * revocation - neither of which two people race on.
  */
-import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch, realpathSync, renameSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch, realpathSync, renameSync, statSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
 import { hostname, homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import {
   newNetworkKey, newNetworkId, newDeviceId, mintToken, verifyToken, ROLE, proofOf, checkProof,
 } from './identity.js';
@@ -72,14 +74,24 @@ const write = (net, { joining = false } = {}) => {
   return net;
 };
 
+let networkCache = null;
+
 export function loadNetwork() {
-  if (!existsSync(NETWORK_FILE)) return null;
+  let info;
+  try { info = statSync(NETWORK_FILE, { bigint: true }); }
+  catch { networkCache = null; return null; }
+  // Check metadata on every read: revocations and writes from another
+  // process must be visible immediately, without waiting for a watcher.
+  const stamp = `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+  if (networkCache?.stamp === stamp) return structuredClone(networkCache.net);
   try {
     const net = JSON.parse(readFileSync(NETWORK_FILE, 'utf8'));
     if (isProductionDirectory() && (!net || typeof net.id !== 'string'
         || typeof net.self !== 'string' || typeof net.key !== 'string')) throw new Error();
-    return net;
+    networkCache = { stamp, net };
+    return structuredClone(net);
   } catch {
+    networkCache = null;
     if (isProductionDirectory()) {
       throw new Error('The existing Helm registration cannot be read. Restore network.json from a backup; it will not be replaced with a new network.');
     }
@@ -163,16 +175,18 @@ export const machineName = (value) => {
  * version negotiation on a gossiped record.
  *
  * A 'pc' runs agents and dials out to the rest. A 'vm' does that and is also
- * a home - it holds an https address the others can be dialled at. A 'nas'
- * is storage for the network: the same hub and daemon as a pc, flagged so
- * the rest of the network knows it is a machine that stays reachable.
+ * a home - it holds an https address the others can be dialled at.
  *
  * A controller is deliberately not here. It is not a fourth kind of machine:
  * it holds a device token rather than the network key, runs no daemon and
  * cannot become a machine, so no value of `kind` ever names it.
  */
-export const MACHINE_KINDS = ['pc', 'vm', 'nas'];
+export const MACHINE_KINDS = ['pc', 'vm'];
 export const machineKind = (v) => (MACHINE_KINDS.includes(v) ? v : null);
+// Older machines may still hold 'nas' (storage, since removed) on their own
+// record. The roster keeps it word for word so fingerprints stay equal; it
+// acts as a pc everywhere it is read.
+const rosterKind = (v) => (v === 'nas' ? v : machineKind(v));
 
 /**
  * Start a brand new network with this machine as its first member.
@@ -270,21 +284,67 @@ export const oneTimeToken = (net, challenge) => mintToken(net.key, {
  * has no hello route, and falling back to the durable token for it would be
  * the very downgrade an impostor would ask for.
  */
+/**
+ * POST a small JSON body and read a small JSON answer. Not fetch: when fetch
+ * gives up on an address that does not answer, its connection keeps trying
+ * for ten more seconds, and a `helm` command that asked an offline machine
+ * stayed open that long after it was done. Giving up here closes it at once.
+ * Failures read as fetch's did, so every caller's retry rules stay the same.
+ */
+function postJson(url, body, { timeout, signal }) {
+  return new Promise((resolve, reject) => {
+    const data = Buffer.from(JSON.stringify(body));
+    let req, timer, settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', aborted);
+      req?.destroy();
+      if (error) reject(error); else resolve(value);
+    };
+    const aborted = () => finish(signal.reason ?? new DOMException('This operation was aborted', 'AbortError'));
+    if (signal?.aborted) { aborted(); return; }
+    let target;
+    try { target = new URL(url); } catch (cause) { finish(new TypeError('fetch failed', { cause })); return; }
+    const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
+    req = send(target, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': data.length } }, (res) => {
+      // Only a good answer is read; anything else is told by its status.
+      if (res.statusCode < 200 || res.statusCode >= 300) { finish(null, { status: res.statusCode, body: null }); return; }
+      const chunks = [];
+      let size = 0;
+      res.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > 64 * 1024) finish(null, { status: res.statusCode, body: null });
+        else chunks.push(chunk);
+      });
+      res.on('end', () => {
+        let parsed = null;
+        try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* not a hub's answer */ }
+        finish(null, { status: res.statusCode, body: parsed });
+      });
+      res.on('error', (cause) => finish(new TypeError('fetch failed', { cause })));
+    });
+    req.on('error', (cause) => finish(new TypeError('fetch failed', { cause })));
+    timer = setTimeout(() => finish(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), timeout);
+    signal?.addEventListener('abort', aborted, { once: true });
+    req.end(data);
+  });
+}
+
+/** The sign-in request, kept on an object so a test can stand in for it. */
+export const hubHello = { post: postJson };
+
 export async function hubCredential(net, base, { timeout = 15_000, signal } = {}) {
   const nonce = randomBytes(24).toString('base64url');
-  const res = await fetch(`${base.replace(/\/+$/, '')}${HELLO_PATH}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ nonce }),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
-  });
+  const res = await hubHello.post(`${base.replace(/\/+$/, '')}${HELLO_PATH}`, { nonce }, { timeout, signal });
   if (res.status === 404) {
     const err = new Error('that hub runs an older helm without the handshake - upgrade it');
     err.untrusted = true;
     throw err;
   }
-  if (!res.ok) throw new Error(`hub hello answered ${res.status}`);
-  const body = await res.json().catch(() => null);
+  if (res.status < 200 || res.status >= 300) throw new Error(`hub hello answered ${res.status}`);
+  const body = res.body;
   if (!body || body.net !== net.id || typeof body.challenge !== 'string'
       || !checkHubProof(net, nonce, body.proof)) {
     const err = new Error('that address answered, but not as a hub of this network - nothing was sent to it');
@@ -574,7 +634,7 @@ function machineRecord(id, their, ceiling) {
   // Optional: records written before kinds existed carry none, and stay
   // valid - but a value that is not a real kind is dropped like any other
   // field the sender cannot vouch for.
-  keep(out, 'kind', machineKind(their.kind));
+  keep(out, 'kind', rosterKind(their.kind));
   keep(out, 'addedAt', stampOf(their.addedAt, ceiling));
   keep(out, 'pubkey', pubkeyOf(their.pubkey));
   keep(out, 'codePubkey', codePubkeyOf(their.codePubkey));

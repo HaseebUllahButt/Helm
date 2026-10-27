@@ -87,7 +87,11 @@ test('a visual moves into a column beside the chat, and the composer stays usabl
   const frame = canvas(page).locator('iframe.visual-frame');
   await page.frameLocator('.canvas iframe.visual-frame').locator('body[data-ran="yes"] h1', { hasText: 'Inline chart' }).waitFor();
   assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts', 'the saved page keeps its sealed frame');
-  assert.equal(await page.getByRole('button', { name: 'Open Inline chart in canvas' }).getAttribute('aria-pressed'), 'true');
+  // While the canvas shows the page, the chat keeps only one line for it.
+  const line = page.locator('.visual-folded', { hasText: 'Inline chart' });
+  await line.getByText('Shown in canvas').waitFor();
+  assert.equal(await line.locator('iframe').count(), 0);
+  assert.equal(await page.locator('.messages iframe.visual-frame, .visual-reply iframe.visual-frame').count(), 0, 'the page is not shown twice');
   const side = await canvas(page).boundingBox();
   const composer = page.locator('textarea').first();
   const box = await composer.boundingBox();
@@ -104,6 +108,8 @@ test('a visual moves into a column beside the chat, and the composer stays usabl
   assert.equal(await live.getAttribute('sandbox'), 'allow-scripts allow-forms allow-popups allow-same-origin');
   assert.equal(await live.getAttribute('src'), 'http://live.test/');
   await page.frameLocator('.canvas-live').locator('body[data-isolated="yes"]').waitFor();
+  // The canvas shows another page now, so the chart comes back in the chat.
+  await page.frameLocator('.visual-reply iframe.visual-frame').locator('h1', { hasText: 'Inline chart' }).waitFor();
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, 'canvas-wide.png') });
   assert.notEqual(await page.title(), 'owned');
   assert.equal(await page.frameLocator('.canvas-live').locator('body').getAttribute('data-storage'), 'works');
@@ -138,8 +144,8 @@ test('the agent opens the canvas once per request, a closed canvas stays closed,
   await page.getByRole('button', { name: 'Open Inline chart in canvas' }).waitFor();
   await request(page, 'a', agentBoard);
   assert.equal(await canvas(page).count(), 0, 'or after a reload');
-  // The header button brings back what it showed.
-  await page.getByRole('button', { name: 'Canvas', exact: true }).click();
+  // The Canvas button brings back what it showed.
+  await page.locator('.session-bar').getByRole('button', { name: 'Canvas', exact: true }).click();
   await page.frameLocator('.canvas iframe.visual-frame').getByText('Agent board').waitFor();
   await canvas(page).getByRole('button', { name: 'Close canvas' }).click();
   await canvas(page).waitFor({ state: 'detached' });
@@ -160,6 +166,28 @@ test('the agent opens the canvas once per request, a closed canvas stays closed,
   await page.frameLocator('.canvas iframe.visual-frame').getByText('Inline chart').waitFor();
 });
 
+test('the owner collapses a page to one line, the device remembers it, and Show brings it back', async t => {
+  const page = await open(t, 1280);
+  const chart = page.frameLocator('.visual-reply iframe.visual-frame').locator('h1', { hasText: 'Inline chart' });
+  await chart.waitFor();
+  await page.getByRole('button', { name: 'Collapse Inline chart' }).click();
+  const line = page.locator('.visual-folded', { hasText: 'Inline chart' });
+  await line.getByText('Collapsed').waitFor();
+  assert.equal(await page.locator('.visual-reply iframe.visual-frame').count(), 0);
+  await page.reload();
+  await page.addScriptTag({ url: '/fixture.js' });
+  await line.getByRole('button', { name: 'Show' }).waitFor();
+  assert.equal(await page.locator('.visual-reply iframe.visual-frame').count(), 0, 'it stays collapsed after a reload');
+  // Open in canvas works from the line, and closing the canvas keeps the line.
+  await line.getByRole('button', { name: 'Open in canvas' }).click();
+  await page.frameLocator('.canvas iframe.visual-frame').getByText('Inline chart').waitFor();
+  await canvas(page).getByRole('button', { name: 'Close canvas' }).click();
+  await canvas(page).waitFor({ state: 'detached' });
+  await line.getByRole('button', { name: 'Show' }).click();
+  await chart.waitFor();
+  assert.equal(await page.locator('.visual-folded').count(), 0);
+});
+
 test('on a phone the canvas covers the chat and closes back to it', async t => {
   const page = await open(t, 390);
   await request(page, 'a', agentBoard);
@@ -175,4 +203,22 @@ test('on a phone the canvas covers the chat and closes back to it', async t => {
   await page.frameLocator('.canvas iframe.visual-frame').getByText('Inline chart').waitFor();
   await page.keyboard.press('Escape');
   await sheet.waitFor({ state: 'detached' });
+});
+
+test('beside the chat, Escape closes the canvas from anywhere, but not while a menu is open', async t => {
+  const page = await open(t, 1280);
+  const bar = page.locator('.session-bar');
+  await bar.getByRole('button', { name: 'Canvas', exact: true }).click();
+  await canvas(page).waitFor();
+  const composer = page.locator('textarea').first();
+  await composer.fill('still here');
+  await page.keyboard.press('Escape');
+  await canvas(page).waitFor({ state: 'detached' });
+  assert.equal(await composer.inputValue(), 'still here', 'Escape leaves the draft alone');
+  await bar.getByRole('button', { name: 'Canvas', exact: true }).click();
+  await canvas(page).waitFor();
+  await bar.getByRole('button', { name: 'more', exact: true }).click();
+  await bar.locator('.menu').waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await canvas(page).isVisible(), true, 'an open menu keeps the canvas');
 });

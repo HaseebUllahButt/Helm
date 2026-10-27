@@ -123,6 +123,10 @@ test('native startup flags distinguish enabling Claude bypass from actually sele
   assert.equal(reportedMode('codex',{approvalPolicy:'never',sandbox:{type:'dangerFullAccess'}}),'full');
   assert.equal(reportedMode('codex',{approvalPolicy:'on-request',sandbox:'workspace-write'}),'ask');
   assert.equal(reportedMode('codex',{}),undefined);
+  for (const approvalsReviewer of ['auto_review','guardian_subagent']) {
+    assert.equal(reportedMode('codex',{approvalPolicy:'on-request',sandbox:'workspace-write',approvalsReviewer}),'auto-review');
+  }
+  assert.equal(reportedMode('codex',{approvalPolicy:'never',sandbox:'workspace-write',approvalsReviewer:'auto_review'}),'edit');
 });
 test('stopping a terminal Pi mid-reply presses Esc there, and never at its prompt',async()=>{
   const host=new Host(), sessions=new Sessions(new EventEmitter(),{nativeHost:host,nativeDiscovery:false});

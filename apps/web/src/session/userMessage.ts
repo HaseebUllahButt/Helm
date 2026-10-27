@@ -11,8 +11,8 @@ export function userMessage(text?: string, attachments: Turn['attachments'] = []
   if (relay) { to = relay[1]; text = relay[2]; }
   // A message Helm pasted into a terminal CLI comes back from the CLI's own
   // record wrapped as a paste; the wrapper is the CLI's bookkeeping, not
-  // what the owner wrote.
-  const pasted = text?.match(/^\s*<pasted_content\b[^>]*>\s*([\s\S]*?)\s*<\/pasted_content>\s*$/);
+  // what the owner wrote. Newer CLIs repeat the id on the closing tag.
+  const pasted = text?.match(/^\s*<pasted_content\b[^>]*>\s*([\s\S]*?)\s*<\/pasted_content\b[^>]*>\s*$/);
   if (pasted) text = pasted[1];
   // Pictures sent to a terminal CLI travel as files it is told to read; the
   // note is for the CLI, the pictures are what to show.

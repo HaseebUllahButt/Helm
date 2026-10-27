@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { knownInside, listFolder, loadFolders } from '../folderIndex';
 import { useCallback, useEffect, useState } from 'react';
 import { rememberFolder, recentFolders } from '../accounts';
@@ -36,7 +37,7 @@ export function Browse({ client, env, path, title = 'Pick a folder', action = 'S
     rememberFolder(env.id, p);
     setError(''); setPicking(true);
     try { await onPick(p); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
     finally { setPicking(false); }
   };
 
@@ -53,7 +54,7 @@ export function Browse({ client, env, path, title = 'Pick a folder', action = 'S
     });
     listFolder(client, env.id, path ?? '~')
       .then((r) => { answered = true; setEntries(r.entries); setHere(r.path); })
-      .catch((e) => setError(e.message)).finally(() => setLoading(false));
+      .catch((e) => setError(errorMessage(e))).finally(() => setLoading(false));
   }, [client, env.id, path, sendFiles]);
 
   useEffect(() => { load(); }, [load]);
@@ -70,7 +71,7 @@ export function Browse({ client, env, path, title = 'Pick a folder', action = 'S
     const t = setTimeout(() => {
       client.rpc(env.id, 'fs.search', { query: q }, 20_000)
         .then((r: any) => { if (!stale) { setHits(r.results ?? []); setIndexed(r.indexed ?? 0); } })
-        .catch((e) => { if (!stale) { setHits([]); setError(e.message); } });
+        .catch((e) => { if (!stale) { setHits([]); setError(errorMessage(e)); } });
     }, 250);
     return () => { stale = true; clearTimeout(t); };
   }, [q, client, env.id]);
@@ -81,7 +82,7 @@ export function Browse({ client, env, path, title = 'Pick a folder', action = 'S
     try {
       await client.rpc(env.id, 'fs.mkdir', { path: here, name });
       setFolder(''); setCreating(false); load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
   };
 
   return (

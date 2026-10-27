@@ -136,6 +136,8 @@ export interface Turn {
   steered?: boolean;
   /** Answered by helm itself - complete on arrival, never a live turn. */
   local?: boolean;
+  /** The agent began it by itself, after this background work ended. */
+  cause?: { summary: string; status: string }[];
   /**
    * The turn still running when this one landed, and how many of its items
    * existed then: the chat renders this turn at that seam, so the running
@@ -296,7 +298,9 @@ export function apply(state: LogState, e: HelmEvent): void {
       // messages are two rows, not one.
       for (let i = 0; !e.wake && !id.startsWith('local-') && i < state.turns.length; i++) {
         const t = state.turns[i];
-        if (t.items.length || t.done || t.steered) continue;
+        if (t.done || t.steered) continue;
+        // A fast review can arrive before the provider echoes its turn.
+        if (t.items.length && !t.items.every(it => it.turnId === id)) continue;
         // An echo that names its message is that message, whatever it says.
         if (e.inputId != null) { if (t.id === e.inputId) { open = t; break; } continue; }
         if (!t.id.startsWith('local-')) continue;
@@ -327,6 +331,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         return;
       }
       const turn: Turn = { id, revision: e.seq, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, delivery: e.delivery, references: e.references, checkpoint: e.checkpoint };
+      if (Array.isArray(e.cause) && e.cause.length) turn.cause = e.cause;
       if (e.local) {
         turn.local = true;
         turn.insideOf = host?.id;
@@ -341,9 +346,10 @@ export function apply(state: LogState, e: HelmEvent): void {
       if (!turn) return;
       if (turn.items.some((x) => x.id === e.id)) return;
       turn.revision = e.seq;
-      // One compaction runs at a time. A restart of helm mid-compaction left
-      // the old marker open, spinning on after the new one finished.
-      if (e.kind === 'tool' && (e.name === 'compact' || e.name === 'contextCompaction')) closeCompactions(state.turns, e.at, e.seq);
+      // One compaction runs at a time, and no other step runs during one. A
+      // restart of helm mid-compaction loses its end, so the next compaction
+      // or the next step of the agent's own closes it.
+      if (!e.parentId) closeCompactions(state.turns, e.at, e.seq);
       const item: Item = {
         id: e.id, kind: e.kind, turnId: e.turnId, text: '', status: 'streaming', startedAt: e.at,
         name: e.name, input: e.input, command: e.command, actions: e.actions, cwd: e.cwd, changes: e.changes,
@@ -477,6 +483,8 @@ export function apply(state: LogState, e: HelmEvent): void {
       state.status = e.status;
       // The process is gone, and every helper it was running went with it.
       if (e.status === 'exited') stopAgents(state.turns, e.seq);
+      // A stopped agent compacts nothing.
+      if (e.status === 'idle' || e.status === 'exited') closeCompactions(state.turns, e.at, e.seq);
       return;
     case 'limits':
       state.limits = { ...(state.limits ?? {}), ...e };

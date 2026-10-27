@@ -18,6 +18,7 @@ function load() {
       useEffect: (fn) => { current.cleanup = fn(); },
     }),
     Date: { now: () => clock },
+    document: { hidden: false, addEventListener() {}, removeEventListener() {} },
     setTimeout: (fn, ms) => { const t = { fn, at: clock + ms }; timers.push(t); return t; },
     clearTimeout: (t) => { timers = timers.filter((x) => x !== t); },
   });

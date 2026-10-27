@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { parseAgentArgs } from './delegation.js';
+import { parseAgentArgs } from './agent-args.js';
 
 export async function runBrowserCommand(args, { rpc, self, findSession, env = process.env, print = console.log } = {}) {
   const { words, options } = parseAgentArgs(args, { values: ['session', 'engine', 'output', 'budget', 'note'], switches: ['full-page', 'default', 'clear-default'] });

@@ -123,6 +123,17 @@ test('explicit held messages and slash commands are barriers to automatic mid-tu
   assert.equal(driver.steered.length, 1);
 });
 
+test('the chat stops reading "compacting" once the agent takes its next step, whatever closed the compaction', async (t) => {
+  const { sessions, session, driver } = await setup(t, 'claude');
+  driver.push('item.start', { id: 'compact-1', kind: 'tool', name: 'compact', turnId: driver.turnId, input: {} });
+  assert.ok(sessions.get(session.id).compacting);
+  // A helper's step runs beside it; the agent's own next step means it is over.
+  driver.push('item.start', { id: 'helper-step', kind: 'tool', name: 'Bash', parentId: 'agent', turnId: driver.turnId });
+  assert.ok(sessions.get(session.id).compacting);
+  driver.push('item.start', { id: 'git-status', kind: 'command', turnId: driver.turnId });
+  assert.equal(sessions.get(session.id).compacting, undefined);
+});
+
 test('OpenCode takes a message inside its running loop; other CLIs keep it for the reply\'s end', async (t) => {
   for (const engine of ['opencode', 'devin', 'opencode2', 'pi']) {
     await t.test(engine, async (t) => {
@@ -200,6 +211,36 @@ test('a refused message keeps its place ahead of messages added while the CLI wa
   assert.equal(driver.sent.at(-1), 'Original follow-up');
   driver.finish(); await tick();
   assert.equal(driver.sent.at(-1), 'Later follow-up');
+});
+
+test('a consumed message stays consumed when its pending steering call later fails', async (t) => {
+  const { sessions, session, driver, events } = await setup(t, 'codex');
+  const held = deferred();
+  driver.onSteer = () => held.promise;
+  driver.push('item.start', { id: 'tool', kind: 'tool', turnId: driver.turnId });
+  await sessions.input(session.id, 'Read this once');
+  await tick();
+  const sent = driver.steered[0];
+  driver.push('input.consumed', { inputId: sent.inputId, text: sent.text });
+  await sessions.input(session.id, 'Read this later', { delivery: 'queue' });
+  held.reject(new Error('The call failed after the message was read'));
+  await tick();
+  driver.finish(); await tick();
+  assert.equal(driver.sent.at(-1), 'Read this later');
+  assert.equal(driver.sent.filter(text => text === 'Read this once').length, 0);
+  assert.equal(events().filter(e => e.type === 'turn.accept' && e.turnId === sent.inputId).length, 1);
+});
+
+test('a failed send cannot claim the echo of a later message with the same text', async (t) => {
+  const { sessions, session, driver, events } = await setup(t, 'devin');
+  driver.finish(); await tick();
+  const send = driver.send;
+  driver.send = async () => { throw new Error('Send failed'); };
+  await assert.rejects(sessions.input(session.id, 'Same words', { turnId: 'failed-reply' }), /Send failed/);
+  driver.send = send;
+  await sessions.input(session.id, 'Same words', { turnId: 'fresh-reply' });
+  const echo = events().findLast(e => e.type === 'turn.start' && e.turnId === driver.turnId);
+  assert.equal(echo.inputId, 'fresh-reply');
 });
 
 test('Codex waits for the next tool step after an awaited handover', async (t) => {

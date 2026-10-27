@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { encrypt, vapidHeader } from '../packages/protocol/push.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const root = mkdtempSync(join(tmpdir(), 'helm-push-'));
+process.env.HELM_DIR = root;
+const { encrypt, vapidHeader, send } = await import('../packages/protocol/push.js');
+test.after(() => rmSync(root, { recursive: true, force: true }));
 
 /**
  * RFC 8291 section 5 is a worked example: a known receiver key, auth secret,
@@ -53,4 +60,17 @@ test('the VAPID header is addressed to the push service that will read it', asyn
   assert.ok(body.exp <= Math.floor(Date.now() / 1000) + 24 * 60 * 60, 'within the 24h VAPID limit');
   assert.equal(Buffer.from(sig, 'base64url').length, 64, 'raw r||s, not DER');
   assert.match(header, /k=[A-Za-z0-9_-]+$/);
+});
+
+for (const status of [201, 410, 503]) test(`push releases an unread response body after status ${status}`, async t => {
+  let cancelled = false;
+  t.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream({
+    cancel() { cancelled = true; },
+  }), { status }));
+  const result = await send({ endpoint: 'https://push.invalid/message', keys: {
+    p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4',
+    auth: 'BTBZMqHH6r4Tts7J_aSIgg',
+  } }, { title: 'test' });
+  assert.equal(cancelled, true);
+  assert.deepEqual(result, { ok: status === 201, status, gone: status === 410 });
 });

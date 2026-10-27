@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
  */
 // The update lock lives in HELM_DIR; never the real one from a test.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-update-dir-'));
-const { selfUpdate, restartServices, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, watchCheckout } = await import('../packages/connect/src/update.js');
+const { selfUpdate, restartServices, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, rebuildStaleApp, watchCheckout } = await import('../packages/connect/src/update.js');
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
@@ -115,6 +115,16 @@ test('an updater that died releases its lock immediately instead of blocking rec
   assert.equal(existsSync(lock), false);
 });
 
+test('a lock whose number now belongs to another user\'s process is released', { skip: process.getuid?.() === 0 }, async () => {
+  const { installed } = make();
+  const lock = join(process.env.HELM_DIR, 'update.lock');
+  // pid 1 is root's: the same answer as a reused number after a reboot.
+  writeFileSync(lock, JSON.stringify({ pid: 1, start: 'gone' }));
+  const result = await update(installed);
+  assert.match(result.reason, /already at/);
+  assert.equal(existsSync(lock), false);
+});
+
 test('a living updater owns its lock until it finishes', async () => {
   const { installed } = make();
   const lock = join(process.env.HELM_DIR, 'update.lock');
@@ -202,6 +212,33 @@ test('a failed app build also rolls back and can complete on retry', async () =>
   } finally {
     process.env.PATH = path;
   }
+});
+
+test('a failed Rust build restores the old release and a retry builds before the app', async (t) => {
+  const { remote, installed } = make();
+  const before = git(installed, ['rev-parse', 'HEAD']);
+  mkdirSync(join(remote, 'scripts'));
+  writeFileSync(join(remote, 'scripts/build-log-reader.mjs'), 'throw Error("Rust build failed");\n');
+  commit(remote, 'add the Rust reader');
+  const bin = mkdtempSync(join(tmpdir(), 'helm-update-bin-'));
+  const calls = join(bin, 'calls'), npm = join(bin, 'npm');
+  writeFileSync(npm, `#!/bin/sh\necho "$*" >> "${calls}"\nexit 0\n`);
+  chmodSync(npm, 0o755);
+  const previous = process.env.PATH;
+  process.env.PATH = `${bin}:${previous}`;
+  t.after(() => { process.env.PATH = previous; });
+  await assert.rejects(selfUpdate(installed, { restart: false }), /Rust build failed/);
+  assert.equal(git(installed, ['rev-parse', 'HEAD']), before);
+  assert.doesNotMatch(readFileSync(calls, 'utf8'), /workspace/, 'the app must not build after a failed Rust build');
+
+  writeFileSync(join(remote, 'scripts/build-log-reader.mjs'),
+    `import {appendFileSync} from 'node:fs';appendFileSync(${JSON.stringify(calls)}, 'rust\\n');\n`);
+  commit(remote, 'fix the Rust build');
+  assert.equal((await selfUpdate(installed, { restart: false })).updated, true);
+  assert.equal(git(installed, ['rev-parse', 'HEAD']), git(remote, ['rev-parse', 'HEAD']));
+  const steps = readFileSync(calls, 'utf8').trim().split('\n');
+  assert.equal(steps.at(-2), 'rust');
+  assert.match(steps.at(-1), /workspace.*build/);
 });
 
 test('an interrupted post-reset transaction is journaled and recovered', async () => {
@@ -423,4 +460,31 @@ test('a version checked out in the install is noticed in seconds, and a status t
   const until = Date.now() + 5000;
   while (!moves.length && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(moves, [git(installed, ['rev-parse', 'HEAD'])]);
+});
+
+test('an app built from another commit than the running one is rebuilt, without a restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-stale-app-'));
+  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+  writeFileSync(join(dir, '.gitignore'), 'apps/web/dist/\n');
+  git(dir, ['add', '.']);
+  git(dir, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'one']);
+  const one = git(dir, ['rev-parse', 'HEAD']);
+  git(dir, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'two']);
+  const two = git(dir, ['rev-parse', 'HEAD']);
+  const dist = join(dir, 'apps', 'web', 'dist');
+  mkdirSync(dist, { recursive: true });
+  const stamp = (commit) => writeFileSync(join(dist, 'build.json'), JSON.stringify({ commit }));
+  let builds = 0;
+  const build = async () => { builds++; stamp(two); };
+
+  assert.deepEqual(await rebuildStaleApp(two, dir, { build }), { rebuilt: false }, 'no stamp: an older build');
+  stamp(one);
+  assert.deepEqual(await rebuildStaleApp(one, dir, { build }), { rebuilt: false }, 'the running commit is not the checkout: an update handles it');
+  assert.deepEqual(await rebuildStaleApp(two, dir, { build }), { rebuilt: true });
+  assert.equal(builds, 1);
+  assert.deepEqual(await rebuildStaleApp(two, dir, { build }), { rebuilt: false }, 'built once');
+  stamp(one);
+  writeFileSync(join(dir, 'edit'), 'x');
+  assert.deepEqual(await rebuildStaleApp(two, dir, { build }), { rebuilt: false }, 'unsaved edits belong to someone');
+  assert.equal(builds, 1);
 });

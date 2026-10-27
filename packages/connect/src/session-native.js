@@ -106,7 +106,8 @@ export class NativeSessions {
     }
     const setStatus = (status) => {
       this.#nativeStatusAt.set(s.id, Date.now());
-      if (s.status === status) return;
+      if (s.status === status && (status === 'idle' || !s.blank)) return;
+      if (status !== 'idle') s.blank = false;
       s.status = status; s.updatedAt = Date.now(); this.#core.save();
       this.#sessions.emit('session', { ...wire(s), alive: this.#sessions.nativeTerminals.has(s.id), ...pendingSummary(this.#sessions.events.pending(s.id)) });
     };
@@ -220,6 +221,10 @@ export class NativeSessions {
   #nativeOffline = new Set();
   /** Native threads the last check found open in their terminal daemon. */
   nativeLoaded = new Set();
+  /** A Codex daemon has this chat's thread open, or has not said yet whether it has. */
+  holds(s) {
+    return !!s.nativeSocket && (!this.nativeDiscovered || this.nativeLoaded.has(s.engineSessionId) || this.nativeUnknown.has(s.profileId));
+  }
   /** Accounts whose native daemon is there but did not answer the last check. */
   nativeUnknown = new Set();
   async discoverNativeCodex(profiles) {
@@ -303,6 +308,7 @@ export class NativeSessions {
             this.#core.removedAt.delete(removed);
           }
           const existing = [...this.#core.index.values()].find((s) => s.engine === 'codex' && s.engineSessionId === thread.id);
+          if (existing?.delegation?.codexFork) continue;
           // An idle Helm conversation resumed in a normal terminal moves to
           // that daemon too. Never detach a private turn that is still active.
           if (existing?.driver && !existing.external && !existing.nativeSocket
@@ -393,6 +399,8 @@ export class NativeSessions {
       ...(meta.settings?.effort ? { engineEffort: meta.settings.effort } : {}),
       ...(meta.settings?.mode ? { mode: meta.settings.mode } : {}),
       ...(meta.conversation ? { engineSessionId: meta.conversation } : {}),
+      // Nothing said yet: the sidebar leaves it out until the first message.
+      ...(meta.conversation ? {} : { blank: true }),
       status: 'idle', createdAt: meta.createdAt, updatedAt: meta.createdAt };
     this.#core.index.set(meta.id, session);
     this.#core.save();

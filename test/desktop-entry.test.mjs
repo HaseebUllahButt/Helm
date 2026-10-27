@@ -66,3 +66,26 @@ test('removing it takes the icons with it', async (t) => {
   assert.equal(existsSync(join(HOME, 'icons', 'hicolor', '512x512', 'apps', 'helm-app.png')), false);
   assert.equal(removeApp().removed, false, 'removing twice is not an error');
 });
+
+test('a start puts the current logo into launcher icons, once per logo', async (t) => {
+  const { refreshAppIcons } = await import('../packages/connect/src/desktop.js');
+  if (process.platform !== 'linux') return t.skip('desktop entries are Linux-only');
+  const { writeFileSync, mkdirSync, statSync } = await import('node:fs');
+  // Chromium's own launcher for Helm's window, with its own copy of the icon.
+  const apps = join(HOME, 'applications');
+  mkdirSync(apps, { recursive: true });
+  const window = join(process.env.HELM_DIR, 'app-window');
+  writeFileSync(join(apps, 'chrome-abc-Default.desktop'), `[Desktop Entry]\nExec=/usr/bin/chromium --user-data-dir=${window} --profile-directory=Default --app=http://127.0.0.1:8787/\nIcon=chrome-abc-Default\n`);
+  writeFileSync(join(apps, 'chrome-other-Default.desktop'), '[Desktop Entry]\nExec=/usr/bin/chromium --app=https://example.com/\nIcon=chrome-other-Default\n');
+  const icon = (name) => join(HOME, 'icons', 'hicolor', '48x48', 'apps', `${name}.png`);
+  mkdirSync(join(HOME, 'icons', 'hicolor', '48x48', 'apps'), { recursive: true });
+  writeFileSync(icon('chrome-abc-Default'), 'old logo');
+  writeFileSync(icon('chrome-other-Default'), 'not ours');
+
+  const first = refreshAppIcons();
+  assert.ok(first.refreshed > 0);
+  assert.notEqual(readFileSync(icon('chrome-abc-Default'), 'utf8'), 'old logo', "Helm's launcher shows the current logo");
+  assert.ok(statSync(icon('chrome-abc-Default')).size > 100);
+  assert.equal(readFileSync(icon('chrome-other-Default'), 'utf8'), 'not ours', 'other web apps keep their icons');
+  assert.equal(refreshAppIcons().refreshed, 0, 'the same logo is not drawn again');
+});

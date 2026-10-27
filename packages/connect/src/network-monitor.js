@@ -36,7 +36,11 @@ async function snapshot() {
 const watch = () => platform() === 'linux' && process.env.HELM_NO_SERVICE !== '1' && !process.env.NODE_TEST_CONTEXT
   ? spawn('ip', ['monitor', 'link', 'address', 'route', 'rule'], { stdio: ['ignore', 'pipe', 'ignore'] }) : null;
 
-/** Kernel events give prompt recovery; polling also handles missed events and wake. */
+/**
+ * Kernel events give prompt recovery; polling also handles missed events and
+ * wake. While the kernel feed runs, a full sample (four `ip` runs) is needed
+ * only once a minute; the 5 s tick still notices a wake from the clock alone.
+ */
 export class NetworkMonitor {
   #stopped = false;
   #signature = null;
@@ -46,24 +50,36 @@ export class NetworkMonitor {
   #timer = null;
   #debounce = null;
   #watcher = null;
+  #watching = false;
+  #sampled = 0;
 
-  constructor(changed, { sample = snapshot, observe = watch, now = Date.now, every = 5000, wakeAfter = 15_000 } = {}) {
-    Object.assign(this, { changed, sample, observe, now, every, wakeAfter });
+  constructor(changed, { sample = snapshot, observe = watch, now = Date.now, every = 5000, watchedEvery = 60_000, wakeAfter = 15_000 } = {}) {
+    Object.assign(this, { changed, sample, observe, now, every, watchedEvery, wakeAfter });
   }
 
   async start() {
     await this.check();
     if (this.#stopped) return this;
     try { this.#watcher = this.observe(); } catch { /* polling remains */ }
-    this.#watcher?.on('error', () => {}); // Polling remains when ip is absent.
+    this.#watching = !!this.#watcher;
+    // Polling remains when ip is absent or the feed ends.
+    this.#watcher?.on('error', () => { this.#watching = false; });
+    this.#watcher?.on('exit', () => { this.#watching = false; });
     this.#watcher?.stdout.on('data', () => {
       if (this.#stopped || this.#debounce) return;
       this.#debounce = setTimeout(() => { this.#debounce = null; void this.check(); }, 200);
       this.#debounce.unref?.();
     });
-    this.#timer = setInterval(() => { void this.check(); }, this.every);
+    this.#timer = setInterval(() => this.#tick(), this.every);
     this.#timer.unref?.();
     return this;
+  }
+
+  #tick() {
+    const now = this.now();
+    const woke = this.#last !== null && now - this.#last > this.wakeAfter;
+    if (!woke && this.#watching && now - this.#sampled < this.watchedEvery) { this.#last = now; return; }
+    void this.check();
   }
 
   check() {
@@ -74,7 +90,7 @@ export class NetworkMonitor {
         this.#again = false;
         const now = this.now();
         const woke = this.#last !== null && now - this.#last > this.wakeAfter;
-        this.#last = now;
+        this.#last = this.#sampled = now;
         let signature;
         try { signature = await this.sample(); } catch { continue; }
         if (this.#stopped) return;

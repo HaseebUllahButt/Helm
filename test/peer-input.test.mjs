@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { build } from 'esbuild';
+import zlib from 'node:zlib';
 
 const bundle = await build({ entryPoints: [new URL('../packages/connect/src/peer.js', import.meta.url).pathname],
   bundle: true, write: false, format: 'cjs', platform: 'node', external: ['node-datachannel/polyfill', './direct-config.js'] });
@@ -22,13 +23,13 @@ async function harness() {
     Map: class extends Map { constructor(...args) { super(...args); maps.push(this); } },
     require: specifier => specifier === './direct-config.js'
       ? { nativeDirectConfig: () => ({ iceServers: [] }) }
-      : { RTCPeerConnection: Connection } };
+      : specifier === 'node:zlib' ? zlib : { RTCPeerConnection: Connection } };
   vm.runInNewContext(bundle.outputFiles[0].text, context);
   const hub = new context.module.exports.PeerHub(() => {}, async (...args) => { calls.push(args); return 'ok'; });
   await hub.signal('browser', { type: 'offer', sdp: 'test' }, null, 'device');
-  const channel = { readyState: 'open', bufferedAmount: 0, close() {}, send: raw => sent.push(JSON.parse(raw)) };
+  const channel = Object.assign(new EventTarget(), { readyState: 'open', bufferedAmount: 0, close() {}, send: raw => sent.push(typeof raw === 'string' ? JSON.parse(raw) : raw) });
   pc.ondatachannel({ channel });
-  return { hub, calls, sent, fragments: maps.at(-1), parses: () => parses,
+  return { hub, calls, sent, channel, fragments: maps.at(-1), parses: () => parses,
     send: frame => channel.onmessage({ data: JSON.stringify(frame) }) };
 }
 
@@ -62,4 +63,53 @@ test('abandoned frames remain bounded and a valid fragmented RPC still completes
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0][0], 'ping');
   assert.equal(h.sent[0].result, 'ok');
+});
+
+test('a direct stream reaches its open device without sending chat bodies to other devices', async t => {
+  const h = await harness(); t.after(() => h.hub.stop());
+  h.hub.broadcast('session.event', { id: 'chat', events: [] }, 'one', ['other-device']);
+  assert.equal(h.sent.length, 0);
+  h.hub.broadcast('session.event', { id: 'chat', events: [] }, 'two', ['device']);
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].eid, 'two');
+  h.hub.broadcast('session.update', { session: { id: 'chat' } }, 'three');
+  assert.equal(h.sent.length, 2, 'sidebar updates still reach devices without an open chat');
+});
+
+test('a browser that says hello gets every later frame in one compressed stream', async t => {
+  const h = await harness(); t.after(() => h.hub.stop());
+  h.send({ t: 'hello', zip: 'deflate-raw' });
+  h.hub.broadcast('session.update', { session: { id: 'c' } }, 'b:1');
+  h.send({ t: 'rpc', id: 'one', method: 'ping' });
+  h.send({ t: 'tunnel.open', sid: 's' });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(h.sent.length >= 2 && h.sent.every(Buffer.isBuffer), 'no plain text after the hello');
+  const frames = zlib.inflateRawSync(Buffer.concat(h.sent), { finishFlush: zlib.constants.Z_SYNC_FLUSH })
+    .toString().split('\n').filter(Boolean).map(line => JSON.parse(line));
+  assert.deepEqual(frames.map(f => f.t), ['event', 'rpcResult'], 'a tunnel cannot write into the stream');
+  assert.equal(frames[1].result, 'ok');
+});
+
+test('a direct event that cannot be sent drops the link', async t => {
+  const h = await harness(); t.after(() => h.hub.stop());
+  let dropped = false;
+  h.channel.send = () => { throw new Error('Message size exceeds limit'); };
+  h.channel.close = () => { dropped = true; };
+  h.hub.broadcast('session.update', { session: { id: 'c' } }, 'b:1');
+  assert.equal(dropped, true);
+});
+
+
+test('a blocked direct reply resumes on its drain event without a polling tick', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = await harness(); t.after(() => h.hub.stop());
+  h.channel.bufferedAmount = 1024 * 1024;
+  h.send({ t: 'rpc', id: 'slow', method: 'ping' });
+  await new Promise(setImmediate);
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.channel.bufferedAmountLowThreshold, 256 * 1024);
+  h.channel.bufferedAmount = 0;
+  h.channel.dispatchEvent(new Event('bufferedamountlow'));
+  await new Promise(setImmediate);
+  assert.equal(h.sent[0].id, 'slow');
 });

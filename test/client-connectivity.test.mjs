@@ -9,7 +9,7 @@ const bundle = await build({ stdin: { contents: source, resolveDir: new URL('../
   loader: 'ts' }, bundle: true, write: false, format: 'cjs', target: 'node22' });
 const code = bundle.outputFiles[0].text;
 
-function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, machineIds = {}, socket = 'open', socketDelay = 1, pong = true, location } = {}) {
+function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, machineIds = {}, socket = 'open', socketDelay = 1, pong = true, location, streams = false } = {}) {
   let now = 0, serial = 0, parses = 0;
   const timers = new Map(), sockets = [], peers = [], events = [], requests = [], windows = new Map(), documents = new Map(), connection = new Map();
   const timer = (fn, delay = 0, interval = 0) => {
@@ -73,9 +73,10 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     setInterval: (fn, ms) => timer(fn, ms, ms), clearInterval: id => timers.delete(id),
     AbortController, AbortSignal, WebSocket: Socket, RTCPeerConnection: Peer,
     ...(location ? { location } : {}),
+    ...(streams ? { DecompressionStream, TextDecoderStream } : {}),
     document,
-    navigator: { connection: { addEventListener: (kind, fn) => connection.set(kind, fn), removeEventListener: kind => connection.delete(kind) } },
-    window: { addEventListener: (kind, fn) => windows.set(kind, fn), removeEventListener: kind => windows.delete(kind) },
+    navigator: { userAgent: 'test', connection: { addEventListener: (kind, fn) => connection.set(kind, fn), removeEventListener: kind => connection.delete(kind) } },
+    window: { matchMedia: () => ({ matches: false }), addEventListener: (kind, fn) => windows.set(kind, fn), removeEventListener: kind => windows.delete(kind) },
     fetch: (url, init) => new Promise((resolve, reject) => {
       requests.push({ url, init });
       const base = new URL(url).origin, delay = delays[url] ?? delays[base] ?? 0;
@@ -92,7 +93,7 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
   const client = new context.module.exports.Client(endpoints, 'test-token');
   client.on((env, kind, payload) => events.push({ env, kind, payload }));
   const start = () => client.connect().catch(error => error.message);
-  return { client, sockets, peers, events, requests, timers, document, advance, start, parses: () => parses,
+  return { client, exports: context.module.exports, sockets, peers, events, requests, timers, document, advance, start, parses: () => parses,
     suspend: ms => { now += ms; },
     window: kind => windows.get(kind)?.(), network: () => connection.get('change')?.(), visible: () => documents.get('visibilitychange')?.() };
 }
@@ -771,6 +772,37 @@ test('HTTP still recovers a chat read when both open socket routes are silent', 
   h.client.close();
 });
 
+test('a socket read cancels its HTTP backup when it returns first', async () => {
+  for (const route of ['direct', 'relay']) {
+    const h = harness({ delays: { 'http://good/api/read': Infinity } });
+    h.start(); await h.advance(10);
+    if (route === 'direct') { await h.client.openDirect('machine'); h.peers[0].open(); }
+    const request = h.client.rpc('machine', 'session.events');
+    await h.advance(3010);
+    const backup = h.requests.find(r => r.url.endsWith('/api/read'));
+    assert.ok(backup);
+    assert.equal(backup.init.signal.aborted, false);
+    const sender = route === 'direct' ? h.peers[0] : h.sockets[0];
+    const frame = (route === 'direct' ? sender.channel.frames : sender.frames).find(f => f.t === 'rpc');
+    sender.message({ t: 'rpcResult', id: frame.id, ok: true, result: 'latest chat' });
+    assert.equal(await request, 'latest chat');
+    assert.equal(backup.init.signal.aborted, true);
+    await h.advance(30000);
+    assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 1);
+    h.client.close();
+  }
+});
+
+test('the parent read deadline cancels a running HTTP backup', async () => {
+  const h = harness({ delays: { 'http://good/api/read': Infinity } });
+  h.start(); await h.advance(10);
+  const request = h.client.rpc('machine', 'session.events', {}, 4000).catch(e => e.message);
+  await h.advance(4010);
+  assert.match(await request, /timed out/);
+  assert.equal(h.requests.find(r => r.url.endsWith('/api/read')).init.signal.aborted, true);
+  h.client.close();
+});
+
 test('HTTP reads fail over promptly from a dead remembered relay and cancel the losing request', async () => {
   const h = harness({ endpoints: ['http://old', 'http://good'], delays: { 'http://old': Infinity, 'http://good': 10 } });
   const request = h.client.rpc('machine', 'session.events', {}, 20000);
@@ -857,5 +889,196 @@ test('a faster hub with the same machines restores subscriptions and drains pend
   assert.equal(h.client.relay, 'http://other');
   await h.advance(30000);
   assert.equal(h.client.relay, 'http://local');
+  h.client.close();
+});
+
+test('a chat list is asked for as changes to the one the device holds', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const socket = h.sockets[0];
+  const answer = async (result) => {
+    await h.advance(1);
+    const frame = socket.frames.filter(f => f.method === 'session.list').at(-1);
+    socket.message({ t: 'rpcResult', id: frame.id, ok: true, result });
+    return frame;
+  };
+  const a = { id: 'a', title: 'one' }, b = { id: 'b', title: 'two' }, c = { id: 'c', title: 'new' };
+  const first = h.client.rpc('vm', 'session.list', { includeDetected: true });
+  assert.equal((await answer({ sessions: [a, b], digest: 'd1' })).params.have, undefined);
+  assert.equal(JSON.stringify((await first).sessions), JSON.stringify([a, b]));
+
+  const second = h.client.rpc('vm', 'session.list', { includeDetected: true });
+  assert.equal((await answer({ base: 'd1', digest: 'd2', ids: ['c', 'b'], changed: [c] })).params.have, 'd1');
+  assert.equal(JSON.stringify((await second).sessions), JSON.stringify([c, b]));
+
+  const third = h.client.rpc('vm', 'session.list', { includeDetected: true });
+  assert.equal((await answer({ base: 'd2', digest: 'd2', unchanged: true })).params.have, 'd2');
+  assert.equal(JSON.stringify((await third).sessions), JSON.stringify([c, b]));
+
+  // A filter of its own holds its own list.
+  const other = h.client.rpc('vm', 'session.list', {});
+  assert.equal((await answer({ sessions: [a], digest: 'd9' })).params.have, undefined);
+  assert.equal(JSON.stringify((await other).sessions), JSON.stringify([a]));
+
+  // Changes that do not fit the held list mean one more ask, for all of it.
+  const lost = h.client.rpc('vm', 'session.list', { includeDetected: true });
+  await answer({ base: 'd2', digest: 'd3', ids: ['x'], changed: [] });
+  assert.equal((await answer({ sessions: [a], digest: 'd4' })).params.have, undefined);
+  assert.equal(JSON.stringify((await lost).sessions), JSON.stringify([a]));
+  h.client.close();
+});
+
+test('a model list that waits for its refresh is not raced over other routes', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const waiting = h.client.rpc('vm', 'model.list', { profileId: 'p', settled: true }, 30000);
+  await h.advance(10000);
+  assert.equal(h.sockets[0].frames.filter(f => f.method === 'model.list').length, 1);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  const frame = h.sockets[0].frames.find(f => f.method === 'model.list');
+  h.sockets[0].message({ t: 'rpcResult', id: frame.id, ok: true, result: { models: ['m'] } });
+  assert.equal((await waiting).models[0], 'm');
+  h.client.close();
+});
+
+test('a direct link stops the hub copy of events, and losing it takes the copy back', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const hub = h.sockets[0];
+  h.client.subscribe('vm');
+  await h.client.openDirect('vm'); h.peers[0].open();
+  assert.deepEqual(hub.frames.filter(f => f.env === 'vm' && /subscribe/.test(f.t)).map(f => f.t), ['subscribe', 'unsubscribe']);
+  const before = h.events.filter(e => e.kind === 'connection').length;
+  h.peers[0].channel.close();
+  assert.deepEqual(hub.frames.filter(f => f.env === 'vm' && /subscribe/.test(f.t)).map(f => f.t), ['subscribe', 'unsubscribe', 'subscribe']);
+  assert.equal(h.events.filter(e => e.kind === 'connection' && e.payload.online).length, before + 1, 'screens resync the gap');
+  h.client.close();
+});
+
+test('a machine subscribed while its direct link is up never gets a hub copy', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('vm'); h.peers[0].open();
+  h.client.subscribe('vm');
+  assert.equal(h.sockets[0].frames.filter(f => f.env === 'vm' && /subscribe/.test(f.t)).length, 0);
+  h.client.close();
+});
+
+test('a silent direct link is checked, and dropped when it does not answer', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  h.client.subscribe('vm');
+  await h.client.openDirect('vm'); const peer = h.peers[0]; peer.open();
+  await h.advance(9000);
+  assert.equal(peer.channel.frames.filter(f => f.method === 'ping').length, 0, 'recent traffic needs no check');
+  await h.advance(2000);
+  const ping = peer.channel.frames.find(f => f.method === 'ping');
+  assert.ok(ping, 'ten silent seconds send a check');
+  peer.message({ t: 'rpcResult', id: ping.id, ok: true, result: {} });
+  await h.advance(1);
+  assert.equal(h.client.directTo('vm'), true);
+  await h.advance(20000);
+  assert.equal(h.client.directTo('vm'), false, 'an unanswered check drops the link');
+  assert.equal(h.sockets[0].frames.filter(f => f.env === 'vm' && f.t === 'subscribe').length, 2);
+  h.client.close();
+});
+
+test('a hub reconnect leaves a machine on its direct link quiet', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  h.client.subscribe('vm'); h.client.subscribe('other');
+  await h.client.openDirect('vm'); h.peers[0].open();
+  h.sockets[0].close(); await h.advance(5000);
+  const next = h.sockets.at(-1);
+  assert.notEqual(next, h.sockets[0]);
+  assert.deepEqual(next.frames.filter(f => f.t === 'subscribe').map(f => f.env), ['other']);
+  h.client.close();
+});
+
+test('a browser that can read compressed frames gets them in one stream', async () => {
+  const { DeflateLink } = await import('../packages/connect/src/peer.js');
+  const h = harness({ streams: true }); h.start(); await h.advance(200);
+  await h.client.openDirect('vm'); const peer = h.peers[0]; peer.open();
+  assert.deepEqual(peer.channel.frames[0], { t: 'hello', zip: 'deflate-raw' });
+  assert.equal(peer.channel.binaryType, 'arraybuffer');
+
+  const sent = [];
+  const link = new DeflateLink({ readyState: 'open', bufferedAmount: 0, send: (bytes) => sent.push(Buffer.from(bytes)) });
+  const big = 'x'.repeat(100_000);
+  const read = h.client.rpc('vm', 'session.events', { id: 'c' });
+  const rpc = peer.channel.frames.find(f => f.method === 'session.events');
+  for (let i = 0; i < 3; i++) await link.send(JSON.stringify({ t: 'event', kind: 'session.update', payload: { session: { id: 'c', n: i } }, eid: `b:${i}` }));
+  await link.send(JSON.stringify({ t: 'rpcResult', id: rpc.id, ok: true, result: { text: big } }));
+  link.close();
+  assert.ok(sent.length > 1 && sent.every(b => b.length <= 16_000), 'large output is split');
+  const raw = sent.reduce((n, b) => n + b.length, 0);
+  assert.ok(raw < 5_000, `compressed to ${raw} bytes`);
+  // Split the bytes at other places than the machine did: the reader must not care.
+  const all = Buffer.concat(sent);
+  for (let at = 0; at < all.length; at += 7) {
+    const piece = all.subarray(at, at + 7);
+    peer.channel.onmessage({ data: piece.buffer.slice(piece.byteOffset, piece.byteOffset + piece.length) });
+  }
+  for (let i = 0; i < 20 && h.events.filter(e => e.kind === 'session.update').length < 3; i++) await new Promise(r => setTimeout(r, 5));
+  assert.deepEqual(h.events.filter(e => e.kind === 'session.update').map(e => e.payload.session.n), [0, 1, 2]);
+  assert.equal((await read).text.length, big.length);
+  h.client.close();
+});
+
+test('after waking, a socket that does not answer in 1.2 s is replaced at once', async () => {
+  const h = harness({ pong: false }); h.start(); await h.advance(10);
+  h.document.hidden = true; h.document.visibilityState = 'hidden'; h.visible();
+  await h.advance(60000);
+  h.document.hidden = false; h.document.visibilityState = 'visible'; h.visible();
+  await h.advance(1100);
+  assert.equal(h.sockets.length, 1, 'a slow answer still has time');
+  await h.advance(200);
+  assert.equal(h.sockets.length, 2, 'a fresh socket opens beside the silent one');
+  assert.equal(h.client.connected, true);
+  await h.advance(2000);
+  assert.equal(h.sockets[0].readyState, 3, 'the silent socket is retired');
+  assert.equal(h.sockets.length, 2);
+  h.client.close();
+});
+
+test('after waking, a socket that answers is kept', async () => {
+  const h = harness({ pong: 1000 }); h.start(); await h.advance(10);
+  h.document.hidden = true; h.document.visibilityState = 'hidden'; h.visible();
+  await h.advance(60000);
+  h.document.hidden = false; h.document.visibilityState = 'visible'; h.visible();
+  await h.advance(8000);
+  assert.equal(h.sockets.length, 1);
+  h.client.close();
+});
+
+test('just after waking, a read tries the web route after 0.5 s', async () => {
+  const h = harness({ pong: false }); h.start(); await h.advance(10);
+  h.document.hidden = true; h.document.visibilityState = 'hidden'; h.visible();
+  await h.advance(60000);
+  h.document.hidden = false; h.document.visibilityState = 'visible'; h.visible();
+  const read = h.client.rpc('vm', 'session.events', { id: 'c', since: 1 });
+  await h.advance(400);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  await h.advance(200);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 1);
+  assert.equal((await read).fresh, true);
+  h.client.close();
+});
+
+test('signing in gives up on a stalled network instead of waiting for ever', async () => {
+  const h = harness({ delays: { 'http://stalled': Infinity } });
+  void h.exports.login('http://stalled', 'secret').catch(() => {});
+  await h.advance(1);
+  const request = h.requests.find(r => r.url.endsWith('/api/auth/login'));
+  assert.ok(request?.init?.signal, 'the sign-in request has a deadline');
+  h.client.close();
+});
+
+test('while the socket is down, the status poll says reachable once, not every 10 seconds', async () => {
+  let opened = 0;
+  const h = harness({ socket: () => (opened++ ? 'stall' : 'open') });
+  h.start(); await h.advance(10);
+  h.sockets[0].close();
+  // Each drop says why; the poll then says "reachable" once to clear it.
+  const drops = () => h.events.filter(e => e.kind === 'connection' && e.payload.error).length;
+  const told = () => h.events.filter(e => e.kind === 'connection' && !e.payload.online && e.payload.reachable && !e.payload.error).length;
+  await h.advance(60_000);
+  const machineReads = h.requests.filter(r => r.url.endsWith('/api/machines')).length;
+  assert.ok(machineReads >= 3, `the poll keeps reading machine status (${machineReads})`);
+  assert.ok(told() <= drops(), `reachable was told ${told()} times for ${drops()} drops`);
   h.client.close();
 });

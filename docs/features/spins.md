@@ -20,6 +20,8 @@ for websites that cannot run inside a frame.
   "No machine in your network has a public address yet". A real link needs
   the real network; use `--private` or `--password` for anything not meant
   for the public, and stop it when done. `--keep` only when the owner asks.
+  A link made from a chat (`HELM_SESSION_ID`) on its own machine notes that
+  chat; deleting the chat stops it. Kept links never belong to a chat.
 - **Tests:** `test/share-links`, `share-private`, `share-expiry`,
   `share-flow`, `tunnel-flow`, `tunnel-ports`, `caddy`, `proxy`;
   `test/browser/private-links`.

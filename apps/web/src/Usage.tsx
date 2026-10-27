@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Client, Environment, UsageReport, UsageGroup, UsageTotals } from './client';
 import { hitRate, cacheSaved } from './client';
@@ -120,7 +121,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
         setRemembered((r) => { const { [env.id]: _drop, ...rest } = r; return rest; });
         saveUsage(env.id, report, win, since);
       })
-      .catch((e) => { if (request === generation.current) setFailed((f) => ({ ...f, [env.id]: String(e?.message || e) })); })
+      .catch((e) => { if (request === generation.current) setFailed((f) => ({ ...f, [env.id]: errorMessage(e, { machine: env.name }) })); })
       .finally(() => { if (request === generation.current) setPending((p) => { const n = new Set(p); n.delete(env.id); return n; }); });
   };
 
@@ -163,13 +164,19 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
 
   const stale = answered.filter((e) => remembered[e.id]);
   const loading = pending.size > 0 && answered.length === 0;
+  // The total grows as machines answer. Name the ones still out, so a
+  // partial sum never reads as the whole bill.
+  const waiting = targets.filter((e) => pending.has(e.id));
+  const missing = waiting.filter((e) => !reports[e.id]).map((e) => e.name);
 
   return (
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <b>Usage</b>
-        {pending.size > 0 && answered.length > 0 && <span className="conn"><i />updating</span>}
+        {waiting.length > 0 && answered.length > 0 && <span className="conn connecting"><i />
+          {waiting.length > 2 ? `Waiting for ${waiting.length} machines` : `Waiting for ${waiting.map((e) => e.name).join(' and ')}`}
+        </span>}
       </div>
 
       <div className="scroll"><div className="pad usage">
@@ -188,6 +195,9 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
           {!!targets.length && <button className="linkish" onClick={() => targets.forEach(e => fetchReport(e, false))}>Retry usage</button>}
         </div>}
         {!loading && answered.length > 0 && <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />}
+        {!loading && missing.length > 0 && <p role="status" className="usage-limits-note">
+          This total does not include {missing.join(', ')} yet.
+        </p>}
 
         {!loading && answered.length > 0 && (
           <section className="usage-where" aria-label="Usage by group">
@@ -208,6 +218,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
           stale={stale.length}
           failed={targets.filter((e) => failed[e.id]).map((e) => e.name)}
           unpriced={scoped.unpriced}
+          estimated={!!merged.estimates?.length}
           rescanning={pending.size > 0}
           onRescan={() => targets.forEach((e) => fetchReport(e, true))}
         />}
@@ -347,6 +358,13 @@ function planSpend(groups: ChartGroup[], accounts: UsageReport['accounts']): Pla
  */
 const SHOWN = 6;
 
+/** A model run from several CLIs has no one engine: its maker's mark stands in. */
+const MAKERS: [RegExp, string][] = [[/^claude-/, 'claude'], [/^(gpt-|o\d)/, 'codex'], [/^grok-/, 'grok'], [/^gemini-/, 'gemini'], [/^kimi-/, 'kimi']];
+function makerOf(model?: string) {
+  const id = (model ?? '').split('/').pop()!.toLowerCase();
+  return MAKERS.find(([re]) => re.test(id))?.[1];
+}
+
 function Breakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: FacetId; onModel: (model: string) => void }) {
   const [all, setAll] = useState(false);
   const priced = groups.some((g) => g.costUsd > 0);
@@ -377,7 +395,7 @@ function Breakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: Fa
       <ul className="usage-shares" aria-label={`${facetLabel} share of ${priced ? 'cost' : 'tokens'}`}>
         {shown.map((g, i) => {
           const body = <>
-            {marked && <EngineMark engine={g.engine} className="usage-share-mark" />}
+            {marked && <EngineMark engine={g.engine ?? (facet === 'model' ? makerOf(g.model) : undefined)} className="usage-share-mark" />}
             <span className="usage-share-name">{name(g)}</span>
             <span className="usage-share-value">{amount(g)}</span>
             <span className="usage-share-pct">{share(g)}</span>
@@ -404,15 +422,19 @@ function Breakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: Fa
 /** How many machines the number covers, and the way to count it again.
     One short line; the finer print (remembered usage, unpriced models)
     sits in its tooltip, and unpriced costs already carry a "+". */
-function Provenance({ answered, total, stale, failed, unpriced, rescanning, onRescan }: {
+function Provenance({ answered, total, stale, failed, unpriced, estimated, rescanning, onRescan }: {
   answered: number; total: number; stale: number; failed: string[]; unpriced: boolean;
-  rescanning: boolean; onRescan: () => void;
+  estimated: boolean; rescanning: boolean; onRescan: () => void;
 }) {
   const detail = [
     stale > 0 ? `${stale} saved reports` : '',
     unpriced ? 'Some models have no published price. Helm shows only their token counts.' : '',
   ].filter(Boolean).join(' · ');
-  return (
+  return (<>
+    {estimated && <p className="usage-note">
+      Claude Code deleted some older chat records. Helm estimates those days from Claude Code daily totals.
+      The Folder view shows them as one row.
+    </p>}
     <p className="usage-note" title={detail || undefined}>
       {`${answered} of ${total} machines`}
       {failed.length > 0 ? ` · ${failed.join(', ')} not answering` : ''}
@@ -424,7 +446,7 @@ function Provenance({ answered, total, stale, failed, unpriced, rescanning, onRe
         {rescanning ? 'Helm is reading usage again.' : 'Read usage again'}
       </button>
     </p>
-  );
+  </>);
 }
 
 /** Fold the daemon's groups down to one dimension. */

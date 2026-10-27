@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useRef, useState } from 'react';
 import { useNow } from '../useNow';
 import type { StoredAuth } from '../store';
@@ -54,7 +55,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
     try {
       finish(await login(endpoint, secret, local));
     } catch (err: any) {
-      setError(err.message);
+      setError(errorMessage(err));
       setLinkSecretFailed(true);
       setPassword((p) => (p === secret ? '' : p));
     } finally { setBusy(false); setChecking(false); }
@@ -168,7 +169,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
       <div className="auth">
         <div className="auth-card">
           <div className="auth-brand">
-            <img src="/icon.svg" alt="" />
+            <img src="/icon.svg?v=7" alt="" />
             <h1>helm</h1>
             <p>{busy ? 'joining your network…' : 'checking this device…'}</p>
           </div>
@@ -181,7 +182,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
     <div className="auth">
       <div className="auth-card">
         <div className="auth-brand">
-          <img src="/icon.svg" alt="" />
+          <img src="/icon.svg?v=7" alt="" />
           <h1>helm</h1>
           <p>{spin ? `Sign in to open ${spin.name}${spin.source ? `, shared from ${spin.source}` : ''}.` : 'All coding agents in one place'}</p>
         </div>
@@ -240,7 +241,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
 }
 
 export function AddMachine({ client }: { client: Client }) {
-  const [role, setRole] = useState<'pc' | 'vm' | 'nas'>('pc');
+  const [role, setRole] = useState<'pc' | 'vm'>('pc');
   const [invite, setInvite] = useState<{ link: string; expiresAt: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -251,7 +252,7 @@ export function AddMachine({ client }: { client: Client }) {
     try {
       const r = await client.invite(role);
       setInvite({ link: `${r.base || client.relay}/#join=${encodeURIComponent(r.code)}`, expiresAt: r.expiresAt });
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
   const command = invite ? `helm join '${invite.link}'` : '';
@@ -266,7 +267,6 @@ export function AddMachine({ client }: { client: Client }) {
       <select aria-label="Computer kind" value={role} onChange={(e) => { setRole(e.target.value as typeof role); setInvite(null); }}>
         <option value="pc">Laptop or desktop</option>
         <option value="vm">Server (virtual machine)</option>
-        <option value="nas">File storage</option>
       </select>
       <button className="row" disabled={busy} onClick={makeInvite}>
         <span className="grow"><span className="rt">{busy ? 'making a command…' : 'Create join command'}</span></span>

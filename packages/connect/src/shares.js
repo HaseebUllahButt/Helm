@@ -40,7 +40,7 @@ function save(list) {
  * A `private` one opens only for this network's own signed-in devices, and
  * takes no password: knowing a password is not being one of them.
  */
-export function addShare({ name, port, password, keep, ttlMs, private: members, preserveHost } = {}) {
+export function addShare({ name, port, password, keep, ttlMs, private: members, preserveHost, chat } = {}) {
   const wanted = Number(port);
   if (!Number.isInteger(wanted) || wanted < 1 || wanted > 65535) throw new Error('give the local port to share, e.g. 3000');
   const picked = name == null || name === '' ? randomShareName() : shareName(name);
@@ -54,6 +54,8 @@ export function addShare({ name, port, password, keep, ttlMs, private: members, 
     ...(password ? { lock: hashSharePassword(password) } : {}),
     ...(members ? { private: true } : {}),
     ...(preserveHost ? { preserveHost: true } : {}),
+    // The chat that made a short-lived link; deleting that chat stops it.
+    ...(!keep && typeof chat === 'string' && /^[\w-]{1,64}$/.test(chat) ? { chat } : {}),
   };
   save([...listShares().filter((s) => s.name !== picked), share]);
   return share;
@@ -65,6 +67,14 @@ export function removeShare(name) {
   if (left.length === list.length) return false;
   save(left);
   return true;
+}
+
+/** A deleted chat's links go with it. A kept link stays: the owner asked for it. */
+export function removeChatShares(chat) {
+  const list = listShares();
+  const gone = list.filter((s) => s.chat && s.chat === chat && s.expiresAt != null);
+  if (gone.length) save(list.filter((s) => !gone.includes(s)));
+  return gone.map((s) => s.name);
 }
 
 /** What a client may see: never the hash itself. */

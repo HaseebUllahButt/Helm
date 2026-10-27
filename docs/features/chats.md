@@ -9,16 +9,27 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   the header title changes from "Quick chat".
 - **Traps:** the title is made from your words and may drop one ("hello from
   fmap" became "from fmap"). The model chip shows real Devin model names even
-  for the fake agent.
-- **Tests:** `test/browser/chat-cycle`, `send-v2`, `send-entry-points`,
-  `failed-send`, `composer-card`; `test/message-delivery`, `user-message`,
+  for the fake agent. Streamed replies must not redraw the message editor;
+  approval cards and settings still update while a draft stays in the box.
+- **Errors (driven 2026-10-24):** make each `session.deliver` request return
+  a timeout in the private browser. After two minutes, expect "Send not
+  confirmed", a plain timeout message, and Retry send. Restore replies and
+  select Retry send. Expect one reply and the original message ID on every
+  attempt. Check `errors` and inspect `shot` at phone size.
+- **Rule:** app errors use `apps/web/src/errors.ts`. Keep clear, short messages.
+  Put technical text behind Details on failed tasks. Log each distinct error once.
+  Retry an unconfirmed send with its original
+  ID, text, images and chat references.
+- **Tests:** `test/web-errors`; `test/browser/chat-cycle`, `send-v2`, `send-entry-points`,
+  `failed-send`, `composer-card`, `composer-streaming`; `test/message-delivery`, `user-message`,
   `stream`, `session-driver`.
 
 ## Queue a message while the agent works
-- **Prove (driven):** fake-ask keeps the turn open.
+- **Prove (driven 2026-10-23):** fake-ask keeps the turn open.
   ```sh
   $V click "Ask anything"; $V type "first"; $V click send; $V wait "TOOL APPROVAL"
-  $V click "Decide above"; $V type "second"; $V click send; $V wait "1 waiting"
+  $V click "Message Devin"; $V type "second"; $V click send; $V wait "1 waiting"
+  $V restart                            # the first approval and second message stay
   $V click Approve; $V wait "TOOL APPROVAL"   # "second" was delivered and asks again
   ```
 - **Traps:** each CLI reads a mid-reply message at a different moment
@@ -33,6 +44,16 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   seconds, so its handed case keeps the full stop (no
   `dropsHandedOnInterrupt`) rather than risk sending it twice. While an
   approval waits there is no stop button; Decline ends the turn.
+- **Rule:** a full stop also ends the background commands, watches and
+  helpers the CLI left running (Claude `stop_task`, Codex
+  `thread/backgroundTerminals/clean`). Each one left running woke the agent
+  when it ended, and the chat worked again by itself. A stop for the next
+  message leaves them running.
+- **Rule:** the button turns to a ring at once. It clears when the work
+  ends, or 5 s after the machine took the stop, so it can be pressed again.
+- **Prove background work (driven 2026-10-24, real Claude and Codex):** ask
+  for `sleep 90` in the background, then a 60 s count in the foreground.
+  Stop. `ps` shows no `sleep 90`, and no wake-up turn follows.
 - **Prove the waiting case (driven 2026-10-18, real Claude):** ask for
   `python3 -c 'import time; time.sleep(45)'` in the foreground, send "Reply
   with only the word LEMON." while it runs, click "stop the agent". The log
@@ -81,8 +102,21 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `hidden-context`.
 
 ## Long chats: folds, copy, selection
+- **Latest first:** opening a chat or returning to it reads its newest window.
+  Saved text can appear first when offline. Missed live events do not replay.
+  Older replies load with the earlier-history control.
+- **Live reading:** a hidden chat releases its live view. Only devices with
+  an open view receive its text. Text redraws before repeated tool updates;
+  events keep their original order. Repeated tool output sends its newest
+  value within each short batch. Full history stays on the machine.
+- **Prove latest first (driven 2026-10-23 with the Rust reader):** close a private chat, add many replies to its private
+  history, restart the private daemon, and reopen the chat. Check that the
+  latest answer appears. Load earlier replies and check that they appear.
+  Send another message and check that the live answer arrives once.
 - **Storage rule:** append new events to history files. Replace old history
   with a rename. Readers keep byte positions between pages and search updates.
+  Rust scans saved record positions when built; JavaScript remains available.
+  See [the reader boundary and checks](../rust-log-reader.md).
 - **Prove selection copy (driven 2026-10-17):** fake chat at 390×844 with
   clipboard permission granted; blur the composer, select `.chat .md p`
   with a Range (no pointer events). After 450 ms
@@ -92,4 +126,5 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
 - **Traps:** iPhone handles and Safari permissions still need a device.
 - **Tests:** `test/browser/activity-fold`, `chat-fold`,
   `history-pagination`, `transcript-performance`, `copy-selection`,
-  `highlight-performance`, `markdown-loading`.
+  `highlight-performance`, `markdown-loading`, `latest-first`, `chat-sync`;
+  `test/event-stream`, `stream-routing`.

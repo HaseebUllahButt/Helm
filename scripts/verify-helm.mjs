@@ -6,6 +6,8 @@
 //   node scripts/verify-helm.mjs click <text> | type <text> | key <key> | wait <text> [ms]
 //   node scripts/verify-helm.mjs text | shot [file.png] [--full] | errors [--clear] | logs [n] | size <w> <h>
 //   node scripts/verify-helm.mjs eval <js> | rpc <method> [json] | upload <file>...
+//   node scripts/verify-helm.mjs record start | record stop [clip.webp|clip.mp4]   a short clip of the app
+//   node scripts/verify-helm.mjs compare <before.png> <after.png> [out.png]   both side by side, labelled
 //   node scripts/verify-helm.mjs restart | status | down [--keep]
 //
 // Each chat gets its own copy (named from HELM_SESSION_ID, or --name /
@@ -15,8 +17,8 @@
 // The skill in .agents/skills/verify-helm says when and how to use it.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, openSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, openSync, statSync, utimesSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -28,6 +30,8 @@ const name = (flag('name') ?? process.env.HELM_VERIFY ?? process.env.HELM_SESSIO
   .replace(/[^a-zA-Z0-9-]/g, '').slice(0, 24) || 'main';
 const ROOT = join(tmpdir(), `helm-verify-${name}`);
 const STATE = join(ROOT, 'state.json');
+// Read before the words are: `record stop --fps 5 clip.webp` keeps clip.webp as its file.
+const media = { fps: flag('fps'), before: flag('before'), after: flag('after') };
 const [cmd, ...args] = argv;
 
 const say = (s) => console.log(s);
@@ -74,6 +78,8 @@ function writeFakeAccount(dir) {
     { id: 'fake-ask', label: 'Fake agent (asks)', engine: 'devin', cmd: bin, args: [], env: { FAKE_TURN_MS: '800', FAKE_ASK: '1', FAKE_HOME: join(dir, 'fake-ask') }, source: 'custom' },
     { id: 'fake-pics', label: 'Fake agent (sees pictures)', engine: 'devin', cmd: bin, args: [], env: { FAKE_TURN_MS: '800', FAKE_IMAGES: '1', FAKE_HOME: join(dir, 'fake-pics') }, source: 'custom' },
     { id: 'fake-slow', label: 'Fake agent (slow)', engine: 'devin', cmd: bin, args: [], env: { FAKE_TURN_MS: '120000', FAKE_HOME: join(dir, 'fake-slow') }, source: 'custom' },
+    // The terminal button needs it; a real machine finds it on its own.
+    { id: 'shell', label: 'Shell', engine: 'shell', cmd: process.env.SHELL || '/bin/sh', args: [], env: {}, source: 'builtin' },
   ];
   writeFileSync(join(dir, 'helm', 'profiles.json'), JSON.stringify({ version: 1, profiles: fake }, null, 2), { mode: 0o600 });
 }
@@ -81,6 +87,7 @@ function writeFakeAccount(dir) {
 async function up() {
   const s = state();
   if (s && alive(s.daemon)) return say(`already up: ${s.url}  (copy "${name}")`);
+  await sweepStale();
   rmSync(ROOT, { recursive: true, force: true });
   const real = has('real');
   for (const d of ['helm', 'ssh', 'work', 'home']) mkdirSync(join(ROOT, d), { recursive: true, mode: 0o700 });
@@ -168,13 +175,120 @@ async function hold() {
   page.on('console', (m) => { if (m.type() === 'error') note(`console: ${m.text()}`); });
   // `size` writes viewport.json; apply it here, where the override lasts.
   const sizeFile = join(s.root, 'viewport.json');
+  const recording = recorder(context, page, join(s.root, 'record'), note);
+  const recordFile = join(s.root, 'record.json');
   setInterval(async () => {
+    if (existsSync(recordFile)) {
+      const { action } = JSON.parse(readFileSync(recordFile, 'utf8'));
+      rmSync(recordFile);
+      await (action === 'start' ? recording.start() : recording.stop()).catch((e) => note(`record: ${e.message}`));
+    }
     if (!existsSync(sizeFile)) return;
     const v = JSON.parse(readFileSync(sizeFile, 'utf8'));
     rmSync(sizeFile);
     await page.setViewportSize(v).catch((e) => note(`size: ${e.message}`));
   }, 200);
   process.on('SIGTERM', () => context.close().finally(() => process.exit(0)));
+}
+
+/**
+ * A screencast of the held page. It lives in the holder, which keeps the
+ * page; `record start|stop` ask through record.json and read the frames
+ * from the record folder.
+ */
+function recorder(context, page, dir, note) {
+  let cdp = null;
+  let frames = [];
+  return {
+    async start() {
+      if (cdp) await this.stop();
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      frames = [];
+      cdp = await context.newCDPSession(page);
+      cdp.on('Page.screencastFrame', ({ data, metadata, sessionId }) => {
+        const file = join(dir, `${String(frames.length).padStart(5, '0')}.jpg`);
+        writeFileSync(file, Buffer.from(data, 'base64'));
+        frames.push({ file, t: metadata?.timestamp ?? Date.now() / 1000 });
+        cdp?.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
+      });
+      const { width, height } = page.viewportSize() ?? { width: 1280, height: 800 };
+      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 80, maxWidth: width * 2, maxHeight: height * 2 });
+      writeFileSync(join(dir, 'started.json'), JSON.stringify({ t: Date.now() / 1000 }));
+    },
+    async stop() {
+      const end = Date.now() / 1000;
+      if (cdp) {
+        await cdp.send('Page.stopScreencast').catch((e) => note(`record: ${e.message}`));
+        await cdp.detach().catch(() => {});
+        cdp = null;
+      }
+      // A page that did not change sent no frame: show it as it is now.
+      if (!frames.length) {
+        const file = join(dir, '00000.jpg');
+        mkdirSync(dir, { recursive: true });
+        await page.screenshot({ path: file, type: 'jpeg', quality: 80 });
+        frames.push({ file, t: end - MIN_CLIP_S });
+      }
+      writeFileSync(join(dir, 'frames.json'), JSON.stringify({ frames, end }));
+    },
+  };
+}
+const MIN_CLIP_S = 1;
+
+/** Wait for a file the browser holder writes. */
+async function waitFor(file, what, ms = 10_000) {
+  for (const until = Date.now() + ms; Date.now() < until; await sleep(100)) if (existsSync(file)) return;
+  die(`${what} did not answer; see ${join(ROOT, 'errors.log')}`);
+}
+
+async function record(action, out) {
+  const s = state() ?? die('not up; run: node scripts/verify-helm.mjs up');
+  if (!s.browser || !alive(s.browser.pid)) die('no browser; run: node scripts/verify-helm.mjs open');
+  const dir = join(ROOT, 'record');
+  if (action === 'start') {
+    rmSync(join(dir, 'started.json'), { force: true });
+    writeFileSync(join(ROOT, 'record.json'), JSON.stringify({ action }));
+    await waitFor(join(dir, 'started.json'), 'the recording');
+    return say('recording. Do the steps, then run: record stop [clip.webp]');
+  }
+  if (action !== 'stop') die('use: record start | record stop [clip.webp|clip.mp4]');
+  if (!existsSync(join(dir, 'started.json'))) die('no recording runs; run: record start');
+  rmSync(join(dir, 'frames.json'), { force: true });
+  writeFileSync(join(ROOT, 'record.json'), JSON.stringify({ action }));
+  await waitFor(join(dir, 'frames.json'), 'the recording');
+  const { frames, end } = JSON.parse(readFileSync(join(dir, 'frames.json'), 'utf8'));
+  rmSync(join(dir, 'started.json'), { force: true });
+  const file = resolve(out ?? join(ROOT, `clip-${Date.now()}.webp`));
+  const { makeClip, RENDER_LIMIT } = await import('./proof-media.mjs');
+  const fps = Number(media.fps ?? 10);
+  const { seconds, bytes } = await makeClip(frames, end, file, { dir, fps, width: s.browser.desktop ? 1280 : 720 }).catch((e) => die(e.message));
+  say(`${file} (${seconds.toFixed(1)} s, ${frames.length} frames, ${(bytes / 1024).toFixed(0)} KB)`);
+  if (file.endsWith('.webp') && bytes > RENDER_LIMIT) say('Too big for helm render (2 MB). Record fewer steps, or use --fps 5.');
+}
+
+/** Two pictures side by side, labelled, in one file. */
+async function compare(before, after, out) {
+  if (!before || !after) die('use: compare <before.png> <after.png> [out.png]');
+  for (const f of [before, after]) if (!existsSync(f)) die(`no such picture: ${f}`);
+  const labels = { beforeLabel: media.before ?? 'Before', afterLabel: media.after ?? 'After' };
+  const file = resolve(out ?? join(dirname(resolve(after)), 'before-after.png'));
+  const { compareHtml } = await import('./proof-media.mjs');
+  const { chromium } = await import('@playwright/test');
+  const system = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].find((p) => existsSync(p));
+  const browser = await chromium.launch({ headless: true }).catch((e) => {
+    if (!system || !/Executable doesn't exist/.test(e.message)) throw e;
+    return chromium.launch({ headless: true, executablePath: system });
+  });
+  try {
+    const page = await browser.newPage({ viewport: { width: 2400, height: 1200 } });
+    await page.setContent(compareHtml(resolve(before), resolve(after), labels));
+    await page.waitForFunction(() => [...document.images].every((i) => i.complete && i.naturalWidth));
+    await page.locator('#pair').screenshot({ path: file });
+  } finally {
+    await browser.close();
+  }
+  say(file);
 }
 
 async function open(hash = '') {
@@ -297,30 +411,70 @@ async function rpc(method, params) {
 }
 
 async function down() {
-  const s = state();
   const keep = has('keep');
+  const killed = await stopCopy(ROOT, state(), { keep });
+  say(`down: stopped ${killed.length} process${killed.length === 1 ? '' : 'es'}${keep ? `, kept ${ROOT}` : ', files removed'}.`);
+}
+
+/** Stop one copy's processes and, unless kept, remove its folder. Returns the processes stopped. */
+async function stopCopy(ROOT, s, { keep = false } = {}) {
   const killed = [];
   const stop = (pid, group) => { try { process.kill(group ? -pid : pid, 'SIGTERM'); killed.push(pid); } catch { /* gone */ } };
-  if (s?.browser) stop(s.browser.pid, true);
-  if (s?.daemon) stop(s.daemon, true);
+  // A saved process number can belong to another program by now.
+  const read = (pid, file) => { try { return readFileSync(`/proc/${pid}/${file}`, 'utf8'); } catch { return ''; } };
+  const copyName = basename(ROOT).slice('helm-verify-'.length);
+  if (s?.browser && read(s.browser.pid, 'cmdline').split('\0').join(' ').includes(`_hold --name ${copyName}`)) stop(s.browser.pid, true);
+  if (s?.daemon && read(s.daemon, 'environ').split('\0').includes(`HELM_DIR=${join(ROOT, 'helm')}`)) stop(s.daemon, true);
   // Terminal and agent hosts start as their own session leaders, and the
   // browser may outlive its holder. They are found by this copy's HELM_DIR
   // or folder, never by name: a name match can be the real laptop's host
   // (and pkill -f matches the shell running it).
   const mine = `HELM_DIR=${join(ROOT, 'helm')}`;
+  // A program run on this copy names it as an argument (`--user-data-dir=`).
+  // A shell command that only mentions the folder, such as the one running
+  // this, is not the copy's, and neither is anything that started us.
+  const inside = (arg) => arg.startsWith(`${ROOT}/`) || new RegExp(`^--[\\w-]+=${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`).test(arg);
+  const callers = new Set();
+  for (let pid = process.ppid; pid > 1 && !callers.has(pid);) {
+    callers.add(pid);
+    try { const stat = readFileSync(`/proc/${pid}/stat`, 'utf8'); pid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]); } catch { break; }
+  }
   await sleep(300);
   for (const pid of readdirSync('/proc').filter((p) => /^\d+$/.test(p)).map(Number)) {
-    if (pid === process.pid) continue;
+    if (pid === process.pid || callers.has(pid)) continue;
     try {
       const ours = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').includes(mine)
-        || readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(ROOT + '/');
+        || readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').some(inside);
       if (ours) stop(pid, false);
     } catch { /* not ours */ }
   }
   await sleep(500);
   if (!keep) rmSync(ROOT, { recursive: true, force: true });
-  say(`down: stopped ${killed.length} process${killed.length === 1 ? '' : 'es'}${keep ? `, kept ${ROOT}` : ', files removed'}.`);
+  return killed;
 }
+
+/**
+ * Copies a chat forgot to take down: their Helm has stopped, or no command
+ * has used them for STALE_MS. Each `up` clears them, so a forgotten copy
+ * does not hold its daemon, browser and agents for days.
+ */
+const STALE_MS = 12 * 60 * 60_000;
+async function sweepStale() {
+  const base = dirname(ROOT);
+  for (const entry of readdirSync(base)) {
+    const root = join(base, entry);
+    if (!entry.startsWith('helm-verify-') || root === ROOT) continue;
+    let s = null, used = 0;
+    try { s = JSON.parse(readFileSync(join(root, 'state.json'), 'utf8')); used = statSync(join(root, 'state.json')).mtimeMs; } catch { continue; }
+    if (s?.daemon && alive(s.daemon) && Date.now() - used < STALE_MS) continue;
+    const why = s?.daemon && alive(s.daemon) ? 'unused for 12 hours' : 'its Helm had stopped';
+    const stopped = await stopCopy(root, s);
+    say(`cleared copy "${entry.slice('helm-verify-'.length)}": ${why}${stopped.length ? `, stopped ${stopped.length} processes` : ''}.`);
+  }
+}
+
+// Each command marks the copy as in use, so sweepStale leaves it alone.
+if (cmd !== 'down' && existsSync(STATE)) { try { const now = new Date(); utimesSync(STATE, now, now); } catch { /* best effort */ } }
 
 switch (cmd) {
   case 'up': await up(); break;
@@ -364,6 +518,8 @@ switch (cmd) {
     say(file);
   }); break;
   case 'eval': await act(async (page) => say(JSON.stringify(await page.evaluate(args.join(' ')), null, 2))); break;
+  case 'record': await record(args[0], args[1]); break;
+  case 'compare': await compare(args[0], args[1], args[2]); break;
   case 'size': {
     writeFileSync(join(ROOT, 'viewport.json'), JSON.stringify({ width: Number(args[0]), height: Number(args[1]) }));
     await sleep(600);
@@ -387,6 +543,6 @@ switch (cmd) {
   case 'restart': await restart(); break;
   case 'down': await down(); break;
   default:
-    say(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 9).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
+    say(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 11).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
     process.exitCode = cmd ? 1 : 0;
 }

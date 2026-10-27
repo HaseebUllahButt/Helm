@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useMemo, useState } from 'react';
 import type { Client, Environment } from '../client';
 import { Icon } from '../Icon';
@@ -35,7 +36,7 @@ export function FilesPanel({ client, env, cwd, refreshKey, changed, wrap, open, 
         if (!Array.isArray(t?.files)) { setError('Update Helm on this machine to show files.'); return; }
         setTree(t); setDir((d) => d ?? t.start);
       })
-      .catch((e: any) => { if (live) setError(e?.message || 'Helm cannot list the files.'); });
+      .catch((e: any) => { if (live) setError(errorMessage(e, { fallback: 'Helm cannot list the files.' })); });
     return () => { live = false; };
   }, [client, env.id, cwd, refreshKey]);
 
@@ -141,7 +142,7 @@ function FileScreen({ client, env, cwd, path, wrap, changed, onBack, onChanges }
     setFile('loading');
     client.rpc<FileText>(env.id, 'git.file', { cwd, path }, 30_000)
       .then((f) => { if (live) setFile(f); })
-      .catch((e: any) => { if (live) setFile({ error: e?.message || 'Helm cannot open this file.' }); });
+      .catch((e: any) => { if (live) setFile({ error: errorMessage(e, { fallback: 'Helm cannot open this file.' }) }); });
     return () => { live = false; };
   }, [client, env.id, cwd, path]);
   const copy = () => {

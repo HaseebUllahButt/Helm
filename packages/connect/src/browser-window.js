@@ -3,8 +3,11 @@
 // it never moves the owner's mouse or types on their keyboard; the owner
 // just uses the window.
 import { existsSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { rm } from 'node:fs/promises';
+import { hostname } from 'node:os';
+import { join, resolve } from 'node:path';
+import { execFileSync, spawn } from 'node:child_process';
+import { browserArgs, ignoredBrowserArgs } from './browser-identity.js';
 
 /** A screen to open a window on: always on a Mac or Windows, a display on Linux. */
 export const canOpenWindow = (env = process.env, platform = process.platform) =>
@@ -24,8 +27,10 @@ const systemChromium = () => process.env.HELM_WINDOW_CHROMIUM || [
  * (niri: `window-rule { match app-id=r#"^helm-browser"# open-focused false }`).
  */
 export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
-  const { chromium } = await import('playwright');
-  const args = ['--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', `--class=${name}`];
+  const { chromium } = await import('patchright-core');
+  // No component downloads: each chat's profile would fetch its own ~150 MB
+  // of speech, DRM and model files, and starting is slower while it does.
+  const args = [...browserArgs, '--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', '--disable-component-update', `--class=${name}`];
   if (process.platform === 'linux') args.push('--ozone-platform-hint=auto');
   const running = await attachWindow(chromium, profileDir);
   if (running) return running;
@@ -35,24 +40,63 @@ export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
   // Chromium's own sandbox stays on, so no "--no-sandbox" warning bar either;
   // only a machine where the sandbox cannot start goes without it. A window
   // started this way closes when Helm does.
-  const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ['--enable-automation'], args, timeout: 15000 };
+  const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ignoredBrowserArgs, args, timeout: 15000 };
   const attempts = [...(system ? [{ executablePath: system }, { executablePath: system, chromiumSandbox: false }] : []), {}, { chromiumSandbox: false }];
   let failure;
   for (const extra of attempts) {
-    try { return await chromium.launchPersistentContext(profileDir, { ...options, ...extra }); } catch (error) { failure = error; }
+    try { const context = await chromium.launchPersistentContext(profileDir, { ...options, ...extra }); context.helmPatched = true; return context; } catch (error) { failure = error; }
   }
   throw failure;
 }
 
 const PORT_FILE = 'DevToolsActivePort';
 
-/** Is a live Chromium using this profile? Chromium's lock names its process. */
-function profileInUse(profileDir) {
-  if (process.platform === 'win32') return true;
-  let target; try { target = readlinkSync(join(profileDir, 'SingletonLock')); } catch { return false; }
-  const pid = Number(target.split('-').pop());
-  if (!Number.isInteger(pid) || pid < 1) return false;
-  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+/**
+ * The live Chromium using this profile, if any. Chromium's lock names its
+ * host and process. A lock left by a crash can name a process number that
+ * another program has since been given, so the process must be Chromium
+ * started on this profile.
+ */
+export function profilePid(profileDir) {
+  let target; try { target = readlinkSync(join(profileDir, 'SingletonLock')); } catch { return null; }
+  const cut = target.lastIndexOf('-'), pid = Number(target.slice(cut + 1));
+  if (cut < 1 || target.slice(0, cut) !== hostname() || !Number.isInteger(pid) || pid < 1) return null;
+  return runsProfile(pid, profileDir) ? pid : null;
+}
+
+// Chromium rewrites its command line as one string, so look for the flag
+// followed by a space or the end.
+function runsProfile(pid, profileDir) {
+  let command;
+  try {
+    command = process.platform === 'linux' ? readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ')
+      : execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 3000 });
+  } catch { return false; }
+  command = `${command.trimEnd()} `;
+  return [profileDir, resolve(profileDir)].some(dir => command.includes(`--user-data-dir=${dir} `));
+}
+const profileInUse = (profileDir) => process.platform === 'win32' || !!profilePid(profileDir);
+
+/** Close a window Helm started for a chat that is gone, and wait for it to exit. */
+export async function stopWindow(profileDir) {
+  const pid = process.platform === 'win32' ? null : profilePid(profileDir);
+  if (!pid) return false;
+  try { process.kill(pid, 'SIGTERM'); } catch { return false; }
+  for (const until = Date.now() + 5000; Date.now() < until && profilePid(profileDir);) await new Promise(done => setTimeout(done, 100));
+  return true;
+}
+
+// What Chromium downloads or caches again by itself; sign-ins, history and
+// site storage stay.
+const REFETCHED = ['component_crx_cache', 'WasmTtsEngine', 'WidevineCdm', 'OnDeviceHeadSuggestModel', 'OptimizationHints', 'ActorSafetyLists',
+  'hyphen-data', 'ZxcvbnData', 'GPUPersistentCache', 'GrShaderCache', 'ShaderCache', 'BrowserMetrics', 'BrowserMetrics-spare.pma',
+  'Default/Cache', 'Default/Code Cache', 'Default/GPUCache', 'Default/DawnGraphiteCache', 'Default/DawnWebGPUCache'];
+
+/** Free a closed window's disk space. A window that is open is left alone. */
+export async function trimProfile(profileDir) {
+  if (!existsSync(profileDir) || profileInUse(profileDir)) return false;
+  await Promise.all(REFETCHED.map(name => rm(join(profileDir, name), { recursive: true, force: true }).catch(() => {})));
+  return true;
 }
 
 /** A window Helm started is open, maybe from before Helm restarted. */
@@ -64,6 +108,7 @@ async function connectWindow(chromium, port, timeout) {
   const context = browser.contexts()[0];
   if (!context) { await browser.close().catch(() => {}); throw new Error('Chromium has no window'); }
   context.helmDetach = () => browser.close();
+  context.helmPatched = true;
   return context;
 }
 
@@ -82,7 +127,7 @@ async function attachWindow(chromium, profileDir) {
  */
 async function startWindow(chromium, executable, profileDir, args) {
   rmSync(join(profileDir, PORT_FILE), { force: true });
-  const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', ...args, 'about:blank'];
+  const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', ...args, NEW_TAB];
   const scoped = process.platform === 'linux' && !process.env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
   for (const [command, list] of [...(scoped ? [[scoped, ['--user', '--scope', '--collect', '--quiet', executable, ...argv]]] : []), [executable, argv]]) {
     const child = spawn(command, list, { detached: true, stdio: 'ignore' });

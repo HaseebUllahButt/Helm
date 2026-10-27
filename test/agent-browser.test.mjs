@@ -183,17 +183,32 @@ test('an agent waits for navigation and gets a failed load in plain words', asyn
   await manager.stop(); rmSync(directory, { recursive: true, force: true });
 });
 
-test('Playwright’s own browser is tried first; a pinned path wins; the system browser is the fallback', async () => {
-  const { chromium } = await import('playwright'), real = chromium.launch, calls = [], browser = new EventEmitter(); browser.isConnected = () => true; browser.close = async () => {};
+test('an agent gets a page once it stops fetching, without waiting for slow pictures', { timeout: 60000 }, async t => {
+  const server = createServer((req, res) => {
+    if (req.url.startsWith('/img')) return setTimeout(() => { res.setHeader('Content-Type', 'image/gif'); res.end(Buffer.from('R0lGODlhAQABAAAAACw=', 'base64')); }, 4000);
+    if (req.url === '/api') return setTimeout(() => res.end('data arrived'), 300);
+    res.setHeader('Content-Type', 'text/html'); res.end('<title>Heavy</title><img src="/img"><p id=d></p><script>fetch("/api").then(r => r.text()).then(x => d.textContent = x)</script>');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: mkdtempSync(join(tmpdir(), 'helm-settle-')), session: sid => ({ id: sid }), canWindow: false });
+  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
+  const started = Date.now(), { text } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}/` });
+  assert.match(text, /data arrived/, 'what the page fetched is there');
+  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+});
+
+test('full Chromium is tried first; a pinned path wins; the system browser is the fallback', async () => {
+  const { chromium } = await import('patchright-core'), real = chromium.launch, calls = [], browser = new EventEmitter(); browser.isConnected = () => true; browser.close = async () => {}; browser.newBrowserCDPSession = async () => ({ send: async () => ({ userAgent: 'Chrome/153.0.0.0', product: 'Chrome/153.0.1.2' }), detach: async () => {} });
   const saved = { HELM_CHROMIUM_PATH: process.env.HELM_CHROMIUM_PATH, HELM_TEST_CHROMIUM: process.env.HELM_TEST_CHROMIUM };
   const run = async (env, launch) => {
-    for (const key of Object.keys(saved)) delete process.env[key]; Object.assign(process.env, env); calls.length = 0; chromium.launch = async options => { calls.push(options.executablePath); return launch(options); };
+    for (const key of Object.keys(saved)) delete process.env[key]; Object.assign(process.env, env); calls.length = 0; chromium.launch = async options => { assert.equal(options.channel, 'chromium'); assert.ok(options.ignoreDefaultArgs.includes('--enable-automation')); calls.push(options.executablePath); return launch(options); };
     const manager = new BrowserManager({ session: sid => ({ id: sid }) });
     try { await manager.start(); } catch (error) { return error; } finally { await manager.stop(); }
   };
   try {
     await run({ HELM_CHROMIUM_PATH: '/pinned/chrome' }, () => browser); assert.deepEqual(calls, ['/pinned/chrome']);
-    await run({}, () => browser); assert.deepEqual(calls, [undefined], 'no path is forced, so Playwright picks its headless shell');
+    await run({}, () => browser); assert.deepEqual(calls, [undefined], 'the Chromium channel selects the full browser');
     const system = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
     const error = await run({}, options => { if (!options.executablePath) throw new Error('Executable doesn\'t exist'); return browser; });
     if (system) { assert.equal(error, undefined); assert.deepEqual(calls, [undefined, system]); } else assert.match(error.message, /could not start/);
@@ -271,6 +286,40 @@ test('browser point CLI builds a guide action', async () => {
   await runBrowserCommand(['point', 'tab', 'button.primary'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
   assert.deepEqual(calls.map(c => c[2].action), [{ kind: 'point', ref: 3, note: 'Approve here' }, { kind: 'point', selector: 'button.primary' }]);
   await assert.rejects(runBrowserCommand(['point', 'tab'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} }), /element number or CSS selector/);
+
+});
+
+test('a viewport screenshot shows the page while its web font is still loading', { timeout: 30000 }, async t => {
+  let fontRequested, fontResponse;
+  const requested = new Promise(resolve => { fontRequested = resolve; });
+  const server = createServer((req, res) => {
+    if (req.url === '/slow-font') { fontResponse = res; res.writeHead(200, { 'Content-Type': 'font/woff2' }); res.flushHeaders(); fontRequested(); return; }
+    res.setHeader('Content-Type', 'text/html');
+    res.end('<style>@font-face{font-family:slow;src:url(/slow-font)}body{margin:0;font-family:slow,sans-serif;height:2400px;background:linear-gradient(#e61914 0 1000px,#173be8 1000px)}</style><title>Visible now</title><h1>Visible now</h1>');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: join(process.env.HELM_DIR, 'font-shot'), session: id => ({ id }), canWindow: false });
+  t.after(async () => { fontResponse?.end(); await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const opened = await manager.open('font', { url: `http://127.0.0.1:${server.address().port}` });
+  await requested;
+  const page = manager.get('font', opened.tab.id).page;
+  assert.equal(await page.evaluate(() => document.fonts.status), 'loading');
+  const shot = await manager.run('font', opened.tab.id, { kind: 'screenshot' });
+  assert.match(shot.image, /^data:image\/jpeg;base64,/);
+  assert.equal(fontResponse.writableEnded, false, 'the screenshot did not wait for the font response');
+  assert.equal(await page.evaluate(() => document.fonts.status), 'loading');
+  await manager.run('font', opened.tab.id, { kind: 'resize', width: 390, height: 844 });
+  await manager.run('font', opened.tab.id, { scroll: 'down', pages: 2 });
+  await page.waitForFunction(() => scrollY > 1000);
+  const scrolled = await manager.run('font', opened.tab.id, { kind: 'screenshot' });
+  const pixels = await page.evaluate(async source => {
+    const bitmap = await createImageBitmap(await (await fetch(source)).blob());
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height), context = canvas.getContext('2d');
+    context.drawImage(bitmap, 0, 0);
+    return { width: bitmap.width, height: bitmap.height, pixel: [...context.getImageData(10, 600, 1, 1).data] };
+  }, scrolled.image);
+  assert.deepEqual([pixels.width, pixels.height], [390, 844]);
+  assert.ok(pixels.pixel[2] > 200 && pixels.pixel[0] < 50, 'the image shows the blue part after scrolling');
 });
 
 test('browser routes keep CLI commands and reject removed panel controls', async () => {
@@ -285,5 +334,5 @@ test('browser routes keep CLI commands and reject removed panel controls', async
     ['open', 'one', { id: 'one', url: 'about:blank' }], ['list', 'one'],
     ['run', 'one', 'tab', { kind: 'look' }], ['close', 'one', 'tab'],
   ]);
-  for (const method of ['browser.show', 'browser.download']) await assert.rejects(routes.dispatch(method, { id: 'one' }), /unknown browser method/);
+  for (const method of ['browser.show', 'browser.download', 'browser.apps']) await assert.rejects(routes.dispatch(method, { id: 'one' }), /unknown browser method/);
 });

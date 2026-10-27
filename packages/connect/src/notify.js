@@ -10,15 +10,26 @@
  * Full questions, commands and paths belong in the conversation they open.
  */
 
-import { agentLabel, notificationContext } from '@helm/protocol/notifications';
+import { agentLabel, notificationContext, notificationLine } from '@helm/protocol/notifications';
 
-/** What the notification should say, from the event the driver produced. */
+/** "Claude Code has a question · laptop": who, what happened, and where. */
+const whoWhere = (session, action) => [`${agentLabel(session?.engine)} ${action}`, session?.machine].filter(Boolean).join(' · ');
+
+/**
+ * What the notification should say, from the event the driver produced. The
+ * title is the chat, which is what the owner knows it by. A question is the
+ * agent's own words and goes under it; a command or a file stays in the chat.
+ */
 export function describe(session, event) {
   const question = event.kind === 'question' || !!event.question || !!event.questions?.length;
-  const action = question ? 'has a question' : event.kind === 'plan' ? 'has a plan to review' : 'needs approval';
+  const action = question ? 'has a question'
+    : event.kind === 'plan' ? 'has a plan for you to check'
+      : event.kind === 'command' ? 'wants to run a command'
+        : event.kind === 'edit' ? 'wants to change a file' : 'needs your approval';
+  const asked = question ? notificationLine(event.questions?.[0]?.question ?? event.question) : '';
   return {
-    title: `Helm · ${agentLabel(session?.engine)} ${action}`,
-    body: notificationContext(session),
+    title: notificationContext(session),
+    body: [whoWhere(session, action), asked].filter(Boolean).join('\n'),
     tag: `helm-${session?.id ?? 'session'}-${event.requestId ?? event.seq ?? ''}`,
     envId: session?.envId ?? null,
     sessionId: session?.id ?? null,
@@ -44,12 +55,15 @@ export function askPreview(event) {
     : kind === 'edit' ? line(event.title)
     : kind === 'plan' ? ''
     : line(event.title || event.tool);
-  return { kind, text, more: question ? Math.max(0, (event.questions?.length ?? 1) - 1) : 0 };
+  // A command shown whole can be allowed from the notice; a cut one is read in the chat.
+  const whole = kind === 'command' && !!text && text === String(event.detail ?? '').trim();
+  return { kind, text, more: question ? Math.max(0, (event.questions?.length ?? 1) - 1) : 0, ...(whole ? { whole } : {}) };
 }
 
-export function describeDone(session, at = Date.now()) {
+/** A finished chat: its name, then the first line of what the agent said last. */
+export function describeDone(session, at = Date.now(), reply = '') {
   return {
-    title: `Helm · ${agentLabel(session?.engine)} finished`, body: notificationContext(session),
+    title: notificationContext(session), body: [whoWhere(session, 'finished'), notificationLine(reply)].filter(Boolean).join('\n'),
     tag: `helm-done-${session.id}-${at}`, envId: session.envId ?? null, sessionId: session.id,
   };
 }

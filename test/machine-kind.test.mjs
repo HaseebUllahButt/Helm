@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * What a machine is for: 'pc', 'vm' or 'nas', carried on its roster record.
+ * What a machine is for: 'pc' or 'vm', carried on its roster record. Older
+ * records may still say 'nas' (storage, since removed); the roster keeps it.
  *
  * `kind` is held to the same bar as every other roster field - a closed set,
  * dropped when it is anything else - because a record only means something
@@ -174,7 +175,7 @@ const stubJoin = (role) => {
 };
 
 test('a join writes the invited kind onto the self record and the local note', async (t) => {
-  for (const [role, want] of [['nas', 'nas'], ['vm', 'vm'], ['pc', 'pc'], ['bogus', 'pc'], [undefined, 'pc']]) {
+  for (const [role, want] of [['nas', 'pc'], ['vm', 'vm'], ['pc', 'pc'], ['bogus', 'pc'], [undefined, 'pc']]) {
     N.forgetNetwork();
     const restore = stubJoin(role);
     try {
@@ -197,7 +198,8 @@ test('machine.set_kind refuses what is not a kind - controllers hardest', async 
   N.createNetwork({ name: 'testbox', port: 8999 });
   const d = daemon();
   t.after(() => d.stop());
-  await assert.rejects(() => d.dispatch(M.MACHINE_SET_KIND, { kind: 'router' }), /one of: pc, vm, nas/);
+  await assert.rejects(() => d.dispatch(M.MACHINE_SET_KIND, { kind: 'router' }), /one of: pc, vm/);
+  await assert.rejects(() => d.dispatch(M.MACHINE_SET_KIND, { kind: 'nas' }), /one of: pc, vm/);
   for (const word of ['device', 'controller', 'phone']) {
     await assert.rejects(
       () => d.dispatch(M.MACHINE_SET_KIND, { kind: word }),
@@ -207,25 +209,28 @@ test('machine.set_kind refuses what is not a kind - controllers hardest', async 
   }
 });
 
-test('pc and nas are a record change, written by the machine itself', async (t) => {
+test('pc is a record change, written by the machine itself', async (t) => {
   N.forgetNetwork();
   const net = N.createNetwork({ name: 'testbox', port: 8999 });
-  N.describeSelf(net, { kind: 'pc' });
+  // An old storage machine: the word is gone, the machine becomes a pc.
+  net.role = 'nas';
+  N.describeSelf(net, { kind: 'nas', endpoints: [] });
+  N.saveNetwork(net);
   const d = daemon();
   t.after(() => d.stop());
 
-  const r = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'nas' });
+  const r = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'pc' });
   assert.equal(r.changed, true);
-  assert.equal(r.from, 'pc');
-  assert.equal(r.kind, 'nas');
+  assert.equal(r.from, 'nas');
+  assert.equal(r.kind, 'pc');
 
   const after = N.loadNetwork();
-  assert.equal(after.machines[after.self].kind, 'nas');
+  assert.equal(after.machines[after.self].kind, 'pc');
   // The local note travels in step, so `helm status` says the same thing.
-  assert.equal(after.role, 'nas');
+  assert.equal(after.role, 'pc');
 
   // Asking for what it already is changes nothing but still answers.
-  const same = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'nas' });
+  const same = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'pc' });
   assert.equal(same.changed, false);
 });
 
@@ -239,12 +244,12 @@ test('leaving vm drops the advertised https endpoint', async (t) => {
   d.advertised = ['https://1-2-3-4.sslip.io'];
   d.extra = ['https://1-2-3-4.sslip.io'];
 
-  const r = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'nas' });
+  const r = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'pc' });
   assert.equal(r.from, 'vm');
   assert.ok(r.notes.some((n) => /Remove its Caddy site with:/.test(n)));
 
   const after = N.loadNetwork();
-  assert.equal(after.machines[after.self].kind, 'nas');
+  assert.equal(after.machines[after.self].kind, 'pc');
   assert.ok(!after.machines[after.self].endpoints.some((e) => e.startsWith('https://')),
     `https should be gone from ${after.machines[after.self].endpoints}`);
 });

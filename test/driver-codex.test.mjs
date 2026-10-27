@@ -22,6 +22,98 @@ const make = (name, opts = {}) => {
   return { fake, driver, log: collect(driver) };
 };
 
+test('a fresh Codex helper sends its task without parent context and reports cached input separately', async () => {
+  const { fake, driver, log } = make('plain', { instructions: 'You are a helper.' });
+  try {
+    await driver.send('Inspect the task.');
+    const done = await log.until(e => e.type === 'turn.done');
+    const requests = fake.stdinLines();
+    const start = requests.find(m => m.method === 'thread/start');
+    const turn = requests.find(m => m.method === 'turn/start');
+    assert.equal(start.params.developerInstructions, 'You are a helper.');
+    assert.equal(start.params.threadId, undefined);
+    assert.deepEqual(turn.params.input, [{ type: 'text', text: 'Inspect the task.', text_elements: [] }]);
+    // These are recorded usage values, not an estimate of savings from the fake.
+    assert.equal(done.usage.input, 20386);
+    assert.equal(done.usage.cacheRead, 9984);
+    assert.equal(done.usage.inputIncludesCache, true);
+  } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
+test('the Codex fork protocol sends a parent reference and preserves reported cache usage', async () => {
+  const { fake, driver, log } = make('plain');
+  const server = new CodexServer(fake.cmd, driver.env, () => {});
+  server.attach(driver);
+  driver.onNotification = driver.onNotification.bind(driver);
+  try {
+    await server.ensure();
+    const fork = await server.call('thread/fork', { threadId: 'parent-thread', ephemeral: false,
+      excludeTurns: true, cwd: fake.dir, model: 'helper-model' });
+    driver.threadId = fork.result.thread.id;
+    server.attach(driver);
+    const task = 'Inspect the task.';
+    await server.call('turn/start', { threadId: driver.threadId, input: [{ type: 'text', text: task, text_elements: [] }] });
+    const done = await log.until(e => e.type === 'turn.done');
+    assert.deepEqual(fake.stdinLines().filter(m => ['thread/start', 'thread/fork'].includes(m.method)).map(m => m.method), ['thread/fork']);
+    assert.equal(fake.stdinLines().find(m => m.method === 'thread/fork').params.threadId, 'parent-thread');
+    assert.equal(fake.stdinLines().find(m => m.method === 'turn/start').params.input[0].text, task);
+    // Recorded values check usage transport. Only real calls can measure savings.
+    assert.equal(done.usage.input, 20386);
+    assert.equal(done.usage.cacheRead, 9984);
+    assert.equal(done.usage.inputIncludesCache, true);
+  } finally { server.detach(driver); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
+test('Codex v2 activity keeps one card per child and nests each reply under the correct card', async () => {
+  const { fake, driver, log } = make('subagent-v2');
+  try {
+    await driver.send('Use two helpers.');
+    await log.until(e => e.type === 'turn.done');
+    const cards = log.of('item.start').filter(e => e.kind === 'subagent');
+    assert.deepEqual(cards.map(e => [e.id, e.agent.id]), [['start-a', 'child-a'], ['start-b', 'child-b']]);
+    assert.deepEqual(log.of('item.start').filter(e => e.kind === 'text').map(e => [e.id, e.parentId]), [['reply-a', 'start-a'], ['reply-b', 'start-b']]);
+    assert.ok(log.of('subagent.status').some(e => e.id === 'start-a' && e.status === 'working'));
+    assert.ok(log.of('subagent.status').some(e => e.id === 'start-b' && e.status === 'working'));
+    for (const card of cards) {
+      assert.equal(log.of('subagent.status').findLast(e => e.id === card.id).status, 'idle');
+      assert.equal(log.of('item.done').filter(e => e.id === card.id).length, 1);
+    }
+    const { eventSubagents } = await import('../packages/connect/src/cli-subagents.js');
+    assert.deepEqual(eventSubagents(log.events, { engine: 'codex' }).map(c => [c.threadId, c.status]), [['child-a', 'done'], ['child-b', 'done']]);
+  } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
+test('Codex v2 interruption settles only its child and later activity keeps the same card', () => {
+  const driver = new CodexDriver({ cmd: 'unused', env: {}, cwd: '/tmp' });
+  driver.threadId = 'parent';
+  const log = collect(driver);
+  const item = { type: 'subAgentActivity', id: 'started', agentThreadId: 'child', agentPath: 'root/check', kind: 'started' };
+  const emit = (kind, id) => driver.onNotification('item/completed', { threadId: 'parent', item: { ...item, kind, id } });
+  emit('started', 'started');
+  emit('interrupted', 'stopped');
+  assert.equal(log.of('item.done').at(-1).status, 'interrupted');
+  emit('interacted', 'follow-up');
+  emit('completed', 'finished');
+  assert.equal(log.of('item.start').length, 1);
+  assert.equal(log.of('subagent.status').at(-1).status, 'idle');
+  assert.equal(log.of('item.done').at(-1).status, 'ok');
+  assert.equal(log.of('turn.done').length, 0, 'a child activity must not end the parent turn');
+});
+
+test('Codex rejects a failed process start and permits a later retry', { timeout: 5000 }, async () => {
+  const { fake, driver, log } = make('plain');
+  const script = readFileSync(fake.cmd, 'utf8');
+  rmSync(fake.cmd);
+  try {
+    await assert.rejects(driver.start(), /ENOENT/);
+    assert.equal(driver.status, 'exited');
+    writeFileSync(fake.cmd, script, { mode: 0o755 });
+    await driver.send('hello');
+    await log.until(e => e.type === 'turn.done');
+    assert.equal(driver.status, 'idle');
+  } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
 test('Codex opens one thread when startup and the first send overlap', { timeout: 5000 }, async () => {
   const { fake, driver, log } = make('plain');
   try {
@@ -109,7 +201,7 @@ test('Codex reports how full the context is from the latest call, not the runnin
   assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 0, window: 258_400, compacted: true });
 });
 
-function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false } = {}) {
+function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false, reply: override } = {}) {
   const fake = fakeCli('codex', 'plain');
   let receive, exited;
   const writes = [];
@@ -123,7 +215,7 @@ function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false } 
         ? unsupportedTurns && request.params.includeTurns
           ? { error: { message: 'list_turns is not supported yet' } }
           : error ? { error } : { result: { thread } }
-        : { result: {} };
+        : override?.(request) ?? { result: {} };
       emit({ id: request.id, ...reply });
       if (request.method === 'thread/read') afterRead?.(emit);
     },
@@ -159,6 +251,24 @@ for (const [name, status, turns, expected] of [
   }
 });
 
+test('adopted Codex loads an unloaded thread when a message finds it missing', async (t) => {
+  let loaded = false;
+  const { driver, log, writes } = adoptedCodex(t, {
+    thread: { status: { type: 'notLoaded' }, turns: [] },
+    reply: (request) => {
+      if (request.method === 'thread/resume') { loaded = true; return { result: { thread: { id: 'recovered-thread' } } }; }
+      if (request.method === 'turn/start') return loaded ? { result: { turn: { id: 'new-turn' } } }
+        : { error: { code: -32600, message: 'thread not found: recovered-thread' } };
+    },
+  });
+  await driver.start();
+  await driver.send('Status?');
+  assert.deepEqual(writes.map((request) => request.method), ['thread/read', 'turn/start', 'thread/resume', 'turn/start']);
+  assert.equal(writes[2].params.threadId, 'recovered-thread');
+  assert.equal(log.of('error').length, 0);
+  assert.equal(driver.status, 'working');
+});
+
 test('reattaching Codex does not replay old helper failures and checks a surviving child live', async t => {
   const thread = { status: { type: 'idle' }, turns: [{ id: 'stale-log-turn', status: 'completed', items: [
     { type: 'collabAgentToolCall', id: 'old-failure', tool: 'spawn_agent', agentsStates: { 'old-child': { status: 'errored' } } },
@@ -169,6 +279,21 @@ test('reattaching Codex does not replay old helper failures and checks a survivi
   assert.equal(log.of('subagent.status').some(e => e.status === 'error'), false);
   assert.ok(writes.some(request => request.method === 'thread/read' && request.params.threadId === 'active-child'));
   assert.deepEqual(log.of('subagent.status').map(e => [e.id,e.status]), [['active-card','working'],['active-card','idle']]);
+});
+
+test('reattaching Codex v2 restores a live child alias without reviving finished children', async t => {
+  const activity = (id, child, kind) => ({ type: 'subAgentActivity', id, agentThreadId: child, agentPath: `root/${child}`, kind });
+  const thread = { status: { type: 'idle' }, turns: [{ id: 'stale-log-turn', status: 'completed', items: [
+    activity('old-card', 'old-child', 'started'), activity('old-end', 'old-child', 'completed'),
+    activity('live-card', 'live-child', 'started'),
+  ] }] };
+  const { driver, log, writes } = adoptedCodex(t, { thread });
+  await driver.start();
+  assert.deepEqual(log.of('subagent.status').map(e => [e.id, e.status]), [['live-card', 'working'], ['live-card', 'idle']]);
+  assert.ok(writes.some(r => r.method === 'thread/read' && r.params.threadId === 'live-child'));
+  assert.equal(writes.some(r => r.params.threadId === 'old-child'), false);
+  driver.onNotification('item/started', { threadId: 'live-child', turnId: 'child-turn', item: { type: 'agentMessage', id: 'reply' } });
+  assert.equal(log.of('item.start').at(-1).parentId, 'live-card');
 });
 
 test('older ephemeral Codex threads fall back to a live status read without replaying work', async (t) => {
@@ -426,8 +551,9 @@ test('informational slash commands do not clear an active turn status', async ()
   await driver.kill();
 });
 
-test('plain: initialize, thread/start, turn/start; text streams as deltas', async () => {
+test('plain: initialize, thread/start, turn/start; text streams as deltas', async t => {
   const { driver, log, fake } = make('plain');
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
   await driver.send('Reply with exactly the words: hello from helm');
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
@@ -444,7 +570,7 @@ test('plain: initialize, thread/start, turn/start; text streams as deltas', asyn
   assert.deepEqual(sent[0].params.clientInfo.name, 'helm');
   assert.equal(sent[1].method, 'initialized');
   assert.equal(sent[2].method, 'thread/start');
-  assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', sandbox: 'workspace-write' });
+  assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write' });
   assert.equal(sent[3].method, 'turn/start');
   assert.deepEqual(sent[3].params.input, [{ type: 'text', text: 'Reply with exactly the words: hello from helm', text_elements: [] }]);
   assert.equal(sent[3].params.effort, 'low');
@@ -731,4 +857,187 @@ test('a Codex retry says why it is retrying', async (t) => {
     ['Reconnecting... 2/5 — We’re currently experiencing high demand, which may cause temporary errors.', 'retrying'],
     ['stream disconnected', 'turn'],
   ]);
+});
+
+// Shapes read from codex-cli 0.162's generated app-server schema.
+const reviewNotice = (overrides = {}) => ({
+  threadId: 'scripted-thread', turnId: 'review-turn', reviewId: 'review-1', targetItemId: 'command-1',
+  startedAtMs: 100, completedAtMs: 200, decisionSource: 'agent',
+  action: { type: 'command', source: 'unifiedExec', command: 'printf SAFE', cwd: '/work' },
+  review: { status: 'denied', rationale: 'This step can remove files.', riskLevel: 'high', userAuthorization: 'low' },
+  ...overrides,
+});
+
+test('auto-review reaches thread and turn starts and switching back restores the user reviewer', async t => {
+  const { fake, driver, log } = make('plain', { mode: 'auto-review' });
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
+  await driver.send('hello');
+  await log.until(e => e.type === 'turn.done');
+  for (const method of ['thread/start', 'turn/start']) {
+    const params = fake.stdinLines().find(m => m.method === method).params;
+    assert.equal(params.approvalPolicy, 'on-request');
+    assert.equal(params.approvalsReviewer, 'auto_review');
+  }
+  const scripted = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+    if (request.method === 'turn/start') return { result: { turn: { id: 'next' } } };
+  } });
+  await scripted.driver.setMode('auto-review');
+  await scripted.driver.send('First');
+  await scripted.driver.setMode('ask');
+  await scripted.driver.send('Next');
+  assert.deepEqual(scripted.writes.filter(m => m.method === 'turn/start').map(m => m.params.approvalsReviewer), ['auto_review', 'user']);
+});
+
+test('approved reviews stay quiet and denied reviews offer the exact one-action grant', async t => {
+  const { driver, log, notify, writes } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  const approved = reviewNotice({ reviewId: 'safe', review: { status: 'approved', rationale: 'Read files only.' } });
+  notify('item/autoApprovalReview/started', { ...approved, review: { status: 'inProgress' } });
+  notify('item/autoApprovalReview/completed', approved);
+  assert.equal(log.of('permission.request').length, 0);
+  assert.equal(log.of('item.start').at(-1).name, 'codexReview');
+  assert.equal(log.of('item.update').at(-1).input.reviewStatus, 'approved');
+  assert.equal(log.of('item.done').at(-1).status, 'ok');
+  const denied = reviewNotice();
+  notify('item/autoApprovalReview/completed', denied);
+  const card = log.of('permission.request').at(-1);
+  assert.equal(card.reason, denied.review.rationale);
+  assert.equal(card.options.find(o => o.role === 'allow').label, 'Allow anyway');
+  assert.equal(card.defaultTo, 'deny');
+  assert.equal(driver.status, 'idle', 'a review result must not invent a running or blocked turn');
+  await driver.answer(card.requestId, { option: 'allow' });
+  assert.deepEqual(writes.at(-1), { jsonrpc: '2.0', id: writes.at(-1).id, method: 'thread/approveGuardianDeniedAction', params: {
+    threadId: 'scripted-thread', event: { id: 'review-1', target_item_id: 'command-1', turn_id: 'review-turn',
+      started_at_ms: 100, completed_at_ms: 200, status: 'denied', risk_level: 'high', user_authorization: 'low',
+      rationale: denied.review.rationale, decision_source: 'agent',
+      action: { type: 'command', source: 'unified_exec', command: 'printf SAFE', cwd: '/work' } },
+  } });
+  assert.equal(driver.status, 'idle');
+  assert.equal(driver.pending.size, 0);
+  notify('item/autoApprovalReview/completed', denied);
+  assert.equal(log.of('permission.request').length, 1, 'replayed reviews do not ask twice');
+});
+
+test('denial grants convert every schema action and keep the reviewed target', async t => {
+  const { driver, log, notify, writes } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  const pairs = [
+    [{ type: 'execve', program: '/bin/echo', argv: ['echo', 'SAFE'], cwd: '/work', source: 'shell' },
+      { type: 'execve', program: '/bin/echo', argv: ['echo', 'SAFE'], cwd: '/work', source: 'shell' }],
+    [{ type: 'writeStdin', approvalId: 'stdin-1', processId: 'proc-1', stdin: 'yes\n', cwd: '/work' },
+      { type: 'write_stdin', approval_id: 'stdin-1', process_id: 'proc-1', stdin: 'yes\n', cwd: '/work' }],
+    [{ type: 'applyPatch', files: ['/work/a'], cwd: '/work' }, { type: 'apply_patch', files: ['/work/a'], cwd: '/work' }],
+    [{ type: 'networkAccess', host: 'example.test', target: 'https://example.test:443', port: 443, protocol: 'socks5Tcp' },
+      { type: 'network_access', host: 'example.test', target: 'https://example.test:443', port: 443, protocol: 'socks5_tcp' }],
+    [{ type: 'mcpToolCall', server: 'drive', toolName: 'write', toolTitle: 'Change a file', connectorId: 'app-1', connectorName: 'Drive' },
+      { type: 'mcp_tool_call', server: 'drive', tool_name: 'write', tool_title: 'Change a file', connector_id: 'app-1', connector_name: 'Drive' }],
+    [{ type: 'requestPermissions', reason: 'Read more files', permissions: { fileSystem: { globScanMaxDepth: 3, read: ['/extra'], entries: [{ access: 'read', path: { type: 'special', value: { kind: 'project_roots' } } }] }, network: { enabled: true } } },
+      { type: 'request_permissions', reason: 'Read more files', permissions: { file_system: { glob_scan_max_depth: 3, read: ['/extra'], entries: [{ access: 'read', path: { type: 'special', value: { kind: 'project_roots' } } }] }, network: { enabled: true } } }],
+  ];
+  for (const [i, [action, expected]] of pairs.entries()) {
+    const notice = reviewNotice({ reviewId: `action-${i}`, targetItemId: null, action });
+    notify('item/autoApprovalReview/completed', notice);
+    await driver.answer(log.of('permission.request').at(-1).requestId, { option: 'allow' });
+    assert.deepEqual(writes.at(-1).params.event.action, expected);
+    assert.equal(writes.at(-1).params.event.target_item_id, null);
+  }
+});
+
+test('failed grants stay answerable and keeping a denial sends no server response', async t => {
+  let failGrant = true;
+  const { driver, log, notify, writes } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+    if (request.method === 'thread/approveGuardianDeniedAction' && failGrant) return { error: { message: 'Try again' } };
+  } });
+  await driver.start();
+  notify('item/autoApprovalReview/completed', reviewNotice());
+  const card = log.of('permission.request').at(-1);
+  await assert.rejects(driver.answer(card.requestId, { option: 'allow' }), /could not allow/);
+  assert.equal(driver.pending.has(card.requestId), true);
+  failGrant = false;
+  const count = writes.length;
+  await driver.answer(card.requestId, { option: 'deny' });
+  assert.equal(writes.length, count);
+  assert.equal(driver.pending.size, 0);
+});
+
+test('review warnings and failed reviews show details without offering unsafe retry grants', () => {
+  const driver = new CodexDriver({ cmd: 'codex', env: {}, cwd: '/work', engineSessionId: 'scripted-thread' });
+  const log = collect(driver);
+  for (const status of ['timedOut', 'aborted']) driver.onNotification('item/autoApprovalReview/completed', reviewNotice({ reviewId: status, review: { status, rationale: 'Review stopped.' } }));
+  driver.onNotification('guardianWarning', { threadId: driver.threadId, message: 'Check this step before continuing.' });
+  assert.equal(log.of('item.done').length, 3);
+  assert.equal(log.of('item.done').at(-1).output, 'Check this step before continuing.');
+  assert.equal(log.of('permission.request').length, 0);
+});
+
+test('the shared Codex server holds review notifications for the correct chat', async t => {
+  let receive;
+  const got = [];
+  const fake = fakeCli('codex', 'plain');
+  const pipe = { onData(fn) { receive = fn; }, onExit() {}, end() {}, kill() {} };
+  const server = new CodexServer(fake.cmd, { CODEX_HOME: join(fake.dir, 'held-reviews') }, () => {}, { hasProc: () => true, procPipe: () => pipe });
+  const first = { threadId: 'first', onNotification: (...args) => got.push(['first', ...args]) };
+  const second = { threadId: 'second', onNotification: (...args) => got.push(['second', ...args]) };
+  t.after(() => { server.detach(first); server.detach(second); rmSync(fake.dir, { recursive: true, force: true }); });
+  server.attach(first);
+  await server.ensure();
+  for (const method of ['item/autoApprovalReview/started', 'item/autoApprovalReview/completed', 'guardianWarning']) {
+    receive(JSON.stringify({ method, params: { ...reviewNotice(), threadId: 'second' } }) + '\n');
+  }
+  assert.deepEqual(got, []);
+  server.attach(second);
+  assert.equal(got.length, 3);
+  assert.ok(got.every(([owner]) => owner === 'second'));
+});
+
+test('saved review grants survive a daemon restart even after the reviewed turn ends', async t => {
+  const { driver, log, notify } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  notify('item/autoApprovalReview/completed', reviewNotice());
+  const card = log.of('permission.request').at(-1);
+  const restored = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  restored.driver.pendingEvents = () => [card];
+  restored.driver.resumeEvents = () => log.events;
+  await restored.driver.start();
+  assert.ok(restored.driver.pending.has(card.requestId));
+  restored.notify('item/autoApprovalReview/completed', reviewNotice());
+  assert.equal(restored.log.of('permission.request').length, 0);
+  await restored.driver.answer(card.requestId, { option: 'allow' });
+  assert.equal(restored.writes.at(-1).method, 'thread/approveGuardianDeniedAction');
+});
+
+
+test('an adopted auto-review chat still reports the reviewer after a daemon restart', async t => {
+  const { driver } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.setMode('auto-review');
+  await driver.start();
+  const { reportedMode } = await import('../packages/connect/src/native-settings.js');
+  assert.equal(reportedMode('codex', driver.info), 'auto-review');
+});
+
+test('a child review keeps its card under the helper and grants only that child action', async t => {
+  const { driver, log, notify, writes } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  notify('item/started', { turnId: 'parent-turn', item: { id: 'helper-card', type: 'collabAgentToolCall', tool: 'spawnAgent', receiverThreadIds: ['child-thread'] } });
+  notify('item/autoApprovalReview/completed', reviewNotice({ threadId: 'child-thread' }));
+  const card = log.of('permission.request').at(-1);
+  assert.equal(card.parentId, 'helper-card');
+  assert.equal(log.of('item.start').at(-1).parentId, 'helper-card');
+  await driver.answer(card.requestId, { option: 'allow' });
+  assert.equal(writes.at(-1).params.threadId, 'child-thread');
+  assert.equal(writes.at(-1).params.event.id, 'review-1');
 });

@@ -22,6 +22,8 @@ const networkFailure = (error) => /offline|not connected|reach|ECONN|socket|time
 const line = (value, max) => typeof value === 'string' && value.length > 0
   && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 
+const FAILED_KEEP_MS = 15 * 60_000;
+
 export class TaskTransfers {
   constructor({ network, sessions, rpc, enqueue, directory = join(HELM_DIR, 'outgoing-tasks'), copy = runCopy, sendEngine }) {
     Object.assign(this, { network, sessions, rpc, enqueue, directory, copy, sendEngine });
@@ -30,6 +32,9 @@ export class TaskTransfers {
     // handoff id reads how far the copy got instead of waiting on it.
     this.copying = new Map();
     this.returning = new Map();
+    // A failed copy is told to the app that polls it, then forgotten: its
+    // failure stays in the saved record, and a later send resumes from there.
+    this.failedKeepMs = FAILED_KEEP_MS;
   }
 
   async send(params, caller) {
@@ -260,7 +265,14 @@ export class TaskTransfers {
     const endActivity = beginTransferActivity();
     this.#bulk(net, target, params, intent, record, job)
       .then(() => { this.copying.delete(params.handoffId); })
-      .catch((error) => { job.error = error; record.bulk.error = String(error.message).slice(0, 500); this.#save(params.handoffId, record); })
+      .catch((error) => {
+        job.error = error;
+        job.preflight = null;
+        setTimeout(() => { if (this.copying.get(params.handoffId) === job) this.copying.delete(params.handoffId); }, this.failedKeepMs).unref?.();
+        record.bulk.error = String(error.message).slice(0, 500);
+        try { this.#save(params.handoffId, record); }
+        catch (saveError) { console.error(`[helm] Could not save task transfer status: ${saveError.message}`); }
+      })
       .finally(endActivity);
     return { sent: true, status: 'copying', handoffId: params.handoffId, targetMachineId: target.id,
       targetName: target.name, progress: { ...job.progress }, preflight: record.preflight };
@@ -325,9 +337,15 @@ export class TaskTransfers {
             if (['failed', 'interrupted', 'cancelled'].includes(send.phase)) this.sendEngine.retry({ jobId: bulk.jobId }, net.self);
           }
           const timer = setInterval(() => {
-            const { job: send } = this.sendEngine.status({ jobId: bulk.jobId }, net.self);
-            job.progress = { phase: send.phase, folder: send.target.path, bytes: send.bytes.sent, total: send.bytes.total,
-              files: send.files, rate: send.rate, eta: send.eta, jobId: send.id };
+            try {
+              const { job: send } = this.sendEngine.status({ jobId: bulk.jobId }, net.self);
+              job.progress = { phase: send.phase, folder: send.target.path, bytes: send.bytes.sent, total: send.bytes.total,
+                files: send.files, rate: send.rate, eta: send.eta, jobId: send.id };
+            } catch {
+              // A removed machine or unreadable job must not throw from a
+              // timer. The wait below still owns the copy's final result.
+              clearInterval(timer);
+            }
           }, 250); timer.unref?.();
           let send;
           try { send = await this.sendEngine.wait(bulk.jobId); } finally { clearInterval(timer); }

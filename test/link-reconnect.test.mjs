@@ -8,7 +8,7 @@ import { WebSocketServer } from 'ws';
 
 const dir = mkdtempSync(join(tmpdir(), 'helm-link-reconnect-'));
 process.env.HELM_DIR = dir;
-const { createNetwork, hubProof } = await import('../packages/protocol/network.js');
+const { createNetwork, hubProof, hubHello } = await import('../packages/protocol/network.js');
 const { Link } = await import('../packages/connect/src/agent.js');
 const { hubRpc } = await import('../packages/connect/src/hub-client.js');
 const net = createNetwork({ name: 'test' });
@@ -51,12 +51,12 @@ test('a timed-out hub proof does not prevent the CLI from trying another known h
     const frame = JSON.parse(raw);
     if (frame.t === 'rpc') socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: 'recovered' }));
   }));
-  const originalFetch = globalThis.fetch;
-  context.mock.method(globalThis, 'fetch', (url, options) => {
+  const post = hubHello.post;
+  context.mock.method(hubHello, 'post', (url, ...rest) => {
     if (String(url).startsWith('http://127.0.0.1:1/')) {
       return Promise.reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
     }
-    return originalFetch(url, options);
+    return post(url, ...rest);
   });
   const network = { ...net, port: 1, machines: {
     ...net.machines, [net.self]: { ...net.machines[net.self], endpoints: [setup.url] },
@@ -98,11 +98,11 @@ test('a stale hub path reconnects quickly after a network change and late closes
 
 test('a route change cancels a stalled hub proof and stale answers never attach twice', async context => {
   const setup = await fixture(context, null);
-  const fetch = globalThis.fetch;
+  const post = hubHello.post;
   let calls = 0, release;
-  context.mock.method(globalThis, 'fetch', (url, options) => {
-    if (++calls === 1) return new Promise(resolve => { release = () => resolve(fetch(url, options)); });
-    return fetch(url, options);
+  context.mock.method(hubHello, 'post', (...args) => {
+    if (++calls === 1) return new Promise(resolve => { release = () => resolve(post(...args)); });
+    return post(...args);
   });
   setup.link.start();
   while (!release) await new Promise(resolve => setTimeout(resolve, 5));

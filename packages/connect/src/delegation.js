@@ -9,6 +9,57 @@ import { activeTurnFromEvents } from './events.js';
 import { createHash } from 'node:crypto';
 import { browserNote, browserReady } from './browser.js';
 import { loadOwner } from '../../protocol/owner.js';
+import { resolve } from 'node:path';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
+import { expand } from './paths.js';
+
+/** Only the same local Codex account can share the parent's context. */
+export function codexHelperFork(parent, parentProfile, profile, cwd, worktree, socket) {
+  if (!parent?.engineSessionId || parent.engine !== 'codex' || profile.engine !== 'codex'
+    || !parentProfile || parentProfile.wraps || profile.wraps || worktree || !socket
+    || resolve(expand(parent.cwd)) !== resolve(expand(cwd))
+    || accountKey(parentProfile) !== accountKey(profile)) return null;
+  const before = materialize(parentProfile), after = materialize(profile);
+  const home = spec => resolve(expand(spec.env.CODEX_HOME || process.env.CODEX_HOME || '~/.codex'));
+  if (before.cmd !== after.cmd || home(before) !== home(after)) return null;
+  if ([...new Set([...Object.keys(before.env), ...Object.keys(after.env)])]
+    .some(key => key !== 'CODEX_HOME' && before.env[key] !== after.env[key])) return null;
+  return { threadId: parent.engineSessionId, nativeSocket: socket, note: helperNote(parent.id) };
+}
+
+/** Restore only this helper's accepted turns, including saved tool results. */
+export function codexHelperHistory(events) {
+  const turns = new Set(events.filter(e => e.type === 'turn.start' && !String(e.turnId).startsWith('local-')).map(e => e.turnId));
+  const items = new Set(events.filter(e => e.type === 'item.start' && turns.has(e.turnId)).map(e => e.id));
+  const accepted = events.filter(e => e.type === 'turn.start' ? turns.has(e.turnId) : items.has(e.id));
+  const results = new Map();
+  for (const event of accepted) {
+    if (event.type === 'item.delta') results.set(event.id, (results.get(event.id) ?? '') + (event.text ?? ''));
+    if (event.output != null) results.set(event.id, String(event.output));
+    if (event.changes) results.set(event.id, JSON.stringify(event.changes));
+  }
+  return fold(accepted).turns.map(turn => [
+    `Task: ${turn.text}`,
+    ...turn.items.filter(item => item.kind !== 'thinking').map(item => item.kind === 'text'
+      ? `Reply: ${item.text}`
+      : `Tool: ${item.name ?? item.kind}\nInput: ${JSON.stringify(item.input)}\nResult: ${item.output ?? results.get(item.id) ?? item.text ?? ''}${item.error ? `\nError: ${item.error}` : ''}`),
+  ].join('\n')).join('\n\n');
+}
+
+/** Read the saved log only on recovery, including work outside the recent window. */
+export async function readCodexHelperHistory(file) {
+  const events = [];
+  try {
+    const lines = createInterface({ input: createReadStream(file), crlfDelay: Infinity });
+    for await (const line of lines) {
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      if (event.type === 'turn.start' || /^item\.(?:start|delta|update|done)$/.test(event.type)) events.push(event);
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return codexHelperHistory(events);
+}
 
 /** Public capabilities and optional credential metadata, never secret values. */
 export async function agentCatalog(profiles, statuses, { models = true, credentials = false } = {}) {
@@ -75,13 +126,11 @@ export function cheapModel(engine, models = []) {
 }
 
 /**
- * Doing the work yourself is the default: a helper costs a fresh context, a
- * second plan draw, and a result the owner has to read twice. The CLI's own
- * subagents are the normal way to fan out; Helm's delegate exists for the
- * one thing they cannot do, which is run on another CLI or account.
+ * Keep helpers visible to the owner. Same-account Codex helpers can reuse
+ * their parent's context; other engines and accounts start a new chat.
  */
 export function delegationNote() {
-  return '[Helm helpers: Do the work yourself by default. For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself. When done, remove the worktrees, branches, scratch folders and test chats (helm delete) you made.]';
+  return '[Helm helpers: Do the work yourself by default. For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself. Keep your helpers: the owner reads them under this chat. When done, remove the worktrees, branches and scratch folders you made, and delete (helm delete) only test chats that are not helpers.]';
 }
 
 /**
@@ -149,11 +198,11 @@ ${toolNotes(parentId)}`;
  * (AGENTS.md).
  */
 export function writingNote() {
-  return '[Helm writing: Write every message in Simplified Technical English (ASD-STE100): replies to the owner, helm say and reply messages, helper tasks, commit messages. Put the answer or result first. One idea per sentence: at most 20 words for a step, 25 for an explanation. Start an instruction with its verb. Use active voice, simple tenses, common words and one word for one meaning. Explain jargon in a few plain words. Put steps in a list. Skip preamble and recaps; cut filler, hedging and repeats. Tell the owner what they will see, not how the code works. Code, commands and quoted output stay as they are.]';
+  return '[Helm writing: These rules replace your usual reply style. Write every message in Simplified Technical English (ASD-STE100): replies to the owner, helm say and reply messages, helper tasks, commit messages. Put the answer or result first. One idea per sentence: at most 20 words for a step, 25 for an explanation. Start an instruction with its verb. Use active voice, simple tenses, common words and one word for one meaning. Explain jargon in a few plain words. Put steps in a list. Skip preamble and recaps; cut filler, hedging and repeats. Tell the owner what they will see, not how the code works. Code, commands and quoted output stay as they are.]';
 }
 
 export function visualNote() {
-  return '[Helm visuals: When a diagram, chart, comparison or simulation would help, make one self-contained HTML file, check it with helm preview, then publish it with helm render (helm render --help has the limits). Use helm canvas <file-or-spin-url> to open project files, visuals or live pages in the column beside the chat. The owner sees it above your reply, so do not repeat it. Prefer plain text for simple answers.]';
+  return '[Helm visuals: Use plain text by default, including reviews, comparisons and progress reports. Make or publish visuals only when the owner asks. Keep verification screenshots private unless asked to show them. Skills must follow the owner\'s chosen format. Report useful findings based on evidence; do not stop at a fixed count. For a requested visual, make one self-contained HTML file, check it with helm preview, then publish it with helm render (helm render --help has the limits). Use helm canvas <file-or-spin-url> to open requested project files, visuals or live pages beside the chat.]';
 }
 
 /** Read-only parents cannot acquire write access through a different CLI. */
@@ -239,24 +288,7 @@ export function trackDelegationReply(session, event) {
   }
 }
 
-/** Flags consume their values; task words after -- are always literal. */
-export function parseAgentArgs(args, { values = [], switches = [] } = {}) {
-  const options = {}, words = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === '--') { words.push(...args.slice(i + 1)); break; }
-    if (!arg.startsWith('--')) { words.push(arg); continue; }
-    const name = arg.slice(2);
-    if (Object.hasOwn(options, name)) throw new Error(`--${name} was given more than once`);
-    if (switches.includes(name)) options[name] = true;
-    else if (values.includes(name)) {
-      const value = args[++i];
-      if (!value || value.startsWith('--')) throw new Error(`--${name} needs a value`);
-      options[name] = value;
-    } else throw new Error(`unknown option: ${arg}`);
-  }
-  return { options, words };
-}
+export { parseAgentArgs } from './agent-args.js';
 
 export function chooseAgent(agents, account) {
   const exact = agents.find((p) => p.id === account);

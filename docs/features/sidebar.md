@@ -3,6 +3,20 @@
 On a phone the sidebar is the Home screen. To get there, press `click Back`
 until `text` starts with "helm / Search anything".
 
+## Home (computer)
+- **Rules (owner, 2026-10-27):** the helm logo top left is the way home. A
+  wide screen opens on the first machine once; after that no machine is
+  picked by itself. Home is a quick-chat box and one plain row per machine
+  (no cards: chats stay in the sidebar). The box starts on the machine open
+  before Home and has the message box's chips: machine, agent, model,
+  thinking, permissions. Enter starts the quick chat at once and sends the
+  text when the agent is up (`sendWhenReady`). A chip's list drops under the
+  box, so the box never moves.
+- **Prove (driven 2026-10-27):** `open --desktop`, `$V click Home`, open the
+  agent chip, pick `fake-ask`, set permissions to Read only, type, Enter:
+  the chat opens with the text and its chip says "read". With `up --real`
+  the model and thinking chips list the account's models; start nothing.
+
 ## Folded sidebar (computer only)
 - **Prove (driven 2026-10-17):** `open --desktop`, start a fake-ask chat and
   a fake-slow chat, `click "collapse sidebar"`, then
@@ -13,14 +27,32 @@ until `text` starts with "helm / Search anything".
 ## Home shelves
 - **Rules:** the owner calls the shelf of recently finished chats
   "Settled". The sidebar shows live and Helm-known chats only, on purpose.
+- **Rules (owner, 2026-10-24):** a Settled chat is one line: title, one
+  status (its age, a green dot when not opened yet, "Needs you" or
+  "Failed"), and the agent logo. A Running chat keeps a second line with
+  its folder, machine, branch and agent logo; the owner wants these. A
+  machine shows a word only for news ("2 running", or the age when
+  offline). The top bar shows only the dot while connected. Shelf headers
+  have no divider lines.
+- **Rules (owner, 2026-10-24):** a CLI opened in a terminal with nothing
+  said in it is in neither Running nor Settled. It joins at its first
+  message. The machine marks it `blank` until then.
+- **Prove (driven 2026-10-24):** launch `helm-native-cli.js claude <fake
+  program>` with the copy's `HELM_DIR` and `XDG_RUNTIME_DIR` (no
+  `HELM_NATIVE_BYPASS`): no row. Send its `UserPromptSubmit` hook with
+  `sendHook`: it shows under Running. Send `Stop`: it moves to Settled.
 - **Prove (driven 2026-10-15):** finish one fake chat, then
   `$V click Back; $V text | head -14`: your chat under "Settled" with its
   age.
 - **Traps:** with `up --real`, Settled also holds the owner's real Claude
   chats (they arrive through Claude hooks), including the one running this
   check.
+- **Rules:** a machine sends a chat update only when it changes what the
+  app holds. Status goes at once; counter-only changes share one update
+  per chat per 0.5 s (`session-updates.js`).
 - **Tests:** `test/browser/sidebar`, `sidebar-shelves`, `sidebar-metadata`,
-  `offline-cache`; `test/seen-sync`, `inventory`, `inventory-active`.
+  `offline-cache`; `test/seen-sync`, `inventory`, `inventory-active`,
+  `session-updates`.
 
 ## Rename, archive, delete
 - **Sees:** each row has a ⋯ button ("actions for <title>") with **Rename
@@ -38,6 +70,14 @@ until `text` starts with "helm / Search anything".
   ```
 - **Proof:** the new name; the machine screen shows "ARCHIVED 1"; the
   deleted chat is gone. Only do this to chats you made.
+- **Delete key (owner, 2026-10-26):** Delete asks to delete the open chat,
+  or the sidebar row that has focus; only Enter (or the button) says yes.
+  A second Delete never says yes (owner, 2026-10-27: a double press lost
+  two chats). It never takes a key you type: only outside a text box or in an empty
+  message box, and never in a terminal (`deleteKey`, chatKeys.ts). Prove
+  (driven 2026-10-26): open a chat, empty its box, `$V key Delete`; the
+  question names that chat; `$V key Delete` again and it stays; `$V key
+  Enter` and it is gone.
 - **Tests:** `test/browser/ui`; `test/delete-stays-deleted`, `titles`,
   `slash-title`.
 
@@ -68,7 +108,7 @@ until `text` starts with "helm / Search anything".
 
 ## Helm brain
 - **Not yet driven;** starting it with a real account costs money. In the
-  copy its row says "verify-<you> · Choose an account".
+  copy its row's tooltip says "verify-<you> · Pick an account".
 - **Traps:** it asks permission for every Helm command, reads included. It
   stays on the VM and never moves to a laptop. Deleting it drops what it
   learned.

@@ -22,6 +22,7 @@ export const MODES = {
   ],
   codex: [
     { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'The agent works inside the project folder. Other actions need approval.', approvalPolicy: 'on-request', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite' } },
+    { id: 'auto-review', label: 'Codex reviews', short: 'auto', hint: 'Codex’s free reviewer approves safe steps; you see the risky ones.', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite' } },
     { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'The agent writes inside the project folder without asking.', approvalPolicy: 'never', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite' } },
     { id: 'full', label: 'Act without asking', short: 'yolo', hint: 'The agent can access the whole machine without asking.', approvalPolicy: 'never', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' }, danger: true },
     { id: 'readonly', label: 'Read only', short: 'read', hint: 'The agent cannot write files. Commands need approval.', approvalPolicy: 'untrusted', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } },

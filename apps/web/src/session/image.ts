@@ -172,40 +172,49 @@ export async function prepareImage(file: File): Promise<PreparedImage> {
   let maxDimension = Math.min(MAX_DIMENSION, Math.max(longest, MIN_DIMENSION));
 
   let blob: Blob | undefined;
-  // Reducing dimensions as needed makes the size bound reliable even for
-  // very detailed camera photos. Every candidate is newly encoded as JPEG.
-  while (!blob && maxDimension >= MIN_DIMENSION) {
-    const scale = Math.min(1, maxDimension / longest);
-    const width = Math.max(1, Math.round(sourceWidth * scale));
-    const height = Math.max(1, Math.round(sourceHeight * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('The browser cannot prepare the image.');
+  try {
+    // Reducing dimensions as needed makes the size bound reliable even for
+    // very detailed camera photos. Every candidate is newly encoded as JPEG.
+    while (!blob && maxDimension >= MIN_DIMENSION) {
+      const scale = Math.min(1, maxDimension / longest);
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      try {
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('The browser cannot prepare the image.');
 
-    // JPEG has no alpha channel. A white background keeps transparent PNGs
-    // readable instead of turning their transparent areas black.
-    context.fillStyle = '#fff';
-    context.fillRect(0, 0, width, height);
-    // An animated GIF gives up its first frame here, which is what the
-    // model would have looked at anyway.
-    context.drawImage(image.source, 0, 0, width, height);
+        // JPEG has no alpha channel. A white background keeps transparent PNGs
+        // readable instead of turning their transparent areas black.
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, width, height);
+        // An animated GIF gives up its first frame here, which is what the
+        // model would have looked at anyway.
+        context.drawImage(image.source, 0, 0, width, height);
 
-    for (const quality of QUALITIES) {
-      const candidate = await encode(canvas, quality);
-      if (candidate.size <= MAX_BYTES) {
-        blob = candidate;
-        break;
+        for (const quality of QUALITIES) {
+          const candidate = await encode(canvas, quality);
+          if (candidate.size <= MAX_BYTES) {
+            blob = candidate;
+            break;
+          }
+        }
+      } finally {
+        // Safari frees a canvas's pixels late and caps their total. Let go
+        // of them now, not when the page next collects garbage.
+        canvas.width = 0;
+        canvas.height = 0;
       }
+      maxDimension = Math.floor(maxDimension * 0.8);
     }
-    maxDimension = Math.floor(maxDimension * 0.8);
-  }
-
-  // An ImageBitmap holds decoded pixels until it is closed, which on a phone
-  // with four photos queued is real memory.
-  if (typeof ImageBitmap !== 'undefined' && image.source instanceof ImageBitmap) {
-    image.source.close();
+  } finally {
+    // An ImageBitmap holds decoded pixels until it is closed, which on a phone
+    // with four photos queued is real memory - also when a step above failed.
+    if (typeof ImageBitmap !== 'undefined' && image.source instanceof ImageBitmap) {
+      image.source.close();
+    }
   }
 
   if (!blob) throw new Error('Helm cannot make the image smaller than 4 MB.');

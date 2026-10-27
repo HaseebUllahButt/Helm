@@ -81,6 +81,45 @@ class FakeDriver extends EventEmitter {
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
 
+test('app discovery gets live agent roots and skips the shared Codex server', async t => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  t.after(() => sessions.stop());
+  const agent = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const codex = await sessions.start({ cwd: '/tmp', profileId: 'codex' });
+  t.mock.method(sessions.terminals, 'pid', async () => null);
+  t.mock.method(sessions.procs, 'pid', async id => id === agent.id ? 1234 : 9999);
+  assert.deepEqual(await sessions.appProcessRoots(agent.id), [1234]);
+  assert.deepEqual(await sessions.appProcessRoots(codex.id), []);
+});
+
+test('deleting a driven chat releases its cached helpers and tool links', async t => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { SessionSubagents } = await import('../packages/connect/src/session-subagents.js');
+  const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  t.after(() => sessions.stop());
+  const session = await sessions.start({ cwd: '/tmp', profileId: 'codex' });
+  let cache, ready;
+  const refreshed = new Promise(resolve => { ready = resolve; });
+  const refresh = SessionSubagents.prototype.refreshNative;
+  t.mock.method(SessionSubagents.prototype, 'refreshNative', function(s, options) {
+    const work = refresh.call(this, s, options);
+    if (s.id === session.id) { cache = this; work.then(ready); }
+    return work;
+  });
+  FakeDriver.made.at(-1).push('item.start', { id: 'helper', kind: 'subagent', name: 'Task', turnId: 't1' });
+  await refreshed;
+  cache.agentTools.set(session.id, new Map([['helper', new Set(['tool'])]]));
+  assert.equal(cache.native.has(session.id), true);
+  const told = [];
+  sessions.on('session', s => { if (s.id === session.id) told.push(s); });
+  await sessions.kill(session.id);
+  // Devices with this chat open learn it was deleted, not that it exited.
+  assert.equal(told.at(-1)?.deleted, true);
+  assert.equal(cache.native.has(session.id), false);
+  assert.equal(cache.agentTools.has(session.id), false);
+});
+
 test('explicit queue mode survives tool steps and supports edits, ordering, and context references', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
@@ -1374,9 +1413,10 @@ test('terminals are numbered by the machine, not guessed by the app', async () =
 
   // A stand-in for the pty host: opening always works, nothing really runs.
   const { EventEmitter } = await import('node:events');
+  const opened = [];
   const terminals = Object.assign(new EventEmitter(), {
     ensure: async () => true,
-    open: async () => ({}),
+    open: async (id, opts) => { opened.push(opts); return {}; },
     has: () => true,
     adopt: async () => [],
   });
@@ -1399,6 +1439,11 @@ test('terminals are numbered by the machine, not guessed by the app', async () =
   // A name the caller chose is still theirs.
   const named = await sessions.start({ cwd: '/tmp', profileId: 'shell', title: 'build' });
   assert.equal(named.title, 'build');
+
+  // Opened at the size the app draws at, so the first prompt fits it.
+  await sessions.start({ cwd: '/tmp', profileId: 'shell', size: { cols: 132, rows: 41, watcher: 'w' } });
+  assert.deepEqual([opened.at(-1).cols, opened.at(-1).rows], [132, 41]);
+  assert.equal(opened[0].cols, undefined, 'no size asked: the pty default');
 });
 
 test('a chat asks for its end, and is told what is behind it', async () => {

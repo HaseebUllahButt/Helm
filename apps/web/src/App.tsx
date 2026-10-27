@@ -1,5 +1,6 @@
+import { errorMessage } from './errors';
 import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice } from './session/voice';
-import { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
 import { useNow } from './useNow';
 import { isUnread, markSeen, seenHere, useSeenVersion } from './threadStatus';
@@ -10,36 +11,35 @@ import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { DrivenSession } from './session/DrivenSession';
 import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
-import { beginChat, forgetChat, onStartingChat, type StartingChat } from './startingChats';
+import { StartingTerminalView } from './session/StartingTerminalView';
+import { beginTerminal, type StartingTerminal } from './startingTerminals';
+import { beginChat, forgetChat, onStartingChat, sendWhenReady, startAgain, type StartingChat } from './startingChats';
+import { loadDraft } from './draftStore';
 import { EngineMark } from './EngineMark';
+import { SidebarSunset } from './SidebarSunset';
 import { NotificationToast } from './NotificationToast';
 import { MachineUpdateNotice } from './MachineUpdateNotice';
 import { sending, useSends } from './send/store';
 import { SendActivity, SendNotice } from './send/SendActivity';
-import { BackIcon, Icon } from './Icon';
+import { Icon } from './Icon';
+import { deferredScreen } from './deferredScreen';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import { brainHost } from '@helm/protocol/brain-host';
 import { Client, LOOPBACK_HOST, type Environment, type Session, type Project, type NativeAgent } from './client';
 import { busyWord, needsAttention, runningThread, settledThread, unknownThread, listedThread } from './format';
-import { loadWorkspace, loadWorkspaceDurable, saveWorkspace, updateWorkspaceSession, forgetWorkspace, workspaceScope } from './workspaceCache';
+import { saveWorkspace, forgetWorkspace, workspaceScope } from './workspaceCache';
+import { sameSession, useWorkspaceData } from './useWorkspaceData';
 import { engineOf } from './engines';
-import { useLiveInterval } from './useLiveInterval';
 import { useViewingReport } from './useViewingReport';
 import { ownTerminal, byRecent, ago } from './screens/common';
 import { Gear } from './screens/icons';
 import { whereOf, HomeRow, StatusChip, Fold, NeedCard, NEVER_SNOOZE, when, PagedRows, SETTLED_FIRST, SETTLED_STEP } from './screens/ThreadRows';
 import { shareHopTarget, clearShareHop, ShareHop } from './screens/ShareHop';
 import { type Auth, Login } from './screens/Login';
-import { DevicesView } from './screens/Devices';
 import { EnvView } from './screens/EnvView';
+import { Home } from './screens/Home';
 import { BrainView } from './screens/Brain';
-import { EnvSettings } from './screens/MachineSettings';
-import { SettingsView, LinksView, NetworkSettings } from './screens/Settings';
-import { OwnerView } from './screens/Owner';
-import { ModelPrefsView } from './screens/ModelPrefs';
-import { Browse } from './screens/Browse';
-import { MediaView } from './screens/Media';
 import { Start } from './screens/Start';
 import { SessionView } from './session/SessionView';
 
@@ -58,23 +58,19 @@ function useWide() {
   return wide;
 }
 
-const UsageView = lazy(() => import('./Usage').then((m) => ({ default: m.UsageView })));
-const UpdatesView = lazy(() => import('./Updates').then((m) => ({ default: m.UpdatesView })));
-const IntegrationsView = lazy(() => import('./Integrations').then((m) => ({ default: m.IntegrationsView })));
-const TransferView = lazy(() => import('./Transfer').then((m) => ({ default: m.TransferView })));
-const VerifyView = lazy(() => import('./Transfer').then((m) => ({ default: m.VerifyView })));
-
-function ViewLoading({ title, onBack }: { title: string; onBack: () => void }) {
-  return (
-    <>
-      <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <b>{title}</b>
-      </div>
-      <div className="scroll"><div className="pad"><div className="empty quiet">Helm is loading.</div></div></div>
-    </>
-  );
-}
+const UsageView = deferredScreen('Usage', () => import('./Usage').then(m => ({ default: m.UsageView })));
+const UpdatesView = deferredScreen('Updates', () => import('./Updates').then(m => ({ default: m.UpdatesView })));
+const IntegrationsView = deferredScreen('Connectors & skills', () => import('./Integrations').then(m => ({ default: m.IntegrationsView })));
+const TransferView = deferredScreen('Send a project', () => import('./Transfer').then(m => ({ default: m.TransferView })));
+const VerifyView = deferredScreen('Check setup', () => import('./Transfer').then(m => ({ default: m.VerifyView })));
+const DevicesView = deferredScreen('Devices', () => import('./screens/Devices').then(m => ({ default: m.DevicesView })));
+const EnvSettings = deferredScreen('Machine settings', () => import('./screens/MachineSettings').then(m => ({ default: m.EnvSettings })));
+const SettingsView = deferredScreen('Settings', () => import('./screens/Settings').then(m => ({ default: m.SettingsView })));
+const LinksView = deferredScreen('Links', () => import('./screens/Settings').then(m => ({ default: m.LinksView })));
+const NetworkSettings = deferredScreen('Network settings', () => import('./screens/Settings').then(m => ({ default: m.NetworkSettings })));
+const OwnerView = deferredScreen('Your preferences', () => import('./screens/Owner').then(m => ({ default: m.OwnerView })));
+const ModelPrefsView = deferredScreen('Models', () => import('./screens/ModelPrefs').then(m => ({ default: m.ModelPrefsView })));
+const Browse = deferredScreen('Folders', () => import('./screens/Browse').then(m => ({ default: m.Browse })));
 
 const DONE_FOR_MS = 3 * 24 * 60 * 60_000;
 
@@ -165,20 +161,21 @@ export type MainView =
   // One page for everything that is not the day's work: machine defaults,
   // what it has all cost, and this device's pairing, alerts and install.
   | { kind: 'app-settings' }
-  // The media a nas shares, browsed and played - only ever offered on one.
-  | { kind: 'media' }
   | { kind: 'session'; session: Session; reviewChildren?: number }
   // One of Claude Code's own subagents, opened from its chat; read only.
   | { kind: 'native-agent'; parent: Session; agent: NativeAgent }
   // A new chat whose agent is still starting; becomes the chat once it is.
-  | { kind: 'starting'; startId: string };
+  | { kind: 'starting'; startId: string }
+  // A new terminal whose machine has not answered yet; becomes it once it has.
+  | { kind: 'terminal-opening'; openId: string };
 
 const VIEW_KINDS: Record<MainView['kind'], true> = {
   env: true, integrations: true, usage: true, brain: true, new: true,
   browse: true, 'transfer-browse': true, transfer: true, verify: true,
   start: true, settings: true, 'network-settings': true, links: true,
   updates: true, owner: true, models: true, devices: true, 'app-settings': true,
-  media: true, session: true, 'native-agent': true, starting: true,
+  session: true, 'native-agent': true, starting: true,
+  'terminal-opening': true,
 };
 /** History can outlive the screen that wrote it across an app update. */
 function supportedViews(views: MainView[]): MainView[] {
@@ -195,11 +192,10 @@ function Shell({ client, conn, onSignOut }: {
 }) {
   const wide = useWide();
   const scope = workspaceScope(client.token);
-  const active = useRef(true);
-  useEffect(() => { active.current = true; return () => { active.current = false; }; }, [client]);
-  const [cached] = useState(() => loadWorkspace(scope));
-  const [envs, setEnvs] = useState<Environment[]>(() => cached.environments.map(e => ({ ...e, online: false })));
-  const [sessions, setSessions] = useState<Record<string, Session[]>>(cached.sessions);
+  const {
+    cached, envs, sessions, loadEnvs, loadSessions, recordSession, envError,
+    liveEnvsSeen, liveListsSeen, restoredView, removeSession, markVoice,
+  } = useWorkspaceData(client, conn.online);
   const sessionsNow = useRef(sessions);
   sessionsNow.current = sessions;
   const [savedSend] = useState(() => history.state?.helm && history.state.stack?.at(-1)?.kind === 'transfer'
@@ -208,26 +204,12 @@ function Shell({ client, conn, onSignOut }: {
   const [stack, setStack] = useState<MainView[]>(() => savedSend ? supportedViews(savedSend.stack) : (cached.view
     ? [{ kind: 'env' }, { kind: 'session', session: cached.view.session }] : [{ kind: 'env' }]));
   const sends = useSends(client, envs);
-  const liveEnvsSeen = useRef(false);
-  const liveListsSeen = useRef(new Set<string>());
-  const sessionRequests = useRef(new Set<string>());
-  const envRequest = useRef(false);
-  const envAgain = useRef(false);
-  useEffect(() => {
-    let stale = false;
-    void loadWorkspaceDurable(scope).then(value => {
-      if (stale) return;
-      if (!liveEnvsSeen.current) setEnvs(value.environments.map(e => ({ ...e, online: false })));
-      setSessions(current => ({ ...Object.fromEntries(Object.entries(value.sessions)
-        .filter(([id]) => !liveListsSeen.current.has(id))), ...current }));
-      if (!savedSend && !cached.view && value.view && !location.hash && nav.current.depth === 0 && nav.current.stack.length === 1) {
-        restate([{ kind: 'env' }, { kind: 'session', session: value.view.session }], value.view.envId);
-      }
-    });
-    return () => { stale = true; };
-  }, [scope]);
   const [error, setError] = useState('');
-  const [envError, setEnvError] = useState('');
+  useEffect(() => {
+    if (!savedSend && !cached.view && restoredView && !location.hash && nav.current.depth === 0 && nav.current.stack.length === 1) {
+      restate([{ kind: 'env' }, { kind: 'session', session: restoredView.session }], restoredView.envId);
+    }
+  }, [restoredView]);
   const [downSince, setDownSince] = useState<number | null>(null);
   /** "thread X needs you" while a different session is on screen. */
   const [toast, setToast] = useState<Toast | null>(null);
@@ -309,6 +291,14 @@ function Shell({ client, conn, onSignOut }: {
   const autoPicked = useRef<string | null>(null);
 
   /**
+   * Unused chats let go on the way out, by session id or placeholder id.
+   * Going back or forward to one starts the same chat again, so it is still
+   * a new chat to write in, not an empty page.
+   */
+  const letGo = useRef(new Set<string>());
+  const reopen = useRef<(key: string) => void>(() => {});
+
+  /**
    * Leaving an unused chat should not leave an empty row behind. The machine
    * re-checks that no input has reached the chat, so a send from another
    * device between our last refresh and this navigation can never be lost.
@@ -322,15 +312,13 @@ function Shell({ client, conn, onSignOut }: {
     if (!envId) return;
     client.rpc<{ discarded: boolean }>(envId, 'session.discard-empty', { id: current.session.id }, 10_000)
       .then((r) => {
-        if (r.discarded) {
-          setSessions((all) => ({
-            ...all,
-            [envId]: (all[envId] ?? []).filter((s) => s.id !== current.session.id),
-          }));
-        }
+        if (!r.discarded) return;
+        removeSession(envId, current.session.id);
+        letGo.current.add(current.session.id);
+        reopen.current(current.session.id);
       })
       .catch(() => { /* offline: the still-empty chat remains recoverable */ });
-  }, [client]);
+  }, [client, removeSession]);
 
   useEffect(() => {
     history.replaceState({ helm: 1, ...nav.current }, '');
@@ -345,6 +333,8 @@ function Shell({ client, conn, onSignOut }: {
       const top = s.stack.at(-1);
       saveWorkspace(scope, { view: s.selected && top?.kind === 'session' && top.session.engine !== 'shell'
         ? { envId: s.selected, session: top.session } : undefined });
+      const key = top?.kind === 'session' ? top.session.id : top?.kind === 'starting' ? top.startId : null;
+      if (key) reopen.current(key);
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -374,6 +364,33 @@ function Shell({ client, conn, onSignOut }: {
     const top = next.at(-1);
     saveWorkspace(scope, { view: sel && top?.kind === 'session' && top.session.engine !== 'shell'
       ? { envId: sel, session: top.session } : undefined });
+  };
+
+  // An unused chat that was let go is on screen again: start it the same
+  // way, with what was typed in its box, in place of the empty page.
+  reopen.current = (key) => {
+    const envId = nav.current.selected;
+    const top = nav.current.stack.at(-1);
+    const shown = top?.kind === 'session' ? top.session : null;
+    if (!envId || !letGo.current.has(key) || (shown?.id ?? (top?.kind === 'starting' ? top.startId : null)) !== key) return;
+    const draft = shown ? loadDraft(envId, shown.id) : '';
+    const chat = startAgain(client, key, draft) ?? (shown ? startLike(envId, shown, draft) : undefined);
+    if (!chat) return;
+    letGo.current.delete(key);
+    restate([...nav.current.stack.slice(0, -1), { kind: 'starting', startId: chat.id }], chat.envId);
+  };
+  /** A chat started before this page loaded: the same folder, agent and settings, read from its record. */
+  const startLike = (envId: string, s: Session, draft: string) => {
+    const folder = s.chatWorktree?.repo ?? s.cwd;
+    const params = {
+      ...(s.quick ? { quick: true } : { cwd: folder }), profileId: s.profileId,
+      model: s.model || undefined, effort: s.effort || undefined, speed: s.speed || undefined,
+      mode: s.mode && s.mode !== 'plan' ? s.mode : undefined,
+    };
+    return beginChat(client, {
+      envId, title: s.quick ? 'Quick chat' : whereOf(s), folder: s.quick ? null : folder,
+      account: s.account ?? s.profileId, profileId: s.profileId, engine: s.engine, agent: engineOf(s.engine).label,
+    }, () => client.rpc<{ session: Session }>(envId, 'session.start', params, 70_000).then((r) => r.session), draft);
   };
 
   /**
@@ -433,126 +450,13 @@ function Shell({ client, conn, onSignOut }: {
     setDownSince((t) => t ?? Date.now());
   }, [conn.online]);
 
-  const loadEnvs = useCallback((): void => {
-    if (!active.current) return;
-    if (envRequest.current) { envAgain.current = true; return; }
-    envRequest.current = true;
-    client.environments()
-      .then((r) => {
-        if (!active.current) return;
-        liveEnvsSeen.current = true;
-        setEnvs(r.environments); setEnvError('');
-        saveWorkspace(scope, { environments: r.environments });
-      })
-      .catch((e) => { if (active.current) setEnvError(e.message); })
-      .finally(() => {
-        envRequest.current = false;
-        const again = envAgain.current; envAgain.current = false;
-        if (again && active.current) loadEnvs();
-      });
-  }, [client, scope]);
-
-  /** One trailing session.list per machine per burst of updates. */
-  const relist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const listRetries = useRef<Record<string, number>>({});
-  /**
-   * Updates that landed while a list was on its way. The list can have been
-   * read before them - on the VPN a round trip is over half a second - so
-   * laying it down as-is put a thread that had just started back under Done,
-   * or kept one that had just finished under Running. They are laid back
-   * over the list, and one more list is asked for to settle it.
-   */
-  const pushedDuringList = useRef<Record<string, Map<string, Session>>>({});
-  const listAgain = useRef(new Set<string>());
-  const recordSession = useCallback((envId: string, up: Session) => {
-    const during = pushedDuringList.current[envId];
-    if (during) during.set(up.id, { ...during.get(up.id), ...up, recovery: up.recovery });
-    setSessions((all) => {
-      const list = all[envId];
-      const known = list?.find(x => x.id === up.id);
-      if (!known) return all;
-      // An update that changes nothing keeps the same objects, so nothing
-      // drawn from them has to be drawn again.
-      if (sameSession(known, up)) return all;
-      return { ...all, [envId]: list!.map(x => x === known ? { ...x, ...up, recovery: up.recovery } : x) };
-    });
-    updateWorkspaceSession(scope, envId, up);
-  }, [scope]);
-  const loadSessions = useCallback((envId: string) => {
-    if (!active.current) return;
-    if (sessionRequests.current.has(envId)) { listAgain.current.add(envId); return; }
-    sessionRequests.current.add(envId);
-    const pushed = new Map<string, Session>();
-    pushedDuringList.current[envId] = pushed;
-    client.rpc<{ sessions: Session[] }>(envId, 'session.list', { includeDetected: true }, 15_000)
-      .then((r) => {
-        if (!active.current) return;
-        liveListsSeen.current.add(envId);
-        delete listRetries.current[envId];
-        const list = pushed.size
-          ? r.sessions.map((x) => { const up = pushed.get(x.id); return up ? { ...x, ...up, recovery: up.recovery } : x; })
-          : r.sessions;
-        setSessions((s) => ({ ...s, [envId]: keepUnchanged(s[envId], list) }));
-        saveWorkspace(scope, { sessions: { [envId]: list } });
-      })
-      .catch(() => {
-        // Until one list has arrived, the screen is the saved copy, which
-        // updates alone never complete: keep asking (a machine that just
-        // restarted can take a while to answer).
-        const tries = listRetries.current[envId] = (listRetries.current[envId] ?? 0) + 1;
-        if (!liveListsSeen.current.has(envId) && tries <= 20) {
-          clearTimeout(relist.current[envId]);
-          relist.current[envId] = setTimeout(() => loadSessions(envId), 3000);
-        }
-      })
-      .finally(() => {
-        sessionRequests.current.delete(envId);
-        if (pushedDuringList.current[envId] === pushed) delete pushedDuringList.current[envId];
-        if (listAgain.current.delete(envId) && active.current) loadSessions(envId);
-      });
-  }, [client, scope]);
-
   useEffect(() => {
-    loadEnvs();
     return client.on((e, kind, payload) => {
-      if (kind === 'presence') {
-        if (e && payload?.env) {
-          // The name travels with presence, and a rename is the one thing
-          // that changes it: a machine renamed from another phone lands here.
-          setEnvs((list) => list.map((m) => (
-            m.id === e ? { ...m, online: !!payload.online, name: payload.name ?? m.name } : m)));
-        } else loadEnvs();
-      }
-      if (kind === 'connection' && (payload.online || payload.reachable)) loadEnvs();
       if (kind === 'session.update' && e) {
-        // The update carries the session, so draw it now; the list call
-        // behind it only has to find what came or went. It used to be the
-        // only path - a full session.list per update, two per status change
-        // (the daemon sends `session` and `status` together), each one a
-        // relay round trip before the sidebar moved.
-        const up = payload?.session as Session | undefined;
-        // A conversation that was taken over lives on as a new thread: the
-        // screen showing it follows, rather than going blank.
-        if (up?.movedTo) {
+        const update = payload?.session as Session | undefined;
+        if (update?.movedTo) {
           const top = nav.current.stack[nav.current.stack.length - 1];
-          if (top?.kind === 'session' && top.session.id === up.id) openSession(e, up.movedTo);
-        }
-        if (up?.id) {
-          recordSession(e, up);
-        }
-        // The whole list (hundreds of KB) is asked for again only when this
-        // update can change which threads it holds: one new to it, one that
-        // ended, moved or was archived. A known thread changing, or a helper
-        // (shown under its lead, which sends its own update), is drawn from
-        // the update alone - busy helpers used to cost a full list each.
-        // Until a live list has arrived, every update still asks for one.
-        const known = up?.id ? sessionsNow.current[e]?.find((x) => x.id === up.id) : undefined;
-        const helper = !!up?.delegation?.parentId && !up.unhomed;
-        const changesList = !liveListsSeen.current.has(e) || !up?.id || !!up.movedTo || up.status === 'exited'
-          || (known ? !!known.archived !== !!up.archived : !helper);
-        if (changesList) {
-          clearTimeout(relist.current[e]);
-          relist.current[e] = setTimeout(() => loadSessions(e), 400);
+          if (top?.kind === 'session' && top.session.id === update.id) openSession(e, update.movedTo);
         }
         // A session that just started waiting, on a machine this window is
         // not looking at, earns a tap-target in front of whatever is open -
@@ -562,7 +466,7 @@ function Shell({ client, conn, onSignOut }: {
         // A machine that knows what was asked follows "blocked" a moment
         // later with `asked`; that fills in the notice already showing, or
         // raises one for a second prompt in a thread that was already waiting.
-        const s = payload?.session;
+        const s = update;
         if ((payload?.transition?.to === 'blocked' || payload?.asked) && s && listedThread(s)) {
           const top = nav.current.stack[nav.current.stack.length - 1];
           const looking = top?.kind === 'session' && top.session.id === s.id;
@@ -577,67 +481,16 @@ function Shell({ client, conn, onSignOut }: {
         }
       }
     });
-  }, [loadEnvs, loadSessions, recordSession, client]);
+  }, [client]);
 
-  useEffect(() => {
-    const catchUp = () => { if (!document.hidden) loadEnvs(); };
-    window.addEventListener('focus', catchUp);
-    window.addEventListener('online', catchUp);
-    window.addEventListener('pageshow', catchUp);
-    document.addEventListener('visibilitychange', catchUp);
-    return () => {
-      window.removeEventListener('focus', catchUp);
-      window.removeEventListener('online', catchUp);
-      window.removeEventListener('pageshow', catchUp);
-      document.removeEventListener('visibilitychange', catchUp);
-    };
-  }, [loadEnvs]);
 
-  const liveIds = envs.filter((e) => e.online).map((e) => e.id).join(',');
+  // A wide screen opens on the first machine once. After that, no machine
+  // selected is the home the logo leads to, so it is never picked again.
+  const autoPickDone = useRef(false);
   useEffect(() => {
-    let stopped = false, checking = false;
-    const check = async () => {
-      if (checking || document.hidden || !conn.online) return;
-      checking = true;
-      try {
-        await Promise.all((liveIds ? liveIds.split(',') : []).map(async (id) => {
-          try {
-            const info = await client.rpc<Environment['info']>(id, 'env.info', {}, 8000);
-            if (!stopped && info.version) setEnvs((list) => list.map((e) => e.id === id ? { ...e, info: { ...e.info, ...info } } : e));
-          } catch { /* keep the last known version through a reconnect */ }
-        }));
-      } finally { checking = false; }
-    };
-    void check();
-    const timer = setInterval(() => { void check(); }, 60_000);
-    window.addEventListener('online', check);
-    document.addEventListener('visibilitychange', check);
-    return () => {
-      stopped = true; clearInterval(timer);
-      window.removeEventListener('online', check);
-      document.removeEventListener('visibilitychange', check);
-    };
-  }, [client, liveIds, conn.online]);
-  // `conn.online` is a dependency because of what it costs to leave out. The
-  // machine list arrives over HTTP and the session lists go over the socket,
-  // so on a cold open this runs first and every `session.list` in it is
-  // rejected as "not connected" and swallowed - and nothing asked again
-  // until the 15s tick below. Measured on loopback, where the daemon answers
-  // in 3ms: 15 seconds of "asking every machine…" for a 3ms question.
-  useEffect(() => {
-    const live = liveIds ? liveIds.split(',') : [];
-    for (const id of live) { client.subscribe(id); loadSessions(id); }
-  }, [liveIds, client, loadSessions, conn.online]);
-  // Status changes arrive pushed, so this list is reconciliation rather
-  // than the live feed - it can afford to be slower than the events that
-  // keep it fresh, and nothing at all while the page is hidden.
-  useLiveInterval(30_000, () => {
-    const live = liveIds ? liveIds.split(',') : [];
-    for (const id of live) loadSessions(id);
-  }, [liveIds, loadSessions]);
-
-  useEffect(() => {
-    if (wide && !selected && envs.length) { autoPicked.current = envs[0].id; setSelected(envs[0].id); }
+    if (!wide || !envs.length || autoPickDone.current) return;
+    autoPickDone.current = true;
+    if (!selected) { restate(nav.current.stack, envs[0].id); autoPicked.current = envs[0].id; }
   }, [wide, selected, envs]);
 
   // Keys, on a keyboard. Every one needs Ctrl/Cmd - never a bare key, which
@@ -782,6 +635,9 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const env = envs.find((e) => e.id === selected) ?? null;
+  /** The machine open before Home, where Home's box starts. */
+  const lastMachine = useRef<string | null>(null);
+  if (selected) lastMachine.current = selected;
   const view = stack[stack.length - 1];
   const viewSession = view.kind === 'session'
     ? (sessions[selected ?? ''] ?? []).find(s => s.id === view.session.id) ?? view.session : null;
@@ -883,16 +739,23 @@ function Shell({ client, conn, onSignOut }: {
     navigate([{ kind: 'env' }, { kind: 'session', session: s, reviewChildren: reviewChildren ? ++attentionVisit.current : undefined }], envId);
   };
   openSessionRef.current = openSession;
-  // A session that changed under an open view: refresh the machine's list and
-  // fold the new record into the stack, so the title in the bar and the title
-  // in the history entry behind it do not disagree.
+  // The pushed record already holds the change. Asking for every chat again
+  // here downloaded a whole list for each update to the open chat.
   const onSessionChanged = (envId: string) => (s: Session) => {
     recordSession(envId, s);
-    loadSessions(envId);
-    restate(nav.current.stack.map((v) => (
-      v.kind === 'session' && v.session.id === s.id ? { ...v, session: { ...v.session, ...s, recovery: s.recovery } } : v)));
+    let changed = false;
+    const next = nav.current.stack.map((v) => {
+      if (v.kind !== 'session' || v.session.id !== s.id || sameSession(v.session, s)) return v;
+      changed = true;
+      return { ...v, session: { ...v.session, ...s, recovery: s.recovery } };
+    });
+    if (changed) restate(next);
   };
   const push = (v: MainView) => navigate([...nav.current.stack, v]);
+  const goHome = () => {
+    if (nav.current.selected === null && nav.current.stack.length === 1 && nav.current.stack[0].kind === 'env') return;
+    navigate([{ kind: 'env' }], null);
+  };
 
   // A chat that was starting in the background is up: open it in place of
   // its placeholder, or, if nobody is looking and nothing was written, let
@@ -907,7 +770,12 @@ function Shell({ client, conn, onSignOut }: {
       restate([...nav.current.stack.slice(0, -1), { kind: 'session', session }]);
     } else if (!chat.message && !chat.draft.trim()) {
       client.rpc<{ discarded: boolean }>(chat.envId, 'session.discard-empty', { id: session.id }, 10_000)
-        .then((r) => { if (r.discarded) setSessions((all) => ({ ...all, [chat.envId]: (all[chat.envId] ?? []).filter((s) => s.id !== session.id) })); })
+        .then((r) => {
+          if (!r.discarded) return;
+          removeSession(chat.envId, session.id);
+          letGo.current.add(chat.id);
+          reopen.current(chat.id);
+        })
         .catch(() => { /* offline: the empty chat stays recoverable */ });
     }
     forgetChat(chat.id);
@@ -986,7 +854,7 @@ function Shell({ client, conn, onSignOut }: {
       loadSessions(envId);
       navigate([...nav.current.stack, { kind: 'session', session: r.session }], envId);
     } catch (e: any) {
-      setError(`Helm cannot continue that chat: ${e.message}`);
+      setError(errorMessage(e, { fallback: 'Helm cannot continue this chat. Try again.' }));
     } finally { setResuming(null); }
   };
 
@@ -1031,7 +899,7 @@ function Shell({ client, conn, onSignOut }: {
         try {
           const r = await client.rpc<{ text: string }>(e.id, 'voice.transcribe', { audio: data, mime }, 60_000);
           return r.text;
-        } catch (err: any) { last = err?.message ?? 'Helm cannot convert the recording to text.'; }
+        } catch (err: any) { last = errorMessage(err, { fallback: 'Helm cannot convert the recording to text.' }); }
       }
       throw new Error(last || 'No machine can convert this recording to text.');
     };
@@ -1088,7 +956,7 @@ function Shell({ client, conn, onSignOut }: {
       rememberBrain(brainEnv.id, r.session);
       loadSessions(brainEnv.id);
       navigate([{ kind: 'session', session: r.session }], brainEnv.id);
-    } catch (e: any) { setError(`Helm cannot open its brain: ${e.message}`); }
+    } catch (e: any) { setError(errorMessage(e, { fallback: 'Helm cannot open its brain. Try again.' })); }
     finally { setBrainOpening(false); }
   };
   const rememberBrain = (envId: string, s: Session) => {
@@ -1133,19 +1001,32 @@ function Shell({ client, conn, onSignOut }: {
   // that chat's folder; the same key in a terminal goes back to where you
   // were. A terminal already open there is reused, so a running build or
   // server is never cut off.
-  const terminalOpening = useRef(false);
+  //
+  // A new terminal is on screen at once, saying it is opening, and becomes
+  // the terminal when its machine answers - or says why it could not.
+  const terminalOpened = useRef<(t: StartingTerminal) => void>(() => {});
+  terminalOpened.current = (t) => {
+    loadSessions(t.envId);
+    const top = nav.current.stack.at(-1);
+    if (t.session && nav.current.selected === t.envId && top?.kind === 'terminal-opening' && top.openId === t.id) {
+      restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: t.session }]);
+    }
+  };
+  /** `inPlace`: from a terminal, the new one takes its place in the history. */
+  const newTerminal = useRef<(envId: string, cwd: string, inPlace?: boolean) => void>(() => {});
+  newTerminal.current = (envId, cwd, inPlace = false) => {
+    const t = beginTerminal(client, envId, cwd, (done) => terminalOpened.current(done));
+    const view: MainView = { kind: 'terminal-opening', openId: t.id };
+    if (inPlace) restate([...nav.current.stack.slice(0, -1), view]);
+    else navigate([{ kind: 'env' }, view], envId);
+  };
   /** Back to the newest terminal on a machine (or the one in `cwd`), else a new one there. */
   const openTerminalOn = useCallback((envId: string, cwd = '~', inFolder = false) => {
     const open = (sessions[envId] ?? []).filter(ownTerminal).sort(byRecent);
     const reuse = inFolder ? open.find((s) => s.cwd === cwd) : open[0];
     if (reuse) { openSession(envId, reuse); return; }
-    if (terminalOpening.current) return;
-    terminalOpening.current = true;
-    client.rpc<{ session: Session }>(envId, 'session.start', { cwd, profileId: 'shell' }, 45_000)
-      .then((r) => { loadSessions(envId); if (r?.session) openSession(envId, r.session); })
-      .catch(() => { /* the machine is off or has no shell; nothing to open */ })
-      .finally(() => { terminalOpening.current = false; });
-  }, [sessions, openSession, client, loadSessions]);
+    newTerminal.current(envId, cwd);
+  }, [sessions, openSession]);
   // The machine this window runs on, when it is one of yours: the laptop's
   // own app window is served by the laptop at a loopback address.
   const [hereId, setHereId] = useState<string | null>(null);
@@ -1172,13 +1053,9 @@ function Shell({ client, conn, onSignOut }: {
       ?? online.find((e) => e.id === hereId)
       ?? [...online].sort((a, b) => lastUsed(b) - lastUsed(a)).find((e) => lastUsed(e) > 0)
       ?? online[0];
-    if (!machine || terminalOpening.current) return;
+    if (!machine) return;
     const chat = current?.kind === 'session' && !current.session.quick && current.session.engine !== 'shell' && machine.id === chosen ? current.session : null;
-    terminalOpening.current = true;
-    client.rpc<{ session: Session }>(machine.id, 'session.start', { cwd: chat?.cwd || '~', profileId: 'shell' }, 45_000)
-      .then((r) => { loadSessions(machine.id); if (r?.session) openSession(machine.id, r.session); })
-      .catch(() => { /* the machine is off or has no shell; nothing to open */ })
-      .finally(() => { terminalOpening.current = false; });
+    newTerminal.current(machine.id, chat?.cwd || '~');
   };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -1213,7 +1090,7 @@ function Shell({ client, conn, onSignOut }: {
       event.preventDefault();
       event.stopPropagation();
       const current = nav.current.stack.at(-1);
-      if (current?.kind === 'session' && current.session.engine === 'shell') { history.back(); return; }
+      if ((current?.kind === 'session' && current.session.engine === 'shell') || current?.kind === 'terminal-opening') { history.back(); return; }
       const envId = nav.current.selected ?? envs.find((e) => e.online)?.id;
       if (!envId) return;
       const chat = current?.kind === 'session' && !current.session.quick ? current.session : null;
@@ -1222,7 +1099,6 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [envs, openTerminalOn]);
-  const runningCount = envs.reduce((total, machine) => total + workingThreadsOn(machine).length, 0);
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
   // older work stays available on its machine and through search.
@@ -1234,7 +1110,7 @@ function Shell({ client, conn, onSignOut }: {
   // lists are all there is, and they show, marked as saved.
   // A chat that cloned a repo stays listed before its first message: the
   // owner leaves it while the repo comes down and comes back to it here.
-  const doneNow = everyone.filter(({ env: machine, s }) => ((s.driver || s.adopted) && ((s.turns ?? 0) > 0 || !!s.clone) || s.nativeCli && s.alive)
+  const doneNow = everyone.filter(({ env: machine, s }) => ((s.driver || s.adopted) && ((s.turns ?? 0) > 0 || !!s.clone) || s.nativeCli && s.alive && !s.blank)
     && (machine.online || !liveEnvsSeen.current)
     && settledThread(s)
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
@@ -1289,20 +1165,25 @@ function Shell({ client, conn, onSignOut }: {
   return (
     <div className="shell">
       <aside className={`sidebar${!showMain ? ' showing' : ''}${wide && sidebarCollapsed ? ' collapsed' : ''}`}>
+        <SidebarSunset />
         <div className="bar side">
+          {/* The logo goes home: on a wide screen the machines overview,
+              on a phone this list. Nothing else leaves a machine. */}
           <div className="brand">
-            <img src="/favicon.svg" alt="" />
-            <b className="wordmark">helm</b>
+            <button type="button" className="brand-home" onClick={goHome} title="Home" aria-label="Home">
+              <img src="/favicon.svg?v=7" alt="" />
+              <b className="wordmark">helm</b>
+            </button>
           </div>
-          {/* Live with every machine up is just the dot: the machines list
-              below already says who is online. Words appear when something
-              is off. */}
+          {/* Live is just the dot, even with some machines off: the machines
+              list below already says who is online. Words appear only when
+              this device cannot reach Helm. */}
           {(() => {
             const online = envs.filter((e) => e.online).length;
-            const quiet = status === 'live' && online === envs.length;
-            return <span className={`conn ${status}`} title={conn.error || (quiet ? `Connected · ${online} of ${envs.length} machines online` : status)}
-              role="status" aria-label={quiet ? `Connected, all ${envs.length} machines online` : undefined}>
-              <i />{quiet ? '' : status === 'live' ? `${online}/${envs.length} online` : status}
+            const live = status === 'live';
+            return <span className={`conn ${status}`} title={conn.error ? errorMessage(conn.error) : (live ? `Connected · ${online} of ${envs.length} machines online` : status)}
+              role="status" aria-label={live ? `Connected, ${online} of ${envs.length} machines online` : undefined}>
+              <i />{live ? '' : status}
             </span>;
           })()}
           <span className="side-tools">
@@ -1378,22 +1259,21 @@ function Shell({ client, conn, onSignOut }: {
             <div className="rows plain brain-entry">
                 {brainEnv ? (() => {
                   const s = brainOn(brainEnv.id);
-                  return <button className="row tall" disabled={brainOpening} onClick={() => void openBrain()}>
+                  const where = `${brainEnv.name} · ${s ? engineOf(s.engine).label : 'Pick an account'}${!brainEnv.online ? ' · offline' : ''}`;
+                  return <button className="row" disabled={brainOpening} onClick={() => void openBrain()} title={`Open the Helm brain\n${where}`}>
                     <EngineMark engine={s ? engineOf(s.engine).cls : undefined} />
                     <span className="grow">
                       <span className="rt"><span className="rt-text">Helm brain</span>{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
-                      <span className="rm">
-                        {brainEnv.name} · {s ? engineOf(s.engine).label : 'Pick an account'}{!brainEnv.online ? ' · offline' : ''}
-                      </span>
                     </span>
                     {brainOpening ? <span className="chip working"><i />opening</span>
                       // The brain is counted in its machine's "running", so it says so here.
                       : s && brainEnv.online && !attentionOn(brainEnv.id, s) && runningThread(s) ? <StatusChip status={busyWord(s.status, s.compacting)} at={s.updatedAt} />
-                      : <span className="chev"><Icon name="forward" size={15} /></span>}
+                      : !brainEnv.online ? <span className="rm">offline</span> : null}
                   </button>;
-                })() : <button className="row tall" disabled>
+                })() : <button className="row" disabled title="Add a VM (a virtual machine) to start the Helm brain.">
                   <EngineMark />
-                  <span className="grow"><span className="rt">Helm brain</span><span className="rm">Add a VM (a virtual machine) to start.</span></span>
+                  <span className="grow"><span className="rt">Helm brain</span></span>
+                  <span className="rm">Add a VM</span>
                 </button>}
             </div>
 
@@ -1465,24 +1345,25 @@ function Shell({ client, conn, onSignOut }: {
               <div className="rows plain">
                 {envs.map((e) => {
                   const waiting = waitingCountOn(e);
+                  // One line: the name, and a word only when there is news.
+                  // The full story is in the tooltip and on the machine screen.
+                  const running = workingThreadsOn(e).length;
+                  const said = e.online ? activityOn(e, 'idle') : e.lastSeen ? `seen ${ago(e.lastSeen)}` : 'never connected';
                   return (
                     <button
                       key={e.id}
-                      className={`row tall machine${e.id === selected && wide ? ' active' : ''}${e.online ? '' : ' offline'}`}
+                      className={`row machine${e.id === selected && wide ? ' active' : ''}${e.online ? '' : ' offline'}`}
                       aria-current={e.id === selected && wide ? 'true' : undefined}
                       onClick={() => openEnv(e.id)}
+                      title={`${e.name} · ${e.online ? 'online' : 'offline'} · ${said}`}
                     >
                       <span className={`mdot ${e.online ? 'on' : 'off'}`} />
                       <span className="grow">
                         <span className="rt"><span className="rt-text">{e.name}</span></span>
-                        <span className="rm">
-                          {e.online
-                            ? activityOn(e, 'idle')
-                            : e.lastSeen ? `seen ${ago(e.lastSeen)}` : 'never connected'}
-                        </span>
                       </span>
+                      {e.online ? running > 0 && <span className="rm">{running} running</span>
+                        : <span className="rm">{e.lastSeen ? ago(e.lastSeen) : 'never'}</span>}
                       {waiting > 0 && <span className="badge">{waiting}</span>}
-                      <span className="chev"><Icon name="forward" size={15} /></span>
                     </button>
                   );
                 })}
@@ -1521,19 +1402,15 @@ function Shell({ client, conn, onSignOut }: {
         {view.kind === 'app-settings' ? (
           <SettingsView
             client={client} envs={envs} onBack={back}
-            onVoice={(ids) => setEnvs((list) => list.map((m) => (ids.includes(m.id) ? { ...m, info: { ...m.info, voice: true } } : m)))}
+            onVoice={markVoice}
             onOpen={(v) => push(v)} onUnpair={() => setUnpairing(true)}
           />
         ) : view.kind === 'usage' ? (
-          <Suspense fallback={<ViewLoading title="Usage" onBack={back} />}>
-            <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
-          </Suspense>
+          <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
         ) : view.kind === 'devices' ? (
           <DevicesView client={client} onBack={back} />
         ) : view.kind === 'updates' ? (
-          <Suspense fallback={<ViewLoading title="Updates" onBack={back} />}>
-            <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
-          </Suspense>
+          <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
         ) : view.kind === 'links' ? (
           <LinksView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'owner' ? (
@@ -1546,45 +1423,17 @@ function Shell({ client, conn, onSignOut }: {
             ], envId)}
           />
         ) : !env ? (
-          // A wide screen with no machine open yet: the machines themselves,
-          // as large rows, rather than a whisper in an empty pane.
-          <div className="scroll"><div className="pad column chooser">
-            <h2 className="screen-title">Machines</h2>
-            {/* The rows below show each machine and its dot; the readout
-                only says what is running and what waits for the owner. */}
-            {(runningCount > 0 || blocked.length > 0) && <p className="readout">
-              {runningCount > 0 && `${runningCount} running`}
-              {runningCount > 0 && blocked.length > 0 && ' · '}
-              {blocked.length > 0 && <span className="attention">{blocked.length} {blocked.length === 1 ? 'needs' : 'need'} you</span>}
-            </p>}
-            {envs.length > 0 ? (
-              <div className="rows plain">
-                {envs.map((e) => {
-                  const waiting = waitingCountOn(e);
-                  return (
-                    <button key={e.id} className={`row tall machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
-                      <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-                      <span className="grow">
-                        <span className="rt"><span className="rt-text">{e.name}</span></span>
-                        <span className="rm">
-                          {e.online
-                            ? activityOn(e, 'No chats are running.')
-                            : e.lastSeen ? `Offline · seen ${ago(e.lastSeen)}` : 'Never connected'}
-                        </span>
-                      </span>
-                      {waiting > 0 && <span className="badge">{waiting}</span>}
-                      <span className="chev"><Icon name="forward" size={15} /></span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="empty quiet">
-                {envError ? 'The connecting machine did not answer.' : 'You have no machines yet.'}
-                {!error && <div className="note">Run <code>helm add pc</code> on a machine in your network.</div>}
-              </div>
-            )}
-          </div></div>
+          // A wide screen with no machine open: Home, where the logo leads.
+          <Home
+            client={client} near={lastMachine.current}
+            machines={envs.map((e) => ({ env: e, running: workingThreadsOn(e).length, waiting: e.online ? waitingCountOn(e) : 0 }))}
+            onOpenMachine={openEnv}
+            onStart={(info, run, message) => {
+              const chat = beginChat(client, info, run);
+              if (message) sendWhenReady(chat.id, message);
+              navigate([{ kind: 'env' }, { kind: 'starting', startId: chat.id }], info.envId);
+            }}
+          />
         ) : view.kind === 'brain' ? (
           <BrainView
             key={env.id}
@@ -1618,17 +1467,15 @@ function Shell({ client, conn, onSignOut }: {
             onStart={(cwd) => push({ kind: 'start', cwd })}
             onSettings={() => push({ kind: 'settings' })}
             onUsage={() => push({ kind: 'usage', envId: env.id })}
-            onMedia={() => push({ kind: 'media' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
+            onNewTerminal={() => newTerminal.current(env.id, '~')}
           />
         ) : view.kind === 'integrations' ? (
-          <Suspense fallback={<ViewLoading title="Connectors & skills" onBack={back} />}>
-            <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
-          </Suspense>
-        ) : view.kind === 'media' ? (
-          <MediaView key={env.id} client={client} env={env} onBack={back} />
+          <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
         ) : view.kind === 'starting' ? (
           <StartingChatView key={view.startId} client={client} env={env} startId={view.startId} onBack={back} />
+        ) : view.kind === 'terminal-opening' ? (
+          <StartingTerminalView key={view.openId} client={client} env={env} openId={view.openId} onBack={back} />
         ) : view.kind === 'native-agent' ? (
           <NativeAgentView key={`${env.id}:${view.parent.id}:${view.agent.id}`} client={client} env={env} parent={view.parent} agent={view.agent} onBack={back} />
         ) : view.kind === 'settings' ? (
@@ -1665,28 +1512,24 @@ function Shell({ client, conn, onSignOut }: {
             onPick={(cwd) => push({ kind: 'transfer', cwd })}
           />
         ) : view.kind === 'transfer' ? (
-          <Suspense fallback={<ViewLoading title="Send a project" onBack={back} />}>
-            <TransferView
-              key={`${env.id}:${view.cwd}`}
-              client={client} source={env} envs={envs} folder={view.cwd} session={view.session} jobId={view.jobId} onBack={back}
-              onJob={(job) => restate([...nav.current.stack.slice(0, -1), { kind: 'transfer', cwd: job.source.path, jobId: job.id }])}
-              onAgain={() => restate([...nav.current.stack.slice(0, -1), { kind: 'transfer', cwd: view.cwd }])}
-              onOpenFolder={(targetId, path) => navigate([{ kind: 'env' }, { kind: 'browse', path }], targetId)}
-              onStartChat={(targetId, path) => navigate([{ kind: 'env' }, { kind: 'start', cwd: path }], targetId)}
-              onOpenSession={(targetId, session) => navigate([
-                { kind: 'env' }, { kind: 'session', session },
-              ], targetId)}
-            />
-          </Suspense>
+          <TransferView
+            key={`${env.id}:${view.cwd}`}
+            client={client} source={env} envs={envs} folder={view.cwd} session={view.session} jobId={view.jobId} onBack={back}
+            onJob={(job) => restate([...nav.current.stack.slice(0, -1), { kind: 'transfer', cwd: job.source.path, jobId: job.id }])}
+            onAgain={() => restate([...nav.current.stack.slice(0, -1), { kind: 'transfer', cwd: view.cwd }])}
+            onOpenFolder={(targetId, path) => navigate([{ kind: 'env' }, { kind: 'browse', path }], targetId)}
+            onStartChat={(targetId, path) => navigate([{ kind: 'env' }, { kind: 'start', cwd: path }], targetId)}
+            onOpenSession={(targetId, session) => navigate([
+              { kind: 'env' }, { kind: 'session', session },
+            ], targetId)}
+          />
         ) : view.kind === 'verify' ? (
-          <Suspense fallback={<ViewLoading title="Check setup" onBack={back} />}>
-            <VerifyView
-              client={client} env={env} folder={view.path} onBack={back}
-              onOpenSession={(envId, session) => navigate([
-                { kind: 'env' }, { kind: 'session', session },
-              ], envId)}
-            />
-          </Suspense>
+          <VerifyView
+            client={client} env={env} folder={view.path} onBack={back}
+            onOpenSession={(envId, session) => navigate([
+              { kind: 'env' }, { kind: 'session', session },
+            ], envId)}
+          />
         ) : view.kind === 'start' ? (
           <Start
             client={client} env={env} cwd={view.cwd} quick={view.quick} onBack={back}
@@ -1726,11 +1569,7 @@ function Shell({ client, conn, onSignOut }: {
             terminals={(sessions[env.id] ?? []).filter(ownTerminal).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))}
             onSwitch={(s) => restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: s }])}
             onOpenNative={(agent) => push({ kind: 'native-agent', parent: view.session, agent })}
-            onNewTerminal={async () => {
-              const r = await client.rpc<{ session: Session }>(env.id, 'session.start', { cwd: '~', profileId: 'shell' }, 45_000);
-              loadSessions(env.id);
-              restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: r.session }]);
-            }}
+            onNewTerminal={async () => newTerminal.current(env.id, '~', true)}
             onBack={back}
             onClosed={() => {
               loadSessions(env.id);
@@ -1750,7 +1589,8 @@ function Shell({ client, conn, onSignOut }: {
       {/* Another thread started waiting while this one was open. A tap on
           the toast is the whole journey to answering it. */}
       {toast && (
-        <NotificationToast session={toast.session} machine={envs.find((m) => m.id === toast.envId)?.name} onDismiss={() => setToast(null)}
+        <NotificationToast client={client} envId={toast.envId} session={toast.session} machine={envs.find((m) => m.id === toast.envId)?.name}
+          waiting={blocked.filter(({ env: e, s }) => !(e.id === toast.envId && s.id === toast.session.id)).length} onDismiss={() => setToast(null)}
           onOpen={() => { const t = toast; setToast(null); openSession(t.envId, t.session); }} />
       )}
 
@@ -1800,31 +1640,4 @@ function Shell({ client, conn, onSignOut }: {
       )}
     </div>
   );
-}
-
-/** Whether laying `up` over `known` would change anything it holds. */
-function sameSession(known: Session, up: Session) {
-  if (JSON.stringify(known.recovery) !== JSON.stringify(up.recovery)) return false;
-  for (const [key, value] of Object.entries(up)) {
-    const was = (known as unknown as Record<string, unknown>)[key];
-    if (was === value) continue;
-    if (value && typeof value === 'object' && JSON.stringify(was) === JSON.stringify(value)) continue;
-    return false;
-  }
-  return true;
-}
-
-
-/** A fresh list, reusing the old object for every chat that did not change. */
-function keepUnchanged(old: Session[] | undefined, fresh: Session[]) {
-  if (!old?.length) return fresh;
-  const before = new Map(old.map((s) => [s.id, s]));
-  let same = old.length === fresh.length;
-  const next = fresh.map((s, i) => {
-    const was = before.get(s.id);
-    const kept = was && JSON.stringify(was) === JSON.stringify(s) ? was : s;
-    if (kept !== old[i]) same = false;
-    return kept;
-  });
-  return same ? old : next;
 }

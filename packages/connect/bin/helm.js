@@ -14,6 +14,7 @@ import { HELM_DIR, expand } from '../src/paths.js';
 import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
 import { hubRpc, hubBroadcastRpc, mergeQueueReceipts } from '../src/hub-client.js';
+import { USAGE, OVERVIEW, commandHelp, wantsHelp } from '../src/help.js';
 import { reliableInput } from '@helm/protocol/reliable-input';
 import {
   render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot, findNetworkSession,
@@ -38,128 +39,7 @@ const rest = leadingFlag ? [first, ...others] : others;
 
 const die = (msg) => { console.error(`helm: ${msg}`); exit(1); };
 
-const USAGE = `helm - Control your coding agents from anywhere
-
-  helm setup [https-url]             Set up this VM as your Helm home
-  helm open                          Open the app here, signed in
-  helm app [--remove]                Add Helm to this desktop's applications
-
-  helm add controller                Add a phone or browser to control machines
-  helm add pc                        Add a computer to run agents and control machines
-  helm add vm                        Add a VM that other machines connect to
-  helm add nas                       Add a machine to store shared files
-  helm join                          Paste a private link to join a network
-  helm join <private-link>           Join a network with the copied link
-  helm start                         Start Helm in the background
-
-  helm join <CODE> <home-url> --foreground   Run Helm in this terminal
-  helm status                        Show the network and agent software
-  helm network-repair                Keep connections working when large network packets fail on Linux
-
-  helm up [--port N] [--tunnel]      Run Helm in this terminal
-  helm up --tunnel --domain <d>     Make a fixed public link (needs a free ngrok account)
-  helm up --tunnel --temporary      Make a temporary public link without an account
-  helm up --advertise <url>         Set the public address for this machine
-  helm up --host <address>          Set the local address (default 0.0.0.0)
-  helm up --install                 Start Helm each time this machine starts
-
-  helm link [minutes]               Add a phone or browser, like 'helm add controller'
-  helm join <CODE> --at <url>       Join a network, like 'helm join CODE url'
-
-  helm devices                      controllers that can drive this network
-  helm browser open <url>            browse with your agent (Chromium or --engine bowser)
-  helm browser tabs | look <id>      list tabs or read text and numbered controls
-  helm machines                     machines in this network
-  helm redesignate [machine] <kind> what a machine is for: pc, vm or nas
-  helm nas [machine] [add|remove <folder>]   what a nas shares
-  helm spin <port> [options]         same as helm share; make a public link
-  helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
-    Make a Spin, a public link that ends after 3 hours unless you use --keep.
-                                  The link opens a port on this machine through your VM.
-    --private                     Limit access to devices signed in to your Helm
-    --preserve-host               Send the Spin host to the app instead of localhost
-  helm share list | stop <name>   List or stop Spins
-  helm share setup                Set up the VM to serve Spins
-  helm forward <machine> <port> [--local <port>]
-                                  Open another machine's shared port on this machine's localhost
-  helm remove <id>                  Remove a device or machine permanently
-  helm leave                        Remove this machine from its network
-
-  helm login [minutes]              Make a temporary password to sign in a device
-  helm status                       Show machines, links and agent software
-  helm profiles [--refresh]         List agent accounts on this machine
-  helm agents [--json] [--refresh]  List command line accounts, sign-in status and model IDs
-  helm run -- <command> [args]      Run a command here through Helm
-  helm exec <machine> [--cwd <path>] -- <command> [args]
-                                    Run a command on another machine through Helm
-    --env NAME=value               Set a command environment value (repeat this flag for more values)
-    --timeout <milliseconds>       Set the command time limit (default 15 minutes)
-  helm exec-status <machine> <id> [--wait] [--json]
-                                    Read command output after a connection loss
-  helm exec-cancel <machine> <id>   Stop a command started earlier
-  helm antigravity [install|login|status|remove]   Install or manage the Google Antigravity agent
-
-  helm brain                       Open the Helm brain on the VM
-  helm digest [--json]              Show every machine, folder and running chat
-  helm search <words...> [--json]   Find chats with these words on every machine, newest first
-  helm thread <id> [-n 40]          Read recent messages from a chat
-  helm delete <id>                  Delete a chat
-  helm pickup [chat-id] [-n 3]      Show where earlier project chats stopped on every machine
-                                    Show requests, unfinished work, commits and unsaved changes
-  helm say <id> <text...>           Send a message from this agent (a plain prompt outside a chat)
-  helm reply <message-id> <text...> Reply to an agent message
-  helm messages [chat-id] [--json]  Read messages in this chat and its Agents
-  helm canvas <file | https://…> [--title <text>] [--session <id>]
-                                    Open a project file, saved picture or live page beside the chat
-  helm render <file.html | picture.png> [--title <text>] [--height <px>] [--session <id>]
-                                    Save a picture, HTML page or screenshot in this chat
-  helm preview <file.html> [--output <file.png>] [--width <px>] [--appearance dark|light]
-                                    screenshot a visual and report JavaScript errors
-  helm chat <account> [-- text]    share a live agent between this terminal and the app
-  helm chat --attach <id>          reconnect to the same managed session
-  helm chat <account> --resume <id> continue a native conversation after its CLI closes
-  helm chat <account> --quick      a chat with no folder, for a small question
-  helm integrate [--remove]        manage automatic control of normal CLI commands
-  helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
-  helm spawn <machine> - <account> <text...>          the same, as a quick chat with no folder
-    --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
-  helm delegate <account> --model <id> --wait --json -- "<task>"
-                                    Start a helper in this folder
-  helm delegate-result <id> [--wait] [--json]   Read the helper result or approval request
-  helm handoff <machine> [text...]  Move code and this task to another machine
-    --handoff-id <id>               Continue a stopped task move with the same ID
-  helm dispatch <machine> [text...]  Send this folder and task when the other machine connects
-  helm dispatch-status <id>         Show progress for a task sent to another machine
-  helm send-task <machine> --account <id> [text...]  Send files, .env and a task directly
-    --no-env --allow-skipped --handoff-id <id>       Control .env files, skipped files and retries
-  helm receive <source> [minutes]   Allow this machine to receive one folder from <source>
-  helm send <machine> [folder] --grant <token>
-                                  Send a folder with the receiving machine's permission
-    --target-folder <folder>        Set the folder on the receiving machine
-    --include-env                   Include .env files with access for the receiving user only
-    --dry-run                       Preview files to send without permission from the receiving machine
-    --allow-skipped                 Send files and allow skipped files
-  helm copy <machine> <file-or-folder> [--target-folder <path>]
-                                  Copy through Helm and resume if stopped (needs rsync 3.2.3+ on both machines)
-    --target-folder <path>          Set the destination (default: same path; ~ means the other machine's home folder)
-    --exclude <pattern>             Skip matching files (repeat this flag for more patterns)
-    --dry-run                       Preview the copy, including hidden files
-    --direct | --relay | --ssh      Pick a connection (default: Helm picks one)
-    --retries <0-5>                 Set retries after connection loss (default: 2)
-  helm verify <folder> [-- cmd...]  Check what a received folder still needs
-
-  helm dictate [--to <id>]          Start recording; run again to stop and turn speech into text
-  helm proxy <host>                 Connect through SSH ProxyCommand (used by ~/.ssh/config)
-  helm self-update                  Get the newest Helm and restart it on this machine
-  helm service install|uninstall    Install or remove the background service
-
-Add devices from Settings, or run 'helm add' on a joined machine.
-Paste a computer's private join link into 'helm join'.
-A control device stays signed in until you remove it.
-Passwords add devices and expire in minutes.
-Run helm help <command> or helm <command> --help for details.
-`;
-const usage = () => console.log(USAGE);
+const usage = () => console.log(OVERVIEW);
 
 const flagOf = (name, fallback) => {
   const i = rest.indexOf(`--${name}`);
@@ -318,6 +198,11 @@ async function up() {
       try { integrateNativeCommands(); } catch (err) { report(err); }
     } catch (err) { report(err); }
   }
+  if (platform() === 'linux') {
+    // A new logo reaches the launcher too, not only the app.
+    import('../src/desktop.js').then((m) => m.refreshAppIcons())
+      .catch((err) => console.error(`helm: app icons: ${err.message}`));
+  }
   useHubDb();
   const { up: bringUp } = await import('../src/serve.js');
   // A tunnel is opt-in now. It exists for the one case that genuinely needs
@@ -343,17 +228,15 @@ async function up() {
 /**
  * `helm add <what>`.
  *
- * Four things can join, and they are different enough that naming them is
+ * Three things can join, and they are different enough that naming them is
  * the whole point: a controller is a screen with no agents on it, a pc runs
- * agents and drives others, a vm also is somewhere to dial, a nas is the
- * same machine flagged as the network's storage - reachable, like a vm, but
- * dialling out like a pc. Only a controller gets a link to open; the
- * machines get a code to type.
+ * agents and drives others, a vm also is somewhere to dial. Only a
+ * controller gets a link to open; the machines get a code to type.
  *
  * CONTROLLER_WORDS comes from the protocol: the set means the same thing in
  * `helm redesignate`, where a controller is refused rather than invited.
  */
-const MACHINE_WORDS = { pc: 'pc', laptop: 'pc', vm: 'vm', nas: 'nas', storage: 'nas' };
+const MACHINE_WORDS = { pc: 'pc', laptop: 'pc', vm: 'vm' };
 
 async function add() {
   const what = (rest.find((a) => !a.startsWith('--')) || '').toLowerCase();
@@ -364,8 +247,7 @@ async function add() {
   console.log('\n  Pick a device to add.\n');
   console.log('    helm add controller    Add a phone or browser to control machines.');
   console.log('    helm add pc            Add a computer to run agents and control machines.');
-  console.log('    helm add vm            Add a VM to run agents and accept connections.');
-  console.log('    helm add nas           Add a machine to store shared files.\n');
+  console.log('    helm add vm            Add a VM to run agents and accept connections.\n');
   if (what) console.log(`  ("${what}" is none of those.)\n`);
 }
 
@@ -373,7 +255,7 @@ async function inviteMachine(role) {
   const net = requireNetwork();
   const { base: where, value } = await postToHome(net, '/api/invite', { role });
   const { code } = value;
-  console.log(`\n  Run this on the ${role === 'vm' ? 'VM' : role === 'nas' ? 'NAS' : 'computer'} you want to add:\n`);
+  console.log(`\n  Run this on the ${role === 'vm' ? 'VM' : 'computer'} you want to add:\n`);
   const link = `${where}/#join=${encodeURIComponent(code)}`;
   console.log('    helm join');
   console.log(`    Paste this link: ${link}\n`);
@@ -381,10 +263,6 @@ async function inviteMachine(role) {
   if (role === 'vm') {
     console.log('  This machine gets its own HTTPS address.');
     console.log('  Other machines can connect to it and this home.');
-  } else if (role === 'nas') {
-    console.log('  This machine connects to this Helm home.');
-    console.log('  It does not need its own HTTPS address.');
-    console.log('  Other machines see it as shared storage.');
   } else {
     console.log('  This machine connects to this Helm home without its own address.');
   }
@@ -999,6 +877,11 @@ async function deleteChat() {
   const { env, machine, session } = await findSession(id);
   const own = process.env.HELM_SESSION_ID;
   if (own && session.id.startsWith(own)) die('that is the chat you are running in');
+  // Agents told to clean up once read their helpers as test chats and
+  // deleted every one, so the owner found the chat's Agents list empty.
+  if (own && session.delegation?.parentId && !rest.includes('--helper')) {
+    die('That chat is a helper. Keep it: the owner reads helpers under their chat. Add --helper only when the owner asks you to delete it.');
+  }
   await brainRpc(env, M.SESSION_KILL, { id: session.id }, 20_000);
   console.log(`Deleted ${machine} ${shortId(session.id)} (${session.title}).`);
 }
@@ -1672,7 +1555,7 @@ async function redesignateLocally(net, kind, { from, home }) {
     fields.endpoints = [home, ...(me.endpoints ?? []).filter((e) => e !== home)];
   } else if (from === 'vm') {
     // The advertised https address is what made it a home; anything http is
-    // a LAN address that stays true of a pc or a nas.
+    // a LAN address that stays true of a pc.
     fields.endpoints = (me.endpoints ?? []).filter((e) => !e.startsWith('https://'));
   }
   net.role = kind;
@@ -1710,17 +1593,6 @@ function listMachines() {
   }
 }
 
-// --------------------------------------------------------------------- nas
-
-/**
- * `helm nas [machine] [add|remove <folder>]` - what a nas shares.
- *
- * The allowlist is the whole security boundary of the designation, so it is
- * edited deliberately and only ever on the machine that serves it: a remote
- * target is asked through its daemon, and this machine through its daemon
- * too when it is up - falling back to writing the file directly, which the
- * media handler re-reads on every request anyway.
- */
 /**
  * `helm share <port>` - a public https link to something running here, served
  * by the network's public home (helm's own ngrok). `list`, `stop <name>`, and
@@ -1759,7 +1631,7 @@ async function shareCmd() {
     const rows = await Promise.all(machines.map(async (m) => {
       try {
         const { shares } = m.id === net.self ? { shares: local.listShares().map(local.publicShare) }
-          : await hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 5000 });
+          : await hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 5000, budget: 6000 });
         return shares.map((x) => ({ ...x, machine: m.name }));
       } catch { return []; }
     }));
@@ -1805,7 +1677,7 @@ async function shareCmd() {
   // A name is the whole address, so it must be free across the network.
   if (name) {
     const others = Object.values(net.machines).filter((m) => m.id !== target && !net.revoked?.[m.id]);
-    const clash = (await Promise.all(others.map((m) => hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 4000 })
+    const clash = (await Promise.all(others.map((m) => hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 4000, budget: 5000 })
       .then(({ shares }) => shares.some((x) => x.name === name.toLowerCase()) ? m.name : null).catch(() => null)))).find(Boolean);
     if (clash) die(`"${name}" is already shared from ${clash}. Pick another name.`);
   }
@@ -1814,7 +1686,9 @@ async function shareCmd() {
   const hours = Number(strFlag('for'));
   if (strFlag('for') !== undefined && !(hours > 0)) die('--for takes a number of hours, e.g. --for 8.');
   const ttlMs = hours > 0 ? hours * 3_600_000 : undefined;
-  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true, ...(members ? { private: true } : {}), ...(flagOf('preserve-host') ? { preserveHost: true } : {}) });
+  // A link an agent makes for its own chat stops when that chat is deleted.
+  const chat = target === net.self && !keep ? process.env.HELM_SESSION_ID : undefined;
+  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true, ...(chat ? { chat } : {}), ...(members ? { private: true } : {}), ...(flagOf('preserve-host') ? { preserveHost: true } : {}) });
   const url = link(share.name);
   const ends = share.expiresAt ? `ends ${new Date(share.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (add --keep to keep it)` : 'kept until you stop it';
   console.log(`\n  ${url}\n  -> ${where}, port ${share.port}, ${ends}${share.password ? `\n  password: ${password}` : ''}`);
@@ -1874,66 +1748,6 @@ async function forwardCmd() {
   });
 }
 
-async function nasCmd() {
-  const net = requireNetwork();
-  const args = rest.filter((a) => !a.startsWith('--'));
-  const isVerb = (w) => ['ls', 'list', 'add', 'rm', 'remove'].includes(w);
-
-  let who = null, verb = 'list', folder = null;
-  if (args.length && !isVerb(args[0])) who = args.shift();
-  if (args.length) verb = args.shift();
-  if (args.length) folder = args.join(' ');
-  if (!isVerb(verb)) die('usage: helm nas [machine] [add|remove <folder>]');
-
-  const target = who ? machineId(who) : net.self;
-  const record = net.machines[target];
-  const kind = record?.kind ?? (target === net.self ? net.role : 'pc');
-  const nas = await import('@helm/nas');
-
-  if (verb === 'ls' || verb === 'list') {
-    if (kind !== 'nas') {
-      console.log(`\n  ${record?.name ?? 'this machine'} is not a nas - ` +
-        `\`helm redesignate ${who ?? ''} nas\` first.\n`);
-      return;
-    }
-    const { roots } = target === net.self && !await reachable(net, target)
-      ? { roots: nas.mediaRoots() }
-      : await hubRpc(net, target, M.MEDIA_ROOTS);
-    if (!roots.length) console.log('\n  This machine shares no folders. Run helm nas add <folder>.');
-    for (const r of roots) console.log(`  [${r.id}] ${r.path}`);
-    console.log('');
-    return;
-  }
-
-  if (kind !== 'nas') {
-    die(`${record?.name ?? 'this machine'} is not a NAS. Run ` +
-      `\`helm redesignate ${who ?? ''} nas\` first.`);
-  }
-  if (!folder) die(`usage: helm nas ${who ? `${who} ` : ''}${verb} <folder>`);
-  const method = verb === 'add' ? M.MEDIA_ROOT_ADD : M.MEDIA_ROOT_REMOVE;
-
-  if (target !== net.self || await reachable(net, target)) {
-    const { roots } = await hubRpc(net, target, method, { path: folder }).catch((err) => {
-      if (target !== net.self) throw err;
-      return null;
-    });
-    if (roots) { for (const r of roots) console.log(`  [${r.id}] ${r.path}`); console.log(''); return; }
-  }
-  // The daemon is not answering and the target is this machine: the file is
-  // the store, so write it directly. The listener re-reads it per request.
-  const roots = verb === 'add' ? nas.addMediaRoot(folder) : nas.removeMediaRoot(folder);
-  for (const r of roots) console.log(`  [${r.id}] ${r.path}`);
-  console.log('');
-}
-
-/** Can this machine's own daemon be asked something right now? */
-async function reachable(net, target) {
-  return hubRpc(net, target, M.MEDIA_INFO, {}, { timeout: 3000 }).then(
-    () => true,
-    () => false
-  );
-}
-
 /**
  * Remove a member. This is the only way something leaves a network - which is
  * the point: nothing else, including restarts, reinstalls or an expired
@@ -1989,11 +1803,14 @@ async function leave() {
 
 // `helm help <command>` and `helm <command> --help` print that command's
 // usage and details. run and chat pass their arguments on to another program.
-const { commandHelp, wantsHelp } = await import('../src/help.js');
 const helpFor = cmd === 'help' || cmd === '--help' || cmd === '-h' ? rest[0]
   : cmd && !['run', 'chat'].includes(cmd) && wantsHelp(rest) ? cmd : null;
 
 try {
+  if (helpFor === '--all') {
+    console.log(USAGE);
+    exit(0);
+  }
   if (helpFor) {
     const text = commandHelp(helpFor, USAGE);
     if (!text) die(`No command "${helpFor}" - helm help lists them all.`);
@@ -2003,7 +1820,7 @@ try {
   switch (cmd) {
     case 'run':
       if (!rest.includes('--') && rest.some(arg => ['--help', '-h'].includes(arg))) {
-        usage();
+        console.log(commandHelp('run', USAGE));
         break;
       }
       if (rest.includes('--') || rest.some(arg => ['--heavy', '--cwd', '--timeout', '--env'].includes(arg))) {
@@ -2076,10 +1893,6 @@ try {
       await redesignate();
       break;
 
-    case 'nas':
-      await nasCmd();
-      break;
-
     case 'spin':
     case 'share':
       await shareCmd();
@@ -2144,6 +1957,20 @@ try {
       console.log(r.restarting?.length
         ? `  Helm updated. ${r.restarting.join(', ')} restart now and keep active chats.`
         : '  Helm updated. Restart Helm to use the update.');
+      break;
+    }
+
+    case 'ship': {
+      const { ship, ShipError } = await import('../src/ship.js');
+      const minutes = Number(strFlag('wait', '10'));
+      if (!(minutes > 0)) die('--wait takes a number of minutes');
+      try {
+        const r = await ship({ net: requireNetwork(), rpc: hubRpc, check: !rest.includes('--no-check'), waitMs: minutes * 60_000 });
+        if (!r.ok) exit(1);
+      } catch (err) {
+        if (!(err instanceof ShipError)) throw err;
+        die(err.message);
+      }
       break;
     }
 

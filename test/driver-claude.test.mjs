@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rmSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { rmSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fakeCli, collect } from './helpers.mjs';
@@ -14,6 +14,76 @@ const make = (name, opts = {}) => {
   });
   return { fake, driver, log: collect(driver) };
 };
+
+test('Claude finishes a failed process start and permits a later retry', { timeout: 5000 }, async () => {
+  const { fake, driver, log } = make('plain');
+  const script = readFileSync(fake.cmd, 'utf8');
+  rmSync(fake.cmd);
+  try {
+    assert.deepEqual(await driver.availableCommands(), []);
+    assert.equal(driver.status, 'exited');
+    writeFileSync(fake.cmd, script, { mode: 0o755 });
+    await driver.send('hello');
+    await log.until(e => e.type === 'turn.done');
+    assert.equal(driver.status, 'idle');
+  } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
+test('a closed Claude input pipe reports an error without crashing Helm', { timeout: 10000 }, async t => {
+  const { fake, driver, log } = make('plain');
+  const script = join(fake.dir, 'closed-input.mjs');
+  writeFileSync(script, `import { closeSync } from 'node:fs';
+    closeSync(0);
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'closed-input' }));
+    setInterval(() => {}, 1000);
+  `);
+  writeFileSync(fake.cmd, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 2.1.302; exit; fi\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)}\n`);
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
+  const initialized = new Promise(resolve => driver.once('init', resolve));
+  await driver.start();
+  await initialized;
+  await driver.send('hello');
+  const error = await log.until(e => e.type === 'error' && e.kind === 'input');
+  assert.match(error.message, /EPIPE/);
+});
+
+test('Claude exits even while a child command keeps its output pipes open', { timeout: 5000 }, async t => {
+  const { fake, driver, log } = make('plain');
+  const script = join(fake.dir, 'parent-exit.mjs');
+  const pidFile = join(fake.dir, 'grandchild.pid');
+  writeFileSync(script, `import { spawn } from 'node:child_process';
+    import { writeFileSync } from 'node:fs';
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 'inherit', 'inherit'] });
+    writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'parent-exit' }));
+    process.exit(0);
+  `);
+  writeFileSync(fake.cmd, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 2.1.302; exit; fi\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)}\n`);
+  t.after(async () => {
+    try { process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGTERM'); } catch { /* already gone */ }
+    await driver.kill(); rmSync(fake.dir, { recursive: true, force: true });
+  });
+  await driver.start();
+  await log.until(e => e.type === 'status' && e.status === 'exited');
+  assert.doesNotThrow(() => process.kill(Number(readFileSync(pidFile, 'utf8')), 0));
+});
+
+test('Claude starts one process when startup and the first send overlap', async () => {
+  let opened = 0, exited;
+  const writes = [];
+  const pipe = { onData() {}, onExit(fn) { exited = fn; },
+    write(raw) { writes.push(JSON.parse(raw)); },
+    end() { exited({ code: 0 }); }, kill() { exited({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: 'unused', cwd: '/tmp', procId: 'hosted', procHost: {
+    hasProc: () => false, openProc: async () => { opened++; }, procPipe: () => pipe,
+  } });
+  try {
+    await Promise.all([driver.start(), driver.start(), driver.send('hello')]);
+    assert.equal(opened, 1);
+    assert.equal(writes.filter(m => m.type === 'control_request').length, 1);
+    assert.equal(writes.filter(m => m.type === 'user').length, 1);
+  } finally { await driver.kill(); }
+});
 
 async function modelControl(t, version = '2.1.302') {
   let receive, exited;
@@ -38,6 +108,25 @@ async function modelControl(t, version = '2.1.302') {
     reply: response => receive(JSON.stringify({ type: 'control_response',
       response: { ...response, request_id: writes.findLast(w => w.type === 'control_request').request_id } }) + '\n') };
 }
+
+test('Claude releases control timers after replies and exit', async t => {
+  const { driver, reply, exit } = await modelControl(t);
+  const timers = new Set();
+  t.mock.method(globalThis, 'setTimeout', () => {
+    const timer = { unref() {} }; timers.add(timer); return timer;
+  });
+  t.mock.method(globalThis, 'clearTimeout', timer => timers.delete(timer));
+  const selected = driver.setModel('sonnet');
+  assert.equal(timers.size, 1);
+  reply({ subtype: 'success' });
+  await selected;
+  assert.equal(timers.size, 0);
+  const changing = driver.setModel('opus');
+  assert.equal(timers.size, 1);
+  exit();
+  await assert.rejects(changing, /exited/);
+  assert.equal(timers.size, 0);
+});
 
 /** What Claude Code 2.1.302 sent for a switch in a real run against a stand-in API. */
 const switchHook = (over = {}) => ({ type: 'control_request', request_id: 'hook-1', request: { subtype: 'hook_callback',
@@ -271,6 +360,9 @@ test('a wake-up the CLI starts by itself is a turn of its own, not the last one 
   assert.equal(starts.length, 3);
   assert.equal(starts[0].text, 'Reply with exactly the words: hello from helm');
   assert.ok(starts.slice(1).every((e) => e.wake === true && e.text === '' && e.turnId.startsWith('wake-')));
+  // The chat says what woke the agent, in the CLI's own words.
+  assert.deepEqual(starts[1].cause, [{ summary: 'Background command "Run the lint check" completed (exit code 0)', status: 'completed' }]);
+  assert.equal(starts[2].cause, undefined, 'a notice with no summary adds nothing');
   // The last result is said twice; the second opens no turn and closes nothing.
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(log.of('turn.start').length, 3);
@@ -279,6 +371,20 @@ test('a wake-up the CLI starts by itself is a turn of its own, not the last one 
   const wakeText = log.of('item.start').find((e) => e.kind === 'text' && e.turnId === starts[1].turnId);
   assert.ok(wakeText, "the wake-up's words belong to the wake-up");
   assert.equal(log.of('item.delta').filter((e) => e.id === wakeText.id).map((e) => e.text).join(''), 'background check is clean');
+  await driver.kill();
+});
+
+test('a task notice the CLI replays is a wake-up, never a message from the owner', async () => {
+  // Background news queued behind the owner's message comes back marked as a
+  // replay. Read as a sent message, the chat showed the raw notice as the
+  // owner's own words.
+  const { driver, log } = make('wake-replay');
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done' && log.of('turn.done').length === 3);
+  const starts = log.of('turn.start');
+  assert.equal(starts.filter((e) => /task-notification/.test(e.text)).length, 0);
+  assert.equal(starts[1].wake, true);
+  assert.deepEqual(starts[1].cause, [{ summary: 'Background command "Run the lint check" completed (exit code 0)', status: 'completed' }]);
   await driver.kill();
 });
 
@@ -297,6 +403,22 @@ test('a wake-up turn reads as working until it finishes, not done', async (t) =>
     'turn.start', 'working', 'turn.done', 'idle',
     'turn.start', 'working', 'turn.done', 'idle',
   ]);
+});
+
+test('a resumed Claude that reports a stale task first leaves the new message working', async (t) => {
+  // A chat resumed after its folder came back: Claude reported a background
+  // command that ended while it was away, with an empty result, before it
+  // read the message. That result closed the message's turn, so the chat
+  // read "done" for the whole reply.
+  const { driver, log } = make('resume-stale-result');
+  t.after(() => driver.kill());
+  await driver.send('Reply with exactly the words: hello from helm');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.turnId, log.of('turn.start')[0].turnId);
+  assert.equal(done.costTotalUsd, 0.016515);
+  const seq = log.events.filter((e) => e.type === 'status' || e.type === 'turn.start' || e.type === 'turn.done')
+    .map((e) => e.type === 'status' ? e.status : e.type);
+  assert.deepEqual(seq, ['working', 'turn.start', 'turn.done', 'idle']);
 });
 
 test('delegated Claude tasks cannot enter a plan approval workflow', () => {
@@ -608,6 +730,25 @@ test('interrupt: stops the turn and reports it as interrupted, not as an error',
   assert.equal(sent.request.subtype, 'interrupt');
   assert.equal(sent.request.cancel_queued, true);
   await driver.kill();
+});
+
+test('Stop also stops the commands and watches Claude left running; a stop for the next message does not', async (t) => {
+  const { driver, writes, send } = await modelControl(t);
+  for (const [task_id, task_type] of [['bash-1', 'local_bash'], ['watch-1', 'monitor']]) {
+    send({ type: 'system', subtype: 'task_started', task_id, tool_use_id: `toolu_${task_id}`, task_type });
+  }
+  const stops = () => writes.filter(w => w.type === 'control_request' && ['interrupt', 'stop_task'].includes(w.request.subtype));
+  const answer = () => { for (const w of stops()) send({ type: 'control_response', response: { subtype: 'success', request_id: w.request_id } }); };
+  const stopped = driver.interrupt({ background: true });
+  assert.deepEqual(stops().map(w => [w.request.subtype, w.request.task_id]),
+    [['interrupt', undefined], ['stop_task', 'bash-1'], ['stop_task', 'watch-1']]);
+  answer();
+  await stopped;
+  writes.length = 0;
+  const replyOnly = driver.interrupt();
+  assert.deepEqual(stops().map(w => w.request.subtype), ['interrupt']);
+  answer();
+  await replyOnly;
 });
 
 test('kill: a prompt still open is denied before the process is closed', async () => {

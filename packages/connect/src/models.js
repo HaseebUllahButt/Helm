@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
@@ -44,16 +44,24 @@ let modelsDevCache = { at: 0, checkedAt: 0, catalog: null };
 let modelsDevInflight = null;
 const discoveries = new Map();
 const codexRetryAt = new Map();
+const codexRefreshes = new Map();
+const publicRefreshes = new Map();
+
+function pendingRefreshes(engine, key) {
+  return [inflight.get(key), publicRefreshes.get(key),
+    ...(engine === 'codex' ? [codexRefreshes.get(key), codexManifestInflight] : []),
+    ...(['claude', 'gemini'].includes(engine) ? [modelsDevInflight] : []),
+  ].filter(Boolean);
+}
 
 /**
  * `launcher` is the {cmd, args} of an account run through a wrapper script
  * (discover.js wrappedEngine): its own binary can only be reached that way.
  */
-export async function listModels(engine, home, environment = {}, launcher = null) {
-  const answer = (value) => ['claude', 'gemini'].includes(engine)
-    ? { ...value, refreshing: !!modelsDevInflight }
-    : value;
+export async function listModels(engine, home, environment = {}, launcher = null, { settled = false } = {}) {
   const key = modelsKey(engine, home, launcher);
+  if (settled) await modelsSettled(engine, home, launcher);
+  const answer = (value) => ({ ...value, refreshing: pendingRefreshes(engine, key).length > 0 });
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return answer(hit.value);
   // Some CLIs take seconds to list (agy asks the server every time). A list
@@ -142,10 +150,10 @@ function refreshModels(key, engine, home, environment, launcher, hit) {
       // A transient provider or CLI failure should not make a previously known
       // model disappear from the picker. The next expiry will try discovery
       // again, while this answer keeps the app useful in the meantime.
-      if (hit?.value) return hit.value;
+      if (hit?.value) value = hit.value;
     }
     // An empty answer from a CLI that listed models before is a hiccup, not news.
-    if (!value.models?.length && hit?.value?.models?.length) return hit.value;
+    if (!value.models?.length && hit?.value?.models?.length) value = hit.value;
     cache.set(key, { at: Date.now(), value });
     return value;
   })().finally(() => inflight.delete(key));
@@ -155,9 +163,11 @@ function refreshModels(key, engine, home, environment, launcher, hit) {
 
 /** Rebuild already-listed account caches after an optional public catalog updates. */
 function refreshDiscoveredModels(engines) {
-  setImmediate(async () => {
-    for (const [key, discovery] of discoveries) {
-      if (!engines.has(discovery.engine)) continue;
+  for (const [key, discovery] of discoveries) {
+    if (!engines.has(discovery.engine) || publicRefreshes.has(key)) continue;
+    // Track this work before the public fetch ends. A waiting menu must not
+    // receive the old account cache between the fetch and its rebuild.
+    const job = (async () => {
       const current = inflight.get(key);
       if (current) await current.catch(() => {});
       const hit = cache.get(key);
@@ -165,8 +175,9 @@ function refreshDiscoveredModels(engines) {
         await refreshModels(key, discovery.engine, discovery.home,
           discovery.environment, discovery.launcher, hit);
       } catch { /* keep the prior account-specific answer */ }
-    }
-  });
+    })().finally(() => publicRefreshes.delete(key));
+    publicRefreshes.set(key, job);
+  }
 }
 
 async function codexModels(root, environment, key) {
@@ -196,10 +207,19 @@ async function codexModels(root, environment, key) {
 }
 
 function readCodexDiskCatalog(root) {
-  try {
-    const catalog = JSON.parse(readFileSync(join(root, 'model_catalog.json'), 'utf8'));
-    return Array.isArray(catalog?.models) && catalog.models.length ? catalog : null;
-  } catch { return null; }
+  // Codex versions use both names. Prefer the latest valid account cache;
+  // an old model_catalog.json must not hide a newer models_cache.json.
+  const catalogs = [];
+  for (const name of ['model_catalog.json', 'models_cache.json']) {
+    try {
+      const file = join(root, name);
+      const catalog = JSON.parse(readFileSync(file, 'utf8'));
+      if (Array.isArray(catalog?.models) && catalog.models.length) {
+        catalogs.push({ catalog, at: statSync(file).mtimeMs });
+      }
+    } catch { /* missing or incomplete cache */ }
+  }
+  return catalogs.sort((a, b) => b.at - a.at)[0]?.catalog ?? null;
 }
 
 function codexValue(catalog, def = null, effort = null) {
@@ -221,9 +241,9 @@ function codexValue(catalog, def = null, effort = null) {
 }
 
 function scheduleCodexRefresh(key, root, environment, def, effort) {
-  if (Date.now() < (codexRetryAt.get(key) ?? 0)) return;
+  if (codexRefreshes.has(key) || Date.now() < (codexRetryAt.get(key) ?? 0)) return;
   codexRetryAt.set(key, Date.now() + CODEX_RETRY_MS);
-  setImmediate(async () => {
+  const job = new Promise((resolve) => setImmediate(resolve)).then(async () => {
     try {
       const result = await codexCatalog(root, environment);
       if (!['app-server', 'debug'].includes(result?.source) || !result.catalog?.models?.length) return;
@@ -235,7 +255,8 @@ function scheduleCodexRefresh(key, root, environment, def, effort) {
       if (prior?.models?.length && !fresh.models.length) return;
       cache.set(key, { at: Date.now(), value: fresh });
     } catch { /* keep local data and throttle the next provider probe */ }
-  });
+  }).finally(() => codexRefreshes.delete(key));
+  codexRefreshes.set(key, job);
 }
 
 /**
@@ -608,6 +629,17 @@ export function newestFirst(ids, releasedAt = {}) {
     .map((x) => x.id);
 }
 
+/** Resolves once catalog refreshes already in progress have ended. */
+export async function modelsSettled(engine, home, launcher = null) {
+  const pending = () => engine ? pendingRefreshes(engine, modelsKey(engine, home, launcher)) : [
+    modelsDevInflight, codexManifestInflight, ...inflight.values(),
+    ...codexRefreshes.values(), ...publicRefreshes.values(),
+  ].filter(Boolean);
+  // A public fetch can start an account rebuild. Follow that work too,
+  // without waiting for another account's CLI or another provider.
+  for (let jobs = pending(); jobs.length; jobs = pending()) await Promise.allSettled(jobs);
+}
+
 /** Return stale public data immediately and refresh it once in the background. */
 function modelsDevCatalog() {
   const now = Date.now();
@@ -657,6 +689,17 @@ export function parseOpencodeModelCache(catalog) {
   return { effortsByModel, labels, attachmentByModel };
 }
 
+/**
+ * OpenCode 2 answers a command through its background service, starting one
+ * when none runs, and that service stays up long after the answer. Asking for
+ * the model list would leave it running for good. `--standalone` uses a
+ * private server that exits with the command; OpenCode 1 has no such flag.
+ */
+async function opencodeExec(bin, args, options) {
+  try { return await exec(bin, [...args, '--standalone'], options); }
+  catch { return exec(bin, args, options); }
+}
+
 async function opencodeModels(root, bin = 'opencode', environment = {}) {
   let def = null;
   for (const name of ['opencode.jsonc', 'opencode.json']) {
@@ -674,7 +717,7 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
   try {
     // The normal command reads OpenCode's existing local catalog. Only try
     // its network-refresh path when there is no usable local answer.
-    ({ stdout } = await exec(bin, ['models'], {
+    ({ stdout } = await opencodeExec(bin, ['models'], {
       timeout: 8_000,
       env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
     }));
@@ -684,13 +727,18 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
   } catch {
     // `--refresh` is a fallback for an empty/broken local catalog, never the
     // first step on every picker request.
-    ({ stdout } = await exec(bin, ['models', '--refresh'], {
+    ({ stdout } = await opencodeExec(bin, ['models', '--refresh'], {
       timeout: 20_000,
       env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
     }));
   }
   const models = stdout.split('\n').map((l) => l.trim()).filter((l) => l && l.includes('/'));
   if (def && !models.includes(def)) models.unshift(def);
+  const signedOut = await refusedOpencodeKeys(bin, root, environment);
+  const refused = (m) => signedOut.some((p) => m.startsWith(`${p}/`));
+  // OpenCode lists opencode-go/ before opencode/, so with no configured
+  // default its own pick is a Go model: a new chat would fail on a dead key.
+  const startModel = signedOut.length && (!def || refused(def)) ? models.find((m) => !refused(m)) ?? null : null;
 
   // Expose correct reasoning levels from opencode's models cache (provider metadata
   // at models.dev). This is the source of truth for zen/opencode models - e.g.
@@ -716,7 +764,8 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
   } catch { /* the live session will advertise its actual levels */ }
 
   return {
-    default: def,
+    default: startModel ?? def,
+    ...(signedOut.length ? { signedOut, startModel } : {}),
     models,
     labels,
     efforts: [],
@@ -724,6 +773,68 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
     attachmentByModel,
     images: models.some((m) => attachmentByModel[m]),
     imagesByModel: { ...attachmentByModel },
+  };
+}
+
+/**
+ * OpenCode's own services answer their public model list to anyone, but
+ * refuse it with 401 for an expired or revoked key. `opencode auth list`
+ * still shows such a key as stored, so this is the only cheap way to tell:
+ * it costs no usage, and the key goes only where OpenCode sends it anyway.
+ */
+const OPENCODE_KEY_CHECKS = {
+  opencode: 'https://opencode.ai/zen/v1/models',
+  'opencode-go': 'https://opencode.ai/zen/go/v1/models',
+};
+
+/** OpenCode providers whose saved key the service refuses. */
+async function refusedOpencodeKeys(bin, root, environment = {}) {
+  const keys = new Map();
+  try {
+    // V2 keeps keys in its database and prints them with `auth export`.
+    const { stdout } = await opencodeExec(bin, ['auth', 'export'], {
+      timeout: 8_000,
+      env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
+    });
+    for (const c of JSON.parse(stdout)) {
+      if (c?.active && c.value?.type === 'key' && c.value.key) keys.set(c.integrationID, c.value.key);
+    }
+  } catch {
+    // V1 keeps them in <data home>/opencode/auth.json.
+    try {
+      const dataHome = environment.XDG_DATA_HOME || join(environment.HOME || expand('~'), '.local', 'share');
+      const saved = JSON.parse(readFileSync(join(dataHome, 'opencode', 'auth.json'), 'utf8'));
+      for (const [id, c] of Object.entries(saved ?? {})) if (c?.type === 'api' && c.key) keys.set(id, c.key);
+    } catch { /* no saved keys */ }
+  }
+  const refused = await Promise.all([...keys].filter(([id]) => OPENCODE_KEY_CHECKS[id]).map(async ([id, key]) => {
+    try {
+      const r = await fetch(OPENCODE_KEY_CHECKS[id], {
+        headers: { authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      return r.status === 401 || r.status === 403 ? id : null;
+    } catch { return null; }
+  }));
+  return refused.filter(Boolean);
+}
+
+/**
+ * Move models of a provider whose sign-in the service refuses to `more`, so
+ * the picker offers what works first. A live session lists them again, so
+ * this runs on the final answer, not only on the cached catalogue.
+ */
+export function setAsideSignedOut(list) {
+  const out = list?.signedOut;
+  if (!out?.length || !list.models?.length) return list;
+  const refused = (m) => out.some((p) => m.startsWith(`${p}/`));
+  const keep = list.models.filter((m) => !refused(m));
+  if (!keep.length) return list;
+  return {
+    ...list,
+    models: keep,
+    more: [...(list.more ?? []).filter((m) => !refused(m)), ...list.models.filter(refused), ...(list.more ?? []).filter(refused)],
+    default: list.default && refused(list.default) ? list.startModel ?? keep[0] : list.default,
   };
 }
 

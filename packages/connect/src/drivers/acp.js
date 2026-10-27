@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
+import { LineBuffer } from '../line-buffer.js';
 import { randomUUID } from 'node:crypto';
-import { Driver, checkVersion, assertFolder } from './index.js';
+import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
 import { modeFor, modesFor } from '../modes.js';
 
 /**
@@ -66,6 +67,10 @@ const SUBAGENT_TOOL = /subagent|spawn.?agent|^task$/i;
 
 /** A turn this driver opened, as opposed to one of helm's own queue tickets. */
 const isDriverTurn = (turnId) => String(turnId).startsWith('turn-');
+
+/** The agent says the saved session does not exist (ACP "resource not found", or its own words). */
+const sessionGone = (error) => error?.code === -32002
+  || /\b(session|chat|conversation)\b.*\b(not found|does not exist|no longer exists|unknown|missing)\b|\bno such (session|chat)\b/i.test(error?.message ?? '');
 
 export class AcpDriver extends Driver {
   /**
@@ -182,7 +187,12 @@ export class AcpDriver extends Driver {
   async start() {
     if (this.#starting) return this.#starting;
     if (this.#pipe) return;
-    this.#starting = this.#start().finally(() => { this.#starting = null; });
+    this.#starting = this.#start().catch(async (error) => {
+      // A refused handshake leaves a live pipe without a usable session.
+      // Close that process before another caller can retry from initialize.
+      if (this.#pipe) await this.#stopPipe(this.#pipe, this.#exited);
+      throw error;
+    }).finally(() => { this.#starting = null; });
     return this.#starting;
   }
 
@@ -219,6 +229,9 @@ export class AcpDriver extends Driver {
     // A fresh agent reports the state it loaded before helm's choices are
     // applied below; that reporting must not pass for a change it made.
     this.#live = false;
+    this.#options = [];
+    this.#commands = [];
+    this.#imagePrompts = null;
     this.#bindPipe(pipe);
 
     // fs and terminal are left unadvertised on purpose: with no client to
@@ -250,7 +263,20 @@ export class AcpDriver extends Driver {
       this.#takeOptions(res.result);
       this.#takeCommands(res.result);
     } else {
-      if (res?.error) this.log(`${this.engine}: session/load failed (${res.error.message}); starting fresh`);
+      // A failed resume is not permission to replace the saved chat. The
+      // next message must retry that chat, with its history still intact -
+      // unless the agent says that chat no longer exists. Then every retry
+      // would fail the same way, so the chat goes on in a new session and
+      // says so; what was said before stays in Helm.
+      if (res?.error && !sessionGone(res.error)) {
+        const message = `Helm cannot open the saved ${this.spec.label ?? this.engine} chat. ${res.error.message}`;
+        this.push('error', { message, kind: 'init' });
+        throw new Error(message);
+      }
+      if (res?.error) {
+        this.log(`${this.engine}: saved chat ${this.engineSessionId} is gone (${res.error.message}); starting a new session`);
+        this.push('error', { kind: 'resume', message: `${this.spec.label ?? this.engine} no longer has this chat's earlier session. The chat goes on in a new session. Earlier messages stay here, but the agent does not remember them.` });
+      }
       let created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
       if (created.error && this.spec.authMethod && !authenticated && this.#needsAuth(created.error)) {
         authenticated = await this.#authenticate();
@@ -299,9 +325,9 @@ export class AcpDriver extends Driver {
         const res = await this.#call(verb, { sessionId, cwd: this.cwd, mcpServers: [] });
         if (!res.error) return res;
         last = res;
-        // An auth refusal needs `authenticate`, not another verb - letting
-        // a fallback's method-not-found overwrite it would hide the ask.
-        if (this.spec.authMethod && this.#needsAuth(res.error)) return res;
+        // Only a missing method calls for a different verb. Auth, invalid
+        // parameters and load failures must keep their original error.
+        if (res.error.code !== -32601) return res;
       }
       return last;
     } finally {
@@ -387,8 +413,26 @@ export class AcpDriver extends Driver {
    * wire actually wants, so everything downstream (catalog, setModel,
    * setMode, refusal handling) treats them identically.
    */
+  #configOptions(result) {
+    const options = Array.isArray(result?.configOptions) ? result.configOptions : [];
+    const seen = new Set();
+    return options.flatMap((option) => {
+      if (!option?.id) return [];
+      // Categories describe the picker; ids are agent-defined wire values.
+      // Older agents omit categories, so their familiar ids still work.
+      const category = option.type == null || option.type === 'select' ? option.category : null;
+      const id = category === 'model' || category === 'mode' ? category
+        : category === 'thought_level' && this.spec.effortId ? this.spec.effortId : option.id;
+      if (seen.has(id)) return [];
+      seen.add(id);
+      return [{ ...option, id, _configId: option._configId ?? option.id,
+        options: (option.options ?? []).flatMap((entry) => Array.isArray(entry?.options) ? entry.options : [entry]),
+      }];
+    });
+  }
+
   #takeOptions(result) {
-    const merged = [...(Array.isArray(result?.configOptions) ? result.configOptions : [])];
+    const merged = this.#configOptions(result);
     // Agents that answer with both - devin does - carry modes/models as a
     // legacy mirror of the same pickers. They fill a picker only when
     // configOptions never carried one; overwriting it would silently switch
@@ -458,7 +502,7 @@ export class AcpDriver extends Driver {
     if (option?._legacy === 'session/set_model') {
       return this.#call('session/set_model', { sessionId: this.engineSessionId, modelId: value });
     }
-    return this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId, value });
+    return this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: option?._configId ?? configId, value });
   }
 
   #syncInfo() {
@@ -482,7 +526,7 @@ export class AcpDriver extends Driver {
       return;
     }
     const changed = this.#optionsChanged(r.result);
-    const responseOption = r.result?.configOptions?.find((o) => o?.id === 'model');
+    const responseOption = this.#configOptions(r.result).find((o) => o.id === 'model');
     const responseValue = Object.hasOwn(responseOption ?? {}, 'currentValue')
       ? responseOption.currentValue
       : Object.hasOwn(r.result?.models ?? {}, 'currentModelId') ? r.result.models.currentModelId : undefined;
@@ -514,7 +558,7 @@ export class AcpDriver extends Driver {
       return;
     }
     const changed = this.#optionsChanged(r.result);
-    const responseOption = r.result?.configOptions?.find((o) => o?.id === this.spec.effortId);
+    const responseOption = this.#configOptions(r.result).find((o) => o.id === this.spec.effortId);
     const responseValue = Object.hasOwn(responseOption ?? {}, 'currentValue') ? responseOption.currentValue : undefined;
     const current = this.#options.find((o) => o.id === this.spec.effortId)?.currentValue;
     const moved = current != null && current !== cachedValue;
@@ -535,6 +579,7 @@ export class AcpDriver extends Driver {
    * back so everything downstream is identical.
    */
   #localPipe(child) {
+    child.stdin.on('error', err => this.push('error', { message: `Could not send input to ${this.engine}: ${err.message}`, kind: 'input' }));
     child.stderr.setEncoding('utf8');
     let tail = '';
     child.stderr.on('data', (d) => { tail = (tail + d).slice(-4000); if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d); });
@@ -595,12 +640,11 @@ export class AcpDriver extends Driver {
         resolve({ code });
       });
     });
-    let buf = '';
+    const lines = new LineBuffer();
     pipe.onData((chunk) => {
-      buf += chunk;
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      lines.write(chunk);
+      let line;
+      while ((line = lines.read()) !== null) {
         if (!line.trim()) continue;
         // Some agents print outside the protocol - antigravity's OAuth URL
         // is a plain stdout line, not JSON-RPC. The spec claims those.
@@ -859,6 +903,12 @@ export class AcpDriver extends Driver {
       this.push('input.failed', { text: input.text, inputId: input.inputId, error: res.error?.message || 'The run ended before reading this message.' });
     }
     this.#closeStream();
+    const plan = `plan-${turnId}`;
+    if (this.#items.delete(plan)) {
+      const reason = res.result?.stopReason;
+      this.push('item.done', { id: plan, status: res.error ? 'error' : reason === 'cancelled' ? 'declined'
+        : reason && reason !== 'end_turn' ? 'error' : 'ok' });
+    }
     this.compactionEnded(res.error ? 'error' : res.result?.stopReason === 'cancelled' ? 'declined' : 'ok', res.error?.message);
     this.#turnId = null;
     this.#promptId = null;
@@ -959,15 +1009,20 @@ export class AcpDriver extends Driver {
       try { await this.answer(requestId, { option: 'deny' }); } catch { /* already gone */ }
     }
     if (this.status === 'working') this.#notify('session/cancel', { sessionId: this.engineSessionId });
+    await this.#stopPipe(pipe, this.#exited);
+  }
+
+  /** Close one process, including a process whose startup failed. */
+  async #stopPipe(pipe, exited) {
     try { pipe.end(); } catch { /* closed */ }
-    const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    const done = await waitForExit(exited, 3000);
     if (!done) pipe.kill('SIGTERM');
-    const done2 = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    const done2 = await waitForExit(exited, 2000);
     if (!done2) pipe.kill('SIGKILL');
     // The exit notice crosses the host's socket when the process is hosted;
     // a dead socket would leave this promise waiting on a death nobody can
     // see, so the last wait is bounded too.
-    await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    await waitForExit(exited, 2000);
   }
 
   /**
@@ -1119,60 +1174,51 @@ export class AcpDriver extends Driver {
   }
 
   #toolCall(u) {
-    this.#closeStream();
-    const id = u.toolCallId ?? `tool-${++this.#itemSeq}`;
-    const input = u.rawInput ?? {};
-    const name = u._meta?.['cognition.ai/inferenceToolName'] ?? input.tool ?? null;
-    const isSpawn = SUBAGENT_TOOL.test(name ?? u.title ?? '');
-    const inChild = !isSpawn && !!u._meta?.['cognition.ai/subagent_context'];
-    const changes = this.#changes(u.content);
-    const kind = isSpawn ? 'subagent' : KIND[u.kind] ?? (input.command ? 'command' : changes.length ? 'edit' : 'tool');
-    if (isSpawn) this.#lastSub = id;
-    const parentId = inChild ? this.#lastSub : undefined;
-    // devin previews the command as a shellscript resource rather than in
-    // rawInput; opencode puts it in rawInput.command.
-    const script = (u.content ?? []).find((c) =>
-      c?.type === 'content' && c.content?.type === 'resource' &&
-      (c.content?._meta?.['cognition.ai/preview_is_shell_command'] || c.content?.resource?.mimeType === 'text/x-shellscript')
-    )?.content?.resource?.text;
-    const command = input.command
-      ?? u._meta?.['cognition.ai/editableCommand']
-      ?? script
-      ?? (kind === 'command' ? u.title : undefined);
-    const item = { kind, command, changes, name, output: '' };
-    this.#items.set(id, item);
-    this.push('item.start', {
-      id, kind, turnId: this.#turnId,
-      name: name ?? (kind === 'command' ? 'Bash' : kind === 'edit' ? 'Edit' : u.title ?? 'tool'),
-      input: Object.keys(input).length ? input : undefined,
-      command, cwd: u._meta?.['cognition.ai/cwd'] ?? input.cwd,
-      changes: changes.length ? changes : undefined,
-      parentId,
-      agent: isSpawn ? { status: 'running', description: u.title } : undefined,
-    });
-    if (u.status === 'completed' || u.status === 'failed') this.#toolDone(id, u);
+    this.#toolUpdate({ ...u, toolCallId: u.toolCallId ?? `tool-${++this.#itemSeq}` });
   }
 
   #toolUpdate(u) {
     const id = u.toolCallId;
     if (!id) return;
-    const item = this.#items.get(id) ?? { kind: 'tool', output: '' };
-    if (!this.#items.has(id)) {
-      this.#items.set(id, item);
-      const isSpawn = SUBAGENT_TOOL.test(u.title ?? '');
-      const inChild = !isSpawn && !!u._meta?.['cognition.ai/subagent_context'];
-      if (isSpawn) { item.kind = 'subagent'; this.#lastSub = id; }
-      this.push('item.start', { id, kind: item.kind, turnId: this.#turnId, name: u.title ?? 'tool', parentId: inChild ? this.#lastSub : undefined, agent: isSpawn ? { status: 'running', description: u.title } : undefined });
-    }
-    // Content entries replace rather than append: a terminal preview and the
-    // final output both say the whole thing.
-    const out = this.#contentText(u.content);
-    if (out) item.output = out;
-    const changes = this.#changes(u.content);
-    if (changes.length) {
-      item.changes = changes;
-      this.push('item.update', { id, changes });
-    }
+    this.#closeStream();
+    const previous = this.#items.get(id);
+    // Every field in an ACP update is optional. Keep the last supplied
+    // value, including details that arrive after the first tool notice.
+    const acp = { ...previous?.acp, ...u };
+    acp._meta = { ...previous?.acp?._meta, ...u._meta };
+    // Keep only the displayed content. Whole-file diffs can be very large.
+    delete acp.content;
+    delete acp.rawOutput;
+    const input = acp.rawInput ?? {};
+    const name = acp._meta?.['cognition.ai/inferenceToolName'] ?? input.tool ?? null;
+    const isSpawn = SUBAGENT_TOOL.test(name ?? acp.title ?? '');
+    const inChild = !isSpawn && !!acp._meta?.['cognition.ai/subagent_context'];
+    const changes = u.content === undefined ? (previous?.changes ?? []) : this.#changes(u.content);
+    const kind = isSpawn ? 'subagent' : KIND[acp.kind] ?? (input.command ? 'command' : changes.length ? 'edit' : 'tool');
+    if (isSpawn) this.#lastSub = id;
+    const script = (u.content ?? []).find((c) =>
+      c?.type === 'content' && c.content?.type === 'resource' &&
+      (c.content?._meta?.['cognition.ai/preview_is_shell_command'] || c.content?.resource?.mimeType === 'text/x-shellscript')
+    )?.content?.resource?.text;
+    const command = input.command
+      ?? acp._meta?.['cognition.ai/editableCommand']
+      ?? script
+      ?? previous?.command
+      ?? (kind === 'command' ? acp.title : undefined);
+    const output = u.content === undefined ? (previous?.output ?? '') : clip(this.#contentText(u.content));
+    const item = { acp, kind, command, changes, name, output };
+    this.#items.set(id, item);
+    const fields = {
+      kind,
+      name: name ?? (kind === 'command' ? 'Bash' : kind === 'edit' ? 'Edit' : acp.title ?? 'tool'),
+      input: Object.keys(input).length ? input : undefined,
+      command, cwd: acp._meta?.['cognition.ai/cwd'] ?? input.cwd,
+      changes,
+      parentId: inChild ? this.#lastSub : undefined,
+      agent: isSpawn ? { status: 'running', description: acp.title } : undefined,
+    };
+    if (!previous) this.push('item.start', { id, turnId: this.#turnId, ...fields });
+    if (previous || output) this.push('item.update', { id, ...fields, output });
     if (u.status === 'completed' || u.status === 'failed') this.#toolDone(id, u);
   }
 
@@ -1194,7 +1240,10 @@ export class AcpDriver extends Driver {
     const parts = [];
     for (const c of content) {
       if (c?.type === 'content' && c.content?.type === 'text') parts.push(c.content.text);
-      else if (c?.type === 'content' && c.content?.type === 'resource' && c.content?.text && !c.content?.uri?.startsWith('tool://')) parts.push(c.content.text);
+      else if (c?.type === 'content' && c.content?.type === 'resource') {
+        const resource = c.content.resource;
+        if (resource?.text && !resource.uri?.startsWith('tool://')) parts.push(resource.text);
+      }
     }
     return parts.join('\n');
   }
@@ -1253,12 +1302,16 @@ export class AcpDriver extends Driver {
 
     const id = p.toolCall?.toolCallId;
     const item = (id && this.#items.get(id)) || {};
-    const kind = item.kind === 'command' ? 'command' : item.kind === 'edit' ? 'edit' : 'tool';
+    // ACP permission requests carry a tool-call update. An agent need not
+    // send a tool_call first, and this update can refine an earlier card.
+    const changes = p.toolCall?.content === undefined ? (item.changes ?? []) : this.#changes(p.toolCall.content);
+    const kind = KIND[p.toolCall?.kind] ?? (item.kind === 'command' || item.kind === 'edit' ? item.kind
+      : p.toolCall?.rawInput?.command ? 'command' : changes.length ? 'edit' : 'tool');
     const tool = p.toolCall?._meta?.['cognition.ai/inferenceToolName'] ?? item.name ?? 'tool';
     const title = p.toolCall?.title || (kind === 'command' ? 'Run a command' : kind === 'edit' ? 'Edit files' : `${this.spec.label ?? this.engine} wants permission`);
     const detail = kind === 'command'
-      ? (item.command ?? p.toolCall?._meta?.['cognition.ai/editableCommand'] ?? title)
-      : kind === 'edit' ? { changes: item.changes ?? [] }
+      ? (p.toolCall?.rawInput?.command ?? p.toolCall?._meta?.['cognition.ai/editableCommand'] ?? item.command ?? title)
+      : kind === 'edit' ? { changes }
       : clip(JSON.stringify(p.toolCall?.rawInput ?? p.toolCall ?? {}, null, 2), 4000);
 
     // The mode may let helm answer this itself; then the phone never sees it.
@@ -1271,7 +1324,7 @@ export class AcpDriver extends Driver {
     }
 
     const shown = [];
-    const allow = options.find((o) => o.kind === 'allow_once') ?? options[0];
+    const allow = options.find((o) => o.kind === 'allow_once');
     if (allow) shown.push({ id: 'allow', role: 'allow', label: allow.name ?? 'Allow' });
     const always = options.find((o) => o.kind === 'allow_always');
     if (always) shown.push({ id: 'always', role: 'allow-always', label: always.name ?? 'Always allow' });
@@ -1282,7 +1335,7 @@ export class AcpDriver extends Driver {
     this.push('permission.request', {
       requestId, itemId: id, kind, tool, title, detail,
       parentId: p.toolCall?._meta?.['cognition.ai/subagent_context'] ? this.#lastSub : undefined,
-      options: shown, defaultTo: 'allow', allowEdit: false,
+      options: shown, defaultTo: allow || always ? 'allow' : 'deny', allowEdit: false,
       // What the wire needs to answer this - kept on the event so a daemon
       // that adopted the process mid-question can still complete the reply.
       acpId: m.id, acpOptions: options,

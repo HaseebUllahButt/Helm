@@ -20,7 +20,6 @@ const WS = `ws://127.0.0.1:${PORT}`;
 
 const N = await import('@helm/protocol/network');
 const { mintToken, newNetworkId, newNetworkKey, ROLE } = await import('@helm/protocol/identity');
-const NAS = await import('@helm/nas');
 const { startRelay } = await import('@helm/relay');
 const { join: joinNet } = await import('../packages/connect/src/serve.js');
 
@@ -64,11 +63,6 @@ test('authenticate admits real members and refuses everything else', () => {
     net: net.id, sub: phone.id, role: ROLE.DEVICE,
   })), 'a rostered device authenticates');
 
-  for (const sub of [phone.id, net.self]) {
-    const { ticket } = NAS.mediaTicket(current(), { sub, env: net.self });
-    assert.equal(N.authenticate(current(), ticket), null, `media ticket for ${sub}`);
-  }
-
   assert.equal(N.authenticate(current(), signed({ net: net.id, sub: net.self, role: 'root' })), null);
   assert.equal(N.authenticate(current(), mintToken(net.key, {
     net: net.id, sub: net.self, role: ROLE.DEVICE,
@@ -90,36 +84,6 @@ test('authenticate admits real members and refuses everything else', () => {
   const gone = N.issueDevice(current(), 'gone');
   N.revoke(N.loadNetwork(), gone.id);
   assert.equal(N.authenticate(N.loadNetwork(), gone.token), null);
-});
-
-test('a media ticket is not a bearer credential on the HTTP API', async () => {
-  const current = N.loadNetwork();
-  const tickets = [
-    NAS.mediaTicket(current, { sub: phone.id, env: net.self }).ticket,
-    NAS.mediaTicket(current, { sub: net.self, env: net.self }).ticket,
-  ];
-  for (const ticket of tickets) {
-    assert.equal(
-      (await fetch(`${BASE}/api/network`, { headers: bearer(ticket) })).status, 401);
-    assert.equal((await fetch(`${BASE}/api/auth/rotate`, {
-      method: 'POST',
-      headers: { ...bearer(ticket), 'content-type': 'application/json' },
-      body: '{}',
-    })).status, 401);
-  }
-  assert.equal((await fetch(`${BASE}/api/network`, { headers: bearer(phone.token) })).status, 200);
-  assert.equal((await fetch(`${BASE}/api/network`, { headers: bearer(MACHINE) })).status, 200);
-});
-
-test('a media ticket cannot upgrade to a socket', async () => {
-  const current = N.loadNetwork();
-  for (const sub of [phone.id, net.self]) {
-    const { ticket } = NAS.mediaTicket(current, { sub, env: net.self });
-    assert.equal((await wsHello(ticket)).httpStatus, 401, `header ticket for ${sub}`);
-    assert.equal((await wsHello(ticket, true)).httpStatus, 401, `subprotocol ticket for ${sub}`);
-  }
-  const hello = await wsHello(phone.token);
-  assert.equal(hello.role, 'client');
 });
 
 test('a device credential never becomes an environment, whatever its subject', async () => {

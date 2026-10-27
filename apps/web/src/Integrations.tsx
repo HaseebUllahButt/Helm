@@ -1,3 +1,4 @@
+import { errorMessage } from './errors';
 import { useEffect, useState } from 'react';
 import type { Client, Environment, Session } from './client';
 import { BackIcon, Icon } from './Icon';
@@ -39,21 +40,21 @@ export function IntegrationsView({ client, env, onBack, onOpenSession }: {
     client.rpc<Reply>(env.id, 'integrations.list', { cwd: cwd || undefined }).then((r) => {
       if (!live) return;
       setReply(r); setProfileId((id) => r.accounts.some((a) => a.profileId === id) ? id : r.accounts.find((a) => a.support?.mcp)?.profileId ?? r.accounts[0]?.profileId ?? '');
-    }).catch((e) => { if (live) setError(e.message); }).finally(() => { if (live) setLoading(false); });
+    }).catch((e) => { if (live) setError(errorMessage(e)); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [client, env.id, cwd]);
   const refresh = async () => setReply(await client.rpc<Reply>(env.id, 'integrations.list', { cwd: cwd || undefined }));
   const change = async (method: string, params: object) => {
     setBusy(true); setError('');
     try { await client.rpc(env.id, method, params, 90_000); await refresh(); setSheet(null); setRemove(undefined); setDetail(undefined); }
-    catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
   const connect = async (c: Connector) => {
     setBusy(true); setError('');
     try {
       const result = await client.rpc<{ session: Session }>(env.id, 'integrations.mcp.connect', { profileId, name: c.name, scope: c.scope, cwd: c.cwd }, 90_000);
       setDetail(undefined); onOpenSession(result.session);
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
   const addButton = (label: string, value: Add) => <button className="linkish" disabled={busy} aria-label={label} onClick={() => { setError(''); setChoice(null); setSheet(value); }}>+ Add</button>;
   const close = () => { if (!busy) { setSheet(null); setError(''); } };
@@ -62,14 +63,14 @@ export function IntegrationsView({ client, env, onBack, onOpenSession }: {
   const skills = account?.skills ?? [];
   const shownSkills = allSkills ? skills : skills.slice(0, FEW);
   return <>
-    <div className="bar"><button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button><b>Connectors &amp; skills</b><span className="spacer" /><button className="linkish" disabled={busy || loading} onClick={() => { setError(''); void refresh().catch((e) => setError(e.message)); }}>Refresh</button></div>
+    <div className="bar"><button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button><b>Connectors &amp; skills</b><span className="spacer" /><button className="linkish" disabled={busy || loading} onClick={() => { setError(''); void refresh().catch((e) => setError(errorMessage(e))); }}>Refresh</button></div>
     <div className="scroll"><div className="pad column integrations">
       <div className="rows"><button className="row" disabled={loading || busy || !reply?.accounts.length} onClick={() => setSheet('account')} aria-label="Pick an account">
         {account && <EngineMark engine={account.engine} />}
         <span className="grow"><span className="rt">{account?.label ?? (loading ? 'Loading accounts…' : 'Helm found no accounts.')}</span><span className="rm">Changes apply to new chats.</span></span>
         <span className="chev"><Icon name="forward" /></span></button></div>
       {error && !sheet && !remove && !detail && <p className="note" role="alert">{error}</p>}
-      {account?.error && <p className="note" role="alert">{account.error}</p>}
+      {account?.error && <p className="note" role="alert">{errorMessage(account.error)}</p>}
       {account && !account.error && <>
         <div className="section">Connectors{!!account.mcp?.length && <span className="quiet">{account.mcp.length}</span>}<span className="spacer" />{account.support?.mcp && addButton('Add connector', 'connector')}</div>
         {!account.support?.mcp ? <p className="note">This agent does not support this feature.</p>

@@ -1,10 +1,10 @@
+import { errorMessage } from '../errors';
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
 import { Client, chatFolder, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
 import { useNow, waitingSince } from '../useNow';
 import { LiveComposer, createLiveDraft } from './liveDraft';
 import { prepareAttachment } from './image';
-import { EngineMark } from '../EngineMark';
 import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
 import { TodoStrip, stripTodos } from './Todos';
 import { RecoveryCard } from './RecoveryCard';
@@ -33,14 +33,13 @@ import { ExternalSessionNotice } from './ExternalSessionNotice';
 import { QueueEdit } from './QueueEdit';
 import { BackIcon, Icon } from '../Icon';
 import { fadeWhenCut } from '../fadeWhenCut';
-import { Route } from '../Route';
 import { EmptyChat, useDockLift } from './EmptyChat';
 import { CloneCard } from './CloneCard';
 import { TaskReturn } from './TaskReturn';
 import { LimitsLine } from './LimitsLine';
 import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
-import { useChatKeys } from './chatKeys';
+import { useChatKeys, useDeleteKey } from './chatKeys';
 import { Canvas, chatPages, useCanvas } from './Canvas';
 import { CanvasContext } from './VisualReply';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
@@ -53,7 +52,7 @@ const ENGINE_LABEL: Record<string, string> = {
 
 type Attachment = { name: string; mime: string; data: string; url: string };
 /** Words whose send failed after the composer had moved on, kept until sent or dismissed. */
-type FailedSend = { id: string; messageId: string; body: string; references: string[]; error: string; retrying?: boolean };
+type FailedSend = { id: string; messageId: string; body: string; references: string[]; attachments: Attachment[]; error: string; retrying?: boolean; before: Set<string> };
 const rejectedDelivery = (error: { code?: string }) => !!error.code && !retryableDelivery(error);
 
 /**
@@ -111,6 +110,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // Typing must not redraw the conversation, so the words live outside this
   // screen's state; only the composer listens to them.
   const [live] = useState(() => createLiveDraft(loadDraft(env.id, session.id)));
+  // Deleted here or on another device: leave the chat once, not twice.
+  const closed = useRef(false);
+  const closeOnce = useCallback(() => { if (closed.current) return; closed.current = true; onClosed(); }, [onClosed]);
+  useEffect(() => { if (session.deleted) closeOnce(); }, [session.deleted, closeOnce]);
   const editRevision = useRef(0);
   const setDraft = useCallback((v: string) => {
     editRevision.current += 1;
@@ -237,7 +240,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       if (!stale && cached) setOptions((now) => now ?? cached);
     });
     const catalog = followModelRefresh(
-      () => client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id }, 30_000),
+      (settled) => client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id, ...(settled ? { settled } : {}) }, 30_000),
       (r) => { setOptions(r); saveModels(env.id, session.profileId, r); },
       () => setOptions((now) => now ?? { default: null, models: [] }),
     );
@@ -282,7 +285,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
 
   const call = async (fn: () => Promise<unknown>) => {
     setBusy(true); setError('');
-    try { await fn(); } catch (e: any) { setError(e.message); }
+    try { await fn(); } catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
   // An orphaned helper is listed on its own; its parent is gone, so there is no thread to go back to.
@@ -315,7 +318,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         try {
           next.push(await prepareAttachment(f));
         } catch (e: any) {
-          failures.push(`${f.name}: ${e?.message || 'Helm cannot read the file.'}`);
+          failures.push(`${f.name}: ${errorMessage(e, { fallback: 'Helm cannot read the file.' })}`);
         }
       }
       if (next.length) await setAttachments((current) => [...current, ...next]);
@@ -325,6 +328,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       setPreparingImages((count) => Math.max(0, count - 1));
     }
   };
+  // The answer to a send can be lost on the way back while the message itself
+  // arrived. A new turn with the same words in the chat proves it arrived.
+  const turnsNow = useRef(log.turns);
+  turnsNow.current = log.turns;
+  const arrivedSince = (before: Set<string>, body: string) => !!body.trim() && turnsNow.current.some((turn) =>
+    !before.has(turn.id) && (splitNote(turn.text).text ?? turn.text ?? '').trim() === body.trim());
   const sendText = async (body: string, atts: Attachment[], sentReferences = references) => {
     const fingerprint = JSON.stringify([env.id, session.id, body, atts.map(a => [a.name, a.mime, a.data]), sentReferences.map(item => item.id)]);
     const messageId = retryDeliveryIds.current.get(fingerprint) ?? newMessageId();
@@ -333,44 +342,70 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     if (!atts.length) setDraft('');
     if (atts.length) setSendingImages(true);
     const clearedAt = editRevision.current;
+    // Turns already in the chat: a new one with these words means it arrived.
+    const before = new Set(log.turns.map((turn) => turn.id));
     try {
       await client.input(env.id, { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 120_000, messageId);
       retryDeliveryIds.current.delete(fingerprint);
+      setFailedSends(current => current.filter(item => item.messageId !== messageId));
       if (atts.length) {
         if (editRevision.current === clearedAt) setDraft('');
         await setAttachments(current => current.filter(image => !atts.includes(image)));
       }
     }
     catch (e: any) {
+      if (!atts.length && !rejectedDelivery(e) && arrivedSince(before, body)) {
+        retryDeliveryIds.current.delete(fingerprint);
+        return;
+      }
       // An explicit rejection can start a new attempt on the owner's next
       // send. An unknown result must retain its original identity.
       const retryId = rejectedDelivery(e) ? newMessageId() : messageId;
       retryDeliveryIds.current.set(fingerprint, retryId);
-      setError(e.message);
+      const problem = errorMessage(e, { machine: env.name });
+      setError(rejectedDelivery(e) ? problem : '');
       setSentFirst(false);
       // Only restore the failed send if the composer is still exactly in the
       // state produced by clearing it. A newer draft or attachment edit -
       // including one from another pending send - belongs to the owner and
       // must not be overwritten by a late RPC failure.
-      if (editRevision.current === clearedAt) {
+      const restore = editRevision.current === clearedAt;
+      if (restore) {
         setDraft(body);
         setReferences(sentReferences);
-      } else if (!atts.length) {
-        // The owner has typed since: keep the words on a card of their own
-        // rather than lose them. A slow failure may still have arrived.
+      }
+      if (!rejectedDelivery(e) || !restore) {
+        // Keep the complete request, even if the owner edits the restored
+        // draft. Retrying an unknown result must use the same identity.
         failedSendSeq.current += 1;
-        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), error: e.message };
-        setFailedSends((current) => [...current, failed]);
+        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), attachments: atts, error: problem, before };
+        setFailedSends((current) => [...current.filter(item => item.messageId !== messageId), failed]);
       }
     } finally { if (atts.length) setSendingImages(false); }
   };
+  // A card whose words show up later in the chat was sent after all.
+  useEffect(() => {
+    const arrived = failedSends.filter((failed) => arrivedSince(failed.before, failed.body));
+    if (!arrived.length) return;
+    setFailedSends((current) => current.filter((failed) => !arrived.some((item) => item.id === failed.id)));
+    setError((current) => arrived.some((failed) => failed.error === current) ? '' : current);
+  }, [log.turns, failedSends]);
   /** Sends exactly what failed - never whatever is in the composer now. */
   const retryFailedSend = async (failed: FailedSend) => {
     if (retryingSends.current.has(failed.id)) return;
     retryingSends.current.add(failed.id);
     setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, retrying: true } : item));
     try {
-      await client.input(env.id, { id: session.id, data: failed.body, references: failed.references }, 120_000, failed.messageId);
+      const revision = editRevision.current;
+      const restoredDraft = live.get() === failed.body
+        && attachments.length === failed.attachments.length
+        && attachments.every((image, i) => image === failed.attachments[i])
+        && references.length === failed.references.length
+        && references.every((item, i) => item.id === failed.references[i]);
+      await client.input(env.id, { id: session.id, data: failed.body, references: failed.references,
+        ...(failed.attachments.length ? { attachments: failed.attachments.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) } : {}) }, 120_000, failed.messageId);
+      if (restoredDraft && editRevision.current === revision) { setDraft(''); setReferences([]); }
+      if (failed.attachments.length) await setAttachments(current => current.filter(image => !failed.attachments.includes(image)));
       for (const [fingerprint, messageId] of retryDeliveryIds.current) {
         if (messageId === failed.messageId) retryDeliveryIds.current.delete(fingerprint);
       }
@@ -380,7 +415,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       for (const [fingerprint, previous] of retryDeliveryIds.current) {
         if (previous === failed.messageId) retryDeliveryIds.current.set(fingerprint, messageId);
       }
-      setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, messageId, error: e.message, retrying: false } : item));
+      setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, messageId, error: errorMessage(e, { machine: env.name }), retrying: false } : item));
     } finally { retryingSends.current.delete(failed.id); }
   };
   const send = async () => {
@@ -431,7 +466,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       if (method === 'session.dequeue' && result?.found === false && !result.removed) setError('The agent received this message. You cannot take it back.');
       return true;
     }
-    catch (failure: any) { setError(failure.message); return false; }
+    catch (failure: any) { setError(errorMessage(failure)); return false; }
     finally { setQueueBusy(''); }
   };
   const moveQueued = (turn: Turn, direction: -1 | 1) => {
@@ -464,12 +499,30 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         if (turn.references?.length) setReferences((current) => [...current, ...turn.references!.filter((id) => !current.some((item) => item.id === id)).map((id) => referenceOptions.find((item) => item.id === id) ?? { id, title: id })].slice(0, 3));
         if (turn.attachments?.length) setAttachments((current) => [...current, ...turn.attachments!.filter((item) => item.data).map((item) => ({ name: item.filename, mime: item.mime, data: item.data!, url: `data:${item.mime};base64,${item.data}` }))]);
       }
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setQueueBusy(''); }
   };
 
   const answer = (d: Decision) => pending && call(() => client.rpc(env.id, 'session.answer', { id: session.id, requestId: pending.requestId, decision: d }));
-  const stop = () => call(() => client.rpc(env.id, 'session.interrupt', { id: session.id }));
+  // The button answers at once: a stop sent to another machine can take
+  // seconds to come back. It clears when the work ends, when the stop sent
+  // the waiting message instead, or a few seconds after the machine took
+  // the stop, so an agent that did not stop can be stopped again.
+  const [stopping, setStopping] = useState(false);
+  const stopTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => { if (!working) setStopping(false); }, [working]);
+  useEffect(() => { setStopping(false); return () => clearTimeout(stopTimer.current); }, [session.id]);
+  const stop = async () => {
+    clearTimeout(stopTimer.current);
+    setStopping(true);
+    setBusy(true); setError('');
+    try {
+      const r: any = await client.rpc(env.id, 'session.interrupt', { id: session.id });
+      if (r?.next) setStopping(false);
+      else stopTimer.current = setTimeout(() => setStopping(false), 5000);
+    } catch (e: any) { setStopping(false); setError(errorMessage(e)); }
+    finally { setBusy(false); }
+  };
   // model / thinking / permissions / speed all go the same way: tell the
   // daemon, take the session it hands back. Nothing restarts that the driver
   // cannot resume.
@@ -562,7 +615,6 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     const next = nameDraft.trim();
     if (save && next) void rename(next);
   };
-  const folder = !session.brain && !session.quick && session.cwd ? chatFolder(session).replace(/\/+$/, '').split('/').pop() || '~' : '';
 
   // "Ping me when it finishes": one ring, once, the next time the thread
   // settles. New sessions start enabled; the owner can silence this thread.
@@ -597,28 +649,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // tell a turn that just started from one that has been thinking for a
   // while. The open turn's own start beats the record's last transition,
   // which also moves when a permission is answered.
-  const now = useNow();
   const openTurn = transcriptTurns.filter((t) => !t.done).at(-1);
   const taskList = stripTodos(transcriptTurns);
-  const since = working && openTurn ? openTurn.at : session.updatedAt;
-  const age = since ? waitingSince(since, now) : '';
-  const rate = useTokenRate(openTurn, status === 'working');
   // The machine says so for every CLI; an older machine only has the item.
   const liveCompaction = working ? [...transcriptTurns].reverse().flatMap((turn) => turn.items)
     .find((item) => isCompaction(item) && item.status === 'streaming') : undefined;
   const compacting = working && (session.compacting || liveCompaction?.startedAt || !!liveCompaction);
-  const chip = (s: string) => {
-    const ago = age && age !== 'just now' ? ` ${age}` : '';
-    return s === 'blocked' ? <span className="chip blocked"><i />waiting{ago}</span>
-      : s === 'starting' ? <span className="chip working"><i />starting</span>
-      : s === 'working' && compacting ? <span className="chip working"><i />Summarizing chat</span>
-      : s === 'working' ? <span className="chip working"><i />working{ago}{rate ? ` · ${rate} tok/s` : ''}</span>
-      // Its own turn is over, but child tasks are not: the sidebar calls
-      // this working, so the open chat must not look finished.
-      : childrenWorking ? <span className="chip working" title="Helpers are still working"><i />working</span>
-      : s === 'unknown' ? <span className="chip exited" title="The machine cannot report if this agent is working.">Status unknown</span>
-      : null;
-  };
 
   const prefs = trayPrefs({ client, env: env.id, engine: session.engine, profileId: session.profileId, options, setOptions, setError });
   const controls = Controls({ options,
@@ -631,6 +667,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     model: () => controls.step('model'),
     agents: () => setDetails((open) => open === 'agents' ? null : 'agents'),
   });
+  useDeleteKey(() => { void kill(); });
   const limits = useAccountLimits(client, env.id, session.engine, session.brain ? null : session.profileId, log.limits);
   // Which account this chat runs on: with several logins per CLI the mark
   // alone does not say whose plan is being spent. It sits with that plan's
@@ -700,19 +737,26 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const firstMessage = loaded && !logError && transcriptTurns.length === 0 && queuedTurns.length === 0
     && !sentFirst && !working && !pending && !session.external && (session.alive !== false || preparing) && failedSends.length === 0 && !session.recovery;
   const dockAnchor = useDockLift(firstMessage);
+  const toggleCanvas = canvas.toggle;
+  const where = [env.name, session.quick ? 'quick chat' : chatFolder(session), session.nativeCodex ? 'Live agent program' : '',
+    session.brain ? engine : '', money(session.costUsd)].filter(Boolean).join(' · ');
+  // Only a state that needs a look gets a line under the title.
+  const barNotice = log.loaded && (logError || (!env.online && syncing))
+    ? <span className="offline" role="status">Saved chat · reconnecting…</span>
+    : !env.online && !log.loaded ? <span className="offline">Machine offline</span>
+    : env.online && conn && !conn.online && !logError ? <span className="offline">Live updates reconnecting…</span>
+    : syncing && !(cameUpEmpty && !log.loaded) ? <span role="status">Syncing chat…</span>
+    : null;
 
   return (
     <>
       <div className="bar session-bar">
         <button className="iconbtn back" aria-label={parentThread && onOpenSession ? 'Back to main chat' : 'Back'}
           onClick={parentThread && onOpenSession ? openParent : onBack}><BackIcon /></button>
-        <div className="titles">
+        {/* The bar holds only the title and what needs a look now. Where the
+            chat runs and what it costs are a hover away and in the ⋯ menu. */}
+        <div className="titles" title={where}>
           <div className="crumb">
-            <EngineMark engine={session.engine} />
-            {folder && <>
-              <span className="crumb-folder" title={chatFolder(session)}>{folder}</span>
-              <span className="crumb-sep" aria-hidden="true">/</span>
-            </>}
             {renaming ? (
               <input
                 className="crumb-edit" aria-label="Chat name" value={nameDraft} maxLength={200}
@@ -730,25 +774,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
                 onDoubleClick={() => { setNameDraft(session.title); setRenaming(true); }}>{shownTitle(session.title).text}</h1>
             )}
           </div>
-          <span className="sub">
-            <Route machine={env.name} quick={session.quick} />
-            {session.nativeCodex && <span> · Live agent program</span>}
-            {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
-              <span key={part}><span className="sep"> · </span>{part}</span>
-            ))}
-            {/* On a phone the folder leaves the title line to the title. */}
-            {folder && <span className="sub-folder" title={chatFolder(session)}><span className="sep"> · </span>{folder}</span>}
-            {log.loaded && (logError || (!env.online && syncing))
-              ? <span className="offline" role="status"> · Saved chat · reconnecting…</span>
-              : syncing && !(cameUpEmpty && !log.loaded) && <span role="status"> · Syncing chat…</span>}
-            {!env.online && !log.loaded && <span className="offline"> · machine offline</span>}
-            {env.online && conn && !conn.online && !logError && (
-              <span className="offline"> · live updates reconnecting…</span>
-            )}
-          </span>
+          {barNotice && <span className="sub">{barNotice}</span>}
         </div>
         {cloning ? <span className="chip working" role="status"><i />Copying project {session.clone!.percent}%</span>
-          : settingUp ? <span className="chip working" role="status"><i />setting up</span> : chip(status)}
+          : settingUp ? <span className="chip working" role="status"><i />setting up</span> : <WorkingChip status={status} working={working} childrenWorking={childrenWorking} compacting={!!compacting} turn={openTurn} updatedAt={session.updatedAt} />}
         {/* Git gets its own button with the count of changed files: it is
             the thing most often checked. The other opens agents and repeats.
             It is always there, Git project or not: hiding it when a folder was
@@ -757,10 +786,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
             onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         )}
-        <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents"
+        <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents (Ctrl/⌘ Shift A)"
           onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
-        {!session.brain && <button className="iconbtn" title="Open canvas: notes and documents (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
-          onClick={canvas.toggle}><Icon name="canvas" size={17} /></button>}
+        {!session.brain && <button className="iconbtn" title={`${canvas.open ? 'Close' : 'Open'} canvas (Ctrl/⌘ Shift D)`} aria-label="Canvas" aria-pressed={canvas.open}
+          onClick={toggleCanvas}><Icon name="canvas" size={17} /></button>}
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -789,6 +818,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             {parentThread && onOpenSession && <button onClick={openParent}>Open main chat</button>}
             <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
             <button className="destructive" onClick={kill}>{session.nativeCodex ? 'Remove from Helm' : 'Delete chat'}</button>
+            <p className="menu-facts">{where}</p>
           </div>
         )}
       </div>
@@ -818,7 +848,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
         <strong>Send not confirmed</strong>
         <p className="failed-send-text">{failed.body}</p>
-        <p>{failed.error} — Check the chat before you try again.</p>
+        {failed.attachments.length > 0 && <p>{failed.attachments.length} {failed.attachments.length === 1 ? 'attached file' : 'attached files'}</p>}
+        <p>{failed.error}</p>
       </div>
         <span className="failed-send-actions">
           <button disabled={failed.retrying} onClick={() => void retryFailedSend(failed)}>{failed.retrying ? 'Sending…' : 'Retry send'}</button>
@@ -827,7 +858,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       </div>)}
       <LiveComposer
         onTranscribe={onTranscribe}
-        live={live} setDraft={setDraft} onSend={send} onStop={stop} working={working}
+        live={live} setDraft={setDraft} onSend={send} onStop={stop} stopping={stopping} working={working}
         engine={engine} keys={false} waiting={!!pending} ask={pending ? (pending.kind === 'question' ? 'question' : 'approval') : undefined}
         shoulder={taskList && <TodoStrip todos={taskList} />}
         banner={pending && <div ref={permissionBox} className="ask-box"><PermissionSheet key={pending.requestId} variant="banner" permission={pending} onAnswer={answer} busy={busy} onHandle={holdQuestion} /></div>}
@@ -866,7 +897,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             after…"); a card asking to continue it was one more thing to dismiss. */}
         {session.recovery && session.recovery.kind !== 'interrupted' && !working && !pending && (
           <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} autoResume={session.autoResumeLimited}
-            onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(e.message)); }} />
+            onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(errorMessage(e))); }} />
         )}
         {childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Helpers need your answer">
           {childrenWaiting.map(({ session: child }) => <button key={child.id} disabled={!onOpenSession} onClick={() => onOpenSession?.(child)}>
@@ -896,7 +927,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <p>Helm removes this message and later replies. It returns the message to your draft. The machine keeps the old history.</p>
           {(live.get().trim() || attachments.length > 0) && <p>This replaces your draft.</p>}
           <label className="rewind-files"><input type="checkbox" checked={rewinding.restore} disabled={!rewinding.allowed || busy} onChange={event => setRewinding({ ...rewinding, restore: event.target.checked })} />Restore files to before this message</label>
-          <p>{rewinding.allowed ? 'This includes new files and files selected for commit. Files that Git ignores stay unchanged.' : rewinding.reason}</p>
+          <p>{rewinding.allowed ? 'This includes new files and files selected for commit. Files that Git ignores stay unchanged.' : errorMessage(rewinding.reason, { fallback: 'Helm cannot restore files for this message.' })}</p>
           {error && <p role="alert" className="error">{error}</p>}
         </div>
         <div className="modal-actions">
@@ -938,11 +969,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         <Confirm
           title={session.nativeCodex ? `Remove "${session.title}" from Helm?` : `Delete "${session.title}"?`}
           body={session.nativeCodex ? 'It stays in Codex and its terminal keeps running.' : 'The agent stops and this chat leaves Helm.'}
-          confirmLabel={session.nativeCodex ? 'Remove' : 'Delete'} danger busy={busy}
+          confirmLabel={session.nativeCodex ? 'Remove' : 'Delete'} danger busy={busy} enterConfirms
           onCancel={() => setAsk(null)}
           onConfirm={async () => {
             setAsk(null);
-            await call(async () => { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); });
+            await call(async () => { await client.rpc(env.id, 'session.kill', { id: session.id }); closeOnce(); });
           }}
         />
       )}
@@ -964,6 +995,29 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       )}
     </>
   );
+}
+
+// Only the status readout listens to its clocks. A second passing must not
+// rebuild the transcript or the composer's actions.
+function WorkingChip({ status: s, working, childrenWorking, compacting, turn, updatedAt }: {
+  status: string; working: boolean; childrenWorking: boolean; compacting: boolean; turn?: Turn; updatedAt?: number;
+}) {
+  const now = useNow();
+  const since = working && turn ? turn.at : updatedAt;
+  const age = since ? waitingSince(since, now) : '';
+  const rate = useTokenRate(turn, s === 'working');
+  const ago = age && age !== 'just now' ? ` ${age}` : '';
+  return s === 'blocked' ? <span className="chip blocked"><i />waiting{ago}</span>
+    : s === 'starting' ? <span className="chip working"><i />starting</span>
+    : s === 'working' && compacting ? <span className="chip working"><i />Summarizing chat</span>
+    // Plain work is only a blue dot. The time and speed are a hover away.
+    : s === 'working' ? <span className="chip working dot-only" role="img" aria-label={`Working${ago}`}
+        title={`Working${ago}${rate ? ` · ${rate} tok/s` : ''}`}><i /></span>
+    // Its own turn is over, but child tasks are not: the sidebar calls
+    // this working, so the open chat must not look finished.
+    : childrenWorking ? <span className="chip working dot-only" role="img" aria-label="Helpers are still working" title="Helpers are still working"><i /></span>
+    : s === 'unknown' ? <span className="chip exited" title="The machine cannot report if this agent is working.">Status unknown</span>
+    : null;
 }
 
 /**

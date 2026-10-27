@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync, watch } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -6,6 +7,7 @@ import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { HOME, HELM_DIR } from './paths.js';
 import { systemdArg } from './service.js';
+import { webBuild } from './web-build.js';
 
 const exec = promisify(execFile);
 const binPath = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
@@ -80,7 +82,7 @@ export async function selfUpdate(dir = ROOT, opts = {}) {
  * `git reset`s and `npm install`s racing in one checkout is how a deploy
  * gets corrupted.
  */
-async function locked(work) {
+export async function locked(work) {
   const lock = join(HELM_DIR, 'update.lock');
   try {
     mkdirSync(HELM_DIR, { recursive: true });
@@ -105,8 +107,10 @@ function abandonedLock(file) {
   try {
     const owner = JSON.parse(readFileSync(file, 'utf8'));
     if (Number.isInteger(owner.pid) && owner.pid > 0) {
+      // EPERM: after a reboot another user's process (containerd, say) took
+      // the number. The lock is always this user's, so its owner is gone.
       try { process.kill(owner.pid, 0); }
-      catch (error) { return error.code === 'ESRCH'; }
+      catch (error) { return error.code === 'ESRCH' || error.code === 'EPERM'; }
       const start = processStart(owner.pid);
       // A restarted daemon must not wait 30 minutes on its dead predecessor,
       // and a recycled PID must not count as that predecessor still running.
@@ -128,7 +132,7 @@ export async function makeBundle({ have = [] } = {}, dir = ROOT) {
   for (const commit of have) {
     if (/^[0-9a-f]{7,40}$/.test(commit) && await git(['cat-file', '-e', `${commit}^{commit}`]).then(() => true, () => false)) known.push(`^${commit}`);
   }
-  const tmp = join(HELM_DIR, `bundle-${process.pid}-${Date.now()}.git`);
+  const tmp = join(HELM_DIR, `bundle-${process.pid}-${randomUUID()}.git`);
   try {
     // Nothing new to send is not an error: say so instead of an empty bundle.
     const head = await git(['rev-parse', 'HEAD']);
@@ -176,6 +180,26 @@ export async function rebuildIfCommitted(running, dir = ROOT, { rebuild = true, 
     const head = await git(['rev-parse', 'HEAD']);
     if (!running || head === running) return { updated: false, reason: 'nothing new' };
     return applyCommit(dir, git, { head: running, tip: head, rebuild, restart, rollback: false });
+  });
+}
+
+/**
+ * The app this machine serves was built from another commit than the one it
+ * runs: an update moved the checkout again while it was building, or after
+ * it asked for its restart. The relay serves files from disk, so a build is
+ * all it needs - no restart.
+ */
+export async function rebuildStaleApp(running, dir = ROOT, { build = () => gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir }) } = {}) {
+  return locked(async () => {
+    const git = gitIn(dir);
+    if (await git(['status', '--porcelain'])) return { rebuilt: false };
+    const head = await git(['rev-parse', 'HEAD']);
+    const stamp = webBuild(join(dir, 'apps', 'web', 'dist'));
+    // No stamp: a build from before stamps existed, or a development tree.
+    if (!running || head !== running || !stamp || stamp.commit === head) return { rebuilt: false };
+    say(`the app was built from ${stamp.commit.slice(0, 7)}; building it from ${head.slice(0, 7)}`);
+    await build();
+    return { rebuilt: true };
   });
 }
 
@@ -381,6 +405,9 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
       await ensurePty(dir);
     }
     if (rebuild) {
+      if (existsSync(join(dir, 'scripts', 'build-log-reader.mjs'))) {
+        await gentle(process.execPath, ['scripts/build-log-reader.mjs'], { cwd: dir });
+      }
       say('building the app');
       await gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir });
     }

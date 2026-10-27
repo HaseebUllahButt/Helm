@@ -1,3 +1,4 @@
+import { discoverDirectory } from './discovery-native.js';
 import { readdir, stat, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -12,15 +13,16 @@ const SKIP = new Set([
 export async function list(path = HOME) {
   const dir = expand(path);
   const entries = [];
-  const contents = await readdir(dir, { withFileTypes: true });
+  const snapshot = await discoverDirectory(dir);
+  const contents = snapshot?.entries ?? await readdir(dir, { withFileTypes: true });
   for (const d of contents) {
     if (d.name.startsWith('.') && d.name !== '.config') continue;
-    if (!d.isDirectory()) continue;
+    if (!snapshot && !d.isDirectory()) continue;
     const full = join(dir, d.name);
     entries.push({
       name: d.name,
       path: collapse(full),
-      isRepo: existsSync(join(full, '.git')),
+      isRepo: snapshot ? d.repo : existsSync(join(full, '.git')),
       skip: SKIP.has(d.name),
     });
   }
@@ -34,7 +36,7 @@ export async function list(path = HOME) {
     entries,
     // Pickers show folders, but transfer preflight must also see ordinary
     // files and hidden entries before deciding a destination is empty.
-    entryCount: contents.length,
+    entryCount: snapshot ? snapshot.count : contents.length,
   };
 }
 
@@ -175,14 +177,15 @@ async function buildIndex() {
   while (queue.length && out.length < INDEX_MAX) {
     await Promise.all(queue.splice(0, INDEX_WORKERS).map(async ([dir, depth]) => {
       let ents;
-      try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
+      const snapshot = await discoverDirectory(dir);
+      try { ents = snapshot?.entries ?? await readdir(dir, { withFileTypes: true }); } catch { return; }
       for (const d of ents) {
         if (out.length >= INDEX_MAX) return;
-        if (!d.isDirectory()) continue;
+        if (!snapshot && !d.isDirectory()) continue;
         if (SKIP.has(d.name)) continue;
         if (d.name.startsWith('.') && d.name !== '.config') continue;
         const full = join(dir, d.name);
-        const repo = await stat(join(full, '.git')).then(() => true, () => false);
+        const repo = snapshot ? d.repo : await stat(join(full, '.git')).then(() => true, () => false);
         if (out.length >= INDEX_MAX) return;
         out.push({ name: d.name, path: collapse(full), repo });
         if (depth >= INDEX_DEPTH) continue;

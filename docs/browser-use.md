@@ -1,7 +1,7 @@
 # Browser use
 
-Each chat has its own browser, run with Playwright on the chat's machine.
-It controls web pages. Open a tab with `helm browser open <url>`.
+Each chat has its own browser, run with Patchright on the chat's machine.
+Open a tab with `helm browser open <url>`.
 The owner uses the external Chromium window. Helm has no browser panel.
 
 ## Decisions
@@ -14,13 +14,34 @@ The owner uses the external Chromium window. Helm has no browser panel.
   chat's browser is a real Chromium window with its own profile folder (a
   new chat starts with the default profile's logins). The agent drives it
   from inside Chromium, never through the desktop, so it never takes the
-  owner's keyboard or mouse. Helm does not show or stream the page.
-  A machine without a screen (the VM) uses a hidden Chromium,
+  owner's keyboard or mouse. Helm does not show or stream the page. A machine without a screen (the VM) uses a hidden Chromium,
   which is never started where windows can show.
+- **Local terminal links use the chat's machine.** Opening a local link
+  checks that its server still belongs to the chat, then opens its address
+  in the external Chromium window. No public link is made. Discovery runs
+  only when the owner opens a link. Paths and queries stay intact.
 - **Owner and agent share the window.** When the owner clicks, types or
   scrolls, the agent's next step waits until they are still for 2.5 s (at
   most 20 s). Closing the window keeps its tabs as asleep; listing tabs
   never opens it.
+- **It cleans up after itself.** A window nobody used for 30 minutes
+  closes, unless the owner is looking at it; its tabs sleep and come back
+  with the next step. Deleting a chat closes its window and removes its
+  folder. Windows start with `--disable-component-update`, so a chat's
+  profile does not fetch ~150 MB of speech, DRM (Widevine) and model files;
+  DRM video does not play there. Some time after Helm starts, closed
+  windows lose the files Chromium fetches again, and folders of chats gone
+  for a day are removed.
+- **A new tab opens at its address** (`Target.createTarget` with the URL).
+  A tab Playwright makes starts empty, and Chromium shows "about:blank" over
+  a white page until the site answers. A failed load is read from
+  Chromium's error page: loading the address again there can leave the tab
+  unable to close.
+- **An agent gets the page when it goes quiet:** the load event, or half a
+  second with no fetch in flight (at most 3 s). Slow pictures and adverts
+  no longer hold every step back. Pointer moves and scrolling return without
+  waiting for background traffic. The pointer stays visible without a pause
+  before each action.
 - **Show me** (`helm browser point`) highlights an element and changes
   nothing, so it works in read-only chats. Read-only agents can read,
   navigate, wait and check; a batch holding any change is refused before
@@ -39,10 +60,18 @@ The owner uses the external Chromium window. Helm has no browser panel.
 
 - Chromium must already be installed (an existing browser,
   `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at daemon
-  start, and loads no Playwright code until a browser is needed.
-- Hidden tabs prefer Playwright's `chromium_headless_shell` (fast, half the
-  memory). It has no `window.chrome`, so some bot checks refuse it; set
-  `HELM_CHROMIUM_PATH` to pin a full browser.
+  start, and loads no browser driver until a browser is needed.
+- Hidden tabs use full Chromium. The headless shell has no native PDF
+  plugins or `window.chrome`. Patchright avoids `Runtime.enable` in pages
+  and workers. Chromium's automation flag stays off. Hidden tabs use one
+  browser version for the user agent and client hints; the CDP connection
+  that sets them must stay open, since detaching resets them.
+- Console capture starts only when `helm browser act` asks for `console`.
+  It reads Chromium's current page buffer, then stops. Reading the console
+  can trigger a site's control checks. Logs from an earlier page are not
+  kept unless the agent read them before navigation.
+- A viewport screenshot captures the visible page without waiting for fonts.
+  A full-page screenshot still waits for fonts.
 - Each chat's cookies and site storage are saved privately under
   `~/.helm/browser` and come back after a restart. Actions, half-done
   navigation and form contents are not replayed.
@@ -55,9 +84,17 @@ The owner uses the external Chromium window. Helm has no browser panel.
 ## Logins
 
 `helm browser profiles` lists browser profiles on the chat's machine.
-`helm browser logins "<profile>" [--default]` copies cookies from a
+`helm browser logins "<profile>" [--default]` copies cookies from a Helium,
 Chromium, Chrome, Brave, Edge or Vivaldi profile. The machine default stores
 only the profile name; cookies live only in each chat's private storage.
+
+- A profile is found by any name a person uses: the browser ("helium"),
+  the profile ("work", "Profile 7", its email), both ("work in chrome",
+  "brave:Default"), the start of a name, or a line pasted from the list.
+  When two fit, the system's default browser wins, then the latest used.
+  The list shows that order.
+- Helium keeps its key in the keyring under "chromium", and its flags in
+  `helium-browser-flags.conf`.
 
 - Sites that also need local storage or device-bound keys may still ask to
   sign in through the external Chromium window.

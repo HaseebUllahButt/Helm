@@ -414,9 +414,11 @@ npm install
 npm run check
 ```
 
-`npm run check` type-checks, builds the web app, and runs only the tests your
-changes can reach (`--list` shows which and why). `npm run check:full` runs
-every test.
+`npm run check` type-checks the web app when web code changed and runs the
+tests named after the changed files. It lists changed files with no test of
+their own and reuses a saved pass while nothing changes (`--list` shows the
+picks; see `scripts/test-smart.mjs`). `npm run check:full` builds the web app
+and runs every test and `test/network.sh`.
 
 ```bash
 npm exec --workspace @helm/web -- playwright install chromium

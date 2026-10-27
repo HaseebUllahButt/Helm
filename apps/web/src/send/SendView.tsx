@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useRef, useState } from 'react';
 import type { Client, Environment, SendJob, SendPlan } from '../client';
 import { BackIcon } from '../Icon';
@@ -139,7 +140,7 @@ export function SendView({ client, source, folder, jobId: initialJobId, onBack, 
             : job.changed ? `${count(job.changed.files)} changed files · ${bytes(job.changed.bytes)}`
             : `${count(job.files.sent)} files · ${bytes(job.bytes.sent)}`}</p>
           <p className="note">Files stay on {job.source.name}.</p>
-          {job.error && <p className="note" role="status">{job.error}</p>}
+          {job.error && <p className="note" role="status">{errorMessage(job.error, { machine: job.target.name })}</p>}
           <div className="send-actions">
             {onOpenFolder && <button className="primary big" onClick={() => onOpenFolder(job.target.machineId,
               job.source.kind === 'file' ? parent(job.target.path) : job.target.path)}>Open folder there</button>}
@@ -149,7 +150,7 @@ export function SendView({ client, source, folder, jobId: initialJobId, onBack, 
           </div>
         </> : <>
           <SendProgress job={job} />
-          {job.error && <p className="error" role="alert">{job.error}</p>}
+          {job.error && <p className="error" role="alert">{errorMessage(job.error, { machine: job.target.name })}</p>}
           {job.phase === 'cancelled' && <p className="note">The send stopped. Select Retry to continue to the same folder.</p>}
           {job.phase === 'interrupted' && <p className="note">The sending machine stopped before the send finished. Select Retry to continue.</p>}
           {sending(job) ? <button className="linkish send-stop" disabled={!!busy} onClick={() => void action('cancel')}>

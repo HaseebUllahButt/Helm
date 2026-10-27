@@ -71,6 +71,9 @@ step "installing dependencies"
 # and no app to point a phone at.
 (cd "$DIR" && npm install --include=dev --silent --no-fund --no-audit) || die "npm install failed"
 
+step "building the chat reader"
+(cd "$DIR" && node scripts/build-log-reader.mjs) || die "could not build the chat reader"
+
 step "building the app"
 (cd "$DIR" && npm --workspace @helm/web run build --silent) >/dev/null 2>&1 \
   || die "could not build the web app - run 'npm --workspace @helm/web run build' in $DIR to see why"

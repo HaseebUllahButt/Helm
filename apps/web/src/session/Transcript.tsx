@@ -32,7 +32,7 @@ export function CompactionLine({ live, item }: { live: boolean; item?: Item }) {
         : item?.status === 'streaming' ? 'Chat summary interrupted'
           : `Chat summarized${took > 2000 ? ` · ${seconds(took)}` : ''}`;
   return (
-    <div className={`compaction${live ? ' live' : ''}${item?.status === 'error' ? ' bad' : ''}`} title={item?.error || undefined} role={live ? 'status' : undefined}>
+    <div className={`compaction${live ? ' live' : ''}${item?.status === 'error' ? ' bad' : ''}`} title={item?.error ? plainError(item.error) : undefined} role={live ? 'status' : undefined}>
       <span className={live ? 'shine' : undefined}>{label}</span>
     </div>
   );
@@ -97,7 +97,7 @@ function ToolItem({ item }: { item: Item }) {
   const live = item.status === 'streaming';
   const summary = toolSummary(item);
   const out = item.output ?? '';
-  const body = out || item.error;
+  const body = out || (item.error ? plainError(item.error) : '');
   const head = (
     <>
       <span className={`aicon${item.status === 'error' ? ' bad' : item.status === 'ok' ? ' done' : ''}`}><ToolIcon name={item.name} /></span>
@@ -165,7 +165,7 @@ const rowable = (it: Item) => !isTextish(it) && !isApart(it) && it.kind !== 'sub
 
 /** What opening a step shows: the raw command and what it printed, the diff, the list. */
 function hasDetail(it: Item): boolean {
-  if (it.kind === 'command' || rawCommand(it) !== undefined) return true;
+  if (it.name === 'codexReview' || it.kind === 'command' || rawCommand(it) !== undefined) return true;
   if (it.kind === 'edit') return (it.changes ?? []).length > 0;
   if (isTodoItem(it)) return !!parseTodos(it);
   if (it.kind === 'thinking') return !!it.text;
@@ -175,8 +175,14 @@ function hasDetail(it: Item): boolean {
 function StepDetail({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
   const command = rawCommand(item);
   const out = (item.output ?? item.text ?? '').replace(/\s+$/, '');
-  const body = out || item.error || '';
+  const body = out || (item.error ? plainError(item.error) : '');
   const raw = body.length > 4000 ? '…\n' + body.slice(-4000) : body;
+  if (item.name === 'codexReview') return (
+    <div className="step-raw">
+      <code className="step-cmd">{item.input?.action}</code>
+      {raw && <pre className="aout">{raw}</pre>}
+    </div>
+  );
   if (command !== undefined) {
     return (
       <div className="step-raw">
@@ -504,21 +510,12 @@ function TodoStep({ item }: { item: Item }) {
   );
 }
 
-/** A failure, said plainly; what the CLI printed is one tap away. */
+/** A failure uses the same safe messages as other app screens. */
 function ErrorLine({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const plain = plainError(text);
-  const differs = plain !== text.trim();
-  return (
-    <div className="act bad errline">
-      <span className="aicon bad"><Icon name="alert" size={15} /></span>
-      <span className="alabel wrap">
-        {plain}
-        {differs && <button className="errline-more" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Hide details' : 'Details'}</button>}
-        {open && <pre className="errline-raw">{text}</pre>}
-      </span>
-    </div>
-  );
+  return <div className="act bad errline">
+    <span className="aicon bad"><Icon name="alert" size={15} /></span>
+    <span className="alabel wrap">{plainError(text)}</span>
+  </div>;
 }
 
 type ItemProps = { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean; plain?: boolean };
@@ -555,7 +552,7 @@ const ItemBody = memo(function ItemBody({ item, byParent, commandOutput, plain }
   }, [focusItem]);
   return (
     <div ref={ref} data-item-id={item.id} tabIndex={-1}>
-      {plain && rowable(item) ? <StepRow item={item} byParent={byParent} /> : <ItemContent item={item} byParent={byParent} commandOutput={commandOutput} />}
+      {(plain || item.name === 'codexReview') && rowable(item) ? <StepRow item={item} byParent={byParent} /> : <ItemContent item={item} byParent={byParent} commandOutput={commandOutput} />}
     </div>
   );
 }, (a, b) => a.item === b.item && a.revision === b.revision && a.commandOutput === b.commandOutput
@@ -605,14 +602,18 @@ function helperName(from: string) {
   return name.split(/(?<=[.!?])\s/)[0].replace(/[.!?]$/, '') || name;
 }
 
+// toLocale*String builds a formatter on every call; a long chat called it
+// for every bubble on every redraw, which a phone could not keep up with.
+const timeFormat = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' });
+const dayFormat = new Intl.DateTimeFormat([], { month: 'short', day: 'numeric' });
+
 /** How long ago a bubble was sent, in the transcript's own quiet type. */
 function clock(ts?: number) {
   if (!ts) return '';
   const d = new Date(ts);
-  const today = new Date();
-  const sameDay = d.toDateString() === today.toDateString();
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const time = timeFormat.format(d);
+  return sameDay ? time : `${dayFormat.format(d)} ${time}`;
 }
 
 /** How long the work took, from the turn's start (or the first step) to the last step's end. */
@@ -776,6 +777,15 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           </summary>
           <Markdown text={helper.text} className="prose" />
         </details>
+      )}
+      {/* The agent started again by itself: say what ended, so the new
+          work does not seem to come from nowhere. */}
+      {head && !!turn.cause?.length && (
+        <div className="turn wake-cause" title="The agent started again after this background work ended.">
+          {turn.cause.map((c, i) => <p key={i} className={c.status === 'failed' ? 'failed' : undefined}>
+            <Icon name={c.status === 'failed' ? 'alert' : 'bolt'} size={13} /><span>{c.summary}</span>
+          </p>)}
+        </div>
       )}
       {head && !helper && !display.printed && !!(turn.text || turn.attachments?.length) && (
         <div className={`turn user${queued ? ' queued' : ''}`} data-turn-id={turn.id}><div className="bubble">
@@ -941,12 +951,33 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
   const openTurn = turns.filter((t) => !t.done && !t.steered).at(-1);
   const working = status === 'working' || status === 'blocked';
 
+  // What the reader is looking at while away from the bottom: the first
+  // step or message that starts on screen, and how far below the top. Older
+  // history arrives above in the background, sometimes inside the message
+  // that is half off the top, so the next one down is what must not move.
+  const hold = useRef<{ sel: string; top: number } | undefined>(undefined);
+  const holdFrame = useRef(0);
+  const markHold = () => {
+    const el = box.current;
+    hold.current = undefined;
+    if (!el || stuck.current) return;
+    const top = el.getBoundingClientRect().top;
+    for (const node of el.querySelectorAll<HTMLElement>('[data-item-id], [data-turn-id]')) {
+      const b = node.getBoundingClientRect();
+      if (!b.height || b.top < top - 1) continue;
+      const attr = node.hasAttribute('data-item-id') ? 'data-item-id' : 'data-turn-id';
+      hold.current = { sel: `[${attr}="${CSS.escape(node.getAttribute(attr)!)}"]`, top: b.top - top };
+      return;
+    }
+  };
   const onScroll = () => {
     const el = box.current;
     if (!el) return;
     stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     setAway(!stuck.current);
     if (stuck.current) setUnread(false);
+    cancelAnimationFrame(holdFrame.current);
+    holdFrame.current = requestAnimationFrame(markHold);
   };
   // Only changed transcript content needs a synchronous layout read. Older
   // turns arriving above keep the reader where they were - iOS Safari has no
@@ -992,10 +1023,19 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
         return;
       }
     }
-    if (stuck.current) el.scrollTop = h;
-    else if (prev.first !== undefined && first !== prev.first) el.scrollTop += h - prev.h;
-    else if (h > prev.h) setUnread(true);
+    if (stuck.current) { el.scrollTop = h; return; }
+    const node = hold.current && el.querySelector<HTMLElement>(hold.current.sel);
+    let moved = 0;
+    if (node) {
+      moved = node.getBoundingClientRect().top - el.getBoundingClientRect().top - hold.current!.top;
+      if (Math.abs(moved) >= 1) el.scrollTop += moved;
+    } else if (prev.first !== undefined && first !== prev.first) el.scrollTop += moved = h - prev.h;
+    // Growth the correction does not explain happened below: new work.
+    if (h - prev.h > Math.max(0, moved) + 1) setUnread(true);
   }, [turns, revision, status, loaded, earlier, loadingEarlier]);
+  // After any move above, the reader's place is wherever they now are.
+  useLayoutEffect(markHold, [turns, revision, status, loaded, earlier, loadingEarlier]);
+  useEffect(() => () => cancelAnimationFrame(holdFrame.current), []);
 
   /** Jump to the previous or next thing you asked - the landmarks of a long thread. */
   const step = (dir: -1 | 1) => {

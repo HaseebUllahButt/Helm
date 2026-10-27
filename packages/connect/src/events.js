@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
 import { EventFile } from './event-file.js';
+import { latestToolEvent } from './event-stream.js';
+import { nativeFunction } from './log-index-native.js';
+
+const scanGlancePositions = nativeFunction('scanGlancePositions');
 
 /**
  * What happened in a session, in order.
@@ -128,7 +132,7 @@ function turnStartFor(events, from) {
 
 const isTurn = (e) => typeof e?.type === 'string' && e.type.startsWith('turn.');
 
-const TURN_CONTEXT = new Set(['turn.start', 'turn.edit', 'turn.images', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove']);
+const TURN_CONTEXT = new Set(['turn.start', 'turn.edit', 'turn.images', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove', 'turn.recover']);
 
 function pendingTickets(events) {
   const pending = new Map();
@@ -151,8 +155,9 @@ function pendingTickets(events) {
 
 /** Small identities outside the contiguous tail, never old tool payloads. */
 function anchor(event) {
-  const { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason, checkpoint } = event;
-  const result = { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason, checkpoint };
+  const { seq, at, type, id, turnId, inputId, requestId, kind, parentId, name, queued, local, status, reason, checkpoint } = event;
+  const result = { seq, at, type, id, turnId, inputId, requestId, kind, parentId, name, queued, local, status, reason, checkpoint };
+  if (type === 'turn.recover') result.providerTurnId = event.providerTurnId;
   if (kind === 'visual' && event.visual) result.visual = event.visual;
   if (type === 'turn.start' || type === 'turn.edit' || type === 'turn.images') {
     result.text = String(event.text ?? '').slice(0, 8000);
@@ -181,7 +186,13 @@ function anchor(event) {
  */
 function retain(tail, older, full = event => event) {
   const first = tail[0]?.seq ?? 0;
-  const pending = pendingTickets([...older()].reverse().concat(tail));
+  const history = [...older()].reverse().concat(tail);
+  const pending = pendingTickets(history);
+  const questions = new Map();
+  for (const event of history) {
+    if (event.type === 'permission.request') questions.set(event.requestId, event);
+    else if (event.type === 'permission.resolved') questions.delete(event.requestId);
+  }
   const items = new Set(tail.filter(e => e.type.startsWith('item.')).map(e => e.id));
   const owners = new Set();
   for (const e of tail) {
@@ -192,6 +203,14 @@ function retain(tail, older, full = event => event) {
   const starts = new Set(tail.filter(e => e.type === 'item.start').map(e => e.id));
   const turns = new Set(tail.filter(e => TURN_CONTEXT.has(e.type)).map(e => `${e.turnId ?? e.seq}:${e.type}`));
   const context = [];
+  for (const question of questions.values()) {
+    if (question.seq >= first) continue;
+    const event = full(question);
+    context.push(event);
+    if (event.turnId) owners.add(event.turnId);
+    if (event.itemId) items.add(event.itemId);
+    if (event.parentId) items.add(event.parentId);
+  }
   let implicit = tail.some(e => e.type === 'item.start' && !e.turnId);
   for (const event of older()) {
     if (event.type !== 'item.start' || !items.has(event.id) || starts.has(event.id)) continue;
@@ -410,10 +429,11 @@ export class EventLog {
       const want = tail > 0 ? tail : Infinity;
       let bytes = 0;
       let front = list.length;
+      const newer = new Map();
       for (let i = list.length - 1; i >= 0 && events.length < want; i--) {
         const raw = list.at(i);
         if (!raw) continue;
-        const e = shaped(raw);
+        const e = shaped(tail > 0 ? latestToolEvent(raw, newer) : raw);
         const n = sizeOf(e);
         // Always at least one: a single event over the budget still has to
         // move, or the client asks forever and never advances.
@@ -507,8 +527,8 @@ export class EventLog {
     if (!file) this.#files.set(id, file = new EventFile(this.#file(id), event => {
       // Exact text is needed to settle queued messages against provider echoes.
       if (isTurn(event)) {
-        const { seq, at, type, turnId, inputId, local, wake, queued, text } = event;
-        return { seq, at, type, turnId, inputId, local, wake, queued, text };
+        const { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId } = event;
+        return { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId };
       }
       return anchor(event);
     }));
@@ -571,7 +591,7 @@ export class EventLog {
    * whole on start held a laptop with hundreds of them at full CPU, and the
    * session list waited behind it.
    *
-   * Questions count only in the newest KEEP lines, as `#open` keeps them.
+   * Unanswered questions stay until their answers arrive, however old they are.
    * Turn events come from the whole file, while `#open` keeps only the older
    * ones the tail still refers to. They differ only in older turns, and an
    * older turn left open is one the restart closes anyway.
@@ -588,8 +608,9 @@ export class EventLog {
     try { buf = stamp ? readFileSync(this.#file(id)) : null; } catch { /* removed meanwhile */ }
     // Where each non-empty line starts. Searching the bytes and decoding only
     // the lines that matter is most of what makes this cheap.
-    const starts = [];
-    for (let at = 0; buf && at < buf.length;) {
+    const scanned = buf && scanGlancePositions?.(buf);
+    const starts = scanned?.starts ?? [];
+    for (let at = 0; !scanned && buf && at < buf.length;) {
       const end = buf.indexOf(10, at);
       const stop = end < 0 ? buf.length : end;
       if (stop > at) starts.push(at);
@@ -605,21 +626,25 @@ export class EventLog {
       try { seq = line(i).seq ?? 0; } catch { /* a torn last line after a crash */ }
     }
     // Inside a JSON string these quotes are escaped, so a hit is a field.
-    const hits = new Set();
-    for (const needle of ['"type":"turn.', '"type":"permission.']) {
-      for (let at = buf.indexOf(needle); at >= 0; at = buf.indexOf(needle, at + needle.length)) {
-        const start = buf.lastIndexOf(10, at) + 1;
-        let lo = 0, hi = starts.length - 1;
-        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= start) lo = mid; else hi = mid - 1; }
-        hits.add(lo);
+    let hits = scanned?.hits;
+    if (!hits) {
+      const found = new Set();
+      for (const needle of ['"type":"turn.', '"type":"permission.']) {
+        for (let at = buf.indexOf(needle); at >= 0; at = buf.indexOf(needle, at + needle.length)) {
+          const start = buf.lastIndexOf(10, at) + 1;
+          let lo = 0, hi = starts.length - 1;
+          while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= start) lo = mid; else hi = mid - 1; }
+          found.add(lo);
+        }
       }
+      hits = [...found].sort((a, b) => a - b);
     }
-    const turns = [], open = new Map(), from = starts.length - KEEP;
-    for (const i of [...hits].sort((a, b) => a - b)) {
+    const turns = [], open = new Map();
+    for (const i of hits) {
       let e;
       try { e = line(i); } catch { continue; }
       if (isTurn(e)) turns.push(e);
-      else if (i >= from) this.#track(open, e);
+      else this.#track(open, e);
     }
     if (!this.#pending.has(id)) this.#pending.set(id, open);
     if (cache) this.#glanced.set(id, { stamp, seq, turns });

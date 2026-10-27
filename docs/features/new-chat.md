@@ -16,6 +16,13 @@
 - **Traps:** with `up --real` the folder list is the owner's home: make no
   folders there. Only bind Ctrl/⌘+N, never a bare letter. The box once hung
   on "looking for agents" with the VM off; it must show the saved list.
+- **Going back to an unused chat (owner, 2026-10-26):** leaving a chat with
+  nothing sent still deletes it. Back or forward to it starts the same chat
+  again (same folder, agent and settings, and the unsent text), so it is
+  never an empty page. Prove (driven 2026-10-26): new fake chat, type
+  "keep me" without sending, open another chat, `$V key Control+BracketLeft`
+  (headless Chrome ignores Alt+Left): "What is on your mind?" with "keep me"
+  in the box, and `rpc session.list` holds one new "Quick chat".
 - **Tests:** `test/browser/new-chat`, `chat-home`, `onboarding`;
   `test/quick-chat`, `picker-prefs`, `onboarding`.
 
@@ -47,12 +54,22 @@
 ## Accounts, models, defaults
 - **Prove (driven):** `$V rpc profile.list` lists `fake` and `fake-ask`;
   `$V rpc agent.list` gives CLI details. `$V key Control+Shift+s; $V click
-  "CLI defaults"` shows rows for "Devin · fake" and "Devin · fake-ask".
+  "Agent defaults"` shows rows for "Devin · fake" and "Devin · fake-ask".
 - **Traps:** "Set default" is separate from this chat's model; on a phone
   it shows only on the chosen row. The model list can be up to ten minutes
   old, with no refresh button yet. Without an approved list the picker
   shows only the newest of each line (`modelShelf.ts`); devin's
   "-high-fast" ids fold into one row plus thinking and speed chips.
+- **Catalog refresh:** every provider returns the usable list while it
+  refreshes, marks that work, and lets open menus receive the completed
+  account list. Public fetches include the account rebuilds they start.
+  One account never waits for another account's CLI. A failed refresh keeps
+  the usable list until the next expiry; a lost follow-up retries. Chat,
+  defaults, helpers, brain and task transfer menus use the same flow.
+  Codex reads the newest valid `model_catalog.json` or `models_cache.json`.
+  Prove with a private CLI stub: open Agent defaults with an old list,
+  release a held model reply with a new name, and check that the new name
+  appears without leaving the page. Check phone and desktop sizes.
 - **Tests:** `test/model-shelf`, `test/alias-accounts`, `native-account`, `profiles-refresh`,
   `engines`, `discover-wrapper`, `models`, `models-refresh`, `model-prefs`,
   `model-follow`, `project-settings`, `session-settings`;

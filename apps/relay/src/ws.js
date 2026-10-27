@@ -113,7 +113,7 @@ export function createWsLayer() {
   function meshEvent(frame) {
     if (online.has(frame.env) || !mesh?.machines().has(frame.env)) return;
     for (const [sock, subs] of clients) {
-      if (subs.has(frame.env)) send(sock, T.EVENT, { ...frame, t: T.EVENT });
+      if (subs.has(frame.env) && (!Array.isArray(frame.to) || frame.to.includes(sock.sub))) send(sock, T.EVENT, { ...frame, t: T.EVENT });
     }
   }
 
@@ -392,7 +392,7 @@ export function createWsLayer() {
           } catch { /* a malformed digest must never kill the connection */ }
         }
         for (const [sock2, subs] of clients) {
-          if (subs.has(envId)) send(sock2, T.EVENT, { ...msg, env: envId });
+          if (subs.has(envId) && (!Array.isArray(msg.to) || msg.to.includes(sock2.sub))) send(sock2, T.EVENT, { ...msg, env: envId });
         }
         for (const watcher of online.values()) {
           if (watcher.hubSubscriptions?.has(envId)) send(watcher, T.HUB_EVENT, { ...msg, t: T.HUB_EVENT, env: envId });
@@ -420,7 +420,9 @@ export function createWsLayer() {
           drop: (endpoint) => q.pushDelete.run(endpoint),
           log: (line) => console.error(`[helm] ${line}`),
         }).then((sent) => {
-          if (sent) console.log(`[helm] push: told ${sent} device${sent === 1 ? '' : 's'} that ${payload.title}`);
+          // A resolve frame has no title: it only takes an answered alert away.
+          const what = payload.resolve ? 'an alert was answered' : payload.title;
+          if (sent) console.log(`[helm] push: told ${sent} device${sent === 1 ? '' : 's'} that ${what}`);
         }).catch(() => {});
         return;
       }
@@ -628,7 +630,7 @@ export function createWsLayer() {
         send(target, T.RPC, {
           id: relayId, method: msg.method, params: msg.params ?? {},
           // Who is asking travels with the call, so methods that answer
-          // "for you" - a media ticket minted for the caller alone - work
+          // "for you" - a reply meant for the caller alone - work
           // over the hub exactly as they do over a direct channel.
           sub,
         });
@@ -673,6 +675,15 @@ export function createWsLayer() {
 
   function routeTunnel(from, msg) {
     if (msg.t === T.TUNNEL_OPEN) {
+      // Reusing a live source id would overwrite its return route and leave
+      // the first target stream alive until the whole socket disconnects.
+      const previousSid = from.sidMap?.get(msg.sid);
+      const previous = tunnels.get(previousSid);
+      if (previous) {
+        forgetTunnel(previousSid, previous);
+        send(previous.target, T.TUNNEL_CLOSE, { sid: previousSid, reason: 'duplicate stream id' });
+        return send(from, T.TUNNEL_CLOSE, { sid: msg.sid, reason: 'duplicate stream id' });
+      }
       // ssh knows environments by the Host alias, which is the name; resolve
       // it to an id so `ssh laptop` works without the caller knowing ids.
       let envId = msg.env;
@@ -751,11 +762,17 @@ export function createWsLayer() {
 
   const wss = new WebSocketServer({
     noServer: true,
+    // Live chat updates are small frames that repeat the same fields. Fresh
+    // compression for each frame, only above 1 KB, sent three real chat logs
+    // at 18-77% of their size; a 16 KB window kept from frame to frame sends
+    // them at 6-24%, for about 200 KB of memory per socket. Uploads
+    // stay fresh per frame: they are small and the browser holds that side.
     perMessageDeflate: {
-      serverNoContextTakeover: true,
+      serverNoContextTakeover: false,
+      serverMaxWindowBits: 14,
       clientNoContextTakeover: true,
       concurrencyLimit: 4,
-      threshold: 1024,
+      threshold: 64,
     },
     // The web app offers ("helm", <token>): answer "helm" so the browser
     // accepts the handshake, without ever echoing the token back.
@@ -950,8 +967,8 @@ export function createWsLayer() {
   // --------------------------------------------------- the hub itself asking
   //
   // A hub is nobody's client, but it is allowed to originate traffic of its
-  // own: answering an HTTP media request for a machine only this hub can see
-  // means first asking that machine which port its media is on, then opening
+  // own: answering an HTTP request for a share on a machine only this hub can
+  // see means first asking that machine which port it is on, then opening
   // a tunnel to it. `inner` is the in-process socket those go over - it
   // implements exactly the surface the RPC router and routeTunnel touch, so
   // the daemon cannot tell it apart from a ws client, and it answers to no
@@ -1070,7 +1087,7 @@ export function createWsLayer() {
       });
       // http.ClientRequest drives these on its socket; over a tunnel they
       // are no-ops, but the calls have to land somewhere. setTimeout must
-      // not arm anything: a media stream idles legitimately while paused.
+      // not arm anything: a stream idles legitimately while paused.
       stream.setNoDelay = () => stream;
       stream.setKeepAlive = () => stream;
       stream.setTimeout = () => stream;

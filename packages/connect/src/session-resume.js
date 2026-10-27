@@ -1,6 +1,8 @@
 import { loadProfiles, materialize } from './profiles.js';
 import { activeTurnFromEvents } from './events.js';
+import { existsSync } from 'node:fs';
 import { hostedProcId } from './hosted-process.js';
+import { expand } from './paths.js';
 
 /** How a recovery note says the agent's state could not be checked. */
 const RECONNECT_FAILED = 'Helm did not reconnect to the agent:';
@@ -52,7 +54,7 @@ export class SessionResume {
     for (const s of [...this.#core.index.values()]) {
       if (!s.pty) continue;
       if (this.#core.terminal(s).has(s.id)) continue;
-      this.#core.index.delete(s.id);
+      this.#core.forgetSession(s.id);
       changed = true;
       this.#sessions.emit('session', { ...s, status: 'exited', alive: false });
     }
@@ -72,7 +74,7 @@ export class SessionResume {
     const closed = new Set(tail.filter((e) => ['turn.done', 'turn.remove'].includes(e.type)).map((e) => e.turnId));
     // A message still waiting in the queue never reached the dead process:
     // it stays queued, and goes to the next one.
-    const waiting = new Set((this.#core.outbox.get(id) ?? []).map((item) => item.turnId));
+    const waiting = new Set((this.#core.deliveryState.queue(id) ?? []).map((item) => item.turnId));
     for (const e of tail) {
       if (e.type !== 'turn.start' || closed.has(e.turnId) || waiting.has(e.turnId)) continue;
       closed.add(e.turnId);
@@ -221,7 +223,7 @@ export class SessionResume {
     if (revive.length) {
       const order = new Map((s.queueOrder ?? []).map((turnId, index) => [turnId, index]));
       revive.sort((left, right) => (order.get(left.turnId) ?? Infinity) - (order.get(right.turnId) ?? Infinity));
-      this.#core.outbox.set(s.id, [...(this.#core.outbox.get(s.id) ?? []), ...revive]);
+      this.#core.deliveryState.restoreQueue(s.id, [...(this.#core.deliveryState.queue(s.id) ?? []), ...revive]);
     }
   }
 
@@ -233,7 +235,7 @@ export class SessionResume {
   #inFlight(s) {
     return ['working', 'blocked', 'starting'].includes(s.status)
       || this.#sessions.events.pending(s.id).length > 0
-      || (this.#core.outbox.get(s.id)?.length ?? 0) > 0
+      || (this.#core.deliveryState.queue(s.id)?.length ?? 0) > 0
       || !!activeTurnFromEvents(this.#sessions.events.tail(s.id, 0));
   }
 
@@ -334,7 +336,13 @@ export class SessionResume {
         this.#sessions.emit('session', s);
         continue;
       }
-      if (nativeAlive || !s.nativeSocket && procId && this.#sessions.procs.hasProc(procId)) {
+      const hosted = !s.nativeSocket && procId && this.#sessions.procs.hasProc(procId);
+      // An idle agent whose worktree folder is gone (removed by hand while
+      // it ran) is closed, not reattached: reattaching rebuilds the folder
+      // of work that is done. Its next message rebuilds it.
+      if (hosted && !nativeAlive && s.chatWorktree && !existsSync(expand(s.chatWorktree.path)) && !this.#inFlight(s)) {
+        await this.#sessions.procs.close(procId).catch((err) => this.#sessions.log(`[${s.id}] could not close its agent: ${err.message}`));
+      } else if (nativeAlive || hosted || s.delegation?.codexFork) {
         if (s.recovery?.kind === 'restart') delete s.recovery;
         const tail = this.#sessions.events.tail(s.id, 0);
         this.#restoreOpenTurns(s, tail, true);
@@ -364,7 +372,9 @@ export class SessionResume {
       // The process a failed reconnect was about is gone; so is the mark.
       // Anything it was doing is settled just above, as "restart" if need be.
       if (this.unreachable(s)) { delete s.recovery; s.queuePaused = false; }
-      if (s.status !== 'idle') {
+      // A worktree whose setup the restart cut off stays "setting up": it
+      // runs again (Sessions.resume) before its agent ever starts.
+      if (s.status !== 'idle' && !this.#core.preparing(s)) {
         s.status = 'idle';
         s.updatedAt = Date.now();
         // The log is what a viewer replays for status: closing the turns

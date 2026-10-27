@@ -65,3 +65,25 @@ test('every alias is looked up in one login shell, not one shell each', async ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a tool only the owner's terminal PATH reaches is found and keeps its full path", async () => {
+  // opencode's installer adds ~/.opencode/bin in ~/.bashrc only, which a
+  // login shell never reads, so OpenCode 2 never showed.
+  const dir = mkdtempSync(join(tmpdir(), 'helm-term-'));
+  writeFileSync(join(dir, 'my-opencode'), '#!/bin/sh\nexec opencode2 "$@"\n');
+  chmodSync(join(dir, 'my-opencode'), 0o755);
+  const symbols = new Map([
+    ['mine', { kind: 'alias', body: 'my-opencode --x' }],
+    ['O2', { kind: 'alias', body: 'opencode2' }],
+  ]);
+  try {
+    const { profiles } = await discoverAliasProfiles(symbols, { opencode2: join(dir, 'opencode2') },
+      { termPath: dir, far: new Map([['opencode2', join(dir, 'opencode2')]]) });
+    assert.deepEqual(profiles.map((p) => [p.id, p.engine, p.cmd]), [
+      ['mine', 'opencode2', join(dir, 'my-opencode')],
+      ['O2', 'opencode2', join(dir, 'opencode2')],
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

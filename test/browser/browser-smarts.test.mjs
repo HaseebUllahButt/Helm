@@ -79,7 +79,7 @@ test('type clear, append, enter, select, scroll and wait forms work on Chromium'
   assert.equal(result.failedAt, undefined); assert.match(result.text, /value="Hello world"/); assert.match(result.text, /value="US"/);
   await manager.run('forms', id, { goto: url });
   const entered = await manager.run('forms', id, { actions: [{ type: 'Ada', into: 'the Email box', clear: true, enter: true }, { check: 'Signed in as Ada' }] });
-  assert.equal(entered.failedAt, undefined); assert.match(entered.text, /Signed in as Ada/);
+  assert.equal(entered.failedAt, undefined, entered.error); assert.match(entered.text, /Signed in as Ada/);
 });
 
 test('settling adds almost no time on a quiet static page and waits for fetched data; pending requests are capped', { timeout: 15000 }, async t => {

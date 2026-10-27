@@ -1,5 +1,5 @@
 import { useDialog } from './useDialog';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 
 /**
  * helm's own confirm/ask sheets.
@@ -10,29 +10,36 @@ import { useState, type FormEvent, type ReactNode } from 'react';
  * like a crash report. These are the same question, styled, focusable, and
  * dismissable the way the rest of the app is.
  */
-export function Sheet({ children, onClose, label }: { children: ReactNode; onClose: () => void; label: string }) {
+export function Sheet({ children, onClose, label, onKeyDown }: { children: ReactNode; onClose: () => void; label: string; onKeyDown?: (e: KeyboardEvent) => void }) {
   const ref = useDialog(onClose);
   return (
     <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={label} ref={ref} tabIndex={-1}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={label} ref={ref} tabIndex={-1} onKeyDown={onKeyDown}>
         {children}
       </div>
     </div>
   );
 }
 
-/** "Are you sure?" - the destructive case gets a red verb, not an OK. */
-export function Confirm({ title, body, confirmLabel = 'Confirm', danger, busy, onCancel, onConfirm }: {
-  title: string; body?: ReactNode; confirmLabel?: string; danger?: boolean; busy?: boolean;
+/**
+ * "Are you sure?" - the destructive case gets a red verb, not an OK.
+ * `enterConfirms` puts focus on the yes button, so Enter answers yes. The key
+ * that asked never answers: a double press of Delete lost the owner's chats.
+ */
+export function Confirm({ title, body, confirmLabel = 'Confirm', danger, busy, enterConfirms, onCancel, onConfirm }: {
+  title: string; body?: ReactNode; confirmLabel?: string; danger?: boolean; busy?: boolean; enterConfirms?: boolean;
   onCancel: () => void; onConfirm: () => void;
 }) {
+  const yes = useRef<HTMLButtonElement>(null);
+  // Runs after the sheet focuses its first button.
+  useEffect(() => { if (enterConfirms) yes.current?.focus(); }, [enterConfirms]);
   return (
     <Sheet onClose={onCancel} label={title}>
       <div className="modal-title">{title}</div>
       {body && <div className="modal-body">{body}</div>}
       <div className="modal-actions">
         <button className="ghost" onClick={onCancel} disabled={busy}>Cancel</button>
-        <button className={danger ? 'primary danger' : 'primary'} onClick={onConfirm} disabled={busy}>
+        <button ref={yes} className={danger ? 'primary danger' : 'primary'} onClick={onConfirm} disabled={busy}>
           {busy ? '…' : confirmLabel}
         </button>
       </div>

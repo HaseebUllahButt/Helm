@@ -15,7 +15,7 @@ import { nonAgentClaudeTask, claudeServiceTasks } from './claude-tasks.js';
 import { ENGINES } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
-import { optionArgs, peekModels, followNewModels } from './models.js';
+import { optionArgs, peekModels, listModels, followNewModels } from './models.js';
 import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
 import { EventLog } from './events.js';
 import { nativeCodexSocket } from './drivers/codex.js';
@@ -32,6 +32,7 @@ import { AccountLimits } from './account-limits.js';
 import { CLAUDE_NATIVE_COMMANDS } from './commands.js';
 import { canvasPath } from './git.js';
 import { validateVisual } from './visual.js';
+import { DeliveryState } from './delivery-state.js';
 import { DRIVERS, pendingSummary, wire } from './session-wire.js';
 import { driverTakesImages } from './session-attachments.js';
 import { missingClaudeConversation, parentLink } from './session-text.js';
@@ -39,6 +40,7 @@ import { SessionTitles } from './session-titles.js';
 import { SessionRewind } from './session-rewind.js';
 import { SessionSubagents } from './session-subagents.js';
 import { SessionDelegation } from './session-delegation.js';
+import { readCodexHelperHistory } from './delegation.js';
 import { SessionViewers } from './session-viewers.js';
 import { LimitRecovery } from './session-limits.js';
 import { SessionResume } from './session-resume.js';
@@ -147,56 +149,9 @@ export class Sessions extends EventEmitter {
   #seen = new Map();
   /** When a row was removed, so new activity in its CLI can bring it back. */
   #removedAt = new Map();
-  /**
-   * sessionId -> messages accepted but not yet handed to the agent.
-   *
-   * Every CLI queues input typed mid-turn *differently*: claude holds it
-   * internally, codex's app-server refuses a second turn/start outright, and
-   * an ACP agent answers a prompt sent while one is open however it pleases.
-   * So the queue lives here, where it works the same on all of them: a
-   * message sent while the agent is working or blocked waits here, then goes
-   * out in the order it was typed - mid-turn at the CLI's own handover point
-   * (`messageDelivery`), otherwise when the turn ends.
-   * Open `local-` turns are the durable tickets; `resume()` rebuilds this
-   * map from the event log after a daemon restart.
-   */
-  #outbox = new Map();
-  /** sessionIds with a pump loop live - the queue's mutex. */
-  #sending = new Set();
-  /**
-   * sessionId -> top-level tool items running now. Claude and Codex both
-   * take a message typed mid-turn at the end of the step in flight, so that
-   * is when a held message is handed over - and until then it can still be
-   * withdrawn, which neither CLI can do once it has the message.
-   */
-  #steps = new Map();
-  /** sessionId -> messages handed to the CLI that it has not used yet. */
-  #steered = new Map();
-  /**
-   * sessionId -> the ticket Send now is delivering. It is reserved: while
-   * the current reply is being cancelled for it, it cannot be withdrawn and
-   * then reach the CLI anyway.
-   */
-  #delivering = new Map();
-  /**
-   * sessionId -> messages sent as a new turn whose echo has not arrived.
-   * The echo gets the ticket's id, so the app and a restart match it to
-   * the right message even when two say the same thing.
-   */
-  #awaitingEcho = new Map();
-  /**
-   * sessionId -> timer, while an agent says it is idle but its newest turn
-   * has not finished. Codex reports the thread idle a few milliseconds
-   * before the turn's completion; a queued message sent into that gap
-   * started its turn before the last one was done, and the late completion
-   * then showed the new turn as idle. The queue waits for the completion,
-   * or for this long if it never comes.
-   */
-  #settling = new Map();
+  #deliveryState = new DeliveryState();
   /** sessionId -> open command cards (turn.start with local: true). */
   #commandCards = new Map();
-  /** sessionId -> the last turns a driver closed, so a repeat is told apart. */
-  #closedTurns = new Map();
 
   constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, waiterGraceMs = 3000, delegationIdleMs = DELEGATION_IDLE_MS, reattachRetryMs = 90_000, reattachConcurrency = 4 } = {}) {
     super();
@@ -268,7 +223,7 @@ export class Sessions extends EventEmitter {
       }
       // Its conversation lives on in the CLI's history list; a dead row
       // here would only be a second, unusable copy of it.
-      this.#index.delete(id);
+      this.#forgetSession(id);
       this.#save();
       this.emit('exit', { id, code });
       this.emit('session', { ...wire(s), status: 'exited', alive: false });
@@ -307,10 +262,8 @@ export class Sessions extends EventEmitter {
 
   /**
    * The parts of this class kept in their own files (session-*.js). Each
-   * part gets this instance, for what is public, and `core`: the private
-   * state and steps it shares with the rest of the class - the same Maps and
-   * the same methods, so nothing is copied and none of it becomes reachable
-   * from outside the way a public field would be.
+   * part gets this instance, for what is public, and `core`: shared private
+   * state and named operations. Delivery state stays behind its owner.
    */
   #titles;
   #rewinder;
@@ -333,21 +286,15 @@ export class Sessions extends EventEmitter {
       retiring: this.#retiring,
       marks: this.#marks,
       removedAt: this.#removedAt,
-      outbox: this.#outbox,
-      sending: this.#sending,
-      steps: this.#steps,
-      steered: this.#steered,
-      delivering: this.#delivering,
-      awaitingEcho: this.#awaitingEcho,
-      settling: this.#settling,
+      deliveryState: this.#deliveryState,
       commandCards: this.#commandCards,
-      closedTurns: this.#closedTurns,
       terminal: this.#terminal.bind(this),
       setContext: this.#setContext.bind(this),
       get lastDetected() { return sessions.#lastDetected; },
       inventory: this.#inventory.bind(this),
       handle: this.#handle.bind(this),
       save: this.#save.bind(this),
+      forgetSession: this.#forgetSession.bind(this),
       flush: () => this.flush(),
       startDriven: this.#startDriven.bind(this),
       driverStarts: this.#driverStarts,
@@ -372,6 +319,16 @@ export class Sessions extends EventEmitter {
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
+
+  #forgetSession(id) {
+    this.#subagents.forget(id);
+    this.#driverEvents.forget(id);
+    this.#delegation.forget(id);
+    this.#viewers.forget(id);
+    clearTimeout(this.#reapers.get(id));
+    this.#reapers.delete(id);
+    return this.#index.delete(id);
+  }
 
   // Usage limits (session-limits.js)
   accountLimits(profiles) { return this.#limitRecovery.accountLimits(profiles); }
@@ -432,8 +389,9 @@ export class Sessions extends EventEmitter {
     if (s.external && s.engine !== 'codex') return EXTERNAL_INFO_COMMANDS;
     // A finished helper's worktree is removed once merged. Opening its chat
     // asks for this menu; starting the agent there only wrote a red "folder
-    // does not exist" into the chat on every visit.
-    if (!this.#drivers.has(s.id) && s.cwd && !existsSync(s.cwd)) return [];
+    // does not exist" into the chat on every visit. A folder being removed
+    // still exists for a moment, and the app asks again as the agent stops.
+    if (!this.#drivers.has(s.id) && ((s.cwd && !existsSync(s.cwd)) || this.#worktrees.removing(s))) return [];
     const driver = await this.#driver(s);
     const available = (await driver.availableCommands?.() ?? []).filter((c) => !['plan', 'plan-mode'].includes(c.name));
     return s.externalSource && s.engine !== 'codex'
@@ -490,12 +448,9 @@ export class Sessions extends EventEmitter {
           s.clone = { ...s.clone, state: 'failed', error: 'Helm restarted before the repo was in.' };
           if (s.status === 'starting') s.status = 'idle';
         }
-        // Its setup command died with the daemon; the agent starts on the
-        // next message, in the worktree as it is.
-        if (s.chatWorktree?.setup === 'running') {
-          s.chatWorktree.setup = 'failed';
-          if (s.status === 'starting') s.status = 'idle';
-        }
+        // Its setup command died with the daemon: it runs again from the
+        // start once resumed, and what was sent meanwhile still waits.
+        if (s.chatWorktree?.setup === 'running') s.status = 'starting';
         this.#index.set(s.id, s);
       }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
@@ -766,6 +721,7 @@ export class Sessions extends EventEmitter {
             ?? detected.find((x) => x.engine === s.engine && x.id === s.engineSessionId);
           s.profileId = profile?.id ?? null;
           if (current) {
+            s.blank = false;
             s.engineSessionId = current.id;
             s.transcript = current.transcript;
             // A live Pi extension is fresher than the append-only transcript.
@@ -868,7 +824,7 @@ export class Sessions extends EventEmitter {
 
   canReturnTask(id) {
     return ['idle', 'done'].includes(this.get(id).status)
-      && !this.#sending.has(id) && !this.#settling.has(id) && !this.get(id).queuePaused && !this.#outbox.get(id)?.length
+      && !this.#deliveryState.isSending(id) && !this.#deliveryState.hasSettling(id) && !this.get(id).queuePaused && !this.#deliveryState.hasQueue(id)
       && !this.events.activeTurn(id) && !this.events.pending(id).length && !this.hasActiveDelegations(id);
   }
 
@@ -882,7 +838,7 @@ export class Sessions extends EventEmitter {
     try { return await this.#start(options); } finally { this.flush(); }
   }
 
-  async #start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null }) {
+  async #start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null, size = null }) {
     if (originAutomationId != null) {
       if (!/^[A-Za-z0-9._:-]{1,120}$/.test(originAutomationId)) throw new Error('invalid automation identity');
       const existing = this.findAutomationSession(originAutomationId);
@@ -906,12 +862,23 @@ export class Sessions extends EventEmitter {
       // A model released since a picker was last opened still becomes the
       // default before this chat starts - from the held catalogue only, so a
       // start never waits on a CLI.
+      let held = null;
       try {
         const eng = ENGINES[profile.engine], spec = materialize(profile);
-        followNewModels(profile, peekModels(profile.engine, spec.env?.[eng?.homeEnv] ?? eng?.defaultHome,
-          profile.wraps ? { cmd: spec.cmd, args: spec.args } : null));
+        const home = spec.env?.[eng?.homeEnv] ?? eng?.defaultHome;
+        const launcher = profile.wraps ? { cmd: spec.cmd, args: spec.args } : null;
+        held = peekModels(profile.engine, home, launcher);
+        // OpenCode's own pick can sit behind a refused sign-in (models.js
+        // startModel), so its first chat after a restart reads the list once.
+        if (!held && /^opencode2?$/.test(profile.engine)) {
+          held = await Promise.race([listModels(profile.engine, home, spec.env, launcher),
+            new Promise((done) => setTimeout(done, 5_000, null))]).catch(() => null);
+        }
+        followNewModels(profile, held);
       } catch { /* the default as it was is still fine */ }
-      model = modelPrefs(profile)?.default ?? null;
+      // With no default of its own, a CLI whose pick sits behind a refused
+      // sign-in starts on a model that works.
+      model = modelPrefs(profile)?.default ?? held?.startModel ?? null;
     }
     const defaults = startPrefs(profile) ?? {};
     if (!effort) effort = defaults.effort ?? null;
@@ -967,7 +934,7 @@ export class Sessions extends EventEmitter {
     // than borrowing a herdr pane and reading its screen back. Where the pty
     // addon is missing the old path still works, slowly.
     if (spec.plain && await this.terminals.ensure()) {
-      return this.#startTerminal({ dir, profileId, title, env: spec.env, parent: lineage, originHandoffId });
+      return this.#startTerminal({ dir, profileId, title, env: spec.env, parent: lineage, originHandoffId, size });
     }
 
     const handle = await this.runtime.createSession({
@@ -1050,7 +1017,7 @@ export class Sessions extends EventEmitter {
     return session;
   }
 
-  async #startTerminal({ dir, profileId, title, env, parent = null, originHandoffId = null }) {
+  async #startTerminal({ dir, profileId, title, env, parent = null, originHandoffId = null, size = null }) {
     this.#rewinder.assertRewindUnlocked(null, dir);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -1071,9 +1038,11 @@ export class Sessions extends EventEmitter {
     // it before either had been added, and both be called "Terminal 1".
     this.#index.set(session.id, session);
     try {
-      await this.terminals.open(session.id, { cwd: dir, env });
+      // Opened at the size the app draws at, so the first prompt fits it.
+      const fits = size?.cols > 0 && size?.rows > 0 ? { cols: size.cols, rows: size.rows } : {};
+      await this.terminals.open(session.id, { cwd: dir, env, ...fits });
     } catch (err) {
-      this.#index.delete(session.id);
+      this.#forgetSession(session.id);
       throw err;
     }
     this.#save();
@@ -1150,9 +1119,7 @@ export class Sessions extends EventEmitter {
       this.#index.set(session.id, session);
       this.#save();
       this.emit('session', session);
-      void this.#worktrees.setup(session, own.setup).then(() => {
-        if (this.#index.get(session.id) === session) return this.#startPrepared(session);
-      });
+      this.#setUp(session, own.setup);
       return session;
     }
     if (cloning) {
@@ -1202,10 +1169,8 @@ export class Sessions extends EventEmitter {
       // behind. The old path persisted the shell before awaiting ACP and
       // returned it with engineSessionId null when startup went wrong.
       this.#drivers.delete(session.id);
-      this.#index.delete(session.id);
-      this.#outbox.delete(session.id);
-      clearTimeout(this.#reapers.get(session.id));
-      this.#reapers.delete(session.id);
+      this.#forgetSession(session.id);
+      this.#deliveryState.clear(session.id);
       driver?.removeAllListeners?.('event');
       await Promise.resolve(driver?.kill?.()).catch(() => {});
       this.#dropQuickDir(session);
@@ -1257,6 +1222,13 @@ export class Sessions extends EventEmitter {
     this.emit('session', s);
     // The repo is in; only the agent has to be tried again.
     await this.#startPrepared(s, (err) => { s.clone = { ...s.clone, state: 'failed', cloned: true, error: `The agent did not start: ${err.message}` }; });
+  }
+
+  /** The repo's setup command, then the agent; a stopping daemon leaves both for the next one. */
+  #setUp(s, command) {
+    void this.#worktrees.setup(s, command).then((done) => {
+      if (done && this.#index.get(s.id) === s) return this.#startPrepared(s);
+    });
   }
 
   /** The agent of a chat that had something to do first (a clone, a setup command). */
@@ -1379,6 +1351,8 @@ export class Sessions extends EventEmitter {
       // would only cost it tokens.
       instructions: DRIVERS[s.driver]?.takesInstructions && !s.delegation?.hidden ? (this.delegationBrief?.(s) || null) : null,
       forkFrom: s.forkFrom,
+      helperFork: s.delegation?.codexFork,
+      helperHistory: s.delegation?.codexFork ? () => readCodexHelperHistory(join(this.events.dir, `${s.id}.jsonl`)) : null,
       transcript: s.transcript,
       monitorOnly: !!s.external,
       delegated: !!s.delegation,
@@ -1412,6 +1386,10 @@ export class Sessions extends EventEmitter {
     d.on('init', (info) => {
       if (!info) return;
       let changed = false;
+      if (s.delegation?.codexFork && d.engineSessionId && s.engineSessionId !== d.engineSessionId) {
+        s.engineSessionId = d.engineSessionId;
+        changed = true;
+      }
       for (const [key, target] of [['model', 'engineModel'], ['effort', 'engineEffort'], ['effortKeepsCache', 'effortKeepsCache'], ['modelSwitchSignal', 'modelSwitchSignal']]) {
         // A partial init must not erase settings another provider event reported.
         if (info[key] === undefined) continue;
@@ -1430,8 +1408,7 @@ export class Sessions extends EventEmitter {
   }
 
   #settled(id) {
-    clearTimeout(this.#settling.get(id));
-    this.#settling.delete(id);
+    clearTimeout(this.#deliveryState.clearSettling(id));
   }
 
   /** Finished children release their runtime quickly; their conversation stays resumable. */
@@ -1440,12 +1417,15 @@ export class Sessions extends EventEmitter {
     if (status === 'idle' && s.chatWorktree) setTimeout(() => void this.#worktrees.tidy(s), 3000).unref?.();
     clearTimeout(this.#reapers.get(s.id));
     this.#reapers.delete(s.id);
+    // An ephemeral helper stays loaded only while its native client stays
+    // connected. Helpers share one held proxy per Codex account.
+    if (s.delegation?.codexFork) return;
     if (status !== 'idle' || (s.shared && !s.delegation) || !this.#drivers.has(s.id)) return;
     const t = setTimeout(() => {
       this.#reapers.delete(s.id);
       const d = this.#drivers.get(s.id);
       if (!d || d.status !== 'idle' || s.status !== 'idle' || this.#retiring.has(s.id)) return;
-      if (this.#sending.has(s.id) || this.#outbox.get(s.id)?.length || d.pending?.size
+      if (this.#deliveryState.isSending(s.id) || this.#deliveryState.hasQueue(s.id) || d.pending?.size
         || this.events.pending(s.id).length || this.events.activeTurn(s.id) || this.hasActiveDelegations(s.id)
         // A background command or watch it is waiting on dies with it.
         || d.backgroundTasks > 0) {
@@ -1543,13 +1523,17 @@ export class Sessions extends EventEmitter {
    * happened while it was away. Every shape is budgeted in bytes by
    * `events.window`, so no reply is ever too big to arrive.
    */
-  history(id, { since = 0, limit = 500, tail = 0, before = 0 } = {}) {
+  history(id, { since = 0, limit = 500, tail = 0, before = 0, pageBytes = 0 } = {}) {
     const s = this.get(id);
     const back = tail > 0 || before > 0;
     const w = this.events.window(s.id, {
       since,
       before,
       tail: tail ? Math.max(1, Math.min(Number(tail), 1000)) : 0,
+      // A device fetching a whole chat behind the first screen asks for
+      // bigger pages: each page redraws the chat, so 17 small ones stalled
+      // a phone 17 times.
+      ...(Number(pageBytes) > 0 ? { maxBytes: Math.max(16_000, Math.min(Number(pageBytes), 1_000_000)) } : {}),
     });
     // `limit` caps a page read forwards. A window taken from the end is
     // already bounded by `tail` and by the byte budget, and slicing it here
@@ -1662,6 +1646,7 @@ export class Sessions extends EventEmitter {
   watch(id, watcher) { return this.#viewers.watch(id, watcher); }
   unwatch(id, watcher) { return this.#viewers.unwatch(id, watcher); }
   watching(id) { return this.#viewers.watching(id); }
+  watcherRecipients(id) { return this.#viewers.recipients(id); }
   messages(id, options) { return this.#viewers.messages(id, options); }
   read(id, options) { return this.#viewers.read(id, options); }
   attach(id, options) { return this.#viewers.attach(id, options); }
@@ -1702,17 +1687,19 @@ export class Sessions extends EventEmitter {
     }
     visited.add(id);
     const session = this.#index.get(id);
-    const children = [...this.#index.values()].filter((child) => child.delegation?.parentId === id);
+    // A helper that already finished keeps its result: only those still at
+    // work are stopped, and only they say so.
+    const finished = (s) => ['done', 'error', 'interrupted'].includes(s.delegation?.status);
+    const running = [...this.#index.values()].filter((child) => child.delegation?.parentId === id && !finished(child));
     if (session) {
       session.stoppedAt = Date.now();
       session.stopGeneration = (session.stopGeneration ?? 0) + 1;
       // Helpers are mentioned only when there were some to stop.
-      const running = children.filter((child) => !['done', 'error', 'interrupted'].includes(child.delegation?.status));
       session.recovery = {
         kind: 'interrupted', at: Date.now(),
         message: running.length ? `You stopped this chat. Helm also stopped ${running.length === 1 ? 'its helper' : 'its helpers'}.` : 'Stopped by you.',
       };
-      if (session.delegation) {
+      if (session.delegation && !finished(session)) {
         session.delegation.status = 'interrupted';
         session.delegation.finishedAt = Date.now();
       }
@@ -1720,20 +1707,19 @@ export class Sessions extends EventEmitter {
       this.#save();
       this.emit('session', session);
     }
-    const stopping = children.map((child) => this.interrupt(child.id, visited));
+    const stopping = running.map((child) => this.interrupt(child.id, visited));
     // "Stop" stops the queue too, and before the driver is asked: a settled
     // turn is what wakes the pump, so a stop that left the queue intact
     // would fire the next message the moment the interrupt landed. Each
     // waiting bubble disappears because the agent never saw it. Only the
     // actual turn in flight ends as interrupted and earns a "stopped" line.
-    const queued = this.#outbox.get(id) ?? [];
-    this.#outbox.delete(id);
+    const queued = this.#deliveryState.removeQueue(id);
     for (const item of queued) {
       const event = this.events.append(id, { type: 'turn.remove', turnId: item.turnId });
       this.emit('event', { id, event });
     }
-    const handed = this.#steered.get(id) ?? [];
-    this.#steered.delete(id);
+    const handed = this.#deliveryState.steered(id);
+    this.#deliveryState.restoreSteered(id, []);
     for (const item of handed) {
       const event = this.events.append(id, { type: 'turn.remove', turnId: item.turnId });
       this.emit('event', { id, event });
@@ -1741,7 +1727,7 @@ export class Sessions extends EventEmitter {
     const s = this.#index.get(id);
     if (s && (queued.length || handed.length)) s.lastSeq = this.events.last(id);
     const d = this.#drivers.get(id);
-    if (d) stopping.push(d.interrupt());
+    if (d) stopping.push(d.interrupt({ background: true }));
     // A Pi in a terminal has no driver to ask: press Esc, which is how Pi
     // stops a reply. Only mid-turn - a second Esc at Pi's prompt opens its tree.
     else if (s?.nativeCli && s.engine === 'pi' && ['working', 'blocked'].includes(s.status)
@@ -1951,6 +1937,15 @@ export class Sessions extends EventEmitter {
     return s;
   }
 
+  /** Read process roots when the owner opens a local link from this chat. */
+  async appProcessRoots(id) {
+    const s = this.get(id);
+    const terminal = this.#terminal(s);
+    const procId = s.driver === 'codex' ? null : (s.rewindProcId || s.id);
+    const pids = await Promise.all([terminal.pid?.(s.id), procId ? this.procs.pid?.(procId) : null]);
+    return [...new Set([s.nativePid, ...pids].filter(pid => Number.isInteger(pid) && pid > 0))];
+  }
+
   /**
    * The session a code handoff started, found by the handoff id on its
    * record - or, for sessions from before that field existed, its parent
@@ -2007,6 +2002,7 @@ export class Sessions extends EventEmitter {
     return this.runtime.sendText(this.#handle(s), bytes);
   }
 
+  /** `deleted` on the last session event tells every device with this chat open to leave it. */
   async kill(id) {
     this.#rewinder.assertRewindUnlocked(id);
     // A row read out of a CLI's own history: there is no process to stop and
@@ -2028,9 +2024,9 @@ export class Sessions extends EventEmitter {
       const d = this.#drivers.get(id);
       this.#drivers.delete(id);
       await d?.kill?.();
-      this.#index.delete(id);
+      this.#forgetSession(id);
       this.#save();
-      this.emit('session', { ...s, status: 'exited', alive: false });
+      this.emit('session', { ...s, status: 'exited', alive: false, deleted: true });
       return { ok: true };
     }
     if (s.driver) {
@@ -2038,18 +2034,14 @@ export class Sessions extends EventEmitter {
       this.#clones.delete(id);
       const d = this.#drivers.get(id);
       this.#drivers.delete(id);
-      this.#outbox.delete(id);
-      this.#steps.delete(id);
-      this.#steered.delete(id);
-      this.#delivering.delete(id);
-      this.#awaitingEcho.delete(id);
+      this.#deliveryState.clear(id);
       this.#settled(id);
       this.#commandCards.delete(id);
-      this.#closedTurns.delete(id);
+      this.#deliveryState.clearClosedTurns(id);
       this.#rewinder.providerRevisions.delete(id);
       clearTimeout(this.#reapers.get(id));
       if (d) await d.kill();
-      this.#index.delete(id);
+      this.#forgetSession(id);
       this.#dropQuickDir(s);
       await this.#worktrees.dropped(s);
       // On disk before its log goes, so a crash never lists a chat whose history is gone.
@@ -2059,19 +2051,19 @@ export class Sessions extends EventEmitter {
       rmSync(join(HELM_DIR, 'agent-messages', id), { recursive: true, force: true });
       rmSync(join(HELM_DIR, 'uploads', id), { recursive: true, force: true });
       this.#delegation.updateTeam(s);
-      this.emit('session', { ...s, status: 'exited', alive: false });
+      this.emit('session', { ...s, status: 'exited', alive: false, deleted: true });
       return { ok: true };
     }
     if (s.pty) {
       await this.#terminal(s).close(id);
-      this.#index.delete(id);
+      this.#forgetSession(id);
       this.#save();
-      this.emit('session', { ...s, status: 'exited', alive: false });
+      this.emit('session', { ...s, status: 'exited', alive: false, deleted: true });
       return { ok: true };
     }
     await this.runtime.close(this.#handle(s));
     if (!s.adopted) {
-      this.#index.delete(id);
+      this.#forgetSession(id);
       this.#save();
     }
     return { ok: true };
@@ -2183,7 +2175,16 @@ export class Sessions extends EventEmitter {
 
   // After a daemon restart (session-resume.js)
   adoptTerminals() { return this.#resumer.adoptTerminals(); }
-  resume() { this.#worktrees.watch(); return this.#resumer.resume(); }
+  async resume() {
+    this.#worktrees.watch();
+    await this.#resumer.resume();
+    // A setup the restart cut off runs again before the agent gets anything.
+    for (const s of this.#index.values()) {
+      if (s.chatWorktree?.setup !== 'running') continue;
+      this.emit('session', s);
+      this.#setUp(s, this.#worktrees.setupCommand(s));
+    }
+  }
 
   /**
    * Let an idle chat's agent process go now rather than at the idle reaper.
@@ -2226,7 +2227,7 @@ export class Sessions extends EventEmitter {
     for (const timer of this.#reapers.values()) clearTimeout(timer);
     this.#reapers.clear();
     await Promise.allSettled(this.#retiring.values());
-    for (const id of [...this.#settling.keys()]) this.#settled(id);
+    for (const id of this.#deliveryState.settlingIds()) this.#settled(id);
     await (await this.hooks?.catch(() => null))?.close();
     this.nativeDiscovery = false;
     await this.#natives.nativeDiscovery?.catch(() => {});

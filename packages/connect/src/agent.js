@@ -14,11 +14,12 @@ import {
   MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
+import { logReader, nativeFeatures } from './log-index-native.js';
 import { BASH_GUARD_MODES } from './pi-settings.js';
 import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
-import { listModels, mergeLiveModelCatalog, followNewModels } from './models.js';
+import { listModels, mergeLiveModelCatalog, followNewModels, setAsideSignedOut } from './models.js';
 import { nativeControls, nativeModelChoices, nativeEffortChoices } from './native-controls.js';
 import { nativeClaudeAccount, nativeAccount } from './native-account.js';
 import { readProcess } from './takeover.js';
@@ -39,9 +40,9 @@ import { allowDirectSignal } from './direct-auth.js';
 import { lanAddresses } from './net-addr.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
-import { listShares, addShare, removeShare, publicShare } from './shares.js';
+import { listShares, addShare, removeShare, removeChatShares, publicShare } from './shares.js';
 import { publicHosts } from '@helm/protocol/share';
-import { brief, render, summaryLine, readThread, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
+import { brief, render, summaryLine, readThread, readSnapshot, writeSnapshot, mergeSnapshot, fold } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { HubMesh } from './hub-mesh.js';
@@ -52,9 +53,10 @@ import { TaskTransfers } from './task-transfer.js';
 import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { CliUpdater } from './cli-updates.js';
-import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, watchCheckout } from './update.js';
+import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, rebuildStaleApp, watchCheckout } from './update.js';
 import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
+import { GitTours } from './git-tour.js';
 import { worktreeNote } from './chat-worktree.js';
 import { createGithubMonitor } from './github.js';
 import { createGithubRepos } from './github-repos.js';
@@ -70,8 +72,11 @@ import { ExecutionJobs } from './execution.js';
 import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
 import { InputDelivery } from './input-delivery.js';
+import { ChatEventStream } from './event-stream.js';
+import { SessionUpdates } from './session-updates.js';
 
 const RECONNECT_MIN = 250;
 const RECONNECT_MAX = 5000;
@@ -356,7 +361,7 @@ export class Daemon {
       const running = (await this.#versionP)?.full;
       const net = loadNetwork() ?? this.net;
       const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
-        syncFromBundle, net, id: this.id, rpc: hubRpc });
+        rebuildStaleApp, syncFromBundle, net, id: this.id, rpc: hubRpc });
       this.syncNote = r.note ?? null;
       if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting now'); }
     } catch (err) {
@@ -378,11 +383,8 @@ export class Daemon {
   /** This process's half of an event id; a restart must not reuse ids. */
   #boot = Math.random().toString(36).slice(2, 8);
   #emitted = 0;
-  // The nas capability, only ever populated when this machine is designated
-  // one: { server, port } for the media listener, plus the lazily imported
-  // module. A machine that is never a nas never loads the package.
-  #media = null;
-  #nas = null;
+  /** Chat lists sent lately, by digest: id -> that chat's revision. */
+  #lists = new Map();
 
   /**
    * @param {object} opts
@@ -410,7 +412,7 @@ export class Daemon {
     this.name = net.machines[net.self]?.name || name || hostname();
     this.copyReceiver = new CopyReceiver({ network: () => loadNetwork() ?? this.net });
     this.executions = new ExecutionJobs();
-    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id) } });
+    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id), appProcessRoots: id => this.sessions.appProcessRoots(id) } });
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),
       // Only asked on Windows, where a running program can not be replaced.
@@ -452,6 +454,10 @@ export class Daemon {
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
       emit: payload => this.#emit('agent.message', payload) });
     if (brainHost((loadNetwork() ?? this.net).machines)?.id !== this.id) this.sessions.retireBrains();
+    this.gitTours = new GitTours({ sessions: this.sessions, agents: async (id) => {
+      const profiles = (await getProfiles()).filter(p => p.id === id);
+      return agentCatalog(profiles, await authStatuses(profiles));
+    } });
     this.github = createGithubMonitor({
       context: gitq.githubContext, watchFile: join(HELM_DIR, 'github-watches.json'),
       accountFile: join(HELM_DIR, 'github-accounts.json'),
@@ -543,14 +549,21 @@ export class Daemon {
       }).catch(() => {});
     }, WARM_DELAY_MS);
     warm.unref?.();
-    this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session: wire(session) }));
-    this.sessions.on('discovery', () => this.#emit(E.SESSION_UPDATE, {}));
+    this.sessions.on('session', (session) => {
+      this.#updates.push({ session: wire(session) });
+      this.browsers.sessionChanged(session);
+      if (session.deleted) {
+        try { for (const name of removeChatShares(session.id)) console.log(`[helm] [${session.id}] stopped its link ${name}`); }
+        catch (error) { console.log(`[helm] [${session.id}] could not stop its links: ${error.message}`); }
+      }
+    });
+    this.sessions.on('discovery', () => this.#updates.push({}));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
     this.sessions.on('exit', (e) => this.#emit(E.SESSION_EXIT, e));
     this.sessions.on('transcript', (ref) => this.#emit(E.SESSION_TRANSCRIPT, ref));
     this.sessions.on('status', ({ session, from, to }) => {
-      this.#emit(E.SESSION_UPDATE, { session: wire(session), transition: { from, to } });
+      this.#updates.push({ session: wire(session), transition: { from, to } });
       // The bell rings when the thread settles back to idle, not when it
       // pauses to ask: a completion notification means finished - a thread
       // that is merely blocked has its own notification already. Done,
@@ -568,7 +581,7 @@ export class Daemon {
         // in-app notice and the Needs-you card can show the question.
         let session = null;
         try { session = this.sessions.get(id); } catch { /* gone already */ }
-        if (session) this.#emit(E.SESSION_UPDATE, { session: { ...wire(session), ask: { ...askPreview(event), requestId: event.requestId } }, asked: true });
+        if (session) this.#updates.push({ session: { ...wire(session), ask: { ...askPreview(event), requestId: event.requestId } }, asked: true });
       }
       // The matching "needs you" is stale the moment anyone answers - on
       // this device, another, or the CLI itself. Hubs pass `resolve` through
@@ -634,17 +647,16 @@ export class Daemon {
     );
     this.#reconcile.unref?.();
 
-    // The opt-in half of being a nas. Synced with the kind at start and on
-    // every redesignation, so a machine that is never one never pays for it.
-    this.#syncMedia().catch((err) =>
-      console.error('[helm] nas media:', err?.message || err));
-
     // Every machine checks its checkout and peers: a
     // version saved here is built and started, and a newer one saved on
     // another machine is copied over the network. Soon after start, then
     // every couple of minutes.
     const first = setTimeout(() => { if (!this.#stopped) void this.#syncVersions(); }, UPDATE_AFTER_START_MS);
     first.unref?.();
+    // Browser folders of chats deleted while Helm was down, and the space
+    // closed windows refill by themselves.
+    const tidy = setTimeout(() => { if (!this.#stopped) void this.browsers.manager.tidy().catch(() => {}); }, 60_000);
+    tidy.unref?.();
     this.#wake = setInterval(() => { if (!this.#stopped) void this.#syncVersions(); }, SYNC_EVERY_MS);
     this.#wake.unref?.();
     // A version checked out here is taken at once, not on the next round.
@@ -723,6 +735,8 @@ export class Daemon {
   async stop() {
     if (this.#stopped) return;
     this.#stopped = true;
+    this.#eventStream.stop();
+    this.#updates.stop();
     this.inputDelivery?.stop();
     await this.executions.stop();
     await this.browsers?.stop();
@@ -753,8 +767,6 @@ export class Daemon {
       tunnel.sock.destroy();
     }
     this.#tunnels.clear();
-    this.#media?.server.close();
-    this.#media = null;
     await this.copyReceiver?.stop();
     this.peers?.stop();
     this.runtime?.stop();
@@ -933,11 +945,11 @@ export class Daemon {
    * `kind` lives on this machine's own roster record, which has exactly one
    * author - so this is only ever asked of the machine itself, never written
    * at whichever hub the caller happened to reach. The set is closed (pc,
-   * vm, nas) and a controller is refused outright rather than mapped into
+   * vm) and a controller is refused outright rather than mapped into
    * it: a controller is not a kind of machine, it is a device - it runs
    * nothing and cannot become one.
    *
-   * pc and nas are a record change only; the flag is what the rest of the
+   * pc is a record change only; the flag is what the rest of the
    * network reads. Becoming the vm is real work: an https address has to be
    * claimed before anything is written, so a failure there leaves the
    * machine exactly what it was rather than half a home. Leaving vm is the
@@ -1007,7 +1019,7 @@ export class Daemon {
       notes.push(`This machine serves the network at ${home}.`);
     } else if (from === 'vm') {
       // The advertised https address is what made it the home. Tunnels and
-      // LAN addresses stay - they are still true of a pc or a nas.
+      // LAN addresses stay - they are still true of a pc.
       const drop = new Set(this.advertised.filter((e) => e.startsWith('https://')));
       this.advertised = this.advertised.filter((e) => !drop.has(e));
       this.extra = this.extra.filter((e) => !drop.has(e));
@@ -1026,70 +1038,7 @@ export class Daemon {
     // Now rather than at the next reconcile: the caller is waiting on the
     // answer, and every other machine holds the old word until this lands.
     this.broadcastFrame(T.ROSTER, { roster: rosterOf(this.net) });
-    await this.#syncMedia();
     return { id: this.id, kind, from, changed: true, notes };
-  }
-
-  // -------------------------------------------------------------------- nas
-
-  /** What this machine is for, as its own record currently says. */
-  #isNas() {
-    const net = loadNetwork() ?? this.net;
-    return (net.machines[this.id]?.kind ?? net.role) === 'nas';
-  }
-
-  /**
-   * The media listener, present exactly while this machine is a nas.
-   *
-   * It binds loopback only: the LAN-facing media path is the hub's /media
-   * route, and the remote one is a tunnel to this port. The listener exists
-   * for the tunnel - a hub on another machine reaches in through the
-   * connection this daemon already holds open, which is how a NAS behind
-   * NAT still streams. Nothing is ever served without the authorization
-   * plug, and the port enters the tunnel allowlist only while it is ours.
-   */
-  async #syncMedia() {
-    if (this.#isNas()) {
-      if (this.#media) return;
-      this.#nas ??= await import('@helm/nas');
-      const { server, port } = await this.#nas.startMediaServer({
-        host: '127.0.0.1', port: 0,
-        authorize: this.#nas.mediaAuthorize({ self: this.id }),
-      });
-      this.#media = { server, port };
-    } else if (this.#media) {
-      this.#media.server.close();
-      this.#media = null;
-    }
-  }
-
-  /**
-   * The media RPCs, gated on the kind: a machine that is not a nas has no
-   * media answers, full stop. `caller` is the member id the frame arrived
-   * under - the ticket it gets back is minted for that member alone.
-   */
-  async #mediaRpc(method, p, caller) {
-    if (!this.#isNas()) {
-      throw Object.assign(new Error('this machine is not a nas'), { code: 'not-nas' });
-    }
-    this.#nas ??= await import('@helm/nas');
-    switch (method) {
-      case M.MEDIA_INFO:
-        return { kind: 'nas', port: this.#media?.port ?? null, roots: this.#nas.mediaRoots() };
-      case M.MEDIA_ROOTS:
-        return { roots: this.#nas.mediaRoots() };
-      case M.MEDIA_ROOT_ADD:
-        return { roots: this.#nas.addMediaRoot(p.path) };
-      case M.MEDIA_ROOT_REMOVE:
-        return { roots: this.#nas.removeMediaRoot(p.path) };
-      case M.MEDIA_LIST: {
-        const root = this.#nas.mediaRoots()[Number(p.root)];
-        if (!root) throw new Error('no such shared folder');
-        return { root: root.id, ...(await this.#nas.listMedia(root.path, p.path ?? '')) };
-      }
-      case M.MEDIA_TICKET:
-        return this.#nas.mediaTicket(loadNetwork() ?? this.net, { sub: caller, env: this.id });
-    }
   }
 
   onLinkUp(link) {
@@ -1118,6 +1067,25 @@ export class Daemon {
     this.#usageRollup()
       .then((r) => link.send(T.USAGE_SYNC, r))
       .catch(() => {});
+  }
+
+  #sharedUsage = { buckets: '', at: 0 };
+
+  /**
+   * Give the hubs a fresh rollup after a report, so they can answer for us
+   * while we sleep. It is the whole history (hundreds of KB on a busy
+   * machine) and went out ahead of every reply on the same links: each
+   * Usage screen paid for it, and a reply waited behind several copies.
+   * Now the reply goes first, and an unchanged rollup goes only every
+   * few minutes, to keep the hub's "last heard" time fresh.
+   */
+  #shareUsage(rollup) {
+    setTimeout(() => {
+      const buckets = JSON.stringify(rollup.buckets);
+      if (buckets === this.#sharedUsage.buckets && Date.now() - this.#sharedUsage.at < 10 * 60_000) return;
+      this.#sharedUsage = { buckets, at: Date.now() };
+      this.broadcastFrame(T.USAGE_SYNC, rollup);
+    }, 2_000).unref?.();
   }
 
   /** The machine's whole usage rollup - shared by the report and the push. */
@@ -1183,29 +1151,49 @@ export class Daemon {
   }
 
   /** sessionId -> events waiting for the next flush */
-  #eventQueue = new Map();
-  #eventFlush = null;
+  #eventStream = new ChatEventStream({
+    recipients: id => this.sessions.watcherRecipients(id),
+    emit: (id, events, to) => this.#emit(E.SESSION_EVENT, { id, events: events.map(forWire) }, to),
+  });
+
+  /** Chat updates without the ones that change nothing (session-updates.js). */
+  #updates = new SessionUpdates({ send: (payload) => this.#emit(E.SESSION_UPDATE, payload) });
 
   /**
-   * Session events go out in small batches, one frame per session per tick,
-   * and only while somebody has asked to watch that session: the relay fans
-   * out per machine, so this is what keeps a phone from receiving the text
-   * of every session on the box.
+   * Tool updates share a short batch. Text and questions flush it at once.
+   * Each frame names only the devices with an open, visible chat view.
    */
   #queueEvent(id, event) {
     if (!this.sessions.watching(id)) return;
-    if (!this.#eventQueue.has(id)) this.#eventQueue.set(id, []);
-    // The same cap a fetched reply gets: a 140KB edit is no cheaper to push
-    // than it was to send, and a phone reading it live is the same phone.
-    this.#eventQueue.get(id).push(forWire(event));
-    if (!this.#eventFlush) {
-      this.#eventFlush = setImmediate(() => {
-        this.#eventFlush = null;
-        const batches = [...this.#eventQueue];
-        this.#eventQueue.clear();
-        for (const [sid, events] of batches) this.#emit(E.SESSION_EVENT, { id: sid, events });
-      });
+    this.#eventStream.push(id, event);
+  }
+
+  /**
+   * A chat list, or only its changes for a device that holds an earlier one.
+   *
+   * The phone asks for the whole list whenever a chat starts, ends or moves,
+   * often several times while one chat opens. Each copy was tens of KB over
+   * a mobile link, almost all of it unchanged. A device that names the
+   * digest of the list it holds gets the order of ids and the chats whose
+   * revision changed. An unknown digest (this daemon restarted, or the list
+   * aged out) gets the full list, which older apps always ask for.
+   */
+  #listReply(sessions, have) {
+    const rev = (s) => createHash('sha1').update(JSON.stringify(s)).digest('base64url').slice(0, 12);
+    const order = sessions.map((s) => [s.id, rev(s)]);
+    const revs = new Map(order);
+    const digest = createHash('sha1').update(order.join('\n')).digest('base64url').slice(0, 16);
+    const base = typeof have === 'string' ? this.#lists.get(have) : undefined;
+    // Least recently used last out; a handful covers every screen's filter.
+    for (const [key, value] of [[have, base], [digest, revs]]) {
+      if (!value) continue;
+      this.#lists.delete(key);
+      this.#lists.set(key, value);
     }
+    while (this.#lists.size > 32) this.#lists.delete(this.#lists.keys().next().value);
+    if (!base) return { sessions, digest };
+    if (have === digest) return { base: have, digest, unchanged: true };
+    return { base: have, digest, ids: order.map(([id]) => id), changed: sessions.filter((s, i) => base.get(s.id) !== order[i][1]) };
   }
 
   /**
@@ -1222,10 +1210,10 @@ export class Daemon {
    * Whichever copy arrives first wins, the other is dropped, and a restarted
    * daemon cannot collide with its own past because the boot half is new.
    */
-  #emit(kind, payload) {
+  #emit(kind, payload, to) {
     const eid = `${this.#boot}:${++this.#emitted}`;
-    this.broadcastFrame(T.EVENT, { kind, payload, eid });
-    this.peers?.broadcast(kind, payload, eid);
+    this.broadcastFrame(T.EVENT, { kind, payload, eid, ...(to ? { to } : {}) });
+    this.peers?.broadcast(kind, payload, eid, to);
   }
 
   /**
@@ -1241,7 +1229,7 @@ export class Daemon {
     let session = null;
     try { session = this.sessions.get(id); } catch { /* gone already */ }
     if (session?.delegation) return;
-    const payload = describeAsk({ ...session, envId: this.id }, event);
+    const payload = describeAsk({ ...session, envId: this.id, machine: this.name }, event);
     // Each connected hub receives the small, already-redacted notification.
     // The hub that accepted the phone's subscription is the one that can
     // deliver it; a laptop's own local hub normally has no subscriptions.
@@ -1249,13 +1237,17 @@ export class Daemon {
   }
 
   /**
-   * A completion bell going off. Deliberately plainer than
-   * `describeAsk` - there is nothing to decide, so the notification carries
-   * the thread's name and that it finished, nothing more.
+   * A completion bell going off: the chat's name, and the first line of
+   * the agent's last words so the owner knows if it needs a look.
    */
   #notifyDone(session) {
+    let reply = '';
+    try {
+      const turn = fold(this.sessions.events.tail(session.id, 400)).turns.at(-1);
+      reply = turn?.items.filter((i) => i.kind === 'text' && i.text.trim()).at(-1)?.text ?? '';
+    } catch { /* the notice still says it finished */ }
     this.broadcastFrame(T.NOTIFY, {
-      payload: describeDone({ ...session, envId: this.id }),
+      payload: describeDone({ ...session, envId: this.id, machine: this.name }, Date.now(), reply),
     });
   }
 
@@ -1286,6 +1278,8 @@ export class Daemon {
       arch: arch(),
       release: release(),
       runtime: this.runtimeInfo,
+      logReader,
+      rustFeatures: nativeFeatures,
       // 'pty' or 'panes': what a terminal here will actually be.
       terminals,
       // Whether this machine can turn a recording into words. The composer
@@ -1506,9 +1500,8 @@ export class Daemon {
    * own loopback interface and get a full duplex byte stream back, which is
    * every database, admin socket and localhost-only HTTP server on the box.
    *
-   * The only things that have ever needed a tunnel are ssh and - while this
-   * machine is a nas - its own media listener, which is how a remote hub
-   * reaches the byte stream. `tunnel.ports` in ~/.helm/config.json adds to
+   * The only things that have ever needed a tunnel are ssh and shared
+   * ports. `tunnel.ports` in ~/.helm/config.json adds to
    * the list for anyone who wants more, deliberately and on the machine
    * itself.
    */
@@ -1516,7 +1509,6 @@ export class Daemon {
     const extra = loadSettings()?.tunnel?.ports;
     return [
       Number(process.env.HELM_SSH_PORT || 22),
-      this.#media?.port,
       this.schedules?.share()?.port,
       // Ports shared on purpose with `helm share`, and only those.
       ...listShares().map((share) => share.port),
@@ -1639,8 +1631,9 @@ export class Daemon {
       case M.EXEC_READ: return this.executions.read(p, caller ?? this.id);
       case M.EXEC_CANCEL: return this.executions.cancel(p, caller ?? this.id);
       case M.ENV_INFO:
-        return { ...(await this.describe()), name: this.name };
+        return { ...(await this.describe()), name: this.name, web: webBuild() };
 
+      case M.GIT_TOUR: return this.gitTours.dispatch(p);
       case M.GIT_STATUS: return gitq.status(p.cwd);
       case M.GIT_GRAPH: return gitq.graph(p.cwd, await this.sessions.list());
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
@@ -1721,7 +1714,7 @@ export class Daemon {
        * Same authorship rule as the name above: `kind` lives on this
        * machine's own roster record, so a CLI or app redesignating a machine
        * asks its daemon - a hub that answered the phone is never asked to
-       * write it. pc and nas are a record change; becoming the vm claims an
+       * write it. pc is a record change; becoming the vm claims an
        * https address first, and failing that fails the whole change.
        */
       // The owner's preferences: the same list on every machine, so any one
@@ -1777,13 +1770,6 @@ export class Daemon {
       case M.SHARE_REMOVE:
         return { removed: removeShare(p.name) };
 
-      case M.MEDIA_INFO:
-      case M.MEDIA_ROOTS:
-      case M.MEDIA_ROOT_ADD:
-      case M.MEDIA_ROOT_REMOVE:
-      case M.MEDIA_LIST:
-      case M.MEDIA_TICKET:
-        return this.#mediaRpc(method, p, caller);
 
       case M.FS_LIST:   return fsApi.list(p.path);
       case M.FS_ROOTS:  return fsApi.roots();
@@ -1883,6 +1869,8 @@ export class Daemon {
       }
 
       case M.MODEL_LIST: {
+        // A picker that saw `refreshing` asks once more and waits here,
+        // rather than asking every second until the refresh ends.
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
         if (p.id) await this.sessions.refreshNativeSettings?.(p.id);
         const native = p.id ? this.sessions.get(p.id) : null;
@@ -1893,7 +1881,7 @@ export class Daemon {
           const engine = ENGINES[native.engine];
           const home = native.nativeHome ?? engine?.defaultHome;
           const hasModels = nativeModelChoices(native.engine);
-          const catalog = hasModels ? await listModels(native.engine, home, nativeEnv ?? {}) : { models: [] };
+          const catalog = hasModels ? await listModels(native.engine, home, nativeEnv ?? {}, null, { settled: p.settled === true }) : { models: [] };
           const prefs = account ? modelPrefs(account) : null;
           const filtered = applyModelPrefs(catalog, prefs, { all: !!p.all });
           const hasEffort = nativeEffortChoices(native.engine) && !!(catalog.efforts?.length || Object.keys(catalog.effortsByModel ?? {}).length);
@@ -1908,7 +1896,7 @@ export class Daemon {
         }
         if (native?.nativeChat && native.engine === 'claude') {
           const home = native.nativeHome ?? profile?.env?.CLAUDE_CONFIG_DIR ?? ENGINES.claude.defaultHome;
-          const catalog = await listModels('claude', home);
+          const catalog = await listModels('claude', home, {}, null, { settled: p.settled === true });
           // The account this terminal runs as, for its favorites and the
           // defaults new chats start with - the same tray a Helm chat has.
           let nativeEnv = null;
@@ -1932,6 +1920,7 @@ export class Daemon {
           spec.env?.[engine?.homeEnv] ?? engine?.defaultHome,
           spec.env,
           profile.wraps ? { cmd: spec.cmd, args: spec.args } : null,
+          { settled: p.settled === true },
         );
         // A live agent reports the pickers it actually has - real display
         // names, the levels this session offers - which beats what the CLI
@@ -1961,8 +1950,10 @@ export class Daemon {
         const prefs = modelPrefs(profile);
         // `models` is the cached catalogue object - copy before folding in
         // prefs/extras so the cache never carries one session's answer.
-        const filtered = applyModelPrefs({ ...models }, prefs, { all: !!p.all });
+        let filtered = applyModelPrefs({ ...models }, prefs, { all: !!p.all });
         if (extra.length) filtered.more = [...(filtered.more ?? []), ...extra];
+        // Models behind a refused sign-in go last; the settings editor still sees all.
+        if (!p.all) filtered = setAsideSignedOut(filtered);
         // A stored default the running agent refuses must not read as the
         // session's model.
         if (live?.models?.length && filtered.default && !live.models.includes(filtered.default)) {
@@ -1997,7 +1988,7 @@ export class Daemon {
 
       case M.SESSION_LIST: {
         const sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true });
-        if (p.projects !== true) return { sessions };
+        if (p.projects !== true) return this.#listReply(sessions, p.have);
         // `helm pickup` from another machine: which project each chat's
         // folder holds, worked out here where the folder is.
         const dirs = sessions.flatMap((s) => [s.cwd, s.delegation?.worktree?.repo]);
@@ -2014,7 +2005,7 @@ export class Daemon {
         return this.agentMessages.receive(p.message, caller);
       // Only the keeper starts a hidden helper; one asked for from outside is
       // always a card in its chat, where the owner can see it.
-      case M.SESSION_DELEGATE: return this.sessions.delegate({ ...p, hidden: false });
+      case M.SESSION_DELEGATE: return this.sessions.delegate({ ...p, hidden: false, tour: false });
       case M.SESSION_DELEGATION_RESULT: {
         await this.sessionRecovery;
         const result = this.sessions.delegationResult(p.id, p);
@@ -2030,8 +2021,16 @@ export class Daemon {
       case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
-        const { originHandoffId: _originHandoffId, delegation: _delegation, ...start } = p;
-        return { session: await this.sessions.start({ ...start, quick: start.quick === true }) };
+        const { originHandoffId: _originHandoffId, delegation: _delegation, attach, ...start } = p;
+        const session = await this.sessions.start({ ...start, quick: start.quick === true, size: attach ?? null });
+        // A new terminal's first screen comes back with it, so the app can
+        // draw it without a second trip - a whole second over a slow link.
+        // Its output is pushed only from this view on, so nothing is missed
+        // and nothing is drawn twice.
+        const first = attach && session.pty
+          ? await this.sessions.attach(session.id, { cols: attach.cols, rows: attach.rows, watcher: attach.watcher }).catch(() => null)
+          : null;
+        return first ? { session, attach: { text: first.text, pty: true } } : { session };
       }
       case M.SESSION_LINK:    return this.sessions.linkChild(p.id, p.child);
       // Attaching starts a push stream of the screen (E.SESSION_DATA); the
@@ -2049,7 +2048,7 @@ export class Daemon {
         return this.inputDelivery.deliver(p, caller);
       case M.SESSION_INPUT:   return this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments, delivery: p.delivery, references: p.references });
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
-      case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });
+      case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit, known: typeof p.known === 'string' ? p.known : null });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
       case M.SESSION_DISCARD_EMPTY: return this.sessions.discardEmpty(p.id);
       case M.SESSION_TITLE:   return this.sessions.rename(p.id, p.title);
@@ -2068,7 +2067,7 @@ export class Daemon {
       case M.SESSION_EVENTS:
         await this.sessions.prepareHistory(p.id);
         return this.sessions.history(p.id, {
-          since: p.since ?? 0, limit: p.limit ?? 500, tail: p.tail ?? 0, before: p.before ?? 0,
+          since: p.since ?? 0, limit: p.limit ?? 500, tail: p.tail ?? 0, before: p.before ?? 0, pageBytes: p.pageBytes ?? 0,
         });
       // A view owns its lease. Refreshing or closing one tab cannot cancel
       // another device's stream, even when both use the same login.
@@ -2149,8 +2148,11 @@ export class Daemon {
       case M.BRAIN_SNAPSHOT: {
         // `cached` serves the picture this machine already had - the app uses
         // it to draw an offline machine's last-known threads without waiting
-        // for a refresh that only proves the machine is still down.
-        const snap = p.cached ? readSnapshot() : await this.refreshSnapshot();
+        // for a refresh that only proves the machine is still down. Those
+        // callers read only the snapshot: each open app asks once a minute
+        // while a machine is down, and the text was 50 KB of every 265 KB.
+        if (p.cached) return { snapshot: readSnapshot() };
+        const snap = await this.refreshSnapshot();
         return { text: render(snap, { roster: this.rosterState(snap) }), snapshot: snap };
       }
 
@@ -2202,7 +2204,7 @@ export class Daemon {
 
       case M.USAGE_REPORT: {
         const rollup = await this.#usageRollup(!!p.rebuild);
-        this.broadcastFrame(T.USAGE_SYNC, rollup);
+        this.#shareUsage(rollup);
         return foldBuckets(rollup.buckets, {
           model: typeof p.model === 'string' ? p.model : null,
           since: p.since ?? null,

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { readFile, writeFile, rm, chmod, stat, rename } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
@@ -7,8 +7,9 @@ import { spawn } from 'node:child_process';
 import { HELM_DIR } from './paths.js';
 import { normalizeAction, readOnlyAction, resolveTarget } from './browser-targets.js';
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
+import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } from './browser-identity.js';
 import * as browserLogins from './browser-logins.js';
-import { canOpenWindow, launchWindow as openWindow, windowProfile, windowName, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen } from './browser-window.js';
+import { canOpenWindow, launchWindow as openWindow, windowProfile, windowName, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -43,18 +44,21 @@ export const plainNavError = (error, url) => {
   return `Could not open ${host}${code ? ` (${code.slice(4).toLowerCase().replace(/_/g, ' ')})` : ''}.`;
 };
 const executable = () => process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM || ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
-const LAUNCH = { headless: true, args: ['--disable-gpu', '--disk-cache-size=33554432'], timeout: 15000 };
-// Playwright's headless shell starts ~3x faster and uses about half the memory of full Chromium; a pinned path or a missing shell falls back to the system browser.
+const LAUNCH = { headless: true, channel: 'chromium', ignoreDefaultArgs: ignoredBrowserArgs, args: [...browserArgs, '--disk-cache-size=33554432', '--disable-component-update'], timeout: 15000 };
+// Full Chromium keeps the same plugins, languages and window.chrome as a window.
 async function launchChromium() {
-  const { chromium } = await import('playwright'), pinned = process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM;
-  if (pinned) return chromium.launch({ ...LAUNCH, executablePath: pinned });
-  try { return await chromium.launch(LAUNCH); }
-  catch (error) { const system = executable(); if (!system) throw error; return chromium.launch({ ...LAUNCH, executablePath: system }); }
+  const { chromium } = await import('patchright-core'), pinned = process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM;
+  let browser;
+  if (pinned) browser = await chromium.launch({ ...LAUNCH, executablePath: pinned });
+  else try { browser = await chromium.launch(LAUNCH); }
+  catch (error) { const system = executable(); if (!system) throw error; browser = await chromium.launch({ ...LAUNCH, executablePath: system }); }
+  try { browser.helmIdentity = await browserIdentity(browser); browser.helmPatched = true; return browser; }
+  catch (error) { await browser.close(); throw error; }
 }
 // Playwright keeps its own Chromium here unless told otherwise.
 const playwrightBrowsers = () => process.env.PLAYWRIGHT_BROWSERS_PATH
   || join(homedir(), process.platform === 'darwin' ? 'Library/Caches/ms-playwright' : process.platform === 'win32' ? 'AppData/Local/ms-playwright' : '.cache/ms-playwright');
-const hasPlaywrightChromium = () => { try { return readdirSync(playwrightBrowsers()).some(name => name.startsWith('chromium')); } catch { return false; } };
+const hasPlaywrightChromium = () => { try { return readdirSync(playwrightBrowsers()).some(name => name.startsWith('chromium-')); } catch { return false; } };
 const bowserBin = () => process.env.HELM_BOWSER_PATH || (process.env.PATH || '').split(':').map(p => join(p, 'bowser-computer')).find(existsSync);
 const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 const MAX_THREAD_DOWNLOAD_BYTES = 256 * 1024 * 1024;
@@ -105,8 +109,8 @@ export class BowserBridge {
  * is one shared hidden Chromium. Nothing starts until a tab is used.
  */
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, bowser = new BowserBridge(), idleMs = 10 * 60000, actionTimeoutMs = 45000, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow(), ownerQuietMs = 2500 } = {}) {
-    this.launchWindow = launchWindow; this.canWindow = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map();
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, bowser = new BowserBridge(), idleMs = 10 * 60000, windowIdleMs = 30 * 60000, actionTimeoutMs = 45000, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow(), ownerQuietMs = 2500 } = {}) {
+    this.launchWindow = launchWindow; this.canWindow = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
     this.logins = logins; this.loginImports = new Map(); this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.bowser = bowser; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
     this.flows = new BrowserFlows(directory);
   }
@@ -152,9 +156,16 @@ export class BrowserManager {
         if (!seed) { const choice = await this.loginDefault(sessionId); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
         if (seed) { if (!seed.cookies.length && seed.failed) throw new Error(seed.warnings?.[0] || 'Could not copy the default browser logins.'); storageState = { cookies: seed.cookies, origins: [] }; }
       }
-      const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true, ...(storageState ? { storageState } : {}) });
+      // Set the user agent before any popup's first request. Each page also
+      // receives matching client hints before an agent opens its address.
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true, ...(browser.helmIdentity ? { userAgent: browser.helmIdentity.userAgent } : {}), ...(storageState ? { storageState } : {}) });
+      context.helmPatched = !!browser.helmPatched;
       context.setDefaultTimeout(10000); context.setDefaultNavigationTimeout(15000);
-      context.on('page', page => this.register(sessionId, page));
+      context.on('page', page => {
+        const tab = this.register(sessionId, page);
+        tab.prepared = presentAsChrome(page, browser.helmIdentity).then(cdp => { tab.identityCdp = cdp; });
+        void tab.prepared.catch(() => {}); // The open or action request reports it.
+      });
       try { if (seed) await this.saveContext(sessionId, context); } catch (error) { await context.close(); throw error; }
       return context;
     })();
@@ -192,7 +203,61 @@ export class BrowserManager {
     this.timer ||= setInterval(() => void this.sweep().catch(() => {}), 2000); this.timer.unref?.();
     return context;
   }
-  async newPage(context) { const spare = context.helmSpare; context.helmSpare = null; return spare && !spare.isClosed() ? spare : context.newPage(); }
+  /**
+   * A new tab. In a window it opens at its address: an empty tab sent
+   * somewhere shows "about:blank" over a white page until the site answers,
+   * while a tab Chromium opens at the address shows the address and Loading.
+   * A new window's empty first tab goes once the real one is there.
+   * `helmGoing` marks a page already on its way. A site that has not
+   * answered within `wait` gets a plain tab that loads it, so the tab is
+   * listed while the site is slow.
+   */
+  async newPage(context, url, { wait = 2000 } = {}) {
+    const spare = context.helmSpare; context.helmSpare = null;
+    const going = context.helmWindow && url && url !== 'about:blank';
+    if (spare && !spare.isClosed() && !going) return spare;
+    if (!going) {
+      const page = await context.newPage();
+      try { await [...this.tabs.values()].find(tab => tab.page === page)?.prepared; return page; }
+      catch (error) { await page.close().catch(() => {}); throw error; }
+    }
+    let page; try { page = await this.windowTab(context, url, wait); } catch (error) { if (spare && !spare.isClosed()) context.helmSpare = spare; throw error; }
+    if (!page) { if (spare && !spare.isClosed()) return spare; return context.newPage(); }
+    if (spare && !spare.isClosed()) await spare.close().catch(() => {});
+    page.helmGoing = url; return page;
+  }
+  /** Chromium opens the tab at `url`; Playwright hands the page over once the site first answers. Null when Chromium cannot be asked or the site is slow. */
+  async windowTab(context, url, wait) {
+    const browser = context.browser?.(), first = context.pages().find(page => !page.isClosed());
+    const cdp = browser ? await browser.newBrowserCDPSession() : first ? await context.newCDPSession(first) : null;
+    if (!cdp) return null;
+    const seen = new Map(); let want, found;
+    const arrived = new Promise(resolve => { found = resolve; });
+    const check = async page => {
+      let session; try { session = await context.newCDPSession(page); const { targetInfo } = await session.send('Target.getTargetInfo'); seen.set(targetInfo.targetId, page); if (targetInfo.targetId === want) found(page); } catch { /* closed already */ } finally { await session?.detach().catch(() => {}); }
+    };
+    context.on('page', check);
+    let timer;
+    try {
+      ({ targetId: want } = await cdp.send('Target.createTarget', { url }));
+      if (seen.has(want)) return seen.get(want);
+      const page = await Promise.race([arrived, new Promise(resolve => { timer = setTimeout(resolve, wait); timer.unref?.(); })]);
+      if (page) return page;
+      await cdp.send('Target.closeTarget', { targetId: want }).catch(() => {});
+      return null;
+    } finally { clearTimeout(timer); context.off('page', check); await cdp.detach().catch(() => {}); }
+  }
+  /**
+   * A tab opened at its address has loaded far enough to read, or says why
+   * it could not. Chromium's error page names the problem; loading the
+   * address again there can leave the tab stuck, even unable to close.
+   */
+  async arrive(page, url) {
+    await page.waitForLoadState('domcontentloaded');
+    if (!page.url().startsWith('chrome-error:')) return;
+    const code = await page.evaluate(() => document.querySelector('.error-code')?.textContent?.trim() || '').catch(() => '');
+    throw new Error(`net::${/^DNS_PROBE/.test(code) ? 'ERR_NAME_NOT_RESOLVED' : /^ERR_[A-Z_]+$/.test(code) ? code : 'ERR_FAILED'} at ${url}`);
+  }
   /** An empty tab in the window shows the New Tab page, as in any browser. */
   async blank(page) { if (page.context?.().helmWindow) await page.goto(NEW_TAB).catch(() => {}); }
   /** The owner clicked, typed or scrolled in the window; the agent's own input is not theirs. */
@@ -261,7 +326,7 @@ export class BrowserManager {
   }
   register(sessionId, page) {
     const existing = [...this.tabs.values()].find(t => t.page === page); if (existing) return existing;
-    const tab = { id: id(), sessionId, engine: 'chromium', page, title: '', console: [], network: [], downloads: [], lastUsed: this.now(), dialog: null, window: !!page.context?.().helmWindow };
+    const tab = { id: id(), sessionId, engine: 'chromium', page, title: '', console: [], network: [], downloads: [], lastUsed: this.now(), dialog: null, window: !!page.context?.().helmWindow, patched: !!page.context?.().helmPatched };
     this.tabs.set(tab.id, tab);
     tab.fetching = new Set(); tab.quietAt = 0;
     const changed = () => { tab.quietAt = Date.now(); for (const wake of tab.settleWaiters || []) wake(); };
@@ -320,14 +385,22 @@ export class BrowserManager {
       for (const [key, orphan] of this.orphans || []) if (orphan.sessionId === sessionId) this.orphans.delete(key);
       let rows; try { rows = JSON.parse(await readFile(join(this.directory, sessionId, 'tabs.json'), 'utf8')); } catch { return; }
       if (!Array.isArray(rows)) return;
+      const restore = [];
       for (const row of rows.slice(0, 24)) {
         if (row.engine !== 'chromium' || !/^[a-f0-9]{16}$/.test(row.id)) continue;
         if (this.tabs.has(row.id)) continue;
         const context = await this.context(sessionId);
         // The window stayed open through a restart: its tab is already there, loaded.
         const kept = [...this.tabs.values()].find(t => t.sessionId === sessionId && t.adopted && t.page.url() === row.url);
-        const page = kept?.page || await this.newPage(context), tab = kept || this.register(sessionId, page);
-        tab.adopted = false;
+        if (kept) kept.adopted = false;
+        let address = 'about:blank'; try { address = httpUrl(row.url); } catch { /* keep the tab available to retry */ }
+        restore.push({ row, context, kept, address });
+      }
+      // The tabs open together, each at its address. One whose site is slow
+      // to answer opens empty and loads behind, as before.
+      const pages = await Promise.all(restore.map(({ context, kept, address }) => kept?.page || this.newPage(context, address).catch(() => context.newPage())));
+      for (const [index, { row, kept, address }] of restore.entries()) {
+        const page = pages[index], tab = kept || this.register(sessionId, page);
         this.tabs.delete(tab.id); tab.id = row.id; tab.title = row.title || tab.title || ''; this.tabs.set(tab.id, tab);
         if (!tab.window && row.viewport && Number.isInteger(row.viewport.width) && row.viewport.width >= 240 && row.viewport.width <= 1920 && Number.isInteger(row.viewport.height) && row.viewport.height >= 200 && row.viewport.height <= 1200) await page.setViewportSize(row.viewport);
         for (const download of (Array.isArray(row.downloads) ? row.downloads : []).slice(-20)) {
@@ -337,8 +410,7 @@ export class BrowserManager {
         }
         if (kept) continue;
         // Loads in the background: the tab list answers now, and each page fills in as it arrives.
-        let address = 'about:blank'; try { address = httpUrl(row.url); } catch { /* keep the tab available to retry */ }
-        if (address !== 'about:blank') { tab.url = address; tab.ready = page.goto(address, { waitUntil: 'domcontentloaded' }).then(() => {}, () => {}); }
+        if (address !== 'about:blank') { tab.url = address; tab.ready = (page.helmGoing ? this.arrive(page, address) : page.goto(address, { waitUntil: 'domcontentloaded' })).then(() => {}, () => {}); }
         else tab.ready = this.blank(page);
       }
     })().catch(error => { this.recovered.delete(sessionId); throw error; }));
@@ -380,9 +452,11 @@ export class BrowserManager {
       } catch (error) { if (!existing) this.tabs.delete(tab.id); throw error; }
     }
     if (engine !== 'chromium') throw new Error('unknown browser engine');
-    const context = await this.context(sessionId), page = await this.newPage(context), tab = this.register(sessionId, page);
-    try { if (url !== 'about:blank') await page.goto(url, { waitUntil: 'domcontentloaded' }); else await this.blank(page); await this.settle(tab); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(await this.look(tab)) }; }
-    catch (error) { await page.close(); throw /net::ERR_|Timeout \d+ms/.test(error.message) ? new Error(plainNavError(error, url)) : error; }
+    const context = await this.context(sessionId);
+    const page = await this.newPage(context, url);
+    const tab = this.register(sessionId, page);
+    try { if (url !== 'about:blank') await (page.helmGoing ? this.arrive(page, url) : page.goto(url, { waitUntil: 'domcontentloaded' })); else await this.blank(page); await this.settle(tab, { navigation: true }); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(await this.look(tab)) }; }
+    catch (error) { tab.explicitClose = true; await page.close(); throw /net::ERR_|Timeout \d+ms/.test(error.message) ? new Error(plainNavError(error, url)) : error; }
   }
   get(sessionId, tabId) { this.owner(sessionId); const tab = this.tabs.get(tabId); if (!tab || tab.sessionId !== sessionId) throw new Error('browser tab not found in this thread'); return tab; }
   async run(sessionId, tabId, action) {
@@ -405,12 +479,14 @@ export class BrowserManager {
         if (!readOnlyAction(action)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
       }
       tab.lastUsed = tab.actedAt = this.now();
-      // Wait for a page restored after a restart before the agent uses it.
+      // Wait for a restored page before the agent uses it.
       if (tab.ready) { await tab.ready; tab.ready = null; }
+      await tab.prepared;
       // In a window the owner may be using the page themselves: the agent
       // lets them finish rather than typing over them.
       const shared = tab.window;
       if (shared && !readOnlyAction(action)) await this.ownerQuiet(tab);
+      if (Date.now() >= deadline) throw new Error('Browser action expired before delivery.');
       let result;
       if (shared) tab.agentActing = true;
       try { result = await this.perform(tab, action); }
@@ -420,7 +496,19 @@ export class BrowserManager {
       return result;
     });
     const job = Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Browser action timed out; inspect the page before retrying.')), this.actionTimeoutMs); timer.unref?.(); })]);
-    this.serial.set(tab.id, job); void job.finally(() => { clearTimeout(timer); if (this.serial.get(tab.id) === job) this.serial.delete(tab.id); }).catch(() => {}); return job;
+    // A reply timeout does not stop a browser command already in flight.
+    // Give it one more action timeout to finish before allowing recovery
+    // commands through: an evaluate call can otherwise block the tab forever.
+    let release;
+    const grace = new Promise(resolve => { release = resolve; });
+    const graceTimer = setTimeout(release, 2 * this.actionTimeoutMs); graceTimer.unref?.();
+    const serial = Promise.race([operation, grace]);
+    this.serial.set(tab.id, serial);
+    void serial.finally(() => {
+      clearTimeout(graceTimer);
+      if (this.serial.get(tab.id) === serial) this.serial.delete(tab.id);
+    }).catch(() => {});
+    try { return await job; } finally { clearTimeout(timer); }
   }
   async look(tab, budget = 6000) {
     integer(budget, 0, 20000);
@@ -431,8 +519,9 @@ export class BrowserManager {
       const elements = [], roots = [], seen = new Set();
       const visit = (root, inView = true) => {
         if (seen.has(root)) return; seen.add(root); roots.push(root);
+        const candidates = new Set(root.querySelectorAll(selector));
         for (const el of root.querySelectorAll('*')) {
-          if (elements.length < 300 && (el.matches(selector) || typeof el.onclick === 'function') && visible(el)) elements.push({ el, inView });
+          if (elements.length < 300 && (candidates.has(el) || typeof el.onclick === 'function') && visible(el)) elements.push({ el, inView });
           if (el.shadowRoot && visible(el)) visit(el.shadowRoot, inView);
           if (el.tagName === 'IFRAME' && visible(el)) { try { if (el.contentDocument) { const r = el.getBoundingClientRect(), w = el.ownerDocument.defaultView; visit(el.contentDocument, inView && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth); } } catch {} }
         }
@@ -477,16 +566,22 @@ export class BrowserManager {
     }
     throw new Error('choose a target, element ref, selector, role/name, or x/y coordinates');
   }
-  async settle(tab) {
+  async settle(tab, { navigation = false } = {}) {
     if (tab.engine !== 'chromium' || !tab.fetching || tab.dialog) return;
-    const deadline = Date.now() + 3000;
-    await tab.page.waitForLoadState('load', { timeout: 3000 }).catch(() => {});
-    if (tab.dialog || Date.now() >= deadline) return;
-    await new Promise(resolve => {
+    const start = Date.now(), deadline = start + 3000;
+    // Pictures and adverts can hold the load event back for seconds after the
+    // text is there: a page that has fetched nothing for half a second is ready.
+    await Promise.race([tab.page.waitForLoadState('load', { timeout: 3000 }).catch(() => {}), this.quiet(tab, deadline, 500, start)]);
+    if (navigation || tab.dialog || Date.now() >= deadline) return;
+    await this.quiet(tab, deadline, 150);
+  }
+  /** No fetch in flight and none started or ended for `ms`, counted from `since`. */
+  quiet(tab, deadline, ms, since = 0) {
+    return new Promise(resolve => {
       let timer;
       const wake = () => {
         clearTimeout(timer);
-        const remaining = deadline - Date.now(), quiet = 150 - (Date.now() - tab.quietAt);
+        const remaining = deadline - Date.now(), quiet = ms - (Date.now() - Math.max(tab.quietAt, since));
         if (tab.dialog || remaining <= 0 || !tab.fetching.size && quiet <= 0) { tab.settleWaiters.delete(wake); resolve(); return; }
         timer = setTimeout(wake, Math.min(remaining, tab.fetching.size ? remaining : Math.max(1, quiet)));
       };
@@ -499,7 +594,7 @@ export class BrowserManager {
     action = normalizeAction(action);
     const kind = action.kind;
     if (kind === 'look') return { tab: this.metadata(tab), ...(await this.look(tab, action.budget ?? 6000)) };
-    if (kind === 'console') return { entries: tab.console };
+    if (kind === 'console') return this.readConsole(tab);
     if (kind === 'network') return { entries: tab.network };
     if (kind === 'screenshot') return this.capture(tab, action);
     if (kind === 'batch') {
@@ -556,12 +651,14 @@ export class BrowserManager {
     else if (kind === 'upload') {
       const files = await this.uploads(tab, action);
       let target; try { target = await this.target(tab, action); await target.setInputFiles(files.paths); } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
-    } else if (kind === 'evaluate') { const value = await page.evaluate(text(action.script, 20000)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
-    else if (kind === 'wait') { integer(action.timeout ?? 10000, 1, 30000); if (action.selector) await page.locator(text(action.selector, 2000)).waitFor({ state: action.state || 'visible', timeout: action.timeout ?? 10000 }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: action.timeout ?? 10000 }); }
+    } else if (kind === 'evaluate') { const script = text(action.script, 20000), value = await (tab.patched ? page.evaluate(script, undefined, undefined, false) : page.evaluate(script)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
+    else if (kind === 'wait') { integer(action.timeout ?? 10000, 1, 30000); if (action.selector) await page.locator(text(action.selector, 2000)).first().waitFor({ state: action.state || 'visible', timeout: action.timeout ?? 10000 }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: action.timeout ?? 10000 }); }
     else if (kind === 'resize') await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) });
     else if (kind === 'dialog') { if (!tab.dialog) throw new Error('no dialog is open'); const dialog = tab.dialog; tab.dialog = null; action.accept ? await dialog.accept(action.text ?? '') : await dialog.dismiss(); }
-    else throw new Error(`unknown browser action: ${kind}`);
-    if (['navigate', 'back', 'forward', 'reload', 'click', 'type', 'key', 'select', 'hover', 'scroll', 'drag', 'resize', 'upload', 'dialog', 'wait'].includes(kind)) await this.settle(tab);
+    else throw new Error(kind ? `unknown browser action: ${kind}` : `unknown browser action ${JSON.stringify(Object.keys(action))}; use a kind such as goto, click, type, evaluate or wait`);
+    // Pointer moves and scrolling do not need to wait for unrelated adverts
+    // or analytics. A read still measures the current DOM and layout.
+    if (['navigate', 'back', 'forward', 'reload', 'click', 'type', 'key', 'select', 'drag', 'resize', 'upload', 'dialog', 'wait'].includes(kind)) await this.settle(tab, { navigation: ['navigate', 'back', 'forward', 'reload'].includes(kind) });
     // Only actions that can change the title ask for it; page loads update it as they finish.
     if (!['hover', 'scroll', 'type', 'resize'].includes(kind)) tab.title = await page.title().catch(() => tab.title);
     return { tab: this.metadata(tab), ...(!inBatch ? await this.look(tab) : {}) };
@@ -590,7 +687,6 @@ export class BrowserManager {
     tab.pointer = { x, y, ...(box ? { box } : {}), action: kind, label: [verb, name && `“${name}”`].filter(Boolean).join(' '), by: kind === 'point' ? 'guide' : 'agent', ...(note ? { note } : {}), seq: tab.pointerSeq, at: this.now() };
     tab.cursor = { x, y };
     await tab.page.evaluate(drawPointer, { ...tab.pointer, guide: kind === 'point' }).catch(() => {});
-    if (kind !== 'point') await new Promise(done => setTimeout(done, 120));
   }
   async bowserAction(tab, action) {
     const kind = action.kind, target = action.ref || action.name || action.selector || action.target;
@@ -625,9 +721,35 @@ export class BrowserManager {
   }
   async capture(tab, { fullPage = false, maxWidth = 1280 } = {}) {
     if (tab.engine === 'bowser') { const result = await this.bowser.call('screenshot', { max_size: maxWidth }); const part = result.content.find(p => p.type === 'image'); if (!part) throw new Error('Bowser did not return a screenshot'); return { image: `data:${part.mimeType};base64,${part.data}` }; }
-    const bytes = await tab.page.screenshot({ type: 'jpeg', quality: 75, fullPage: !!fullPage, scale: 'css', timeout: 10000 });
+    let bytes;
+    if (fullPage) bytes = await tab.page.screenshot({ type: 'jpeg', quality: 75, fullPage: true, scale: 'css', timeout: 10000 });
+    else {
+      // Capture what is visible now. Playwright waits for every web font,
+      // which can hold a screenshot for seconds after the page is readable.
+      const cdp = await (tab.captureCdp ||= tab.page.context().newCDPSession(tab.page));
+      const { x, y, width, height, ratio } = await tab.page.evaluate(() => ({ x: scrollX, y: scrollY, width: innerWidth, height: innerHeight, ratio: devicePixelRatio }));
+      const { data } = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 75, fromSurface: true, captureBeyondViewport: false, clip: { x, y, width, height, scale: 1 / ratio } });
+      bytes = Buffer.from(data, 'base64');
+    }
     if (bytes.length > 3 * 1024 * 1024) throw new Error('screenshot exceeds 3 MiB; capture the viewport instead');
     return { image: `data:image/jpeg;base64,${bytes.toString('base64')}` };
+  }
+  /** Read Chromium's buffered console only when asked. Leaving Runtime on
+   * makes sites inspect logged objects in pages and workers. */
+  async readConsole(tab) {
+    if (!tab.patched) return { entries: tab.console };
+    const cdp = await tab.page.context().newCDPSession(tab.page);
+    const record = message => {
+      if (!tab.console.some(old => old.at === message.at && old.level === message.level && old.text === message.text)) cap(tab.console, message);
+    };
+    cdp.on('Runtime.consoleAPICalled', event => {
+      const message = { level: event.type, text: event.args.map(arg => String(arg.value ?? arg.unserializableValue ?? arg.description ?? arg.type)).join(' ').slice(0, 4000), at: event.timestamp };
+      record(message);
+    });
+    cdp.on('Runtime.exceptionThrown', event => record({ level: 'error', text: String(event.exceptionDetails.exception?.description || event.exceptionDetails.text).slice(0, 4000), at: event.timestamp }));
+    try { await cdp.send('Runtime.enable'); await cdp.send('Runtime.disable'); }
+    finally { await cdp.detach(); }
+    return { entries: tab.console };
   }
   /** Wait for navigation and report a failed load in plain words. */
   async go(tab, kind, action) {
@@ -677,12 +799,72 @@ export class BrowserManager {
       // Sign-ins made since the last save survive Chromium dying with Helm.
       const savedAt = this.savedAt?.get(sid) || 0;
       if (tabs.some(t => t.actedAt > savedAt) && this.now() - savedAt > 15000) await this.save(sid).catch(() => {});
-      // A window on the owner's screen is never put away behind their back.
-      if (this.windowContexts.has(sid)) continue;
+      // A window nobody has used for a while is put away: its tabs sleep and
+      // come back with the next step. One the owner is looking at stays.
+      if (this.windowContexts.has(sid)) {
+        if (tabs.length && tabs.every(t => !this.serial.has(t.id) && !t.dialog && this.now() - t.lastUsed > this.windowIdleMs) && !(await this.watched(tabs))) await this.putAway(sid);
+        continue;
+      }
       if (!tabs.length || !tabs.every(t => !this.serial.has(t.id) && this.now() - t.lastUsed > this.idleMs)) continue;
       await this.save(sid); await this.persistTabs(sid); const context = await this.contexts.get(sid); this.suspending.add(sid); try { await context?.close(); } finally { this.suspending.delete(sid); } this.contexts.delete(sid); this.recovered.delete(sid);
     }
     if (this.browser && !this.headlessInUse()) await this.shutdownBrowser();
+  }
+  /** Is the owner looking at one of these tabs right now? */
+  async watched(tabs) {
+    const looking = tab => Promise.race([tab.page.evaluate(() => document.visibilityState === 'visible' && document.hasFocus()), new Promise(done => setTimeout(() => done(false), 1000).unref?.())]).catch(() => false);
+    return (await Promise.all(tabs.map(looking))).some(Boolean);
+  }
+  /** Close a chat's window and keep its tabs asleep, as when the owner closes it. */
+  async putAway(sessionId) {
+    const context = this.windowContexts.get(sessionId);
+    await this.save(sessionId).catch(() => {}); await this.persistTabs(sessionId);
+    this.suspending.add(sessionId);
+    try {
+      this.windowContexts.delete(sessionId); this.contexts.delete(sessionId); this.recovered.delete(sessionId);
+      await this.closeWindow(sessionId, context);
+      for (const tab of [...this.tabs.values()]) if (tab.sessionId === sessionId && tab.engine === 'chromium') this.tabs.delete(tab.id);
+    } finally { this.suspending.delete(sessionId); }
+    await trimProfile(windowProfile(this.directory, sessionId));
+  }
+  async closeWindow(sessionId, context) {
+    // A window Helm started on its own keeps running without Helm: stop it.
+    if (!context || context.helmDetach) await stopWindow(windowProfile(this.directory, sessionId));
+    await (context?.helmDetach ? context.helmDetach() : context?.close())?.catch(() => {});
+  }
+  /** The chat was deleted: its window, tabs, downloads and sign-ins go too. */
+  async forget(sessionId) {
+    if (!/^[\w:-]{1,160}$/.test(sessionId || '')) return;
+    this.suspending.add(sessionId);
+    try {
+      const context = await this.contexts.get(sessionId)?.catch(() => null);
+      this.windowContexts.delete(sessionId); this.contexts.delete(sessionId); this.recovered.delete(sessionId);
+      clearTimeout(this.persistTimers?.get(sessionId)); this.persistTimers?.delete(sessionId); this.savedAt?.delete(sessionId);
+      for (const [key, orphan] of this.orphans || []) if (orphan.sessionId === sessionId) this.orphans.delete(key);
+      if (context?.helmWindow || this.canWindow) await this.closeWindow(sessionId, context);
+      else await context?.close().catch(() => {});
+      for (const tab of [...this.tabs.values()]) if (tab.sessionId === sessionId) { this.tabs.delete(tab.id); if (tab.engine === 'bowser') this.bowser.stop(); }
+      await rm(join(this.directory, sessionId), { recursive: true, force: true });
+    } finally { this.suspending.delete(sessionId); }
+    if (this.browser && !this.headlessInUse()) await this.shutdownBrowser();
+  }
+  /**
+   * Some time after Helm starts: folders of chats deleted while it was down
+   * go, after a day untouched, and closed windows give back the space
+   * Chromium fills again by itself.
+   */
+  async tidy() {
+    let names; try { names = readdirSync(this.directory); } catch { return; }
+    for (const name of names) {
+      if (name === 'flows' || !/^[\w:-]{1,160}$/.test(name)) continue;
+      const folder = join(this.directory, name);
+      let info; try { info = statSync(folder); } catch { continue; }
+      if (!info.isDirectory() || this.contexts.has(name)) continue;
+      let alive; try { alive = !!this.session(name); } catch { alive = false; }
+      const touched = Math.max(info.mtimeMs, ...['tabs.json', 'storage.json'].map(file => { try { return statSync(join(folder, file)).mtimeMs; } catch { return 0; } }));
+      if (!alive && this.now() - touched > 24 * 3600000) await this.forget(name);
+      else await trimProfile(windowProfile(this.directory, name));
+    }
   }
   async shutdownBrowser() { const browser = this.browser; this.browser = null; await browser?.close(); if (!this.tabs.size) { clearInterval(this.timer); this.timer = null; } }
   async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } this.bowser.stop(); // A window Helm can come back to stays open on the owner's screen.
@@ -693,4 +875,4 @@ export class BrowserManager {
 /** A machine with no browser to start gets no browser note: it would only steer the agent to a tool that fails. */
 export function browserReady() { return !!(executable() || hasPlaywrightChromium() || bowserBin()); }
 
-export function browserNote({ bowser = !!bowserBin() } = {}) { return `[Helm browser: helm browser controls Chromium tabs on this machine (helm browser --help). On machines with a screen, the owner uses the external Chromium window. Helm has no browser panel. localhost reaches your dev servers.${bowser ? ' Bowser Computer Use is installed: --engine bowser.' : ''} When the owner wants to do a step, point at it with helm browser point; do not click. Never ask for passwords. Suggest helm browser profiles and helm browser logins "<profile>" to copy logins. Respect the request on signed-in sites.]`; }
+export function browserNote({ bowser = !!bowserBin() } = {}) { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, the owner uses external Chromium.${bowser ? ' Bowser Computer Use is installed: --engine bowser.' : ''} For an owner step, point with helm browser point; do not click. Never ask for passwords. Suggest helm browser profiles and helm browser logins "<profile>" to copy logins. Respect the request on signed-in sites.]`; }

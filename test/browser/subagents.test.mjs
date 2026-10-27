@@ -522,7 +522,7 @@ test('Shell back history leaves parent and child chats without cycling between t
       const heading = title=>view.locator('.session-bar h1').filter({hasText:new RegExp('^'+title+'$')});
       await heading('Parent history chat').waitFor();
       const openChild = async title=>{
-        await view.getByRole('button',{name:'Agents',exact:true}).click();
+        await view.locator('.session-bar').getByRole('button',{name:'Agents',exact:true}).click();
         await view.getByRole('dialog',{name:'Agents',exact:true}).waitFor();
         await view.getByRole('button',{name:new RegExp(title)}).click();
         await heading(title).waitFor();
@@ -851,6 +851,9 @@ test('the Git button is always in the header, and follows the project a chat edi
         const dialog = view.getByRole('dialog', {name:'Git',exact:true});
         await dialog.getByText('This folder is not a Git project.').waitFor();
       }
+      // No helpers yet: the bar still has Agents.
+      await view.keyboard.press('Escape');
+      await view.getByRole('dialog', {name:'Git',exact:true}).waitFor({state:'detached'});
       assert.equal(await bar.getByRole('button', {name:'Agents',exact:true}).count(), 1);
     } finally { await view.close(); }
   }
@@ -893,6 +896,7 @@ test('a terminal chat has the Git button and the full Agents panel', async () =>
     await view.keyboard.press('Escape');
     await gitSheet.waitFor({ state:'detached' });
     // The same Agents panel as a Helm chat, with a task form, not a short list.
+    // With no helpers yet it is still in the bar, as in a Helm chat.
     await view.locator('.bar').getByRole('button', {name:'Agents',exact:true}).click();
     await view.getByRole('dialog', {name:'Agents'}).getByRole('button', {name:/New task/}).waitFor();
   } finally { await view.close(); }

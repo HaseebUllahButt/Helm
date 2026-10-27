@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Client, Environment, Session } from '../client';
 import { Icon } from '../Icon';
@@ -159,7 +160,7 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
         if (/not connected|disconnected/i.test(e?.message ?? '')) {
           setError('Waiting for this machine…');
           retry = setTimeout(() => setReload((n) => n + 1), WATCH_MS);
-        } else setError(/not a git/i.test(e?.message ?? '') ? NOT_GIT : e?.message || 'Helm cannot list the files.');
+        } else setError(/not a git/i.test(e?.message ?? '') ? NOT_GIT : errorMessage(e, { machine: env.name, fallback: 'Helm cannot list the files.' }));
       });
     return () => { live = false; clearTimeout(retry); };
   }, [client, env.id, cwd, reload]);
@@ -176,7 +177,7 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
   }, [path, tree]);
   useEffect(() => { if (shown && shown !== path) onPath(shown); }, [shown, path, onPath]);
 
-  return <SideDock label="Canvas" widthKey={WIDTH_KEY} className="canvas" share={0.5} onClose={onClose}>
+  return <SideDock label="Canvas" widthKey={WIDTH_KEY} className="canvas" share={0.5} escapeCloses onClose={onClose}>
     {visual ? <CanvasPage key={visual.ref} visual={visual} read={read} onBack={() => onVisual?.(null)} onClose={onClose} />
       : shown === undefined
       ? <div className="canvas-pad"><CanvasHead title="Not in this project" sub={path ?? ''} onBack={() => onPath(null)} onClose={onClose} /><div className="git-state">The canvas cannot open files outside this chat’s project.</div></div>
@@ -262,7 +263,7 @@ function CanvasPicker({ client, env, cwd, tree, error, changed, pages, onPage, o
       const r = await client.rpc<Saved>(env.id, 'git.write', { cwd, path: rel, text: '', base: null }, 30_000);
       if (r.exists) { setNaming(null); onOpen(rel); return; }
       setNaming(null); onCreated(rel);
-    } catch (e: any) { setProblem(/unknown|not supported/i.test(e?.message ?? '') ? 'Update Helm on this machine to create files here.' : e?.message || 'Helm cannot create the file.'); }
+    } catch (e: any) { setProblem(/unknown|not supported/i.test(e?.message ?? '') ? 'Update Helm on this machine to create files here.' : errorMessage(e, { machine: env.name, fallback: 'Helm cannot create the file.' })); }
     finally { setBusy(false); }
   };
 
@@ -357,8 +358,8 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
       })
       .catch((e: any) => {
         if (!alive || at !== revision.current) return;
-        if (drafts.has(dkey)) setProblem(e?.message || 'Helm cannot open this file.');
-        else setFile({ error: e?.message || 'Helm cannot open this file.' });
+        if (drafts.has(dkey)) setProblem(errorMessage(e, { fallback: 'Helm cannot open this file.' }));
+        else setFile({ error: errorMessage(e, { fallback: 'Helm cannot open this file.' }) });
       });
     return () => { alive = false; };
   }, [client, env.id, cwd, path, hidden]);
@@ -411,7 +412,7 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
       else drafts.delete(dkey);
       setTheirs(null);
     } catch (e: any) {
-      setProblem(/unknown|not supported/i.test(e?.message ?? '') ? 'Update Helm on this machine to save files here.' : e?.message || 'Helm cannot save the file.');
+      setProblem(/unknown|not supported/i.test(e?.message ?? '') ? 'Update Helm on this machine to save files here.' : errorMessage(e, { machine: env.name, fallback: 'Helm cannot save the file.' }));
     } finally { savingNow.current = false; revision.current++; setSaving(false); }
   };
   // Save once typing pauses. A clash or a failed save waits for the owner.

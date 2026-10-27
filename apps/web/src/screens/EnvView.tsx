@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
@@ -10,7 +11,7 @@ import { money, busyWord, needsAttention, runningThread } from '../format';
 import { engineOf } from '../engines';
 import { useLiveInterval } from '../useLiveInterval';
 import { shortPath, ownTerminal, byRecent, ago } from './common';
-import { Play, Meter, Gear } from './icons';
+import { Meter, Gear } from './icons';
 import { Fold, StatusChip, ThreadActions } from './ThreadRows';
 
 /**
@@ -84,7 +85,7 @@ function dedupeDetected(list: Session[], found: InventorySession[]): InventorySe
  */
 const botThread = (s: Session) => /^whatsapp-/i.test(s.title);
 
-export function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming, isSnoozed = () => false, sendJobs = [], sendTarget }: {
+export function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onOpen, onNewTerminal, onResume, resuming, isSnoozed = () => false, sendJobs = [], sendTarget }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[]; sendJobs?: SendJob[]; sendTarget?: string;
   isSnoozed?: (session: Session) => boolean;
   /** What this machine last said it was running, while it cannot be asked. */
@@ -94,14 +95,15 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
   onSendProject: (cwd?: string) => void; onCheckProject: (path: string) => void;
   onStart: (cwd: string) => void;
   onSettings: () => void;
-  onUsage: () => void; onMedia: () => void; onOpen: (s: Session) => void;
+  onUsage: () => void; onOpen: (s: Session) => void;
+  /** A new terminal on this machine, on screen at once while it opens. */
+  onNewTerminal: () => void;
   /** Continue a conversation a CLI recorded on its own; starts the engine. */
   onResume: (s: Session) => void;
   resuming: string | null;
 }) {
   const [direct, setDirect] = useState(false);
   const [ping, setPing] = useState<number | null>(null);
-  const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   /** Filing several threads away at once, rather than one ⋯ at a time. */
@@ -184,7 +186,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         setProjectError('');
       })
       .catch(error => {
-        if (sequence === projectSequence.current) setProjectError(error.message);
+        if (sequence === projectSequence.current) setProjectError(errorMessage(error));
       });
   }, [client, env.id, env.online]);
   const projectCwds = sessions.filter((s) => s.engine !== 'shell').map((s) => s.cwd ?? '').sort().join('\n');
@@ -197,21 +199,14 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
     return () => { off(); projectSequence.current++; };
   }, [client, env.id, reloadProjects, projectCwds]);
 
-  const openTerminal = async () => {
+  const openTerminal = () => {
     // Back to the terminal you left, with whatever is running in it still
     // running: the button used to start a fresh shell and close the old one,
     // which killed a build or a server mid-run. A new one is the + beside
     // the terminal's tabs.
     const open = sessions.filter(ownTerminal).sort(byRecent)[0];
     if (open) { onOpen(open); return; }
-    setOpening(true); setError('');
-    try {
-      const r = await client.rpc<{ session: Session }>(env.id, 'session.start',
-        { cwd: '~', profileId: 'shell' }, 45_000);
-      reload();
-      onOpen(r.session);
-    } catch (e: any) { setError(e.message); }
-    finally { setOpening(false); }
+    onNewTerminal();
   };
 
   // One box for the whole screen. The folder is part of what you are looking
@@ -297,7 +292,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
       // Archiving is a tap on a small ⋯ menu item with nothing to confirm it:
       // say what happened and leave the way back in reach.
       setUndo(archived && offerUndo ? s : null);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
   };
 
   const deleteSession = async (s: Session) => {
@@ -305,7 +300,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
     try {
       await client.rpc(env.id, 'session.kill', { id: s.id }, 20_000);
       reload(); reloadEarlier();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
   };
 
   // The `found:` pile is mostly threads nobody opens twice, but the ⋯ menu
@@ -317,7 +312,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
     const left = new Set(marked);
     for (const id of marked) {
       try { await client.rpc(env.id, 'session.archive', { id, archived: true }, 20_000); left.delete(id); }
-      catch (e: any) { setError(e.message); }
+      catch (e: any) { setError(errorMessage(e)); }
     }
     setMarked(left);
     if (!left.size) setSelecting(false);
@@ -327,7 +322,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
   const setTitle = async (s: Session, title: string) => {
     setError('');
     try { await client.rpc(env.id, 'session.title', { id: s.id, title }, 20_000); reload(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
   };
 
   const renameProject = async (p: Project, title: string) => {
@@ -335,7 +330,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
     try {
       await client.rpc(env.id, 'project.save', { path: p.path, title }, 20_000);
       reloadProjects();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setProjectBusy(false); }
   };
 
@@ -347,7 +342,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
       await client.rpc(env.id, 'project.remove', { path: p.path }, 20_000);
       setRemoving(null);
       reloadProjects();
-    } catch (e: any) { setRemoving(null); setError(e.message); }
+    } catch (e: any) { setRemoving(null); setError(errorMessage(e)); }
     finally { setProjectBusy(false); }
   };
 
@@ -406,11 +401,6 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
             )}
           </span>
         </div>
-        {/* The media view only exists on a machine that is a nas: elsewhere
-            the button would be an offer the daemon has to refuse. */}
-        {env.kind === 'nas' && (
-          <button className="iconbtn" title={`Open media on ${env.name}`} aria-label={`Open media on ${env.name}`} onClick={onMedia}><Play /></button>
-        )}
         <button
           className="iconbtn mono"
           // A machine with no pty falls back to sampling a herdr pane's
@@ -418,7 +408,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
           // one and wonder what is wrong with it.
           title={env.info.terminals === 'panes' ? 'Open terminal (slow on this machine)' : 'terminal'}
           aria-label={env.info.terminals === 'panes' ? 'Open terminal (slow on this machine)' : 'terminal'}
-          disabled={!env.online || opening}
+          disabled={!env.online}
           onClick={openTerminal}
         ><Icon name="terminal" size={18} />{env.info.terminals === 'panes' && <b className="slowmark" aria-hidden="true">!</b>}</button>
         <button className="iconbtn" title={`Show costs on ${env.name}`} aria-label={`Show costs on ${env.name}`} onClick={onUsage}><Meter /></button>

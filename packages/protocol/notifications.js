@@ -6,10 +6,24 @@ const labels = {
 };
 export const agentLabel = (engine) => labels[engine] || 'Your agent';
 
+// Addresses and paths stay in the chat, never on a lock screen. A link
+// keeps its words and loses its target; a path inside brackets or quotes
+// goes too.
+const scrub = (text) => String(text ?? '')
+  .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+  .replace(/(?:https?|file):\/\/\S+|\b(?:localhost|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?\S*|(?:\b[\w.-]+:\d+)\S*/gi, '')
+  .replace(/(^|[\s([{<"'`])(?:~?\/|[A-Z]:\\)[^\s)\]}>"'`]+/gi, '$1')
+  .replace(/\(\s*\)|\[\s*\]|\{\s*\}|<\s*>|"\s*"|'\s*'|`\s*`/g, '')
+  .replace(/\s+/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
+const cap = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
 export function notificationContext(session) {
-  const title = String(session?.title || session?.cwd?.split('/').filter(Boolean).pop() || 'Your chat')
-    .replace(/https?:\/\/\S+|\b(?:localhost|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?\S*|(?:\b[\w.-]+:\d+)\S*/gi, '')
-    .replace(/(?:^|\s)(?:~?\/|[A-Z]:\\)\S+/gi, ' ')
-    .replace(/\s+/g, ' ').trim() || 'Your chat';
-  return title.length > 72 ? `${title.slice(0, 71)}…` : title;
+  const title = scrub(session?.title || session?.cwd?.split('/').filter(Boolean).pop() || 'Your chat') || 'Your chat';
+  return cap(title, 72);
+}
+
+/** The first line of an agent's words, plain and short, for a notice. */
+export function notificationLine(text, max = 110) {
+  const line = String(text ?? '').split('\n').map((l) => l.replace(/^\s*(?:[#>*-]+|\d+\.)\s*/, '').replace(/[*_`]/g, '')).find((l) => l.trim()) ?? '';
+  return cap(scrub(line), max);
 }

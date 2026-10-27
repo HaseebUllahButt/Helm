@@ -223,11 +223,11 @@ test('project timeout errors clear on recovery and late failures cannot replace 
   });
   await page.waitForFunction(() => window.projectRequests.length === 1);
   await page.evaluate(() => window.projectRequests[0].reject(new Error('project.list timed out')));
-  await page.getByText('project.list timed out', { exact: true }).waitFor();
+  await page.getByText('Helm did not get a reply in time. Try again.', { exact: true }).waitFor();
   await page.evaluate(() => window.reconnect());
   await page.waitForFunction(() => window.projectRequests.length === 2);
   await page.evaluate(() => window.projectRequests[1].resolve({ projects: [] }));
-  await page.getByText('project.list timed out', { exact: true }).waitFor({ state: 'detached' });
+  await page.getByText('Helm did not get a reply in time. Try again.', { exact: true }).waitFor({ state: 'detached' });
   await page.evaluate(() => { window.reconnect(); window.reconnect(); });
   await page.waitForFunction(() => window.projectRequests.length === 4);
   await page.evaluate(() => window.projectRequests[3].resolve({ projects: [] }));
@@ -248,7 +248,7 @@ test('settings expose the app route and build without exposing pairing credentia
   await page.getByText('Connection details', { exact: true }).click();
   await page.getByText('Helm home: https://hub.example', { exact: true }).waitFor();
   await page.getByText('App version: development', { exact: true }).waitFor();
-  await page.getByText('Last connection error: connection stopped responding', { exact: true }).waitFor();
+  await page.getByText('Connection stopped responding', { exact: true }).waitFor();
   // The app reloads itself when a new build lands; no button for it.
   assert.equal(await page.getByRole('button', { name: /^Reload app/ }).count(), 0);
   assert.doesNotMatch(await page.locator('.main').innerText(), /helm1\./);
@@ -266,7 +266,8 @@ test('Done is newest first across machines, retires at three days, and the foote
       laptop: [session('Two days ago',48*hour),session('Newest',hour),session('Retired',72*hour),
         session('Almost retired',72*hour-1000),session('Working',100*hour,{status:'working'}),
         session('Archived',0,{archived:true}),session('Child',0,{delegation:{parentId:'other'}}),
-        session('Unused',0,{turns:0}),session('Waiting',0,{status:'blocked'})],
+        session('Unused',0,{turns:0}),session('Waiting',0,{status:'blocked'}),
+        session('Empty terminal',0,{driver:undefined,turns:0,nativeCli:true,pty:true,alive:true,blank:true})],
       vm: [session('Yesterday',24*hour),...Array.from({length:31},(_,i)=>session('Recent '+i,(i+2)*60000))],
     };
     window.mount(window.makeClient(['laptop','vm'].map(id=>({id,name:id,online:true,info:{}})), sessions, 'https://private.sslip.io'));
@@ -332,8 +333,11 @@ test('Running counts only working threads and excludes idle native sessions', as
   await laptop.waitFor();
   assert.equal(await laptop.locator('.rm').textContent(), '1 running');
   assert.equal(await laptop.locator('.badge').textContent(), '1');
-  assert.equal(await rows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'idle');
-  assert.match(await rows.filter({ hasText: 'old' }).locator('.rm').textContent(), /^seen/);
+  // One line each: a word only when there is news; the rest is in the tooltip.
+  assert.equal(await rows.filter({ hasText: 'vm' }).locator('.rm').count(), 0, 'an idle machine says nothing');
+  assert.equal(await rows.filter({ hasText: 'vm' }).getAttribute('title'), 'vm · online · idle');
+  assert.equal(await rows.filter({ hasText: 'old' }).locator('.rm').textContent(), '2d ago');
+  assert.equal(await rows.filter({ hasText: 'old' }).getAttribute('title'), 'old · offline · seen 2d ago');
   const runningSection = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Running$/ }) });
   assert.ok(await runningSection.getByText('Busy', { exact: true }).isVisible());
   assert.equal(await runningSection.getByText('Idle alive', { exact: true }).count(), 0);
@@ -350,12 +354,13 @@ test('Running counts only working threads and excludes idle native sessions', as
   await page.locator('.main.showing .session-bar').filter({ hasText: 'Stale work' }).waitFor();
   await page.goBack();
   await page.locator('.sidebar.showing').waitFor();
-  const readout = await page.locator('.main .chooser .readout').textContent();
+  const readout = await page.locator('.main .home .home-state').textContent();
   assert.match(readout, /1 running/);
   assert.match(readout, /1 needs you/);
-  const chooserRows = page.locator('.main .chooser .row.machine');
-  assert.equal(await chooserRows.filter({ hasText: 'laptop' }).locator('.rm').textContent(), '1 running');
-  assert.equal(await chooserRows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'No chats are running.');
+  const homeRows = page.locator('.main .home .row.machine');
+  assert.equal(await homeRows.filter({ hasText: 'laptop' }).locator('.rm').textContent(), '1 running');
+  assert.equal(await homeRows.filter({ hasText: 'laptop' }).locator('.badge').textContent(), '1');
+  assert.equal(await homeRows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'Nothing is running.');
   const machineSummaries = await rows.locator('.rm').allTextContents();
   const runningTotal = machineSummaries.reduce((total, text) => total + (+(/^(\d+) running$/.exec(text)?.[1] ?? 0)), 0);
   assert.equal(runningTotal, +(/(\d+) running/.exec(readout)[1]), 'sidebar per-machine counts add up to the readout');
@@ -365,6 +370,42 @@ test('Running counts only working threads and excludes idle native sessions', as
   assert.ok(await done.getByText('Shared stopped', { exact: true }).isVisible());
   await rows.filter({ hasText: 'vm' }).click();
   await page.locator('.main.showing h1').filter({ hasText: 'vm' }).waitFor();
+});
+
+test('the logo opens Home: a quick chat box with chips, and a row per machine', async t => {
+  const { page, boot } = await pageFor(t, { width: 1280, height: 900 });
+  await boot();
+  await page.evaluate(() => {
+    const session = (id, title, status) => ({ id, title, cwd: '/project', engine: 'codex', profileId: 'codex', driver: 'codex', turns: 1, status, alive: true, updatedAt: Date.now() });
+    window.started = [];
+    window.mount(window.makeClient([
+      { id: 'laptop', name: 'Laptop', online: true, info: {} },
+      { id: 'vm', name: 'VM', online: false, lastSeen: Date.now() - 2 * 3600_000, info: {} },
+    ], { laptop: [session('one', 'Build the API', 'working')] }, 'http://helm-test', {
+      'profile.list': { profiles: [{ id: 'codex', engine: 'codex' }] },
+      'session.start': () => {
+        window.started.push(true);
+        return { session: { id: 'quick', title: 'Quick chat', quick: true, cwd: '/tmp/q', engine: 'codex', profileId: 'codex', driver: 'codex', turns: 0, status: 'idle', alive: true, updatedAt: Date.now() } };
+      },
+    }));
+  });
+  // A wide screen opens on the first machine once.
+  await page.getByText('What should we build on', { exact: false }).waitFor();
+  await page.getByRole('button', { name: 'Home' }).click();
+  await page.getByRole('heading', { name: 'What should we build?' }).waitFor();
+  const rows = page.locator('.home .row.machine');
+  assert.equal(await rows.filter({ hasText: 'Laptop' }).locator('.rm').textContent(), '1 running');
+  assert.equal(await rows.filter({ hasText: 'VM' }).locator('.rm').textContent(), 'Offline · seen 2h ago');
+  // The box starts on the machine open before Home, with its agent.
+  await page.getByRole('button', { name: 'Machine: Laptop' }).waitFor();
+  await page.getByRole('button', { name: 'Agent: Codex' }).waitFor();
+  await page.getByRole('textbox', { name: 'Ask anything' }).fill('Add a health check');
+  await page.keyboard.press('Enter');
+  await page.locator('.main').getByText('Add a health check').first().waitFor();
+  assert.equal((await page.evaluate(() => window.started)).length, 1, 'a quick chat starts with no folder step');
+  await page.getByRole('button', { name: 'Home' }).click();
+  await rows.filter({ hasText: 'Laptop' }).click();
+  await page.getByText('What should we build on', { exact: false }).waitFor();
 });
 
 test('selected running threads have a distinct highlight on desktop and phone', async testContext => {
@@ -381,9 +422,10 @@ test('selected running threads have a distinct highlight on desktop and phone', 
     await first.click();
     assert.equal(await first.getAttribute('aria-current'), 'page');
     assert.equal(await second.getAttribute('aria-current'), null);
-    const style = await first.evaluate(element => ({ background: getComputedStyle(element).backgroundColor, outline: getComputedStyle(element).boxShadow }));
-    assert.notEqual(style.background, 'rgba(0, 0, 0, 0)');
-    assert.notEqual(style.outline, 'none');
+    // The app draws no outlines; the selected row is told by its fill.
+    const fill = (row) => row.evaluate(element => getComputedStyle(element).backgroundColor);
+    assert.notEqual(await fill(first), 'rgba(0, 0, 0, 0)');
+    assert.notEqual(await fill(first), await fill(second));
     if (width < 900) await page.setViewportSize({ width: 1280, height: 844 });
     await second.click();
     assert.equal(await first.getAttribute('aria-current'), null);
@@ -523,11 +565,13 @@ for (const width of [1280, 390]) test(`one VM brain stays the entry point while 
   const entry = page.locator('.sidebar').getByRole('button',{name:/Helm brain/});
   await entry.waitFor();
   assert.equal(await entry.count(),1);
-  assert.match(await entry.innerText(),/VM.*offline/s);
+  assert.match(await entry.innerText(),/offline/);
+  assert.match(await entry.getAttribute('title'),/VM · .* · offline/);
   await entry.click();
   await page.getByRole('heading',{name:'Brain',exact:true}).waitFor();
   assert.equal(await page.getByText('Select an account',{exact:true}).count(),0,'a cold offline open retains the VM conversation');
-  assert.match(await page.locator('.main .bar .sub').innerText(),/VM/);
+  assert.match(await page.locator('.main .bar .titles').getAttribute('title'),/^VM\b/);
+  assert.match(await page.locator('.main .bar .sub').innerText(),/offline|reconnecting/i,'the bar says why it is stale');
 });
 
 test('opening the online brain validates the VM provider before entering the conversation', async t => {
@@ -603,7 +647,8 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
   assert.equal(await starting.locator('.tstat.working').textContent(), 'starting');
   assert.equal(await running.locator('.thread-row').filter({ hasText: 'claude children' }).locator('.tstat.working').count(), 1);
   const laptop = sidebar.locator('.row.machine').filter({ hasText: 'Laptop' });
-  assert.equal(await laptop.locator('.rm').textContent(), `${n * 3} running · ${n} status unavailable`,
+  assert.equal(await laptop.locator('.rm').textContent(), `${n * 3} running`);
+  assert.equal(await laptop.getAttribute('title'), `Laptop · online · ${n * 3} running · ${n} status unavailable`,
     'threads the machine cannot read are counted, not called idle');
   assert.equal(await laptop.locator('.badge').textContent(), String(n));
 
@@ -911,7 +956,7 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   await page.screenshot({ path: `/tmp/helm-dismiss-child-${width}.png` });
   await page.evaluate(() => { window.rejectDismiss = true; });
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
-  await card.getByRole('alert').getByText('Machine disconnected. Try again.', { exact: true }).waitFor();
+  await card.getByRole('alert').getByText('This machine is not connected. Check the connection. Try again.', { exact: true }).waitFor();
   await page.evaluate(() => { window.rejectDismiss = false; });
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
   await card.waitFor({ state: 'detached' });

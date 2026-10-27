@@ -1,4 +1,6 @@
+import { createReplayBuffer } from './replay-buffer.js';
 import { EventEmitter } from 'node:events';
+import { LineBuffer } from './line-buffer.js';
 import { connect } from 'node:net';
 import { spawn } from 'node:child_process';
 import { existsSync, unlinkSync, mkdirSync, openSync, lstatSync, chmodSync, readFileSync, readdirSync } from 'node:fs';
@@ -60,7 +62,7 @@ export const PROC_SOCKET_PATH =
  * somebody is using. The old one leaves once its last terminal ends.
  */
 const hostCode = createHash('sha256');
-for (const file of ['./pty.js', '../bin/helm-terminals.js', './terminals.js']) {
+for (const file of ['./pty.js', '../bin/helm-terminals.js', './terminals.js', './replay-buffer.js', './line-buffer.js']) {
   try { hostCode.update(readFileSync(fileURLToPath(new URL(file, import.meta.url)))); } catch { /* packaged differently */ }
 }
 export const NATIVE_HOST_VERSION = hostCode.digest('hex').slice(0, 8);
@@ -113,7 +115,7 @@ const START_TIMEOUT_MS = 8000;
  */
 export class TerminalHost extends EventEmitter {
   #sock = null;
-  #buffer = '';
+  #buffer = null;
   #rid = 0;
   #waiting = new Map();
   #ids = new Set();
@@ -142,6 +144,11 @@ export class TerminalHost extends EventEmitter {
 
   /** True once a host has answered and it has a working pty. */
   get usable() { return this.#pty === true; }
+
+  async pid(id) {
+    if (!this.has(id) && !this.hasProc(id)) return null;
+    try { return (await this.#call({ t: 'process.pid', id })).pid; } catch { return null; }
+  }
 
   has(id) { return this.#ids.has(id); }
   list() { return [...this.#ids]; }
@@ -217,13 +224,11 @@ export class TerminalHost extends EventEmitter {
 
   #attach(sock) {
     this.#sock = sock;
-    this.#buffer = '';
+    this.#buffer = new LineBuffer();
     sock.on('data', (chunk) => {
-      this.#buffer += chunk;
-      let cut;
-      while ((cut = this.#buffer.indexOf('\n')) !== -1) {
-        const line = this.#buffer.slice(0, cut);
-        this.#buffer = this.#buffer.slice(cut + 1);
+      this.#buffer.write(chunk);
+      let line;
+      while ((line = this.#buffer.read()) !== null) {
         if (!line.trim()) continue;
         try { this.#dispatch(JSON.parse(line)); } catch { /* not a frame */ }
       }
@@ -261,13 +266,18 @@ export class TerminalHost extends EventEmitter {
     if (msg.t === 'proc.data') {
       const l = this.#procListeners.get(msg.id);
       if (l?.onData) l.onData(msg.data);
-      else this.#procBacklog.set(msg.id, ((this.#procBacklog.get(msg.id) ?? '') + msg.data).slice(-262144));
+      else {
+        let backlog = this.#procBacklog.get(msg.id);
+        if (!backlog) this.#procBacklog.set(msg.id, backlog = createReplayBuffer(262144, { trimLine: false }));
+        backlog.append(msg.data);
+      }
       return;
     }
     if (msg.t === 'proc.exit') {
       this.#procs.delete(msg.id);
       const l = this.#procListeners.get(msg.id);
       this.#procListeners.delete(msg.id);
+      this.#procBacklog.get(msg.id)?.clear();
       this.#procBacklog.delete(msg.id);
       if (l?.onExit) l.onExit({ code: msg.code, stderr: msg.stderr });
       // With no driver attached, the session itself has to close the turn
@@ -416,7 +426,9 @@ export class TerminalHost extends EventEmitter {
       kill: (signal) => this.#call({ t: 'proc.kill', id, signal }).catch(() => {}),
       onData: (cb) => {
         l.onData = cb;
-        const backlog = this.#procBacklog.get(id) ?? '';
+        const buffer = this.#procBacklog.get(id);
+        const backlog = buffer?.text() ?? '';
+        buffer?.clear();
         this.#procBacklog.delete(id);
         if (backlog) queueMicrotask(() => { if (l.onData === cb) cb(backlog); });
       },
@@ -496,6 +508,7 @@ export class NativeHosts extends EventEmitter {
     await this.#adoptOlder();
     return ok;
   }
+  pid(id) { return this.#owner(id).pid(id); }
   has(id) { return this.#all().some((h) => h.has(id)); }
   list() { return this.#all().flatMap((h) => h.list()); }
   nativeSessions() { return this.#all().flatMap((h) => h.nativeSessions()); }

@@ -7,6 +7,19 @@ import { EventLog, activeTurnFromEvents } from '../packages/connect/src/events.j
 import { EventFile } from '../packages/connect/src/event-file.js';
 import { apply, emptyLog } from '../apps/web/src/session/types.ts';
 
+test('a recovered helper turn keeps its provider link after log retention and restart', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-recover-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = new EventLog(dir);
+  log.append('helper', { type: 'turn.start', turnId: 'shown', text: 'Continue the helper task' });
+  log.append('helper', { type: 'turn.recover', turnId: 'shown', providerTurnId: 'replacement' });
+  log.append('helper', { type: 'item.start', turnId: 'shown', id: 'output', kind: 'text' });
+  for (let n = 0; n < 2400; n++) log.append('helper', { type: 'item.delta', id: 'output', text: 'x' });
+  for (const reader of [log, new EventLog(dir)]) {
+    assert.equal(reader.tail('helper', 0).find(e => e.type === 'turn.recover')?.providerTurnId, 'replacement');
+  }
+});
+
 test('events are numbered, persisted, and replayable from a sequence number', () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-events-'));
   const log = new EventLog(dir);
@@ -172,6 +185,31 @@ test('pending permissions are derived from the log', () => {
   log.append('s', { type: 'permission.request', requestId: 'r2', kind: 'edit' });
   log.append('s', { type: 'permission.resolved', requestId: 'r1', decision: 'allow' });
   assert.deepEqual(log.pending('s').map((e) => e.requestId), ['r2']);
+});
+
+test('unanswered permissions survive long turns, eviction and a restart', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-permission-retention-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const live = new EventLog(dir);
+  const request = live.append('s', { type: 'permission.request', requestId: 'waiting', itemId: 'tool',
+    kind: 'command', title: 'Run a command', options: [{ id: 'allow' }],
+    codex: { id: 42, method: 'item/commandExecution/requestApproval' } });
+  live.append('s', { type: 'permission.request', requestId: 'answered' });
+  live.append('s', { type: 'permission.resolved', requestId: 'answered', decision: 'allow' });
+  for (let i = 0; i < 2400; i++) live.append('s', { type: 'item.delta', id: 'other', text: 'x' });
+  assert.deepEqual(live.pending('s'), [request]);
+  assert.deepEqual(live.since('s').filter(e => e.type === 'permission.request'), [request]);
+  for (let i = 0; i < 25; i++) live.append(`other-${i}`, { type: 'turn.start' });
+  for (const reader of [live, new EventLog(dir)]) {
+    assert.deepEqual(reader.glance('s').pending, [request]);
+    assert.deepEqual(reader.since('s').filter(e => e.type === 'permission.request'), [request]);
+    assert.deepEqual(reader.pending('s'), [request]);
+  }
+  live.append('s', { type: 'permission.resolved', requestId: 'waiting', decision: 'allow' });
+  for (let i = 0; i < 2400; i++) live.append('s', { type: 'item.delta', id: 'other', text: 'x' });
+  const cold = new EventLog(dir);
+  assert.deepEqual(cold.pending('s'), []);
+  assert.deepEqual(cold.since('s').filter(e => e.type.startsWith('permission.')), []);
 });
 
 test('the open turn is the last turn.start without a turn.done', () => {
@@ -618,4 +656,20 @@ test('a changed step moves its own revision and every card it sits in, so drawn 
   assert.equal(helper.revision, 5, 'text growing elsewhere leaves the card alone');
   ev({ type: 'turn.done', turnId: 't', status: 'ok' });
   assert.equal(said.revision, 7, 'ending the turn closes the streaming text and moves it');
+});
+
+
+test('a fast review stays with its message when Codex echoes the turn after its items', () => {
+  const state = emptyLog();
+  let seq = 0;
+  const ev = e => apply(state, { at: ++seq, seq, ...e });
+  ev({ type: 'turn.start', turnId: 'local-send', text: 'Check the project' });
+  ev({ type: 'item.start', id: 'review', turnId: 'codex-turn', kind: 'tool', name: 'codexReview', input: { action: 'Read app.ts', reviewStatus: 'approved' } });
+  ev({ type: 'item.done', id: 'review', status: 'ok' });
+  ev({ type: 'turn.start', turnId: 'codex-turn', inputId: 'local-send', text: 'Check the project' });
+  assert.equal(state.turns.length, 1);
+  assert.equal(state.turns[0].id, 'codex-turn');
+  assert.equal(state.turns[0].items[0].id, 'review');
+  ev({ type: 'turn.start', turnId: 'other-turn', text: 'Check the project' });
+  assert.equal(state.turns.length, 2, 'a different turn cannot claim these review items');
 });

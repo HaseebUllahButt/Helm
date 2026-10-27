@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Session } from './client';
+import type { Client, Session } from './client';
 import { EngineMark } from './EngineMark';
 import { Icon } from './Icon';
+import { errorMessage } from './errors';
 import { agentLabel, notificationContext } from '@helm/protocol/notifications';
 
 /** "has a question", "wants to run a command" - what a waiting thread wants. */
@@ -16,47 +17,68 @@ export function askAction(ask: Session['ask']): string {
   }
 }
 
+const GO: Record<string, string> = { question: 'Answer', plan: 'Read the plan', edit: 'See the change' };
+
 /** How long the notice stays before it goes by itself. */
-const SHOW_MS = 9000;
+const SHOW_MS = 12000;
 
 /**
- * "Another thread is waiting on you", over whatever is open. It says who,
- * what they want - the question itself, when the machine sent it - and
- * where; the whole card opens that thread. It leaves by itself unless a
- * pointer or focus is resting on it.
+ * "Another chat is waiting on you", over whatever is open. It names the chat
+ * first, then who wants what, then the request itself. A command shown whole
+ * can be allowed right here; everything else opens the chat. It leaves by
+ * itself unless a pointer or focus is resting on it.
  */
-export function NotificationToast({ session, machine, onOpen, onDismiss }: {
-  session: Session; machine?: string; onOpen: () => void; onDismiss: () => void;
+export function NotificationToast({ client, envId, session, machine, waiting = 0, onOpen, onDismiss }: {
+  client: Client; envId: string; session: Session; machine?: string;
+  /** Other chats that are waiting too. */
+  waiting?: number;
+  onOpen: () => void; onDismiss: () => void;
 }) {
   const [held, setHeld] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   // The parent re-renders all the time; only a new thread or a new ask
   // should start the clock again.
   const dismiss = useRef(onDismiss);
   dismiss.current = onDismiss;
   useEffect(() => {
-    if (held) return;
+    if (held || busy || error) return;
     const timer = setTimeout(() => dismiss.current(), SHOW_MS);
     return () => clearTimeout(timer);
-  }, [held, session]);
+  }, [held, busy, error, session]);
 
   const who = agentLabel(session.engine);
   const chat = notificationContext(session);
   const ask = session.ask;
   const text = ask?.text || '';
-  const more = ask?.more ? ` +${ask.more} more` : '';
+  const canAllow = ask?.kind === 'command' && !!ask.whole && !!ask.requestId;
+  const allow = async () => {
+    setBusy(true); setError('');
+    try {
+      await client.rpc(envId, 'session.answer', { id: session.id, requestId: ask!.requestId, decision: { option: 'allow' } });
+      dismiss.current();
+    } catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
+  };
   const hold = { onPointerEnter: () => setHeld(true), onPointerLeave: () => setHeld(false), onFocus: () => setHeld(true), onBlur: () => setHeld(false) };
-  return <div className="toast" role="status" {...hold}>
-    <button className="toast-open" onClick={onOpen} aria-label={`Open ${chat}: ${who} ${askAction(ask)}${text ? `, ${text}` : ''}`}>
+  return <div className="toast" role="status" aria-label={`${chat}: ${who} ${askAction(ask)}`} {...hold}>
+    <div className="toast-head">
       <EngineMark engine={session.engine} />
       <span className="toast-copy">
-        <span className="toast-kind"><i />{who} {askAction(ask)}</span>
-        {text
-          ? <b className={ask?.kind === 'command' ? 'mono' : undefined}>{text}{more && <span className="toast-more">{more}</span>}</b>
-          : <b>{chat}</b>}
-        {(text || machine) && <span className="toast-where">{[text && chat, machine].filter(Boolean).join(' · ')}</span>}
+        <b className="toast-chat">{chat}</b>
+        <span className="toast-where">{[who, machine].filter(Boolean).join(' · ')}</span>
       </span>
-    </button>
-    <button className="toast-dismiss" aria-label="Dismiss notification" onClick={onDismiss}><Icon name="close" size={15} /></button>
-    {!held && <span className="toast-timer" style={{ animationDuration: `${SHOW_MS}ms` }} key={String(session.updatedAt) + (ask?.text ?? '')} />}
+      <button className="toast-dismiss" aria-label="Close notice" onClick={onDismiss}><Icon name="close" size={15} /></button>
+    </div>
+    <p className="toast-kind"><i />{who} {askAction(ask)}{ask?.more ? ` (+${ask.more} more)` : ''}</p>
+    {/* A command you can allow from here always shows in full. */}
+    {text && <p className={`toast-ask${ask?.kind === 'command' ? ' mono' : ''}${canAllow ? ' whole' : ''}`}>{text}</p>}
+    {error && <p className="error" role="alert">{error}</p>}
+    <div className="toast-actions">
+      {canAllow && <button className="toast-allow" disabled={busy} onClick={() => void allow()}>{busy ? 'Allowing…' : 'Allow once'}</button>}
+      <button className="toast-go" onClick={onOpen}>{GO[ask?.kind ?? ''] ?? 'Open chat'}<Icon name="forward" size={14} /></button>
+      {waiting > 0 && <span className="toast-queue">{waiting} more {waiting === 1 ? 'chat waits' : 'chats wait'}</span>}
+    </div>
+    {!held && !busy && !error && <span className="toast-timer" style={{ animationDuration: `${SHOW_MS}ms` }} key={String(session.updatedAt) + (ask?.text ?? '')} />}
   </div>;
 }

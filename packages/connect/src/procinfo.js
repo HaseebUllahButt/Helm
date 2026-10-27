@@ -1,3 +1,4 @@
+import { discoverProcesses } from './discovery-native.js';
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -16,14 +17,17 @@ const run = (cmd, args) => {
   catch (err) { return typeof err?.stdout === 'string' ? err.stdout : ''; }
 };
 
-/** Every process this user can see, with its arguments. */
-export function processList() {
+/** Every process this user can see, with its arguments. A root can be supplied for private fixtures. */
+export function processList(procRoot = '/proc') {
   if (LINUX) {
+    const native = discoverProcesses(procRoot);
+    if (native !== null) return native;
     const list = [];
     let pids = [];
-    try { pids = readdirSync('/proc').filter((x) => /^\d+$/.test(x)); } catch { return list; }
+    try { pids = readdirSync(procRoot).filter((x) => /^\d+$/.test(x)); } catch { return list; }
     for (const pid of pids) {
-      const argv = processArgv(Number(pid));
+      let argv = null;
+      try { argv = readFileSync(join(procRoot, String(Number(pid)), 'cmdline'), 'utf8').split('\0').filter(Boolean); } catch { /* gone or hidden */ }
       if (argv?.length) list.push({ pid: Number(pid), argv });
     }
     return list;

@@ -45,6 +45,15 @@ before(async () => {
       on: (fn) => {listeners.add(fn);return () => listeners.delete(fn)},
       rpc: async (env,method,params) => {
         (window.calls ??= []).push({env,method,params});
+        if(method === 'git.tour') {
+          if(params.action === 'stop') {window.tourState='stopped';return {state:'stopped'};}
+          if(params.action === 'start') {window.tourState=window.tourReady ? 'ready' : 'writing';}
+          return {state:window.tourState || 'none', change:{label:'Uncommitted edits',files:[{path:'App.tsx'},{path:'extra.txt'}]},
+            guide:window.tourState === 'ready' ? {stops:[
+              {title:'Read the main change',summary:'Show the new value. This gives the owner a clear label.',path:'App.tsx',start:1,end:1,side:'new',diff:'@@ -1 +1 @@\\n-old value\\n+new value',decision:'Keep the new label?'},
+              {title:'Check the next change',summary:'Show the supporting change.',path:'App.tsx',start:8,end:8,side:'new',diff:'@@ -8 +8 @@\\n-before\\n+after',decision:''}
+            ],alsoChanged:[{path:'extra.txt',note:''}]} : undefined};
+        }
         if(method === 'git.graph') {
           if(window.graphFails > 0){window.graphFails--;throw new Error('git is busy');}
           return data;
@@ -245,8 +254,8 @@ test('a clean folder and an unreachable history each say what is going on', asyn
   await page.evaluate(()=>{window.graphFails = 1;window.showGit('clean')});
   await page.getByRole('tab',{name:'Graph',exact:true,selected:true}).waitFor();
   assert.equal(await page.getByRole('tab',{name:'Changes',exact:true}).count(),1,'no zero count on a clean folder');
-  await page.getByText('Helm cannot load Git history.').waitFor();
-  await page.getByText('git is busy').waitFor();
+  await page.getByText('Helm cannot load Git history.').first().waitFor();
+  await page.getByText('Git is busy', { exact: true }).waitFor();
   await page.getByRole('button',{name:'Try again'}).click();
   await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();
@@ -264,17 +273,18 @@ test('graph and branded notifications fit a phone, and dismissal does not naviga
   await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();
   await page.evaluate(()=>window.showToast());
-  await page.getByRole('button',{name:'Dismiss notification'}).waitFor();
+  await page.getByRole('button',{name:'Close notice'}).waitFor();
   const bounds = await page.locator('.toast').boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390);
-  assert.equal((await page.locator('.toast').innerText()).replace(/\s+/g,' '),'Codex needs you Review mobile notifications');
+  assert.equal(await page.locator('.toast-chat').innerText(),'Review mobile notifications');
+  assert.equal(await page.locator('.toast-kind').innerText(),'Codex needs you');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true);
   await shot('git-notification-phone.png');
-  await page.getByRole('button',{name:'Dismiss notification'}).click();
+  await page.getByRole('button',{name:'Close notice'}).click();
   await page.locator('.toast').waitFor({state:'detached'});
   assert.equal(await page.evaluate(()=>!!window.toastOpened),false);
   await page.evaluate(()=>window.showToast());
-  await page.locator('.toast-open').click();
+  await page.getByRole('button',{name:'Open chat',exact:true}).click();
   await page.waitForFunction(()=>window.toastOpened);
 });
 
@@ -339,10 +349,10 @@ test('CI / CD shows PR readiness, failing steps, deployment boundaries, refresh 
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='git.monitor').at(-1).params.force),true);
   await page.evaluate(()=>{window.monitorFails=1});
   await page.getByRole('button',{name:'Refresh build checks',exact:true}).click();
-  await page.getByText('GitHub is unreachable',{exact:false}).waitFor();
+  await page.getByText('Laptop is not connected. Check the connection. Try again.',{exact:false}).waitFor();
   assert.equal(await page.getByText('Unit tests',{exact:true}).count(),1,'a failed refresh preserves the previous display');
   await page.getByRole('button',{name:'Try again',exact:true}).click();
-  await page.getByText('GitHub is unreachable',{exact:false}).waitFor({state:'detached'});
+  await page.getByText('Laptop is not connected. Check the connection. Try again.',{exact:false}).waitFor({state:'detached'});
   await page.getByLabel('GitHub account',{exact:true}).selectOption('work');
   await page.waitForFunction(()=>window.githubAccount==='work');
   await page.getByText('Unit tests',{exact:true}).waitFor();
@@ -378,4 +388,33 @@ for (const width of [320, 390, 768]) test(`the actual Git dialog fills a ${width
   assert.equal(await page.evaluate(()=>window.refreshed),true);
   await dialog.getByRole('button',{name:'Back to chat'}).click();
   await dialog.waitFor({state:'detached'});
+});
+
+
+test('a change tour starts only on request, stops, and reopens its saved stops on a phone and computer', async () => {
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({width,height:844});
+    await page.evaluate(()=>{window.calls=[];window.tourState=undefined;window.tourReady=false;window.showGit()});
+    await page.getByRole('button',{name:'Tour',exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.calls.some(c=>c.method==='git.tour')),false);
+    await page.getByRole('button',{name:'Tour',exact:true}).click();
+    await page.getByRole('button',{name:'Stop writing',exact:true}).click();
+    await page.getByText('The tour stopped.',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='git.tour').at(-1).params.action),'stop');
+    await page.evaluate(()=>{window.tourReady=true});
+    await page.getByRole('button',{name:'Try again',exact:true}).click();
+    await page.locator('.tour-decision').getByText('Needs your decision',{exact:true}).waitFor();
+    assert.match(await page.locator('.tour-excerpt').innerText(),/new value/);
+    await page.getByRole('button',{name:'Next',exact:true}).click();
+    await page.getByRole('heading',{name:'Check the next change',exact:true}).waitFor();
+    assert.match(await page.locator('.tour-excerpt').innerText(),/after/);
+    await page.locator('.tour-also summary').click();
+    assert.equal(await page.locator('.tour-also code').innerText(),'extra.txt');
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true);
+    const starts = await page.evaluate(()=>window.calls.filter(c=>c.method==='git.tour' && c.params.action==='start').length);
+    await page.getByRole('button',{name:'Close tour',exact:true}).click();
+    await page.getByRole('button',{name:'Tour',exact:true}).click();
+    await page.getByRole('heading',{name:'Read the main change',exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='git.tour' && c.params.action==='start').length),starts);
+  }
 });

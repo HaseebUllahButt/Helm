@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Client, type CliAgent, type Environment, type ModelList, type Session, type DelegationResult, type NativeAgent, type NativeAgentDetail, type SubagentDefaults } from '../client';
 import { loadModels, saveModels } from '../modelCache';
@@ -68,7 +69,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   const [nativeDetail, setNativeDetail] = useState<NativeAgentDetail | null>(null);
   const firstList = useRef(false);
   const ref = useDialog(() => { if (!busy) onClose(); }, !embedded);
-  const fail = (at: string) => (failure: any) => setError({ text: failure?.message || String(failure), at });
+  const fail = (at: string) => (failure: any) => setError({ text: errorMessage(failure), at });
   const bump = () => setRevision((count) => count + 1);
   const offered = offeredOf(agents, parent.profileId);
   const agent = offered.find((candidate) => candidate.id === account);
@@ -193,7 +194,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     let stale = false;
     loadModels(env.id, account).then((cached) => { if (!stale && cached) setCatalog((now) => now ?? cached); });
     const refresh = followModelRefresh(
-      () => client.rpc<ModelList>(env.id, 'model.list', { profileId: account }, 30_000),
+      (settled) => client.rpc<ModelList>(env.id, 'model.list', { profileId: account, ...(settled ? { settled } : {}) }, 30_000),
       (list) => {
         if (!Array.isArray(list?.models)) return;
         setCatalog(list); void saveModels(env.id, account, list);
@@ -331,7 +332,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
       {!result ? <p className="note" role="status">Loading result…</p>
         : result.output ? <div className="delegation-output"><Markdown text={result.output} live={!result.complete} /></div>
         : !result.error && <p className="note">{result.complete ? 'The agent finished without a written reply.' : 'The agent has not replied yet.'}</p>}
-      {result?.error && <p className="error">{result.error}</p>}
+      {result?.error && <p className="error">{errorMessage(result.error, { machine: env.name })}</p>}
       {result?.truncated && <p className="note">Showing the most recent output.</p>}
       <form className="delegation-follow" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
         <label htmlFor={`message-${child.id}`} className="vh">Message helper</label>
@@ -458,8 +459,11 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
             <button className="primary" disabled={busy || loading || !agent?.available || !task.trim()}>{busy ? 'Starting…' : 'Start helper'}</button>
           </div>
         </form>
-          : <button type="button" className="delegation-new" onClick={() => setComposing(true)}><Icon name="plus" size={16} />New task</button>}
-        {!nativeOnly && env.info?.agentMessages === true && <AgentMessages client={client} envId={env.id} parent={parent} children={children} />}
+          : null}
+        {!nativeOnly && (!composing || env.info?.agentMessages === true) && <div className="delegation-tools">
+          {!composing && <button type="button" className="delegation-new" onClick={() => setComposing(true)}><Icon name="plus" size={15} />New task</button>}
+          {env.info?.agentMessages === true && <AgentMessages client={client} envId={env.id} parent={parent} children={children} />}
+        </div>}
         <div className="delegation-branches" aria-label="Helper tasks">
           {!listed ? <p className="note" role="status">Loading tasks…</p>
             : !children.length && !natives.length && !composing && <p className="note">This chat has no helper tasks.</p>}

@@ -235,7 +235,7 @@ export class ExternalSessions {
       || this.#core.drivers.get(s.id)?.pending?.size || this.#core.drivers.get(s.id)?.backgroundTasks > 0
       || this.#sessions.events.activeTurn(s.id) || this.#sessions.events.pending(s.id).length
       || this.#core.driverStarts.has(s.id) || this.#core.retiring.has(s.id)
-      || this.#core.sending.has(s.id) || this.#core.outbox.get(s.id)?.length);
+      || this.#core.deliveryState.isSending(s.id) || this.#core.deliveryState.hasQueue(s.id));
     if (!idle() || !opencodeServiceStatus(s.engineSessionId)) return;
     found ??= (await inventory((await getProfiles()).filter(p => p.engine === 'opencode2'), { limit: Infinity }))
       .find(x => x.id === s.engineSessionId);
@@ -571,7 +571,7 @@ export class ExternalSessions {
       this.#takeovers.delete(id);
       this.#core.drivers.get(id)?.kill?.();
       this.#core.drivers.delete(id);
-      this.#core.index.delete(id);
+      this.#core.forgetSession(id);
       this.#core.save();
       this.#sessions.emit('session', { ...wire(s), takeover: null, status: 'exited', alive: false, movedTo: { ...wire(next), alive: true } });
       this.#sessions.emit('session', { ...wire(next), alive: true });

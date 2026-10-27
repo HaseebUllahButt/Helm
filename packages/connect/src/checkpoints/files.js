@@ -30,7 +30,10 @@ function safePath(root, name) {
   const file = join(root, name);
   let parent = dirname(file);
   while (parent !== root) {
-    if (present(parent) && (!lstatSync(parent).isDirectory() || lstatSync(parent).isSymbolicLink())) throw new Error(`Unsafe checkpoint parent: ${name}`);
+    // Read each parent once per visit. Recheck on every path and capture pass:
+    // a parent can change while the workspace is being captured or restored.
+    const st = lstatSync(parent, { throwIfNoEntry: false });
+    if (st && (!st.isDirectory() || st.isSymbolicLink())) throw new Error(`Unsafe checkpoint parent: ${name}`);
     parent = dirname(parent);
   }
   return file;

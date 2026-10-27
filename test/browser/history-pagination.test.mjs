@@ -13,7 +13,7 @@ before(async () => {
     import { Transcript } from './apps/web/src/session/Transcript';
     const client = { subscribe() {}, on() { return () => {}; }, rpc: window.rpc };
     function App() {
-      const state = useSessionLog(client, 'machine', 'chat');
+      const state = useSessionLog(client, 'machine', 'chat', { wholeChat: window.wholeChat === true });
       window.state = state;
       return <Transcript turns={state.log.turns} status={state.log.status} loaded={state.log.loaded}
         earlier={state.earlier} loadingEarlier={state.loadingEarlier} onEarlier={state.loadEarlier} />;
@@ -107,7 +107,7 @@ test('a failed earlier read can be retried and clears its error after revealing 
   const { page, calls } = await device(t, { fail: true });
   const button = page.getByRole('button', { name: 'Earlier in this chat', exact: true });
   await button.click();
-  await page.waitForFunction(() => window.state.error === 'History disconnected' && !window.state.loadingEarlier);
+  await page.waitForFunction(() => window.state.error === 'This machine is not connected. Check the connection. Try again.' && !window.state.loadingEarlier);
   assert.equal(await button.isEnabled(), true);
   await button.click();
   await page.locator('[data-item-id="step-0"]').waitFor({ state: 'visible' });

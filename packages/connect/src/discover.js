@@ -2,9 +2,10 @@ import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { ENGINES, engineForCommand } from './engines.js';
 import { antigravityInstall } from './antigravity.js';
+import { findBinary } from './cli-updates.js';
 import { HOME, expand, collapse } from './paths.js';
 
 const exec = promisify(execFile);
@@ -37,6 +38,31 @@ async function whichAll(bins) {
     }
   } catch { /* no shell to ask: nothing found */ }
   return found;
+}
+
+// The PATH Helm started with. Discovery widens process.env.PATH, but a
+// restarted daemon starts from this again.
+const START_PATH = process.env.PATH ?? '';
+
+/**
+ * whichAll, then the owner's terminal PATH for what the login shell missed.
+ * Many installers (opencode's among them) add their folder in ~/.bashrc
+ * only, which a login shell never reads. `far` holds every tool the PATH
+ * Helm started with cannot reach: it keeps its full path, so a restarted
+ * daemon can still start it.
+ */
+async function locate(bins, termPath = '') {
+  const found = await whichAll(bins);
+  const far = new Map();
+  for (const bin of new Set(bins.filter(Boolean))) {
+    if (!found.has(bin) && termPath) {
+      const hit = findBinary([bin], { PATH: termPath });
+      if (hit) found.set(bin, hit.path);
+    }
+    const path = found.get(bin);
+    if (path?.startsWith('/') && !findBinary([bin], { PATH: START_PATH })) far.set(bin, path);
+  }
+  return { found, far };
 }
 
 /**
@@ -73,6 +99,7 @@ function altHomes(engine) {
  */
 async function shellSymbols() {
   const symbols = new Map();
+  let path = '';
   const run = async (args) => {
     try {
       const { stdout } = await exec('bash', args, {
@@ -86,7 +113,9 @@ async function shellSymbols() {
     }
   };
 
-  for (const line of (await run(['-ic', 'alias'])).split('\n')) {
+  // The terminal's PATH comes along: it is where the owner's tools are.
+  for (const line of (await run(['-ic', 'alias; printf "\\nhelm-path\\t%s\\n" "$PATH"'])).split('\n')) {
+    if (line.startsWith('helm-path\t')) { path = line.slice(10).trim(); continue; }
     const m = /^alias\s+([^=]+)=(.*)$/.exec(line.trim());
     if (m) symbols.set(m[1], { kind: 'alias', body: unquote(m[2]) });
   }
@@ -98,7 +127,7 @@ async function shellSymbols() {
     const name = /^([A-Za-z_][A-Za-z0-9_:.-]*)\s*\(\)/.exec(chunk.trim())?.[1];
     if (name && !symbols.has(name)) symbols.set(name, { kind: 'function', body: chunk });
   }
-  return symbols;
+  return { symbols, path };
 }
 
 /** Strip one layer of shell quoting, honouring bash's '\'' escape form. */
@@ -327,7 +356,13 @@ export async function discoverProfiles() {
   // them - they are the same question, not four. An engine may ship under
   // an older name (cursor-agent used to be `agent`), so probe its altBins.
   const installed = {};
-  const where = await whichAll(Object.values(ENGINES).flatMap((e) => (e.managed || !e.bin ? [] : [e.bin, ...(e.altBins ?? [])])));
+  const shell = await shellSymbols();
+  // Helm's own lookups by name (model lists, updates) need the terminal's
+  // folders too. They go last, so the daemon's own order still wins.
+  const dirs = (process.env.PATH ?? '').split(delimiter);
+  const more = shell.path.split(delimiter).filter((d) => d.startsWith('/') && !dirs.includes(d));
+  if (more.length) process.env.PATH = [...dirs, ...more].filter(Boolean).join(delimiter);
+  const { found: where, far } = await locate(Object.values(ENGINES).flatMap((e) => (e.managed || !e.bin ? [] : [e.bin, ...(e.altBins ?? [])])), shell.path);
   const paths = Object.values(ENGINES).map((e) => {
     // A managed engine ships no PATH binary; it is "installed" when the
     // runtime helm downloaded is in place (antigravity's ACP agent).
@@ -351,7 +386,7 @@ export async function discoverProfiles() {
       id: engine.id,
       label: engine.label,
       engine: engine.id,
-      cmd: hit.bin,
+      cmd: far.has(hit.bin) ? collapse(hit.path) : hit.bin,
       args: [],
       // A managed engine's own home must be set on every profile: with no
       // GEMINI_HOME the agent would share the user's real ~/.gemini.
@@ -370,7 +405,7 @@ export async function discoverProfiles() {
         engine: engine.id,
         // hit.bin is the engine's own bin, or the managed exe path when
         // there is no PATH binary at all (antigravity's ACP agent).
-        cmd: hit.bin,
+        cmd: far.has(hit.bin) ? collapse(hit.path) : hit.bin,
         args: [],
         env: { [engine.homeEnv]: home },
         source: 'detected',
@@ -390,8 +425,7 @@ export async function discoverProfiles() {
   });
 
   // 4. Whatever the user's shell config already says.
-  const symbols = await shellSymbols();
-  const aliases = await discoverAliasProfiles(symbols, installed);
+  const aliases = await discoverAliasProfiles(shell.symbols, installed, { termPath: shell.path, far });
   Object.assign(secrets, aliases.secrets);
   for (const profile of aliases.profiles) add(profile);
 
@@ -399,14 +433,14 @@ export async function discoverProfiles() {
 }
 
 /** Import alias credentials by reference, preserving distinct token accounts. */
-export async function discoverAliasProfiles(symbols, installed) {
+export async function discoverAliasProfiles(symbols, installed, { termPath = '', far = new Map() } = {}) {
   const profiles = [];
   const secrets = {};
   const all = [...symbols.keys()].map((name) => [name, resolve(name, symbols)]).filter(([, resolved]) => resolved);
   // Not an engine itself: maybe a script that launches one. Every bare
   // command name is looked up at once.
-  const where = await whichAll(all.map(([, resolved]) => resolved.argv[0])
-    .filter((cmd) => !engineForCommand(cmd) && !cmd.includes('/')));
+  const { found: where } = await locate(all.map(([, resolved]) => resolved.argv[0])
+    .filter((cmd) => !engineForCommand(cmd) && !cmd.includes('/')), termPath);
   for (const [name, resolved] of all) {
     let engineId = engineForCommand(resolved.argv[0]);
     let wraps = null;
@@ -417,6 +451,7 @@ export async function discoverAliasProfiles(symbols, installed) {
       if (engineId) { wraps = engineId; resolved.argv[0] = collapse(path); }
     }
     if (!engineId || !installed[engineId]) continue;
+    if (far.has(resolved.argv[0])) resolved.argv[0] = collapse(far.get(resolved.argv[0]));
 
     const env = {};
     const envFrom = [];

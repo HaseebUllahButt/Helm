@@ -6,8 +6,10 @@ the code, `git log` or `helm help` shows is not repeated here.
 ## Development and rollout
 
 - Requested Helm work is done only when it is verified, committed, pushed to
-  main and installed on every reachable machine. Check the source checkout,
-  installed checkout, running daemon and served web build separately.
+  main and installed on every reachable machine. Run `helm ship` from your
+  worktree: it merges, pushes, and waits until each online machine runs the
+  new commit and serves an app built from it. Fix what it reports; never
+  call the work shipped while it fails.
 - Develop in the source checkout or a worktree. Temporary scripts go under
   ~/.helm, never inside an installed checkout.
 - Installed copies often hold other chats' unsaved edits. Never reset or stash
@@ -24,13 +26,32 @@ survive the restart; fix interruptions instead of waiting for chats or transfers
 ## Proving it works
 
 For any change the owner can see in the app, try it in a private Helm
-(`verify-helm`), take a screenshot with `verify-helm shot`, and show it in the
-chat with `helm render`. Say what you could not check.
+(`verify-helm`), take a screenshot with `verify-helm shot`, and inspect it.
+Then show the owner one proof in the chat: a before and after picture for
+a change in looks, or a short clip for a change in behaviour (the skill
+says how). Keep every other screenshot private. Say what you could not
+check.
+
+Use plain text for reviews and progress reports. Create or publish a visual
+only when the owner asks. Skills must follow the owner's chosen format.
+Report supported findings without a fixed count.
 
 ## Testing
 
-- Run `npm run check` before and after a change.
-- Never run the full test suite unless the owner asks. Rerun only failed files.
+- While you work, run the test files you touch by name:
+  `npm run test:smart -- test/a.test.mjs`. Rerun only failed files.
+- Run `npm run check` once before you commit. It type-checks the web app when
+  web code changed and runs the tests named after the changed files.
+- `check` lists changed files with no test of their own. Pick their tests by
+  name (docs/features lists tests per feature). Add `--near` only when needed.
+- Never run `npm test`, `test:browser`, `test:network`, `check:full` or
+  `--wide` unless the owner asks. No hosted server runs them for Helm.
+- New tests wait for an event or a state, never for a fixed time.
+- `test:smart` gives each run its own temporary folder, then stops what the
+  tests left running and deletes the folder. When it says it stopped
+  programs, fix the test that left them.
+- Clean up what you start: `verify-helm down`, `helm share stop` for links
+  you made, and your scratch folders.
 
 ## Working alongside other chats
 

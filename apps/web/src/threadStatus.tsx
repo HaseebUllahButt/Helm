@@ -137,13 +137,7 @@ export const compactAge = (ts: number | undefined, now: number) => {
   return text === 'just now' ? 'now' : text;
 };
 
-/** "wrapped up 2h ago", split so a phone can drop the lead-in. */
-export const wrappedUp = (ts: number | undefined, now: number): { lead: string; rest: string } => {
-  const text = waitingSince(ts, now);
-  return !text ? { lead: '', rest: '' } : text === 'just now' ? { lead: 'finished ', rest: 'just now' } : { lead: 'finished ', rest: `${text} ago` };
-};
-
-export function ThreadStatus({ s, mood, now, label }: { s: Thread; mood: ThreadMood; now: number; label?: string }) {
+export function ThreadStatus({ s, mood, now }: { s: Thread; mood: ThreadMood; now: number }) {
   const live = mood === 'working';
   // Re-draw every second, but only while something is working.
   const tick = useNow(1000, live);
@@ -160,14 +154,15 @@ export function ThreadStatus({ s, mood, now, label }: { s: Thread; mood: ThreadM
       : s.chatWorktree?.setup === 'running' ? 'setting up' : busyWord(s.status, s.compacting);
     return (
       <span className="tstat working" data-mood="working">
-        <Icon name="think" size={13} className="tspin" />
+        <i />
         <span className="tclock">{word === 'working' ? clock(tick - turnStart(s, tick)) : word === 'compacting' ? 'shortening chat history' : word}</span>
       </span>
     );
   }
   if (mood === 'unread') {
-    return <span className="tstat unread" data-mood="unread" role="img" aria-label="Finished. You have not opened this chat." title="Finished. You have not opened this chat."><Icon name="check" size={14} /></span>;
+    // A green dot before the age: new, and when, in one place.
+    return <span className="tstat unread" data-mood="unread" role="img" aria-label="Finished. You have not opened this chat." title="Finished. You have not opened this chat."><i />{compactAge(s.updatedAt, now)}</span>;
   }
-  const age = label ?? compactAge(s.updatedAt, now);
+  const age = compactAge(s.updatedAt, now);
   return age ? <span className="tstat quiet" data-mood="quiet">{age}</span> : null;
 }

@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import type { Session } from '../client';
 import { Icon } from '../Icon';
+import { errorMessage } from '../errors';
 import { plainProblem } from './problem';
 
 /**
  * The task stopped and was not finished: what happened, in a sentence, and
  * the one thing to do about it. It sits above the message box, where the
  * eye already is when a turn ends, not at the top of a long thread. The
- * CLI's own words are kept behind "Details".
+ * original failure stays behind Details.
  */
 export function RecoveryCard({ recovery, busy, offline, onRetry, autoResume, onAutoResume }: {
   recovery: NonNullable<Session['recovery']>;
@@ -29,7 +30,7 @@ export function RecoveryCard({ recovery, busy, offline, onRetry, autoResume, onA
         <div className="recovery-copy">
           <b>{p.title}</b>
           <p>{recovery.kind === 'limited' && recovery.resetAt ? `Limit resets ${new Date(recovery.resetAt).toLocaleString()}.${autoResume && !recovery.autoResumeCancelled ? ' Helm continues then.' : ''}` : p.text}</p>
-          {recovery.autoResumeError && <p className="error">Helm cannot continue: {recovery.autoResumeError}</p>}
+          {recovery.autoResumeError && <p className="error">{errorMessage(recovery.autoResumeError)}</p>}
         </div>
         <button className="recovery-x" aria-label="Hide" onClick={() => setHiddenAt(recovery.at)}><Icon name="close" size={14} /></button>
       </div>

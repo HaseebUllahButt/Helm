@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { WRITING_REMINDER } from '../packages/protocol/brief.js';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-delegation-'));
 process.env.HELM_NO_SERVICE = '1';
@@ -18,13 +19,13 @@ process.env.HELM_TERMINALS_SOCKET = join(process.env.HELM_DIR, 'terminals.sock')
 process.env.HELM_NATIVE_SOCKET = join(process.env.HELM_DIR, 'native.sock');
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 const profiles = [
-  { id: 'codex-main', label: 'Codex personal', engine: 'codex', cmd: process.execPath, source: 'custom' },
+  { id: 'codex-main', label: 'Codex personal', engine: 'codex', cmd: process.execPath, env: { CODEX_HOME: join(process.env.HELM_DIR, 'codex-home') }, source: 'custom' },
   { id: 'claude-main', label: 'Claude personal', engine: 'claude', cmd: process.execPath,
     env: { CLAUDE_CONFIG_DIR: '~/.claude-test', PRIVATE_TOKEN: 'never-advertise-me' }, args: ['--secret', 'never-advertise-me'], source: 'custom' },
 ];
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ version: 1, profiles }));
 const { Sessions } = await import('../packages/connect/src/sessions.js');
-const { agentCatalog, parseAgentArgs, chooseAgent, delegationMode, delegationOutput, delegationNote } = await import('../packages/connect/src/delegation.js');
+const { agentCatalog, parseAgentArgs, chooseAgent, delegationMode, delegationOutput, delegationNote, codexHelperFork, codexHelperHistory, readCodexHelperHistory } = await import('../packages/connect/src/delegation.js');
 const { runAgentCommand } = await import('../packages/connect/src/agent-cli.js');
 const { M } = await import('@helm/protocol');
 
@@ -61,6 +62,53 @@ function setup(t, make = (opts) => new FakeDriver(opts), options = {}) {
   });
   return { sessions, drivers };
 }
+
+test('Codex forks require the same local account, folder and native daemon', () => {
+  const profile = profiles[0];
+  const parent = { id: 'parent', engine: 'codex', engineSessionId: 'parent-thread', cwd: process.env.HELM_DIR };
+  const fork = (p = parent, before = profile, after = profile, cwd = parent.cwd, worktree = false, socket = '/private/codex.sock') => codexHelperFork(p, before, after, cwd, worktree, socket);
+  assert.equal(fork().threadId, 'parent-thread');
+  assert.match(fork().note, /helper for chat parent/);
+  assert.equal(fork(null), null);
+  assert.equal(fork({ ...parent, engineSessionId: null }), null);
+  assert.equal(fork({ ...parent, engine: 'claude' }), null);
+  assert.equal(fork(parent, profile, profiles[1]), null);
+  assert.equal(fork(parent, profile, { ...profile, env: { CODEX_HOME: '/other/account' } }), null);
+  assert.equal(fork(parent, profile, { ...profile, env: { OPENAI_API_KEY: 'other-login' } }), null);
+  assert.equal(fork(parent, profile, { ...profile, wraps: 'codex' }), null);
+  assert.equal(fork(parent, profile, profile, '/different/folder'), null);
+  assert.equal(fork(parent, profile, profile, parent.cwd, true), null);
+  assert.equal(fork(parent, profile, profile, parent.cwd, false, null), null);
+});
+
+test('Codex recovery history leaves out queued tickets and keeps accepted tool results', () => {
+  const events = [
+    { type: 'turn.start', turnId: 'local-ticket', text: 'Unsent task' },
+    { type: 'turn.start', turnId: 'own-turn', text: 'Accepted task' },
+    { type: 'item.start', turnId: 'own-turn', id: 'tool', kind: 'command', name: 'exec', input: { command: 'echo saved' } },
+    { type: 'item.done', id: 'tool', output: 'Saved result' },
+  ];
+  const history = codexHelperHistory(events);
+  assert.match(history, /Accepted task/);
+  assert.match(history, /Saved result/);
+  assert.match(history, /echo saved/);
+  assert.doesNotMatch(history, /Unsent task/);
+});
+
+test('Codex recovery reads earlier work from the saved log', async t => {
+  const file = join(process.env.HELM_DIR, 'helper-recovery.jsonl');
+  t.after(() => rmSync(file, { force: true }));
+  writeFileSync(file, [
+    { type: 'turn.start', turnId: 'early', text: 'Earlier helper task' },
+    { type: 'item.start', turnId: 'early', id: 'reply', kind: 'text' },
+    { type: 'item.delta', id: 'reply', text: 'Earlier helper reply' },
+    ...Array.from({ length: 2400 }, () => ({ type: 'status', status: 'working' })),
+  ].map(e => JSON.stringify(e)).join('\n'));
+  const history = await readCodexHelperHistory(file);
+  assert.match(history, /Earlier helper task/);
+  assert.match(history, /Earlier helper reply/);
+  assert.equal(await readCodexHelperHistory(file + '.missing'), '');
+});
 
 test('native children keep an idle parent active, expose questions, and settle independently', async t => {
   const { sessions, drivers } = setup(t);
@@ -370,6 +418,23 @@ test('stopping a parent cascades and late child results cannot restart it', asyn
   assert.equal(drivers.get(parent.id).sent, 'A new user request');
   assert.equal(sessions.history(parent.id).events.some((event) => String(event.turnId).startsWith('local-result-')), false);
   assert.equal(sessions.get(child.id).delegation.status, 'interrupted');
+});
+
+test('stopping a parent leaves a helper that already finished as it was', async (context) => {
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: done } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const { session: busy } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Check tests' });
+  drivers.get(done.id).finish();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sessions.get(done.id).delegation.status, 'done');
+  const finishedAt = sessions.get(done.id).delegation.finishedAt;
+  await sessions.interrupt(parent.id);
+  assert.equal(sessions.get(done.id).delegation.status, 'done', 'a finished helper keeps its result');
+  assert.equal(sessions.get(done.id).delegation.finishedAt, finishedAt);
+  assert.equal(sessions.get(done.id).recovery, undefined, 'and is not marked stopped');
+  assert.equal(sessions.get(busy.id).delegation.status, 'interrupted', 'one still at work is stopped');
+  assert.equal(parent.recovery.message, 'You stopped this chat. Helm also stopped its helper.');
 });
 
 test('a child completion wakes its idle parent once with a durable result ticket', async (context) => {
@@ -774,37 +839,15 @@ test('delegation instructions keep only rules; the details live in helm delegate
   assert.match(note, /open, message and stop it/);
   assert.match(note, /never unset HELM_SESSION_ID/);
   assert.match(note, /--model cheap/);
-  assert.match(note, /test chats \(helm delete\)/);
+  assert.match(note, /Keep your helpers/);
+  assert.match(note, /only test chats that are not helpers/);
   assert.doesNotMatch(note, /--heavy|slot|--worktree|--cwd/, 'flags are looked up, not carried');
   const help = commandHelp('delegate', '  helm delegate <account> -- "<task>"\n');
-  for (const want of [/Use same for this chat's account/, /--cwd <folder>/, /--worktree/, /context for an hour/, /helm delete <id>/]) assert.match(help, want);
+  for (const want of [/Use same for this chat's account/, /--cwd <folder>/, /--worktree/, /context for an hour/, /Keep finished helpers/]) assert.match(help, want);
 });
 
 test('no account by that name lists the accounts that do exist', () => {
   assert.throws(() => chooseAgent([{ id: 'claudes', engine: 'claude' }, { id: 'a1', engine: 'agy' }], 'pc'), /no CLI account "pc" here; accounts: claudes, a1/);
-});
-
-test('helm help <command> prints that command and its relatives, and --help before -- asks for it', async () => {
-  const { commandHelp, wantsHelp } = await import('../packages/connect/src/help.js');
-  const usage = [
-    'helm - title', '',
-    '  helm exec <machine> -- <command>', '                                    run there',
-    '    --env NAME=value               environment',
-    '  helm exec-status <machine> <id>   read it later',
-    '  helm execute-not <x>              unrelated',
-    '  helm say <id> <text...>           send a message', '',
-  ].join('\n');
-  const exec = commandHelp('exec', usage);
-  assert.match(exec, /helm exec <machine>/);
-  assert.match(exec, /--env NAME=value/);
-  assert.match(exec, /helm exec-status/);
-  assert.match(exec, /Do not rerun a command/);
-  assert.doesNotMatch(exec, /execute-not|helm say/);
-  assert.equal(commandHelp('nosuch', usage), null);
-  assert.equal(commandHelp('', usage), null);
-  assert.ok(wantsHelp(['--help']));
-  assert.ok(wantsHelp(['same', '-h']));
-  assert.ok(!wantsHelp(['same', '--', 'explain --help to me']), 'task words after -- are literal');
 });
 
 test('a child works in the folder the caller names, else where its parent does', async (t) => {
@@ -867,11 +910,12 @@ test('agents get the tool instructions as standing instructions, not in the owne
   await sessions.input(parent.id, '/status');
   assert.equal(drivers.get(parent.id).sent, '/status');
   drivers.get(parent.id).finish();
+  // Only the short writing reminder rides on each message.
   await sessions.input(parent.id, 'Work');
-  assert.equal(drivers.get(parent.id).sent, 'Work');
+  assert.equal(drivers.get(parent.id).sent, `Work\n\n${WRITING_REMINDER}`);
   drivers.get(parent.id).finish();
   await sessions.input(parent.id, 'Continue');
-  assert.equal(drivers.get(parent.id).sent, 'Continue');
+  assert.equal(drivers.get(parent.id).sent, `Continue\n\n${WRITING_REMINDER}`);
   const child = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
   assert.equal(drivers.get(child.session.id).instructions, `${drivers.get(parent.id).instructions} helper of ${parent.id}`);
 });
@@ -1139,6 +1183,25 @@ test('the browser note rides along only where a browser can start', async () => 
   assert.match(browserNote({ bowser: true }), /--engine bowser/);
 });
 
+// Every chat pays for these notes before it does any work, and every message
+// carries the reminder. Lower the numbers when the text shrinks; raise them
+// only when the owner wants the new text.
+test('the notes every agent gets match the committed size', async () => {
+  const { helmBrief } = await import('../packages/connect/src/delegation.js');
+  const { browserNote } = await import('../packages/connect/src/browser.js');
+  const { worktreeNote } = await import('../packages/connect/src/chat-worktree.js');
+  const { readFileSync } = await import('node:fs');
+  const budget = JSON.parse(readFileSync(new URL('./agent-context-budget.json', import.meta.url), 'utf8'));
+  const net = { self: 'a', machines: { a: { id: 'a', name: 'Laptop' }, b: { id: 'b', name: 'VM', kind: 'vm' }, c: { id: 'c', name: 'HomePC', kind: 'pc' } } };
+  // The browser note depends on this machine; count the version without Bowser.
+  const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:')).join('\n');
+  const notes = [brief, browserNote({ bowser: false }), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
+  assert.deepEqual(
+    { notesBytes: Buffer.byteLength(notes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
+    { notesBytes: budget.notesBytes, reminderBytes: budget.reminderBytes },
+  );
+});
+
 test('a helper with no thread to sit under lists on its own, and its team nests under it', async (t) => {
   const { sessions, drivers } = setup(t);
   // `helm delegate` from a plain shell: no parent. Its own children have it as parent.
@@ -1273,4 +1336,18 @@ test('reading five helper replies removes their real parent queue tickets withou
   await messages.send({id:child.id,to:{env:'local',id:parent.id},text:'Update 0',messageId:ids[0]});
   assert.equal(sessions.events.tail(parent.id,0).filter(e=>e.type==='turn.start'&&e.source==='agent').length,5);
   assert.deepEqual(await messages.collectResult({id:child.id,parentId:parent.id,consume:true}),[]);
+});
+
+test('tour helpers stay visible and do not send their JSON to the parent', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'codex-main', mode: 'readonly',
+    task: 'Write a Git review tour.\n' + 'data '.repeat(7000), tour: true });
+  assert.equal(sessions.get(child.id).delegation.notifyParent, false);
+  assert.equal(sessions.get(child.id).delegation.codexFork, undefined);
+  assert.equal(sessions.get(child.id).delegation.hidden, undefined);
+  drivers.get(child.id).finish();
+  assert.equal(sessions.delegationResult(child.id).status, 'done');
+  assert.equal(drivers.get(parent.id).sent, undefined);
+  assert.ok((await sessions.list({ parentId: parent.id })).some(s => s.id === child.id));
 });

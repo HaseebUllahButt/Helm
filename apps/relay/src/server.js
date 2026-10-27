@@ -41,11 +41,6 @@ export async function startRelay({
 
   const { wss, online, reachable, attachMesh, meshChanged, meshEvent, meshSignal, connectedDevices, kick, callEnv, openTcp, stop: stopWs } = createWsLayer();
   const api = makeHttpHandler({ online: reachable, kick, connectedDevices, callEnv });
-  // The byte-stream half of a nas - a real HTTP surface, mounted on every
-  // hub but answering only where a nas designation and a valid media
-  // credential say it may.
-  const media = (await import('./media.js')).createMediaRoute({ online, callEnv, openTcp });
-
   // Public links on <name>.<this host> - see share.js.
   const shares = (await import('./share.js')).createShareRoute({ online, callEnv, openTcp });
 
@@ -91,13 +86,6 @@ export async function startRelay({
       ? serveVisualFrame(req, res)
       : req.url === '/api/version'
       ? version(req, res)
-      : req.url.startsWith('/media/')
-      ? Promise.resolve(media(req, res)).then((handled) => {
-          // Inside the media surface every request is answered; a path that
-          // is not a media route is a missing thing, not a hanging one.
-          if (!handled) notFound(res);
-          return null;
-        })
       : req.url.startsWith('/api/')
       ? api(req, res)
       : serveStatic(req, res).then((served) => {
@@ -118,7 +106,7 @@ export async function startRelay({
       : req.url.startsWith('/api/share/ask?') && loopback(req) && !req.headers['x-forwarded-for'] ? shares.ask(req, res).then(() => true)
       : null;
     Promise.resolve(handled ?? (helmPath(req), routeHelm(req, res))).catch((err) => {
-      // A handler that fails mid-answer - a media stream is the usual one -
+      // A handler that fails mid-answer - a share stream is the usual one -
       // cannot become a 500, only a dropped connection.
       if (res.headersSent) return res.destroy();
       res.writeHead(500, { 'content-type': 'application/json' });

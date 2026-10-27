@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { openPrivateLink } from '../privateLink';
 import { useEffect, useState } from 'react';
 import { Client } from '../client';
@@ -57,7 +58,7 @@ export function ShareHop({ client, target, onDone }: { client: Client; target: S
             openPrivateLink(pass);
             return;
           } catch (err: any) {
-            failures.push(`${base ? new URL(base).host : 'this device’s Helm home'}: ${err?.message || 'no answer'}`);
+            failures.push(`${base ? new URL(base).host : 'this device’s Helm home'}: ${errorMessage(err)}`);
           }
         }
       }
@@ -69,7 +70,7 @@ export function ShareHop({ client, target, onDone }: { client: Client; target: S
     <div className="auth">
       <div className="auth-card">
         <div className="auth-brand">
-          <img src="/icon.svg" alt="" />
+          <img src="/icon.svg?v=7" alt="" />
           <h1>helm</h1>
           <p>{error ? `Helm cannot open ${target.name}: ${error}` : `Opening ${target.name}…`}</p>
         </div>

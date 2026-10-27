@@ -41,8 +41,7 @@ db.exec(`
   -- Invites let a new machine join the network. Claiming one hands over the
   -- network key, so they are single-use and short-lived.
   -- role is what the person adding the machine said it was: 'pc' for one that
-  -- dials out, 'vm' for one that also becomes a home with its own address,
-  -- 'nas' for storage for the network - a machine that stays reachable.
+  -- dials out, 'vm' for one that also becomes a home with its own address.
   -- Carrying it on the invite is what lets "helm join" be the only command
   -- typed on the far machine, whichever kind it is.
   CREATE TABLE IF NOT EXISTS invites (

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Driver, checkVersion, assertFolder } from './index.js';
+import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
 import { modeFor } from '../modes.js';
 import { nonAgentClaudeTask } from '../claude-tasks.js';
 import { bareModel, compactWindow, configDir } from '../context-limit.js';
@@ -56,6 +56,14 @@ const BASE_ARGS = [
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const MAX_OUTPUT = 32_000;
+/** `<task-notification>` blocks: what background work ended, in the CLI's words. */
+export function taskNotices(text = '') {
+  const tag = (block, name) => block.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))?.[1]?.trim() ?? '';
+  return [...String(text).matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)].flatMap(([, block]) => {
+    const summary = tag(block, 'summary');
+    return summary ? [{ summary: summary.length > 200 ? `${summary.slice(0, 199)}…` : summary, status: tag(block, 'status') || 'completed' }] : [];
+  });
+}
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
 const stripAnsi = (s) => (typeof s === 'string' ? s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '') : s);
 const automaticDecision = (mode, kind) => {
@@ -120,6 +128,7 @@ export class ClaudeDriver extends Driver {
   #hosted = false;
   #exited = null;
   #ready = null;
+  #starting = null;
   /**
    * `${messageId}#${index}` for text/thinking blocks, the tool_use id for
    * tools - one map per sidechain: a subagent's stream_events interleave
@@ -130,6 +139,8 @@ export class ClaudeDriver extends Driver {
   #tasks = new Map();
   /** task_ids started and not yet ended: helpers, background commands, watches. */
   #running = new Set();
+  /** Background work that ended between turns: what the next wake-up is about. */
+  #woke = [];
 
   /**
    * Work Claude left running after its turn - a background command, a watch,
@@ -226,6 +237,13 @@ export class ClaudeDriver extends Driver {
   }
 
   async start() {
+    if (this.#starting) return this.#starting;
+    this.#starting = this.#start();
+    try { return await this.#starting; }
+    finally { this.#starting = null; }
+  }
+
+  async #start() {
     if (this.#pipe) return;
     assertFolder(this);
     await checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
@@ -272,18 +290,31 @@ export class ClaudeDriver extends Driver {
   }
 
   #localPipe(child) {
+    child.stdin.on('error', err => this.push('error', { message: `Could not send input to Claude: ${err.message}`, kind: 'input' }));
     child.stderr.setEncoding('utf8');
     let tail = '';
     child.stderr.on('data', (d) => {
       tail = (tail + d).slice(-4000);
       if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d);
     });
+    let exitResult = null;
+    let exitHandler = null;
+    const finish = result => {
+      if (exitResult) return;
+      exitResult = result;
+      exitHandler?.(result);
+    };
+    child.on('exit', (code, signal) => finish({ code, signal, stderr: tail.trim().split('\n').pop() || null }));
+    child.on('error', err => finish({ code: -1, signal: null, stderr: err.message }));
     return {
       write: (d) => child.stdin.write(d),
       end: () => child.stdin.end(),
       kill: (s) => child.kill(s),
       onData: (cb) => child.stdout.on('data', (c) => cb(typeof c === 'string' ? c : c.toString('utf8'))),
-      onExit: (cb) => child.on('exit', (code, signal) => cb({ code, signal, stderr: tail.trim().split('\n').pop() || null })),
+      onExit: cb => {
+        exitHandler = cb;
+        if (exitResult) queueMicrotask(() => cb(exitResult));
+      },
       detach: () => {},
     };
   }
@@ -339,6 +370,7 @@ export class ClaudeDriver extends Driver {
         // Messages handed over mid-turn that it never read die with it too.
         for (const input of this.#inputs.values()) this.push('input.failed', { ...input, error: 'Claude exited before reading this message.' });
         this.#inputs.clear();
+        this.off('init', markReady);
         markReady();
         // A prompt the CLI was holding open dies with it; say so.
         for (const requestId of [...this.pending.keys()]) {
@@ -367,10 +399,11 @@ export class ClaudeDriver extends Driver {
   #control(request) {
     const request_id = `helm-${++this.#controlSeq}`;
     return new Promise((resolve, reject) => {
-      this.#controls.set(request_id, resolve);
+      const timer = setTimeout(() => { if (this.#controls.delete(request_id)) resolve(null); }, 15_000);
+      timer.unref?.();
+      this.#controls.set(request_id, response => { clearTimeout(timer); resolve(response); });
       try { this.#write({ type: 'control_request', request_id, request }); }
-      catch (e) { this.#controls.delete(request_id); reject(e); }
-      setTimeout(() => { if (this.#controls.delete(request_id)) resolve(null); }, 15_000).unref?.();
+      catch (e) { clearTimeout(timer); this.#controls.delete(request_id); reject(e); }
     });
   }
 
@@ -510,10 +543,13 @@ export class ClaudeDriver extends Driver {
   /** With `cancel_queued`, a message handed over mid-reply is dropped with the reply. */
   get dropsHandedOnInterrupt() { return this.#capabilities.has('interrupt_cancel_queued_v1'); }
 
-  async interrupt() {
+  async interrupt({ background = false } = {}) {
     if (!this.#pipe) return;
     this.#interrupting = true;
-    await this.#control({ subtype: 'interrupt', cancel_queued: this.#capabilities.has('interrupt_cancel_queued_v1') });
+    // The reply first, the tasks with it: none waits for another to answer.
+    const reply = this.#control({ subtype: 'interrupt', cancel_queued: this.#capabilities.has('interrupt_cancel_queued_v1') });
+    const tasks = background ? [...this.#running] : [];
+    await Promise.all([reply, ...tasks.map((task_id) => this.#control({ subtype: 'stop_task', task_id }))]);
   }
 
   /**
@@ -587,9 +623,9 @@ export class ClaudeDriver extends Driver {
       try { await this.answer(requestId, { option: 'deny', message: 'The chat ended.' }); } catch { /* already gone */ }
     }
     try { pipe.end(); } catch { /* closed */ }
-    const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    const done = await waitForExit(this.#exited, 3000);
     if (!done) pipe.kill('SIGTERM');
-    const done2 = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+    const done2 = await waitForExit(this.#exited, 2000);
     if (!done2) pipe.kill('SIGKILL');
     await this.#exited;
   }
@@ -720,7 +756,10 @@ export class ClaudeDriver extends Driver {
       return;
     }
     if (m.subtype === 'task_notification') {
-      if (['completed', 'failed', 'stopped'].includes(m.status)) this.#running.delete(m.task_id);
+      if (['completed', 'failed', 'stopped'].includes(m.status)) {
+        this.#running.delete(m.task_id);
+        if (!this.#inTurn && m.summary) this.#woke.push({ summary: m.summary.length > 200 ? `${m.summary.slice(0, 199)}…` : m.summary, status: m.status });
+      }
       const id = this.#tasks.get(m.task_id) ?? m.tool_use_id;
       if (!id) return;
       if (nonAgentClaudeTask({ type: m.task_type, summary: m.summary })) this.#nonAgentTasks.add(id);
@@ -761,7 +800,12 @@ export class ClaudeDriver extends Driver {
   #wake(m) {
     this.#turnId = `wake-${m.uuid ?? randomUUID()}`;
     this.#inTurn = true;
-    this.push('turn.start', { turnId: this.#turnId, text: '', wake: true });
+    const cause = this.#woke.splice(0);
+    // Claude Code also hands the news over as the message that wakes it.
+    for (const n of m.type === 'user' ? taskNotices(resultText(m.message?.content)) : []) {
+      if (!cause.some((c) => c.summary === n.summary)) cause.push(n);
+    }
+    this.push('turn.start', { turnId: this.#turnId, text: '', wake: true, ...(cause.length ? { cause } : {}) });
     // The last turn said idle. Without this the chat reads "done" for the
     // whole wake-up while Claude runs tools.
     if (!this.pending.size) this.push('status', { status: 'working' });
@@ -772,6 +816,12 @@ export class ClaudeDriver extends Driver {
       // A subagent's own prompt is not one of the owner's messages.
       if (m.parent_tool_use_id) return;
       let text = resultText(m.message?.content);
+      // Background news the CLI queued behind the owner's message comes back
+      // as a replay too. It wakes Claude; it is not a message from the owner.
+      if (/^\s*<task-notification>/.test(text) && !text.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim()) {
+        if (!this.#inTurn) this.#wake(m);
+        return;
+      }
       const record = localCommandRecord(text);
       if (record?.kind === 'note') return;
       if (record?.kind === 'output') {
@@ -960,8 +1010,10 @@ export class ClaudeDriver extends Driver {
     this.#flushCommandOutput();
     // A result outside any turn closes nothing that is open. A failure still
     // says so - the CLI can refuse a message before it echoes it - but with no
-    // turn id, never the last turn's again; a success is that turn's repeated.
-    if (!this.#inTurn && this.#turnId && !m.is_error) return;
+    // turn id, never the last turn's again. A success is the last turn's
+    // repeated, or, in a resumed process, a task that ended while it was
+    // away: closing then would mark the message just sent as done.
+    if (!this.#inTurn && !m.is_error) return;
     const turnId = this.#inTurn ? this.#turnId : null;
     this.#inTurn = false;
     const interrupted = this.#interrupting && m.is_error;

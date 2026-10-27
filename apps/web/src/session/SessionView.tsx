@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useCopySelection } from '../useCopySelection';
 import type { Transcribe } from './voice';
 import { useDismiss } from '../useDismiss';
@@ -13,7 +14,7 @@ import { useAccountLimits } from './useAccountLimits';
 import { nativeConversation } from './nativeView';
 import { CompactionLine } from './Transcript';
 import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
-import { useChatKeys } from './chatKeys';
+import { useChatKeys, useDeleteKey } from './chatKeys';
 import { Canvas, chatPages, useCanvas } from './Canvas';
 import { prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
@@ -26,9 +27,7 @@ import { ExternalSessionNotice } from './ExternalSessionNotice';
 import { useSessionLog } from './useSessionLog';
 import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
 import type { Decision } from './types';
-import { EngineMark } from '../EngineMark';
 import { BackIcon, Icon, toolKind } from '../Icon';
-import { Route } from '../Route';
 import { Client, chatFolder, type Environment, type Session, type Message, type ModelList, type NativeControl, type NativeAgent } from '../client';
 import { followModelRefresh } from '../modelRefresh';
 import { loadMessages, saveMessages } from './logCache';
@@ -63,6 +62,8 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
+  /** The messages last shown, as text: a read that brings back the same chat changes nothing. */
+  const shown = useRef({ id: '', text: '', version: '' });
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat && !nativeConversation(session.engine));
   // Git and Agents open the same panels a Helm chat has.
@@ -97,7 +98,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     if (!session.nativeCli) return;
     let stale = false;
     const catalog = followModelRefresh(
-      () => client.rpc<ModelList>(env.id, 'model.list', { id: session.id, profileId: session.profileId }, 30_000),
+      (settled) => client.rpc<ModelList>(env.id, 'model.list', { id: session.id, profileId: session.profileId, ...(settled ? { settled } : {}) }, 30_000),
       (options) => {
         // The same tray a Helm chat has. `default` and `effort` stay empty:
         // the chips show what Claude itself reports, never an account guess.
@@ -122,7 +123,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try {
       await client.input(env.id, { id: session.id, data: command });
       setNativeNotice(command);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setSettingBusy(false); }
   };
   // A model picked here is checked with Claude first: its PreModelSwitch
@@ -145,7 +146,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         setNativeNotice(`/${kind} ${value}`);
         if (!session.nativeChat) setRaw(true);
       }
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setSettingBusy(false); }
   };
 
@@ -159,13 +160,26 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     reading.current = true;
     let success = false;
     try {
-      const r = await client.rpc<{ messages: Message[]; status?: Session['status'] }>(env.id, 'session.messages', { id: session.id }, 15_000);
+      // The machine answers `unchanged` when the version we hold is current,
+      // so a quiet chat costs a few bytes, not the whole list.
+      const known = shown.current.id === session.id ? shown.current.version : '';
+      const r = await client.rpc<{ messages?: Message[]; unchanged?: boolean; version?: string; status?: Session['status'] }>(
+        env.id, 'session.messages', { id: session.id, ...(known ? { known } : {}) }, 15_000);
       if (!mounted.current) return;
-      setMessages(r.messages);
+      // Most reads repeat the chat on screen. A new list redrew every
+      // message, rewrote the saved copy and, for a reader scrolled up,
+      // showed "new" when nothing was.
+      if (!r.unchanged && r.messages) {
+        const text = JSON.stringify(r.messages);
+        if (shown.current.id !== session.id || shown.current.text !== text) {
+          setMessages(r.messages);
+          saveMessages(env.id, session.id, r.messages);
+        }
+        shown.current = { id: session.id, text, version: r.version ?? '' };
+      }
       if (r.status) setStatus(r.status);
       setReadError(''); success = true;
-      saveMessages(env.id, session.id, r.messages);
-    } catch (e: any) { if (mounted.current) setReadError(e.message); }
+    } catch (e: any) { if (mounted.current) setReadError(errorMessage(e)); }
     finally {
       reading.current = false;
       const again = readAgain.current; readAgain.current = false;
@@ -225,7 +239,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try {
       for (const file of picked) {
         try { ready.push(await prepareAttachment(file)); }
-        catch (e: any) { failures.push(`${file.name}: ${e.message}`); }
+        catch (e: any) { failures.push(`${file.name}: ${errorMessage(e)}`); }
       }
       await setImages(current => [...current, ...ready]);
       if (failures.length) setError(`Not added — ${failures.join('; ')}`);
@@ -254,16 +268,20 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       setDraft(current => current === body ? '' : current);
       await setImages(current => current.filter(image => !attachments.includes(image)));
       if (session.nativeChat && (result?.terminal || body.trimStart().startsWith('/'))) setNativeNotice(body.trim());
-      else setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now(),
-        attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) }] : m);
+      else {
+        // The next read replaces this guess, as it always did.
+        shown.current = { id: '', text: '', version: '' };
+        setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now(),
+          attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) }] : m);
+      }
       setTimeout(refresh, 600);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setSending(false); }
   };
 
   const key = async (k: string) => {
     try { await client.rpc(env.id, 'session.keys', { id: session.id, keys: [k] }); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
   };
 
   const [killing, setKilling] = useState(false);
@@ -272,17 +290,21 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const newTerminal = async () => {
     if (!onNewTerminal) return;
     setOpening(true);
-    try { await onNewTerminal(); } catch (e: any) { setError(e.message); } finally { setOpening(false); }
+    try { await onNewTerminal(); } catch (e: any) { setError(errorMessage(e)); } finally { setOpening(false); }
   };
 
   const stopNative = async () => {
     try { await client.rpc(env.id, 'session.interrupt', { id: session.id }); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
   };
 
+  // Deleted here or on another device: leave the chat once, not twice.
+  const closed = useRef(false);
+  const closeOnce = useCallback(() => { if (closed.current) return; closed.current = true; onClosed(); }, [onClosed]);
+  useEffect(() => { if (session.deleted) closeOnce(); }, [session.deleted, closeOnce]);
   const kill = async () => {
-    try { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); }
-    catch (e: any) { setError(e.message); }
+    try { await client.rpc(env.id, 'session.kill', { id: session.id }); closeOnce(); }
+    catch (e: any) { setError(errorMessage(e)); }
   };
 
   // A terminal's own tab keys, the way a terminal app has them: Ctrl/Cmd+T a
@@ -320,7 +342,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const archive = async () => {
     setMenu(false);
     try { await client.rpc(env.id, 'session.archive', { id: session.id, archived: !session.archived }); onArchived(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
   };
 
   // Terminals are named by the machine ("Terminal 3") and agents by their
@@ -330,7 +352,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try {
       const r: any = await client.rpc(env.id, 'session.title', { id: session.id, title: next });
       onSession(r.session);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
   };
 
   const nativeProfile = nativeOptions?.profileId ?? session.profileId;
@@ -344,7 +366,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try {
       await client.rpc(env.id, 'session.control', { id: session.id, kind }, 70_000);
       setRaw(true);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(errorMessage(e)); }
     finally { setSettingBusy(false); }
   };
   const nativeControls = Controls({ options: nativeOptions, session,
@@ -356,6 +378,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     model: () => nativeControls.step('model'),
     ...(session.nativeChat ? { agents: () => setDetails((open) => open === 'agents' ? null : 'agents') } : {}),
   } : {});
+  useDeleteKey(isShell ? null : () => setKilling(true));
 
   useEffect(() => {
     if (!session.nativeChat || raw) return;
@@ -409,26 +432,26 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     </Composer>
   );
 
+  const toggleCanvas = canvas.toggle;
+  const where = [env.name, session.quick ? 'quick chat' : chatFolder(session), eng.label, (session as any).model ?? ''].filter(Boolean).join(' · ');
+
   return (
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <div className="titles">
+        {/* As in a Helm chat: the title and what needs a look now. Where it
+            runs and with what are a hover away and in the ⋯ menu. */}
+        <div className="titles" title={where}>
           <h1>{session.title}</h1>
-          <span className="sub">
-            <EngineMark engine={eng.cls} />
-            <Route machine={env.name} folder={chatFolder(session)} quick={session.quick} />
-            <span className="sep"> · </span>{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''}
-            {!isShell && messages && (readError || !env.online) && <span className="offline" role="status"> · Saved chat · reconnecting…</span>}
-          </span>
+          {!isShell && messages && (readError || !env.online) && <span className="sub"><span className="offline" role="status">Saved chat · reconnecting…</span></span>}
         </div>
         <StatusChip status={compacting && status === 'working' ? 'compacting' : status} at={statusAt} />
         {/* Git is in every chat's header, as in a Helm chat, terminal or not.
             Hiding it here made it look gone. The sheet says when there is no Git. */}
         <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
           onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
-        {!isShell && <button className="iconbtn" title="Open canvas: notes and documents (Ctrl/⌘ Shift D)" aria-label="Canvas" aria-pressed={canvas.open}
-          onClick={canvas.toggle}><Icon name="canvas" size={17} /></button>}
+        {!isShell && <button className="iconbtn" title={`${canvas.open ? 'Close' : 'Open'} canvas (Ctrl/⌘ Shift D)`} aria-label="Canvas" aria-pressed={canvas.open}
+          onClick={toggleCanvas}><Icon name="canvas" size={17} /></button>}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'Show chat' : 'Show terminal'} aria-label={raw ? 'Show chat' : 'Show terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
@@ -436,7 +459,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         )}
         {/* A Claude terminal chat starts Helm helpers like any chat. Another
             CLI's terminal only lists the helpers that CLI ran itself. */}
-        {!isShell && (session.nativeChat || !!session.nativeCards?.length) && (
+        {!isShell && (agentCount > 0 || session.nativeChat || !!session.nativeCards?.length) && (
           <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents" onClick={() => setDetails('agents')}>
             <Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}
           </button>
@@ -464,6 +487,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
             {!isExternal && onSendTask && <button disabled={!env.online} onClick={onSendTask}>Send task to another machine</button>}
             <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
             <button className="destructive" onClick={() => setKilling(true)}>{session.nativeCli ? 'Stop chat' : 'Delete chat'}</button>
+            <p className="menu-facts">{where}</p>
           </div>
         ))}
       </div>
@@ -500,7 +524,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           body={isShell
             ? 'All programs in this terminal stop.'
             : session.nativeCli ? 'This stops the agent program on your laptop. Close this view to leave it running.' : 'The agent stops and this chat leaves Helm.'}
-          confirmLabel={isShell ? 'Close' : session.nativeCli ? 'Stop chat' : 'Delete'} danger
+          confirmLabel={isShell ? 'Close' : session.nativeCli ? 'Stop chat' : 'Delete'} danger enterConfirms
           onCancel={() => setKilling(false)}
           onConfirm={() => { setKilling(false); kill(); }}
         />
@@ -546,7 +570,7 @@ function NativeClaudeApprovals({ client, env, sessionId, handle, children }: {
     if (!pending) return;
     setBusy(true); setError('');
     try { await client.rpc(env, 'session.answer', { id: sessionId, requestId: pending.requestId, decision }); await refresh(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
   const hold = useCallback((h: QuestionHandle | null) => { if (handle) handle.current = h; }, [handle]);

@@ -259,6 +259,16 @@ export function stepWords(it: Item): Words {
     return fromActions ?? commandWords(it.command);
   }
   switch (it.name) {
+    case 'codexReview': {
+      const action = field(it, 'action') || 'this step';
+      const status = field(it, 'reviewStatus');
+      const result = status === 'approved' ? 'Codex approved'
+        : status === 'denied' ? 'Codex denied'
+          : status === 'timedOut' ? 'Codex review timed out'
+            : status === 'aborted' ? 'Codex review stopped'
+              : status === 'warning' ? 'Codex review warning' : 'Codex is reviewing';
+      return { now: `Codex is reviewing: ${action}`, past: `${result}: ${action}` };
+    }
     case 'Bash': {
       const d = field(it, 'description').trim();
       return d ? describe(d) : commandWords(field(it, 'command'));

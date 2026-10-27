@@ -20,7 +20,10 @@ export type Status = 'idle' | 'working' | 'blocked' | 'done' | 'shell' | 'exited
 export interface Environment {
   id: string;
   name: string;
-  /** What the machine is for; absent on records from before kinds existed. */
+  /**
+   * What the machine is for; absent on records from before kinds existed.
+   * 'nas' is an old word for storage, which Helm no longer has: a pc.
+   */
   kind?: 'pc' | 'vm' | 'nas';
   online: boolean;
   lastSeen: number | null;
@@ -102,6 +105,8 @@ export interface Session {
   profileId: string;
   status: Status;
   alive?: boolean;
+  /** Set on the last update of a chat that was deleted, from any device. */
+  deleted?: boolean;
   createdAt?: number;
   updatedAt?: number;
   /** When the owner last opened it, on any device; the machine keeps it. */
@@ -126,6 +131,8 @@ export interface Session {
   pty?: boolean;
   /** A normal local CLI launch; app and laptop share its native terminal. */
   nativeCli?: boolean;
+  /** A terminal chat with nothing said in it yet; the sidebar leaves it out. */
+  blank?: boolean;
   /** Native Claude connected to Helm's conversation UI through its channel. */
   nativeChat?: boolean;
   /** Joined through Codex's existing shared local daemon. */
@@ -150,7 +157,7 @@ export interface Session {
   /** Prompts waiting on a person, for the list view. */
   pending?: number;
   /** What the newest of those prompts is about - the question's first line. */
-  ask?: { kind: 'question' | 'command' | 'edit' | 'plan' | 'tool'; text: string; more: number; requestId?: string } | null;
+  ask?: { kind: 'question' | 'command' | 'edit' | 'plan' | 'tool'; text: string; more: number; requestId?: string; whole?: boolean } | null;
   adopted?: boolean;
   /** Archived threads stay on the machine but are hidden from active groups. */
   archived?: boolean;
@@ -330,6 +337,12 @@ export interface UsageReport {
    * own cache gets, surfaced the same way.
    */
   stale?: boolean;
+  /**
+   * Days whose Claude transcripts were deleted, estimated from Claude Code's
+   * daily totals. `id` is the same on every machine holding a copy of one
+   * Claude folder, so a merge counts each once.
+   */
+  estimates?: (UsageGroup & { id: string; date: string })[];
 }
 
 /** The share of input tokens that came back out of the prompt cache. */
@@ -455,20 +468,6 @@ export interface TaskReturnState {
   changed?: number;
 }
 
-/** A folder a machine designated 'nas' has agreed to serve. */
-export interface MediaRoot { id: number; name: string; path: string }
-
-/** One entry inside a shared folder. `media` means a browser can play it. */
-export interface MediaEntry {
-  name: string;
-  path: string;
-  dir: boolean;
-  size: number | null;
-  mtime: number;
-  mime: string | null;
-  media: boolean;
-}
-
 /** `worktrees` are other checkouts of this repo that have threads in them. */
 export interface Project { path: string; title: string; worktrees?: string[] }
 
@@ -511,6 +510,41 @@ interface Peer {
   fragments: Map<string, { n: number; parts: string[]; got: number }>;
   deadline?: ReturnType<typeof setTimeout>;
   disconnectedTimer?: ReturnType<typeof setTimeout>;
+  /** When the channel last carried anything, and whether a check is out. */
+  heard?: number;
+  checking?: boolean;
+  /** Reads the machine's compressed frames (peer.js DeflateLink). */
+  inflate?: { write: (bytes: ArrayBuffer) => void; close: () => void };
+}
+
+/**
+ * Frames from one raw deflate stream of newline-ended JSON, in order. The
+ * machine flushes after each frame and may split the bytes anywhere, so they
+ * are read as one stream, not message by message.
+ */
+function inflater(onFrame: (msg: Record<string, any>) => void, onError: () => void) {
+  const stream = new DecompressionStream('deflate-raw');
+  const writer = stream.writable.getWriter();
+  const reader = stream.readable.pipeThrough(new TextDecoderStream()).getReader();
+  let text = '';
+  void (async () => {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      text += value;
+      for (let end = text.indexOf('\n'); end >= 0; end = text.indexOf('\n')) {
+        const line = text.slice(0, end);
+        text = text.slice(end + 1);
+        let msg: any;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg && typeof msg === 'object' && !Array.isArray(msg)) onFrame(msg);
+      }
+    }
+  })().catch(onError);
+  return {
+    write: (bytes: ArrayBuffer) => { writer.write(new Uint8Array(bytes)).catch(onError); },
+    close: () => { writer.abort().catch(() => {}); },
+  };
 }
 
 /**
@@ -529,6 +563,17 @@ const HTTP_READ_METHODS = new Set([
   'session.commands', 'env.info', 'session.watch', 'session.unwatch',
   'project.list',
 ]);
+
+/** A held chat list with a machine's changes applied, or null if they do not fit it. */
+function applyListChanges(held: Session[], r: any): Session[] | null {
+  if (typeof r?.digest !== 'string') return null;
+  if (r.unchanged) return held;
+  if (!Array.isArray(r.ids) || !Array.isArray(r.changed)) return null;
+  const byId = new Map(held.map((s) => [s.id, s]));
+  for (const s of r.changed) byId.set(s.id, s);
+  const rebuilt = r.ids.map((id: string) => byId.get(id));
+  return rebuilt.every(Boolean) ? rebuilt : null;
+}
 
 function sendDirect(channel: RTCDataChannel, frame: string): boolean {
   try {
@@ -703,12 +748,22 @@ export class Client {
   private pending = new Map<string, Pending>();
   private listeners = new Set<Listener>();
   private subscribed = new Set<string>();
+  /**
+   * Machines whose events the hub holds back because a direct link carries
+   * them. Both routes used to deliver every event, so a phone downloaded each
+   * one twice. A quiet link is checked (checkDirect); losing it takes the
+   * hub's copy back and resyncs what the gap may have missed.
+   */
+  private quiet = new Set<string>();
+  private quietCheck: ReturnType<typeof setInterval> | undefined;
   private backoff = 500;
   private closed = false;
   private connecting = false;
   private connectStartedAt = 0;
   private recoveryTimer: ReturnType<typeof setInterval> | undefined;
   private backgrounded = false;
+  /** When the page last came back from the background. */
+  private wokeAt = 0;
   private connectVersion = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private disconnectSocket: ((reason: string, retry?: boolean) => void) | null = null;
@@ -727,9 +782,11 @@ export class Client {
     if (document.visibilityState !== 'visible') { this.backgrounded = true; return; }
     const resumed = this.backgrounded || event?.type === 'pageshow' || event?.type === 'resume';
     this.backgrounded = false;
+    if (resumed) this.wokeAt = Date.now();
     // Picking the phone back up. It may well be on a different network than
     // it was when you put it down, so anything relaying is worth another go.
     this.retryDirectNow();
+    this.checkDirect(true);
     this.probeSocket?.(resumed);
     this.refreshReachability();
     // Coming back to the foreground: the socket is almost certainly dead and
@@ -943,7 +1000,12 @@ export class Client {
           for (const env of r.environments) {
             this.emit(env.id, 'presence', { env: env.id, online: env.online, info: env.info, name: env.name });
           }
-          this.emit('', 'connection', { online: false, reachable: true, hub: this.relay });
+          // Said once. Each repeat redrew the app, and the machine list
+          // asked the hub again for what this poll had just read.
+          const told = this.told;
+          if (told?.online !== false || told.reachable !== true || told.error) {
+            this.emit('', 'connection', { online: false, reachable: true, hub: this.relay });
+          }
         })
         .catch(() => {});
     }, 10_000);
@@ -1148,6 +1210,7 @@ export class Client {
       let drain: ReturnType<typeof setTimeout> | undefined;
       let lastReceived = Date.now(), awaiting = false;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
+      let woke: ReturnType<typeof setTimeout> | undefined;
       const settle = (err?: Error) => {
         if (settled) return;
         settled = true;
@@ -1156,7 +1219,7 @@ export class Client {
       const stop = (reason: string, retry = true) => {
         if (stopped) return;
         stopped = true;
-        clearTimeout(handshake); clearInterval(heartbeat); clearTimeout(drain);
+        clearTimeout(handshake); clearInterval(heartbeat); clearTimeout(drain); clearTimeout(woke);
         this.socketCleanups.delete(cleanup);
         ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
         if (this.ws === ws) {
@@ -1209,6 +1272,23 @@ export class Client {
         // grace period instead of declaring a healthy socket dead on wake.
         if (reset) { awaiting = false; lastReceived = Date.now(); }
         beat(true);
+        // An unlocked phone often holds a socket its network dropped during
+        // sleep. It still looks open, and the usual 15 s wait for its pong
+        // left the screen stale that long. After waking, 1.2 s of silence
+        // opens a fresh socket beside it (connect() moves over when it opens
+        // and retires this one), and 3 s drops this one outright. A slow
+        // answer costs one reconnect, so the hub is not marked as failed.
+        if (!reset || !awaiting) return;
+        clearTimeout(woke);
+        woke = setTimeout(() => {
+          if (stopped || !awaiting || this.ws !== ws) return;
+          void this.connect(hub).catch(() => {});
+          woke = setTimeout(() => {
+            if (stopped || !awaiting || this.ws !== ws) return;
+            stop('connection did not answer after waking', false);
+            this.recoverConnection(true);
+          }, 1800);
+        }, 1200);
       };
       ws.onopen = () => {
         if (stopped || this.closed || version !== this.connectVersion) { stop('connection superseded', false); return; }
@@ -1232,7 +1312,7 @@ export class Client {
         lastReceived = Date.now();
         this.stopPresencePoll();
         if (!this.reachPoll) this.reachPoll = setInterval(() => this.refreshReachability(), 15_000);
-        for (const env of this.subscribed) ws.send(JSON.stringify({ t: 'subscribe', env }));
+        for (const env of this.subscribed) if (!this.quiet.has(env)) ws.send(JSON.stringify({ t: 'subscribe', env }));
         heartbeat = setInterval(beat, 5000);
         for (const [env, peer] of this.peers) if (!peer.ready) this.dropDirect(env, peer);
         this.retryDirectNow();
@@ -1313,7 +1393,13 @@ export class Client {
     this.refreshReachability();
   }
 
+  /** The connection state last told to the screens. */
+  private told: { online: boolean; reachable: boolean; error?: string } | null = null;
+
   private emit(env: string, kind: string, payload: any) {
+    if (kind === 'connection') {
+      this.told = { online: !!payload.online, reachable: payload.reachable ?? !!payload.online, error: payload.error };
+    }
     for (const l of this.listeners) l(env, kind, payload);
   }
 
@@ -1336,6 +1422,7 @@ export class Client {
     this.stopPresencePoll();
     if (this.reachPoll) clearInterval(this.reachPoll);
     this.reachPoll = null;
+    clearInterval(this.quietCheck); this.quietCheck = undefined;
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisible);
       document.removeEventListener('resume', this.onVisible);
@@ -1357,8 +1444,45 @@ export class Client {
   }
 
   subscribe(env: string) {
+    if (this.subscribed.has(env)) return;
     this.subscribed.add(env);
-    if (this.connected) this.ws!.send(JSON.stringify({ t: 'subscribe', env }));
+    const peer = this.peers.get(env);
+    if (peer?.ready) this.quietHub(env, false);
+    else if (this.connected) this.ws!.send(JSON.stringify({ t: 'subscribe', env }));
+  }
+
+  /** The direct link carries this machine's events: the hub stops sending them. */
+  private quietHub(env: string, subscribedThere = true) {
+    if (!this.subscribed.has(env) || this.quiet.has(env)) return;
+    this.quiet.add(env);
+    if (subscribedThere && this.connected) try { this.ws!.send(JSON.stringify({ t: 'unsubscribe', env })); } catch { /* resubscribed on reconnect */ }
+    this.quietCheck ??= setInterval(() => this.checkDirect(), 5000);
+  }
+
+  /** The hub sends this machine's events again. True when it had stopped. */
+  private wakeHub(env: string) {
+    if (!this.quiet.delete(env)) return false;
+    if (!this.quiet.size) { clearInterval(this.quietCheck); this.quietCheck = undefined; }
+    if (this.connected) try { this.ws!.send(JSON.stringify({ t: 'subscribe', env })); } catch { /* resubscribed on reconnect */ }
+    return true;
+  }
+
+  /**
+   * A direct link can look open and carry nothing: a phone that changed
+   * networks, a laptop that slept. While the hub is quiet that would freeze
+   * the screen, so a link silent for 10 s gets a ping. No answer in 5 s
+   * drops the link (the call's own timeout), which wakes the hub. Skipped
+   * while the page is hidden; coming back checks at once.
+   */
+  private checkDirect(force = false) {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    const now = Date.now();
+    for (const env of this.quiet) {
+      const peer = this.peers.get(env);
+      if (!peer?.ready || peer.checking || (!force && now - (peer.heard ?? 0) < 10_000)) continue;
+      peer.checking = true;
+      this.call(env, 'ping', {}, 5000).catch(() => {}).finally(() => { peer.checking = false; });
+    }
   }
 
   /**
@@ -1420,6 +1544,36 @@ export class Client {
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
+    if (method === 'session.list' && params?.projects !== true) return this.listSessions(env, params, timeout) as Promise<T>;
+    return this.call<T>(env, method, params, timeout);
+  }
+
+  /** The last chat list each screen's filter got, by machine. */
+  private lists = new Map<string, { digest: string; sessions: Session[] }>();
+
+  /**
+   * A chat list, sent as only its changes when this device holds an earlier
+   * one (agent.js #listReply). A machine too old to know `have`, or one that
+   * no longer has that list, answers in full as before.
+   */
+  private async listSessions(env: string, params: any, timeout: number): Promise<any> {
+    const key = `${env}|${JSON.stringify(params ?? {})}`;
+    const held = this.lists.get(key);
+    let r = await this.call<any>(env, 'session.list', held ? { ...params, have: held.digest } : params, timeout);
+    if (r && typeof r === 'object' && 'base' in r) {
+      const rebuilt = held && r.base === held.digest ? applyListChanges(held.sessions, r) : null;
+      if (rebuilt) {
+        this.lists.set(key, { digest: r.digest, sessions: rebuilt });
+        return { sessions: [...rebuilt] };
+      }
+      r = await this.call<any>(env, 'session.list', params, timeout);
+    }
+    if (typeof r?.digest === 'string' && Array.isArray(r.sessions)) this.lists.set(key, { digest: r.digest, sessions: r.sessions });
+    else this.lists.delete(key);
+    return r;
+  }
+
+  private call<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
     // Watching an open chat includes restored tabs and deep links, which
     // never visit the machine screen that originally started direct links.
     if (method === 'session.watch') void this.openDirect(env).catch(() => {});
@@ -1446,17 +1600,21 @@ export class Client {
     }
 
     const id = `w${++this.seq}`;
+    // A model list asked with `settled` waits on the machine for its refresh
+    // to end. That wait is not a stalled route, so it is never raced.
+    const hedge = HTTP_READ_METHODS.has(method) && !(method === 'model.list' && params?.settled === true);
     return new Promise<T>((resolve, reject) => {
       const started = Date.now();
       let deadline: ReturnType<typeof setTimeout> | undefined;
       let fallback: ReturnType<typeof setTimeout> | undefined;
-      const clear = () => { clearTimeout(deadline); clearTimeout(fallback); };
+      const http = HTTP_READ_METHODS.has(method) ? new AbortController() : undefined;
+      const clear = () => { clearTimeout(deadline); clearTimeout(fallback); http?.abort(); };
       this.pending.set(id, {
         resolve: (value) => { clear(); resolve(value as T); },
         reject: (error) => { clear(); reject(error); },
         ...(direct ? { direct: peer, env } : {}),
         routes: new Set([direct ? 'direct' : 'relay']),
-        ...(HTTP_READ_METHODS.has(method) ? { readKey: `${env}:${method}`, sentAt: { [direct ? 'direct' : 'relay']: started } } : {}),
+        ...(hedge ? { readKey: `${env}:${method}`, sentAt: { [direct ? 'direct' : 'relay']: started } } : {}),
       });
       const frame = JSON.stringify({ t: 'rpc', id, env, method, params });
       // Prefer the direct channel: relaying costs two internet round trips
@@ -1485,14 +1643,18 @@ export class Client {
       // A suspended laptop can leave a data channel looking open but silent.
       // These reads (and the idempotent view lease) are safe to race over the
       // hub too; never replay prompts, approvals, or other writes this way.
-      if (HTTP_READ_METHODS.has(method)) {
+      if (hedge) {
         // A slow but healthy link must not multiply a large history download.
         // Keep quick recovery when no latency is known, with a bounded grace
         // period once the machine's round-trip cost has been measured.
         const samples = this.rttSamples?.get(env);
         const rtt = samples?.length ? Math.min(...samples) : 0;
         const previousRead = this.readDurations?.get(`${env}:${method}`) || 0;
-        const hedgeAfter = Math.min(8000, Math.max(1500, rtt * 2 + 250, previousRead * 1.5 + 250), timeout / 2);
+        // Just after waking, the route is the doubt, not the machine: the
+        // first reads try the web route after 0.5 s instead of 1.5 s.
+        const justWoke = this.wokeAt > 0 && Date.now() - this.wokeAt < 5000;
+        const hedgeAfter = justWoke ? 500
+          : Math.min(8000, Math.max(1500, rtt * 2 + 250, previousRead * 1.5 + 250), timeout / 2);
         const httpFallback = (elapsed: number) => {
           const pending = this.pending.get(id);
           if (!pending || pending.routes?.has('http')) return;
@@ -1501,7 +1663,7 @@ export class Client {
           pending.hedged = true;
           pending.routes?.add('http');
           if (pending.sentAt) pending.sentAt.http = Date.now();
-          this.readHttp<T>(env, method, params, timeout - elapsed).then(
+          this.readHttp<T>(env, method, params, timeout - elapsed, http?.signal).then(
             result => this.receiveRpc({ id, ok: true, result }, 'http'),
             error => this.receiveRpc({ id, ok: false, error }, 'http'),
           );
@@ -1536,8 +1698,9 @@ export class Client {
     });
   }
 
-  private async readHttp<T>(env: string, method: string, params: any, timeout: number): Promise<T> {
+  private async readHttp<T>(env: string, method: string, params: any, timeout: number, signal?: AbortSignal): Promise<T> {
     if (this.closed) throw new Error('client closed');
+    if (signal?.aborted) throw new Error('read cancelled');
     const bases = [...new Set([this.relay, ...this.endpoints])].filter(Boolean).filter(reachableFromHere);
     if (!bases.length) throw new Error('not connected');
     const body = JSON.stringify({ env, method, params });
@@ -1556,11 +1719,13 @@ export class Client {
         settled = true;
         clearTimeout(stagger); clearTimeout(deadline);
         this.httpReads.delete(cancel);
+        signal?.removeEventListener('abort', cancel);
         for (const controller of controllers) controller.abort();
         error ? reject(error) : resolve(result as T);
       };
-      const cancel = () => done(new Error('client closed'));
+      const cancel = () => done(new Error(this.closed ? 'client closed' : 'read cancelled'));
       this.httpReads.add(cancel);
+      signal?.addEventListener('abort', cancel, { once: true });
       const launch = () => {
         clearTimeout(stagger); stagger = undefined;
         if (settled) return;
@@ -1679,6 +1844,7 @@ export class Client {
       pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       try { channel = pc.createDataChannel('helm', { ordered: true }); }
       catch (error) { pc.close(); throw error; }
+      channel.binaryType = 'arraybuffer';
     } catch {
       this.directErrors.set(env, 'This browser could not start the direct link.');
       this.retryDirect(env);
@@ -1717,17 +1883,31 @@ export class Client {
       this.directErrors.delete(env);
       // It worked, so the next failure starts its backoff from scratch.
       this.directWait.delete(env);
+      peer.heard = Date.now();
+      // Ask for compressed frames where this browser can read them. An older
+      // machine ignores the hello and keeps sending text.
+      if (typeof DecompressionStream === 'function' && typeof TextDecoderStream === 'function') {
+        try {
+          peer.inflate = inflater(handle, () => this.dropDirect(env, peer, 'The direct link sent data Helm could not read.'));
+          channel.send(JSON.stringify({ t: 'hello', zip: 'deflate-raw' }));
+        } catch { peer.inflate = undefined; }
+      }
+      this.quietHub(env);
       this.emit(env, 'transport', { direct: true });
     };
     channel.onclose = () => this.dropDirect(env, peer);
-    channel.onmessage = (ev) => {
-      const msg = this.accumulate(peer, ev.data);
-      if (msg == null) return;
+    const handle = (msg: Record<string, any>) => {
       if (msg.t === 'rpcResult') {
         this.receiveRpc(msg, 'direct');
         return;
       }
       if (msg.t === 'event') this.deliver(env, msg.kind, msg.payload, msg.eid);
+    };
+    channel.onmessage = (ev) => {
+      peer.heard = Date.now();
+      if (typeof ev.data !== 'string') { peer.inflate?.write(ev.data); return; }
+      const msg = this.accumulate(peer, ev.data);
+      if (msg != null) handle(msg);
     };
 
     try {
@@ -1831,7 +2011,12 @@ export class Client {
     clearTimeout(peer.disconnectedTimer);
     if (reason) this.directErrors.set(env, reason);
     try { peer.channel.close(); peer.pc.close(); } catch { /* already gone */ }
+    peer.inflate?.close();
+    const gap = this.wakeHub(env);
     this.emit(env, 'transport', { direct: false });
+    // The hub held this machine's events back, so some may be lost. Screens
+    // already reload everything after a reconnect; this is one.
+    if (gap && this.connected) this.emit('', 'connection', { online: true, hub: this.relay });
     // Losing it is not the end of trying for it.
     this.retryDirect(env);
   }
@@ -1885,7 +2070,7 @@ export class Client {
   devices(base = this.relay) { return this.httpAt<{ devices: Device[] }>(base, '/api/devices'); }
 
   /** An invite for adding another machine. Carries the network key. */
-  async invite(role: 'pc' | 'vm' | 'nas' = 'pc') {
+  async invite(role: 'pc' | 'vm' = 'pc') {
     // Invites belong to the hub that minted them. A localhost link cannot
     // be redeemed on another computer; mint at a public home and carry that
     // same address, rather than replacing it with a different hub's address.
@@ -1944,7 +2129,7 @@ export class Client {
    * than an edit at whatever hub answered. Becoming the vm can take a
    * moment - the machine claims an https address before it answers.
    */
-  setMachineKind(env: string, kind: 'pc' | 'vm' | 'nas') {
+  setMachineKind(env: string, kind: 'pc' | 'vm') {
     return this.rpc<{ id: string; kind: string; from?: string; changed: boolean; notes?: string[] }>(
       env, 'machine.set_kind', { kind }, 90_000
     );
@@ -1952,49 +2137,6 @@ export class Client {
 
   removeMachine(id: string) { return this.http(`/api/machines/${id}`, { method: 'DELETE' }); }
   removeDevice(id: string) { return this.http(`/api/devices/${id}`, { method: 'DELETE' }); }
-
-  // ------------------------------------------------------------- nas media
-  //
-  // Browsing is ordinary RPC - small JSON, fits the channel. The bytes are
-  // not carried here at all: a media element speaks real HTTP, so playback
-  // is a URL it fetches itself. What it cannot send is an Authorization
-  // header, so the URL carries a ticket the nas minted for this device and
-  // for itself, good for a few hours and nothing else.
-
-  /** The folders a nas has agreed to serve. */
-  mediaRoots(env: string) {
-    return this.rpc<{ roots: MediaRoot[] }>(env, 'media.roots', {}, 15_000);
-  }
-
-  /** One directory inside a shared folder. */
-  mediaList(env: string, root: number, path = '') {
-    return this.rpc<{ root: number; path: string; entries: MediaEntry[] }>(
-      env, 'media.list', { root, path }, 15_000
-    );
-  }
-
-  /** Mint the URL credential a media element will send. */
-  mediaTicket(env: string) {
-    return this.rpc<{ ticket: string; expiresAt: number }>(env, 'media.ticket', {}, 15_000);
-  }
-
-  /**
-   * The URL a media element plays from.
-   *
-   * Every hub in the network answers the same /media route, so which one the
-   * file comes through is ours to choose: the machine's own hub when the
-   * page can reach it - the direct LAN path - and the hub we are attached to
-   * when it cannot, which proxies the stream through the network.
-   */
-  mediaStreamUrl(
-    env: Environment,
-    opts: { root: number; path: string; ticket: string },
-    { direct = true }: { direct?: boolean } = {},
-  ) {
-    const base = (direct ? env.endpoints?.find(reachableFromHere) : null) ?? this.relay;
-    const q = new URLSearchParams({ root: String(opts.root), path: opts.path, t: opts.ticket });
-    return `${base}/media/${env.id}/stream?${q}`;
-  }
 
   digests(limit = 50) { return this.http<{ digests: any[] }>(`/api/digests?limit=${limit}`); }
 
@@ -2099,6 +2241,8 @@ export async function login(endpoint: string, password: string, local?: string) 
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ password, local, label: deviceLabel() }),
+    // A stalled network must not leave the sign-in button busy for ever.
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({} as any));

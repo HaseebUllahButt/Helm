@@ -8,7 +8,7 @@ import { join } from 'node:path';
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-shares-'));
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 
-const { addShare, listShares, removeShare, DEFAULT_TTL_MS } = await import('../packages/connect/src/shares.js');
+const { addShare, listShares, removeShare, removeChatShares, DEFAULT_TTL_MS } = await import('../packages/connect/src/shares.js');
 
 test('a new share ends after 3 hours by default', () => {
   const s = addShare({ name: 'spin-default', port: 3000 });
@@ -30,4 +30,16 @@ test('an ended share is no longer listed, so its port cannot be reached', () => 
   const later = Date.now() + 5000;
   assert.equal(listShares(later).some((x) => x.name === 'spin-old'), false);
   removeShare('spin-old');
+});
+
+test('deleting a chat stops the short links it made, never a kept one or another chat\'s', () => {
+  addShare({ name: 'spin-mine', port: 3010, chat: 'chat-a' });
+  addShare({ name: 'spin-kept-mine', port: 3011, chat: 'chat-a', keep: true });
+  addShare({ name: 'spin-theirs', port: 3012, chat: 'chat-b' });
+  addShare({ name: 'spin-owner', port: 3013 });
+  assert.equal(listShares().find((x) => x.name === 'spin-kept-mine').chat, undefined, 'a kept link belongs to no chat');
+  assert.deepEqual(removeChatShares('chat-a'), ['spin-mine']);
+  assert.deepEqual(listShares().map((x) => x.name).filter((n) => n.startsWith('spin-')).sort(), ['spin-kept-mine', 'spin-owner', 'spin-theirs']);
+  assert.deepEqual(removeChatShares('chat-a'), []);
+  for (const name of ['spin-kept-mine', 'spin-theirs', 'spin-owner']) removeShare(name);
 });

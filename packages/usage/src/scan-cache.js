@@ -202,10 +202,23 @@ export class FileRollupCache {
     // file list as the whole universe would have each account delete the
     // others' entries on its way past, and the last one to scan would be the
     // only one left in the fold.
-    for (const known of [...this.entries.keys()]) {
-      if (live.has(known)) continue;
+    //
+    // A file that is really gone keeps its buckets, marked `gone`. Claude Code
+    // deletes transcripts after 30 days, and dropping their counts made "All"
+    // only ever cover the last month: 23B tokens on one machine showed as the
+    // 30-day share. The entry stays under its path, so a file that comes back
+    // replaces it rather than being counted twice.
+    for (const [known, entry] of [...this.entries]) {
+      if (live.has(known) || entry.gone) continue;
       if (root && !known.startsWith(root)) continue;
-      this.entries.delete(known);
+      let missing = false;
+      try { await stat(known); } catch (e) { missing = e?.code === 'ENOENT'; }
+      if (missing) {
+        entry.gone = true;
+        entry.state = null;
+      } else {
+        this.entries.delete(known);
+      }
       stats.dropped++;
     }
 
@@ -220,7 +233,7 @@ export class FileRollupCache {
       // a thousand files cost 40ms.
       let st;
       try { st = await stat(filePath); } catch { continue; }
-      if (!rebuild && this.#matches(entry, st)) {
+      if (!rebuild && !entry?.gone && this.#matches(entry, st)) {
         if (entry.sealed) stats.sealed++;
         else stats.hits++;
         stats.bytesSkipped += st.size;
@@ -229,7 +242,7 @@ export class FileRollupCache {
       }
       // Grown in place with everything we already read still intact: read the
       // tail only. Anything else (shrunk, replaced, first sight) starts over.
-      const appended = !rebuild && entry && st.size > entry.size && entry.ino === st.ino && entry.bytes <= st.size;
+      const appended = !rebuild && entry && !entry.gone && st.size > entry.size && entry.ino === st.ino && entry.bytes <= st.size;
       work.push({ filePath, st, appended: !!appended });
     }
 
@@ -267,11 +280,15 @@ export class FileRollupCache {
    * Buckets summed into one `date|model -> tokens` map.
    *
    * `files` scopes the fold to one account's tree; without it the answer would
-   * carry every account sharing this index.
+   * carry every account sharing this index. `root` adds that tree's deleted
+   * files, which are no longer in any listing.
    */
-  fold(files = null) {
+  fold(files = null, root = null) {
     const out = new Map();
     const pick = files ? files.map((f) => this.entries.get(f)).filter(Boolean) : [...this.entries.values()];
+    if (files && root) {
+      for (const [p, e] of this.entries) if (e.gone && p.startsWith(root)) pick.push(e);
+    }
     for (const entry of pick) {
       for (const [key, b] of Object.entries(entry.buckets)) {
         let cur = out.get(key);
@@ -293,7 +310,7 @@ export class FileRollupCache {
     for (const [p, e] of this.entries) {
       files[p] = {
         m: e.mtimeMs, s: e.size, i: e.ino, b: e.bytes, k: e.sealed ? 1 : 0,
-        u: e.buckets, t: e.state,
+        u: e.buckets, t: e.state, ...(e.gone ? { g: 1 } : {}),
       };
     }
     return { id: this.id, files };
@@ -305,7 +322,7 @@ export class FileRollupCache {
     for (const [p, e] of Object.entries(data.files)) {
       this.entries.set(p, {
         mtimeMs: e.m, size: e.s, ino: e.i, bytes: e.b, sealed: !!e.k,
-        buckets: e.u || {}, state: e.t || this.parser.initState(),
+        buckets: e.u || {}, state: e.t || this.parser.initState(), gone: !!e.g,
       });
     }
     return true;

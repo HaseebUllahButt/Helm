@@ -20,6 +20,25 @@ Helm restart. Whoever typed last sets the size.
 - **Tests:** `test/terminal-browser`, `terminal-host`, `pty`,
   `shared-terminal`, `proc-host`, `pane-keys`.
 
+## Local app links
+
+- **Prove (private Linux, 2026-10-27):** A terminal running a small web
+  server opens its printed local address on the chat machine.
+  The chat browser uses the external Chromium window.
+- **Reach:** Tap a localhost or 127.0.0.1 address with a port in terminal
+  output. Helm opens a tab in that chat's external Chromium window.
+- **Traps:** The app must still belong to this chat. A stopped or unrelated
+  app shows a message in the terminal. Paths, queries and wrapped links work.
+- **Tests:** `test/terminal-links`, `test/terminal-browser`, `test/browser-apps`.
+
+## Opening over a slow link
+A new terminal shows at once, saying "Opening a terminal on <machine>…",
+and becomes the terminal when the machine answers. If it cannot open, the
+reason and "Try again" show there. Its first screen comes back with the start
+(`session.start` with `attach`), so the app does not ask again.
+- **Tests:** `test/browser/global-keys` ("on screen at once"),
+  `test/terminal-browser`, `test/session-driver` ("numbered by the machine").
+
 ## The owner's own terminal panes
 - **Traps:** the private copy sees the owner's real herdr panes (`rpc
   session.list` ids like `pane:wD:p1`, marked `adopted`). Never open, type

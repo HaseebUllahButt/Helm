@@ -46,12 +46,19 @@ test('Bowser steps map without changing existing kind actions', () => {
   assert.equal(normalizeAction({ back: true }).kind, 'back');
   assert.equal(normalizeAction({ check: 'Done', expect: false }).expect, false);
   assert.equal(normalizeAction({ actions: [] }).kind, 'batch');
+  assert.deepEqual(normalizeAction({ evaluate: 'document.title' }), { evaluate: 'document.title', kind: 'evaluate', script: 'document.title' });
+  assert.equal(normalizeAction({ script: '1' }).kind, 'evaluate');
+  assert.equal(normalizeAction({ wait: '.done' }).selector, '.done');
+  assert.equal(normalizeAction({ upload: 'File', files: ['a.txt'] }).target, 'File');
+  assert.equal(normalizeAction({ resize: { width: 390, height: 844 } }).width, 390);
+  assert.equal(normalizeAction({ dialog: 'accept' }).accept, true);
+  for (const kind of ['forward', 'reload', 'console', 'network']) assert.equal(normalizeAction({ [kind]: true }).kind, kind);
   assert.throws(() => normalizeAction({ scroll: 'sideways' }));
   assert.throws(() => normalizeAction({ check: 'Done', expect: 'false' }));
 });
 test('read-only classification checks every step and keeps all mutation kinds blocked', () => {
   for (const step of [{ goto: 'example.com' }, { back: true }, { check: 'Done' }, { wait_for: 'Done' }, { kind: 'look' }, { kind: 'screenshot' }]) assert.ok(readOnlyAction({ actions: [step] }));
-  for (const step of [{ click: 'Send' }, { type: 'Ada', into: 'Name' }, { hover: 'Name' }, { select: 'Country', option: 'Canada' }, { key: 'Enter' }, { scroll: 'down' }, { kind: 'evaluate', script: '1' }, { kind: 'reload' }, { kind: 'dialog' }]) assert.equal(readOnlyAction({ actions: [{ check: 'Done' }, step] }), false);
+  for (const step of [{ click: 'Send' }, { type: 'Ada', into: 'Name' }, { hover: 'Name' }, { select: 'Country', option: 'Canada' }, { key: 'Enter' }, { scroll: 'down' }, { kind: 'evaluate', script: '1' }, { evaluate: '1' }, { reload: true }, { dialog: 'accept' }, { kind: 'reload' }, { kind: 'dialog' }]) assert.equal(readOnlyAction({ actions: [{ check: 'Done' }, step] }), false);
   assert.equal(readOnlyAction({ kind: 'wait', selector: 'input' }), false, 'existing kind permissions stay unchanged');
 });
 test('flows fill nested values, require every parameter, and save only successful templates privately', async () => {

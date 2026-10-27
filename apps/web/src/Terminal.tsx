@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal as Xterm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type { Client } from './client';
+import { localTerminalUrl, terminalLocalLinks } from './terminalLinks';
+import { takeFirstScreen } from './startingTerminals';
 
 /**
  * The keys a phone keyboard does not have, as the bytes a keyboard sends.
@@ -104,7 +106,11 @@ export function Terminal({ client, env, sessionId }: {
   useEffect(() => {
     if (!host.current) return;
 
+    const openLocal = (url: string) => {
+      client.rpc(env, 'browser.openApp', { id: sessionId, url }, 60_000).catch(() => setNote('This app stopped or does not belong to this chat.'));
+    };
     const xterm = new Xterm({
+      linkHandler: { activate: (_event, text) => { const url = localTerminalUrl(text); if (url) openLocal(url); else window.open(text, '_blank', 'noopener,noreferrer'); } },
       fontSize: 13,
       lineHeight: 1.15,
       fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace',
@@ -120,6 +126,7 @@ export function Terminal({ client, env, sessionId }: {
         brightBlue: '#a5c4ff', brightMagenta: '#d8b4fe', brightCyan: '#a5f3fc', brightWhite: '#ffffff',
       },
     });
+    xterm.registerLinkProvider({ provideLinks: (y, callback) => callback(terminalLocalLinks(xterm, y).map(link => ({ ...link, activate: () => openLocal(link.url) }))) });
     term.current = xterm;
     const fit = new FitAddon();
     xterm.loadAddon(fit);
@@ -143,7 +150,9 @@ export function Terminal({ client, env, sessionId }: {
     let seen = '';
     let stopped = false;
     let isPty = false;
-    const watcher = globalThis.crypto?.randomUUID?.() ?? `terminal-${Date.now()}-${Math.random()}`;
+    // A terminal just opened from here brought its first screen with it.
+    const first = takeFirstScreen(sessionId);
+    const watcher = first?.watcher ?? globalThis.crypto?.randomUUID?.() ?? `terminal-${Date.now()}-${Math.random()}`;
 
     const show = (text: string, reset: boolean) => {
       if (reset) {
@@ -234,7 +243,15 @@ export function Terminal({ client, env, sessionId }: {
       client.rpc(env, 'session.resize', { id: sessionId, cols, rows }, 10_000).catch(() => {});
     });
 
-    attach();
+    if (first) {
+      isPty = true;
+      show(first.text, true);
+      for (const piece of first.later) show(piece.text, piece.reset);
+      // It was opened at a guess of our size; now the real one is known.
+      if (xterm.cols !== first.cols || xterm.rows !== first.rows) {
+        client.rpc(env, 'session.resize', { id: sessionId, cols: xterm.cols, rows: xterm.rows }, 10_000).catch(() => {});
+      }
+    } else attach();
     // The renew keeps a watching viewer registered, so output stops being
     // pushed to a phone that has gone away.
     const renew = setInterval(() => attach(true), 25_000);

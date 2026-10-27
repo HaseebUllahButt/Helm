@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
@@ -130,7 +131,12 @@ export function useDictation({ transcribe, onText }: {
   const audioCtx = useRef<AudioContext | null>(null);
   /** Loudest window seen while recording, as RMS - see SILENCE_RMS. */
   const loudest = useRef(0);
-  const [level, setLevel] = useState(0);
+  /**
+   * The mic button, which breathes with the voice (`--lvl`). Written here
+   * each frame, not kept as state: state redrew the whole composer sixty
+   * times a second for as long as the recording ran.
+   */
+  const meter = useRef<HTMLButtonElement | null>(null);
 
   /**
    * Letting go of the microphone matters: while a track is live the browser
@@ -146,7 +152,7 @@ export function useDictation({ transcribe, onText }: {
     audioCtx.current?.close().catch(() => {});
     audioCtx.current = null;
     setSeconds(0);
-    setLevel(0);
+    meter.current?.style.removeProperty('--lvl');
   }, []);
 
   const stop = useCallback(() => {
@@ -164,7 +170,7 @@ export function useDictation({ transcribe, onText }: {
       // re-asked from inside the page - so say which of the two it was.
       setError(e?.name === 'NotAllowedError'
         ? 'The browser blocks the microphone for this site.'
-        : e?.name === 'NotFoundError' ? 'This device has no microphone.' : e?.message || 'Helm cannot use the microphone.');
+        : e?.name === 'NotFoundError' ? 'This device has no microphone.' : errorMessage(e, { fallback: 'Helm cannot use the microphone.' }));
       return;
     }
     const mime = pickFormat();
@@ -188,13 +194,14 @@ export function useDictation({ transcribe, onText }: {
       ctx.createMediaStreamSource(stream).connect(analyser);
       const buf = new Float32Array(analyser.fftSize);
       const sample = () => {
-        if (!audioCtx.current) return;
+        // A newer recording has its own loop; this one ends with its context.
+        if (audioCtx.current !== ctx) return;
         analyser.getFloatTimeDomainData(buf);
         let sum = 0;
         for (let i = 0; i < buf.length; i += 1) sum += buf[i] * buf[i];
         const rms = Math.sqrt(sum / buf.length);
         if (rms > loudest.current) loudest.current = rms;
-        setLevel(rms);
+        meter.current?.style.setProperty('--lvl', String(Math.min(1, rms * 6)));
         requestAnimationFrame(sample);
       };
       requestAnimationFrame(sample);
@@ -225,7 +232,7 @@ export function useDictation({ transcribe, onText }: {
           const text = (await transcribe(blob, type)).trim();
           if (text) onText(text); else setError('Helm heard no speech.');
         } catch (e: any) {
-          setError(e?.message || 'Helm cannot convert the speech to text.');
+          setError(errorMessage(e, { fallback: 'Helm cannot convert the speech to text.' }));
         } finally { setState('idle'); }
       } finally { stopTiming?.(); }
     };
@@ -248,5 +255,5 @@ export function useDictation({ transcribe, onText }: {
   // A view that goes away mid-recording must not leave the microphone on.
   useEffect(() => () => { try { rec.current?.stop(); } catch { /* already stopped */ } release(); }, [release]);
 
-  return { state, error, seconds, level, start, stop, toggle, clearError: () => setError('') };
+  return { state, error, seconds, meter, start, stop, toggle, clearError: () => setError('') };
 }

@@ -88,10 +88,10 @@ export function StartingChatView({ client, env, startId, onBack }: {
       {/* The same page an empty chat shows, so nothing moves once it is up. */}
       {!message && (
         <EmptyChat cwd={chat.folder ?? undefined} quick={!chat.folder} machine={env.name} agent={chat.agent}
-          note={!failed && <span className="starting-line" role="status"> · <Icon name="think" size={12} className="tspin" />starting…</span>} />
+          note={!failed && <span className="starting-line" role="status"> · <Icon name="think" size={12} />starting…</span>} />
       )}
       <Transcript turns={turns} status="idle" loaded empty="" onWithdraw={failed || !message || chat.session ? undefined : () => unsendChat(startId)} />
-      {message && !failed && <p className="starting-note" role="status"><Icon name="think" size={12} className="tspin" />Sends as soon as {chat.agent} is ready.</p>}
+      {message && !failed && <p className="starting-note" role="status"><Icon name="think" size={12} />Sends as soon as {chat.agent} is ready.</p>}
       <Composer
         draft={draft} setDraft={setDraft} engine={chat.engine} keys={false}
         canAttach={false} statusLine={<LimitsLine windows={limits} account={chat.profileId} />}

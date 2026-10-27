@@ -16,10 +16,12 @@ export function useWide() {
 /** A column beside the chat on a wide screen, or a full screen on a phone.
  * Drag its left edge to set its width. Double-click to use the default width.
  */
-export function SideDock({ label, widthKey, className, share = 0.45, onClose, children }: {
+export function SideDock({ label, widthKey, className, share = 0.45, escapeCloses = false, onClose, children }: {
   label: string; widthKey: string; className: string;
   /** How much of the room it takes before the owner drags it. */
   share?: number;
+  /** Escape anywhere in the chat closes the column too, not only the phone sheet. */
+  escapeCloses?: boolean;
   onClose: () => void; children: ReactNode;
 }) {
   const wide = useWide();
@@ -37,6 +39,20 @@ export function SideDock({ label, widthKey, className, share = 0.45, onClose, ch
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [wide]);
+  // Beside the chat, Escape closes it from anywhere, unless something else
+  // wants the key: a dialog, an open menu, or a terminal.
+  // On window, so every handler on the page has had its turn first.
+  useEffect(() => {
+    if (!wide || !escapeCloses) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+      if (document.querySelector('[aria-modal="true"], [aria-haspopup][aria-expanded="true"]')) return;
+      if ((e.target as HTMLElement).closest?.('.xterm')) return;
+      e.preventDefault(); close.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [wide, escapeCloses]);
   // The chat makes room through its own padding; the dock sits in that gap.
   useLayoutEffect(() => {
     const main = box.current?.parentElement;

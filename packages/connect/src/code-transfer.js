@@ -30,6 +30,7 @@ import { promisify } from 'node:util';
 import { brotliCompressSync, brotliDecompressSync, constants as zlib } from 'node:zlib';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { HELM_DIR, expand, HOME } from './paths.js';
+import { Worker } from 'node:worker_threads';
 
 const KEY_FILE = join(HELM_DIR, 'code_x25519');
 const SIGN_KEY_FILE = join(HELM_DIR, 'code_ed25519');
@@ -61,7 +62,7 @@ const SECRET_NAME = /^(?:\.env(?!\.(?:example|sample|template)$)(?:\..*)?|\.npmr
 const SECRET_DIR = /^(?:\.ssh|\.aws|\.azure|\.config|\.docker|\.kube|\.gnupg|\.terraform)$/i;
 const ENV_NAME = /^\.env(?:\..+)?$/i;
 
-const b64 = (value) => Buffer.from(value).toString('base64url');
+const b64 = (value) => (Buffer.isBuffer(value) ? value : Buffer.from(value)).toString('base64url');
 const unb64 = (value) => Buffer.from(String(value), 'base64url');
 const asB64 = (value, max = MAX_SNAPSHOT_BYTES * 2) =>
   typeof value === 'string' && value.length > 0 && value.length <= max
@@ -269,6 +270,82 @@ export function verifyCodeKeyProof(targetCodePubkey, secret, response) {
     throw new Error('the machine did not prove it holds the pinned code key');
   }
   return true;
+}
+
+// Keep file reads, packing, and encryption off the daemon's main loop.
+// No inline fallback: a failed worker must fail the transfer visibly.
+function prepareInWorker(operation, args) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./code-transfer-worker.js', import.meta.url), {
+      workerData: { operation, args },
+    });
+    worker.once('message', message => {
+      if (message.error) reject(new Error(message.error));
+      else resolve(message.value);
+    });
+    worker.once('error', reject);
+    worker.once('exit', code => reject(new Error(`Code transfer worker stopped (${code}).`)));
+  });
+}
+
+export function createCodeSnapshotAsync(root, options = {}) {
+  // Resolve relative paths before leaving the caller's working directory.
+  return prepareInWorker('snapshot', [resolve(expand(root || process.cwd())), options]);
+}
+
+export function sealCodeSnapshotAsync(snapshot, targetCodePubkey, handoffId) {
+  return prepareInWorker('seal', [snapshot, targetCodePubkey, handoffId]);
+}
+
+/**
+ * Keep captured file bytes in one worker until the caller finishes its checks.
+ * `snapshot` contains the original metadata and file entries without `data`;
+ * only `seal` can use the captured bytes. Always stop the worker on return,
+ * including omitted-file review, invalid invitations, and caller failures.
+ * Existing snapshot/seal helpers retain their full-snapshot contract.
+ */
+export async function withCodeSnapshotAsync(root, options, use) {
+  const worker = new Worker(new URL('./code-transfer-worker.js', import.meta.url), {
+    workerData: {
+      operation: 'capture', args: [resolve(expand(root || process.cwd())), options],
+    },
+  });
+  let pending;
+  let failure;
+  let sealed = false;
+  const fail = error => {
+    failure = error;
+    if (pending) { pending.reject(error); pending = null; }
+  };
+  worker.on('error', fail);
+  worker.on('exit', code => fail(new Error(`Code transfer worker stopped (${code}).`)));
+  worker.on('message', message => {
+    if (message.error) { fail(new Error(message.error)); return; }
+    if (pending) { pending.resolve(message.value); pending = null; }
+  });
+  const receive = () => new Promise((resolve, reject) => {
+    if (failure) { reject(failure); return; }
+    pending = { resolve, reject };
+  });
+  try {
+    const snapshot = await receive();
+    return await use({
+      snapshot,
+      seal: async (targetCodePubkey, handoffId) => {
+        if (sealed) throw new Error('Code snapshot was already sealed.');
+        sealed = true;
+        const result = receive();
+        try {
+          if (!failure) worker.postMessage({ args: [targetCodePubkey, handoffId] });
+        } catch (error) {
+          fail(error);
+        }
+        return result;
+      },
+    });
+  } finally {
+    await worker.terminate();
+  }
 }
 
 /** Encrypt a snapshot to the target's published X25519 public key. */

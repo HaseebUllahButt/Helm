@@ -149,5 +149,8 @@ export async function send(subscription, payload, { timeoutMs = 10_000, subject 
     body,
     signal: AbortSignal.timeout(timeoutMs),
   });
+  // Only the status matters. Release the body even if the service keeps
+  // streaming an error page, so retries do not hold its connections open.
+  await res.body?.cancel().catch(() => {});
   return { ok: res.ok, status: res.status, gone: res.status === 404 || res.status === 410 };
 }

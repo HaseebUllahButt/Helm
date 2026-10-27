@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Client, Environment } from '../client';
 import { Icon } from '../Icon';
@@ -39,7 +40,7 @@ export function usePipeline(client: Client, env: Environment, cwd: string, branc
         const data = await client.rpc<PipelineSnapshot>(env.id, 'git.monitor', { cwd, force: fresh, sessionId }, 90_000);
         if (!data || typeof data.supported !== 'boolean' || !Array.isArray(data.errors)) throw new Error('Update Helm on this machine to monitor GitHub build checks.');
         if (!stale) { setSnapshot(data); setError(''); }
-      } catch (e: any) { if (!stale) setError(e.message || 'Helm cannot load GitHub status.'); }
+      } catch (e: any) { if (!stale) setError(errorMessage(e, { machine: env.name, fallback: 'Helm cannot load GitHub status.' })); }
       finally { busy = false; if (!stale) setLoading(false); }
     };
     void load();
@@ -47,7 +48,7 @@ export function usePipeline(client: Client, env: Environment, cwd: string, branc
     const visible = () => { if (!document.hidden) void load(); };
     document.addEventListener('visibilitychange', visible);
     const off = client.on((id, kind, payload: any) => {
-      if (kind === 'connection') { void load(); return; }
+      if (kind === 'connection') { if (payload?.online) void load(); return; }
       if (id !== env.id) return;
       if (kind === 'git.monitor' && payload.id === sessionId && payload.snapshot?.sha) {
         // A branch switch must not let an older watch overwrite the newly opened checkout.
@@ -55,14 +56,14 @@ export function usePipeline(client: Client, env: Environment, cwd: string, branc
       }
     });
     return () => { stale = true; clearInterval(timer); document.removeEventListener('visibilitychange', visible); off(); };
-  }, [client, env.id, env.online, cwd, branch, head, sessionId, attempt]);
+  }, [client, env.id, env.name, env.online, cwd, branch, head, sessionId, attempt]);
   const watch = async () => {
     if (!sessionId || watchBusy) return;
     setWatchBusy(true);
     try {
       const result = await client.rpc<{ watching: boolean }>(env.id, 'git.watch', { sessionId, on: !snapshot?.watching }, 20_000);
       setSnapshot(s => s ? { ...s, watching: result.watching } : s); setError('');
-    } catch (e: any) { setError(e.message || 'Helm cannot change notifications.'); }
+    } catch (e: any) { setError(errorMessage(e, { machine: env.name, fallback: 'Helm cannot change notifications.' })); }
     finally { setWatchBusy(false); }
   };
   return { snapshot, error, loading, refresh, watch, watchBusy };
@@ -100,7 +101,7 @@ export function Pipeline({ client, env, cwd, sessionId, data, error, loading, re
     try {
       await client.rpc(env.id, 'git.account', { cwd, login }, 20_000);
       setAccounts(value => value ? { ...value, selected: login } : value); refresh(true);
-    } catch (e: any) { setAccountError(e.message || 'Helm cannot select that GitHub account.'); }
+    } catch (e: any) { setAccountError(errorMessage(e, { machine: env.name, fallback: 'Helm cannot select that GitHub account.' })); }
     finally { setAccountBusy(false); }
   };
   const runVersion = data?.runs?.map(r => `${r.id}:${r.attempt}:${r.state}:${r.updatedAt || ''}`).join('|');
@@ -116,7 +117,7 @@ export function Pipeline({ client, env, cwd, sessionId, data, error, loading, re
   const agentWatch = async (enabled: boolean, maxWakes = data?.agentWatch?.maxWakes || 5) => {
     setAgentBusy(true); setAgentError('');
     try { await client.rpc(env.id, 'git.watch', { sessionId, on: true, agent: enabled, maxWakes }, 20000); refresh(); }
-    catch (e: any) { setAgentError(e.message); }
+    catch (e: any) { setAgentError(errorMessage(e)); }
     finally { setAgentBusy(false); }
   };
   const pr = data?.pr;
@@ -138,7 +139,7 @@ export function Pipeline({ client, env, cwd, sessionId, data, error, loading, re
           disabled={watchBusy || !env.online} onClick={watch}><i /></button></div>}
       {sessionId && data?.supported && <div className="pipeline-watch"><div><b>Wake the agent on changes</b>
         {data.agentWatch?.enabled && <label>Wakes per day <input type="number" min={1} max={20} value={data.agentWatch.maxWakes} disabled={agentBusy || !env.online} onChange={e => { const n = Number(e.target.value); if (n >= 1 && n <= 20) void agentWatch(true, n); }} /></label>}
-        {data.agentWatch?.enabled && (data.agentWatch.wakes > 0 || data.agentWatch.lastError) && <p>{data.agentWatch.wakes} today{data.agentWatch.lastError ? ` · ${data.agentWatch.lastError}` : ''}</p>}</div>
+        {data.agentWatch?.enabled && (data.agentWatch.wakes > 0 || data.agentWatch.lastError) && <p>{data.agentWatch.wakes} today{data.agentWatch.lastError ? ` · ${errorMessage(data.agentWatch.lastError, { machine: env.name })}` : ''}</p>}</div>
         <button className={`switch${data.agentWatch?.enabled ? ' on' : ''}`} role="switch" aria-label="Wake agent on GitHub changes" aria-checked={!!data.agentWatch?.enabled} disabled={agentBusy || !env.online} onClick={() => void agentWatch(!data.agentWatch?.enabled)}><i /></button></div>}
     </details>}
     {accountError && <div className="pipeline-notice failure" role="status">{accountError}</div>}
@@ -147,7 +148,7 @@ export function Pipeline({ client, env, cwd, sessionId, data, error, loading, re
     {error && <div className="pipeline-notice failure" role="status">{error}<button className="linkish" onClick={() => refresh()}>Try again</button></div>}
     {loading && !data && <p className="note" role="status">Reading GitHub…</p>}
     {data && !data.supported && !data.errors.length && <p className="note">This project is not on GitHub.</p>}
-    {data?.errors.map((e, i) => <div className="pipeline-notice failure" role="status" key={`${e.section}:${i}`}><b>{e.section}</b> · {e.message}
+    {data?.errors.map((e, i) => <div className="pipeline-notice failure" role="status" key={`${e.section}:${i}`}><b>{e.section}</b> · {errorMessage(e, { machine: env.name })}
       {!!e.retryAt && <span> Retrying at {at(e.retryAt)}.</span>}</div>)}
     {data?.stale && <p className="note">Helm cannot refresh the results. It shows the last results.</p>}
     {data?.unpublished && <div className="pipeline-notice">The pull request uses another commit. Push this commit to run build checks.</div>}

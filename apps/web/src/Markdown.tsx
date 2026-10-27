@@ -30,22 +30,46 @@ function useHighlighting() {
 /**
  * Where a streaming reply's settled part ends: the last blank line that is
  * not inside a code fence. Everything before it is finished markdown that
- * the next token cannot change.
+ * the next token cannot change. Also where a code fence that is still open
+ * starts, with its language, once its first line is complete.
  */
-function settledEnd(text: string): number {
-  let fence: string | null = null, end = 0, at = 0;
+function settledEnd(text: string): { end: number; open: { at: number; lang: string; fence: string } | null } {
+  let fence: string | null = null, end = 0, at = 0, open: { at: number; lang: string; fence: string } | null = null;
   // The last line is still being written: a reply that stops right after a
   // line break must not count the empty line after it, or the settled part
   // shrinks again with the next word.
   for (const line of text.split('\n').slice(0, -1)) {
     const delimiter = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
     if (delimiter) {
-      if (!fence) fence = delimiter[1];
-      else if (delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
+      if (!fence) { fence = delimiter[1]; open = { at, lang: delimiter[2].trim().split(/\s+/)[0].toLowerCase(), fence: delimiter[1] }; }
+      else if (delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length && !delimiter[2].trim()) { fence = null; open = null; }
     } else if (!fence && !line.trim() && at > 0) end = at;
     at += line.length + 1;
   }
-  return end;
+  return { end, open };
+}
+
+/**
+ * An open code block while it streams: the same box the renderer makes, with
+ * the code as plain text. Formatting and colouring it again for every piece
+ * cost a long block hundreds of ms a step; it is done once, when it closes.
+ */
+function liveCodeBlock(lang: string) {
+  const block = document.createElement('div');
+  block.className = 'codeblock';
+  const head = document.createElement('div');
+  head.className = 'codehead';
+  const name = document.createElement('span');
+  name.textContent = lang || 'text';
+  const copy = document.createElement('button');
+  copy.type = 'button'; copy.className = 'copy'; copy.dataset.copy = ''; copy.textContent = 'Copy';
+  head.append(name, copy);
+  const pre = document.createElement('pre');
+  const code = document.createElement('code');
+  code.className = 'hljs';
+  pre.append(code);
+  block.append(head, pre);
+  return { block, code };
 }
 
 /** Sanitised HTML as nodes, ready to add to the box. */
@@ -62,7 +86,11 @@ export const Markdown = memo(function Markdown({ text, className = '', live = fa
   const html = useMemo(() => (live ? '' : render(text)), [text, live, highlighted]);
   // What the box holds now: a finished message's HTML, or for a live reply
   // the settled text already in it and how many of its nodes that made.
-  const shown = useRef<{ html: string } | { settled: string; nodes: number; highlighted: boolean } | null>(null);
+  const shown = useRef<{ html: string } | {
+    settled: string; nodes: number; highlighted: boolean;
+    /** The open code block at the end, if the tail is one: what is in it so far. */
+    open?: { at: number; before: string; body: string; code: HTMLElement };
+  } | null>(null);
 
   // While a reply streams it is re-rendered as text arrives, and a whole
   // parse (marked, highlight.js, DOMPurify) of a long reply is tens of ms on
@@ -80,18 +108,44 @@ export const Markdown = memo(function Markdown({ text, className = '', live = fa
       if (!was || !('html' in was) || was.html !== html) { el.innerHTML = html; shown.current = { html }; }
       return;
     }
-    const cut = settledEnd(text);
+    const { end: cut, open } = settledEnd(text);
     // A finished message going live, another reply, or a highlighter that
     // just arrived: start the box over.
     let now = was && 'settled' in was && was.highlighted === highlighted
       && cut >= was.settled.length && text.startsWith(was.settled) ? was : null;
     if (!now) { el.textContent = ''; now = shown.current = { settled: '', nodes: 0, highlighted }; }
-    while (el.childNodes.length > now.nodes) el.lastChild!.remove();
     if (cut > now.settled.length) {
+      while (el.childNodes.length > now.nodes) el.lastChild!.remove();
+      now.open = undefined;
       el.append(parse(render(text.slice(now.settled.length, cut))));
       now.settled = text.slice(0, cut);
       now.nodes = el.childNodes.length;
     }
+    // A closing fence already typed on the last line ends the block: the
+    // whole-parse path below draws it as the finished block.
+    const lastLine = text.slice(text.lastIndexOf('\n') + 1).trim();
+    const closing = !!open && lastLine.length >= open.fence.length && lastLine === open.fence[0].repeat(lastLine.length);
+    if (open && open.at >= cut && !closing) {
+      const before = text.slice(cut, open.at);
+      const line = text.indexOf('\n', open.at);
+      const body = text.slice(line + 1);
+      const held = now.open;
+      // The same block, grown at the end: add only the new code.
+      if (held && held.at === open.at && held.before === before && body.startsWith(held.body)) {
+        if (body.length > held.body.length) held.code.append(body.slice(held.body.length));
+        held.body = body;
+        return;
+      }
+      while (el.childNodes.length > now.nodes) el.lastChild!.remove();
+      if (before) el.append(parse(render(before)));
+      const { block, code } = liveCodeBlock(open.lang);
+      code.textContent = body;
+      el.append(block);
+      now.open = { at: open.at, before, body, code };
+      return;
+    }
+    while (el.childNodes.length > now.nodes) el.lastChild!.remove();
+    now.open = undefined;
     el.append(parse(render(text.slice(cut))));
   }, [text, live, html, highlighted]);
 

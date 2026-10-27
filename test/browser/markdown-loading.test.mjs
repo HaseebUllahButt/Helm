@@ -145,3 +145,26 @@ test('a live reply leaves its finished paragraphs alone while the end grows', as
   await page.evaluate(text => window.showMarkdown(text), reply);
   assert.equal(await page.locator('.md').innerHTML(), streaming.replace(' data-kept="yes"', ''));
 });
+
+test('a growing open code block gets only the new code, and is coloured once it closes', async t => {
+  const page = await pageFor(t, route => route.fulfill({ contentType: 'text/javascript', body: files.get(new URL(route.request().url()).pathname) }));
+  await page.evaluate(() => window.showMarkdown('warm up\n\n```js\nconst a = 1;\n```', false));
+  await page.waitForFunction(() => document.querySelector('code.language-js'));
+  let text = 'Here:\n\n```js\n';
+  await page.evaluate(t => window.showMarkdown(t, true), text);
+  await page.evaluate(() => { window.liveCode = document.querySelector('.codeblock code'); });
+  for (let i = 0; i < 200; i++) {
+    text += `const value${i} = ${i};\n`;
+    await page.evaluate(t => window.showMarkdown(t, true), text);
+  }
+  const live = await page.evaluate(() => ({
+    same: document.querySelector('.codeblock code') === window.liveCode,
+    lines: document.querySelector('.codeblock code').textContent.split('\n').length,
+    coloured: !!document.querySelector('.codeblock code span'),
+  }));
+  assert.deepEqual(live, { same: true, lines: 201, coloured: false }, 'the same box grows; no colouring while it is open');
+  text += '```\n\nDone.';
+  await page.evaluate(t => window.showMarkdown(t, true), text);
+  assert.ok(await page.evaluate(() => !!document.querySelector('.codeblock code.language-js span')), 'coloured once closed');
+  assert.doesNotMatch(await page.locator('.md').innerText(), /```/);
+});

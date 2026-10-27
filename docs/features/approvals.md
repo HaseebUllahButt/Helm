@@ -16,6 +16,19 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 - **Tests:** `test/browser/composer-card`, `child-requests`;
   `test/local-answer`, `driver-acp`, `driver-claude`, `driver-codex`.
 
+## Codex reviews
+- **Rule:** Select **Codex reviews** for one chat. Keep the existing defaults
+  for new chats and helpers. Use the same project limits as **Ask before acting**.
+- **Proof:** In a private copy, use a fake Codex account that emits
+  `item/autoApprovalReview/started` and `item/autoApprovalReview/completed`.
+  Select the mode, send a message, and open the steps. Check **Codex approved**.
+  A denied step shows its reason and **Allow anyway**. Press it and check that
+  `thread/approveGuardianDeniedAction` receives the same action and chat ID.
+- **Trap:** **Allow anyway** permits one retry. It does not mean the action ran.
+  A denial is already final for that attempt, so its card must not stop a live turn.
+- **Tests:** `test/driver-codex`, `native-codex`, `modes`, `session-settings`,
+  `events`; `test/browser/codex-review`.
+
 ## Questions
 - **Not yet driven;** the fake agent never asks questions, so use a real
   chat you made. To look at the card alone, run `test/browser/composer-card`
@@ -35,8 +48,16 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 - **Tests:** `test/browser/sidebar-shelves`, `chat-home`; `test/seen-sync`.
 
 ## Alerts
-- **Not yet driven;** the hidden browser blocks notifications. For the
-  in-app pop-up, leave a fake-ask chat waiting and open a second chat.
+- **Rules:** the pop-up and system notices lead with the chat's name. Only a
+  command shown whole gets "Allow once" in the pop-up; anything cut, a file
+  change or a tool opens the chat. A system notice may carry a question or
+  the first line of a finished reply, never a command, address or path.
+- **Prove the pop-up (driven):** open one chat, then start another with
+  `$V rpc session.start` in `"mode":"default"` on a Claude account whose
+  `cmd` replays a fixture with a Bash `can_use_tool` (copy
+  `test/fixtures/claude/always.ndjson` and change the tool), and send it a
+  message with `$V rpc session.input`. It closes after 12 s.
+- **Not driven:** system notices; the hidden browser blocks them.
 - **Traps:** a tap can be lost while the app shows its sign-in screen.
 - **Tests:** `test/notify`, `desktop-notify`, `notification-route`, `push`;
   `test/browser/git-notifications`.

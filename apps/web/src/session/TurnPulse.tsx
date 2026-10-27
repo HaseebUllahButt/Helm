@@ -8,20 +8,7 @@ import { openInCanvas } from './Canvas';
 /** Lets the changed-files card ask the transcript to open and show one step. */
 export const Reveal = createContext<(id: string) => void>(() => {});
 
-// Short and friendly, like the CLI's own. Seven is coprime with twenty, so
-// stepping by seven walks all of them before one comes round again.
-const VERBS = [
-  'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working',
-  'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working', 'Working',
-];
-const VERB_SECONDS = 5;
-
-/** Same turn, same verbs in the same order - nothing flickers on a re-render. */
-const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
-export const verbAt = (turnId: string, elapsedSeconds: number) =>
-  VERBS[(hash(turnId) + Math.floor(elapsedSeconds / VERB_SECONDS) * 7) % VERBS.length];
-
-/** "Working for 42s · Pondering…": the one calm line that says the agent is busy. */
+/** "Working for 42s": the one calm line that says the agent is busy. Its clock is the only thing that moves. */
 export function WorkingLine({ turn, blocked = false }: { turn: Turn; blocked?: boolean }) {
   const now = useNow(1000);
   if (blocked) return <div className="working quiet">Waiting for you</div>;
@@ -33,7 +20,6 @@ export function WorkingLine({ turn, blocked = false }: { turn: Turn; blocked?: b
       {start
         ? <span className="working-for">Working for <span className="working-time">{elapsed < 1 ? '0s' : seconds(elapsed * 1000)}</span></span>
         : <span className="working-for">Working</span>}
-      <span className="working-verb shine">{verbAt(turn.id, elapsed)}…</span>
     </div>
   );
 }

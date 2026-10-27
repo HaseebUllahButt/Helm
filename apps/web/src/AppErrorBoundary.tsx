@@ -10,6 +10,8 @@ export class AppErrorBoundary extends Component<{
 
   static getDerivedStateFromError(error: Error) { return { error }; }
 
+  componentDidCatch(error: Error) { console.warn('Helm screen failed:', error); }
+
   render() {
     const error = this.state.error;
     if (!error) return this.props.children;
@@ -17,14 +19,13 @@ export class AppErrorBoundary extends Component<{
     return <main className="auth" role="alert">
       <div className="auth-card">
         <div className="auth-brand">
-          <img src="/icon.svg" alt="" />
+          <img src="/icon.svg?v=7" alt="" />
           <h1>{missingFile ? 'Reload Helm' : 'Helm cannot open this screen.'}</h1>
           <p>{missingFile
             ? 'Helm cannot load an app file. Reload Helm to get the latest version.'
             : 'Reload Helm to try again.'}</p>
         </div>
         <button className="primary" onClick={this.props.reload ?? reloadApp}>Reload Helm</button>
-        <details className="note"><summary>Error details</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{error.message}</pre></details>
       </div>
     </main>;
   }

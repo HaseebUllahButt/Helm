@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync, mkdirSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, appendFileSync, mkdirSync, statSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -292,6 +292,35 @@ test('the index survives a restart', async () => {
   assert.equal(second.scan.parsed, 0, 'a restored index must not re-parse the transcripts');
   await Promise.all(saves);
   rmSync(m.dir, { recursive: true, force: true });
+});
+
+test('a transcript the CLI deleted keeps its counts, and a restored one counts once', async () => {
+  // Claude Code deletes transcripts after 30 days. Forgetting their counts
+  // made "All" only ever show the last month.
+  const m = machine();
+  const indexPath = join(m.dir, 'usage-index.json');
+  const reader = new UsageReader({ indexPath });
+  const before = await reader.report(m.profiles, {});
+  const file = join(m.profiles[0].env.CLAUDE_CONFIG_DIR, 'projects', '-work-repo', 's.jsonl');
+  const kept = readFileSync(file);
+  rmSync(file);
+
+  const after = await reader.report(m.profiles, {});
+  assert.equal(after.totals.turns, before.totals.turns, 'a deleted transcript is still usage');
+  assert.equal(after.totals.costUsd, before.totals.costUsd);
+  await reader.persist();
+  const restarted = await new UsageReader({ indexPath }).report(m.profiles, {});
+  assert.equal(restarted.totals.turns, before.totals.turns, 'the deleted counts survive a restart');
+
+  writeFileSync(file, kept);
+  const back = await reader.report(m.profiles, {});
+  assert.equal(back.totals.turns, before.totals.turns, 'a restored transcript must not count twice');
+  rmSync(m.dir, { recursive: true, force: true });
+});
+
+test('Sonnet 5.5 and Haiku 5.5 have prices', () => {
+  assert.ok(priceBucket('claude', 'claude-sonnet-5-5', { input: 1e6 }, '2026-10-24').total > 0);
+  assert.ok(priceBucket('claude', 'claude-haiku-5-5', { input: 1e6 }, '2026-10-24').total > 0);
 });
 
 test('an unreadable account does not lose the others', async () => {

@@ -128,7 +128,7 @@ test('a chat that already has messages never shows the greeting',async t=>{
   assert.equal(await page.locator('.empty-chat').count(),0);
 });
 
-for (const width of [1280,390]) test(`the header is a path with the title last to be cut: folder / title, machine and cost beneath, at ${width}px`,async t=>{
+for (const width of [1280,390]) test(`the header is the title and what needs a look; where the chat runs and its cost are a hover and the ⋯ menu away, at ${width}px`,async t=>{
   const page=await pageFor(t,width);
   await page.evaluate(()=>window.open('long'));
   const bar=page.locator('.session-bar');
@@ -136,15 +136,18 @@ for (const width of [1280,390]) test(`the header is a path with the title last t
   const title=bar.locator('h1');
   assert.equal(await title.innerText(),LONG);
   assert.equal(await title.getAttribute('title'),LONG,'hovering shows the whole title');
-  assert.equal(await bar.locator('.crumb-folder').innerText(),'helm-mobile-app');
-  const sub=(await bar.locator('.sub').innerText()).replace(/\s+/g,' ');
-  assert.match(sub,/^Laptop · \$15\.29/,'machine first, then the cost');
-  // The title keeps more room than the folder.
-  const room=await bar.evaluate(el=>({folder:el.querySelector('.crumb-folder').getBoundingClientRect().width,title:el.querySelector('h1').getBoundingClientRect().width}));
-  assert.ok(room.title>room.folder*2,`the title gets the room (${JSON.stringify(room)})`);
+  assert.equal(await bar.locator('.crumb-folder, .mark').count(),0,'no folder or agent logo beside the title');
+  assert.equal(await bar.locator('.sub').count(),0,'no second line while nothing needs a look');
+  const where=await bar.locator('.titles').getAttribute('title');
+  assert.match(where,/^Laptop · .*helm-mobile-app · \$15\.29$/,'the hover note: machine, folder, cost');
   assert.ok(await noSideways(page),'no sideways scroll');
-  for (const name of ['Agents','more','Back']) assert.ok(await bar.getByRole('button',{name,exact:true}).isVisible(),`${name} is still there`);
+  for (const name of ['Agents','Canvas','more','Back']) assert.ok(await bar.getByRole('button',{name,exact:true}).isVisible(),`${name} is in the bar`);
   await shot(page,`header-long-title-${width}.png`);
+  await bar.getByRole('button',{name:'more',exact:true}).click();
+  const menu=bar.locator('.menu');
+  await menu.getByRole('button',{name:'Rename chat'}).waitFor();
+  for (const name of [/^Open canvas/,/^Open browser/,/^Agents/]) assert.equal(await menu.getByRole('button',{name}).count(),0,'the bar has it, the menu does not repeat it');
+  assert.equal(await menu.locator('.menu-facts').innerText(),where);
 });
 
 test('double-clicking the title renames the thread; Escape leaves it alone',async t=>{

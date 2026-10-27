@@ -108,7 +108,7 @@ test('opening the website and installed app inherits the terminal join without p
   assert.equal(await app.evaluate(() => window.auth.deviceId), auth.deviceId);
 
   await page.evaluate(() => window.showAdd());
-  await page.getByLabel('Computer kind').selectOption('nas');
+  await page.getByLabel('Computer kind').selectOption('vm');
   await page.getByRole('button', { name: 'Create join command' }).click();
   await page.locator('pre.snippet').waitFor();
   const command = await page.locator('pre.snippet').innerText();
@@ -116,7 +116,7 @@ test('opening the website and installed app inherits the terminal join without p
   assert.ok(requests.includes('/api/invite'), 'local desktop mints at the reachable public home');
   const code = new URL(command.slice(11, -1)).hash.slice(6);
   const { q } = await import('@helm/relay/db');
-  assert.equal(q.inviteGet.get(code).role, 'nas');
+  assert.equal(q.inviteGet.get(code).role, 'vm');
   const phoneLink = await page.evaluate(() => window.localClient().newPassword());
   assert.equal(phoneLink.base, remoteOrigin, 'phone links also use the home that minted them');
   await page.evaluate(base => window.localClient().closePairing(base), phoneLink.base);
