@@ -44,6 +44,11 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   // The agent opened a tab here: list it and follow it.
   useEffect(() => client.on((id, kind, payload: any) => {
     if (id !== env.id || kind !== 'browser.tab' || payload?.id !== session.id) return;
+    if (payload.tab) {
+      setTabs(current => current.some(t => t.id === payload.tab.id) ? current.map(t => t.id === payload.tab.id ? payload.tab : t) : [...current, payload.tab]);
+      setChosen(current => current || payload.tab.id);
+      return;
+    }
     void refresh().then(() => { if (!payload.viewer) setChosen(payload.tabId); }).catch(() => {});
   }), [client, env.id, session.id, refresh]);
   useEffect(() => { if (!typingAddress.current) setAddress(!tab?.url || tab.url === 'about:blank' || tab.url.startsWith('chrome://') ? '' : tab.url); }, [chosen, tab?.url]);
@@ -67,7 +72,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   };
   const openTab = async (url?: string) => {
     setBusy(true); setError('');
-    try { const result = await call<{ tab: Tab }>('open', { viewer: viewer.current, ...(url ? { url } : {}) }); await refresh(); setChosen(result.tab.id); }
+    try { const result = await call<{ tab: Tab }>('open', { viewer: viewer.current, ...(url ? { url } : {}) }); setTabs(current => current.some(t => t.id === result.tab.id) ? current : [...current, result.tab]); setChosen(result.tab.id); }
     catch (e: any) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
   const closeTab = async (id: string) => { try { await call('close', { tabId: id }); await refresh(); } catch (e: any) { setError(errorMessage(e)); } };

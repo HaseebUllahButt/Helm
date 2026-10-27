@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { HELM_DIR } from './paths.js';
 import { normalizeAction, readOnlyAction, resolveTarget } from './browser-targets.js';
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
+import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } from './browser-identity.js';
 import * as browserLogins from './browser-logins.js';
 import { canOpenWindow, launchWindow as openWindow, windowProfile, windowName, focusWindow, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
 
@@ -43,18 +44,21 @@ export const plainNavError = (error, url) => {
   return `Could not open ${host}${code ? ` (${code.slice(4).toLowerCase().replace(/_/g, ' ')})` : ''}.`;
 };
 const executable = () => process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM || ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
-const LAUNCH = { headless: true, args: ['--disable-gpu', '--disk-cache-size=33554432'], timeout: 15000 };
-// Playwright's headless shell starts ~3x faster and uses about half the memory of full Chromium; a pinned path or a missing shell falls back to the system browser.
+const LAUNCH = { headless: true, channel: 'chromium', ignoreDefaultArgs: ignoredBrowserArgs, args: [...browserArgs, '--disk-cache-size=33554432', '--disable-component-update'], timeout: 15000 };
+// Full Chromium keeps the same plugins, languages and window.chrome as a window.
 async function launchChromium() {
-  const { chromium } = await import('playwright'), pinned = process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM;
-  if (pinned) return chromium.launch({ ...LAUNCH, executablePath: pinned });
-  try { return await chromium.launch(LAUNCH); }
-  catch (error) { const system = executable(); if (!system) throw error; return chromium.launch({ ...LAUNCH, executablePath: system }); }
+  const { chromium } = await import('patchright-core'), pinned = process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM;
+  let browser;
+  if (pinned) browser = await chromium.launch({ ...LAUNCH, executablePath: pinned });
+  else try { browser = await chromium.launch(LAUNCH); }
+  catch (error) { const system = executable(); if (!system) throw error; browser = await chromium.launch({ ...LAUNCH, executablePath: system }); }
+  try { browser.helmIdentity = await browserIdentity(browser); browser.helmPatched = true; return browser; }
+  catch (error) { await browser.close(); throw error; }
 }
 // Playwright keeps its own Chromium here unless told otherwise.
 const playwrightBrowsers = () => process.env.PLAYWRIGHT_BROWSERS_PATH
   || join(homedir(), process.platform === 'darwin' ? 'Library/Caches/ms-playwright' : process.platform === 'win32' ? 'AppData/Local/ms-playwright' : '.cache/ms-playwright');
-const hasPlaywrightChromium = () => { try { return readdirSync(playwrightBrowsers()).some(name => name.startsWith('chromium')); } catch { return false; } };
+const hasPlaywrightChromium = () => { try { return readdirSync(playwrightBrowsers()).some(name => name.startsWith('chromium-')); } catch { return false; } };
 const bowserBin = () => process.env.HELM_BOWSER_PATH || (process.env.PATH || '').split(':').map(p => join(p, 'bowser-computer')).find(existsSync);
 const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 const MAX_THREAD_DOWNLOAD_BYTES = 256 * 1024 * 1024;
@@ -105,7 +109,8 @@ export class BowserBridge {
  * is one shared hidden Chromium. Nothing starts until a tab is used.
  */
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, bowser = new BowserBridge(), idleMs = 10 * 60000, windowIdleMs = 30 * 60000, actionTimeoutMs = 45000, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow(), ownerQuietMs = 2500 } = {}) {
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, bowser = new BowserBridge(), idleMs = 10 * 60000, windowIdleMs = 30 * 60000, actionTimeoutMs = 45000, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow(), ownerQuietMs = 2500, changed = () => {} } = {}) {
+    this.changed = changed;
     this.launchWindow = launchWindow; this.canWindow = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
     this.logins = logins; this.loginImports = new Map(); this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.bowser = bowser; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
     this.flows = new BrowserFlows(directory);
@@ -152,9 +157,16 @@ export class BrowserManager {
         if (!seed) { const choice = await this.loginDefault(sessionId); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
         if (seed) { if (!seed.cookies.length && seed.failed) throw new Error(seed.warnings?.[0] || 'Could not copy the default browser logins.'); storageState = { cookies: seed.cookies, origins: [] }; }
       }
-      const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true, ...(storageState ? { storageState } : {}) });
+      // Set the user agent before any popup's first request. Each page also
+      // receives matching client hints before an agent opens its address.
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true, ...(browser.helmIdentity ? { userAgent: browser.helmIdentity.userAgent } : {}), ...(storageState ? { storageState } : {}) });
+      context.helmPatched = !!browser.helmPatched;
       context.setDefaultTimeout(10000); context.setDefaultNavigationTimeout(15000);
-      context.on('page', page => this.register(sessionId, page));
+      context.on('page', page => {
+        const tab = this.register(sessionId, page);
+        tab.prepared = presentAsChrome(page, browser.helmIdentity).then(cdp => { tab.identityCdp = cdp; });
+        void tab.prepared.catch(() => {}); // The open or action request reports it.
+      });
       try { if (seed) await this.saveContext(sessionId, context); } catch (error) { await context.close(); throw error; }
       return context;
     })();
@@ -205,7 +217,11 @@ export class BrowserManager {
     const spare = context.helmSpare; context.helmSpare = null;
     const going = context.helmWindow && url && url !== 'about:blank';
     if (spare && !spare.isClosed() && !going) return spare;
-    if (!going) return context.newPage();
+    if (!going) {
+      const page = await context.newPage();
+      try { await [...this.tabs.values()].find(tab => tab.page === page)?.prepared; return page; }
+      catch (error) { await page.close().catch(() => {}); throw error; }
+    }
     let page; try { page = await this.windowTab(context, url, wait); } catch (error) { if (spare && !spare.isClosed()) context.helmSpare = spare; throw error; }
     if (!page) { if (spare && !spare.isClosed()) return spare; return context.newPage(); }
     if (spare && !spare.isClosed()) await spare.close().catch(() => {});
@@ -267,6 +283,7 @@ export class BrowserManager {
     this.windowContexts.delete(sessionId); this.recovered.delete(sessionId);
     if (this.contexts.has(sessionId) && (await this.contexts.get(sessionId).catch(() => null)) === context) this.contexts.delete(sessionId);
     await this.persistTabs(sessionId);
+    this.changed({ id: sessionId, viewer: 'window' });
   }
   /**
    * Bring the thread's window forward on this machine's screen, opening it
@@ -325,7 +342,7 @@ export class BrowserManager {
   }
   register(sessionId, page) {
     const existing = [...this.tabs.values()].find(t => t.page === page); if (existing) return existing;
-    const tab = { id: id(), sessionId, engine: 'chromium', page, title: '', console: [], network: [], downloads: [], lastUsed: this.now(), dialog: null, window: !!page.context?.().helmWindow };
+    const tab = { id: id(), sessionId, engine: 'chromium', page, title: '', console: [], network: [], downloads: [], lastUsed: this.now(), dialog: null, window: !!page.context?.().helmWindow, patched: !!page.context?.().helmPatched };
     this.tabs.set(tab.id, tab);
     tab.fetching = new Set(); tab.quietAt = 0;
     const changed = () => { tab.quietAt = Date.now(); for (const wake of tab.settleWaiters || []) wake(); };
@@ -348,17 +365,17 @@ export class BrowserManager {
     page.on('response', response => cap(tab.network, { url: response.url().slice(0, 2000), method: response.request().method(), status: response.status() }));
     page.on('requestfailed', request => cap(tab.network, { url: request.url().slice(0, 2000), method: request.method(), error: request.failure()?.errorText }));
     page.on('domcontentloaded', () => {
-      void page.title().then(title => { tab.title = title; }).catch(() => {});
+      void page.title().then(title => { tab.title = title; this.notify(tab); }).catch(() => {});
       // A new page keeps the agent's arrow where it last was, without its label.
       if (tab.window && tab.cursor) void page.evaluate(drawPointer, tab.cursor).catch(() => {});
     });
     // The panel says a tab is loading from the click to the page's load.
     // A download or an empty answer never loads, so it gives up after 20 seconds.
-    const loading = value => { clearTimeout(tab.loadingTimer); if (value) { tab.loadingTimer = setTimeout(() => loading(false), 20000); tab.loadingTimer.unref?.(); } tab.loading = value; };
+    const loading = value => { clearTimeout(tab.loadingTimer); if (value) { tab.loadingTimer = setTimeout(() => loading(false), 20000); tab.loadingTimer.unref?.(); } tab.loading = value; this.notify(tab); };
     page.on('request', request => { if (request.isNavigationRequest() && request.frame() === page.mainFrame()) { loading(true); tab.problem = null; } });
     page.on('requestfailed', request => { if (request.isNavigationRequest() && request.frame() === page.mainFrame()) loading(false); });
     page.on('load', () => { loading(false); this.persistSoon(sessionId); });
-    page.on('framenavigated', frame => { if (frame === page.mainFrame()) tab.pending = null; });
+    page.on('framenavigated', frame => { if (frame === page.mainFrame()) { tab.pending = null; this.notify(tab); } });
     page.on('download', () => loading(false)); page.on('close', () => clearTimeout(tab.loadingTimer));
     page.on('dialog', dialog => { tab.dialog = dialog; });
     page.on('download', download => {
@@ -372,6 +389,7 @@ export class BrowserManager {
     return tab;
   }
   metadata(tab) { const live = tab.page?.url(); return { id: tab.id, engine: tab.engine, url: tab.problem?.url || tab.pending || (live && live !== 'about:blank' ? live : tab.url || live || 'about:blank'), title: tab.title, viewport: tab.page?.viewportSize() || tab.windowSize || { width: 1280, height: 800 }, window: !!tab.window, dialog: tab.dialog ? { type: tab.dialog.type(), message: tab.dialog.message().slice(0, 2000) } : null, downloads: tab.downloads.map(({ path, ...d }) => d), loading: !!tab.loading, problem: tab.problem || null }; }
+  notify(tab) { if (!this.stopping && !tab.page.isClosed?.()) this.changed({ id: tab.sessionId, tabId: tab.id, viewer: 'window', tab: this.metadata(tab) }); }
   discardDownloads(tab) { for (const record of tab.downloads) { record.discarded = true; if (record.path) void rm(record.path, { force: true }).catch(() => {}); } }
   async finishDownload(tab, record) {
     if (record.discarded || this.tabs.get(tab.id) !== tab) { await rm(record.path, { force: true }); return; }
@@ -470,7 +488,7 @@ export class BrowserManager {
       else { tab.url = url; tab.ready = (page.helmGoing ? this.arrive(page, url) : page.goto(url, { waitUntil: 'domcontentloaded' })).then(() => this.persistSoon(sessionId), error => { if (!/ERR_ABORTED|interrupted by another navigation|closed/i.test(error.message)) tab.problem = { url, message: plainNavError(error, url) }; }); }
       await this.persistTabs(sessionId); return { tab: this.metadata(tab) };
     }
-    try { if (url !== 'about:blank') await (page.helmGoing ? this.arrive(page, url) : page.goto(url, { waitUntil: 'domcontentloaded' })); else await this.blank(page); await this.settle(tab); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(await this.look(tab)) }; }
+    try { if (url !== 'about:blank') await (page.helmGoing ? this.arrive(page, url) : page.goto(url, { waitUntil: 'domcontentloaded' })); else await this.blank(page); await this.settle(tab, { navigation: true }); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(await this.look(tab)) }; }
     catch (error) { tab.explicitClose = true; await page.close(); throw /net::ERR_|Timeout \d+ms/.test(error.message) ? new Error(plainNavError(error, url)) : error; }
   }
   get(sessionId, tabId) { this.owner(sessionId); const tab = this.tabs.get(tabId); if (!tab || tab.sessionId !== sessionId) throw new Error('browser tab not found in this thread'); return tab; }
@@ -497,6 +515,7 @@ export class BrowserManager {
       // A page still loading in the background (opened by the owner, or
       // restored after a restart) is ready before an agent reads or acts on it.
       if (!owned && tab.ready) { await tab.ready; tab.ready = null; }
+      await tab.prepared;
       // In a window the owner may be using the page themselves: the agent
       // lets them finish rather than typing over them.
       const shared = tab.window && !owned;
@@ -534,8 +553,9 @@ export class BrowserManager {
       const elements = [], roots = [], seen = new Set();
       const visit = (root, inView = true) => {
         if (seen.has(root)) return; seen.add(root); roots.push(root);
+        const candidates = new Set(root.querySelectorAll(selector));
         for (const el of root.querySelectorAll('*')) {
-          if (elements.length < 300 && (el.matches(selector) || typeof el.onclick === 'function') && visible(el)) elements.push({ el, inView });
+          if (elements.length < 300 && (candidates.has(el) || typeof el.onclick === 'function') && visible(el)) elements.push({ el, inView });
           if (el.shadowRoot && visible(el)) visit(el.shadowRoot, inView);
           if (el.tagName === 'IFRAME' && visible(el)) { try { if (el.contentDocument) { const r = el.getBoundingClientRect(), w = el.ownerDocument.defaultView; visit(el.contentDocument, inView && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth); } } catch {} }
         }
@@ -580,13 +600,13 @@ export class BrowserManager {
     }
     throw new Error('choose a target, element ref, selector, role/name, or x/y coordinates');
   }
-  async settle(tab) {
+  async settle(tab, { navigation = false } = {}) {
     if (tab.engine !== 'chromium' || !tab.fetching || tab.dialog) return;
     const start = Date.now(), deadline = start + 3000;
     // Pictures and adverts can hold the load event back for seconds after the
     // text is there: a page that has fetched nothing for half a second is ready.
     await Promise.race([tab.page.waitForLoadState('load', { timeout: 3000 }).catch(() => {}), this.quiet(tab, deadline, 500, start)]);
-    if (tab.dialog || Date.now() >= deadline) return;
+    if (navigation || tab.dialog || Date.now() >= deadline) return;
     await this.quiet(tab, deadline, 150);
   }
   /** No fetch in flight and none started or ended for `ms`, counted from `since`. */
@@ -608,7 +628,7 @@ export class BrowserManager {
     action = normalizeAction(action);
     const kind = action.kind;
     if (kind === 'look') return { tab: this.metadata(tab), ...(await this.look(tab, action.budget ?? 6000)) };
-    if (kind === 'console') return { entries: tab.console };
+    if (kind === 'console') return this.readConsole(tab);
     if (kind === 'network') return { entries: tab.network };
     if (kind === 'screenshot') return this.capture(tab, action);
     if (kind === 'batch') {
@@ -665,14 +685,16 @@ export class BrowserManager {
     else if (kind === 'upload') {
       const files = await this.uploads(tab, action);
       let target; try { target = await this.target(tab, action); await target.setInputFiles(files.paths); } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
-    } else if (kind === 'evaluate') { const value = await page.evaluate(text(action.script, 20000)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
+    } else if (kind === 'evaluate') { const script = text(action.script, 20000), value = await (tab.patched ? page.evaluate(script, undefined, undefined, false) : page.evaluate(script)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
     else if (kind === 'wait') { integer(action.timeout ?? 10000, 1, 30000); if (action.selector) await page.locator(text(action.selector, 2000)).first().waitFor({ state: action.state || 'visible', timeout: action.timeout ?? 10000 }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: action.timeout ?? 10000 }); }
     else if (kind === 'resize') await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) });
     else if (kind === 'dialog') { if (!tab.dialog) throw new Error('no dialog is open'); const dialog = tab.dialog; tab.dialog = null; action.accept ? await dialog.accept(action.text ?? '') : await dialog.dismiss(); }
     else throw new Error(kind ? `unknown browser action: ${kind}` : `unknown browser action ${JSON.stringify(Object.keys(action))}; use a kind such as goto, click, type, evaluate or wait`);
     // Only agent actions wait for the page to settle and get it back as text.
     const agent = actor === 'agent';
-    if (agent && ['navigate', 'back', 'forward', 'reload', 'click', 'type', 'key', 'select', 'hover', 'scroll', 'drag', 'resize', 'upload', 'dialog', 'wait'].includes(kind)) await this.settle(tab);
+    // Pointer moves and scrolling do not need to wait for unrelated adverts
+    // or analytics. A read still measures the current DOM and layout.
+    if (agent && ['navigate', 'back', 'forward', 'reload', 'click', 'type', 'key', 'select', 'drag', 'resize', 'upload', 'dialog', 'wait'].includes(kind)) await this.settle(tab, { navigation: ['navigate', 'back', 'forward', 'reload'].includes(kind) });
     // Only actions that can change the title ask for it; page loads update it as they finish.
     if (!['hover', 'scroll', 'type', 'resize'].includes(kind)) tab.title = await page.title().catch(() => tab.title);
     return { tab: this.metadata(tab), ...(agent && !inBatch ? await this.look(tab) : {}) };
@@ -701,7 +723,6 @@ export class BrowserManager {
     tab.pointer = { x, y, ...(box ? { box } : {}), action: kind, label: [verb, name && `“${name}”`].filter(Boolean).join(' '), by: kind === 'point' ? 'guide' : 'agent', ...(note ? { note } : {}), seq: tab.pointerSeq, at: this.now() };
     tab.cursor = { x, y };
     await tab.page.evaluate(drawPointer, { ...tab.pointer, guide: kind === 'point' }).catch(() => {});
-    if (kind !== 'point') await new Promise(done => setTimeout(done, 120));
   }
   async bowserAction(tab, action) {
     const kind = action.kind, target = action.ref || action.name || action.selector || action.target;
@@ -736,9 +757,35 @@ export class BrowserManager {
   }
   async capture(tab, { fullPage = false, maxWidth = 1280 } = {}) {
     if (tab.engine === 'bowser') { const result = await this.bowser.call('screenshot', { max_size: maxWidth }); const part = result.content.find(p => p.type === 'image'); if (!part) throw new Error('Bowser did not return a screenshot'); return { image: `data:${part.mimeType};base64,${part.data}` }; }
-    const bytes = await tab.page.screenshot({ type: 'jpeg', quality: 75, fullPage: !!fullPage, scale: 'css', timeout: 10000 });
+    let bytes;
+    if (fullPage) bytes = await tab.page.screenshot({ type: 'jpeg', quality: 75, fullPage: true, scale: 'css', timeout: 10000 });
+    else {
+      // Capture what is visible now. Playwright waits for every web font,
+      // which can hold a screenshot for seconds after the page is readable.
+      const cdp = await (tab.captureCdp ||= tab.page.context().newCDPSession(tab.page));
+      const { x, y, width, height, ratio } = await tab.page.evaluate(() => ({ x: scrollX, y: scrollY, width: innerWidth, height: innerHeight, ratio: devicePixelRatio }));
+      const { data } = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 75, fromSurface: true, captureBeyondViewport: false, clip: { x, y, width, height, scale: 1 / ratio } });
+      bytes = Buffer.from(data, 'base64');
+    }
     if (bytes.length > 3 * 1024 * 1024) throw new Error('screenshot exceeds 3 MiB; capture the viewport instead');
     return { image: `data:image/jpeg;base64,${bytes.toString('base64')}` };
+  }
+  /** Read Chromium's buffered console only when asked. Leaving Runtime on
+   * makes sites inspect logged objects in pages and workers. */
+  async readConsole(tab) {
+    if (!tab.patched) return { entries: tab.console };
+    const cdp = await tab.page.context().newCDPSession(tab.page);
+    const record = message => {
+      if (!tab.console.some(old => old.at === message.at && old.level === message.level && old.text === message.text)) cap(tab.console, message);
+    };
+    cdp.on('Runtime.consoleAPICalled', event => {
+      const message = { level: event.type, text: event.args.map(arg => String(arg.value ?? arg.unserializableValue ?? arg.description ?? arg.type)).join(' ').slice(0, 4000), at: event.timestamp };
+      record(message);
+    });
+    cdp.on('Runtime.exceptionThrown', event => record({ level: 'error', text: String(event.exceptionDetails.exception?.description || event.exceptionDetails.text).slice(0, 4000), at: event.timestamp }));
+    try { await cdp.send('Runtime.enable'); await cdp.send('Runtime.disable'); }
+    finally { await cdp.detach(); }
+    return { entries: tab.console };
   }
   /**
    * Moving the page. The owner sees it load, as in any browser, so their
@@ -770,7 +817,7 @@ export class BrowserManager {
     // that is still open is that tab, closed by the owner.
     if (tab.window) {
       if (this.stopping || tab.page.context?.().helmClosed || !this.orphans?.has(tab.id)) return;
-      this.orphans.delete(tab.id); this.discardDownloads(tab); await this.persistTabs(sessionId); return;
+      this.orphans.delete(tab.id); this.discardDownloads(tab); await this.persistTabs(sessionId); this.changed({ id: sessionId, viewer: 'window' }); return;
     }
     if (this.stopping || !this.browser || this.browser.isConnected?.() === false || !this.orphans?.has(tab.id)) return;
     // The browser is still up: the page closed itself (window.close).

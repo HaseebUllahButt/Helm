@@ -8,6 +8,7 @@ import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { browserArgs, ignoredBrowserArgs } from './browser-identity.js';
 
 /** A screen to open a window on: always on a Mac or Windows, a display on Linux. */
 export const canOpenWindow = (env = process.env, platform = process.platform) =>
@@ -27,10 +28,10 @@ const systemChromium = () => process.env.HELM_WINDOW_CHROMIUM || [
  * (niri: `window-rule { match app-id=r#"^helm-browser"# open-focused false }`).
  */
 export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
-  const { chromium } = await import('playwright');
+  const { chromium } = await import('patchright-core');
   // No component downloads: each chat's profile would fetch its own ~150 MB
   // of speech, DRM and model files, and starting is slower while it does.
-  const args = ['--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', '--disable-component-update', `--class=${name}`];
+  const args = [...browserArgs, '--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', '--disable-component-update', `--class=${name}`];
   if (process.platform === 'linux') args.push('--ozone-platform-hint=auto');
   const running = await attachWindow(chromium, profileDir);
   if (running) return running;
@@ -40,11 +41,11 @@ export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
   // Chromium's own sandbox stays on, so no "--no-sandbox" warning bar either;
   // only a machine where the sandbox cannot start goes without it. A window
   // started this way closes when Helm does.
-  const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ['--enable-automation'], args, timeout: 15000 };
+  const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ignoredBrowserArgs, args, timeout: 15000 };
   const attempts = [...(system ? [{ executablePath: system }, { executablePath: system, chromiumSandbox: false }] : []), {}, { chromiumSandbox: false }];
   let failure;
   for (const extra of attempts) {
-    try { return await chromium.launchPersistentContext(profileDir, { ...options, ...extra }); } catch (error) { failure = error; }
+    try { const context = await chromium.launchPersistentContext(profileDir, { ...options, ...extra }); context.helmPatched = true; return context; } catch (error) { failure = error; }
   }
   throw failure;
 }
@@ -108,6 +109,7 @@ async function connectWindow(chromium, port, timeout) {
   const context = browser.contexts()[0];
   if (!context) { await browser.close().catch(() => {}); throw new Error('Chromium has no window'); }
   context.helmDetach = () => browser.close();
+  context.helmPatched = true;
   return context;
 }
 

@@ -1,6 +1,6 @@
 import { BrowserManager } from './browser.js';
 
-export function createBrowserRoutes({ sessions, manager = new BrowserManager({ session: id => sessions.get(id) }), onOpen = () => {} } = {}) {
+export function createBrowserRoutes({ sessions, onOpen = () => {}, manager = new BrowserManager({ session: id => sessions.get(id), changed: onOpen }) } = {}) {
   return {
     manager,
     stop: () => manager.stop(),
