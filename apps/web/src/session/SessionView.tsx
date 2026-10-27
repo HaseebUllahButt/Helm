@@ -72,7 +72,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const [details, setDetails] = useState<DetailsTab | null>(null);
   const team = useThreadTeam(client, env.id, session.id);
   const agentCount = team.length + (session.nativeCards?.length ?? 0);
-  const browser = useBrowserDock(client, env, session, !isShell);
+  const browser = useBrowserDock(client, env, session);
   // The canvas and the browser panel share the column beside the chat: one at a time.
   const canvas = useCanvas(client, env, session, !isShell);
   useExclusiveDocks(canvas, browser);
@@ -458,7 +458,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         {!isShell && <button className="iconbtn" title={`${canvas.open ? 'Close' : 'Open'} canvas (Ctrl/⌘ Shift D)`} aria-label="Canvas" aria-pressed={canvas.open}
           onClick={toggleCanvas}><Icon name="canvas" size={17} /></button>}
-        {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={toggleBrowser}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
+        <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={toggleBrowser}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'Show chat' : 'Show terminal'} aria-label={raw ? 'Show chat' : 'Show terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
@@ -502,7 +502,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       {details && <ThreadDetails client={client} env={env} session={session} tab={details} nativeOnly={!session.nativeChat}
         git={git.status} gitCwd={session.quick ? '' : session.cwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
-      {!isShell && (canvas.open
+      {(!isShell && canvas.open
         ? <Canvas client={client} env={env} cwd={session.quick ? '' : session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}
           visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)}
           pages={chatPages((messages ?? []).map((m) => m.visual && { visual: m.visual, at: typeof m.at === 'number' ? m.at : Date.parse(m.at ?? '') }))} />
@@ -543,7 +543,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       {raw
         ? <Suspense fallback={<div className="xterm-host" />}>
-            <Terminal client={client} env={env.id} sessionId={session.id} />
+            <Terminal client={client} env={env.id} sessionId={session.id} onOpenBrowser={() => browser.setOpen(true)} />
           </Suspense>
         : <Chat messages={messages} status={status} compacting={compacting} readVisual={readVisual} canvas={canvasVisuals} />}
 

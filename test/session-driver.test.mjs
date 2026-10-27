@@ -81,6 +81,18 @@ class FakeDriver extends EventEmitter {
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
 
+test('app discovery gets live agent roots and skips the shared Codex server', async t => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  t.after(() => sessions.stop());
+  const agent = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const codex = await sessions.start({ cwd: '/tmp', profileId: 'codex' });
+  t.mock.method(sessions.terminals, 'pid', async () => null);
+  t.mock.method(sessions.procs, 'pid', async id => id === agent.id ? 1234 : 9999);
+  assert.deepEqual(await sessions.appProcessRoots(agent.id), [1234]);
+  assert.deepEqual(await sessions.appProcessRoots(codex.id), []);
+});
+
 test('deleting a driven chat releases its cached helpers and tool links', async t => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { SessionSubagents } = await import('../packages/connect/src/session-subagents.js');

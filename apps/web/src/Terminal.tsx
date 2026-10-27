@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal as Xterm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type { Client } from './client';
+import { localTerminalUrl, terminalLocalLinks } from './terminalLinks';
 import { takeFirstScreen } from './startingTerminals';
 
 /**
@@ -49,10 +50,11 @@ const TERMKEYS: TermKey[] = [
  * redrew and the text replaces what we have.
  */
 
-export function Terminal({ client, env, sessionId }: {
-  client: Client; env: string; sessionId: string;
+export function Terminal({ client, env, sessionId, onOpenBrowser }: {
+  client: Client; env: string; sessionId: string; onOpenBrowser?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const openBrowser = useRef(onOpenBrowser); openBrowser.current = onOpenBrowser;
   const term = useRef<Xterm | null>(null);
   const [note, setNote] = useState('');
   const [armed, setArmed] = useState<'ctrl' | 'alt' | null>(null);
@@ -105,7 +107,11 @@ export function Terminal({ client, env, sessionId }: {
   useEffect(() => {
     if (!host.current) return;
 
+    const openLocal = (url: string) => {
+      client.rpc(env, 'browser.openApp', { id: sessionId, url }, 60_000).then(() => openBrowser.current?.()).catch(() => setNote('This app stopped or does not belong to this chat.'));
+    };
     const xterm = new Xterm({
+      linkHandler: { activate: (_event, text) => { const url = localTerminalUrl(text); if (url) openLocal(url); else window.open(text, '_blank', 'noopener,noreferrer'); } },
       fontSize: 13,
       lineHeight: 1.15,
       fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace',
@@ -121,6 +127,7 @@ export function Terminal({ client, env, sessionId }: {
         brightBlue: '#a5c4ff', brightMagenta: '#d8b4fe', brightCyan: '#a5f3fc', brightWhite: '#ffffff',
       },
     });
+    xterm.registerLinkProvider({ provideLinks: (y, callback) => callback(terminalLocalLinks(xterm, y).map(link => ({ ...link, activate: () => openLocal(link.url) }))) });
     term.current = xterm;
     const fit = new FitAddon();
     xterm.loadAddon(fit);

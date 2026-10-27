@@ -190,6 +190,7 @@ async function handle(msg, viewer) {
     case 'resize':  terminals.resize(msg.id, msg.cols, msg.rows, viewer); return { ok: true };
     // The pty's own exit event reports the end, once.
     case 'close':   nativeSessions.delete(msg.id); terminals.close(msg.id); armIdleExit(); return { ok: true };
+    case 'process.pid': return { pid: terminals.pid(msg.id) ?? procs.get(msg.id)?.child.pid ?? null };
     case 'list':    return { ids: terminals.list() };
 
     // Pipe-stdio processes, held on the same terms as the ptys.
