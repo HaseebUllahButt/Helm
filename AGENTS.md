@@ -27,8 +27,10 @@ survive the restart; fix interruptions instead of waiting for chats or transfers
 
 For any change the owner can see in the app, try it in a private Helm
 (`verify-helm`), take a screenshot with `verify-helm shot`, and inspect it.
-Keep proof screenshots private unless the owner asks to see them.
-Say what you could not check.
+Then show the owner one proof in the chat: a before and after picture for
+a change in looks, or a short clip for a change in behaviour (the skill
+says how). Keep every other screenshot private. Say what you could not
+check.
 
 Use plain text for reviews and progress reports. Create or publish a visual
 only when the owner asks. Skills must follow the owner's chosen format.
