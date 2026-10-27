@@ -56,6 +56,10 @@ It controls web pages only, not desktop apps. Open it with a chat's
 - Chromium must already be installed (an existing browser,
   `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at daemon
   start, and loads no Playwright code until a browser is needed.
+- Readiness and launch use the same system browser list, including macOS
+  Chrome. `HELM_WINDOW_CHROMIUM` selects only the visible browser;
+  `HELM_CHROMIUM_PATH` selects the hidden browser.
+- Chats share no tab limit. Keep every saved tab when Helm restarts.
 - Hidden tabs prefer Playwright's `chromium_headless_shell` (fast, half the
   memory). It has no `window.chrome`, so some bot checks refuse it; set
   `HELM_CHROMIUM_PATH` to pin a full browser.

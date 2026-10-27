@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-agent-browser-'));
 process.env.HELM_NO_SERVICE = '1';
@@ -15,6 +16,63 @@ test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }))
 const { BrowserManager, BowserBridge } = await import('../packages/connect/src/browser.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
 const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
+
+test('Mac Chrome is ready without Linux browsers or a Playwright download', () => {
+  const browser = new URL('../packages/connect/src/browser.js', import.meta.url).href;
+  const window = new URL('../packages/connect/src/browser-window.js', import.meta.url).href;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    let installed = true;
+    fs.existsSync = path => installed && path === chrome;
+    fs.readdirSync = () => [];
+    syncBuiltinESMExports();
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    for (const key of ['HELM_CHROMIUM_PATH', 'HELM_TEST_CHROMIUM', 'HELM_WINDOW_CHROMIUM', 'HELM_BOWSER_PATH']) delete process.env[key];
+    process.env.PATH = '';
+    const { browserReady } = await import(${JSON.stringify(browser)});
+    const { systemChromium } = await import(${JSON.stringify(window)});
+    assert.equal(systemChromium(), chrome);
+    assert.equal(browserReady(), true);
+    installed = false;
+    assert.equal(browserReady(), false);
+    process.env.HELM_WINDOW_CHROMIUM = '/custom/window-browser';
+    assert.equal(systemChromium(), undefined);
+    assert.equal(browserReady(), true);
+  `], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('tabs from one chat do not block another and all saved tabs survive recovery', async t => {
+  const directory = mkdtempSync(join(process.env.HELM_DIR, 'many-tabs-'));
+  const makeManager = () => {
+    const manager = new BrowserManager({ directory, session: sid => ({ id: sid }), canWindow: false });
+    const context = { newPage: async () => {
+      let viewport = { width: 800, height: 600 };
+      return Object.assign(new EventEmitter(), {
+        context: () => context, url: () => 'about:blank', viewportSize: () => viewport,
+        setViewportSize: async value => { viewport = value; },
+      });
+    } };
+    manager.context = async () => context;
+    t.after(() => manager.stop());
+    return manager;
+  };
+  const first = makeManager();
+  for (let i = 0; i < 26; i++) await first.open('one', { viewer: 'owner' });
+  const second = await first.open('two', { viewer: 'owner' });
+  assert.equal(second.tab.engine, 'chromium');
+  assert.equal((await first.list('one')).tabs.length, 26);
+  await first.stop();
+  const restored = makeManager();
+  assert.equal((await restored.savedRows('one')).length, 26);
+  const tabs = (await restored.list('one')).tabs;
+  assert.equal(tabs.length, 26);
+  assert.equal(new Set(tabs.map(tab => tab.id)).size, 26);
+  assert.equal((await restored.list('two')).tabs[0].id, second.tab.id);
+});
 
 test('browser is lazy and actions cannot cross thread boundaries', async () => {
   let launched = 0;

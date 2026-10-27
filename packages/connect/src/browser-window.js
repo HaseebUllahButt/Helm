@@ -15,7 +15,7 @@ export const canOpenWindow = (env = process.env, platform = process.platform) =>
 
 // The owner's own Chromium looks and feels like their browser; Playwright's
 // build is the fallback when none is installed or it will not start.
-const systemChromium = () => process.env.HELM_WINDOW_CHROMIUM || [
+export const systemChromium = () => [
   '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
   '/Applications/Chromium.app/Contents/MacOS/Chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ].find(existsSync);
@@ -34,7 +34,7 @@ export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
   if (process.platform === 'linux') args.push('--ozone-platform-hint=auto');
   const running = await attachWindow(chromium, profileDir);
   if (running) return running;
-  const system = systemChromium();
+  const system = process.env.HELM_WINDOW_CHROMIUM || systemChromium();
   if (system) { try { return await startWindow(chromium, system, profileDir, args); } catch { /* Playwright's way below */ } }
   // No "controlled by automated test software" bar: it is the owner's window.
   // Chromium's own sandbox stays on, so no "--no-sandbox" warning bar either;
