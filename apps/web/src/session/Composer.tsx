@@ -362,7 +362,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   /**
    * A file dropped anywhere on the chat lands in this box, not only on the
    * box itself - and the browser does not open it in place of Helm. The
-   * browser panel and terminals keep their own drops.
+   * terminals keep their own drops.
    */
   const slabRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -370,7 +370,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
     const mine = (e: DragEvent) => {
       const target = e.target as Element | null;
       const area = slabRef.current?.closest('.main');
-      return !!area && !!target?.closest && area.contains(target) && !target.closest('.browser-panel, .xterm, .slab')
+      return !!area && !!target?.closest && area.contains(target) && !target.closest('.xterm, .slab')
         && Array.from(e.dataTransfer?.types ?? []).includes('Files');
     };
     const over = (e: DragEvent) => {

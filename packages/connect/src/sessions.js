@@ -1937,7 +1937,7 @@ export class Sessions extends EventEmitter {
     return s;
   }
 
-  /** Live process roots, read only while the chat's Browser panel is open. */
+  /** Read process roots when the owner opens a local link from this chat. */
   async appProcessRoots(id) {
     const s = this.get(id);
     const terminal = this.#terminal(s);

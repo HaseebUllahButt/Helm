@@ -278,7 +278,8 @@ const DETAILS = {
   Tabs use Chromium on this machine.
   localhost reaches your development servers.
   The owner shares these tabs with you.
-  On machines with a screen, tabs open in a window beside Helm.
+  On machines with a screen, use the external Chromium window.
+  Helm has no browser panel.
   The window does not take keyboard control.
   Your actions wait while the owner uses the window.
   Use --engine bowser for Bowser Computer Use, if installed.

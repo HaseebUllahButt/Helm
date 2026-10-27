@@ -23,10 +23,10 @@ Helm restart. Whoever typed last sets the size.
 ## Local app links
 
 - **Prove (private Linux, 2026-10-27):** A terminal running a small web
-  server opens its printed local address in the chat Browser panel. The
-  owner browser keeps one tab.
+  server opens its printed local address on the chat machine.
+  The chat browser uses the external Chromium window.
 - **Reach:** Tap a localhost or 127.0.0.1 address with a port in terminal
-  output. Helm opens a new tab in that chat's Browser panel.
+  output. Helm opens a tab in that chat's external Chromium window.
 - **Traps:** The app must still belong to this chat. A stopped or unrelated
   app shows a message in the terminal. Paths, queries and wrapped links work.
 - **Tests:** `test/terminal-links`, `test/terminal-browser`, `test/browser-apps`.
