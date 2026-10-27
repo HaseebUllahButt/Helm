@@ -250,7 +250,7 @@ test('real browser isolation, batched actions, uploads, answering a dialog, and 
 test('the agent’s cursor is drawn in a window tab only, and point guides without touching the page', async () => {
   let clock = 1000, clicks = 0, scrolled = 0; const drawn = [];
   const box = { x: 100, y: 40, width: 80, height: 20 };
-  const locator = { first: () => locator, scrollIntoViewIfNeeded: async () => { scrolled++; }, boundingBox: async () => box, evaluate: async () => 'Sign in', click: async () => { clicks++; } };
+  const locator = { first: () => locator, scrollIntoViewIfNeeded: async () => { scrolled++; }, boundingBox: async () => box, evaluate: async () => ({ name: 'Sign in', main: true, viewport: { width: 1280, height: 800 }, box }), click: async () => { clicks++; } };
   const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => ({ width: 1280, height: 800 }), locator: () => locator, mouse: { click: async () => { clicks++; }, move: async () => {} }, evaluate: async (fn, arg) => { if (arg?.label != null) drawn.push(arg); return { title: 'Example', url: 'http://example.test/', text: '', elements: [] }; } };
   const manager = new BrowserManager({ session: sid => ({ id: sid, mode: sid === 'reader' ? 'readonly' : 'default' }), now: () => clock, canWindow: false });
   const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
@@ -261,6 +261,7 @@ test('the agent’s cursor is drawn in a window tab only, and point guides witho
   await manager.run('one', 'tab', { kind: 'click', selector: 'button' });
   assert.deepEqual(tab.pointer, { x: 140, y: 50, box, action: 'click', label: 'Clicking “Sign in”', by: 'agent', seq: 1, at: 1000 }); assert.equal(clicks, 2);
   assert.equal(drawn.at(-1).label, 'Clicking “Sign in”', 'drawn on the page itself');
+  assert.equal(scrolled, 0, 'an onscreen target does not repeat the action scroll check');
   await manager.run('one', 'tab', { kind: 'scroll', dy: -300 }).catch(() => {});
   assert.equal(tab.pointer.label, 'Scrolling up'); assert.deepEqual([tab.pointer.x, tab.pointer.y], [640, 400]);
   // A guide works in a hidden tab too, and never clicks or scrolls.

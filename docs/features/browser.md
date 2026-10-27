@@ -18,6 +18,9 @@ Design: [`docs/browser-use.md`](../browser-use.md).
   window rule. A machine without a screen cannot show the owner a window.
 - **Tests:** `test/agent-browser`, `browser-window`, `browser-smarts`,
   `test/browser/agent-browser`, and `test/browser/browser-smarts`.
+- **Speed checks:** The first native window opens only the requested page,
+  with copied logins already present. Reopening a sleeping window reuses
+  cached site files. Pointer checks cover clipped controls and frame targets.
 
 ## Logins and saved flows
 

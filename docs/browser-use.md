@@ -30,9 +30,12 @@ The owner uses the external Chromium window. Helm has no browser panel.
   folder. Windows start with `--disable-component-update`, so a chat's
   profile does not fetch ~150 MB of speech, DRM (Widevine) and model files;
   DRM video does not play there. Some time after Helm starts, closed
-  windows lose the files Chromium fetches again, and folders of chats gone
-  for a day are removed.
+  windows lose component downloads and graphics files. Folders of chats gone
+  for a day are removed. Cached site files and compiled scripts stay ready
+  for repeat visits, including after a window sleeps or Helm restarts.
 - **A new tab opens at its address** (`Target.createTarget` with the URL).
+  A native browser starts without an unused New Tab page. Helm copies logins
+  and sets up owner input first, then opens the requested page.
   A tab Playwright makes starts empty, and Chromium shows "about:blank" over
   a white page until the site answers. A failed load is read from
   Chromium's error page: loading the address again there can leave the tab
@@ -41,7 +44,9 @@ The owner uses the external Chromium window. Helm has no browser panel.
   second with no fetch in flight (at most 3 s). Slow pictures and adverts
   no longer hold every step back. Pointer moves and scrolling return without
   waiting for background traffic. The pointer stays visible without a pause
-  before each action.
+  before each action. Drawing it does not repeat the action's scroll and
+  stability checks for a control already in view. Clicks and typing still
+  scroll clipped controls and frame targets into view.
 - **Show me** (`helm browser point`) highlights an element and changes
   nothing, so it works in read-only chats. Read-only agents can read,
   navigate, wait and check; a batch holding any change is refused before
