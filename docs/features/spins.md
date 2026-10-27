@@ -39,7 +39,10 @@ for websites that cannot run inside a frame.
   local Helm. A newly created name must refresh the hub's share list even
   when another spin just warmed its cache.
 - **App hosts:** Helm sends `Host: localhost:<port>` for HTTP and
-  WebSockets, preserving the visitor's host in `X-Forwarded-Host`.
-  `--preserve-host` opts out for apps that need the original host.
+  WebSockets. The link host goes nowhere else: X-Forwarded-Host, Forwarded
+  and similar headers are dropped, and Origin/Referer on the link become
+  `http://localhost:<port>`. Dev servers (Express, Vite, webpack) check all
+  of these. `--preserve-host` sends the link host in Host and
+  X-Forwarded-Host for apps that need it.
 - **Tests:** `test/share-private`, `share-links`, `loopback`, `tunnel-ports`;
   `test/browser/private-links`, `private-spin-e2e`.
