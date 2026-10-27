@@ -1659,6 +1659,7 @@ export class Sessions extends EventEmitter {
   async answer(id, requestId, decision) {
     const s = this.get(id);
     const ask = this.#natives.hookAsks.get(requestId);
+    const asked = this.events.pending(id).find((request) => request.requestId === requestId);
     if (s.nativeCli) {
       if (!ask || ask.id !== id) throw new Error('that question was already answered on the terminal');
       // The same answer `claude -p` takes, printed by the waiting hook.
@@ -1672,12 +1673,37 @@ export class Sessions extends EventEmitter {
       }
       ask.reply({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: response } });
       this.#natives.closeHookAsk(requestId, decision?.option);
-      return { ok: true };
+      return { ok: true, ...await this.#approvalNote(s, requestId, decision, asked?.title, decision?.option === 'deny') };
     }
     const d = this.#drivers.get(id);
     if (!d) throw new Error('the agent is not running; that prompt is gone');
     await d.answer(requestId, decision);
-    return { ok: true };
+    // Only Claude's decline takes the owner's words with the answer.
+    const carried = decision?.option === 'deny' && DRIVERS[s.driver] === DRIVERS.claude;
+    return { ok: true, ...await this.#approvalNote(s, requestId, decision, asked?.title, carried) };
+  }
+
+  /**
+   * The note the owner added to an approval. Most answers have no place for
+   * words, so it goes to the agent as the owner's next message, after the
+   * answer was taken. The turn id comes from the request, so it is sent once.
+   * A note that fails is said in the chat: the answer itself already counted.
+   */
+  async #approvalNote(s, requestId, decision, title, carried) {
+    const note = typeof decision?.message === 'string' ? decision.message.trim() : '';
+    if (!note || carried || decision?.answers) return {};
+    const what = String(title || 'the request').replace(/[\[\]\n\r]+/g, ' ').trim().slice(0, 80);
+    const verb = decision.option === 'deny' ? 'declined' : 'approved';
+    const text = `[helm The owner ${verb} "${what}" and added this note.]\n\n${note}`;
+    const turnId = `approval-note-${String(requestId).replace(/[^A-Za-z0-9._:-]/g, '-')}`.slice(0, 120);
+    try {
+      await this.input(s.id, text, { turnId });
+      return { note: 'sent' };
+    } catch (e) {
+      this.log(`approval note for ${s.id}: ${e.message}`);
+      this.events.append(s.id, { type: 'error', message: `Helm could not send your note: ${e.message}` });
+      return { note: 'failed' };
+    }
   }
 
   async interrupt(id, visited = new Set()) {
