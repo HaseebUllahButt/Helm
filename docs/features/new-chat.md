@@ -26,7 +26,7 @@
 - **Tests:** `test/browser/new-chat`, `chat-home`, `onboarding`;
   `test/quick-chat`, `picker-prefs`, `onboarding`.
 
-## Clone from GitHub
+## Copy from GitHub
 - **Rules:** Helm never signs in to GitHub and no GitHub key reaches the
   app; it uses the machine's `gh` login. The repo list is kept in
   `~/.helm/github-repos.json` and fetched again after 10 minutes. The chat
@@ -36,7 +36,7 @@
   into the scratch folder:
   ```sh
   $V up --real; $V open --desktop; $V click "New chat"; $V key Enter
-  $V click "Clone from GitHub"; $V click "Search repos"; $V type "expressjs/express"
+  $V click "Copy from GitHub"; $V click "Search repos"; $V type "expressjs/express"
   $V wait "ON GITHUB" 20000; $V key Enter
   $V click "Search folders, or type a path"; $V type "/tmp/helm-verify-<you>/work"; $V key Enter
   $V type fake; $V key Enter                     # the chat opens, "cloning n%"
