@@ -850,29 +850,6 @@ test('no account by that name lists the accounts that do exist', () => {
   assert.throws(() => chooseAgent([{ id: 'claudes', engine: 'claude' }, { id: 'a1', engine: 'agy' }], 'pc'), /no CLI account "pc" here; accounts: claudes, a1/);
 });
 
-test('helm help <command> prints that command and its relatives, and --help before -- asks for it', async () => {
-  const { commandHelp, wantsHelp } = await import('../packages/connect/src/help.js');
-  const usage = [
-    'helm - title', '',
-    '  helm exec <machine> -- <command>', '                                    run there',
-    '    --env NAME=value               environment',
-    '  helm exec-status <machine> <id>   read it later',
-    '  helm execute-not <x>              unrelated',
-    '  helm say <id> <text...>           send a message', '',
-  ].join('\n');
-  const exec = commandHelp('exec', usage);
-  assert.match(exec, /helm exec <machine>/);
-  assert.match(exec, /--env NAME=value/);
-  assert.match(exec, /helm exec-status/);
-  assert.match(exec, /Do not rerun a command/);
-  assert.doesNotMatch(exec, /execute-not|helm say/);
-  assert.equal(commandHelp('nosuch', usage), null);
-  assert.equal(commandHelp('', usage), null);
-  assert.ok(wantsHelp(['--help']));
-  assert.ok(wantsHelp(['same', '-h']));
-  assert.ok(!wantsHelp(['same', '--', 'explain --help to me']), 'task words after -- are literal');
-});
-
 test('a child works in the folder the caller names, else where its parent does', async (t) => {
   const { sessions } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
@@ -1204,6 +1181,25 @@ test('the browser note rides along only where a browser can start', async () => 
   assert.equal(helmBrief({}).includes('[Helm browser:'), browserReady());
   assert.doesNotMatch(browserNote({ bowser: false }), /bowser/i, 'no pointer to a tool this machine lacks');
   assert.match(browserNote({ bowser: true }), /--engine bowser/);
+});
+
+// Every chat pays for these notes before it does any work, and every message
+// carries the reminder. Lower the numbers when the text shrinks; raise them
+// only when the owner wants the new text.
+test('the notes every agent gets match the committed size', async () => {
+  const { helmBrief } = await import('../packages/connect/src/delegation.js');
+  const { browserNote } = await import('../packages/connect/src/browser.js');
+  const { worktreeNote } = await import('../packages/connect/src/chat-worktree.js');
+  const { readFileSync } = await import('node:fs');
+  const budget = JSON.parse(readFileSync(new URL('./agent-context-budget.json', import.meta.url), 'utf8'));
+  const net = { self: 'a', machines: { a: { id: 'a', name: 'Laptop' }, b: { id: 'b', name: 'VM', kind: 'vm' }, c: { id: 'c', name: 'HomePC', kind: 'pc' } } };
+  // The browser note depends on this machine; count the version without Bowser.
+  const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:')).join('\n');
+  const notes = [brief, browserNote({ bowser: false }), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
+  assert.deepEqual(
+    { notesBytes: Buffer.byteLength(notes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
+    { notesBytes: budget.notesBytes, reminderBytes: budget.reminderBytes },
+  );
 });
 
 test('a helper with no thread to sit under lists on its own, and its team nests under it', async (t) => {

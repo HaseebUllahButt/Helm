@@ -14,6 +14,7 @@ import { HELM_DIR, expand } from '../src/paths.js';
 import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
 import { hubRpc, hubBroadcastRpc, mergeQueueReceipts } from '../src/hub-client.js';
+import { USAGE, OVERVIEW, commandHelp, wantsHelp } from '../src/help.js';
 import { reliableInput } from '@helm/protocol/reliable-input';
 import {
   render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot, findNetworkSession,
@@ -38,126 +39,7 @@ const rest = leadingFlag ? [first, ...others] : others;
 
 const die = (msg) => { console.error(`helm: ${msg}`); exit(1); };
 
-const USAGE = `helm - Control your coding agents from anywhere
-
-  helm setup [https-url]             Set up this VM as your Helm home
-  helm open                          Open the app here, signed in
-  helm app [--remove]                Add Helm to this desktop's applications
-
-  helm add controller                Add a phone or browser to control machines
-  helm add pc                        Add a computer to run agents and control machines
-  helm add vm                        Add a VM that other machines connect to
-  helm join                          Paste a private link to join a network
-  helm join <private-link>           Join a network with the copied link
-  helm start                         Start Helm in the background
-
-  helm join <CODE> <home-url> --foreground   Run Helm in this terminal
-  helm status                        Show the network and agent software
-  helm network-repair                Keep connections working when large network packets fail on Linux
-
-  helm up [--port N] [--tunnel]      Run Helm in this terminal
-  helm up --tunnel --domain <d>     Make a fixed public link (needs a free ngrok account)
-  helm up --tunnel --temporary      Make a temporary public link without an account
-  helm up --advertise <url>         Set the public address for this machine
-  helm up --host <address>          Set the local address (default 0.0.0.0)
-  helm up --install                 Start Helm each time this machine starts
-
-  helm link [minutes]               Add a phone or browser, like 'helm add controller'
-  helm join <CODE> --at <url>       Join a network, like 'helm join CODE url'
-
-  helm devices                      controllers that can drive this network
-  helm browser open <url>            browse with your agent (Chromium or --engine bowser)
-  helm browser tabs | look <id>      list tabs or read text and numbered controls
-  helm machines                     machines in this network
-  helm redesignate [machine] <kind> what a machine is for: pc or vm
-  helm spin <port> [options]         same as helm share; make a public link
-  helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
-    Make a Spin, a public link that ends after 3 hours unless you use --keep.
-                                  The link opens a port on this machine through your VM.
-    --private                     Limit access to devices signed in to your Helm
-    --preserve-host               Send the Spin host to the app instead of localhost
-  helm share list | stop <name>   List or stop Spins
-  helm share setup                Set up the VM to serve Spins
-  helm forward <machine> <port> [--local <port>]
-                                  Open another machine's shared port on this machine's localhost
-  helm remove <id>                  Remove a device or machine permanently
-  helm leave                        Remove this machine from its network
-
-  helm login [minutes]              Make a temporary password to sign in a device
-  helm status                       Show machines, links and agent software
-  helm profiles [--refresh]         List agent accounts on this machine
-  helm agents [--json] [--refresh]  List command line accounts, sign-in status and model IDs
-  helm run -- <command> [args]      Run a command here through Helm
-  helm exec <machine> [--cwd <path>] -- <command> [args]
-                                    Run a command on another machine through Helm
-    --env NAME=value               Set a command environment value (repeat this flag for more values)
-    --timeout <milliseconds>       Set the command time limit (default 15 minutes)
-  helm exec-status <machine> <id> [--wait] [--json]
-                                    Read command output after a connection loss
-  helm exec-cancel <machine> <id>   Stop a command started earlier
-  helm antigravity [install|login|status|remove]   Install or manage the Google Antigravity agent
-
-  helm brain                       Open the Helm brain on the VM
-  helm digest [--json]              Show every machine, folder and running chat
-  helm search <words...> [--json]   Find chats with these words on every machine, newest first
-  helm thread <id> [-n 40]          Read recent messages from a chat
-  helm delete <id>                  Delete a chat
-  helm pickup [chat-id] [-n 3]      Show where earlier project chats stopped on every machine
-                                    Show requests, unfinished work, commits and unsaved changes
-  helm say <id> <text...>           Send a message from this agent (a plain prompt outside a chat)
-  helm reply <message-id> <text...> Reply to an agent message
-  helm messages [chat-id] [--json]  Read messages in this chat and its Agents
-  helm canvas <file | https://…> [--title <text>] [--session <id>]
-                                    Open a project file, saved picture or live page beside the chat
-  helm render <file.html | picture.png> [--title <text>] [--height <px>] [--session <id>]
-                                    Save a picture, HTML page or screenshot in this chat
-  helm preview <file.html> [--output <file.png>] [--width <px>] [--appearance dark|light]
-                                    screenshot a visual and report JavaScript errors
-  helm chat <account> [-- text]    share a live agent between this terminal and the app
-  helm chat --attach <id>          reconnect to the same managed session
-  helm chat <account> --resume <id> continue a native conversation after its CLI closes
-  helm chat <account> --quick      a chat with no folder, for a small question
-  helm integrate [--remove]        manage automatic control of normal CLI commands
-  helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
-  helm spawn <machine> - <account> <text...>          the same, as a quick chat with no folder
-    --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
-  helm delegate <account> --model <id> --wait --json -- "<task>"
-                                    Start a helper in this folder
-  helm delegate-result <id> [--wait] [--json]   Read the helper result or approval request
-  helm handoff <machine> [text...]  Move code and this task to another machine
-    --handoff-id <id>               Continue a stopped task move with the same ID
-  helm dispatch <machine> [text...]  Send this folder and task when the other machine connects
-  helm dispatch-status <id>         Show progress for a task sent to another machine
-  helm send-task <machine> --account <id> [text...]  Send files, .env and a task directly
-    --no-env --allow-skipped --handoff-id <id>       Control .env files, skipped files and retries
-  helm receive <source> [minutes]   Allow this machine to receive one folder from <source>
-  helm send <machine> [folder] --grant <token>
-                                  Send a folder with the receiving machine's permission
-    --target-folder <folder>        Set the folder on the receiving machine
-    --include-env                   Include .env files with access for the receiving user only
-    --dry-run                       Preview files to send without permission from the receiving machine
-    --allow-skipped                 Send files and allow skipped files
-  helm copy <machine> <file-or-folder> [--target-folder <path>]
-                                  Copy through Helm and resume if stopped (needs rsync 3.2.3+ on both machines)
-    --target-folder <path>          Set the destination (default: same path; ~ means the other machine's home folder)
-    --exclude <pattern>             Skip matching files (repeat this flag for more patterns)
-    --dry-run                       Preview the copy, including hidden files
-    --direct | --relay | --ssh      Pick a connection (default: Helm picks one)
-    --retries <0-5>                 Set retries after connection loss (default: 2)
-  helm verify <folder> [-- cmd...]  Check what a received folder still needs
-
-  helm dictate [--to <id>]          Start recording; run again to stop and turn speech into text
-  helm proxy <host>                 Connect through SSH ProxyCommand (used by ~/.ssh/config)
-  helm self-update                  Get the newest Helm and restart it on this machine
-  helm service install|uninstall    Install or remove the background service
-
-Add devices from Settings, or run 'helm add' on a joined machine.
-Paste a computer's private join link into 'helm join'.
-A control device stays signed in until you remove it.
-Passwords add devices and expire in minutes.
-Run helm help <command> or helm <command> --help for details.
-`;
-const usage = () => console.log(USAGE);
+const usage = () => console.log(OVERVIEW);
 
 const flagOf = (name, fallback) => {
   const i = rest.indexOf(`--${name}`);
@@ -1921,11 +1803,14 @@ async function leave() {
 
 // `helm help <command>` and `helm <command> --help` print that command's
 // usage and details. run and chat pass their arguments on to another program.
-const { commandHelp, wantsHelp } = await import('../src/help.js');
 const helpFor = cmd === 'help' || cmd === '--help' || cmd === '-h' ? rest[0]
   : cmd && !['run', 'chat'].includes(cmd) && wantsHelp(rest) ? cmd : null;
 
 try {
+  if (helpFor === '--all') {
+    console.log(USAGE);
+    exit(0);
+  }
   if (helpFor) {
     const text = commandHelp(helpFor, USAGE);
     if (!text) die(`No command "${helpFor}" - helm help lists them all.`);
@@ -1935,7 +1820,7 @@ try {
   switch (cmd) {
     case 'run':
       if (!rest.includes('--') && rest.some(arg => ['--help', '-h'].includes(arg))) {
-        usage();
+        console.log(commandHelp('run', USAGE));
         break;
       }
       if (rest.includes('--') || rest.some(arg => ['--heavy', '--cwd', '--timeout', '--env'].includes(arg))) {
