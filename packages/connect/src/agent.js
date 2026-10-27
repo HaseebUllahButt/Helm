@@ -53,7 +53,7 @@ import { TaskTransfers } from './task-transfer.js';
 import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { CliUpdater } from './cli-updates.js';
-import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, watchCheckout } from './update.js';
+import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, rebuildStaleApp, watchCheckout } from './update.js';
 import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
 import { worktreeNote } from './chat-worktree.js';
@@ -71,6 +71,7 @@ import { ExecutionJobs } from './execution.js';
 import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
 import { InputDelivery } from './input-delivery.js';
 import { ChatEventStream } from './event-stream.js';
@@ -359,7 +360,7 @@ export class Daemon {
       const running = (await this.#versionP)?.full;
       const net = loadNetwork() ?? this.net;
       const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
-        syncFromBundle, net, id: this.id, rpc: hubRpc });
+        rebuildStaleApp, syncFromBundle, net, id: this.id, rpc: hubRpc });
       this.syncNote = r.note ?? null;
       if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting now'); }
     } catch (err) {
@@ -1625,7 +1626,7 @@ export class Daemon {
       case M.EXEC_READ: return this.executions.read(p, caller ?? this.id);
       case M.EXEC_CANCEL: return this.executions.cancel(p, caller ?? this.id);
       case M.ENV_INFO:
-        return { ...(await this.describe()), name: this.name };
+        return { ...(await this.describe()), name: this.name, web: webBuild() };
 
       case M.GIT_STATUS: return gitq.status(p.cwd);
       case M.GIT_GRAPH: return gitq.graph(p.cwd, await this.sessions.list());

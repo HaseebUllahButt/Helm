@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
  */
 // The update lock lives in HELM_DIR; never the real one from a test.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-update-dir-'));
-const { selfUpdate, restartServices, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, watchCheckout } = await import('../packages/connect/src/update.js');
+const { selfUpdate, restartServices, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, rebuildStaleApp, watchCheckout } = await import('../packages/connect/src/update.js');
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
@@ -460,4 +460,31 @@ test('a version checked out in the install is noticed in seconds, and a status t
   const until = Date.now() + 5000;
   while (!moves.length && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(moves, [git(installed, ['rev-parse', 'HEAD'])]);
+});
+
+test('an app built from another commit than the running one is rebuilt, without a restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-stale-app-'));
+  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+  writeFileSync(join(dir, '.gitignore'), 'apps/web/dist/\n');
+  git(dir, ['add', '.']);
+  git(dir, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'one']);
+  const one = git(dir, ['rev-parse', 'HEAD']);
+  git(dir, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'two']);
+  const two = git(dir, ['rev-parse', 'HEAD']);
+  const dist = join(dir, 'apps', 'web', 'dist');
+  mkdirSync(dist, { recursive: true });
+  const stamp = (commit) => writeFileSync(join(dist, 'build.json'), JSON.stringify({ commit }));
+  let builds = 0;
+  const build = async () => { builds++; stamp(two); };
+
+  assert.deepEqual(await rebuildStaleApp(two, dir, { build }), { rebuilt: false }, 'no stamp: an older build');
+  stamp(one);
+  assert.deepEqual(await rebuildStaleApp(one, dir, { build }), { rebuilt: false }, 'the running commit is not the checkout: an update handles it');
+  assert.deepEqual(await rebuildStaleApp(two, dir, { build }), { rebuilt: true });
+  assert.equal(builds, 1);
+  assert.deepEqual(await rebuildStaleApp(two, dir, { build }), { rebuilt: false }, 'built once');
+  stamp(one);
+  writeFileSync(join(dir, 'edit'), 'x');
+  assert.deepEqual(await rebuildStaleApp(two, dir, { build }), { rebuilt: false }, 'unsaved edits belong to someone');
+  assert.equal(builds, 1);
 });

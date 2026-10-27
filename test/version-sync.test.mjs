@@ -50,3 +50,16 @@ test('diverged installs expose the peer name and preserve the local version', as
     syncFromBundle: async () => ({ updated: false, diverged: true }) });
   assert.deepEqual((await synchronizeVersion(opts)).note, { diverged: true, with: 'Peer' });
 });
+
+test('a machine that runs its checkout also repairs an app built from another commit', async () => {
+  const stale = [];
+  const { opts } = fixture({ running: 'new', currentVersion: async () => ({ full: 'new', time: 3 }),
+    rebuildStaleApp: async (running) => { stale.push(running); return { rebuilt: true }; } });
+  await synchronizeVersion(opts);
+  assert.deepEqual(stale, ['new']);
+  const { opts: moving } = fixture({ currentVersion: async () => ({ full: 'newer', time: 4 }),
+    rebuildIfCommitted: async () => ({ updated: false, reason: 'unsaved changes here' }),
+    rebuildStaleApp: async (running) => { stale.push(running); } });
+  await synchronizeVersion(moving);
+  assert.deepEqual(stale, ['new'], 'a checkout that moved is rebuilt by the update, not here');
+});

@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { retainAssets } from './retainAssets.mjs';
+import { stampBuild } from './stampBuild.mjs';
 
 /**
  * Three chunks by intent, not by accident:
@@ -13,7 +14,7 @@ import { retainAssets } from './retainAssets.mjs';
  * itself stays with the chat so failed optional chunks cannot leave raw fences.
  */
 export default defineConfig({
-  plugins: [react(), retainAssets()],
+  plugins: [react(), retainAssets(), stampBuild()],
   server: { port: 5273 },
   build: {
     outDir: 'dist',
