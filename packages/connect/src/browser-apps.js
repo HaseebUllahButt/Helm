@@ -29,7 +29,17 @@ export function internalApp(argv) {
     || /(?:^|[/\\-])mcp(?:[/\\-]|$)|^app-server$|^--remote-debugging-|^run-server$/.test(arg));
 }
 
-export function appRows(processes, listeners, { roots = [], cwd = null } = {}) {
+/**
+ * Chromium and some servers rewrite their command line into one string;
+ * split it again so the program name is the first word.
+ */
+export const commandWords = (cmdline) => {
+  const words = cmdline.split('\0').filter(Boolean);
+  return words.length === 1 && /\s/.test(words[0]) ? words[0].split(/\s+/).filter(Boolean) : words;
+};
+
+/** The processes a chat started that are not Helm's or an agent's own. */
+export function chatProcesses(processes, { roots = [], cwd = null } = {}) {
   const byPid = new Map(processes.map(p => [p.pid, p]));
   const rootSet = new Set(roots.filter(pid => Number.isInteger(pid) && pid > 0));
   const owned = p => {
@@ -40,9 +50,12 @@ export function appRows(processes, listeners, { roots = [], cwd = null } = {}) {
     }
     return !!(cwd && p.cwd && inside(cwd, p.cwd));
   };
+  return processes.filter(p => owned(p) && !rootSet.has(p.pid) && !internalApp(p.argv));
+}
+
+export function appRows(processes, listeners, { roots = [], cwd = null } = {}) {
   const ports = new Map();
-  for (const p of processes) {
-    if (!owned(p) || rootSet.has(p.pid) || internalApp(p.argv)) continue;
+  for (const p of chatProcesses(processes, { roots, cwd })) {
     for (const socket of listeners.filter(socket => p.sockets.has(socket.inode))) {
       const name = p.argv.find(arg => /(?:^|[/\\])(?:vite|next|astro|webpack|http-server)(?:[/\\.]|$)/.test(arg));
       const app = { port: socket.port, name: name ? basename(name).replace(/\.(?:m?js|cjs)$/, '') : basename(p.argv[0] || p.name || 'App'), pid: p.pid };
@@ -66,16 +79,21 @@ export async function discoverApps(session, { roots = [], proc = '/proc', platfo
     const listeners = (await Promise.all(['tcp', 'tcp6'].map(file => read(`${proc}/net/${file}`)))).flatMap(procListeners);
     if (!listeners.length) return [];
     const processes = (await Promise.all((await files(proc)).filter(pid => /^\d+$/.test(pid)).map(async pid => {
-      const [stat, cmd, folder, env, descriptors] = await Promise.all([read(`${proc}/${pid}/stat`), read(`${proc}/${pid}/cmdline`), link(`${proc}/${pid}/cwd`), read(`${proc}/${pid}/environ`), files(`${proc}/${pid}/fd`)]);
+      const [stat, cmd, folder, env] = await Promise.all([read(`${proc}/${pid}/stat`), read(`${proc}/${pid}/cmdline`), link(`${proc}/${pid}/cwd`), read(`${proc}/${pid}/environ`)]);
       if (!stat || !cmd) return null;
       const vars = new Map(env.split('\0').map(item => { const at = item.indexOf('='); return [item.slice(0, at), item.slice(at + 1)]; }));
       // A shared Codex app-server can serve several chats. Its environment
       // cannot tie all its children to the first chat. Use their folders.
-      const argv = cmd.split('\0').filter(Boolean);
+      const argv = commandWords(cmd);
       if (vars.get('HELM_SESSION_ID') === session.id && internalApp(argv) && !argv.includes('app-server')) roots.push(Number(pid));
-      const sockets = new Set((await Promise.all(descriptors.map(fd => link(`${proc}/${pid}/fd/${fd}`)))).flatMap(value => /^socket:\[(\d+)\]$/.exec(value)?.[1] || []));
-      return { pid: Number(pid), ppid: Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]), argv, cwd: folder, sockets };
+      return { pid: Number(pid), ppid: Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]), argv, cwd: folder, sockets: new Set() };
     }))).filter(Boolean);
+    // Open files only for the chat's own processes: reading every program's
+    // file list on each look cost most of the time.
+    await Promise.all(chatProcesses(processes, { roots, cwd }).map(async p => {
+      const descriptors = await files(`${proc}/${p.pid}/fd`);
+      p.sockets = new Set((await Promise.all(descriptors.map(fd => link(`${proc}/${p.pid}/fd/${fd}`)))).flatMap(value => /^socket:\[(\d+)\]$/.exec(value)?.[1] || []));
+    }));
     return appRows(processes, listeners, { roots, cwd });
   }
   if (platform !== 'darwin') return [];

@@ -91,3 +91,11 @@ test('only a panel apps request scans; opening checks the port still belongs to 
   await routes.dispatch('browser.openApp', { id: 'fake', url: 'http://127.0.0.1:5173/path?q=1' });
   assert.equal(opens[0][0], 'fake'); assert.equal(opens[0][1].url, 'http://127.0.0.1:5173/path?q=1'); assert.equal(notices[0].tabId, 'tab');
 });
+
+test('a browser that rewrote its command line into one string is never an app', async () => {
+  const { commandWords, internalApp } = await import('../packages/connect/src/browser-apps.js');
+  const argv = commandWords('/usr/lib/chromium/chromium --user-data-dir=/tmp/x --remote-debugging-port=0 chrome://newtab/\0');
+  assert.equal(argv[0], '/usr/lib/chromium/chromium');
+  assert.equal(internalApp(argv), true);
+  assert.deepEqual(commandWords('node\0server.js\0'), ['node', 'server.js']);
+});
