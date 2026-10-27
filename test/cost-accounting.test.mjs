@@ -75,6 +75,21 @@ test('Codex gpt-6.1-sol has a price, and Sol is priced by the day it was used', 
   assert.ok(Math.abs(sol('2026-08-21') - 24.4) < 1e-9, 'from the promo on: the cut card');
 });
 
+test('GPT 6.1 Terra usage has a cost across model names', () => {
+  const tokens = { input: 1e6, output: 1e6, cacheRead: 1e6 };
+  for (const [engine, model] of [
+    ['codex', 'gpt-6.1-terra'],
+    ['codex', 'gpt-6.1-terra-2026-10-27'],
+    ['opencode', 'openai/gpt-6.1-terra'],
+    ['devin', 'gpt-6-1-terra-high'],
+  ]) {
+    assert.deepEqual(priceBucket(engine, model, tokens, '2026-10-27'), {
+      input: 1, output: 5, cacheWrite: 0, cacheRead: 0.05, total: 6.05,
+    }, `${engine}: ${model}`);
+  }
+  assert.equal(priceBucket('codex', 'gpt-6.2-terra', tokens, '2026-10-27'), null);
+});
+
 test('an old transcript that is resumed is counted again', async () => {
   const dir = tmp();
   const f = join(dir, 's.jsonl');
