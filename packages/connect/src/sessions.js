@@ -451,10 +451,10 @@ export class Sessions extends EventEmitter {
         // Its setup command died with the daemon: it runs again from the
         // start once resumed, and what was sent meanwhile still waits.
         if (s.chatWorktree?.setup === 'running') s.status = 'starting';
-        // A helper's copy made before helpers had this record: Helm tidies
-        // and rebuilds it too. Its start is unknown, so a branch with no
-        // commits counts as merged.
-        if (s.delegation?.worktree && !s.chatWorktree) s.chatWorktree = { ...s.delegation.worktree, start: null };
+        // Only helpers made since helpers have this record get it. One added
+        // on load to older helpers (start unknown) made Helm rebuild the
+        // folders of long-finished Codex helpers whenever it rejoined them.
+        if (s.delegation?.worktree && s.chatWorktree?.start === null) delete s.chatWorktree;
         this.#index.set(s.id, s);
       }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
