@@ -840,9 +840,6 @@ pre.snippet {
 .screen-title { margin: 6px 0 4px; font: 600 var(--t-h2)/1.2 var(--display); letter-spacing: -0.005em; color: var(--text); }
 /* True facts about the screen in the instrument voice: counts, nothing else. */
 .readout { margin: 0 0 18px; font: 500 var(--t-meta) var(--mono); color: var(--mutedfg); }
-.readout .attention { color: var(--amber-text); }
-.chooser { padding-top: 40px; }
-@media (min-width: 900px) { .chooser { padding-top: 12vh; } }
 
 /* ------------------------------------------------------------------- auth */
 
@@ -3616,6 +3613,46 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
   .home-compose-key, .home-compose-hint { display: none; }
   .home-compose-text { flex: 1; }
 }
+
+/* ------------------------------------------------------------- Home (wide) */
+
+.pad.column.home { padding-top: 10vh; }
+.home .home-state .attention { color: var(--amber-text); }
+/* The start box: the message box's plate and chips, with its sheets docked
+   above it the same way. */
+.home-ask {
+  position: relative; z-index: 1;
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 10px 10px 14px;
+  border-radius: var(--radius-xl); background: var(--raised); border: 1px solid var(--line-2);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 20%), 0 10px 30px -14px rgb(0 0 0 / 45%);
+  transition: border-color 0.12s var(--ease);
+}
+.home-ask:focus-within { border-color: color-mix(in srgb, var(--text) 24%, transparent); }
+.home-ask textarea {
+  width: 100%; min-height: 48px; max-height: 40vh; resize: none; field-sizing: content;
+  border: 0; outline: 0; background: none; padding: 2px 4px 0 0;
+  font-size: var(--t-read); line-height: 1.5; color: var(--text);
+}
+.home-ask textarea:focus { outline: none; box-shadow: none; }
+.home-ask textarea::placeholder { color: var(--mutedfg); }
+.home-ask-bar { display: flex; align-items: center; gap: 10px; }
+.home-ask-wrap { position: relative; }
+/* A chip's list drops under the box, over the machine rows, so the box
+   never moves while you pick. */
+.home-ask-wrap > .modesheet {
+  position: absolute; z-index: 5; top: calc(100% + 6px); left: 0; right: 0; margin: 0; padding: 8px;
+  border-radius: var(--radius-xl); border-bottom: 1px solid var(--line-2);
+  box-shadow: var(--shadow); max-height: min(420px, 50vh);
+}
+.home-chips { flex-wrap: wrap; overflow: visible; }
+.home-chip-rest, .home-chip-rest .chips { display: contents; }
+.home-send {
+  width: 32px; height: 32px; flex: none; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--pill-bg); color: var(--pill-fg);
+}
+.home-send:disabled { opacity: 0.4; }
+.home .rows .row.machine.offline .rt-text { color: var(--mutedfg); }
 
 /* New chat asks the empty chat's question, at the top of the box. */
 .newchat-greeting {
