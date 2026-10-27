@@ -132,3 +132,20 @@ test('older saved changes remain available after writing another tour', async t 
   const back = await s.instance.dispatch({ ...s.args, action: 'start' });
   assert.equal(back.change.identity, first.change.identity); assert.equal(s.calls.length, 2);
 });
+
+test('lock files and builds are listed but their text never reaches the tour writer', async t => {
+  const { cwd } = fixture(t);
+  writeFileSync(join(cwd, 'package-lock.json'), '{"lockfileVersion":3,"packages":{"x":"LOCKTEXT"}}\n');
+  mkdirSync(join(cwd, 'dist')); writeFileSync(join(cwd, 'dist', 'app.min.js'), 'BUILTTEXT\n');
+  edit(cwd);
+  const change = await tourChange(cwd);
+  const lock = change.files.find(f => f.path === 'package-lock.json');
+  assert.deepEqual(lock.hunks, []);
+  assert.match(lock.note, /tool makes this file/);
+  assert.ok(change.files.find(f => f.path === 'dist/app.min.js'));
+  const prompt = tourPrompt(change);
+  assert.doesNotMatch(prompt, /LOCKTEXT|BUILTTEXT/);
+  assert.match(prompt, /TWO/);
+  const tour = normalizeTour(reply(), change);
+  assert.deepEqual(tour.alsoChanged.map(f => f.path).sort(), ['dist/app.min.js', 'package-lock.json']);
+});

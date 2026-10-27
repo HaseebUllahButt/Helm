@@ -13,6 +13,8 @@ const exec = promisify(execFile);
 const git = (cwd, args) => exec('git', ['-C', cwd, '-c', 'core.quotePath=false', ...args],
   { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 30_000 }).then(r => r.stdout);
 const digest = text => createHash('sha256').update(text).digest('hex');
+// Lock files, builds and source maps: long, made by tools, and no help to a reader.
+const GENERATED = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|poetry\.lock|composer\.lock|Gemfile\.lock|go\.sum|dist\/.*|build\/.*|[^/]+\.min\.(js|css)|[^/]+\.map)$/;
 
 // Like T3 Code's guide normalizer, use real diff ranges and account for every file.
 export function tourHunks(patch) {
@@ -58,7 +60,8 @@ export async function tourChange(cwd, scope = 'edits', hash) {
     const outside = full && (!full.startsWith(root + '/') || isSecretPath(relative(root, full)));
     let patch = '';
     const hidden = isSecretPath(path) || !!outside;
-    if (!hidden) {
+    const generated = !hidden && GENERATED.test(path);
+    if (!hidden && !generated) {
       if ((untracked + initial).split('\0').includes(path)) {
         patch = await git(root, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-index', '--', '/dev/null', path])
           .catch(e => { if (e.code === 1 && typeof e.stdout === 'string') return e.stdout; throw e; });
@@ -69,7 +72,9 @@ export async function tourChange(cwd, scope = 'edits', hash) {
       }
     }
     files.push({ path, hidden, hunks: tourHunks(patch), note: hidden ? 'Helm hides this file because it can contain passwords or keys.'
-      : !patch.includes('@@ ') ? 'This file has no text changes to show.' : '', fingerprint: digest(patch) });
+      : generated ? 'A tool makes this file, so the tour does not show it.'
+        : !patch.includes('@@ ') ? 'This file has no text changes to show.' : '',
+      fingerprint: digest(generated ? (await git(root, ['diff', '--no-renames', '--stat', ...range, '--', path]).catch(() => path)) : patch) });
   }
   const identity = digest(JSON.stringify({ root, scope, commit, base, files }));
   return { root, scope, commit, base, label, identity, files };
