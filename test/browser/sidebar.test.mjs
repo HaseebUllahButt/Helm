@@ -354,12 +354,12 @@ test('Running counts only working threads and excludes idle native sessions', as
   await page.locator('.main.showing .session-bar').filter({ hasText: 'Stale work' }).waitFor();
   await page.goBack();
   await page.locator('.sidebar.showing').waitFor();
-  const readout = await page.locator('.main .chooser .readout').textContent();
+  const readout = await page.locator('.main .home .home-state').textContent();
   assert.match(readout, /1 running/);
   assert.match(readout, /1 needs you/);
-  const chooserRows = page.locator('.main .chooser .row.machine');
-  assert.equal(await chooserRows.filter({ hasText: 'laptop' }).locator('.rm').textContent(), '1 running');
-  assert.equal(await chooserRows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'No chats are running.');
+  const cards = page.locator('.main .home .home-mcard');
+  assert.equal(await cards.filter({ hasText: 'laptop' }).locator('.home-msaid').textContent(), '1 running · 1 needs you');
+  assert.equal(await cards.filter({ hasText: 'vm' }).locator('.home-msaid').textContent(), 'Nothing is running.');
   const machineSummaries = await rows.locator('.rm').allTextContents();
   const runningTotal = machineSummaries.reduce((total, text) => total + (+(/^(\d+) running$/.exec(text)?.[1] ?? 0)), 0);
   assert.equal(runningTotal, +(/(\d+) running/.exec(readout)[1]), 'sidebar per-machine counts add up to the readout');
@@ -369,6 +369,32 @@ test('Running counts only working threads and excludes idle native sessions', as
   assert.ok(await done.getByText('Shared stopped', { exact: true }).isVisible());
   await rows.filter({ hasText: 'vm' }).click();
   await page.locator('.main.showing h1').filter({ hasText: 'vm' }).waitFor();
+});
+
+test('the logo opens Home: a start box on any machine and a card per machine', async t => {
+  const { page, boot } = await pageFor(t, { width: 1280, height: 900 });
+  await boot();
+  await page.evaluate(() => {
+    const session = (id, title, status) => ({ id, title, cwd: '/project', engine: 'codex', profileId: 'codex', driver: 'codex', turns: 1, status, alive: true, updatedAt: Date.now() });
+    window.mount(window.makeClient([
+      { id: 'laptop', name: 'Laptop', online: true, info: {} },
+      { id: 'vm', name: 'VM', online: false, lastSeen: Date.now() - 2 * 3600_000, info: {} },
+    ], { laptop: [session('one', 'Build the API', 'working')] }));
+  });
+  // A wide screen opens on the first machine once.
+  await page.getByText('What should we build on', { exact: false }).waitFor();
+  await page.getByRole('button', { name: 'Home' }).click();
+  await page.getByRole('heading', { name: 'What should we build?' }).waitFor();
+  const laptop = page.locator('.home-mcard').filter({ hasText: 'Laptop' });
+  assert.match(await laptop.innerText(), /1 running[\s\S]*Build the API/);
+  assert.match(await page.locator('.home-mcard.offline').innerText(), /VM\s+Offline · seen 2h ago/);
+  assert.equal(await page.getByRole('button', { name: 'Machine: Laptop' }).count(), 1, 'the box starts on the online machine');
+  await page.getByRole('textbox', { name: 'Ask anything' }).fill('Add a health check');
+  await page.keyboard.press('Enter');
+  await page.getByText('Pick a folder on', { exact: false }).waitFor();
+  await page.keyboard.press('Escape');
+  await laptop.getByRole('button', { name: 'Laptop' }).click();
+  await page.getByText('What should we build on', { exact: false }).waitFor();
 });
 
 test('selected running threads have a distinct highlight on desktop and phone', async testContext => {
