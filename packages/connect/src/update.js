@@ -7,6 +7,7 @@ import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { HOME, HELM_DIR } from './paths.js';
 import { systemdArg } from './service.js';
+import { webBuild } from './web-build.js';
 
 const exec = promisify(execFile);
 const binPath = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
@@ -179,6 +180,26 @@ export async function rebuildIfCommitted(running, dir = ROOT, { rebuild = true, 
     const head = await git(['rev-parse', 'HEAD']);
     if (!running || head === running) return { updated: false, reason: 'nothing new' };
     return applyCommit(dir, git, { head: running, tip: head, rebuild, restart, rollback: false });
+  });
+}
+
+/**
+ * The app this machine serves was built from another commit than the one it
+ * runs: an update moved the checkout again while it was building, or after
+ * it asked for its restart. The relay serves files from disk, so a build is
+ * all it needs - no restart.
+ */
+export async function rebuildStaleApp(running, dir = ROOT, { build = () => gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir }) } = {}) {
+  return locked(async () => {
+    const git = gitIn(dir);
+    if (await git(['status', '--porcelain'])) return { rebuilt: false };
+    const head = await git(['rev-parse', 'HEAD']);
+    const stamp = webBuild(join(dir, 'apps', 'web', 'dist'));
+    // No stamp: a build from before stamps existed, or a development tree.
+    if (!running || head !== running || !stamp || stamp.commit === head) return { rebuilt: false };
+    say(`the app was built from ${stamp.commit.slice(0, 7)}; building it from ${head.slice(0, 7)}`);
+    await build();
+    return { rebuilt: true };
   });
 }
 

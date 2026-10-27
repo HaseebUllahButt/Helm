@@ -53,7 +53,7 @@ import { TaskTransfers } from './task-transfer.js';
 import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { CliUpdater } from './cli-updates.js';
-import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, watchCheckout } from './update.js';
+import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, rebuildStaleApp, watchCheckout } from './update.js';
 import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
 import { worktreeNote } from './chat-worktree.js';
@@ -360,7 +360,7 @@ export class Daemon {
       const running = (await this.#versionP)?.full;
       const net = loadNetwork() ?? this.net;
       const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
-        syncFromBundle, net, id: this.id, rpc: hubRpc });
+        rebuildStaleApp, syncFromBundle, net, id: this.id, rpc: hubRpc });
       this.syncNote = r.note ?? null;
       if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting now'); }
     } catch (err) {
