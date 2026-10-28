@@ -72,7 +72,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   compacting?: number | boolean;
   children?: React.ReactNode;
   /** Resolves to what was added, so each gets its "[Image #N]" or "[File: name]". */
-  onAttach?: (files: FileList | File[]) => void | Promise<{ name: string; mime: string }[] | void>;
+  onAttach?: (files: FileList | File[]) => void | Promise<{ name: string; mime: string; imageNumber?: number }[] | void>;
   attachments?: { name: string; mime: string; url: string }[];
   onRemoveAttachment?: (i: number) => void;
   /** False when the running model cannot see images; other files still go. */
@@ -122,6 +122,9 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
 }) {
   const [keys, setKeys] = useState(false);
   const [dragging, setDragging] = useState(false);
+  /** Pictures shown while they are made smaller and saved. */
+  const [incoming, setIncoming] = useState<{ key: number; url: string; name: string }[]>([]);
+  const incomingSeq = useRef(0);
   const [pick, setPick] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [allQueued, setAllQueued] = useState(false);
@@ -193,11 +196,22 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   const attach = async (files: FileList | File[]) => {
     if (!onAttach) return;
     const el = ref.current;
-    const at = el && document.activeElement === el ? el.selectionStart : draftNow.current.length;
+    // At the end, it stays at the end: a second quick paste then lands after the first.
+    const at = el && document.activeElement === el && el.selectionStart < draftNow.current.length ? el.selectionStart : Infinity;
     let images = (attachments ?? []).filter(isImageAttachment).length;
-    const added = await onAttach(files);
+    const list = Array.from(files);
+    // The picture shows at once, as it is, while it is made smaller.
+    const shown = list.filter(looksLikeImage).map((f) => ({ key: ++incomingSeq.current, url: URL.createObjectURL(f), name: f.name || 'image' }));
+    if (shown.length) setIncoming((now) => [...now, ...shown]);
+    let added;
+    try { added = await onAttach(list); }
+    finally {
+      if (shown.length) setIncoming((now) => now.filter((item) => !shown.includes(item)));
+      // After the swap is drawn, so the box never flashes empty.
+      setTimeout(() => shown.forEach((item) => URL.revokeObjectURL(item.url)), 1000);
+    }
     if (!added?.length) return;
-    const tokens = added.map((a) => isImageAttachment(a) ? `[Image #${++images}]` : `[File: ${a.name}]`).join(' ');
+    const tokens = added.map((a) => isImageAttachment(a) ? `[Image #${a.imageNumber ?? ++images}]` : `[File: ${a.name}]`).join(' ');
     const now = draftNow.current;
     const pre = now.slice(0, Math.min(at, now.length)), post = now.slice(pre.length);
     setDraft(`${pre}${pre && !/\s$/.test(pre) ? ' ' : ''}${tokens}${/^\s/.test(post) ? '' : ' '}${post}`);
@@ -509,10 +523,10 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
               })}
             </div>
           )}
-          {attachments && attachments.length > 0 && (
+          {(!!attachments?.length || incoming.length > 0) && (
             <div className="attach-previews">
-              {attachments.map((a, i) => {
-                const label = isImageAttachment(a) ? `Image #${attachments.slice(0, i + 1).filter(isImageAttachment).length}` : a.name;
+              {(attachments ?? []).map((a, i, all) => {
+                const label = isImageAttachment(a) ? `Image #${all.slice(0, i + 1).filter(isImageAttachment).length}` : a.name;
                 return (
                   <span key={i} className={`attach-preview${isImageAttachment(a) ? '' : ' file'}`} title={isImageAttachment(a) ? `[${label}] ${a.name}` : a.name}>
                     {isImageAttachment(a) ? <img src={a.url} alt={label} /> : <span className="attach-file">
@@ -523,6 +537,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
                   </span>
                 );
               })}
+              {incoming.map((item) => <span key={`incoming-${item.key}`} className="attach-preview" title={item.name} aria-busy="true"><img src={item.url} alt={item.name} /></span>)}
             </div>
           )}
           {/* The same text drawn behind the box, see-through except for a
