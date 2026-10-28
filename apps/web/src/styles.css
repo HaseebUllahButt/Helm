@@ -176,7 +176,9 @@
   --pill-fg:   #0a0a0a;
   --toast-bg:  var(--raised);
   --shadow:    0 1px 0 rgb(255 255 255 / 4%) inset, 0 18px 48px -18px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 25%);
-  --need-bg:   color-mix(in srgb, var(--amber) 7%, var(--raised));
+  /* "Needs you" is white, not yellow (owner, 2026-10-28). Yellow stays
+     for warnings: offline, limits, risky modes. */
+  --need: var(--text); --need-text: var(--text); --on-need: var(--bg);
   --link:      #b7a9ff;
   --diff-add:  var(--emerald);
   --diff-del:  var(--red);
@@ -282,7 +284,7 @@ code, pre, kbd { font-family: var(--mono); }
     position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%;
     border: 2px solid var(--sidebar); background: var(--sky);
   }
-  .rail-chat.rail-need .rail-dot { background: var(--amber); }
+  .rail-chat.rail-need .rail-dot { background: var(--need); }
   @media (prefers-reduced-motion: reduce) { .rail-chat.rail-working .rail-dot { animation: none; } }
   .main { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; }
 }
@@ -468,8 +470,8 @@ code, pre, kbd { font-family: var(--mono); }
 .section .spacer { flex: 1; }
 .section .quiet { text-transform: none; letter-spacing: 0; }
 .section .linkish { text-transform: none; letter-spacing: 0; }
-.section.attention { color: var(--amber-text); }
-.section.attention::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex: none; }
+.section.attention { color: var(--need-text); }
+.section.attention::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--need); flex: none; }
 
 .rows { display: flex; flex-direction: column; gap: 0; }
 
@@ -633,11 +635,11 @@ code, pre, kbd { font-family: var(--mono); }
    colour. */
 .mdot.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--dot-off); }
 .sdot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin: 0 3px; display: inline-block; }
-.sdot.blocked { background: var(--amber); }
+.sdot.blocked { background: var(--need); }
 .badge {
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: var(--t-micro); font-weight: 650; background: var(--amber); color: var(--on-amber);
+  font-size: var(--t-micro); font-weight: 650; background: var(--need); color: var(--on-need);
 }
 
 /* Status chips: a still dot plus a word. */
@@ -646,7 +648,7 @@ code, pre, kbd { font-family: var(--mono); }
   font-size: var(--t-micro); font-weight: 550; letter-spacing: 0.01em; color: var(--mutedfg);
 }
 .chip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.chip.blocked { color: var(--amber-text); }
+.chip.blocked { color: var(--need-text); }
 .chip.working { color: var(--sky); }
 .chip.dot-only { padding: 6px; }
 .chip.dot-only i { width: 8px; height: 8px; }
@@ -1646,7 +1648,7 @@ pre.snippet {
   text-transform: none; letter-spacing: 0; color: var(--mutedfg); font-weight: 400; font-size: var(--t-micro);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
-.section.fold.attention { color: var(--amber-text); }
+.section.fold.attention { color: var(--need-text); }
 
 .fold-toggle {
   display: flex; align-items: center; gap: 8px;
@@ -1808,7 +1810,7 @@ li.marked .usage-share-track { margin-left: 32px; }
 /* "Waiting" without a colour: a ring that breathes out from the agent. */
 .island-logo::after {
   content: ''; position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid rgb(255 255 255 / 55%);
-  animation: island-ring 2.4s ease-in-out infinite;
+  animation: island-ring 2.4s ease-in-out 3 forwards;
 }
 @keyframes island-ring { 0%, 100% { opacity: .9; transform: scale(1); } 50% { opacity: 0; transform: scale(1.25); } }
 .island-title { flex: 1; min-width: 0; font-size: var(--t-meta); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1891,7 +1893,7 @@ button.linkish:disabled { color: var(--icon); }
 .rows.stale .row .mark, .rows.stale .row .glyph { opacity: 0.55; }
 
 /* "waiting 12m" on a permission sheet, and the queued tag on a bubble. */
-.tag.waiting { background: color-mix(in srgb, var(--amber) 14%, transparent); color: var(--amber-text); }
+.tag.waiting { background: var(--accent); color: var(--need-text); }
 .turn.user.queued .bubble { opacity: 0.72; }
 .bubble-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: var(--t-micro); color: var(--mutedfg); }
 
@@ -1962,7 +1964,9 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .need-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 9px; border-radius: 8px; text-align: left; color: inherit; }
 .need-main:hover, .need.active .need-main { background: var(--select); }
 .need-t { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.need-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--hi); animation: need-breathe 2.4s ease-in-out infinite; }
+/* It breathes three times, then stays still: endless motion redraws the
+   window for as long as anything waits. */
+.need-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--hi); animation: need-breathe 2.4s ease-in-out 3; }
 @keyframes need-breathe {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hi) 45%, transparent); }
   50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--hi) 0%, transparent); }
@@ -2147,7 +2151,6 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
   --pill-fg:   #ffffff;
   --toast-bg:  #ffffff;
   --shadow:    0 18px 48px -20px rgb(26 29 36 / 30%), 0 2px 8px rgb(26 29 36 / 8%);
-  --need-bg:   color-mix(in srgb, var(--amber) 9%, #ffffff);
   --link:      #2a55c4;
   --diff-add-fg: #166534;
   --diff-del-fg: #991b1b;
@@ -2330,8 +2333,8 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .git-agent-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--mutedfg); }
 .git-agent.s-working .git-agent-state { color: var(--sky); }
 .git-agent.s-working .git-agent-state i { background: var(--sky); }
-.git-agent.s-blocked .git-agent-state { color: var(--amber-text); }
-.git-agent.s-blocked .git-agent-state i { background: var(--amber); }
+.git-agent.s-blocked .git-agent-state { color: var(--need-text); }
+.git-agent.s-blocked .git-agent-state i { background: var(--need); }
 .git-shared { display: flex; align-items: center; gap: 6px; padding: 2px 8px 4px; color: var(--amber-text); font-size: var(--t-micro); }
 .git-shared svg { flex: none; }
 
@@ -2372,7 +2375,7 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .git-mini { position: relative; display: inline-flex; }
 .git-mini .mark { width: 18px; height: 18px; border-radius: 5px; }
 .git-mini i { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--mutedfg); border: 2px solid var(--card); }
-.git-mini.s-working i { background: var(--sky); } .git-mini.s-blocked i { background: var(--amber); }
+.git-mini.s-working i { background: var(--sky); } .git-mini.s-blocked i { background: var(--need); }
 .git-more { font-size: var(--t-micro); color: var(--mutedfg); }
 
 /* A commit, opened. */
@@ -2722,7 +2725,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-status[aria-expanded="true"]:not(:hover) { background: none; }
 .delegation-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .delegation-status.state-working, .delegation-status.state-starting { color: var(--sky); }
-.delegation-status.state-blocked { color: var(--amber-text); }
+.delegation-status.state-blocked { color: var(--need-text); }
 .delegation-status.state-error { color: var(--red); }
 .delegation-status.state-done i { background: var(--ok); box-shadow: var(--ok-glow); }
 .delegation-detail { display: grid; gap: 12px; margin: 0 12px; padding: 12px 0 14px; border-top: 1px solid var(--edge); font-size: var(--t-body); }
@@ -2839,7 +2842,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .team-summary summary { position: sticky; top: 0; z-index: 1; background: var(--card); padding: 12px 14px; cursor: pointer; font-size: var(--t-meta); }
 .team-summary summary strong { margin-right: 12px; }
 .team-summary summary span { color: var(--text-dim); }
-.team-summary.needs-attention { border-color: var(--amber-text); }
+.team-summary.needs-attention { border-color: color-mix(in srgb, var(--need) 35%, transparent); }
 .team-summary ul { list-style: none; padding: 0 10px 10px; margin: 0; }
 .team-summary li { border-top: 1px solid var(--line); }
 .team-task { display: flex; align-items: center; gap: 10px; text-align: left; width: 100%; background: transparent; border: none; padding: 12px 4px; }
@@ -2847,15 +2850,16 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .team-task b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
 .team-task small { display: block; color: var(--text-dim); margin-top: 3px; }
 .team-state { flex: none; font-size: var(--t-micro); color: var(--text-dim); }
-.team-state.state-blocked, .team-state.state-error { color: var(--amber-text); }
+.team-state.state-blocked { color: var(--need-text); }
+.team-state.state-error { color: var(--amber-text); }
 .team-result { margin: 0 8px 10px 30px; color: var(--text-dim); font-size: var(--t-meta); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 .team-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
 .team-actions button { min-height: 36px; font-size: var(--t-meta); padding: 6px 10px; }
 .child-requests { display: grid; gap: 4px; max-height: 24vh; overflow-y: auto; }
-.child-requests button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 9px 12px; color: var(--amber-text); }
+.child-requests button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 9px 12px; color: var(--need-text); }
 .child-requests button span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .child-requests small { display: block; color: var(--text-dim); font-size: var(--t-meta); }
-.subagent-request { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 5px 8px; color: var(--amber-text); font-size: var(--t-meta); }
+.subagent-request { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 5px 8px; color: var(--need-text); font-size: var(--t-meta); }
 .subagent-request.subagent-open { color: var(--text-dim); }
 .subagent-request.subagent-open:hover { color: var(--text); }
 .thread-details-launch { position: relative; }
@@ -3054,7 +3058,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tstat.working i { width: 6px; height: 6px; border-radius: 50%; background: var(--sky); }
 /* The chat screen's ".working" line must not size the row's clock. */
 .tri-row .tstat.working { min-height: 0; padding: 0; gap: 5px; font-size: var(--t-micro); }
-.tstat.needs { color: var(--amber-text); font-weight: 650; }
+.tstat.needs { color: var(--need-text); font-weight: 650; }
 .tstat.failed { color: var(--red); }
 .tstat.unread { color: var(--ok); }
 .tstat.unread i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: var(--ok-glow); }
@@ -3081,11 +3085,11 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .section.shelf .count { font-size: var(--t-micro); color: var(--mutedfg); font-weight: 450; }
 .section.shelf .note-inline { font-size: var(--t-micro); }
 .section.shelf .note-inline.fresh { color: var(--ok); font-weight: 550; }
-.section.fold.shelf.attention { color: var(--amber-text); }
+.section.fold.shelf.attention { color: var(--need-text); }
 .section.shelf.attention::before { display: none; }
 .section.shelf.attention .count {
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
-  background: var(--amber); color: var(--on-amber); font-weight: 650;
+  background: var(--need); color: var(--on-need); font-weight: 650;
 }
 .shelf-more {
   display: block; width: 100%; margin-top: 0; padding: 5px 10px; text-align: left;
@@ -3620,7 +3624,7 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 /* ------------------------------------------------------------- Home (wide) */
 
 .pad.column.home { padding-top: 10vh; }
-.home .home-state .attention { color: var(--amber-text); }
+.home .home-state .attention { color: var(--need-text); }
 /* The start box: the message box's plate and chips, with its sheets docked
    above it the same way. */
 .home-ask {

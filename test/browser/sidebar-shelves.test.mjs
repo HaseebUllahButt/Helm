@@ -85,7 +85,7 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   await shelf(page, 'Settled').waitFor();
   assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Running', 'Settled', 'Machines']);
 
-  // Needs you: only shown when something waits, with an amber count.
+  // Needs you: only shown when something waits, with a white count.
   const needs = shelf(page, 'Needs you');
   assert.equal(await needs.locator('.count').innerText(), '1');
   assert.equal(await needs.locator('.need').count(), 1);

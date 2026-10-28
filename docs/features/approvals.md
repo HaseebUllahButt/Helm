@@ -47,8 +47,10 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 - **Tests:** `test/driver-claude`, `driver-codex`, `native-claude-chat`.
 
 ## "Needs you" on Home
-- **Rules (owner, 2026-10-28):** no yellow. A waiting chat is a plain row
-  with a white dot that breathes; its second line says what it wants.
+- **Rules (owner, 2026-10-28):** no yellow for "needs you" anywhere; it is
+  white (`--need`). Yellow stays for warnings. A waiting chat is a plain row
+  with a white dot that breathes three times, then stays still (endless
+  motion redraws the window); its second line says what it wants.
   Snooze and "Dismiss failure" sit behind the row's ⋯. A row with a request
   opens the waiting box; a failure opens the chat.
 - **Prove (driven 2026-10-28):** start two fake-ask chats with
