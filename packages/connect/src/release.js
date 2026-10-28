@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cp, mkdir, rm, readdir, readlink, symlink, unlink } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, lstatSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { HELM_DIR } from './paths.js';
@@ -44,6 +44,7 @@ export async function publishRelease(folder, dir, paths) {
 }
 
 async function moveLinks(path, from, to) {
+  if (!lstatSync(path).isDirectory()) return;
   for (const entry of await readdir(path, { withFileTypes: true })) {
     const file = join(path, entry.name);
     if (entry.isDirectory()) await moveLinks(file, from, to);

@@ -10,7 +10,7 @@ const oldDependency = "module.exports = 'old dependency';\n";
 const root = mkdtempSync(join(tmpdir(), 'helm-update-recovery-'));
 process.env.HELM_DIR = join(root, 'state');
 mkdirSync(process.env.HELM_DIR);
-const { selfUpdate, syncFromBundle, makeBundle, rebuildIfCommitted, rebuildStaleApp } = await import('../packages/connect/src/update.js');
+const { selfUpdate, syncFromBundle, makeBundle, rebuildIfCommitted, rebuildStaleApp, watchRelease } = await import('../packages/connect/src/update.js');
 const moduleUrl = new URL('../packages/connect/src/update.js', import.meta.url).href;
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
 const put = (dir, file, text) => { mkdirSync(join(dir, file, '..'), { recursive: true }); writeFileSync(join(dir, file), text); };
@@ -26,7 +26,7 @@ function fixture(t) {
   git(dir, 'init', '-qb', 'main', remote);
   git(remote, 'config', 'user.email', 'test@example.invalid');
   git(remote, 'config', 'user.name', 'test');
-  put(remote, '.gitignore', 'node_modules/\ndist/\n');
+  put(remote, '.gitignore', 'node_modules/\ndist/\n*.node\n');
   put(remote, 'v', 'old source');
   put(remote, 'package-lock.json', '{}');
   put(remote, 'apps/web/package.json', '{"name":"@helm/web"}');
@@ -233,5 +233,36 @@ test('edits made while copying installed files stop the update before source mov
   await assert.rejects(selfUpdate(f.installed, { restart: false }), /files changed during the update/);
   assert.equal(git(f.installed, 'rev-parse', 'HEAD'), f.previous);
   assert.equal(readFileSync(join(f.installed, 'v'), 'utf8'), 'owner edit during backup');
+  assertRestored(f.installed);
+});
+
+
+test('a staged update publishes the built chat reader', async t => {
+  const f = fixture(t);
+  put(f.installed, 'native/log-index/log-index.old.node', 'old reader');
+  f.npm(`${damage}
+fs.mkdirSync('native/log-index', {recursive:true});
+fs.writeFileSync('native/log-index/log-index.new.node', 'new reader');`);
+  assert.equal((await selfUpdate(f.installed, {restart:false})).updated, true);
+  assert.equal(readFileSync(join(f.installed, 'native/log-index/log-index.new.node'), 'utf8'), 'new reader');
+});
+test('startup recovery restores the previous chat reader and removes the failed reader', async t => {
+  const f = fixture(t);
+  put(f.installed, 'native/log-index/log-index.old.node', 'old reader');
+  f.npm(`${damage}
+fs.mkdirSync('native/log-index', {recursive:true});
+fs.writeFileSync('native/log-index/log-index.new.node', 'new reader');`);
+  const service = join(f.installed, '..', 'bin', 'systemctl');
+  writeFileSync(service, '#!/bin/sh\ncase " $* " in *" restart "*) exit 1;; esac\nexit 0\n'); chmodSync(service, 0o755);
+  const result = await selfUpdate(f.installed);
+  assert.equal(result.failed.length, 2);
+  const journal = join(process.env.HELM_DIR, 'update-state.json');
+  const state = JSON.parse(readFileSync(journal));
+  state.phase = 'starting'; state.deadline = 0; state.units = [];
+  writeFileSync(journal, JSON.stringify(state));
+  await watchRelease();
+  assert.equal(git(f.installed, 'rev-parse', 'HEAD'), f.previous);
+  assert.equal(readFileSync(join(f.installed, 'native/log-index/log-index.old.node'), 'utf8'), 'old reader');
+  assert.equal(existsSync(join(f.installed, 'native/log-index/log-index.new.node')), false);
   assertRestored(f.installed);
 });
