@@ -3844,9 +3844,13 @@ details.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
    own buttons float over the top right corner, so the bars keep clear of
    them, and the bars are where the window is dragged from. */
 @media (display-mode: window-controls-overlay) {
-  .bar { app-region: drag; -webkit-app-region: drag; padding-right: calc(10px + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)); }
+  :root { --overlay-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)); }
+  .bar { app-region: drag; -webkit-app-region: drag; padding-right: calc(10px + var(--overlay-right)); }
   .sidebar .bar.side { padding-right: 10px; }
-  .bar button, .bar a, .bar input, .bar select, .bar textarea, .bar [role="button"] { app-region: no-drag; -webkit-app-region: no-drag; }
+  /* A notice above the bar takes the top edge, so it keeps clear too. */
+  .main > .banner, .main > .send-notice { app-region: drag; -webkit-app-region: drag; padding-right: calc(12px + var(--overlay-right)); }
+  .bar button, .bar a, .bar input, .bar select, .bar textarea, .bar [role="button"],
+  .main > .banner button, .main > .send-notice button { app-region: no-drag; -webkit-app-region: no-drag; }
 }
 
 /* Another agent's message in the chat: one plain line of quiet text - its

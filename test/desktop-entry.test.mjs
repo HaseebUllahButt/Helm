@@ -47,11 +47,44 @@ test('a windowed entry only claims to be one when it can be', async (t) => {
   assert.equal(r.browser, 'no-such-browser-9000');
   assert.match(text, /^Exec=no-such-browser-9000 .*--app=http:/m);
   assert.match(text, /^StartupWMClass=chrome-127\.0\.0\.1__-Default$/m);
-  // Its own profile, set to the system title bar, so a tiling desktop shows
-  // no bar repeating the chat's name; the everyday browser profile is untouched.
+  // Its own profile, so the everyday browser profile is untouched.
   assert.match(text, new RegExp(`--user-data-dir=${join(HOME, 'helm', 'app-window')} `));
   const prefs = JSON.parse(readFileSync(join(HOME, 'helm', 'app-window', 'Default', 'Preferences'), 'utf8'));
-  assert.equal(prefs.browser.custom_chrome_frame, false);
+  assert.equal(prefs.browser.custom_chrome_frame, true, "the overlay needs Chromium's own frame");
+});
+
+test('an installed app opens with its own top row and no Chromium bar', async (t) => {
+  const { installApp } = await import('../packages/connect/src/desktop.js');
+  if (process.platform !== 'linux') return t.skip('desktop entries are Linux-only');
+  const r = installApp({ url: 'http://127.0.0.1:8787/', browser: 'no-such-browser-9000', appId: 'abcdef' });
+  const text = readFileSync(entry(), 'utf8');
+  assert.equal(r.overlay, true);
+  assert.match(text, /^Exec=no-such-browser-9000 .*--enable-features=DesktopPWAsWindowControlsOverlayWithNoToggle --app-id=abcdef$/m);
+  assert.match(text, /^StartupWMClass=chrome-abcdef-Default$/m);
+  assert.match(text, /^X-Helm-Url=http:\/\/127\.0\.0\.1:8787\/$/m);
+});
+
+test('a start updates an old launcher, but only for the Helm it opens', async (t) => {
+  const { refreshAppLauncher } = await import('../packages/connect/src/desktop.js');
+  if (process.platform !== 'linux') return t.skip('desktop entries are Linux-only');
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  mkdirSync(join(HOME, 'applications'), { recursive: true });
+  const old = '[Desktop Entry]\nExec=/usr/bin/chromium --profile-directory=Default --app=http://127.0.0.1:8787/\n';
+  const asked = [];
+  const install = async (o) => { asked.push(o); return 'abcdef'; };
+
+  writeFileSync(entry(), old);
+  assert.equal((await refreshAppLauncher({ url: 'http://127.0.0.1:9999/', install })).updated, false, 'a test copy on another port leaves it');
+  assert.equal(readFileSync(entry(), 'utf8'), old);
+  assert.equal((await refreshAppLauncher({ url: 'http://127.0.0.1:8787/', install: async () => null })).updated, false, 'a failed install leaves it');
+  assert.equal(readFileSync(entry(), 'utf8'), old);
+
+  assert.equal((await refreshAppLauncher({ url: 'http://127.0.0.1:8787/', install })).updated, true);
+  assert.deepEqual(asked.at(-1), { url: 'http://127.0.0.1:8787/', browser: '/usr/bin/chromium' });
+  assert.match(readFileSync(entry(), 'utf8'), /--app-id=abcdef$/m);
+  asked.length = 0;
+  assert.equal((await refreshAppLauncher({ url: 'http://127.0.0.1:8787/', install })).updated, false, 'once is enough');
+  assert.equal(asked.length, 0);
 });
 
 test('removing it takes the icons with it', async (t) => {
