@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync, watch } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync, watch, readdirSync, lstatSync, constants } from 'node:fs';
+import { cp, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -151,7 +152,7 @@ export async function syncFromBundle(bundle, dir = ROOT, { rebuild = true, resta
   return locked(async () => {
     const git = gitIn(dir);
     if (!existsSync(join(dir, '.git'))) return { updated: false, reason: `${dir} is not a git checkout` };
-    await recoverUpdate(dir, git);
+    const resumed = await recoverUpdate(dir, git);
     if (await git(['status', '--porcelain'])) return { updated: false, reason: 'unsaved changes here' };
     const tmp = join(HELM_DIR, `incoming-${process.pid}-${Date.now()}.git`);
     let tip;
@@ -161,7 +162,11 @@ export async function syncFromBundle(bundle, dir = ROOT, { rebuild = true, resta
       tip = await git(['rev-parse', 'FETCH_HEAD']);
     } finally { rmSync(tmp, { force: true }); }
     const head = await git(['rev-parse', 'HEAD']);
-    if (head === tip) return { updated: false, reason: `already at ${tip.slice(0, 7)}` };
+    if (head === tip) {
+      if (resumed?.phase === 'prepared') return applyCommit(dir, git, { head, tip, rebuild, restart, rollback: resumed.rollback });
+      if (resumed?.phase === 'built') return finishUpdate(resumed, restart);
+      return { updated: false, reason: `already at ${tip.slice(0, 7)}` };
+    }
     if (!(await git(['merge-base', '--is-ancestor', head, tip]).then(() => true, () => false))) {
       return { updated: false, reason: 'both machines have their own changes', diverged: true };
     }
@@ -176,10 +181,12 @@ export async function syncFromBundle(bundle, dir = ROOT, { rebuild = true, resta
 export async function rebuildIfCommitted(running, dir = ROOT, { rebuild = true, restart = true } = {}) {
   return locked(async () => {
     const git = gitIn(dir);
+    const resumed = await recoverUpdate(dir, git);
     if (await git(['status', '--porcelain'])) return { updated: false, reason: 'unsaved changes here' };
     const head = await git(['rev-parse', 'HEAD']);
-    if (!running || head === running) return { updated: false, reason: 'nothing new' };
-    return applyCommit(dir, git, { head: running, tip: head, rebuild, restart, rollback: false });
+    if (resumed?.phase === 'built') return finishUpdate(resumed, restart);
+    if ((!running || head === running) && resumed?.phase !== 'prepared') return { updated: false, reason: 'nothing new' };
+    return applyCommit(dir, git, { head: running || head, tip: head, rebuild, restart, rollback: false });
   });
 }
 
@@ -192,13 +199,24 @@ export async function rebuildIfCommitted(running, dir = ROOT, { rebuild = true, 
 export async function rebuildStaleApp(running, dir = ROOT, { build = () => gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir }) } = {}) {
   return locked(async () => {
     const git = gitIn(dir);
+    await recoverUpdate(dir, git);
     if (await git(['status', '--porcelain'])) return { rebuilt: false };
     const head = await git(['rev-parse', 'HEAD']);
     const stamp = webBuild(join(dir, 'apps', 'web', 'dist'));
     // No stamp: a build from before stamps existed, or a development tree.
     if (!running || head !== running || !stamp || stamp.commit === head) return { rebuilt: false };
     say(`the app was built from ${stamp.commit.slice(0, 7)}; building it from ${head.slice(0, 7)}`);
-    await build();
+    const state = { dir, previousHead: head, targetHead: head, phase: 'prepared', restart: false, rollback: false };
+    state.artifacts = await saveArtifacts(dir, ['apps/web/dist']);
+    try {
+      writeUpdateState(state);
+      await build();
+    } catch (error) {
+      await restoreArtifacts(state);
+      await clearUpdateState(state);
+      throw error;
+    }
+    await clearUpdateState(state);
     return { rebuilt: true };
   });
 }
@@ -259,7 +277,70 @@ function writeUpdateState(state) {
   renameSync(temp, UPDATE_STATE_FILE);
 }
 
-function clearUpdateState() { rmSync(UPDATE_STATE_FILE, { force: true }); }
+async function clearUpdateState(state = readUpdateState()) {
+  rmSync(UPDATE_STATE_FILE, { force: true });
+  if (state?.artifacts) await rm(artifactBackup(state.artifacts), { recursive: true, force: true });
+}
+
+// Copy installed files before npm or a build can replace them. Leave the
+// originals available while saving the copies. Copy links as links; relative
+// targets must stay unchanged when restored to the checkout.
+const copyArtifact = (from, to) => cp(from, to, {
+  recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE,
+});
+const present = (path) => { try { lstatSync(path); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
+function artifactBackup(artifacts) {
+  if (!/^update-backup-[0-9a-f-]+$/.test(artifacts.id)) throw new Error('Cannot read the saved update files.');
+  return join(HELM_DIR, artifacts.id);
+}
+async function saveArtifacts(dir, paths) {
+  const artifacts = { id: `update-backup-${randomUUID()}`, paths: [] };
+  const backup = artifactBackup(artifacts);
+  mkdirSync(backup, { mode: 0o700 });
+  try {
+    for (const path of paths) {
+      const existed = present(join(dir, path));
+      const index = artifacts.paths.length;
+      artifacts.paths.push({ path, existed });
+      if (existed) await copyArtifact(join(dir, path), join(backup, String(index)));
+    }
+    return artifacts;
+  } catch (error) {
+    await rm(backup, { recursive: true, force: true });
+    throw error;
+  }
+}
+async function restoreArtifacts(state) {
+  if (!state.artifacts) return; // Journals from older Helm versions have no copy.
+  const backup = artifactBackup(state.artifacts);
+  for (const [index, { path, existed }] of state.artifacts.paths.entries()) {
+    if (path !== 'apps/web/dist' && path !== 'node_modules' && !/^(apps|packages)\/[^/.][^/]*\/node_modules$/.test(path)) {
+      throw new Error('Cannot read the saved update files.');
+    }
+    const saved = join(backup, String(index));
+    // Check before removing anything. Retain the journal if restoration fails,
+    // so another invocation can retry rather than accepting a broken release.
+    if (existed && !present(saved)) throw new Error('Cannot find the saved update files.');
+    const installed = join(state.dir, path);
+    await rm(installed, { recursive: true, force: true });
+    if (existed) await copyArtifact(saved, installed);
+  }
+}
+async function dependencyPaths(dir, git, tip) {
+  const paths = new Set(['node_modules']);
+  for (const parent of ['apps', 'packages']) {
+    if (!existsSync(join(dir, parent))) continue;
+    for (const entry of readdirSync(join(dir, parent), { withFileTypes: true })) {
+      // restoreArtifacts rejects hidden folders, so never save one.
+      if (entry.isDirectory() && !entry.name.startsWith('.')) paths.add(`${parent}/${entry.name}/node_modules`);
+    }
+  }
+  // npm can also create nested dependencies in a newly added workspace.
+  for (const file of (await git(['ls-tree', '-r', '--name-only', tip, '--', 'apps', 'packages'])).split('\n')) {
+    if (/^(apps|packages)\/[^/]+\/package.json$/.test(file)) paths.add(file.replace(/package.json$/, 'node_modules'));
+  }
+  return [...paths];
+}
 
 /** Long builds run at low priority, so a machine stays usable while it updates. */
 const gentle = (cmd, args, opts) => platform() === 'win32'
@@ -321,21 +402,22 @@ async function requestRestart() {
 async function recoverUpdate(dir, git) {
   const state = readUpdateState();
   if (!state || state.dir !== dir) return null;
+  if (state.phase === 'prepared') await restoreArtifacts(state);
   const head = await git(['rev-parse', 'HEAD']).catch(() => '');
   const dirty = await git(['status', '--porcelain']).catch(() => null);
   if (state.phase === 'prepared') {
     if (head === state.targetHead && dirty === '' && state.rollback !== false) {
       await git(['reset', '--hard', '--quiet', state.previousHead]);
     }
-    // The reset either restored the old commit, or the checkout was changed
-    // by somebody else. In both cases do not replay an old transaction.
-    if (head !== state.targetHead || dirty === '') clearUpdateState();
-    return null;
+    await clearUpdateState(state);
+    // A rolled-back update has nothing left to do. An owner commit keeps its
+    // source, so its restored old build must be built again.
+    return head === state.targetHead && dirty === '' && state.rollback === false ? state : null;
   }
   if (state.phase === 'built' && head === state.targetHead && dirty === '') return state;
   // A different commit means the owner moved the checkout; leave it alone.
   if (state.phase === 'built' && dirty !== '') return state;
-  clearUpdateState();
+  await clearUpdateState();
   return null;
 }
 
@@ -369,13 +451,8 @@ async function updateLocked(dir, { rebuild = true, restart = true, replace = fal
     if (!resumed || resumed.targetHead !== head) {
       return { updated: false, reason: `already at ${tip.slice(0, 7)}` };
     }
-    if (!restart || resumed.restart === false) {
-      clearUpdateState();
-      return { updated: true, restarting: [] };
-    }
-    const result = await requestRestart();
-    if (!result.failed.length) clearUpdateState();
-    return { updated: true, ...result };
+    if (resumed.phase === 'prepared') return applyCommit(dir, git, { head, tip, rebuild, restart, rollback: resumed.rollback });
+    return finishUpdate(resumed, restart);
   }
   // Commits made here and not pushed would be thrown away by the reset below.
   // The VM's checkout is one you commit from, and an update asked for from a
@@ -392,12 +469,23 @@ async function updateLocked(dir, { rebuild = true, restart = true, replace = fal
  */
 async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true, rollback = true }) {
   say(`updating ${head.slice(0, 7)} -> ${tip.slice(0, 7)}`);
-  writeUpdateState({ dir, previousHead: head, targetHead: tip, phase: 'prepared', restart, rollback });
+  const state = { dir, previousHead: head, targetHead: tip, phase: 'prepared', restart, rollback };
+  const depsChanged = head === tip || !!(await git(['diff', '--name-only', head, tip, '--', 'package-lock.json']).catch(() => 'yes'));
+  const install = rebuild && (depsChanged || !existsSync(join(dir, 'node_modules')));
+  if (rebuild) state.artifacts = await saveArtifacts(dir, [
+    'apps/web/dist', ...(install ? await dependencyPaths(dir, git, tip) : []),
+  ]);
+  let started = false;
   try {
-    // Dependencies only when they changed: most changes are a few files.
-    const depsChanged = head === tip || !!(await git(['diff', '--name-only', head, tip, '--', 'package-lock.json']).catch(() => 'yes'));
+    // Copying can take time. Recheck source edits before moving the checkout.
+    const expected = rollback ? head : tip;
+    if (await git(['rev-parse', 'HEAD']) !== expected || await git(['status', '--porcelain'])) {
+      throw new Error('The files changed during the update. Keep your changes and try again.');
+    }
+    writeUpdateState(state);
+    started = true;
     await git(['reset', '--hard', '--quiet', tip]);
-    if (rebuild && (depsChanged || !existsSync(join(dir, 'node_modules')))) {
+    if (install) {
       say('installing dependencies');
       // Install the committed dependency tree without rewriting its lockfile.
       // An install-induced dirty tree would disable rollback and every retry.
@@ -414,28 +502,35 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
     // Mark the source and build complete before touching systemd. If this
     // process dies while scheduling a restart, the next run can finish that
     // part without reinstalling or moving the checkout again.
-    writeUpdateState({ dir, previousHead: head, targetHead: tip, phase: 'built', restart, rollback });
+    state.phase = 'built';
+    writeUpdateState(state);
   } catch (error) {
+    // Restore generated files even if the owner changed source during the
+    // build. Only move the source back while it is still clean and unchanged.
     // A failed build must make the next attempt eligible again. The clean
     // deployment checkout is still at the journaled target, so restore HEAD;
     // unpushed/dirty trees were rejected before this transaction began and
     // are never reset here.
+    if (started) await restoreArtifacts(state);
     const now = await git(['rev-parse', 'HEAD']).catch(() => '');
     const dirty = await git(['status', '--porcelain']).catch(() => null);
     // A version the owner saved here is theirs: a failed build leaves it in
     // place for them (or their agent) to fix, rather than moving it away.
-    if (now === tip && dirty === '' && rollback) {
-      await git(['reset', '--hard', '--quiet', head]).then(clearUpdateState);
-    } else clearUpdateState();
+    if (started && now === tip && dirty === '' && rollback) await git(['reset', '--hard', '--quiet', head]);
+    await clearUpdateState(state);
     throw error;
   }
 
-  if (!restart) {
-    clearUpdateState();
+  return finishUpdate(state, restart);
+}
+
+async function finishUpdate(state, restart) {
+  if (!restart || state.restart === false) {
+    await clearUpdateState(state);
     return { updated: true, restarting: [] };
   }
   const result = await requestRestart();
-  if (!result.failed.length) clearUpdateState();
+  if (!result.failed.length) await clearUpdateState(state);
   return { updated: true, ...result };
 }
 
