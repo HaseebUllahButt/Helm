@@ -7,6 +7,7 @@ import { AppErrorBoundary } from './AppErrorBoundary';
 import { applyAppearance, watchSystemTheme } from './appearance';
 import { clearRefreshMarker } from './reload';
 import { blockBrowserKeys } from './browserKeys';
+import { addWindowClose } from './windowClose';
 
 clearRefreshMarker();
 
@@ -14,6 +15,7 @@ clearRefreshMarker();
 applyAppearance();
 watchSystemTheme();
 blockBrowserKeys();
+addWindowClose();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode><AppErrorBoundary><App /><AppUpdate /></AppErrorBoundary></StrictMode>
