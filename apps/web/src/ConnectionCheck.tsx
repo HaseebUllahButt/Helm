@@ -2,27 +2,33 @@ import { useState } from 'react';
 import { connectionChecks, connectionSupport, type ConnectionRoutes } from '@helm/protocol/connection-report';
 import type { Client, Environment } from './client';
 
-type Result = { name: string; routes?: ConnectionRoutes; failed?: boolean };
+type Result = { id: string; name: string; routes?: ConnectionRoutes; failed?: boolean };
 
 export function ConnectionCheck({ client, envs }: { client: Client; envs: Environment[] }) {
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<Result[] | null>(null);
   const [saved, setSaved] = useState(false);
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
+  const [liveConnection, setLiveConnection] = useState(false);
   const run = async () => {
     setBusy(true); setSaved(false); setResults(null);
     const next = await Promise.all(envs.map(async env => {
       try {
         const routes = await client.rpc(env.id, 'net.routes', {}, 8000) as ConnectionRoutes;
         if (!Array.isArray(routes?.machines)) throw new Error('No report');
-        return { name: env.name, routes };
-      } catch { return { name: env.name, failed: true }; }
+        return { id: env.id, name: env.name, routes };
+      } catch { return { id: env.id, name: env.name, failed: true }; }
     }));
+    setCheckedAt(new Date().toISOString()); setLiveConnection(client.connected);
     setResults(next); setBusy(false);
   };
   const download = () => {
-    const report = { checkedAt: new Date().toISOString(), liveConnection: client.connected,
-      machines: results?.map((r, i) => ({ machine: `Machine ${i + 1}`, ...(r.routes
-        ? connectionSupport(r.routes) : { failed: true }) })) };
+    const ids = [...new Set([...(results ?? []).map(r => r.id),
+      ...(results ?? []).flatMap(r => r.routes?.machines.map(m => m.env).filter((id): id is string => typeof id === 'string') ?? [])])];
+    const at = checkedAt ? Date.parse(checkedAt) : Date.now();
+    const report = { checkedAt, liveConnection,
+      machines: results?.map(r => ({ machine: `Machine ${ids.indexOf(r.id) + 1}`, ...(r.routes
+        ? connectionSupport(r.routes, at, ids) : { failed: true }) })) };
     const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a');
     link.href = url; link.download = 'helm-connection-report.json'; link.click();
