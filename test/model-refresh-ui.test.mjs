@@ -99,3 +99,31 @@ test('a lost follow-up retries until the open menu receives the completed list',
     assert.deepEqual(errors, ['connection lost']);
   } finally { catalog.stop(); }
 });
+
+
+test('an open menu checks for releases again and recovers after a failed check', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const seen = [];
+  const asked = [];
+  const errors = [];
+  const catalog = followModelRefresh(async settled => {
+    asked.push(settled);
+    if (asked.length === 2) throw new Error('offline');
+    return {models:asked.length === 1 ? ['old'] : ['old','new'], refreshing:false};
+  }, list => seen.push(list.models), error => errors.push(error.message));
+  const flush = () => new Promise(setImmediate);
+  try {
+    await flush();
+    t.mock.timers.tick(10 * 60_000 + 1000);
+    await flush();
+    assert.deepEqual(errors, ['offline']);
+    t.mock.timers.tick(10 * 60_000 + 1000);
+    await flush();
+    assert.deepEqual(seen, [['old'], ['old','new']]);
+    assert.deepEqual(asked, [false,false,false]);
+    catalog.stop();
+    t.mock.timers.tick(10 * 60_000 + 1000);
+    await flush();
+    assert.equal(asked.length, 3);
+  } finally { catalog.stop(); }
+});
