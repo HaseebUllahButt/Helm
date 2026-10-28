@@ -49,7 +49,14 @@ export function copyDependencies(source, target) {
   const copy = (name) => {
     const from = realpathSync(join(source, name)), to = join(target, name);
     cpSync(from, to, { recursive: true, dereference: false, verbatimSymlinks: true });
-    const pkg = JSON.parse(readFileSync(join(to, 'package.json'), 'utf8'));
+    let pkg;
+    try { pkg = JSON.parse(readFileSync(join(to, 'package.json'), 'utf8')); }
+    catch (error) {
+      // Native builds can leave header or Makefile folders beside packages.
+      // Preserve these files; only package metadata can declare command links.
+      if (error.code === 'ENOENT') return;
+      throw error;
+    }
     const bins = typeof pkg.bin === 'string' ? { [pkg.name.split('/').at(-1)]: pkg.bin } : pkg.bin ?? {};
     for (const [name, file] of Object.entries(bins)) {
       const link = join(target, '.bin', name);
