@@ -409,7 +409,7 @@ async function recoverUpdate(dir, git) {
     else throw new Error('The new release is still starting. Try again after recovery finishes.');
     return null;
   }
-  if (state.phase === 'prepared') await restoreArtifacts(state);
+  if (state.phase === 'prepared' && state.publishing !== false) await restoreArtifacts(state);
   const head = await git(['rev-parse', 'HEAD']).catch(() => '');
   const dirty = await git(['status', '--porcelain']).catch(() => null);
   if (state.phase === 'prepared') {
@@ -476,7 +476,7 @@ async function updateLocked(dir, { rebuild = true, restart = true, replace = fal
  */
 async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true, rollback = true }) {
   say(`updating ${head.slice(0, 7)} -> ${tip.slice(0, 7)}`);
-  const state = { dir, previousHead: head, targetHead: tip, phase: 'prepared', restart, rollback };
+  const state = { dir, previousHead: head, targetHead: tip, phase: 'prepared', restart, rollback, publishing: false };
   if (rebuild) state.artifacts = await saveArtifacts(dir, [
     'apps/web/dist', ...await dependencyPaths(dir, git, tip),
   ]);
@@ -505,6 +505,8 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
       throw new Error('The files changed during the update. Keep your changes and try again.');
     }
     await checkSourcePaths(dir, git, head, tip);
+    state.publishing = true;
+    writeUpdateState(state);
     await git(['reset', '--hard', '--quiet', tip]);
     if (rebuild) await publishRelease(state.release, dir, state.artifacts.paths.map((entry) => entry.path));
     // Mark the source and build complete before touching systemd. If this
@@ -519,7 +521,7 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
     // deployment checkout is still at the journaled target, so restore HEAD;
     // unpushed/dirty trees were rejected before this transaction began and
     // are never reset here.
-    if (started) await restoreArtifacts(state);
+    if (started && state.publishing) await restoreArtifacts(state);
     const now = await git(['rev-parse', 'HEAD']).catch(() => '');
     const dirty = await git(['status', '--porcelain']).catch(() => null);
     // A version the owner saved here is theirs: a failed build leaves it in
