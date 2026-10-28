@@ -1,3 +1,4 @@
+import { assertRestoreReviewed } from './restore-guard.js';
 import { join as pathJoin } from 'node:path';
 import { hostname } from 'node:os';
 import { startRelay } from '@helm/relay';
@@ -25,6 +26,7 @@ export async function up({
   port = 8787, password, name, tunnel = null, domain, advertise = [],
   temporary = false, host = '0.0.0.0',
 } = {}) {
+  assertRestoreReviewed(HELM_DIR);
   let net = loadNetwork();
   const fresh = !net;
   if (!net) net = createNetwork({ name: name || hostname(), port });

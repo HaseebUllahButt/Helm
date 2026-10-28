@@ -1,3 +1,4 @@
+import { assertRestoreReviewed } from './restore-guard.js';
 import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
 import { encodeTunnelFrame, decodeTunnelFrame } from '../../protocol/tunnel-frame.js';
@@ -399,6 +400,7 @@ export class Daemon {
   constructor({
     name, port = 8787, extra = [], advertised = [], advertiseLan = true,
   } = {}) {
+    assertRestoreReviewed(HELM_DIR);
     const net = loadNetwork();
     if (!net) throw new Error('this machine is not in a network - run `helm up`');
     this.net = net;
