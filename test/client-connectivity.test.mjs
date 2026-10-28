@@ -391,6 +391,68 @@ test('hub migration keeps the old route working and drains writes without replay
   setup.client.close();
 });
 
+test('losing the new hub preserves a write still waiting on the old hub', async () => {
+  const h = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 } });
+  h.start(); await h.advance(10);
+  const original = h.sockets[0];
+  let settled = false;
+  const request = h.client.rpc('vm', 'session.input', { data: 'once' });
+  request.then(() => { settled = true; }, () => { settled = true; });
+  const frame = original.frames.at(-1);
+  h.client.learn(['http://local', 'http://home']);
+  await h.advance(20);
+  assert.equal(h.client.relay, 'http://home');
+  h.sockets[1].close();
+  await h.advance(1);
+  assert.equal(settled, false, 'the old hub can still answer this write');
+  original.message({ t: 'rpcResult', id: frame.id, ok: true, result: 'accepted' });
+  assert.equal(await request, 'accepted');
+  assert.equal(original.readyState, 3);
+  assert.equal(h.sockets.flatMap(socket => socket.frames).filter(frame => frame.method === 'session.input').length, 1);
+  h.client.close();
+});
+
+test('losing a draining hub fails only its own writes and never replays them', async () => {
+  const h = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 } });
+  h.start(); await h.advance(10);
+  const original = h.sockets[0];
+  let failure;
+  const lost = h.client.rpc('vm', 'session.input', { data: 'old' }).catch(error => { failure = error; });
+  h.client.learn(['http://local', 'http://home']);
+  await h.advance(20);
+  const replacement = h.sockets[1];
+  const current = h.client.rpc('vm', 'session.input', { data: 'new' });
+  const frame = replacement.frames.at(-1);
+  original.close();
+  await h.advance(1);
+  assert.match(failure?.message ?? '', /disconnected/);
+  await lost;
+  assert.equal(h.client.connected, true);
+  replacement.message({ t: 'rpcResult', id: frame.id, ok: true, result: 'accepted' });
+  assert.equal(await current, 'accepted');
+  assert.equal(h.sockets.flatMap(socket => socket.frames).filter(frame => frame.method === 'session.input').length, 2);
+  h.client.close();
+});
+
+test('a drained hub closes when its own write ends while another hub still has work', async () => {
+  const h = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 } });
+  h.start(); await h.advance(10);
+  const original = h.sockets[0];
+  const old = h.client.rpc('vm', 'session.input', { data: 'old' });
+  const oldFrame = original.frames.at(-1);
+  h.client.learn(['http://local', 'http://home']);
+  await h.advance(20);
+  const replacement = h.sockets[1];
+  const current = h.client.rpc('vm', 'session.input', { data: 'new' });
+  const frame = replacement.frames.at(-1);
+  original.message({ t: 'rpcResult', id: oldFrame.id, ok: true, result: 'old accepted' });
+  assert.equal(await old, 'old accepted');
+  assert.equal(original.readyState, 3, 'other hubs must not hold this socket open');
+  replacement.message({ t: 'rpcResult', id: frame.id, ok: true, result: 'new accepted' });
+  assert.equal(await current, 'new accepted');
+  h.client.close();
+});
+
 test('failed migration preserves the working hub and closing cancels a pending replacement', async () => {
   for (const behavior of ['error', 'hang']) {
     const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 },
