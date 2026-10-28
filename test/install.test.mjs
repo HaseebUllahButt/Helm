@@ -598,3 +598,22 @@ test('interrupted installation never rewinds a branch the owner selected afterwa
   assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), target);
   assert.equal(existsSync(m.dir + '.install-state'), true);
 });
+
+test('the standalone installer retains a previous release that the updater can restore', t => {
+  const m = machine(t);
+  for (const name of ['update.js','release.js','service.js','network-recovery.js','paths.js','web-build.js']) {
+    m.put(m.source, 'packages/connect/src/' + name, readFileSync(new URL('../packages/connect/src/' + name, import.meta.url)));
+  }
+  m.put(m.source, 'package.json', '{"name":"private-installer-fixture","type":"module"}');
+  m.git(m.source, 'add', '.'); m.git(m.source, 'commit', '-qm', 'Include private updater'); m.git(m.source, 'push', '-q', 'origin', 'main');
+  const before = oldInstallation(m); m.publish();
+  passed(m.run({FAKE_READER_OUTPUT:'1'}));
+  const saved = JSON.parse(readFileSync(join(m.env.HELM_DIR, 'previous-release.json')));
+  assert.equal(saved.previousHead, before);
+  assert.equal(m.git(m.dir, 'rev-parse', saved.ref), before);
+  assert.equal(existsSync(m.dir + '.install-state'), false);
+  const result = spawnSync(process.execPath, ['--input-type=module','-e',
+    'const m=await import(process.argv[1]); await m.rollbackPreviousRelease(process.argv[2],{restart:false});',
+    pathToFileURL(join(m.dir,'packages/connect/src/update.js')).href, m.dir], {env:m.env,encoding:'utf8'});
+  passed(result); assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), before); oldFiles(m);
+});

@@ -15,9 +15,16 @@ const moduleUrl = new URL('../packages/connect/src/update.js', import.meta.url).
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
 const put = (dir, file, text) => { mkdirSync(join(dir, file, '..'), { recursive: true }); writeFileSync(join(dir, file), text); };
 test.after(() => {
-  try { assert.deepEqual(readdirSync(process.env.HELM_DIR), [], 'no recovery snapshots remain'); }
+  try { assertOnlyCheckpoint(); }
   finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+function assertOnlyCheckpoint() {
+  const file = join(process.env.HELM_DIR, 'previous-release.json');
+  const checkpoint = existsSync(file) ? JSON.parse(readFileSync(file)) : null;
+  assert.deepEqual(readdirSync(process.env.HELM_DIR).sort(), checkpoint
+    ? [checkpoint.artifacts.id, 'previous-release.json'].sort() : [], 'keep one previous release, with no pending update');
+}
 
 function fixture(t) {
   const dir = mkdtempSync(join(root, 'case-'));
@@ -135,7 +142,7 @@ test('an interrupted install restores files before a failed retry can fetch', as
   assertRestored(f.installed);
 });
 
-test('a successful retry keeps the new app and removes recovery copies', async t => {
+test('a successful retry keeps the new app and one previous release', async t => {
   const f = fixture(t);
   f.npm(`${damage}\nprocess.exit(1);`);
   await assert.rejects(selfUpdate(f.installed, { restart: false }), /Command failed/);
@@ -143,7 +150,7 @@ test('a successful retry keeps the new app and removes recovery copies', async t
   assert.equal((await selfUpdate(f.installed, { restart: false })).updated, true);
   assert.equal(git(f.installed, 'rev-parse', 'HEAD'), f.target);
   assert.equal(readFileSync(join(f.installed, 'apps/web/dist/index.html'), 'utf8'), 'new app');
-  assert.deepEqual(readdirSync(process.env.HELM_DIR), []);
+  assertOnlyCheckpoint();
 });
 
 test('a failed first install removes incomplete files that had no previous copy', async t => {

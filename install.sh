@@ -408,6 +408,17 @@ esac
 
 step "starting helm"
 "$BIN_DIR/helm" start || die "could not start Helm - run helm start to see why"
+# Hand the saved files to the installed updater before deleting this journal.
+# Older selected branches can still install without this newer helper.
+if [ -f "$DIR/packages/connect/src/update.js" ]; then
+  node --input-type=module -e '
+    import { pathToFileURL } from "node:url";
+    const [dir, journal] = process.argv.slice(1);
+    const update = await import(pathToFileURL(`${dir}/packages/connect/src/update.js`));
+    if (typeof update.checkpointInstalledRelease === "function") await update.checkpointInstalledRelease(dir, journal);
+  ' "$DIR" "$JOURNAL" || die "Cannot keep the previous release. Keep the saved installation."
+fi
+
 
 printf '\n%s\n' "-------------------------------------------------------------"
 if [ "$ON_PATH" = no ]; then
