@@ -69,9 +69,7 @@ interface Row {
   sub?: string;
   group?: string;
   engine?: string;
-  icon?: 'machine' | 'folder' | 'repo' | 'plus' | 'back' | 'github' | 'lock';
-  /** No icon, only the space for one, so its words line up with the rows around it. */
-  bare?: boolean;
+  icon?: 'machine' | 'folder' | 'repo' | 'quill' | 'plus' | 'back' | 'github' | 'lock';
   quiet?: boolean;
   tag?: string;
   disabled?: boolean;
@@ -484,7 +482,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       }
       else for (const e of home ?? []) add(e.path, e.name, e.isRepo, 0);
       if (step === 'into') return out;
-      const quickRow: Row = { id: QUICK_ROW, title: 'No folder · sketch', sub: 'Ask a short question.', bare: true, pick: pickQuick };
+      const quickRow: Row = { id: QUICK_ROW, title: 'No folder · sketch', sub: 'Ask a short question.', icon: 'quill', pick: pickQuick };
       const githubRow: Row = { id: GITHUB_ROW, title: 'Copy from GitHub', icon: 'github', pick: () => go('github') };
       if (!query || matches(githubRow, query)) out.unshift(githubRow);
       if (!query || matches(quickRow, query)) out.unshift(quickRow);
@@ -734,7 +732,6 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                   >
                     {row.quiet ? <span className="newchat-quiet-glyph">{row.icon && <Icon name={row.icon} size={14} />}</span>
                       : row.engine ? <EngineMark engine={engineOf(row.engine).cls} />
-                      : row.bare ? <span className="pglyph bare" />
                       : !row.disabled && <span className="pglyph"><Icon name={row.icon ?? 'folder'} size={15} /></span>}
                     <span className="grow">
                       <span className="palette-title">{row.title}{row.tag && <span className="tag">{row.tag}</span>}</span>
