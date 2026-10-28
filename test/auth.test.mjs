@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -87,4 +87,18 @@ test("the agy check hands its model list to the picker, so it isn't fetched twic
   // (settings.json in the real ~/.gemini may add custom models; the listed one must be there.)
   assert.ok(models.models.includes('gemini-3.8-flash-high'));
   assert.equal(readFileSync(count, 'utf8').trim().split('\n').length, 1, 'agy ran once, for the check');
+});
+
+
+test('Codex sign-in and sign-out replace the cached answer immediately', async () => {
+  _resetAuthCache();
+  const home = mkdtempSync(join(dir, 'codex-login-'));
+  const file = join(home, 'auth.json');
+  const cmd = cli('codex-file-login', 'if [ -f "$CODEX_HOME/auth.json" ]; then echo "Logged in using ChatGPT"; else echo "Not logged in"; exit 1; fi');
+  const p = profile('file-login', 'codex', cmd, { env: { CODEX_HOME: home } });
+  assert.deepEqual(await usableProfiles([p]), []);
+  writeFileSync(file, '{}');
+  assert.equal((await usableProfiles([p]))[0]?.auth, 'authenticated');
+  rmSync(file);
+  assert.deepEqual(await usableProfiles([p]), []);
 });
