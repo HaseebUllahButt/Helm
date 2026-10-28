@@ -13,7 +13,7 @@
  * is up, and the hub carries the call when it is not.
  */
 
-import { reliableInput } from '@helm/protocol/reliable-input';
+import { newMessageId, retryableDelivery } from '@helm/protocol/reliable-input';
 
 export type Status = 'idle' | 'working' | 'blocked' | 'done' | 'shell' | 'exited' | 'unknown';
 
@@ -558,7 +558,7 @@ function inflater(onFrame: (msg: Record<string, any>) => void, onError: () => vo
 const DC_CHUNK_AT = 16_000;
 const DC_CHUNK_TYPE = 'dc-chunk';
 // Kept deliberately narrow, matching the hub's authenticated /api/read route.
-// Prompts, approvals and other mutations must never acquire replay semantics.
+// Untracked writes must never acquire replay semantics.
 const HTTP_READ_METHODS = new Set([
   'session.events', 'session.messages', 'session.visual', 'session.list', 'model.list',
   'session.commands', 'env.info', 'session.watch', 'session.unwatch',
@@ -1544,12 +1544,108 @@ export class Client {
     return this.rpc<TransferReadiness>(env, 'transfer.verify', { folder }, 60_000);
   }
 
+  private deliveryKey() { return 'helm.pending-actions.' + this.token; }
+  pendingActions(): any[] {
+    const prefix = this.deliveryKey() + '.';
+    const saved = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(prefix)) continue;
+      const action = JSON.parse(localStorage.getItem(key) || 'null');
+      if (!action?.actionId || !action?.params) throw new Error('Cannot read saved deliveries. Check the chat before sending again.');
+      saved.push(action);
+    }
+    return saved;
+  }
+  private saveAction(action: any, remove = false) {
+    // Separate records keep simultaneous tabs from replacing each other's work.
+    const key = this.deliveryKey() + '.' + action.actionId;
+    if (remove) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(action));
+    this.emit(action.env, 'delivery', { id: action.params.id });
+  }
+  resumeActions(env: string, id: string) {
+    return Promise.allSettled(this.pendingActions().filter(item => item.env === env && item.params.id === id)
+      .map(item => this.deliverAction(item)));
+  }
+  private delivering = new Map<string, Promise<any>>();
+  private deliverAction(action: any, timeout = 120_000): Promise<any> {
+    const active = this.delivering.get(action.actionId);
+    if (active) return active;
+    this.saveAction(action);
+    const running = this.checkAction(action, timeout).finally(() => this.delivering.delete(action.actionId));
+    this.delivering.set(action.actionId, running);
+    return running;
+  }
+  private async checkAction(action: any, timeout: number): Promise<any> {
+    const { env, method, params, actionId } = action;
+    if (action.legacy) throw Object.assign(new Error('Checking delivery. Check the terminal before sending again.'), { code: 'delivery_pending' });
+    let firstAttempt = !action.started;
+    if (firstAttempt) { action.started = true; this.saveAction(action); }
+    const deadline = Date.now() + timeout;
+    while (!this.closed && Date.now() < deadline) {
+      try {
+        const wait = Math.max(1, Math.min(10_000, deadline - Date.now()));
+        const status = firstAttempt ? { state: 'missing' } : await this.readHttp<any>(env, 'session.action-status',
+          { actionId, kind: method === 'session.deliver' ? 'input' : 'answer' }, wait, undefined, '/api/action');
+        firstAttempt = false;
+        if (status.state === 'done') {
+          this.saveAction(action, true);
+          if (status.error) throw Object.assign(new Error(status.error.message), { code: status.error.code });
+          return status.result;
+        }
+        if (status.state === 'missing') {
+          let result;
+          try {
+            result = await this.call(env, method, params, Math.min(1500, wait));
+          } catch {
+            // Both methods bind this ID to the saved content at the receiver.
+            result = await this.readHttp<any>(env, method, params, wait, undefined, '/api/action');
+          }
+          if (method === 'session.deliver' || result.state === 'done') {
+            this.saveAction(action, true);
+            return method === 'session.deliver' ? result : result.result;
+          }
+        }
+      } catch (error: any) {
+        if (method === 'session.deliver' && error?.code === 'delivery_unsupported') {
+          // This explicit refusal means no durable input was accepted.
+          // Legacy terminal writes get one attempt, retained as uncertain if its reply is lost.
+          this.saveAction({ ...action, legacy: true });
+          const result = await this.call(env, 'session.input', Object.fromEntries(
+            Object.entries(params).filter(([key]) => key !== 'messageId')), Math.max(1, deadline - Date.now()));
+          this.saveAction(action, true);
+          return result;
+        }
+        if (!retryableDelivery(error) && error?.code) throw error;
+      }
+      this.emit(env, 'delivery', { id: params.id });
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    throw Object.assign(new Error('Checking delivery. Open this chat to check again.'), { code: 'delivery_pending' });
+  }
   input(env: string, params: any, timeout = 120_000, messageId?: string): Promise<any> {
-    return reliableInput((method: string, request: any, wait: number) => this.rpc(env, method, request, wait),
-      params, { timeout, ...(messageId ? { messageId } : {}) });
+    if (params.raw) return this.call(env, 'session.input', params, timeout);
+    const actionId = messageId ?? newMessageId();
+    const frozen = JSON.parse(JSON.stringify({ ...params, messageId: actionId }));
+    const held = this.pendingActions().find(item => item.env === env && item.actionId === actionId);
+    if (held && JSON.stringify(held.params) !== JSON.stringify(frozen)) {
+      return Promise.reject(new Error('This message number belongs to another message.'));
+    }
+    return this.deliverAction(held ?? { env, method: 'session.deliver', actionId, params: frozen }, timeout);
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
+    if (method === 'session.answer') {
+      const held = this.pendingActions().find(item => item.env === env && item.method === 'session.answer-deliver'
+        && item.params.id === params.id && item.params.requestId === params.requestId);
+      if (held && JSON.stringify(held.params.decision) !== JSON.stringify(params.decision)) {
+        return Promise.reject(new Error('Checking delivery of the previous answer. Wait before choosing another answer.'));
+      }
+      const actionId = held?.actionId ?? newMessageId();
+      return this.deliverAction(held ?? { env, method: 'session.answer-deliver', actionId,
+        params: JSON.parse(JSON.stringify({ ...params, actionId })) }, timeout);
+    }
     if (method === 'session.list' && params?.projects !== true) return this.listSessions(env, params, timeout) as Promise<T>;
     return this.call<T>(env, method, params, timeout);
   }
@@ -1705,7 +1801,7 @@ export class Client {
     });
   }
 
-  private async readHttp<T>(env: string, method: string, params: any, timeout: number, signal?: AbortSignal): Promise<T> {
+  private async readHttp<T>(env: string, method: string, params: any, timeout: number, signal?: AbortSignal, path = '/api/read'): Promise<T> {
     if (this.closed) throw new Error('client closed');
     if (signal?.aborted) throw new Error('read cancelled');
     const bases = [...new Set([this.relay, ...this.endpoints])].filter(Boolean).filter(reachableFromHere);
@@ -1713,8 +1809,9 @@ export class Client {
     const body = JSON.stringify({ env, method, params });
     // A reconnect may find another hub while this read is already waiting on
     // an obsolete relay. Race known, eligible endpoints with a short head
-    // start for the current one; authentication and the read-only body stay
-    // identical. Errors from one hub cannot defeat another hub's success.
+    // start for the current one; authentication and the body stay
+    // identical. Action writes also use this route, with receiver-backed IDs.
+    // Errors from one hub cannot defeat another hub's success.
     return new Promise<T>((resolve, reject) => {
       let settled = false, next = 0, active = 0;
       let lastError: Error = new Error('not connected');
@@ -1740,7 +1837,7 @@ export class Client {
         if (next >= bases.length) { if (!active) done(lastError); return; }
         const base = bases[next++], controller = new AbortController();
         controllers.add(controller); active++;
-        this.httpAt<{ result: T }>(base, '/api/read', {
+        this.httpAt<{ result: T }>(base, path, {
           method: 'POST', body, signal: controller.signal,
         }).then(reply => done(undefined, reply.result)).catch(error => {
           if (settled) return;
@@ -2040,7 +2137,10 @@ export class Client {
       signal: init.signal ?? AbortSignal.timeout(20_000),
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...init.headers },
     });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { code: body.code });
+    }
     return res.json();
   }
 

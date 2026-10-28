@@ -7,6 +7,7 @@ import { LiveComposer, createLiveDraft } from './liveDraft';
 import { prepareAttachment } from './image';
 import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
 import { TodoStrip, stripTodos } from './Todos';
+import { DeliveryStatus } from './DeliveryStatus';
 import { RecoveryCard } from './RecoveryCard';
 import { Controls, trayPrefs, type Kind } from './Controls';
 import { Transcript, splitNote, isCompaction } from './Transcript';
@@ -856,6 +857,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         empty={preparing ? '' : session.alive === false ? 'Your next message continues this chat.' : sentFirst ? 'Waiting for the agent…' : undefined}
       /></CanvasContext.Provider>
 
+      <DeliveryStatus client={client} env={env.id} id={session.id} />
       {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
         <strong>Send not confirmed</strong>
         <p className="failed-send-text">{failed.body}</p>

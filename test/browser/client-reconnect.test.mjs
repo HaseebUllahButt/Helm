@@ -29,7 +29,25 @@ async function hub(context, reach = 1) {
     response.setHeader('access-control-allow-origin', '*');
     response.setHeader('access-control-allow-headers', 'authorization');
     if (request.method === 'OPTIONS') { response.end(); return; }
-    if (request.url.startsWith('/api/')) {
+    if (request.url === '/api/action') {
+      let body = '';
+      request.on('data', data => { body += data; });
+      request.on('end', () => {
+        const action = JSON.parse(body);
+        if (action.method === 'session.action-status') {
+          response.end(JSON.stringify({ result: { state: 'missing' } }));
+        } else {
+          const socket = { terminate: () => response.destroy(), send: raw => {
+            const reply = JSON.parse(raw);
+            if (!reply.ok) { response.statusCode = 503; response.end(JSON.stringify(reply.error)); }
+            else response.end(JSON.stringify({ result: reply.result }));
+          } };
+          const frame = { ...action, t: 'rpc', id: 'http' };
+          state.calls.push({ socket, frame });
+          state.onRpc?.({ socket, frame });
+        }
+      });
+    } else if (request.url.startsWith('/api/')) {
       later(() => {
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify({ machines: Array.from({ length: reach }, (_, index) => ({ id: `machine-${index}`, online: true })), endpoints: [] }));
@@ -247,5 +265,36 @@ test('model and effort changes avoid a silent direct peer and are delivered once
     socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: { ok: true } }));
   }
   assert.deepEqual(await page.evaluate(() => window.settingsResult), [{ ok: true }, { ok: true }]);
+  await page.evaluate(() => window.client.close());
+});
+
+
+test('a live connection can send when ordinary web requests do not answer', async context => {
+  const home = await hub(context);
+  home.delay = 60_000;
+  home.onRpc = ({ socket, frame }) => socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: { ok: true } }));
+  // Connect before slowing unrelated discovery; writes must not need an HTTP preflight.
+  home.delay = 0;
+  const page = await pageFor(context, home);
+  home.delay = 60_000;
+  await page.route('**/api/action', route => route.abort());
+  assert.deepEqual(await page.evaluate(() => window.client.input('laptop', { id: 'chat', data: 'live still works' })), { ok: true });
+  assert.equal(home.calls.length, 1);
+  await page.evaluate(() => window.client.close());
+});
+
+test('an uncertain terminal write is never repeated with the saved message number', async context => {
+  const home = await hub(context);
+  let terminalWrites = 0;
+  home.onRpc = ({ socket, frame }) => {
+    if (frame.method === 'session.deliver') socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: false,
+      error: { error: 'Use terminal input.', message: 'Use terminal input.', code: 'delivery_unsupported' } }));
+    else { assert.equal(frame.method, 'session.input'); terminalWrites++; socket.terminate(); }
+  };
+  const page = await pageFor(context, home);
+  await page.evaluate(() => window.client.input('pc', { id: 'terminal', data: 'once' }, 5000, 'd'.repeat(32)).catch(() => {}));
+  assert.equal(terminalWrites, 1);
+  assert.equal(await page.evaluate(() => window.client.input('pc', { id: 'terminal', data: 'once' }, 5000, 'd'.repeat(32)).catch(error => error.code)), 'delivery_pending');
+  assert.equal(terminalWrites, 1);
   await page.evaluate(() => window.client.close());
 });

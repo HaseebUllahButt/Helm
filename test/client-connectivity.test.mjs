@@ -793,9 +793,9 @@ test('safe chat reads use authenticated HTTP when WebSocket upgrades are unavail
   h.client.close();
 });
 
-test('HTTP fallback never sends mutations and respects the read deadline', async () => {
+test('HTTP read fallback never sends untracked writes and respects the read deadline', async () => {
   const h = harness({ delays: { 'http://good': Infinity } });
-  for (const method of ['session.input', 'session.answer', 'session.archive', 'profile.defaults']) {
+  for (const method of ['session.input', 'session.archive', 'profile.defaults']) {
     await assert.rejects(h.client.rpc('machine', method), /not connected/);
   }
   assert.equal(h.requests.length, 0);

@@ -37,6 +37,13 @@ export class InputDelivery {
     const key = hash([caller, messageId]);
     return this.#read(this.#paths(key).receipt);
   }
+  status(messageId, caller = 'local') {
+    if (!/^[a-f0-9]{32}$/.test(messageId ?? '')) throw failure('Choose a valid message number.', 'invalid_argument');
+    const paths = this.#paths(hash([caller, messageId]));
+    const receipt = this.#read(paths.receipt);
+    if (receipt) return { state: 'done', ...receipt };
+    return { state: this.#read(paths.pending) ? 'checking' : 'missing' };
+  }
   /** Reading an agent's inbox in a tool replaces its still-waiting prompt. */
   async acknowledge(id, messageId, caller) {
     const key = hash([caller, messageId]);
