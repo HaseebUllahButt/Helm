@@ -19,7 +19,7 @@ before(async () => {
       import { txn, idb } from './apps/web/src/idb';
 
       const root = createRoot(document.getElementById('root'));
-      const client = {input:(env,params)=>client.rpc(env,'session.input',params),
+      const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
         subscribe: () => {}, on: () => () => {},
         rpc: (env, method, params) => {
           if (window.customRpc) return window.customRpc(env, method, params);

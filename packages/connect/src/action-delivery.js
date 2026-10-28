@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
 
@@ -21,8 +21,10 @@ export class ActionDelivery {
   save(path, value) {
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     const temp = path + '.' + randomBytes(8).toString('hex');
-    writeFileSync(temp, JSON.stringify(value), { mode: 0o600 });
-    renameSync(temp, path);
+    try {
+      writeFileSync(temp, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
+      renameSync(temp, path);
+    } finally { rmSync(temp, { force: true }); }
   }
   status(actionId, caller) {
     const record = this.read(this.path(actionId, caller));

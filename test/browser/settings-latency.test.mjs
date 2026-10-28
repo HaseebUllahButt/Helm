@@ -10,7 +10,7 @@ test('model choice paints before a slow reply, retains its catalog, and rolls ba
     import { DrivenSession } from './apps/web/src/session/DrivenSession';
     window.requests = []; window.catalogs = 0; window.listeners = [];
     const initial = {id:'latency',engine:'codex',driver:'codex',profileId:'test',model:'a',status:'idle',cwd:'/project',title:'Test'};
-    const client = {on:f=>{window.listeners.push(f);return ()=>{window.listeners=window.listeners.filter(x=>x!==f)}},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],on:f=>{window.listeners.push(f);return ()=>{window.listeners=window.listeners.filter(x=>x!==f)}},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
       if(method==='session.events')return {events:[],pending:[],last:0,session:{status:'idle'}};
       if(method==='model.list') {
         if(++window.catalogs>1)return new Promise(resolve=>{window.finishCatalog=resolve});

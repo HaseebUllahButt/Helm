@@ -21,7 +21,7 @@ test('a chat shows a calm context meter that grows amber and red, and is absent 
     const env = { id:'ctx-test', name:'Laptop', online:true, info:{} };
     const base = { id:'chat', title:'Context chat', cwd:'/project', engine:'claude', profileId:'claudes', status:'idle', driver:true };
     const soon = Math.floor(Date.now() / 1000) + 115 * 60;
-    const client = {
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],
       on: () => () => {}, subscribe: () => {},
       rpc: async (env, method) => {
         if (method === 'usage.limits') return { unsupported:0, accounts:[
@@ -98,7 +98,7 @@ test('a chat with a context figure but no account limits still shows the meter a
     import { DrivenSession } from './apps/web/src/session/DrivenSession';
     const env = { id:'ctx-test', name:'Laptop', online:true, info:{} };
     const chat = { id:'chat', title:'Context chat', cwd:'/project', engine:'codex', profileId:'', status:'idle', driver:true, context:{ used:60000, window:258400, at:1 } };
-    const client = {
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],
       on: () => () => {}, subscribe: () => {},
       rpc: async (env, method) => {
         if (method === 'usage.limits') return { unsupported:0, accounts:[] };

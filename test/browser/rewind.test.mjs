@@ -41,7 +41,7 @@ before(async () => {
     window.restoreReason = 'This worktree is shared with another session. Rewind without restoring files.';
     window.calls = []; window.sessionUpdates = [];
     let rewound = false;
-    const client = {input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},subscribe:()=>{},rpc:async(env,method,params={})=>{
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},subscribe:()=>{},rpc:async(env,method,params={})=>{
       window.calls.push({env,method,params});
       if(method==='session.events') {
         const all = rewound ? [{seq:7,at:Date.now(),type:'history.reset'}] : original;
