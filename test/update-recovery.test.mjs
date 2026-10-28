@@ -92,10 +92,10 @@ test('a failed bundle build restores app files and dependencies', async t => {
 
 test('a failed build preserves edits made while the update runs', async t => {
   const f = fixture(t);
-  f.npm(`if (process.argv.includes('ci')) { ${damage} } else { fs.writeFileSync('v', 'owner edit'); process.exit(1); }`);
+  f.npm(`if (process.argv.includes('ci')) { ${damage} } else { fs.writeFileSync(${JSON.stringify(join(f.installed, 'v'))}, 'owner edit'); process.exit(1); }`);
   await assert.rejects(selfUpdate(f.installed, { restart: false }), /Command failed/);
   assert.equal(readFileSync(join(f.installed, 'v'), 'utf8'), 'owner edit');
-  assert.equal(git(f.installed, 'rev-parse', 'HEAD'), f.target);
+  assert.equal(git(f.installed, 'rev-parse', 'HEAD'), f.previous);
   assertRestored(f.installed);
 });
 
@@ -167,7 +167,7 @@ test('an interrupted owner build retries even when its commit is already running
     { env: process.env, stdio: 'pipe' });
   const [code, signal] = await once(child, 'exit');
   assert.equal(code, null); assert.equal(signal, 'SIGKILL');
-  f.npm(`fs.writeFileSync('apps/web/dist/index.html', 'rebuilt app');`);
+  f.npm(`fs.mkdirSync('apps/web/dist', {recursive:true});fs.writeFileSync('apps/web/dist/index.html', 'rebuilt app');`);
   assert.equal((await rebuildIfCommitted(f.target, f.installed, { restart: false })).updated, true);
   assert.equal(git(f.installed, 'rev-parse', 'HEAD'), f.target);
   assert.equal(readFileSync(join(f.installed, 'apps/web/dist/index.html'), 'utf8'), 'rebuilt app');
@@ -225,7 +225,7 @@ process.send('ready');
 
 test('edits made while copying installed files stop the update before source moves', async t => {
   const f = fixture(t);
-  f.npm('process.exit(0);');
+  f.npm("fs.mkdirSync('apps/web/dist', {recursive:true});fs.writeFileSync('apps/web/dist/index.html', 'new app');");
   const watcher = watch(process.env.HELM_DIR, (_event, name) => {
     if (String(name).startsWith('update-backup-')) put(f.installed, 'v', 'owner edit during backup');
   });

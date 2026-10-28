@@ -119,6 +119,7 @@ export async function up({
     net: loadNetwork() ?? net, hub, daemon, port, publicUrl, fresh, webRoot,
     tunnelError, tunnelKind, tunnelChanged, host,
   });
+  await (await import('./update.js')).confirmRelease();
   return { daemon, hub, port, publicUrl };
 }
 

@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync, watch, readdirSync, lstatSync, constants } from 'node:fs';
@@ -8,6 +8,7 @@ import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { HOME, HELM_DIR } from './paths.js';
 import { systemdArg } from './service.js';
+import { prepareRelease, publishRelease } from './release.js';
 import { webBuild } from './web-build.js';
 
 const exec = promisify(execFile);
@@ -279,6 +280,7 @@ function writeUpdateState(state) {
 
 async function clearUpdateState(state = readUpdateState()) {
   rmSync(UPDATE_STATE_FILE, { force: true });
+  if (state?.release) await rm(state.release, { recursive: true, force: true });
   if (state?.artifacts) await rm(artifactBackup(state.artifacts), { recursive: true, force: true });
 }
 
@@ -402,7 +404,12 @@ async function requestRestart() {
 async function recoverUpdate(dir, git) {
   const state = readUpdateState();
   if (!state || state.dir !== dir) return null;
-  if (state.phase === 'prepared') await restoreArtifacts(state);
+  if (state.phase === 'starting') {
+    if (Date.now() >= state.deadline) await watchRelease({ id: state.id });
+    else throw new Error('The new release is still starting. Try again after recovery finishes.');
+    return null;
+  }
+  if (state.phase === 'prepared' && state.publishing !== false) await restoreArtifacts(state);
   const head = await git(['rev-parse', 'HEAD']).catch(() => '');
   const dirty = await git(['status', '--porcelain']).catch(() => null);
   if (state.phase === 'prepared') {
@@ -469,12 +476,11 @@ async function updateLocked(dir, { rebuild = true, restart = true, replace = fal
  */
 async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true, rollback = true }) {
   say(`updating ${head.slice(0, 7)} -> ${tip.slice(0, 7)}`);
-  const state = { dir, previousHead: head, targetHead: tip, phase: 'prepared', restart, rollback };
-  const depsChanged = head === tip || !!(await git(['diff', '--name-only', head, tip, '--', 'package-lock.json']).catch(() => 'yes'));
-  const install = rebuild && (depsChanged || !existsSync(join(dir, 'node_modules')));
+  const state = { dir, previousHead: head, targetHead: tip, phase: 'prepared', restart, rollback, publishing: false };
   if (rebuild) state.artifacts = await saveArtifacts(dir, [
-    'apps/web/dist', ...(install ? await dependencyPaths(dir, git, tip) : []),
+    'apps/web/dist', ...await dependencyPaths(dir, git, tip),
   ]);
+  if (rebuild) state.release = join(HELM_DIR, `release-${randomUUID()}`);
   let started = false;
   try {
     // Copying can take time. Recheck source edits before moving the checkout.
@@ -482,23 +488,27 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
     if (await git(['rev-parse', 'HEAD']) !== expected || await git(['status', '--porcelain'])) {
       throw new Error('The files changed during the update. Keep your changes and try again.');
     }
+    await checkSourcePaths(dir, git, head, tip);
     writeUpdateState(state);
     started = true;
-    await git(['reset', '--hard', '--quiet', tip]);
-    if (install) {
-      say('installing dependencies');
-      // Install the committed dependency tree without rewriting its lockfile.
-      // An install-induced dirty tree would disable rollback and every retry.
-      await gentle('npm', ['ci', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: dir });
-      await ensurePty(dir);
-    }
-    if (rebuild) {
-      if (existsSync(join(dir, 'scripts', 'build-log-reader.mjs'))) {
-        await gentle(process.execPath, ['scripts/build-log-reader.mjs'], { cwd: dir });
+    // Always install in the release folder. npm links workspaces to that folder,
+    // which stays available until startup has passed.
+    if (rebuild) await prepareRelease(dir, tip, async (folder) => {
+      await gentle('npm', ['ci', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: folder });
+      await ensurePty(folder);
+      if (existsSync(join(folder, 'scripts/build-log-reader.mjs'))) {
+        await gentle(process.execPath, ['scripts/build-log-reader.mjs'], { cwd: folder });
       }
-      say('building the app');
-      await gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir });
+      await gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: folder });
+    }, state.release);
+    if (await git(['rev-parse', 'HEAD']) !== expected || await git(['status', '--porcelain'])) {
+      throw new Error('The files changed during the update. Keep your changes and try again.');
     }
+    await checkSourcePaths(dir, git, head, tip);
+    state.publishing = true;
+    writeUpdateState(state);
+    await git(['reset', '--hard', '--quiet', tip]);
+    if (rebuild) await publishRelease(state.release, dir, state.artifacts.paths.map((entry) => entry.path));
     // Mark the source and build complete before touching systemd. If this
     // process dies while scheduling a restart, the next run can finish that
     // part without reinstalling or moving the checkout again.
@@ -511,7 +521,7 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
     // deployment checkout is still at the journaled target, so restore HEAD;
     // unpushed/dirty trees were rejected before this transaction began and
     // are never reset here.
-    if (started) await restoreArtifacts(state);
+    if (started && state.publishing) await restoreArtifacts(state);
     const now = await git(['rev-parse', 'HEAD']).catch(() => '');
     const dirty = await git(['status', '--porcelain']).catch(() => null);
     // A version the owner saved here is theirs: a failed build leaves it in
@@ -529,8 +539,25 @@ async function finishUpdate(state, restart) {
     await clearUpdateState(state);
     return { updated: true, restarting: [] };
   }
+  state.units = [];
+  if (platform() === 'linux') for (const unit of DAEMON_UNITS) if (await unitActive(unit)) state.units.push(unit);
+  state.id = randomUUID();
+  state.phase = 'starting';
+  state.deadline = Date.now() + 90_000;
+  writeUpdateState(state);
+  const worker = spawn(process.execPath, ['--input-type=module', '-e',
+    `const m = await import(${JSON.stringify(import.meta.url)}); process.send('ready'); await m.watchRelease({id:${JSON.stringify(state.id)}});`],
+    { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: process.env });
+  await new Promise((resolve, reject) => {
+    worker.once('message', resolve);
+    worker.once('error', reject);
+    worker.once('exit', () => reject(new Error('Cannot start release recovery.')));
+  });
+  worker.disconnect();
+  worker.unref();
   const result = await requestRestart();
-  if (!result.failed.length) await clearUpdateState(state);
+  if (result.failed.length) { state.phase = 'built'; writeUpdateState(state); }
+  else if (!result.restarting.length) await clearUpdateState(state);
   return { updated: true, ...result };
 }
 
@@ -541,5 +568,76 @@ export async function removeUpdateTimer() {
   for (const name of [UPDATE_SERVICE, UPDATE_TIMER]) {
     const file = join(unitDir, name);
     if (existsSync(file)) rmSync(file);
+  }
+}
+
+/** Called only after the hub and daemon have started. Old daemons cannot confirm. */
+export async function confirmRelease(dir = ROOT) {
+  const state = readUpdateState();
+  if (state?.phase !== 'starting' || state.dir !== dir) return;
+  const version = await currentVersion(dir);
+  if (version?.full !== state.targetHead || version.dirty) return;
+  state.readyPid = process.pid;
+  state.readyStart = processStart(process.pid);
+  state.readyAt = Date.now();
+  writeUpdateState(state);
+}
+
+/** Independent of the replaced daemon; never stops terminal or agent hosts. */
+export async function watchRelease({ id, sleep = (ms) => new Promise(r => setTimeout(r, ms)), now = Date.now } = {}) {
+  for (;;) {
+    const state = readUpdateState();
+    if (state?.phase !== 'starting' || (id && state.id !== id)) return;
+    if (state.readyPid) {
+      try {
+        process.kill(state.readyPid, 0);
+        if (state.readyStart && processStart(state.readyPid) !== state.readyStart) throw Error('The new program stopped.');
+        if (now() - state.readyAt >= 5000) {
+          await clearUpdateState(state);
+          return;
+        }
+      } catch { /* Startup exited before confirmation was read. */ }
+    }
+    if (now() >= state.deadline) {
+      const git = gitIn(state.dir);
+      if (await git(['rev-parse', 'HEAD']) !== state.targetHead || await git(['status', '--porcelain'])) {
+        state.phase = 'built';
+        writeUpdateState(state); // Preserve owner edits and the saved release.
+        return;
+      }
+      await restoreArtifacts(state);
+      if (state.rollback === false) await git(['branch', `helm-recovery-${state.id || randomUUID()}`, state.targetHead]);
+      await git(['reset', '--hard', '--quiet', state.previousHead]);
+      await clearUpdateState(state);
+      if (state.units?.length) await restartServices(state.units);
+      else await requestRestart();
+      return;
+    }
+    await sleep(250);
+  }
+}
+
+/** Local ship path. The caller holds the update lock across preparation and switch. */
+export async function installFromCheckout(dir, source, { rebuild = true, restart = true } = {}) {
+  const git = gitIn(dir);
+  await recoverUpdate(dir, git);
+  if (await git(['status', '--porcelain'])) throw Error('Save your edits before installing.');
+  const head = await git(['rev-parse', 'HEAD']);
+  await git(['fetch', '--quiet', '--', source, 'main']);
+  const tip = await git(['rev-parse', 'FETCH_HEAD']);
+  if (!(await git(['merge-base', '--is-ancestor', head, tip]).then(() => true, () => false))) {
+    throw Error('Keep the local saved changes. Combine them before installing.');
+  }
+  return applyCommit(dir, git, { head, tip, rebuild, restart });
+}
+
+async function checkSourcePaths(dir, git, head, tip) {
+  const flags = await git(['ls-files', '-v']);
+  if (flags.split('\n').some(line => /^[a-zS] /.test(line))) throw Error('Some files have hidden edits. Keep them before installing.');
+  const additions = await git(['diff', '--name-only', '--diff-filter=A', '-z', head, tip]);
+  for (const path of additions.split('\0').filter(Boolean)) {
+    if (present(join(dir, path)) && !(await git(['ls-files', '--error-unmatch', '--', path]).then(() => true, () => false))) {
+      throw Error('The new release would replace local files. Keep them before installing.');
+    }
   }
 }
