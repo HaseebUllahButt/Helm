@@ -1,6 +1,6 @@
 import { discoverDirectory } from './discovery-native.js';
 import { readdir, stat, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { HOME, HELM_DIR, expand, collapse } from './paths.js';
@@ -8,6 +8,22 @@ import { HOME, HELM_DIR, expand, collapse } from './paths.js';
 const SKIP = new Set([
   'node_modules', '.git', '.cache', '__pycache__', 'target', 'dist', '.venv',
 ]);
+
+/**
+ * A project copy Helm made for one chat or helper: a linked git worktree on
+ * a `helm/` branch. Helm puts these next to the project, so without this
+ * every chat added a row like `helm-chat-86c426bbecd1` to the folder picker.
+ * They are Helm's business; the owner picks the project itself.
+ */
+export function helmCopy(dir) {
+  try {
+    const marker = join(dir, '.git');
+    if (!statSync(marker).isFile()) return false;
+    const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(marker, 'utf8'))?.[1]?.trim();
+    if (!gitdir || !/\/\.git\/worktrees\/[^/]+$/.test(gitdir)) return false;
+    return /^ref: refs\/heads\/helm\//.test(readFileSync(join(resolve(dir, gitdir), 'HEAD'), 'utf8'));
+  } catch { return false; }
+}
 
 /** One directory, with just enough signal to choose a place to work. */
 export async function list(path = HOME) {
@@ -19,10 +35,12 @@ export async function list(path = HOME) {
     if (d.name.startsWith('.') && d.name !== '.config') continue;
     if (!snapshot && !d.isDirectory()) continue;
     const full = join(dir, d.name);
+    const isRepo = snapshot ? d.repo : existsSync(join(full, '.git'));
+    if (isRepo && helmCopy(full)) continue;
     entries.push({
       name: d.name,
       path: collapse(full),
-      isRepo: snapshot ? d.repo : existsSync(join(full, '.git')),
+      isRepo,
       skip: SKIP.has(d.name),
     });
   }
@@ -186,6 +204,7 @@ async function buildIndex() {
         if (d.name.startsWith('.') && d.name !== '.config') continue;
         const full = join(dir, d.name);
         const repo = snapshot ? d.repo : await stat(join(full, '.git')).then(() => true, () => false);
+        if (repo && helmCopy(full)) continue;
         if (out.length >= INDEX_MAX) return;
         out.push({ name: d.name, path: collapse(full), repo });
         if (depth >= INDEX_DEPTH) continue;

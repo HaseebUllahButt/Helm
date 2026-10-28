@@ -132,6 +132,29 @@ test('list counts ordinary and hidden files even though the picker lists only fo
   assert.equal(listing.entryCount, 2);
 });
 
+test('project copies Helm made for chats stay out of the picker; other worktrees stay in', async () => {
+  // Fake linked worktrees: a `.git` file into the repo's .git/worktrees, with a HEAD there.
+  const copy = (name, branch) => {
+    const gitdir = join(HOME, 'dev/helm/.git/worktrees', name);
+    mkdirSync(gitdir, { recursive: true });
+    writeFileSync(join(gitdir, 'HEAD'), `ref: refs/heads/${branch}\n`);
+    mkdirSync(join(HOME, 'dev', name, 'src'), { recursive: true });
+    writeFileSync(join(HOME, 'dev', name, '.git'), `gitdir: ${gitdir}\n`);
+  };
+  copy('helm-chat-abc123', 'helm/chat-abc123');
+  copy('helm-own-tree', 'experiment');
+  const fsApi = await import('../packages/connect/src/fs.js?copies');
+  const listed = (await fsApi.list(join(HOME, 'dev'))).entries.map((e) => e.name);
+  assert.ok(listed.includes('helm') && listed.includes('helm-own-tree'));
+  assert.ok(!listed.includes('helm-chat-abc123'));
+  await fsApi.warmIndex({ force: true });
+  const found = (await fsApi.search('helm')).results.map((d) => d.path);
+  assert.ok(found.includes('~/dev/helm-own-tree'));
+  assert.ok(!found.some((p) => p.startsWith('~/dev/helm-chat-abc123')), 'neither the copy nor its folders');
+  rmSync(join(HOME, 'dev/helm-chat-abc123'), { recursive: true });
+  rmSync(join(HOME, 'dev/helm-own-tree'), { recursive: true });
+});
+
 test('a device gets the whole index as a tree, and only again once it changes', async () => {
   mkdirSync(join(HOME, '.config/chromium/Default/IndexedDB/deep'), { recursive: true });
   const fsApi = await import('../packages/connect/src/fs.js?index');
