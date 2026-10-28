@@ -42,7 +42,7 @@ function machine(t, { unusualPaths = false, herdr = true } = {}) {
     writeFileSync(file, body);
     chmodSync(file, 0o755);
   };
-  for (const name of ['sh', 'bash', 'env', 'mkdir', 'cat', 'chmod', 'ls']) symlinkSync(tool(name), join(bin, name));
+  for (const name of ['sh', 'bash', 'env', 'mkdir', 'cat', 'chmod', 'ls', 'cp', 'mv', 'rm', 'dirname']) symlinkSync(tool(name), join(bin, name));
   symlinkSync(gitBin, join(bin, 'git'));
   const fakeHeader = `#!${process.execPath}\nimport { appendFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';\nimport { join } from 'node:path';\nconst args = process.argv.slice(2);\nappendFileSync(process.env.INSTALL_CALLS, JSON.stringify({ tool: process.argv[1].split('/').at(-1), args, cwd: process.cwd() }) + '\\n');\n`;
   executable('node', fakeHeader + `
@@ -67,7 +67,7 @@ if (args[0] === '--version') {
   process.exit(process.env.FAKE_NPM_BROKEN ? 1 : 0);
 }
 if (args[0] === 'ci') process.exit(process.env.FAKE_CI_FAIL ? 1 : 0);
-if (args[0] === '--workspace') process.exit(process.env.FAKE_BUILD_FAIL ? 1 : 0);
+if (args[0] === '--workspace') { mkdirSync('apps/web/dist', {recursive:true}); writeFileSync('apps/web/dist/index.html', 'app'); process.exit(process.env.FAKE_BUILD_FAIL ? 1 : 0); }
 process.exit(91);
 `);
   executable('curl', fakeHeader + `
@@ -442,4 +442,24 @@ test('refuses unsaved submodule edits even when local settings hide them', (t) =
   m.put(join(m.dir, 'nested-repo'), 'tracked.txt', 'keep submodule edit\n');
   refused(m, m.run(), /Save your edits/);
   assert.equal(readFileSync(join(m.dir, 'nested-repo/tracked.txt'), 'utf8'), 'keep submodule edit\n');
+});
+
+test('failed update build leaves the working source and app unchanged', t => {
+  const m = machine(t); m.clone();
+  m.put(m.dir, 'apps/web/dist/index.html', 'working app');
+  const before = m.git(m.dir, 'rev-parse', 'HEAD'); m.publish();
+  const result = m.run({FAKE_BUILD_FAIL:'1'});
+  assert.notEqual(result.status, 0);
+  assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), before);
+  assert.equal(readFileSync(join(m.dir, 'apps/web/dist/index.html'), 'utf8'), 'working app');
+});
+test('failed startup restores the previous source, app and launcher', t => {
+  const m = machine(t); passed(m.run());
+  const before = m.git(m.dir, 'rev-parse', 'HEAD');
+  const launcher = readFileSync(join(m.home, '.local/bin/helm'), 'utf8');
+  m.put(m.dir, 'apps/web/dist/index.html', 'working app'); m.publish();
+  assert.notEqual(m.run({FAKE_START_FAIL:'1'}).status, 0);
+  assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), before);
+  assert.equal(readFileSync(join(m.dir, 'apps/web/dist/index.html'), 'utf8'), 'working app');
+  assert.equal(readFileSync(join(m.home, '.local/bin/helm'), 'utf8'), launcher);
 });

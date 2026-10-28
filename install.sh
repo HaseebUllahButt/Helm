@@ -90,9 +90,7 @@ if [ -e "$DIR" ] || [ -L "$DIR" ]; then
     elif git -C "$DIR" merge-base --is-ancestor "$TARGET" HEAD; then
       say "kept local commits in $DIR"
     elif git -C "$DIR" merge-base --is-ancestor HEAD "$TARGET"; then
-      git -C "$DIR" -c core.hooksPath=/dev/null merge --ff-only --no-overwrite-ignore --quiet "$TARGET" \
-        || die "Cannot update $DIR without changing local files."
-      say "updated $DIR"
+      say "preparing the new release for $DIR"
     else
       die "Local and remote commits differ. Keep them and resolve the branch in $DIR before installing."
     fi
@@ -105,6 +103,55 @@ else
   git clone --quiet --branch "$BRANCH" --depth 1 -- "$REPO" "$DIR"
 fi
 [ -f "$DIR/package.json" ] && [ -f "$DIR/package-lock.json" ] || die "The checkout needs package.json and package-lock.json."
+
+# Check ignored local paths before downloading or building software.
+if [ -n "${TARGET:-}" ]; then
+  while IFS= read -r -d '' ITEM; do
+    if [ -e "$DIR/$ITEM" ] || [ -L "$DIR/$ITEM" ]; then
+      git -C "$DIR" ls-files --error-unmatch -- "$ITEM" >/dev/null 2>&1 ||
+        die "Cannot update $DIR without changing local files."
+    fi
+  done < <(git -C "$DIR" diff --name-only --diff-filter=A -z HEAD "$TARGET")
+fi
+
+# Keep the serving checkout and its dependencies unchanged during preparation.
+LIVE_DIR="$DIR"
+PREVIOUS=$(git -C "$LIVE_DIR" rev-parse HEAD)
+TARGET="${TARGET:-$PREVIOUS}"
+if git -C "$LIVE_DIR" merge-base --is-ancestor "$TARGET" HEAD; then TARGET="$PREVIOUS"; fi
+STAGE="${LIVE_DIR}.release.$$"
+BACKUP="${LIVE_DIR}.previous.$$"
+PUBLISHED=no
+PATHS=()
+cleanup_release() {
+  RESULT=$?
+  trap - EXIT
+  if [ "$RESULT" -ne 0 ] && [ "$PUBLISHED" = yes ]; then
+    # Do not reset source files if someone saved edits during startup.
+    if [ -z "$(git -C "$LIVE_DIR" status --porcelain --untracked-files=all)" ] &&
+       [ "$(git -C "$LIVE_DIR" rev-parse HEAD)" = "$TARGET" ]; then
+      git -C "$LIVE_DIR" reset --hard --quiet "$PREVIOUS"
+    fi
+    for ITEM in "${PATHS[@]}"; do
+      rm -rf -- "$LIVE_DIR/$ITEM"
+      if [ -e "$BACKUP/$ITEM" ] || [ -L "$BACKUP/$ITEM" ]; then
+        mkdir -p "$(dirname "$LIVE_DIR/$ITEM")"
+        mv -- "$BACKUP/$ITEM" "$LIVE_DIR/$ITEM"
+      fi
+    done
+    if [ -e "$BACKUP/launcher" ]; then
+      cp -- "$BACKUP/launcher" "$BIN_DIR/helm"
+      "$BIN_DIR/helm" start || true
+    fi
+  fi
+  rm -rf -- "$STAGE" "$BACKUP"
+  exit "$RESULT"
+}
+trap cleanup_release EXIT
+git clone --quiet --no-hardlinks --no-checkout -- "$LIVE_DIR" "$STAGE"
+git -C "$STAGE" fetch --quiet -- "$LIVE_DIR" "$TARGET"
+git -C "$STAGE" checkout --quiet --detach "$TARGET"
+DIR="$STAGE"
 
 # Install terminal software only after the checkout passes all safety checks.
 if need herdr || [ -x "$BIN_DIR/herdr" ]; then
@@ -166,6 +213,34 @@ else
   say "    arch:           sudo pacman -S --needed base-devel python"
   say "  then re-run this installer."
 fi
+
+# Check the prepared app before publishing anything.
+[ -f "$DIR/apps/web/dist/index.html" ] || die "The new app is missing. Keep the working release."
+[ -z "$(git -C "$LIVE_DIR" status --porcelain --untracked-files=all)" ] || die "Save your edits before installing."
+[ "$(git -C "$LIVE_DIR" rev-parse HEAD)" = "$PREVIOUS" ] || die "The saved version changed. Run the installer again."
+mkdir -p "$BACKUP"
+[ ! -e "$BIN_DIR/helm" ] || cp -- "$BIN_DIR/helm" "$BACKUP/launcher"
+git -C "$LIVE_DIR" -c core.hooksPath=/dev/null merge --ff-only --no-overwrite-ignore --quiet "$TARGET" \
+  || die "Cannot update $LIVE_DIR without changing local files."
+PUBLISHED=yes
+PATHS=(node_modules apps/web/dist)
+for ITEM in "$LIVE_DIR"/apps/*/node_modules "$LIVE_DIR"/packages/*/node_modules "$STAGE"/apps/*/node_modules "$STAGE"/packages/*/node_modules; do
+  [ -e "$ITEM" ] || [ -L "$ITEM" ] || continue
+  ITEM="${ITEM#"$LIVE_DIR/"}"
+  ITEM="${ITEM#"$STAGE/"}"
+  case " ${PATHS[*]} " in *" $ITEM "*) ;; *) PATHS+=("$ITEM");; esac
+done
+for ITEM in "${PATHS[@]}"; do
+  if [ -e "$LIVE_DIR/$ITEM" ] || [ -L "$LIVE_DIR/$ITEM" ]; then
+    mkdir -p "$(dirname "$BACKUP/$ITEM")"
+    mv -- "$LIVE_DIR/$ITEM" "$BACKUP/$ITEM"
+  fi
+  if [ -e "$STAGE/$ITEM" ] || [ -L "$STAGE/$ITEM" ]; then
+    mkdir -p "$(dirname "$LIVE_DIR/$ITEM")"
+    cp -a -- "$STAGE/$ITEM" "$LIVE_DIR/$ITEM"
+  fi
+done
+DIR="$LIVE_DIR"
 
 # -------------------------------------------------------------------- link
 
