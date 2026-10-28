@@ -47,14 +47,15 @@ machine -> folder -> chat. Each chat runs one profile: a CLI on an account.
 - **Grey bar on the installed app:** an app installed from one address and sent
   to another shows Chrome's address strip. Install the desktop app from the
   machine's own address (`helm app`).
-- **Chromium's bar on the desktop app:** an installed web app always keeps a
-  Chromium strip, and a plain `--app=` window loses its bar only with the
-  system title bar on a desktop that draws none (niri with prefer-no-csd,
-  Hyprland). There the launcher opens that bare window; elsewhere it opens Helm
-  installed as a web app with the overlay switch on, so only Chromium's small
-  buttons stay. Each start rewrites an outdated launcher (`refreshAppLauncher`)
-  and sets the frame once the window's browser has exited (`syncWindowFrame`):
-  Chromium writes its settings back after it lets go of the profile lock.
+- **Chromium's bar on the desktop app:** an installed web app always keeps
+  Chromium's zoom, extensions and menu buttons, so Helm never installs one. The
+  launcher opens a plain `--app=` window with the system title bar: the
+  desktop's own bar and Close button where it draws one, nothing where it
+  draws none (niri with prefer-no-csd, Hyprland, sway), and then Helm's page
+  draws its own Close button. Each start rewrites an older launcher
+  (`refreshAppLauncher`) and sets the frame once the window's browser has
+  exited (`syncWindowFrame`): Chromium writes its settings back after it lets
+  go of the profile lock.
 - **A laptop's hub is plain http on its local network** (bound to `0.0.0.0` so
   a phone on the same wifi is fast). On a network you do not trust, run
   `helm up --install --host 127.0.0.1`.

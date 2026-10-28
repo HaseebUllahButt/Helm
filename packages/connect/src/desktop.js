@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, readdirSync, readlinkSync, rmSync, accessSync, constants } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join, dirname, resolve } from 'node:path';
+import { join } from 'node:path';
 import { homedir, platform } from 'node:os';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { HELM_DIR } from './paths.js';
 
@@ -96,56 +96,32 @@ function installIcons() {
 }
 
 /**
- * The window is Helm installed as a web app in a browser profile of its own.
- * Where the desktop draws no title bar for a window that asks for none (niri
- * with prefer-no-csd, Hyprland), the window uses the system title bar and has
- * no Chromium buttons at all: Helm's own top row is the top edge. Elsewhere
- * (GNOME, KDE, niri without prefer-no-csd) Chromium draws its frame itself,
- * so the window opens with window controls overlay always on and Chromium
- * keeps only its small buttons at the right. A plain `--app=` window always
- * has Chromium's bar repeating the chat's name. Both settings are per browser
- * profile, so the window needs its own; the owner's everyday one is left
- * alone. Helm signs this window in with the machine's local key, so the
- * separate profile costs nothing to sign into.
+ * The window is a plain `--app=` window in a browser profile of its own, set
+ * to the system title bar. It then looks native everywhere: a desktop that
+ * draws title bars (GNOME, KDE, macOS, Windows) gives it its own bar and
+ * Close button, and a tiling desktop that draws none (niri with
+ * prefer-no-csd, Hyprland, sway) leaves it bare, and Helm's page draws its own
+ * Close button. Chromium's own frame never shows: no zoom, extensions or menu
+ * buttons. An installed web app always keeps those, so Helm never installs
+ * one. The setting is per browser profile, so the window needs its own; the
+ * owner's everyday one is left alone. Helm signs this window in with the
+ * machine's local key, so the separate profile costs nothing to sign into.
  */
 const windowProfile = () => join(HELM_DIR, 'app-window');
-const OVERLAY = '--enable-features=DesktopPWAsWindowControlsOverlayWithNoToggle';
-const appsStore = (dir) => join(dir, 'Default', 'Web Applications', 'Manifest Resources');
-
-/** Lines of a niri config and the files it includes. */
-function niriConfig(file, seen = new Set()) {
-  if (seen.has(file)) return '';
-  seen.add(file);
-  let text;
-  try { text = readFileSync(file, 'utf8'); } catch { return ''; }
-  const included = [...text.matchAll(/^\s*include\s+"([^"]+)"/gm)]
-    .map((m) => niriConfig(resolve(dirname(file), m[1].replace(/^~(?=\/)/, homedir())), seen));
-  return [text, ...included].join('\n');
-}
-
-/** True where the system title bar is no bar at all. */
-export function desktopDrawsNoBar(env = process.env) {
-  const desktops = (env.XDG_CURRENT_DESKTOP || '').toLowerCase().split(':');
-  if (desktops.includes('hyprland')) return true;
-  if (!desktops.includes('niri')) return false;
-  const file = env.NIRI_CONFIG || join(env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'niri', 'config.kdl');
-  return /^\s*prefer-no-csd\s*$/m.test(niriConfig(file));
-}
 
 const prefsFile = (dir) => join(dir, 'Default', 'Preferences');
 const readPrefs = (dir) => { try { return JSON.parse(readFileSync(prefsFile(dir), 'utf8')); } catch { return null; } };
 
 /**
- * Set the frame this desktop needs. Returns true when it changed. An open
- * window would write its own setting back over it as it closes.
+ * Set the system title bar. Returns true when it changed. An open window
+ * would write its own setting back over it as it closes.
  */
 function seedWindowProfile(dir) {
   if (profileInUse(dir)) return false;
   const prefs = readPrefs(dir) ?? {};
-  const custom = !desktopDrawsNoBar();
-  if (prefs?.browser?.custom_chrome_frame === custom) return false;
+  if (prefs?.browser?.custom_chrome_frame === false) return false;
   mkdirSync(join(dir, 'Default'), { recursive: true });
-  writeFileSync(prefsFile(dir), JSON.stringify({ ...prefs, browser: { ...prefs.browser, custom_chrome_frame: custom } }));
+  writeFileSync(prefsFile(dir), JSON.stringify({ ...prefs, browser: { ...prefs.browser, custom_chrome_frame: false } }));
   return true;
 }
 
@@ -164,76 +140,10 @@ function profileInUse(dir) {
 }
 
 /**
- * Install the Helm at `url` as a web app in the window profile, through a
- * hidden browser. Returns its app id, or null when that is not possible now
- * (no browser, Helm not answering, or the Helm window is open on this
- * profile: the next start tries again).
- */
-export async function installWebApp({ url, browser, timeoutMs = 30_000 }) {
-  const bin = browser ? which(browser) || browser : BROWSERS.map(which).find(Boolean);
-  const dir = windowProfile();
-  const ids = () => { try { return readdirSync(appsStore(dir)); } catch { return []; } };
-  // Chromium names the app by a hash Helm cannot repeat, so remember which
-  // new folder each address made; installing again adds none.
-  const record = join(dir, 'helm-apps.json');
-  let known = {};
-  try { known = JSON.parse(readFileSync(record, 'utf8')); } catch { /* first install */ }
-  const installed = () => (ids().includes(known[url]) ? known[url] : null);
-  if (!bin) return null;
-  if (profileInUse(dir)) return installed();
-  seedWindowProfile(dir);
-  const before = new Set(ids());
-
-  const child = spawn(bin, [`--user-data-dir=${dir}`, '--no-first-run', '--headless', '--remote-debugging-pipe', 'about:blank'],
-    { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
-  const [toBrowser, fromBrowser] = [child.stdio[3], child.stdio[4]];
-  const waiting = new Map();
-  let buf = '';
-  let next = 0;
-  fromBrowser.on('data', (chunk) => {
-    buf += chunk;
-    for (let end; (end = buf.indexOf('\0')) >= 0; buf = buf.slice(end + 1)) {
-      const msg = JSON.parse(buf.slice(0, end));
-      waiting.get(msg.id)?.(msg);
-    }
-  });
-  const call = (method, params = {}) => new Promise((resolve, reject) => {
-    const id = ++next;
-    waiting.set(id, (msg) => (msg.error ? reject(new Error(msg.error.message)) : resolve(msg.result)));
-    toBrowser.write(`${JSON.stringify({ id, method, params })}\0`);
-  });
-  const gone = new Promise((_, reject) => {
-    child.on('error', reject);
-    child.on('exit', () => reject(new Error('the browser closed')));
-  });
-  const timer = setTimeout(() => child.kill(), timeoutMs);
-  try {
-    // Chromium installs from the page's manifest, so Helm must be answering.
-    await Promise.race([call('PWA.install', { manifestId: url, installUrlOrBundleUrl: url }), gone]);
-    // Installed this way it would open as a browser tab.
-    await Promise.race([call('PWA.changeAppUserSettings', { manifestId: url, displayMode: 'standalone' }), gone]);
-    await Promise.race([call('Browser.close'), gone]).catch(() => {});
-  } catch {
-    child.kill();
-    return installed();
-  } finally {
-    clearTimeout(timer);
-  }
-  if (child.exitCode === null && child.signalCode === null) await new Promise((resolve) => child.once('exit', resolve));
-  const added = ids().find((id) => !before.has(id));
-  if (added) {
-    known = { ...known, [url]: added };
-    writeFileSync(record, JSON.stringify(known));
-  }
-  return installed();
-}
-
-/**
- * The desktop can change after the window profile was made (the owner turns
- * on prefer-no-csd). Chromium writes its settings back as it exits, after it
- * lets go of the lock, so while the Helm window is open the change waits for
- * that browser to end. It shows the next time the window opens. `onChange`
- * hears when it is made.
+ * Earlier Helm set Chromium's own frame. Chromium writes its settings back as
+ * it exits, after it lets go of the lock, so while the Helm window is open
+ * the change waits for that browser to end. It shows the next time the
+ * window opens. `onChange` hears when it is made.
  */
 export function syncWindowFrame({ onChange = () => {}, everyMs = 500 } = {}) {
   const dir = windowProfile();
@@ -242,7 +152,7 @@ export function syncWindowFrame({ onChange = () => {}, everyMs = 500 } = {}) {
     if (seedWindowProfile(dir)) onChange();
     return { waiting: false };
   }
-  if (readPrefs(dir)?.browser?.custom_chrome_frame === !desktopDrawsNoBar()) return { waiting: false };
+  if (readPrefs(dir)?.browser?.custom_chrome_frame === false) return { waiting: false };
   let pid = lockHolder(dir);
   const timer = setInterval(() => {
     if (pid && alive(pid)) return;
@@ -264,12 +174,10 @@ export function syncWindowFrame({ onChange = () => {}, everyMs = 500 } = {}) {
 const wmClass = (url, profile) => `chrome-${new URL(url).hostname}__-${profile}`;
 
 /**
- * Write the launcher. Returns what it did, so the caller can say it. With
- * `appId` (from installWebApp) it opens the installed app with its own top
- * row; without, a plain app window at `url`.
- * @param {{ url: string, browser?: string, profile?: string, appId?: string|null }} opts
+ * Write the launcher. Returns what it did, so the caller can say it.
+ * @param {{ url: string, browser?: string, profile?: string }} opts
  */
-export function installApp({ url, browser, profile = 'Default', appId = null }) {
+export function installApp({ url, browser, profile = 'Default' }) {
   if (platform() !== 'linux') {
     throw new Error(
       'a desktop entry is Linux-only for now - open the address in your browser ' +
@@ -281,12 +189,8 @@ export function installApp({ url, browser, profile = 'Default', appId = null }) 
   // remembering a port.
   const dir = windowProfile();
   if (bin) seedWindowProfile(dir);
-  // An installed app always keeps a Chromium strip; a plain app window on a
-  // desktop that draws no bar has none at all.
-  const overlay = !!(bin && appId) && !desktopDrawsNoBar();
-  const opens = overlay ? `${OVERLAY} --app-id=${appId}` : `--app=${url}`;
   const exec = bin
-    ? `${bin} --user-data-dir=${dir} --profile-directory=${profile} --no-first-run ${opens}`
+    ? `${bin} --user-data-dir=${dir} --profile-directory=${profile} --no-first-run --app=${url}`
     : `xdg-open ${url}`;
 
   const entry = [
@@ -298,9 +202,7 @@ export function installApp({ url, browser, profile = 'Default', appId = null }) 
     'Comment=every coding agent, one place - the helm running on this machine',
     `Exec=${exec}`,
     `Icon=${ICON}`,
-    ...(bin ? [`StartupWMClass=${overlay ? `chrome-${appId}-${profile}` : wmClass(url, profile)}`] : []),
-    // An installed app opens at its start page; a notice opens a chat from here.
-    ...(overlay ? [`X-Helm-Url=${url}`] : []),
+    ...(bin ? [`StartupWMClass=${wmClass(url, profile)}`] : []),
     'Categories=Development;',
     'Keywords=helm;agents;claude;codex;',
     'Terminal=false',
@@ -318,23 +220,20 @@ export function installApp({ url, browser, profile = 'Default', appId = null }) 
   run('update-desktop-database', [appsDir()]);
   run('gtk-update-icon-cache', ['-f', '-t', join(dataHome(), 'icons', 'hicolor')]);
 
-  return { file, icons: icons.length, browser: bin, url, windowed: !!bin, overlay };
+  return { file, icons: icons.length, browser: bin, url, windowed: !!bin };
 }
 
 /**
- * A launcher written before Helm drew its own top row, or for another
- * desktop, opens a window with Chromium's bar or buttons across the top. Each
- * start brings it up to date, once Helm answers at `url`; until the install
- * works it stays as it was.
+ * A launcher from an earlier Helm opens Chromium's bar or buttons across the
+ * top: one without the window profile, or one that opens Helm installed as a
+ * web app. Each start rewrites it as a plain window.
  */
-export async function refreshAppLauncher({ url, install = installWebApp }) {
+export function refreshAppLauncher({ url }) {
   if (platform() !== 'linux') return { updated: false };
   let text;
   try { text = readFileSync(join(appsDir(), ENTRY), 'utf8'); } catch { return { updated: false }; }
   const exec = text.match(/^Exec=(.*)$/m)?.[1]?.trim() ?? '';
-  const bare = desktopDrawsNoBar();
-  const current = bare ? !exec.includes(OVERLAY) && exec.includes('--app=') : exec.includes(OVERLAY);
-  if (current && exec.includes(`--user-data-dir=${windowProfile()} `)) return { updated: false };
+  if (/(^|\s)--app=/.test(exec) && exec.includes(`--user-data-dir=${windowProfile()} `)) return { updated: false };
   // Only the Helm the launcher opens may rewrite it: a test copy on another
   // port or folder shares this desktop.
   const opens = text.match(/^X-Helm-Url=(.*)$/m)?.[1]?.trim() ?? exec.match(/--app=(\S+)/)?.[1];
@@ -342,14 +241,8 @@ export async function refreshAppLauncher({ url, install = installWebApp }) {
   if (opens !== url || (profile && profile !== windowProfile())) return { updated: false };
   const bin = exec.split(/\s+/)[0];
   if (!bin || bin === 'xdg-open') return { updated: false };
-  if (bare) {
-    installApp({ url, browser: bin });
-    return { updated: true };
-  }
-  const appId = await install({ url, browser: bin });
-  if (!appId) return { updated: false };
-  installApp({ url, browser: bin, appId });
-  return { updated: true, appId };
+  installApp({ url, browser: bin });
+  return { updated: true };
 }
 
 /**

@@ -224,12 +224,12 @@ async function up() {
     temporary: rest.includes('--temporary'),
   });
   if (platform() === 'linux') {
-    // An older launcher opens Helm under Chromium's bar; update it in the background.
-    // The window frame follows the desktop, which can change between starts.
-    import('../src/desktop.js').then(async (m) => {
-      const r = await m.refreshAppLauncher({ url: `http://127.0.0.1:${started.port}/` });
-      if (r.updated) console.log('helm: the Helm app now opens with its own top row');
-      m.syncWindowFrame({ onChange: () => console.log('helm: the Helm app window frame now suits this desktop') });
+    // An older launcher or window profile opens Helm under Chromium's bar or buttons.
+    import('../src/desktop.js').then((m) => {
+      if (m.refreshAppLauncher({ url: `http://127.0.0.1:${started.port}/` }).updated) {
+        console.log('helm: the Helm app now opens as a plain window');
+      }
+      m.syncWindowFrame({ onChange: () => console.log('helm: the Helm app window now uses the system title bar') });
     }).catch((err) => console.error(`helm: app launcher: ${err.message}`));
   }
 }
@@ -394,10 +394,9 @@ async function joinCmd() {
 
 async function installLocalApp(net) {
   if (platform() !== 'linux') return;
-  const { installApp, installWebApp } = await import('../src/desktop.js');
+  const { installApp } = await import('../src/desktop.js');
   try {
-    const url = `http://127.0.0.1:${net.port ?? 8787}/`;
-    installApp({ url, appId: await installWebApp({ url }) });
+    installApp({ url: `http://127.0.0.1:${net.port ?? 8787}/` });
     console.log('  Helm is in your applications, already signed in.');
   } catch (err) { console.log(`  Helm did not add the app launcher: ${err.message}`); }
 }
@@ -1984,7 +1983,7 @@ try {
       break;
 
     case 'app': {
-      const { installApp, installWebApp, removeApp } = await import('../src/desktop.js');
+      const { installApp, removeApp } = await import('../src/desktop.js');
       if (rest.includes('--remove') || rest.includes('remove')) {
         const { removed, icons } = removeApp();
         console.log(removed
@@ -1995,8 +1994,7 @@ try {
       const net = requireNetwork();
       const at = `http://127.0.0.1:${net.port ?? 8787}/`;
       const pick = rest[rest.indexOf('--browser') + 1];
-      const browser = rest.includes('--browser') ? pick : undefined;
-      const r = installApp({ url: at, browser, appId: await installWebApp({ url: at, browser }) });
+      const r = installApp({ url: at, browser: rest.includes('--browser') ? pick : undefined });
       console.log(`\n  Helm is in your applications. Opening ${r.url}.`);
       console.log(r.windowed
         ? `  Helm opens in a separate ${r.browser} window and signs in automatically.`

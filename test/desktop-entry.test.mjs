@@ -10,8 +10,6 @@ import { join } from 'node:path';
 const HOME = mkdtempSync(join(tmpdir(), 'helm-desktop-'));
 process.env.XDG_DATA_HOME = HOME;
 process.env.HELM_DIR = join(HOME, 'helm');
-// The frame depends on the desktop; these run as on one that draws title bars.
-process.env.XDG_CURRENT_DESKTOP = 'GNOME';
 test.after(() => rmSync(HOME, { recursive: true, force: true }));
 
 const entry = () => join(HOME, 'applications', 'helm-app.desktop');
@@ -52,18 +50,7 @@ test('a windowed entry only claims to be one when it can be', async (t) => {
   // Its own profile, so the everyday browser profile is untouched.
   assert.match(text, new RegExp(`--user-data-dir=${join(HOME, 'helm', 'app-window')} `));
   const prefs = JSON.parse(readFileSync(join(HOME, 'helm', 'app-window', 'Default', 'Preferences'), 'utf8'));
-  assert.equal(prefs.browser.custom_chrome_frame, true, "the overlay needs Chromium's own frame");
-});
-
-test('an installed app opens with its own top row and no Chromium bar', async (t) => {
-  const { installApp } = await import('../packages/connect/src/desktop.js');
-  if (process.platform !== 'linux') return t.skip('desktop entries are Linux-only');
-  const r = installApp({ url: 'http://127.0.0.1:8787/', browser: 'no-such-browser-9000', appId: 'abcdef' });
-  const text = readFileSync(entry(), 'utf8');
-  assert.equal(r.overlay, true);
-  assert.match(text, /^Exec=no-such-browser-9000 .*--enable-features=DesktopPWAsWindowControlsOverlayWithNoToggle --app-id=abcdef$/m);
-  assert.match(text, /^StartupWMClass=chrome-abcdef-Default$/m);
-  assert.match(text, /^X-Helm-Url=http:\/\/127\.0\.0\.1:8787\/$/m);
+  assert.equal(prefs.browser.custom_chrome_frame, false, "the system title bar, never Chromium's buttons");
 });
 
 test('a start updates an old launcher, but only for the Helm it opens', async (t) => {
@@ -72,36 +59,20 @@ test('a start updates an old launcher, but only for the Helm it opens', async (t
   const { writeFileSync, mkdirSync } = await import('node:fs');
   mkdirSync(join(HOME, 'applications'), { recursive: true });
   const old = '[Desktop Entry]\nExec=/usr/bin/chromium --profile-directory=Default --app=http://127.0.0.1:8787/\n';
-  const asked = [];
-  const install = async (o) => { asked.push(o); return 'abcdef'; };
-
   writeFileSync(entry(), old);
-  assert.equal((await refreshAppLauncher({ url: 'http://127.0.0.1:9999/', install })).updated, false, 'a test copy on another port leaves it');
-  assert.equal(readFileSync(entry(), 'utf8'), old);
-  assert.equal((await refreshAppLauncher({ url: 'http://127.0.0.1:8787/', install: async () => null })).updated, false, 'a failed install leaves it');
+  assert.equal(refreshAppLauncher({ url: 'http://127.0.0.1:9999/' }).updated, false, 'a test copy on another port leaves it');
   assert.equal(readFileSync(entry(), 'utf8'), old);
 
-  assert.equal((await refreshAppLauncher({ url: 'http://127.0.0.1:8787/', install })).updated, true);
-  assert.deepEqual(asked.at(-1), { url: 'http://127.0.0.1:8787/', browser: '/usr/bin/chromium' });
-  assert.match(readFileSync(entry(), 'utf8'), /--app-id=abcdef$/m);
-  asked.length = 0;
-  assert.equal((await refreshAppLauncher({ url: 'http://127.0.0.1:8787/', install })).updated, false, 'once is enough');
-  assert.equal(asked.length, 0);
-});
+  assert.equal(refreshAppLauncher({ url: 'http://127.0.0.1:8787/' }).updated, true);
+  assert.match(readFileSync(entry(), 'utf8'), new RegExp(`^Exec=/usr/bin/chromium --user-data-dir=${join(HOME, 'helm', 'app-window')} .*--app=http://127\\.0\\.0\\.1:8787/$`, 'm'));
+  assert.equal(refreshAppLauncher({ url: 'http://127.0.0.1:8787/' }).updated, false, 'once is enough');
 
-test('the window has no Chromium buttons where the desktop draws no title bar', async (t) => {
-  const { desktopDrawsNoBar } = await import('../packages/connect/src/desktop.js');
-  const { writeFileSync, mkdirSync } = await import('node:fs');
-  const config = join(HOME, 'config');
-  mkdirSync(join(config, 'niri', 'parts'), { recursive: true });
-  const niri = { XDG_CURRENT_DESKTOP: 'niri', XDG_CONFIG_HOME: config };
-  writeFileSync(join(config, 'niri', 'config.kdl'), 'layout {\n}\n// prefer-no-csd\n');
-  assert.equal(desktopDrawsNoBar(niri), false, 'niri draws a bar unless told not to');
-  writeFileSync(join(config, 'niri', 'config.kdl'), 'include "parts/look.kdl"\n');
-  writeFileSync(join(config, 'niri', 'parts', 'look.kdl'), '  prefer-no-csd\n');
-  assert.equal(desktopDrawsNoBar(niri), true, 'the setting counts in an included file');
-  assert.equal(desktopDrawsNoBar({ XDG_CURRENT_DESKTOP: 'Hyprland' }), true);
-  assert.equal(desktopDrawsNoBar({ XDG_CURRENT_DESKTOP: 'ubuntu:GNOME' }), false);
+  // The installed web app an earlier Helm opened, with Chromium's buttons.
+  writeFileSync(entry(), `[Desktop Entry]\nExec=/usr/bin/chromium --user-data-dir=${join(HOME, 'helm', 'app-window')} --profile-directory=Default --no-first-run --enable-features=DesktopPWAsWindowControlsOverlayWithNoToggle --app-id=abcdef\nX-Helm-Url=http://127.0.0.1:8787/\n`);
+  assert.equal(refreshAppLauncher({ url: 'http://127.0.0.1:8787/' }).updated, true);
+  const text = readFileSync(entry(), 'utf8');
+  assert.match(text, /--app=http:\/\/127\.0\.0\.1:8787\/$/m);
+  assert.doesNotMatch(text, /app-id|DesktopPWAs|X-Helm-Url/);
 });
 
 test('a frame change waits until the Helm window closes', async (t) => {
@@ -111,18 +82,8 @@ test('a frame change waits until the Helm window closes', async (t) => {
   const dir = join(process.env.HELM_DIR, 'app-window');
   const prefs = () => JSON.parse(readFileSync(join(dir, 'Default', 'Preferences'), 'utf8')).browser;
   mkdirSync(join(dir, 'Default'), { recursive: true });
+  // Earlier Helm set Chromium's own frame.
   writeFileSync(join(dir, 'Default', 'Preferences'), JSON.stringify({ browser: { custom_chrome_frame: true, other: 1 } }));
-  const config = join(HOME, 'config-sync');
-  mkdirSync(join(config, 'niri'), { recursive: true });
-  writeFileSync(join(config, 'niri', 'config.kdl'), 'prefer-no-csd\n');
-  const saved = { ...process.env };
-  t.after(() => {
-    for (const key of ['XDG_CURRENT_DESKTOP', 'XDG_CONFIG_HOME', 'NIRI_CONFIG']) {
-      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
-    }
-  });
-  Object.assign(process.env, { XDG_CURRENT_DESKTOP: 'niri', XDG_CONFIG_HOME: config });
-  delete process.env.NIRI_CONFIG;
 
   // A child process stands in for the browser that holds the profile. It
   // lets go of the lock before it exits and writes its settings last.
@@ -141,29 +102,6 @@ test('a frame change waits until the Helm window closes', async (t) => {
   await done;
   assert.deepEqual(prefs(), { custom_chrome_frame: false, other: 1 }, 'the system title bar, other settings kept');
   assert.equal(syncWindowFrame().waiting, false, 'nothing left to change');
-});
-
-test('on a desktop that draws no bar the launcher opens a plain window', async (t) => {
-  const { installApp, refreshAppLauncher } = await import('../packages/connect/src/desktop.js');
-  if (process.platform !== 'linux') return t.skip('desktop entries are Linux-only');
-  const { writeFileSync, mkdirSync } = await import('node:fs');
-  const saved = process.env.XDG_CURRENT_DESKTOP;
-  t.after(() => { process.env.XDG_CURRENT_DESKTOP = saved; });
-  // The overlay launcher an earlier start wrote, before Hyprland.
-  installApp({ url: 'http://127.0.0.1:8787/', browser: 'no-such-browser-9000', appId: 'abcdef' });
-  assert.match(readFileSync(entry(), 'utf8'), /--app-id=abcdef$/m);
-  process.env.XDG_CURRENT_DESKTOP = 'Hyprland';
-  mkdirSync(join(HOME, 'applications'), { recursive: true });
-
-  const r = await refreshAppLauncher({ url: 'http://127.0.0.1:8787/', install: async () => assert.fail('a plain window needs no install') });
-  assert.equal(r.updated, true);
-  const text = readFileSync(entry(), 'utf8');
-  assert.match(text, /^Exec=no-such-browser-9000 .*--app=http:\/\/127\.0\.0\.1:8787\/$/m);
-  assert.doesNotMatch(text, /DesktopPWAsWindowControlsOverlay|X-Helm-Url/);
-  assert.match(text, /^StartupWMClass=chrome-127\.0\.0\.1__-Default$/m);
-  assert.equal((await refreshAppLauncher({ url: 'http://127.0.0.1:8787/' })).updated, false, 'once is enough');
-  assert.equal(installApp({ url: 'http://127.0.0.1:8787/', browser: 'no-such-browser-9000', appId: 'abcdef' }).overlay, false);
-  writeFileSync(entry(), '');
 });
 
 test('removing it takes the icons with it', async (t) => {
