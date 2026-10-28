@@ -512,11 +512,8 @@ async function codexAppServerCatalog(root, environment = {}) {
 /** Codex provider catalog with its source attached for safe cache promotion. */
 async function codexCatalog(root, environment = {}) {
   void codexPublishedModels();
-  const live = await codexAppServerCatalog(root, environment).catch(() => null);
-  if (live?.models?.length) {
-    return { catalog: mergeCodexPublishedModels(live, codexManifestCache.models), source: 'app-server' };
-  }
-
+  // debug models refreshes the account catalog. app-server model/list can
+  // return bundled or cached rows before its online discovery has finished.
   const bin = ENGINES.codex?.bin ?? 'codex';
   try {
     const { stdout } = await exec(bin, ['debug', 'models'], {
@@ -529,6 +526,11 @@ async function codexCatalog(root, environment = {}) {
       return { catalog: mergeCodexPublishedModels(cat, codexManifestCache.models), source: 'debug' };
     }
   } catch { /* not installed, too old, or no network - fall back to disk */ }
+  const live = await codexAppServerCatalog(root, environment).catch(() => null);
+  if (live?.models?.length) {
+    return { catalog: mergeCodexPublishedModels(live, codexManifestCache.models), source: 'app-server' };
+  }
+
   const cat = readCodexDiskCatalog(root);
   if (cat) return { catalog: mergeCodexPublishedModels(cat, codexManifestCache.models), source: 'disk' };
   return codexManifestCache.models.length

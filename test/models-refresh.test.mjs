@@ -197,6 +197,7 @@ async function output() {
   }
 }
 if (name === 'codex') {
+  if (process.argv[2] !== 'app-server') process.exit(1);
   require('node:readline').createInterface({input:process.stdin}).on('line', async line => {
     const req = JSON.parse(line);
     if (req.id === undefined) return;
@@ -462,5 +463,50 @@ test('Codex reads either disk cache name and prefers the newest valid account ca
     if (priorManifest === undefined) delete process.env.HELM_CODEX_MODEL_MANIFEST_URL;
     else process.env.HELM_CODEX_MODEL_MANIFEST_URL = priorManifest;
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('Codex refreshes online before accepting stale app-server rows and finds later releases', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-model-online-'));
+  const home = join(dir, 'account');
+  const bin = join(dir, 'bin');
+  mkdirSync(home); mkdirSync(bin);
+  const catalogFile = join(home, 'model_catalog.json');
+  const onlineFile = join(dir, 'online.json');
+  const callsFile = join(dir, 'calls');
+  writeFileSync(catalogFile, JSON.stringify({models:[{slug:'old-model'}]}));
+  executable(bin, 'codex', `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.appendFileSync(process.env.TEST_CALLS, process.argv.slice(2).join(' ') + '\\n');
+if (process.argv[2] === 'debug') {
+  process.stdout.write(fs.readFileSync(process.env.TEST_CATALOG));
+} else if (process.argv[2] === 'app-server') {
+  require('node:readline').createInterface({input:process.stdin}).on('line', line => {
+    const req = JSON.parse(line);
+    if (req.id !== undefined) console.log(JSON.stringify({id:req.id,result:req.method === 'model/list' ? {data:[{model:'old-model'}]} : {}}));
+  });
+}
+`);
+  const prior = process.env.HELM_CODEX_MODEL_MANIFEST_URL;
+  process.env.HELM_CODEX_MODEL_MANIFEST_URL = 'http://127.0.0.1:1/unavailable';
+  try {
+    const {listModels} = await import('../packages/connect/src/models.js?online-first');
+    const env = {PATH:bin+':'+process.env.PATH, TEST_CATALOG:onlineFile, TEST_CALLS:callsFile};
+    writeFileSync(onlineFile, JSON.stringify({models:[{slug:'gpt-6.1-terra'}]}));
+    assert.deepEqual((await listModels('codex', home, env)).models, ['old-model']);
+    assert.deepEqual((await listModels('codex', home, env, null, {settled:true})).models, ['gpt-6.1-terra']);
+    writeFileSync(onlineFile, JSON.stringify({models:[{slug:'gpt-6.1-terra'},{slug:'future-model'}]}));
+    const now = Date.now;
+    Date.now = () => now() + 10 * 60_000 + 1;
+    try {
+      await listModels('codex', home, env);
+      assert.deepEqual((await listModels('codex', home, env, null, {settled:true})).models, ['gpt-6.1-terra','future-model']);
+    } finally { Date.now = now; }
+    assert.deepEqual(readFileSync(callsFile,'utf8').trim().split('\n'), ['debug models','debug models']);
+  } finally {
+    if (prior === undefined) delete process.env.HELM_CODEX_MODEL_MANIFEST_URL;
+    else process.env.HELM_CODEX_MODEL_MANIFEST_URL = prior;
+    rmSync(dir, {recursive:true, force:true});
   }
 });

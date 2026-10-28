@@ -3,6 +3,7 @@
  * The follow-up asks with `settled`: the machine answers once its refresh is
  * done, so one more request replaces a poll every second. A machine too old
  * to wait answers at once, and the delay keeps that a poll.
+ * A list that stays open checks again after the machine cache expires.
  */
 export function followModelRefresh<T extends { refreshing?: boolean }>(
   fetchList: (settled: boolean) => Promise<T>,
@@ -23,12 +24,12 @@ export function followModelRefresh<T extends { refreshing?: boolean }>(
       if (stopped) return;
       refreshing = !!list.refreshing;
       receive(list);
-      if (refreshing) timer = setTimeout(() => refresh(true), delayMs);
+      timer = setTimeout(() => refresh(refreshing), refreshing ? delayMs : 10 * 60_000 + 1000);
     } catch (error) {
       if (!stopped) {
         onError(error);
         // A lost follow-up must not leave an open menu on the old list.
-        if (refreshing) timer = setTimeout(() => refresh(true), delayMs);
+        timer = setTimeout(() => refresh(refreshing), refreshing ? delayMs : 10 * 60_000 + 1000);
       }
     } finally {
       pending = false;

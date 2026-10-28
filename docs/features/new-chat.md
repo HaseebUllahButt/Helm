@@ -66,7 +66,11 @@
   One account never waits for another account's CLI. A failed refresh keeps
   the usable list until the next expiry; a lost follow-up retries. Chat,
   defaults, helpers, brain and task transfer menus use the same flow.
-  Codex reads the newest valid `model_catalog.json` or `models_cache.json`.
+  Open menus check again after ten minutes, including after a failed request.
+  Codex first serves its newest valid disk cache, then runs `debug models`
+  to refresh the account list. `app-server model/list` is a fallback because
+  it can return old bundled rows before online discovery finishes.
+  Do not pin `model_catalog_json` in Codex settings: it stops online refresh.
   Prove with a private CLI stub: open Agent defaults with an old list,
   release a held model reply with a new name, and check that the new name
   appears without leaving the page. Check phone and desktop sizes.
