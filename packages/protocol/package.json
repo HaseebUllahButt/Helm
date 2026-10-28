@@ -17,6 +17,7 @@
     "./reliable-input": "./reliable-input.js",
     "./visual": "./visual.js",
     "./brief": "./brief.js",
-    "./owner-seen": "./owner-seen.js"
+    "./owner-seen": "./owner-seen.js",
+    "./connection-report": "./connection-report.js"
   }
 }

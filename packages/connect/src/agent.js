@@ -73,6 +73,7 @@ import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
 import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
+import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
 import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
@@ -860,6 +861,7 @@ export class Daemon {
 
   async #tick() {
     if (this.#stopped) return;
+    this.routes();
     void this.#checkNetworkRecovery().catch(error => console.warn('[helm] packet-size recovery:', error.message));
     await this.#publishSelf();
 
@@ -1110,6 +1112,8 @@ export class Daemon {
    * it is the machine's own, and the measured round trip - plus what the
    * local network discovery has heard. What `helm status` prints.
    */
+  connectionHistory = new ConnectionHistory(join(HELM_DIR, 'connection-history.json'));
+
   routes() {
     const net = loadNetwork() ?? this.net;
     const name = (id) => net.machines?.[id]?.name ?? id;
@@ -1125,11 +1129,11 @@ export class Daemon {
     const reached = new Set(table.map((r) => r.env));
     return {
       recovery: this.networkRecovery,
-      machines: [
+      ...this.connectionHistory.observe([
         ...table.map((r) => ({ ...r, name: name(r.env) })),
         ...Object.keys(net.machines ?? {}).filter((id) => id !== this.id && !net.revoked?.[id] && !reached.has(id))
           .map((env) => ({ env, name: name(env), url: null })),
-      ],
+      ]),
       lan: this.lan?.status() ?? { on: false, reason: 'not started', heard: [] },
     };
   }

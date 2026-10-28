@@ -10,6 +10,7 @@ import { engineOf } from '../engines';
 import { startSummary } from './common';
 import { Notifications, InstallPwa } from './Notifications';
 import type { MainView } from '../App';
+import { ConnectionCheck } from '../ConnectionCheck';
 
 const AppearanceSettings = lazy(() => import('../AppearanceSettings').then((m) => ({ default: m.AppearanceSettings })));
 
@@ -33,6 +34,7 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
         <div className="titles"><h1>Settings</h1></div>
       </div>
       <div className="scroll"><div className="pad column">
+        <ConnectionCheck client={client} envs={envs} />
         <div className="rows">
           <button className="row" onClick={() => onOpen({ kind: 'owner' })}>
             <span className="grow"><span className="rt">Your preferences</span></span>

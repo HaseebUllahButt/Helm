@@ -6,6 +6,7 @@ import { NETWORK_FILE } from '@helm/protocol/network';
 import { M } from '@helm/protocol';
 import { hubRpc } from './hub-client.js';
 import { findWebRoot } from './web-build.js';
+import { connectionSupport } from '@helm/protocol/connection-report';
 
 const exec = promisify(execFile);
 const command = (file, args) => exec(file, args, { timeout: 3000, maxBuffer: 64 * 1024 });
@@ -130,6 +131,10 @@ export async function diagnose({
       checks.push(check('routes', reached === machines.length ? 'ok' : 'warning',
         `${reached} of ${machines.length} other machines have a route from here.`,
         reached < machines.length ? 'Run helm doctor on an unreachable machine. It may be asleep or disconnected.' : undefined));
+      const detail = connectionSupport(routes.value);
+      checks.push(...detail.checks);
+      for (const [i, event] of detail.history.entries()) checks.push(check(`history-${i}`, 'info',
+        `${event.machine}: ${event.state === 'connected' ? 'connection found' : event.state === 'disconnected' ? 'connection lost' : 'connection path changed'} at ${new Date(event.at).toISOString()}.`));
       if (routes.value.recovery?.repair) checks.push(check('packet-recovery', 'warning', 'Large network packet recovery needs setup.', 'Run helm network-repair on this machine.'));
     }
   }
