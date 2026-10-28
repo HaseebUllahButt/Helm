@@ -76,6 +76,7 @@ import { NetworkMonitor } from './network-monitor.js';
 import { createBrowserRoutes } from './browser-routes.js';
 import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
+import { ActionDelivery } from './action-delivery.js';
 import { InputDelivery } from './input-delivery.js';
 import { ChatEventStream } from './event-stream.js';
 import { SessionUpdates } from './session-updates.js';
@@ -2067,6 +2068,18 @@ export class Daemon {
       case M.SESSION_CONNECT: return { session: await this.sessions.connect(p.id) };
       case M.SESSION_DETACH:  return this.sessions.detach(p.id, p.watcher);
       case M.SESSION_RESIZE:  return this.sessions.resize(p.id, p.cols, p.rows);
+      case 'session.action-status':
+        await this.sessionRecovery;
+        if (p.kind === 'input') {
+          this.inputDelivery ??= new InputDelivery(this.sessions);
+          return this.inputDelivery.status(p.actionId, caller);
+        }
+        this.actionDelivery ??= new ActionDelivery(this.sessions);
+        return this.actionDelivery.status(p.actionId, caller);
+      case 'session.answer-deliver':
+        await this.sessionRecovery;
+        this.actionDelivery ??= new ActionDelivery(this.sessions);
+        return this.actionDelivery.deliver(p, caller);
       case M.SESSION_DELIVER:
         await this.sessionRecovery;
         this.inputDelivery ??= new InputDelivery(this.sessions);
