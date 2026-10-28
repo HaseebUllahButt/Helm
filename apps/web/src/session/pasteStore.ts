@@ -1,19 +1,13 @@
 /**
- * Big pastes, kept out of the message box.
- *
- * A log or a file pasted into the composer is a wall of text that pushes the
- * box off the screen and makes it slow to type in. It goes in as a short
- * token - "pasted text 1 · 3,412 chars" - and the text itself is put back in
- * when the message is sent, so the agent receives exactly what was pasted.
- * Held in localStorage as well as memory: a draft that survives a reload must
- * not send the token as if it were the message.
+ * Big pastes once went into the box as a token - "pasted text 1 · 3,412
+ * chars" - and came back whole on send. The owner wants the real text in the
+ * box, so pastes are no longer folded. Drafts saved before that can still
+ * hold a token, so a send still puts its text back. Held in localStorage as
+ * well as memory: a draft that survives a reload must not send the token as
+ * if it were the message.
  */
 const KEY = 'helm.pastes';
 const TOKEN = /⟦pasted text \d+ · [\d,]+ chars⟧/g;
-
-/** Long enough to be a wall of text: a screenful on a phone is about 600 characters. */
-export const PASTE_CHARS = 1500;
-export const PASTE_LINES = 30;
 
 const load = (): Record<string, string> => { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; } };
 const save = (m: Record<string, string>) => {
@@ -21,9 +15,7 @@ const save = (m: Record<string, string>) => {
 };
 const memory: Record<string, string> = {};
 
-export const isBigPaste = (text: string) => text.length >= PASTE_CHARS || text.split('\n').length > PASTE_LINES;
-
-/** Store `text` and return the token that stands in for it. */
+/** Store `text` and return the token that stands in for it (as older drafts hold). */
 export function stashPaste(text: string): string {
   const all = { ...load(), ...memory };
   const n = Object.keys(all).reduce((max, k) => Math.max(max, Number(/pasted text (\d+)/.exec(k)?.[1] ?? 0)), 0) + 1;

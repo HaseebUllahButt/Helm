@@ -4,7 +4,6 @@ import { useNow } from '../useNow';
 import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
 import { useDictation, type Transcribe } from './voice';
 import type { Turn } from './types';
-import { isBigPaste, stashPaste } from './pasteStore';
 import { renumberImages, splitTags, wholeTagEdit } from './attachTags';
 import { Icon } from '../Icon';
 
@@ -72,7 +71,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   compacting?: number | boolean;
   children?: React.ReactNode;
   /** Resolves to what was added, so each gets its "[Image #N]" or "[File: name]". */
-  onAttach?: (files: FileList | File[]) => void | Promise<{ name: string; mime: string }[] | void>;
+  onAttach?: (files: FileList | File[]) => void | Promise<{ name: string; mime: string; imageNumber?: number }[] | void>;
   attachments?: { name: string; mime: string; url: string }[];
   onRemoveAttachment?: (i: number) => void;
   /** False when the running model cannot see images; other files still go. */
@@ -122,6 +121,15 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
 }) {
   const [keys, setKeys] = useState(false);
   const [dragging, setDragging] = useState(false);
+  /** Pictures shown while they are made smaller and saved. */
+  const [incoming, setIncoming] = useState<{ key: number; url: string; name: string }[]>([]);
+  const incomingSeq = useRef(0);
+  /**
+   * Pictures that landed while their quick previews are still listed. A
+   * finished picture shows before its paste returns (the save goes on in
+   * the background), so without this both copies showed for a moment.
+   */
+  const landedEarly = useRef({ base: 0, pending: 0 });
   const [pick, setPick] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [allQueued, setAllQueued] = useState(false);
@@ -193,11 +201,26 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   const attach = async (files: FileList | File[]) => {
     if (!onAttach) return;
     const el = ref.current;
-    const at = el && document.activeElement === el ? el.selectionStart : draftNow.current.length;
+    // At the end, it stays at the end: a second quick paste then lands after the first.
+    const at = el && document.activeElement === el && el.selectionStart < draftNow.current.length ? el.selectionStart : Infinity;
     let images = (attachments ?? []).filter(isImageAttachment).length;
-    const added = await onAttach(files);
+    const list = Array.from(files);
+    // The picture shows at once, as it is, while it is made smaller.
+    const shown = list.filter(looksLikeImage).map((f) => ({ key: ++incomingSeq.current, url: URL.createObjectURL(f), name: f.name || 'image' }));
+    if (!landedEarly.current.pending) landedEarly.current.base = images;
+    landedEarly.current.pending += shown.length;
+    if (shown.length) setIncoming((now) => [...now, ...shown]);
+    let added;
+    try { added = await onAttach(list); }
+    finally {
+      landedEarly.current.pending -= shown.length;
+      landedEarly.current.base += (added || []).filter(isImageAttachment).length;
+      if (shown.length) setIncoming((now) => now.filter((item) => !shown.includes(item)));
+      // After the swap is drawn, so the box never flashes empty.
+      setTimeout(() => shown.forEach((item) => URL.revokeObjectURL(item.url)), 1000);
+    }
     if (!added?.length) return;
-    const tokens = added.map((a) => isImageAttachment(a) ? `[Image #${++images}]` : `[File: ${a.name}]`).join(' ');
+    const tokens = added.map((a) => isImageAttachment(a) ? `[Image #${a.imageNumber ?? ++images}]` : `[File: ${a.name}]`).join(' ');
     const now = draftNow.current;
     const pre = now.slice(0, Math.min(at, now.length)), post = now.slice(pre.length);
     setDraft(`${pre}${pre && !/\s$/.test(pre) ? ' ' : ''}${tokens}${/^\s/.test(post) ? '' : ' '}${post}`);
@@ -509,10 +532,10 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
               })}
             </div>
           )}
-          {attachments && attachments.length > 0 && (
+          {(!!attachments?.length || incoming.length > 0) && (
             <div className="attach-previews">
-              {attachments.map((a, i) => {
-                const label = isImageAttachment(a) ? `Image #${attachments.slice(0, i + 1).filter(isImageAttachment).length}` : a.name;
+              {(attachments ?? []).map((a, i, all) => {
+                const label = isImageAttachment(a) ? `Image #${all.slice(0, i + 1).filter(isImageAttachment).length}` : a.name;
                 return (
                   <span key={i} className={`attach-preview${isImageAttachment(a) ? '' : ' file'}`} title={isImageAttachment(a) ? `[${label}] ${a.name}` : a.name}>
                     {isImageAttachment(a) ? <img src={a.url} alt={label} /> : <span className="attach-file">
@@ -523,6 +546,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
                   </span>
                 );
               })}
+              {incoming.slice(Math.max(0, (attachments ?? []).filter(isImageAttachment).length - landedEarly.current.base)).map((item) => <span key={`incoming-${item.key}`} className="attach-preview" title={item.name} aria-busy="true"><img src={item.url} alt={item.name} /></span>)}
             </div>
           )}
           {/* The same text drawn behind the box, see-through except for a
@@ -541,17 +565,8 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
               if (!deleteTags(e.currentTarget, e.target.value)) setDraft(e.target.value);
             }}
             onPaste={(e) => {
-              if (take(clipboardFiles(e.clipboardData))) { e.preventDefault(); return; }
-              // A wall of text goes in as a token, not into the box.
-              const text = e.clipboardData?.getData('text/plain') ?? '';
-              if (text && isBigPaste(text)) {
-                e.preventDefault();
-                const el = e.currentTarget;
-                const from = el.selectionStart, to = el.selectionEnd;
-                const token = stashPaste(text);
-                setDraft(draft.slice(0, from) + token + draft.slice(to));
-                requestAnimationFrame(() => { const at = from + token.length; el.focus(); el.setSelectionRange(at, at); });
-              }
+              // Text, however long, goes in as it is: the owner reads and edits it there.
+              if (take(clipboardFiles(e.clipboardData))) e.preventDefault();
             }}
             onKeyDown={(e) => {
               // Enter confirms an IME composition before it is a prompt.
