@@ -38,6 +38,10 @@ export function useDraftImages<T extends Image>(env: string, session: string, on
     const operation = (writes.get(scope.key) ?? Promise.resolve()).then(async () => {
       await scope.ready;
       scope.images = typeof next === 'function' ? next(scope.images) : next;
+      // Show the change now. Waiting for the commit held every pasted
+      // picture back behind the browser's storage, which is slow when it
+      // is also saving a long chat.
+      if (scope.active) setState({ scope, images: scope.images, loading: false, saving: true });
       try {
         // Store the bytes once; preview URLs are reconstructed on restore.
         const saved = scope.images.map(({ name, mime, data }) => ({ name, mime, data }));
@@ -47,8 +51,6 @@ export function useDraftImages<T extends Image>(env: string, session: string, on
         if (scope.active) onError('Helm cannot save draft images on this device. Keep this tab open to keep the images.');
       }
       scope.pending--;
-      // Show added previews after their write commits, so a refresh directly
-      // after an image appears can recover its bytes.
       if (scope.active) setState({ scope, images: scope.images, loading: false, saving: scope.pending > 0 });
     });
     writes.set(scope.key, operation);

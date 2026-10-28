@@ -2,18 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 /**
- * A big paste stands in as a token and comes back whole on send. What must
- * hold: the agent receives exactly what was pasted, a token that is not ours
- * is left alone, and small pastes are never folded.
+ * A draft saved before pastes stopped being folded can hold a token; it
+ * comes back whole on send. What must hold: the agent receives exactly what
+ * was pasted, and a token that is not ours is left alone.
  */
-const { isBigPaste, stashPaste, expandPastes, PASTE_CHARS } = await import('../apps/web/src/session/pasteStore.ts');
-
-test('short text is not a big paste; a wall of characters or of lines is', () => {
-  assert.equal(isBigPaste('hello'), false);
-  assert.equal(isBigPaste('x'.repeat(PASTE_CHARS - 1)), false);
-  assert.equal(isBigPaste('x'.repeat(PASTE_CHARS)), true);
-  assert.equal(isBigPaste(Array(40).fill('a').join('\n')), true);
-});
+const { stashPaste, expandPastes } = await import('../apps/web/src/session/pasteStore.ts');
 
 test('a stashed paste comes back exactly, wherever its token stands', () => {
   const text = 'line one\n  indented  \n\ttabbed\n' + 'z'.repeat(2000);

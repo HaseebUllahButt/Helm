@@ -57,7 +57,10 @@ async function paste(p, count=1){
   const dt=new DataTransfer();
   for(let i=0;i<count;i++)dt.items.add(new File([blob],`screen-${i}.png`,{type:'image/png'}));
   document.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));
-},count);await p.locator('.attach-preview img').first().waitFor(); }
+},count);
+  // The quick preview shows first; the paste is done once the smaller picture replaces it.
+  await p.locator('.attach-preview img').first().waitFor();
+  await p.waitForFunction(()=>!document.querySelector('.attach-preview[aria-busy]')); }
 async function reload(p,mode){
   await p.reload();await p.addScriptTag({content:script});
   if(mode==='Driven')await p.evaluate(()=>window.showDriven());
@@ -89,6 +92,35 @@ for(const mode of ['Native','Driven']){
     await reload(p,mode);
     assert.equal(await p.locator('.attach-preview').count(),0);
     assert.equal(await p.locator('textarea').inputValue(),'');
+  });
+  test(`${mode} two quick pastes both stay, numbered in order`,async t=>{
+    const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
+    await p.evaluate(async()=>{
+      const c=document.createElement('canvas');c.width=32;c.height=24;c.getContext('2d').fillRect(0,0,32,24);
+      const blob=await new Promise(resolve=>c.toBlob(resolve,'image/png'));
+      const ta=document.querySelector('textarea');ta.focus();
+      for(const name of ['a.png','b.png']){const dt=new DataTransfer();dt.items.add(new File([blob],name,{type:'image/png'}));ta.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));}
+      // The preview shows before the picture is made smaller.
+      if(!document.querySelector('.attach-preview img'))await new Promise(resolve=>requestAnimationFrame(resolve));
+      window.shownAtOnce=document.querySelectorAll('.attach-preview img').length;
+    });
+    assert.equal(await p.evaluate(()=>window.shownAtOnce),2);
+    // Each paste swaps its own quick preview for the smaller picture; wait for both swaps.
+    await p.waitForFunction(()=>document.querySelector('textarea').value.trim()==='[Image #1] [Image #2]'&&!document.querySelector('.attach-preview[aria-busy]'));
+    assert.equal(await p.locator('.attach-preview').count(),2);
+    // One Backspace takes the last picture only; two pastes once shared one label and both went.
+    await p.locator('textarea').press('End');await p.locator('textarea').press('Backspace');
+    await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===1);
+    assert.equal((await p.locator('textarea').inputValue()).trim(),'[Image #1]');
+  });
+  test(`${mode} a long text paste goes in as the text itself`,async t=>{
+    const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
+    const text=Array.from({length:60},(_,i)=>`line ${i} `+'x'.repeat(40)).join('\n');
+    await p.locator('textarea').focus();
+    const kept=await p.evaluate(text=>{const dt=new DataTransfer();dt.setData('text/plain',text);
+      return document.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));},text);
+    // Not cancelled: the browser puts the text in the box as it is.
+    assert.equal(kept,true);
   });
   test(`${mode} draft images stay with their machine and chat`,async t=>{
     const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());

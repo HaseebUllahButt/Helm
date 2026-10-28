@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction 
 import { Client, chatFolder, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
 import { useNow, waitingSince } from '../useNow';
 import { LiveComposer, createLiveDraft } from './liveDraft';
-import { prepareAttachment } from './image';
+import { isImageAttachment, numbered, prepareAttachment } from './image';
 import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
 import { TodoStrip, stripTodos } from './Todos';
 import { DeliveryStatus } from './DeliveryStatus';
@@ -307,7 +307,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
    * Every failure says so; all chosen files are prepared.
    */
   const onAttach = async (files: FileList | File[]) => {
-    if (loadingImages || savingImages || sendingImages) return [];
+    // No busy guard: a paste during a save or a send used to vanish without
+    // a word. Draft writes queue in order, and a send removes only its own.
     const chosen = Array.from(files);
     if (!chosen.length) return [];
     const failures: string[] = [];
@@ -322,9 +323,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           failures.push(`${f.name}: ${errorMessage(e, { fallback: 'Helm cannot read the file.' })}`);
         }
       }
-      if (next.length) await setAttachments((current) => [...current, ...next]);
+      let before = 0;
+      if (next.length) await setAttachments((current) => { before = current.filter(isImageAttachment).length; return [...current, ...next]; });
       if (failures.length) setError(`Not added — ${failures.join('; ')}`);
-      return next;
+      return numbered(next, before);
     } finally {
       setPreparingImages((count) => Math.max(0, count - 1));
     }

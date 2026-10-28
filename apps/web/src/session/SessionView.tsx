@@ -17,7 +17,7 @@ import { CompactionLine } from './Transcript';
 import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
 import { useChatKeys, useDeleteKey } from './chatKeys';
 import { Canvas, chatPages, useCanvas } from './Canvas';
-import { prepareAttachment } from './image';
+import { isImageAttachment, numbered, prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
 import { loadDraft, saveDraft } from '../draftStore';
 import { userMessage } from './userMessage';
@@ -229,12 +229,13 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const [sending, setSending] = useState(false);
   const { images, setImages, loading: loadingImages, saving: savingImages } = useDraftImages<{ name: string; mime: string; data: string; url: string }>(env.id, session.id, setError);
   const [preparingImages, setPreparingImages] = useState(false);
-  const imageBusy = useRef(false);
+  const imageBusy = useRef(0);
   const attachImages = async (files: FileList | File[]) => {
-    if (imageBusy.current || sending || loadingImages || savingImages) return [];
+    // A second paste while the first is still being made smaller, saved or
+    // sent is added too; it used to be dropped without a word.
     const picked = Array.from(files);
     if (!picked.length) return [];
-    imageBusy.current = true; setPreparingImages(true); setError('');
+    imageBusy.current++; setPreparingImages(true); setError('');
     const ready: { name: string; mime: string; data: string; url: string }[] = [];
     const failures: string[] = [];
     try {
@@ -242,16 +243,17 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         try { ready.push(await prepareAttachment(file)); }
         catch (e: any) { failures.push(`${file.name}: ${errorMessage(e)}`); }
       }
-      await setImages(current => [...current, ...ready]);
+      let before = 0;
+      if (ready.length) await setImages(current => { before = current.filter(isImageAttachment).length; return [...current, ...ready]; });
       if (failures.length) setError(`Not added — ${failures.join('; ')}`);
-      return ready;
-    } finally { imageBusy.current = false; setPreparingImages(false); }
+      return numbered(ready, before);
+    } finally { imageBusy.current--; setPreparingImages(imageBusy.current > 0); }
   };
   const questionHandle = useRef<QuestionHandle | null>(null);
   const send = async () => {
     const body = draft;
     const attachments = images;
-    if ((!body.trim() && !attachments.length) || sending || settingBusy || imageBusy.current || loadingImages || savingImages) return;
+    if ((!body.trim() && !attachments.length) || sending || settingBusy || imageBusy.current > 0 || loadingImages || savingImages) return;
     // While Claude's question is on screen, typing is the answer to it.
     if (questionHandle.current && body.trim() && !attachments.length) {
       if (questionHandle.current.submit(body.trim()) === 'sent') setDraft('');

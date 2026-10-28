@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { writeFileSync, readFileSync, chmodSync, rmSync, mkdtempSync, watch } from 'node:fs';
+import { writeFileSync, readFileSync, chmodSync, rmSync, mkdtempSync, mkdirSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
 
@@ -635,6 +635,29 @@ test('each thread names its own session; the shared app-server names none', asyn
   const serverEnv = readFileSync(envFile, 'utf8');
   for (const k of Object.keys(ids)) assert.doesNotMatch(serverEnv, new RegExp(`^${k}=`, 'm'));
   await driver.kill();
+});
+
+test('a Codex chat starts and resumes without the online MCP servers and keeps local ones', async (t) => {
+  for (const engineSessionId of [undefined, '01a09e7a-960e-79e2-b7c8-8fc714c00f2a']) {
+    const { driver, fake } = make('plain', { engineSessionId });
+    t.after(() => driver.kill());
+    const home = join(fake.dir, 'home');
+    mkdirSync(home, { recursive: true });
+    const toml = [
+      '[mcp_servers.node_repl]', 'command = "node"',
+      '[mcp_servers.cloudflare]', 'url = "https://example.test/mcp"',
+      '[mcp_servers.zoho-mail]', 'url = "https://example.test/secret"',
+      '[mcp_servers.off]', 'url = "https://example.test/off"', 'enabled = false',
+      '[plugins."pdf@openai-primary-runtime"]', 'enabled = true', '',
+    ].join('\n');
+    writeFileSync(join(home, 'config.toml'), toml);
+    await driver.start();
+    const request = fake.stdinLines().find((entry) => entry.method === (engineSessionId ? 'thread/resume' : 'thread/start'));
+    assert.deepEqual(Object.entries(request.params.config ?? {}).filter(([k]) => k.startsWith('mcp_servers.') || k.startsWith('plugins.')),
+      [['mcp_servers.cloudflare.enabled', false], ['mcp_servers.zoho-mail.enabled', false]]);
+    // The owner's file is read, never written.
+    assert.equal(readFileSync(join(home, 'config.toml'), 'utf8'), toml);
+  }
 });
 
 test('command: a command item with an approval request; accept runs it and the output lands', async () => {

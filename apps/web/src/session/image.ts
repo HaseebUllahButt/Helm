@@ -46,6 +46,16 @@ export const clipboardImages = (clipboard: DataTransfer | null) => clipboardFile
 /** An attachment that goes to the model as a picture, not as a saved file. */
 export const isImageAttachment = (a: { mime: string }) => a.mime.startsWith('image/');
 
+/**
+ * Give each added picture its "[Image #N]" number from where it really
+ * landed. Two quick pastes both counted the pictures from before either
+ * one, and both became "[Image #1]".
+ */
+export function numbered<T extends { mime: string }>(added: T[], before: number): (T & { imageNumber?: number })[] {
+  let n = before;
+  return added.map((a) => isImageAttachment(a) ? { ...a, imageNumber: ++n } : a);
+}
+
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 /**
