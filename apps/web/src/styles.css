@@ -3780,6 +3780,7 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 .newchat-refresh { flex: none; }
 .newchat-refresh:disabled svg { animation: tspin 0.9s linear infinite; }
 .newchat-bar.creating { gap: 10px; align-items: flex-end; }
+.pglyph.bare { background: none; }
 .newchat-bar.creating .pglyph { margin-bottom: 4px; }
 .newchat-bar.creating button.primary, .newchat-bar.creating button.ghost {
   flex: none; width: auto; margin: 0; min-height: 36px; padding: 7px 14px;

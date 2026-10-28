@@ -201,7 +201,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['Ctrl Shift Tab', 'Previous terminal'],
   ]],
   ['In the new-chat box', [
-    ['Ctrl/⌘ Enter', 'Quick chat, no folder'],
+    ['Ctrl/⌘ Enter', 'Sketch, no folder'],
     ['Ctrl/⌘ Shift Enter', 'Create a folder with the typed name'],
     ['→ ←', 'Open or close a folder'],
   ]],

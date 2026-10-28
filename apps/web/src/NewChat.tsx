@@ -69,7 +69,9 @@ interface Row {
   sub?: string;
   group?: string;
   engine?: string;
-  icon?: 'machine' | 'folder' | 'repo' | 'bolt' | 'plus' | 'back' | 'github' | 'lock';
+  icon?: 'machine' | 'folder' | 'repo' | 'plus' | 'back' | 'github' | 'lock';
+  /** No icon, only the space for one, so its words line up with the rows around it. */
+  bare?: boolean;
   quiet?: boolean;
   tag?: string;
   disabled?: boolean;
@@ -430,7 +432,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     const env = machine.id;
     onClose();
     onStarting(
-      { envId: env, title: quick ? 'Quick chat' : where(folder), folder: quick ? null : folder, account: a.account, profileId: a.profile.id, engine: a.engine, agent: engineOf(a.engine).label },
+      { envId: env, title: quick ? 'Sketch' : where(folder), folder: quick ? null : folder, account: a.account, profileId: a.profile.id, engine: a.engine, agent: engineOf(a.engine).label },
       () => client.rpc<{ session: Session }>(env, 'session.start', params, cloneFrom ? 120_000 : 70_000).then((r) => r.session),
     );
   };
@@ -482,7 +484,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       }
       else for (const e of home ?? []) add(e.path, e.name, e.isRepo, 0);
       if (step === 'into') return out;
-      const quickRow: Row = { id: QUICK_ROW, title: 'No folder · quick chat', sub: 'Ask a short question.', icon: 'bolt', pick: pickQuick };
+      const quickRow: Row = { id: QUICK_ROW, title: 'No folder · sketch', sub: 'Ask a short question.', bare: true, pick: pickQuick };
       const githubRow: Row = { id: GITHUB_ROW, title: 'Copy from GitHub', icon: 'github', pick: () => go('github') };
       if (!query || matches(githubRow, query)) out.unshift(githubRow);
       if (!query || matches(quickRow, query)) out.unshift(quickRow);
@@ -627,7 +629,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
           <span className="newchat-steps">
             <span className={step === 'machine' ? 'on' : ''}>{machine?.name ?? 'Machine'}</span>
             <Icon name="forward" size={12} />
-            <span className={step === 'folder' || step === 'github' || step === 'into' ? 'on' : ''}>{step === 'cli' ? quick ? 'Quick chat' : leaf(folder) : step === 'github' || step === 'into' ? 'GitHub' : 'Folder'}</span>
+            <span className={step === 'folder' || step === 'github' || step === 'into' ? 'on' : ''}>{step === 'cli' ? quick ? 'Sketch' : leaf(folder) : step === 'github' || step === 'into' ? 'GitHub' : 'Folder'}</span>
             <Icon name="forward" size={12} />
             <span className={step === 'cli' ? 'on' : ''}>Agent</span>
           </span>
@@ -639,7 +641,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
             : step === 'folder' ? <>Pick a folder on <b>{machine?.name}</b>.</>
             : step === 'github' ? <>Pick a GitHub project.</>
             : step === 'into' ? <>Pick a folder for <b>{chosen.split('/')[1] ?? chosen}</b>.</>
-            : quick ? <>Pick an agent for a <b>quick chat</b>.</>
+            : quick ? <>Pick an agent for a <b>sketch</b>.</>
             : <>Pick an agent in <b>{leaf(folder)}</b>.</>}
         </h2>
         {step === 'cli' && cloneFrom && <p className="newchat-note">Helm will copy {cloneFrom} into {folder}.</p>}
@@ -688,7 +690,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
               <button type="button" className="ghost" onClick={reloadGh}><Icon name="refresh" size={14} />Check again</button>
             </div>
           )}
-          {busy && step !== 'github' && <div className="empty quiet">{step === 'into' ? `Helm is checking the folder for ${chosen.split('/')[1] ?? chosen}.` : step === 'folder' ? `Helm is creating ${newPath}.` : quick ? `Helm is starting ${rows[selected]?.title} for a quick chat.` : `Helm is starting ${rows[selected]?.title} in ${leaf(folder)}.`}</div>}
+          {busy && step !== 'github' && <div className="empty quiet">{step === 'into' ? `Helm is checking the folder for ${chosen.split('/')[1] ?? chosen}.` : step === 'folder' ? `Helm is creating ${newPath}.` : quick ? `Helm is starting ${rows[selected]?.title} for a sketch.` : `Helm is starting ${rows[selected]?.title} in ${leaf(folder)}.`}</div>}
           {!busy && loading && !rows.length && <div className="empty quiet">{step === 'cli' ? 'Helm is looking for agents.' : step === 'github' ? 'Helm is checking GitHub.' : 'Helm is looking for folders.'}</div>}
           {!busy && !loading && (!rows.length || (viewHidden && rows.every(row => row.quiet))) && step !== 'github' && (
             <div className="empty quiet">
@@ -732,6 +734,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                   >
                     {row.quiet ? <span className="newchat-quiet-glyph">{row.icon && <Icon name={row.icon} size={14} />}</span>
                       : row.engine ? <EngineMark engine={engineOf(row.engine).cls} />
+                      : row.bare ? <span className="pglyph bare" />
                       : !row.disabled && <span className="pglyph"><Icon name={row.icon ?? 'folder'} size={15} /></span>}
                     <span className="grow">
                       <span className="palette-title">{row.title}{row.tag && <span className="tag">{row.tag}</span>}</span>

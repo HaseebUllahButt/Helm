@@ -17,9 +17,9 @@ export const Route = memo(function Route({ machine, folder, full = false, quick 
   quick?: boolean;
 }) {
   if (quick) return (
-    <span className="route" title={`${machine} · quick chat`}>
+    <span className="route" title={`${machine} · sketch`}>
       <span className="route-machine">{machine}</span>
-      <span className="route-quick">· quick chat</span>
+      <span className="route-quick">· sketch</span>
     </span>
   );
   return (

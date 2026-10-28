@@ -751,7 +751,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     && !sentFirst && !working && !pending && !session.external && (session.alive !== false || preparing) && failedSends.length === 0 && !session.recovery;
   const dockAnchor = useDockLift(firstMessage);
   const toggleCanvas = canvas.toggle;
-  const where = [env.name, session.quick ? 'quick chat' : chatFolder(session), session.nativeCodex ? 'Live agent program' : '',
+  const where = [env.name, session.quick ? 'sketch' : chatFolder(session), session.nativeCodex ? 'Live agent program' : '',
     session.brain ? engine : '', money(session.costUsd)].filter(Boolean).join(' · ');
   // Only a state that needs a look gets a line under the title.
   const barNotice = log.loaded && (logError || (!env.online && syncing))

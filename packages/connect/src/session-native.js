@@ -327,7 +327,7 @@ export class NativeSessions {
             driver: 'codex', nativeSocket: thread.nativeSocket, nativeCodex: true,
             shared: true, external: false, externalActive: false, externalSource: true, adopted: false,
             updatedAt: thread.updatedAt * 1000 });
-          if (!s.titleBy) s.title = thread.name || thread.preview?.slice(0, 80) || (s.quick ? 'Quick chat' : basename(thread.cwd));
+          if (!s.titleBy) s.title = thread.name || thread.preview?.slice(0, 80) || (s.quick ? 'Sketch' : basename(thread.cwd));
           // The snapshot names a newly found thread's state. After that the
           // live thread is the authority: this read can be older than the
           // notification that just arrived, and writing it here silently

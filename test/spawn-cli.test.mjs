@@ -91,6 +91,6 @@ test('spawn with - as the folder starts a quick chat and never touches the file 
   assert.equal(start.quick, true);
   assert.equal(start.cwd, undefined);
   assert.equal(f.calls.some(c => c.method === M.FS_LIST || c.method === M.FS_MKDIR || c.method === M.ENV_INFO), false);
-  assert.match(f.output(), /quick chat/);
+  assert.match(f.output(), /sketch/);
   await assert.rejects(spawnAgent(['VM', '-', 'codex', 'hi', '--mkdir'], f.deps), /--mkdir needs a folder/);
 });

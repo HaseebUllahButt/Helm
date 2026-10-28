@@ -136,7 +136,7 @@ export function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <div className="titles"><h1>{quick ? 'Quick chat' : 'New chat'}</h1><span className="sub"><Route machine={env.name} folder={cwd} quick={quick} /></span></div>
+        <div className="titles"><h1>{quick ? 'Sketch' : 'New chat'}</h1><span className="sub"><Route machine={env.name} folder={cwd} quick={quick} /></span></div>
         {(accounts?.length ?? 0) > 0 && (
           <button
             className="iconbtn" title="Select agents to show" aria-label="Select agents to show"

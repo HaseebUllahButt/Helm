@@ -10,9 +10,9 @@ export function parseSpawnArgs(args) {
   if (!machine || !folder || !account) throw new Error('usage: helm spawn <machine> <folder | -> <account> [text...] [--mkdir] [--wait] [--timeout <ms>]');
   // "-" is no folder: a quick chat, in an empty folder the machine makes.
   const quick = folder === '-';
-  if (quick && options.mkdir) throw new Error('--mkdir needs a folder; a quick chat (-) has none');
+  if (quick && options.mkdir) throw new Error('--mkdir needs a folder; a sketch (-) has none');
   if (!quick && ((!folder.startsWith('/') && folder !== '~' && !folder.startsWith('~/')) || /[\u0000-\u001f\u007f]/.test(folder))) {
-    throw new Error('the target folder must start with / or ~/, or be - for a quick chat');
+    throw new Error('the target folder must start with / or ~/, or be - for a sketch');
   }
   const timeout = Number(options.timeout ?? 120_000);
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 86_400_000) throw new Error('--timeout must be milliseconds between 1 and 86400000');
@@ -59,7 +59,7 @@ export async function spawnAgent(args, { rpc, write = () => {}, sleep = (ms) => 
   // defaults include model, effort, permissions and speed.
   const { session } = await call(M.SESSION_START, { ...(quick ? { quick: true } : { cwd }), profileId: agent.id,
     model: options.model, mode: options.mode, effort: options.effort, title: options.title }, 60_000);
-  write(`${session.id}  ${session.title}  (${agent.engine} on ${machine}, ${quick ? 'quick chat' : cwd})\n`);
+  write(`${session.id}  ${session.title}  (${agent.engine} on ${machine}, ${quick ? 'sketch' : cwd})\n`);
   if (!text) return { session };
   try { await call(M.SESSION_INPUT, { id: session.id, data: text }); }
   catch (error) { throw new Error(`${error.message}; session ${session.id} was started. Read it with helm thread ${session.id} before retrying`); }

@@ -182,7 +182,7 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete, en
 const dirName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
 
 /** Where a thread runs, in a word: its folder, or "quick chat" when it has none. */
-export const whereOf = (s: Session) => (s.quick ? 'quick chat' : dirName(chatFolder(s)));
+export const whereOf = (s: Session) => (s.quick ? 'sketch' : dirName(chatFolder(s)));
 
 /**
  * A session that is waiting on you, as the first thing on Home.

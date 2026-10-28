@@ -123,7 +123,7 @@ export function Home({ client, machines, near, onOpenMachine, onStart }: {
       mode: now.mode && now.mode !== 'plan' ? now.mode : undefined, speed: now.speed || undefined,
     };
     onStart(
-      { envId: env, title: 'Quick chat', folder: null, account: agent.account, profileId: agent.profile.id, engine: agent.engine, agent: engineOf(agent.engine).label },
+      { envId: env, title: 'Sketch', folder: null, account: agent.account, profileId: agent.profile.id, engine: agent.engine, agent: engineOf(agent.engine).label },
       () => client.rpc<{ session: Session }>(env, 'session.start', params, 70_000).then((r) => r.session),
       text.trim(),
     );
@@ -191,7 +191,7 @@ export function Home({ client, machines, near, onOpenMachine, onStart }: {
               </button>
               {agent && <span className="home-chip-rest" onClickCapture={() => setSheet(null)}>{controls.chips}</span>}
             </span>
-            <button type="submit" className="home-send" disabled={!ready} aria-label="Start quick chat" title="Start quick chat (Enter)">
+            <button type="submit" className="home-send" disabled={!ready} aria-label="Start sketch" title="Start sketch (Enter)">
               <Icon name="arrow-up" size={16} />
             </button>
           </div>

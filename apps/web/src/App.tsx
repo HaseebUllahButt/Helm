@@ -387,7 +387,7 @@ function Shell({ client, conn, onSignOut }: {
       mode: s.mode && s.mode !== 'plan' ? s.mode : undefined,
     };
     return beginChat(client, {
-      envId, title: s.quick ? 'Quick chat' : whereOf(s), folder: s.quick ? null : folder,
+      envId, title: s.quick ? 'Sketch' : whereOf(s), folder: s.quick ? null : folder,
       account: s.account ?? s.profileId, profileId: s.profileId, engine: s.engine, agent: engineOf(s.engine).label,
     }, () => client.rpc<{ session: Session }>(envId, 'session.start', params, 70_000).then((r) => r.session), draft);
   };
@@ -544,7 +544,7 @@ function Shell({ client, conn, onSignOut }: {
         items.push({
           id: `t:${e.id}:${s.id}`, group: 'thread', title: s.title, engine: s.engine, at: s.updatedAt,
           sub: `${whereOf(s)} · ${e.name}${attentionOn(e.id, s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status, s.compacting)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
-          keywords: `${s.quick ? 'quick chat' : s.cwd} ${engineOf(s.engine).label}`,
+          keywords: `${s.quick ? 'sketch' : s.cwd} ${engineOf(s.engine).label}`,
           run: () => openSession(e.id, s),
         });
       }
@@ -563,7 +563,7 @@ function Shell({ client, conn, onSignOut }: {
     items.push({ id: 'a:new', group: 'action', title: 'New chat', keywords: 'start create agent session', run: () => setNewChat({}) });
     // A chat in no folder, on the machine on screen (or asked, when that one is not there).
     items.push({
-      id: 'a:quick', group: 'action', title: 'Quick chat', sub: 'Ask a short question without a folder.', keywords: 'start new agent question scratch',
+      id: 'a:quick', group: 'action', title: 'Sketch', sub: 'Ask a short question without a folder.', keywords: 'start new agent question scratch quick chat',
       run: () => setNewChat({ envId: envs.find((e) => e.id === selected && e.online)?.id, quick: true }),
     });
     const go = (id: string, title: string, keywords: string, stack: MainView[]) =>
@@ -608,7 +608,7 @@ function Shell({ client, conn, onSignOut }: {
           const who = hit.who === 'you' ? 'You: ' : hit.who === 'agent' ? 'Agent: ' : '';
           return {
             id: `said:${e.id}:${hit.id}`, same: `t:${e.id}:${hit.id}`, group: 'said', title: hit.title || 'Untitled chat', engine: hit.engine, at: hit.at,
-            sub: `${hit.snippet ? `${who}${hit.snippet}` : hit.quick ? 'quick chat' : hit.cwd} · ${e.name}${hit.archived ? ' · archived' : ''}`,
+            sub: `${hit.snippet ? `${who}${hit.snippet}` : hit.quick ? 'sketch' : hit.cwd} · ${e.name}${hit.archived ? ' · archived' : ''}`,
             run: () => openSessionRef.current(e.id, session),
           };
         }));

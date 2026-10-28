@@ -93,7 +93,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm chat <account> --quick      a chat with no folder, for a small question
   helm integrate [--remove]        manage automatic control of normal CLI commands
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
-  helm spawn <machine> - <account> <text...>          the same, as a quick chat with no folder
+  helm spawn <machine> - <account> <text...>          the same, as a sketch with no folder
     --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
   helm delegate <account> --model <id> --wait --json -- "<task>"
                                     Start a helper in this folder
