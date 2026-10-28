@@ -54,8 +54,9 @@
   text` shows "verify-<you>" and the repo's current commit.
 - **Traps:** never press either GitHub button in the private copy: it runs
   from the real repo. Machines sync the newest committed version between
-  themselves; GitHub pulls happen only from the explicit button. Mac and
-  Windows do not auto-update. Open apps reload at a quiet moment.
+  themselves; GitHub pulls happen only from the explicit button. Linux
+  background services and macOS login services can take these updates.
+  Native Windows has no automatic service replacement. Open apps reload at a quiet moment.
   Daemons restart immediately after an update. Agent hosts stay running;
   chats and open transfers never postpone replacement.
 - **Prove restart:** start a private `fake-slow` chat, run `$V restart`,

@@ -225,9 +225,12 @@ async function up() {
   });
   if (platform() === 'linux') {
     // An older launcher opens Helm under Chromium's bar; update it in the background.
-    import('../src/desktop.js').then((m) => m.refreshAppLauncher({ url: `http://127.0.0.1:${started.port}/` }))
-      .then((r) => r.updated && console.log('helm: the Helm app now opens with its own top row'))
-      .catch((err) => console.error(`helm: app launcher: ${err.message}`));
+    // The window frame follows the desktop, which can change between starts.
+    import('../src/desktop.js').then(async (m) => {
+      const r = await m.refreshAppLauncher({ url: `http://127.0.0.1:${started.port}/` });
+      if (r.updated) console.log('helm: the Helm app now opens with its own top row');
+      m.syncWindowFrame({ onChange: () => console.log('helm: the Helm app window frame now suits this desktop') });
+    }).catch((err) => console.error(`helm: app launcher: ${err.message}`));
   }
 }
 
@@ -2164,6 +2167,14 @@ try {
           `${p.id.padEnd(16)} ${p.engine.padEnd(9)} ${env} ${p.cmd} ${(p.args || []).join(' ')}${status}`
         );
       }
+      break;
+    }
+
+    case 'doctor': {
+      const { diagnose, formatDiagnosis } = await import('../src/doctor.js');
+      const report = await diagnose();
+      console.log(flagOf('json') ? JSON.stringify(report, null, 2) : formatDiagnosis(report));
+      if (!report.ok) process.exitCode = 1;
       break;
     }
 

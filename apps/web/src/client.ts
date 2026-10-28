@@ -487,6 +487,7 @@ type RpcRoute = 'direct' | 'relay' | 'http';
 type Pending = {
   resolve: (v: any) => void; reject: (e: Error) => void;
   direct?: Peer; env?: string; hedged?: boolean;
+  relay?: WebSocket;
   routes?: Set<RpcRoute>;
   recover?: () => void;
   readKey?: string;
@@ -1211,6 +1212,7 @@ export class Client {
       let lastReceived = Date.now(), awaiting = false;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let woke: ReturnType<typeof setTimeout> | undefined;
+      const hasPending = () => [...this.pending.values()].some(p => p.relay === ws && p.routes?.has('relay'));
       const settle = (err?: Error) => {
         if (settled) return;
         settled = true;
@@ -1229,14 +1231,6 @@ export class Client {
           this.retireSocket = null;
           this.lastError = reason;
           if (retry) this.failedHubs.set(hub, Date.now() + 15_000);
-          // A healthy direct route can still answer while the relay reconnects.
-          for (const [id, pending] of this.pending) {
-            pending.routes?.delete('relay');
-            if (pending.direct?.ready || pending.routes?.has('http')) continue;
-            if (!this.closed && pending.recover) { pending.recover(); continue; }
-            this.pending.delete(id);
-            pending.reject(new Error('disconnected'));
-          }
           if (!this.closed) {
             this.emit('', 'connection', { online: false, reachable: true, hub, error: reason });
             this.startPresencePoll();
@@ -1246,6 +1240,18 @@ export class Client {
           this.connecting = false;
           if (retry) this.failedHubs.set(hub, Date.now() + 15_000);
           if (!this.connected && !this.closed && retry) this.scheduleReconnect();
+        }
+        // A replaced hub can still hold writes in flight. A close belongs
+        // only to requests sent on this socket; other hubs keep their work.
+        for (const [id, pending] of this.pending) {
+          if (pending.relay !== ws) continue;
+          pending.relay = undefined;
+          pending.routes?.delete('relay');
+          // A dropped direct peer leaves 'direct' in routes; it cannot answer.
+          if (pending.direct?.ready || pending.routes?.has('http')) continue;
+          if (!this.closed && pending.recover) { pending.recover(); continue; }
+          this.pending.delete(id);
+          pending.reject(new Error('disconnected'));
         }
         try { ws.close(); } catch { /* already closed */ }
         settle(new Error(reason));
@@ -1301,7 +1307,7 @@ export class Client {
         this.probeSocket = probeSocket;
         this.retireSocket = () => {
           clearInterval(heartbeat);
-          if (!this.pending.size) cleanup();
+          if (!hasPending()) cleanup();
           else drain = setTimeout(cleanup, 60_000);
         };
         retire?.();
@@ -1327,8 +1333,8 @@ export class Client {
         lastReceived = Date.now(); awaiting = false;
         if (msg.t === 'ping') { ws.send(JSON.stringify({ t: 'pong' })); return; }
         if (msg.t === 'rpcResult') {
-          this.receiveRpc(msg, 'relay');
-          if (this.ws !== ws && !this.pending.size) cleanup();
+          if (this.pending.get(msg.id)?.relay === ws) this.receiveRpc(msg, 'relay');
+          if (this.ws !== ws && !hasPending()) cleanup();
           return;
         }
         if (this.ws !== ws) return;
@@ -1612,7 +1618,7 @@ export class Client {
       this.pending.set(id, {
         resolve: (value) => { clear(); resolve(value as T); },
         reject: (error) => { clear(); reject(error); },
-        ...(direct ? { direct: peer, env } : {}),
+        ...(direct ? { direct: peer, env } : { relay: this.ws! }),
         routes: new Set([direct ? 'direct' : 'relay']),
         ...(hedge ? { readKey: `${env}:${method}`, sentAt: { [direct ? 'direct' : 'relay']: started } } : {}),
       });
@@ -1625,7 +1631,7 @@ export class Client {
       if (direct) sent = sendDirect(peer!.channel, frame);
       if (!sent) {
         const pending = this.pending.get(id);
-        if (pending) { pending.direct = undefined; pending.routes = new Set(['relay']); if (pending.sentAt) pending.sentAt = { relay: started }; }
+        if (pending) { pending.direct = undefined; pending.relay = this.ws!; pending.routes = new Set(['relay']); if (pending.sentAt) pending.sentAt = { relay: started }; }
         if (!this.connected) {
           this.pending.delete(id);
           reject(new Error('not connected'));
@@ -1674,6 +1680,7 @@ export class Client {
           if (!pending) return;
           pending.hedged = true;
           if (sent && this.connected) {
+            pending.relay = this.ws!;
             pending.routes?.add('relay');
             if (pending.sentAt) pending.sentAt.relay = Date.now();
             try {
