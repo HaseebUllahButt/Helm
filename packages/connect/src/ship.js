@@ -185,7 +185,9 @@ export async function ship({
     for (let told = false; !moved;) {
       moved = await updateLock(async () => {
         try {
-          await install(installed, mainDir);
+          const result = await install(installed, mainDir);
+          if (!result?.updated) throw new Error(result?.reason || 'The installed files did not update.');
+          if (result.failed?.length) throw new Error('Helm could not restart. Run helm doctor.');
           return { done: true };
         } catch (err) {
           return { error: err };
@@ -198,7 +200,7 @@ export async function ship({
         await sleep(STEP_MS);
       }
     }
-    if (moved.error) throw new ShipError(`Git did not move ${installed} to main:\n${moved.error.message}`);
+    if (moved.error) throw new ShipError(`Cannot install the new release in ${installed}:\n${moved.error.message}`);
     log(`  Moved ${installed} to ${short(tip)}.`);
   }
 

@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync, watch, readdirSync, lstatSync, constants } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync, watch, readdirSync, lstatSync, constants, fsyncSync } from 'node:fs';
 import { cp, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { platform } from 'node:os';
@@ -163,6 +163,10 @@ export async function syncFromBundle(bundle, dir = ROOT, { rebuild = true, resta
       tip = await git(['rev-parse', 'FETCH_HEAD']);
     } finally { rmSync(tmp, { force: true }); }
     const head = await git(['rev-parse', 'HEAD']);
+    const hold = rollbackHold();
+    if (hold?.dir === dir && hold.restoredHead === head && hold.rejectedHead === tip) {
+      return { updated: false, reason: 'Keep the restored release until a newer version is saved.' };
+    }
     if (head === tip) {
       if (resumed?.phase === 'prepared') return applyCommit(dir, git, { head, tip, rebuild, restart, rollback: resumed.rollback });
       if (resumed?.phase === 'built') return finishUpdate(resumed, restart);
@@ -273,15 +277,110 @@ function readUpdateState() {
 
 function writeUpdateState(state) {
   mkdirSync(HELM_DIR, { recursive: true });
-  const temp = `${UPDATE_STATE_FILE}.${process.pid}.tmp`;
-  writeFileSync(temp, JSON.stringify({ version: 1, ...state }), { mode: 0o600 });
-  renameSync(temp, UPDATE_STATE_FILE);
+  writeAtomicState(UPDATE_STATE_FILE, { version: 1, ...state });
+}
+
+function writeAtomicState(file, value) {
+  const temp = `${file}.${process.pid}.tmp`;
+  const fd = openSync(temp, 'w', 0o600);
+  try { writeFileSync(fd, JSON.stringify(value)); fsyncSync(fd); } finally { closeSync(fd); }
+  renameSync(temp, file);
+  const parent = openSync(dirname(file), 'r');
+  try { fsyncSync(parent); } finally { closeSync(parent); }
+}
+
+const ROLLBACK_HOLD_FILE = join(HELM_DIR, 'rollback-hold.json');
+function rollbackHold() {
+  try { return JSON.parse(readFileSync(ROLLBACK_HOLD_FILE, 'utf8')); } catch { return null; }
+}
+
+const PREVIOUS_RELEASE_FILE = join(HELM_DIR, 'previous-release.json');
+function previousRelease() {
+  try {
+    const saved = JSON.parse(readFileSync(PREVIOUS_RELEASE_FILE, 'utf8'));
+    if (saved.version !== 1 || typeof saved.dir !== 'string' || !/^[0-9a-f]{40,64}$/.test(saved.previousHead)
+      || !/^[0-9a-f]{40,64}$/.test(saved.targetHead) || !saved.artifacts) throw Error();
+    artifactBackup(saved.artifacts);
+    return saved;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw Error('Cannot read the previous release. Keep its saved files.');
+  }
+}
+
+/** Keep one complete previous release after the new release passes startup. */
+async function keepPreviousRelease(state) {
+  const previous = previousRelease();
+  const git = gitIn(state.dir);
+  const ref = `refs/helm/releases/${state.artifacts.id}`;
+  await git(['update-ref', ref, state.previousHead]);
+  const checkpoint = { version: 1, dir: state.dir, previousHead: state.previousHead,
+    targetHead: state.targetHead, branch: state.branch, artifacts: state.artifacts, ref };
+  writeAtomicState(PREVIOUS_RELEASE_FILE, checkpoint);
+  if (previous?.artifacts.id !== checkpoint.artifacts.id && previous?.artifacts) {
+    await rm(artifactBackup(previous.artifacts), { recursive: true, force: true });
+    if (previous.ref === `refs/helm/releases/${previous.artifacts.id}`) {
+      await gitIn(previous.dir)(['update-ref', '-d', previous.ref]).catch(() => {});
+    }
+  }
+}
+
+async function completeUpdate(state) {
+  if (state.rollbackHold) writeAtomicState(ROLLBACK_HOLD_FILE, state.rollbackHold);
+  else {
+    const hold = rollbackHold();
+    if (hold?.dir === state.dir && state.targetHead !== hold.restoredHead) rmSync(ROLLBACK_HOLD_FILE, { force: true });
+  }
+  if (!state.retainPrevious || !state.artifacts) return clearUpdateState(state);
+  await keepPreviousRelease(state);
+  // The checkpoint owns these copies after its atomic record is saved.
+  await clearUpdateState({ ...state, artifacts: null });
+}
+
+/** Import the standalone installer's complete, already saved previous files. */
+export async function checkpointInstalledRelease(dir, journal) {
+  if (journal !== `${dir}.install-state`) throw Error('Cannot read the saved installation.');
+  const previousHead = readFileSync(join(journal, 'previous'), 'utf8').trim();
+  const targetHead = readFileSync(join(journal, 'target'), 'utf8').trim();
+  if (!/^[0-9a-f]{40,64}$/.test(previousHead) || !/^[0-9a-f]{40,64}$/.test(targetHead)) throw Error('Cannot read the saved source.');
+  if (previousHead === targetHead) return { retained: false };
+  const git = gitIn(dir);
+  if (await git(['rev-parse', 'HEAD']) !== targetHead || await git(['status', '--porcelain'])) throw Error('The files changed. Keep your changes.');
+  const fields = readFileSync(join(journal, 'paths'), 'utf8').split('\0');
+  if (fields.pop() !== '' || fields.length % 2) throw Error('Cannot read the saved installation.');
+  const paths = [];
+  for (let i = 0; i < fields.length; i += 2) {
+    if (!['yes', 'no'].includes(fields[i + 1])) throw Error('Cannot read the saved installation.');
+    paths.push({ path: fields[i], existed: fields[i + 1] === 'yes' });
+  }
+  // A first installation has no working app to retain.
+  if (!paths.some(entry => entry.path === 'apps/web/dist' && entry.existed)) return { retained: false };
+  const artifacts = { id: `update-backup-${randomUUID()}`, paths };
+  mkdirSync(HELM_DIR, { recursive: true });
+  const backup = artifactBackup(artifacts);
+  mkdirSync(backup, { mode: 0o700 });
+  try {
+    for (const [index, entry] of paths.entries()) {
+      if (entry.existed) await copyArtifact(join(journal, 'files', String(index)), join(backup, String(index)));
+    }
+    const state = { dir, previousHead, targetHead, artifacts,
+      branch: await git(['symbolic-ref', '--quiet', 'HEAD']).catch(() => null) };
+    validateArtifacts(state);
+    await keepPreviousRelease(state);
+    return { retained: true };
+  } catch (error) {
+    if (previousRelease()?.artifacts.id !== artifacts.id) await rm(backup, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function clearUpdateState(state = readUpdateState()) {
+  const checkpoint = state?.artifacts ? previousRelease() : null;
   rmSync(UPDATE_STATE_FILE, { force: true });
   if (state?.release) await rm(state.release, { recursive: true, force: true });
-  if (state?.artifacts) await rm(artifactBackup(state.artifacts), { recursive: true, force: true });
+  if (state?.artifacts) {
+    if (checkpoint?.artifacts.id !== state.artifacts.id) await rm(artifactBackup(state.artifacts), { recursive: true, force: true });
+  }
 }
 
 // Copy installed files before npm or a build can replace them. Leave the
@@ -312,20 +411,23 @@ async function saveArtifacts(dir, paths) {
     throw error;
   }
 }
+function validateArtifacts(state) {
+  if (!state.artifacts) return;
+  const backup = artifactBackup(state.artifacts);
+  if (!Array.isArray(state.artifacts.paths)) throw Error('Cannot read the saved update files.');
+  for (const [index, { path, existed }] of state.artifacts.paths.entries()) {
+    if (path !== 'apps/web/dist' && path !== 'node_modules' && !/^native\/log-index\/log-index\.[a-zA-Z0-9._-]+\.node$/.test(path)
+      && !/^(apps|packages)\/[^/.][^/]*\/node_modules$/.test(path)) throw Error('Cannot read the saved update files.');
+    if (existed && !present(join(backup, String(index)))) throw Error('Cannot find the saved update files.');
+  }
+}
 async function restoreArtifacts(state) {
   if (!state.artifacts) return; // Journals from older Helm versions have no copy.
+  validateArtifacts(state);
   const backup = artifactBackup(state.artifacts);
   for (const [index, { path, existed }] of state.artifacts.paths.entries()) {
-    if (path !== 'apps/web/dist' && path !== 'node_modules' && !/^native\/log-index\/log-index\.[a-zA-Z0-9._-]+\.node$/.test(path) && !/^(apps|packages)\/[^/.][^/]*\/node_modules$/.test(path)) {
-      throw new Error('Cannot read the saved update files.');
-    }
-    const saved = join(backup, String(index));
-    // Check before removing anything. Retain the journal if restoration fails,
-    // so another invocation can retry rather than accepting a broken release.
-    if (existed && !present(saved)) throw new Error('Cannot find the saved update files.');
-    const installed = join(state.dir, path);
-    await rm(installed, { recursive: true, force: true });
-    if (existed) await copyArtifact(saved, installed);
+    await rm(join(state.dir, path), { recursive: true, force: true });
+    if (existed) await copyArtifact(join(backup, String(index)), join(state.dir, path));
   }
 }
 async function dependencyPaths(dir, git, tip) {
@@ -476,7 +578,8 @@ async function updateLocked(dir, { rebuild = true, restart = true, replace = fal
  */
 async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true, rollback = true }) {
   say(`updating ${head.slice(0, 7)} -> ${tip.slice(0, 7)}`);
-  const state = { dir, previousHead: head, targetHead: tip, phase: 'prepared', restart, rollback, publishing: false };
+  const state = { dir, previousHead: head, targetHead: tip, phase: 'prepared', restart, rollback, publishing: false,
+    retainPrevious: rebuild && head !== tip, branch: await git(['symbolic-ref', '--quiet', 'HEAD']).catch(() => null) };
   if (rebuild) state.artifacts = await saveArtifacts(dir, [
     'apps/web/dist', ...await dependencyPaths(dir, git, tip),
   ]);
@@ -552,7 +655,7 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
 
 async function finishUpdate(state, restart) {
   if (!restart || state.restart === false) {
-    await clearUpdateState(state);
+    await completeUpdate(state);
     return { updated: true, restarting: [] };
   }
   state.units = [];
@@ -573,7 +676,7 @@ async function finishUpdate(state, restart) {
   worker.unref();
   const result = await requestRestart();
   if (result.failed.length) { state.phase = 'built'; writeUpdateState(state); }
-  else if (!result.restarting.length) await clearUpdateState(state);
+  else if (!result.restarting.length) await completeUpdate(state);
   // Nothing was replaced. Retire the unused watcher before returning; a
   // private service refusal must not leave a detached program behind.
   if (!result.restarting.length && worker.exitCode === null && worker.signalCode === null) {
@@ -615,7 +718,7 @@ export async function watchRelease({ id, sleep = (ms) => new Promise(r => setTim
         process.kill(state.readyPid, 0);
         if (state.readyStart && processStart(state.readyPid) !== state.readyStart) throw Error('The new program stopped.');
         if (now() - state.readyAt >= 5000) {
-          await clearUpdateState(state);
+          await completeUpdate(state);
           return;
         }
       } catch { /* Startup exited before confirmation was read. */ }
@@ -654,6 +757,9 @@ export async function installFromCheckout(dir, source, { rebuild = true, restart
 }
 
 async function checkSourcePaths(dir, git, head, tip) {
+  const meta = await git(['rev-parse', '--absolute-git-dir']);
+  if (['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer', 'BISECT_LOG']
+    .some(name => existsSync(join(meta, name)))) throw Error('Finish the source change before installing.');
   const flags = await git(['ls-files', '-v']);
   if (flags.split('\n').some(line => /^[a-zS] /.test(line))) throw Error('Some files have hidden edits. Keep them before installing.');
   const additions = await git(['diff', '--name-only', '--diff-filter=A', '-z', head, tip]);
@@ -662,4 +768,51 @@ async function checkSourcePaths(dir, git, head, tip) {
       throw Error('The new release would replace local files. Keep them before installing.');
     }
   }
+}
+
+/** Restore the last installed release. A later owner change always wins. */
+export async function rollbackPreviousRelease(dir = ROOT, { restart = true } = {}) {
+  return locked(async () => {
+    const git = gitIn(dir);
+    await recoverUpdate(dir, git);
+    const checkpoint = previousRelease();
+    if (!checkpoint || checkpoint.dir !== dir) return { updated: false, reason: 'No previous release is saved here.' };
+    const head = await git(['rev-parse', 'HEAD']);
+    const branch = await git(['symbolic-ref', '--quiet', 'HEAD']).catch(() => null);
+    if (head !== checkpoint.targetHead || branch !== checkpoint.branch) {
+      return { updated: false, reason: 'The saved version or selected branch changed. Keep your changes.' };
+    }
+    if (await git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'])) {
+      return { updated: false, reason: 'Save your edits before restoring the previous release.' };
+    }
+    await checkSourcePaths(dir, git, head, checkpoint.previousHead);
+    validateArtifacts(checkpoint);
+    if (checkpoint.ref !== `refs/helm/releases/${checkpoint.artifacts.id}`
+      || await git(['rev-parse', checkpoint.ref]) !== checkpoint.previousHead) throw Error('Cannot find the saved source. Keep the saved release.');
+    const artifacts = await saveArtifacts(dir, checkpoint.artifacts.paths.map(entry => entry.path));
+    const state = { dir, previousHead: head, targetHead: checkpoint.previousHead, artifacts,
+      phase: 'prepared', publishing: true, rollback: true, retainPrevious: true, restart, branch,
+      rollbackHold: { dir, restoredHead: checkpoint.previousHead, rejectedHead: head } };
+    // Keep the installed commit reachable before moving the selected branch.
+    await git(['update-ref', `refs/helm/releases/${artifacts.id}`, head]);
+    writeUpdateState(state);
+    try {
+      if (await git(['rev-parse', 'HEAD']) !== head || await git(['symbolic-ref', '--quiet', 'HEAD']).catch(() => null) !== branch
+        || await git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'])) throw Error('The files changed. Keep your changes.');
+      await checkSourcePaths(dir, git, head, state.targetHead);
+      await git(['reset', '--hard', '--quiet', state.targetHead]);
+      await restoreArtifacts(checkpoint);
+      state.phase = 'built';
+      writeUpdateState(state);
+    } catch (error) {
+      // Keep the journal until a later recovery completes. Never consume the
+      // previous checkpoint while restoring its files.
+      await restoreArtifacts(state);
+      if (await git(['rev-parse', 'HEAD']) === state.targetHead && await git(['status', '--porcelain']) === '') {
+        await git(['reset', '--hard', '--quiet', head]);
+      }
+      throw error;
+    }
+    return finishUpdate(state, restart);
+  });
 }

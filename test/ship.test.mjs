@@ -258,3 +258,23 @@ test('a failed private release proof prevents a shipped result', async () => {
   const {result} = run(r, {network:{offline:false}, ship:{verifyRelease:async () => {throw Error('Reconnect failed');}}});
   await assert.rejects(result, /Reconnect failed/);
 });
+
+test('a failed installation result stops ship before proof or a shipped message', async () => {
+  const r = repos(); let proved = false;
+  const {lines,result} = run(r,{network:{offline:false},ship:{
+    install:async()=>({updated:false,reason:'Keep the local saved changes.'}),
+    verifyRelease:async()=>{proved=true;},
+  }});
+  await assert.rejects(result,/Cannot install.*Keep the local saved changes/s);
+  assert.equal(proved,false);assert.equal(lines.some(line=>line.includes('Shipped ')),false);
+});
+test('a refused restart cannot pass ship even when the installed version is current', async () => {
+  const r = repos(); let proved = false;
+  const {lines,result} = run(r,{network:{offline:false},ship:{
+    install:async(dir,source)=>{await installFromCheckout(dir,source,{rebuild:false,restart:false});return {updated:true,restarting:[],failed:['helm-serve.service']};},
+    verifyRelease:async()=>{proved=true;},
+  }});
+  await assert.rejects(result,/Helm could not restart/);
+  assert.equal(git(r.installed,'rev-parse','HEAD'),git(r.main,'rev-parse','main'));
+  assert.equal(proved,false);assert.equal(lines.some(line=>line.includes('Shipped ')),false);
+});
