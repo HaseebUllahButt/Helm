@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 
 /** A small status history. It stores machine IDs, never addresses or chat data. */
 export class ConnectionHistory {
@@ -11,7 +12,7 @@ export class ConnectionHistory {
     try {
       const saved = JSON.parse(readFileSync(file, 'utf8'));
       if (Array.isArray(saved.events) && saved.states && typeof saved.states === 'object') {
-        this.events = saved.events.filter(e => typeof e.env === 'string' && Number.isFinite(e.at)
+        this.events = saved.events.filter(e => typeof e.env === 'string' && Number.isFinite(e.at) && e.at >= 0 && e.at <= now()
           && ['connected', 'disconnected', 'path-changed'].includes(e.state)).slice(-100);
         this.states = Object.assign(Object.create(null), saved.states);
       }
@@ -25,7 +26,8 @@ export class ConnectionHistory {
     for (const id of Object.keys(this.states)) if (!ids.has(id)) { delete this.states[id]; changed = true; }
     this.events = this.events.filter(e => ids.has(e.env));
     for (const machine of machines) {
-      const path = machine.direct?.used ? 'direct' : machine.attached ? 'attached' : machine.url ? 'home' : 'none';
+      const path = machine.direct?.used ? 'direct' : machine.attached ? 'attached'
+        : machine.url ? `home-${createHash('sha256').update(machine.url).digest('hex')}` : 'none';
       const previous = this.states[machine.env];
       if (previous?.path !== path) {
         this.events.push({ env: machine.env, at, state: path === 'none' ? 'disconnected'

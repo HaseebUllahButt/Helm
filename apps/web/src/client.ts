@@ -562,7 +562,7 @@ const DC_CHUNK_TYPE = 'dc-chunk';
 const HTTP_READ_METHODS = new Set([
   'session.events', 'session.messages', 'session.visual', 'session.list', 'model.list',
   'session.commands', 'env.info', 'session.watch', 'session.unwatch',
-  'project.list',
+  'project.list', 'net.routes',
 ]);
 
 /** A held chat list with a machine's changes applied, or null if they do not fit it. */

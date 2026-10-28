@@ -781,7 +781,7 @@ test('an early hedge error does not reject the slower direct success', async () 
 
 test('safe chat reads use authenticated HTTP when WebSocket upgrades are unavailable', async () => {
   const h = harness({ socket: 'hang' }); h.start(); await h.advance(10);
-  for (const method of ['session.events', 'session.messages', 'session.list', 'model.list', 'session.commands', 'env.info', 'session.watch', 'session.unwatch']) {
+  for (const method of ['session.events', 'session.messages', 'session.list', 'model.list', 'session.commands', 'env.info', 'session.watch', 'session.unwatch', 'net.routes']) {
     const request = h.client.rpc('machine', method, { id: 'chat' }); await h.advance(1);
     assert.equal((await request).fresh, true);
     const sent = h.requests.at(-1);

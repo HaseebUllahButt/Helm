@@ -371,7 +371,7 @@ function announceNewDevice(device) {
 const HTTP_READ_METHODS = new Set([
   'session.events', 'session.messages', 'session.visual', 'session.list', 'session.commands',
   'model.list', 'env.info', 'session.watch', 'session.unwatch',
-  'project.list',
+  'project.list', 'net.routes',
 ]);
 
 export function makeHttpHandler({ online, kick, connectedDevices = () => new Set(), callEnv }) {

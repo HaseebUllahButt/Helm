@@ -59,7 +59,7 @@ test('the visual host has its own restrictive policy without weakening app respo
 });
 
 test('authenticated HTTP snapshots cross the real hub RPC router and are never browser cached', async () => {
-  for (const method of ['session.events', 'session.messages', 'session.visual', 'session.list', 'model.list', 'session.commands', 'env.info', 'project.list']) {
+  for (const method of ['session.events', 'session.messages', 'session.visual', 'session.list', 'model.list', 'session.commands', 'env.info', 'project.list', 'net.routes']) {
     const response = await read(method, { id: 'chat' });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');

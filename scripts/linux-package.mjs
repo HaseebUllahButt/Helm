@@ -43,7 +43,7 @@ export function checkLinuxPackage(folder) {
   return manifest;
 }
 
-function copyDependencies(source, target) {
+export function copyDependencies(source, target) {
   mkdirSync(target, { recursive: true });
   mkdirSync(join(target, '.bin'));
   const copy = (name) => {
@@ -60,8 +60,12 @@ function copyDependencies(source, target) {
     if (name.startsWith('.')) continue;
     if (name === '@helm') {
       mkdirSync(join(target, name));
-      for (const workspace of ['connect', 'protocol', 'usage']) symlinkSync(`../../packages/${workspace}`, join(target, name, workspace));
-      for (const workspace of ['relay', 'web']) symlinkSync(`../../apps/${workspace}`, join(target, name, workspace));
+      for (const workspace of readdirSync(join(source, name))) {
+        const group = ['connect', 'protocol', 'usage'].includes(workspace) ? 'packages'
+          : ['relay', 'web'].includes(workspace) ? 'apps' : null;
+        if (!group) fail('The package contains an unknown Helm workspace.');
+        symlinkSync(`../../${group}/${workspace}`, join(target, name, workspace));
+      }
     } else if (name.startsWith('@')) {
       mkdirSync(join(target, name));
       for (const child of readdirSync(join(source, name))) copy(`${name}/${child}`);

@@ -18,6 +18,7 @@ export function connectionSupport(routes, now = Date.now()) {
   const names = new Map(machines.map((machine, i) => [machine.env, `Machine ${i + 1}`]));
   return { checks: connectionChecks({ machines }, { privateNames: true, now }),
     history: (routes?.history ?? []).filter(event => names.has(event.env)
-      && ['connected', 'disconnected', 'path-changed'].includes(event.state) && Number.isFinite(event.at))
+      && ['connected', 'disconnected', 'path-changed'].includes(event.state)
+      && Number.isFinite(event.at) && event.at >= 0 && event.at <= now)
       .map(event => ({ machine: names.get(event.env), state: event.state, at: event.at })) };
 }

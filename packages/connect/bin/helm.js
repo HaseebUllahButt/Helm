@@ -2074,11 +2074,21 @@ try {
 
     case 'self-update':
     case 'update': {
-      const { selfUpdate } = await import('../src/update.js');
+      const { selfUpdate, rollbackPreviousRelease } = await import('../src/update.js');
+      if (rest.includes('--rollback')) {
+        if (rest.includes('--replace')) die('Choose --rollback or --replace, not both.');
+        const r = await rollbackPreviousRelease();
+        if (!r.updated) { console.log(`Previous release was not restored. ${r.reason}`); process.exitCode = 1; break; }
+        if (r.failed?.length) die('The previous files are restored, but Helm could not restart. Run helm doctor.');
+        console.log(r.restarting?.length ? 'The previous release is restored. Helm restarts now.'
+          : 'The previous release is restored. Restart Helm to use it.');
+        break;
+      }
       // GitHub's version, only when asked. --replace overrides this machine's
       // own changes and keeps them on a backup branch.
       const r = await selfUpdate(undefined, { replace: rest.includes('--replace') });
       if (!r.updated) { console.log(`  not updated - ${r.reason}`); break; }
+      if (r.failed?.length) die('The files updated, but Helm could not restart. Run helm doctor.');
       if (r.backup) console.log(`  your changes are kept on branch ${r.backup}`);
       console.log(r.restarting?.length
         ? `  Helm updated. ${r.restarting.join(', ')} restart now and keep active chats.`
@@ -2087,11 +2097,22 @@ try {
     }
 
     case 'ship': {
-      const { ship, ShipError } = await import('../src/ship.js');
+      const { ship, ShipError, includes } = await import('../src/ship.js');
+      const { proveRelease } = await import('../src/release-proof.js');
       const minutes = Number(strFlag('wait', '10'));
       if (!(minutes > 0)) die('--wait takes a number of minutes');
       try {
-        const r = await ship({ net: requireNetwork(), rpc: hubRpc, check: !rest.includes('--no-check'), waitMs: minutes * 60_000 });
+        const directory = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+        const tip = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+        await proveRelease({ directory, tip, prepare: true });
+        const r = await ship({ net: requireNetwork(), rpc: hubRpc, check: !rest.includes('--no-check'), waitMs: minutes * 60_000,
+          verifyRelease: async ({ tip, net, rpc }) => {
+            const info = await rpc(net, net.self, M.ENV_INFO, {}, { timeout: 8000, budget: 8000 });
+            if (!includes([directory, info.version?.dir].filter(Boolean), tip, info.version?.full)) {
+              throw new ShipError('The installed release changed during the check. Run helm ship again.');
+            }
+            await proveRelease({ directory: info.version?.dir, tip: info.version?.full });
+          } });
         if (!r.ok) exit(1);
       } catch (err) {
         if (!(err instanceof ShipError)) throw err;
@@ -2165,6 +2186,12 @@ try {
           `${p.id.padEnd(16)} ${p.engine.padEnd(9)} ${env} ${p.cmd} ${(p.args || []).join(' ')}${status}`
         );
       }
+      break;
+    }
+
+    case 'backup': {
+      const { backupCommand } = await import('../src/backup-cli.js');
+      backupCommand(rest);
       break;
     }
 

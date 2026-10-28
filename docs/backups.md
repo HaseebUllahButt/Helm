@@ -11,8 +11,18 @@ That check cannot prove that a live database is consistent. Do not back up a
 running Helm folder. Links, sockets, and other special files cause a refusal;
 the library never silently omits them. It does not stop any services.
 
-The parent command interface can call these exports from
-`packages/connect/src/backup.js`:
+Use a stopped data copy. These commands never stop the running installation:
+
+```sh
+helm backup key /safe/place/helm-backup.key
+helm backup create /offline/helm-data /safe/place/helm.backup --key-file /safe/place/helm-backup.key --offline
+helm backup restore /safe/place/helm.backup /offline/review --key-file /safe/place/helm-backup.key
+```
+
+Keep the key and backup in separate safe places. The restore stays blocked.
+The command accepts key-file paths, never secret values in arguments.
+
+The library also exports these functions from `packages/connect/src/backup.js`:
 
 - `createBackup({ source, destination, password, offline: true })`
 - `restoreBackup({ archive, destination, password })`
@@ -60,4 +70,4 @@ link refusal, and startup blocking before state files are created. Tests use
 private folders. The private Helm check also tests the guard during restart.
 No production backup or restore runs during these checks.
 
-Tests: `test/backup.test.mjs`, `test/restore-guard.test.mjs`.
+Tests: `test/backup.test.mjs`, `test/backup-cli.test.mjs`, `test/restore-guard.test.mjs`.
