@@ -17,7 +17,7 @@ before(async () => {
     import { ChangesPanel } from './apps/web/src/session/Changes';
     import { ThreadDetails } from './apps/web/src/session/ThreadDetails';
     import { graphRows } from './apps/web/src/session/GitGraph';
-    import { NotificationToast } from './apps/web/src/NotificationToast';
+    import { WaitingIsland } from './apps/web/src/WaitingIsland';
     const root = createRoot(document.getElementById('root'));
     const toast = createRoot(document.getElementById('toast'));
     const listeners = new Set();
@@ -97,8 +97,9 @@ before(async () => {
         branch:'feature/an-extremely-long-branch-name-that-should-stay-on-screen',ahead:128,behind:73,
         files:[{path:'packages/connect/src/one-very-long-file-name-with-a-useful-description.js',status:'M',add:12000,del:34567}]}}
       reloadGit={()=>{window.refreshed=true}} onClose={()=>root.render(null)} />);
-    window.showToast = () => toast.render(<NotificationToast session={{...agents[0],title:'Review mobile notifications https://private.test /home/me/project'}}
-      onOpen={()=>{window.toastOpened=true;toast.render(null)}} onDismiss={()=>{window.dismissed=true;toast.render(null)}} />);
+    window.showToast = () => toast.render(<WaitingIsland client={client} pick={null} ping={{envId:'local',id:'main',at:Date.now()}}
+      items={[{envId:'local',machine:'Laptop',s:{...agents[0],status:'blocked',title:'Review mobile notifications https://private.test /home/me/project'}}]}
+      onOpen={()=>{window.toastOpened=true;toast.render(null)}} />);
     window.notifyChange = () => listeners.forEach((fn)=>fn('local','session.update',{}));
   `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true,write:false,format:'iife',jsx:'automatic' });
   browser = await chromium.launch({headless:true,...(process.env.HELM_TEST_CHROMIUM ? {executablePath:process.env.HELM_TEST_CHROMIUM} : {})});
@@ -273,17 +274,17 @@ test('graph and branded notifications fit a phone, and dismissal does not naviga
   await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();
   await page.evaluate(()=>window.showToast());
-  await page.getByRole('button',{name:'Close notice'}).waitFor();
-  const bounds = await page.locator('.toast').boundingBox();
+  await page.locator('.island.open').waitFor();
+  const bounds = await page.locator('.island').boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390);
-  assert.equal(await page.locator('.toast-chat').innerText(),'Review mobile notifications');
-  assert.equal(await page.locator('.toast-kind').innerText(),'Codex needs you');
+  assert.equal(await page.locator('.island-title').innerText(),'Review mobile notifications');
+  assert.match(await page.locator('.island-where').innerText(),/^Codex · needs you · /);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true);
   await shot('git-notification-phone.png');
-  await page.getByRole('button',{name:'Close notice'}).click();
-  await page.locator('.toast').waitFor({state:'detached'});
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.locator('.island:not(.open)').waitFor();
   assert.equal(await page.evaluate(()=>!!window.toastOpened),false);
-  await page.evaluate(()=>window.showToast());
+  await page.locator('.island').click();
   await page.getByRole('button',{name:'Open chat',exact:true}).click();
   await page.waitForFunction(()=>window.toastOpened);
 });

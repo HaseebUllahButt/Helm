@@ -63,8 +63,8 @@ for (const width of [1280, 390]) test(`a resumed task clears stale recovery and 
   await card.getByText('Response interrupted', { exact: false }).waitFor();
   await page.screenshot({ path: `/tmp/helm-recovery-sidebar-${width}.png` });
   assert.ok((await card.boundingBox()).height < 165, `recovery uses a compact thread card: ${JSON.stringify(await card.boundingBox())}`);
-  const action = card.locator('.need-go');
-  assert.equal(await action.evaluate(element => getComputedStyle(element).backgroundColor), 'rgba(0, 0, 0, 0)', 'recovery is not a large filled warning button');
+  const action = card.locator('.need-main');
+  assert.equal(await action.evaluate(element => getComputedStyle(element).backgroundColor), 'rgba(0, 0, 0, 0)', 'recovery is a plain row, not a filled warning button');
   await page.screenshot({ path: `/tmp/helm-recovery-sidebar-${width}.png` });
   await page.evaluate(() => window.resumeTask());
   await page.locator('.sidebar .need').waitFor({ state: 'detached' });
@@ -115,7 +115,7 @@ test('attention cards distinguish failures, limits, and actual questions on mobi
     window.mount(window.makeClient([{ id: 'vm', name: 'VM', online: true, info: {} }], { vm: sessions }));
   });
   const sidebar = page.locator('.sidebar');
-  for (const title of ['Task failed', 'Usage limit reached', 'Helper task failed', 'Needs you']) {
+  for (const title of ['Task failed', 'Usage limit reached', '1 helper task failed', 'Has a question']) {
     await sidebar.locator('.need-k').filter({ hasText: new RegExp(`^${title}`) }).waitFor();
   }
   assert.equal(await sidebar.locator('.need-k').filter({ hasText: /Task paused|Helm restarted/ }).count(), 0);
@@ -812,11 +812,12 @@ for (const width of [1280, 390]) for (const childState of ['error', 'blocked']) 
     window.mount(client);
   }, childState);
   const card = page.locator('.sidebar .need').filter({ hasText: 'Game task' });
-  await card.getByRole('button', { name: 'Snooze…' }).click();
+  await card.getByRole('button', { name: 'More for Game task' }).click();
   await card.getByRole('button', { name: '5 mins' }).waitFor();
   assert.equal(await page.getByRole('dialog', { name: 'Agents', exact: true }).count(), 0);
-  await card.getByRole('button', { name: 'cancel', exact: true }).click();
-  await card.locator('.need-go').click();
+  await card.getByRole('button', { name: 'More for Game task' }).click();
+  await card.getByRole('button', { name: '5 mins' }).waitFor({ state: 'detached' });
+  await card.locator('.need-main').click();
   const details = page.getByRole('dialog', { name: 'Agents', exact: true });
   await details.getByRole('heading', { name: 'Agents' }).waitFor();
   await details.locator('.delegation-branch.selected').getByText('Provider request failed', { exact: true }).waitFor();
@@ -840,15 +841,15 @@ test('snooze offers short delays and Never survives refresh until the chat is op
   });
   await mount();
   const card = page.locator('.sidebar .need');
-  await card.getByRole('button', { name: 'Snooze…' }).click();
-  assert.deepEqual(await card.locator('.snooze-opts button').allTextContents(), ['5 mins', '1 hr', '3 hrs', 'Never', '']);
+  await card.getByRole('button', { name: 'More for Quiet chat' }).click();
+  assert.deepEqual(await card.locator('.need-foot button').allTextContents(), ['5 mins', '1 hr', '3 hrs', 'Never']);
   assert.equal(await card.locator('input').count(), 0);
   const before = Date.now();
   await card.getByRole('button', { name: '5 mins', exact: true }).click();
   const until = await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:snooze-chat']);
   assert.ok(until >= before + 299000 && until <= Date.now() + 300000);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  await card.getByRole('button', { name: 'Snooze…' }).click();
+  await card.getByRole('button', { name: 'More for Quiet chat' }).click();
   await card.getByRole('button', { name: 'Never', exact: true }).click();
   await card.waitFor({ state: 'detached' });
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:snooze-chat']), Number.MAX_SAFE_INTEGER);
@@ -869,7 +870,7 @@ for (const status of ['working', 'idle']) test(`snoozing a child's alert restore
   }, status);
   const sidebar = page.locator('.sidebar');
   const card = sidebar.locator('.need');
-  await card.getByRole('button', { name: 'Snooze…' }).click();
+  await card.getByRole('button', { name: 'More for Continue game' }).click();
   await card.getByRole('button', { name: '5 mins', exact: true }).click();
   await card.waitFor({ state: 'detached' });
   await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).locator('.tstat.working').waitFor();
@@ -948,11 +949,13 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   });
   await mount();
   const card = page.locator('.sidebar .need');
+  const more = card.getByRole('button', { name: 'More for Keep building' });
+  await more.click();
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).waitFor();
-  assert.equal(await card.locator('.need-go').innerText(), '1 helper task failed');
+  assert.equal(await card.locator('.need-what').innerText(), '1 helper task failed');
   const dismissBounds = await card.getByRole('button', { name: 'Dismiss failure', exact: true }).boundingBox();
-  const reviewBounds = await card.locator('.need-go').boundingBox();
-  assert.ok(dismissBounds.y >= reviewBounds.y + reviewBounds.height, 'dismiss and snooze do not overlap the review action');
+  const reviewBounds = await card.locator('.need-main').boundingBox();
+  assert.ok(dismissBounds.y >= reviewBounds.y + reviewBounds.height, 'dismiss and snooze do not overlap the row');
   await page.screenshot({ path: `/tmp/helm-dismiss-child-${width}.png` });
   await page.evaluate(() => { window.rejectDismiss = true; });
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
@@ -967,10 +970,11 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   await page.locator('.sidebar .thread-row').filter({ hasText: 'Keep building' }).waitFor();
   assert.equal(await card.count(), 0);
   await page.evaluate(() => window.newFailure());
+  await more.click();
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).waitFor();
   await page.evaluate(() => window.newApproval());
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
-  await card.getByText('Needs you', { exact: false }).waitFor();
+  await card.getByText('1 helper task needs approval', { exact: true }).waitFor();
   assert.equal(await card.getByRole('button', { name: 'Dismiss failure', exact: true }).count(), 0, 'approval remains visible after dismissing failures');
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 });
