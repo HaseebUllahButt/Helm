@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serveVisualFrame } from './visual-frame.js';
+import { closeAppWindow } from './app-window.js';
 
 /**
  * Start a hub.
@@ -100,11 +101,23 @@ export async function startRelay({
   const LOCAL_HOST = /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])(:\d+)?$/;
   const loopback = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
 
+  // The Close button of the Helm window on this desktop (app-window.js): only
+  // a page this machine serves to itself may ask, so no other site can.
+  const windowPage = (req) => loopback(req) && !req.headers['x-forwarded-for']
+    && LOCAL_HOST.test(String(req.headers.host || '')) && req.headers.origin === `http://${req.headers.host}`;
+  const closeWindow = (res) => {
+    const closed = closeAppWindow();
+    res.writeHead(closed ? 204 : 404, SECURITY_HEADERS);
+    res.end();
+    return true;
+  };
+
   const server = createServer((req, res) => {
     // A share's host is never helm: everything on it belongs to the shared
     // app. Caddy's certificate check is answered to Caddy alone.
     const handled = shares.owns(req) ? shares.route(req, res)
       : req.url.startsWith('/api/share/ask?') && loopback(req) && !req.headers['x-forwarded-for'] ? shares.ask(req, res).then(() => true)
+      : req.url === '/api/window/close' && req.method === 'POST' && windowPage(req) ? closeWindow(res)
       : null;
     Promise.resolve(handled ?? (helmPath(req), routeHelm(req, res))).catch((err) => {
       // A handler that fails mid-answer - a share stream is the usual one -
