@@ -47,25 +47,35 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 - **Tests:** `test/driver-claude`, `driver-codex`, `native-claude-chat`.
 
 ## "Needs you" on Home
-- **Prove (driven, except Snooze):** in a fake-ask chat:
-  ```sh
-  $V click "Ask anything"; $V type "need me"; $V click send; $V wait "Command approval"
-  $V click Back                       # repeat until text starts with "helm"
-  $V click "Review and allow"; $V click Approve; $V wait "done."
-  ```
-- **Tests:** `test/browser/sidebar-shelves`, `chat-home`; `test/seen-sync`.
+- **Rules (owner, 2026-10-28):** no yellow for "needs you" anywhere; it is
+  white (`--need`). Yellow stays for warnings. A waiting chat is a plain row
+  with a white dot that breathes three times, then stays still (endless
+  motion redraws the window); its second line says what it wants.
+  Snooze and "Dismiss failure" sit behind the row's ⋯. A row with a request
+  opens the waiting box; a failure opens the chat.
+- **Prove (driven 2026-10-28):** start two fake-ask chats with
+  `$V rpc session.start` and `session.input`, then
+  `$V click "<title>"` in the sidebar: the box opens with "2 of 2".
+- **Tests:** `test/browser/sidebar`, `sidebar-shelves`, `chat-home`; `test/seen-sync`.
 
-## Alerts
-- **Rules:** the pop-up and system notices lead with the chat's name. Only a
-  command shown whole gets "Allow once" in the pop-up; anything cut, a file
-  change or a tool opens the chat. A system notice may carry a question or
-  the first line of a finished reply, never a command, address or path.
-- **Prove the pop-up (driven):** open one chat, then start another with
-  `$V rpc session.start` in `"mode":"default"` on a Claude account whose
-  `cmd` replays a fixture with a Bash `can_use_tool` (copy
-  `test/fixtures/claude/always.ndjson` and change the tool), and send it a
-  message with `$V rpc session.input`. It closes after 12 s.
-- **Not driven:** system notices; the hidden browser blocks them.
+## The waiting box
+- **Rules (owner, 2026-10-28):** every waiting chat except the open one is
+  in one black box at the top centre (`WaitingIsland.tsx`). Closed it is a
+  pill: the first chat and "+n". A chat that starts waiting opens it for
+  12 s without a dimmed screen and without keys. Opened by a click, it dims
+  the screen and takes keys: Ctrl+Enter says yes, Ctrl+1..9 or
+  Ctrl+Alt+1..9 answers, Esc closes. A command, plan or tool is answered
+  there; a single one-choice question shows its answers; a file change and
+  anything else open the chat. After an answer the next chat comes in.
+  Titles lead, scrubbed of links and paths. A system notice may carry a
+  question or the first line of a finished reply, never a command, address
+  or path.
+- **Prove (driven 2026-10-28):** with two fake-ask chats waiting, click a
+  sidebar row, `$V key Control+Enter`, `$V wait Allowed`: the other chat
+  slides in; `$V click "Allow once"` and the box goes.
+- **Not driven:** questions in the real app (the fake agent never asks);
+  `test/browser/waiting-island` covers them. System notices: the hidden
+  browser blocks them.
 - **Traps:** a tap can be lost while the app shows its sign-in screen.
 - **Tests:** `test/notify`, `desktop-notify`, `notification-route`, `push`;
-  `test/browser/git-notifications`.
+  `test/browser/waiting-island`, `git-notifications`.

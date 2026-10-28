@@ -12,6 +12,7 @@ import { shownTitle, unknownThread } from '../format';
 import { engineOf } from '../engines';
 import { fadeWhenCut } from '../fadeWhenCut';
 import { deleteKey } from '../session/chatKeys';
+import { waitingLine } from '../WaitingIsland';
 
 /**
  * A section that can be put away, with what it holds counted on the header.
@@ -212,12 +213,16 @@ function snoozeChoices(): { label: string; at: number }[] {
   ];
 }
 
-const NEED_GO: Record<string, string> = {
-  question: 'Answer', command: 'Review the command', edit: 'Review the change', plan: 'Review the plan', tool: 'Review and allow',
-};
-
-export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Session; machine: string; onOpen: () => void; onSnooze: (until: number) => void; onDismiss: () => Promise<void> }) {
-  const now = useNow();
+/**
+ * A chat that waits on you, as a plain sidebar row: a breathing dot, the
+ * title, and what it wants. A row with a question or a request opens the
+ * waiting box at the top (`onPick`); a failure opens the chat. Snooze and
+ * clearing a helper failure sit behind the ⋯ button.
+ */
+export function NeedCard({ s, machine, selected = false, onOpen, onPick, onSnooze, onDismiss }: {
+  s: Session; machine: string; selected?: boolean; onOpen: () => void; onPick?: () => void;
+  onSnooze: (until: number) => void; onDismiss: () => Promise<void>;
+}) {
   const [choosing, setChoosing] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState('');
@@ -231,48 +236,47 @@ export function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Sessi
   const n = s.pending ?? 0;
   const ask = s.status === 'blocked' ? s.ask : null;
   const problem = s.status !== 'blocked' && s.recovery ? plainProblem(s.recovery.kind, s.recovery.message) : null;
+  const line = waitingLine(s);
   return (
-    <div className={`need${s.recovery && s.status !== 'blocked' ? ' need-recovery' : ''}`}>
-      <button className="need-main" onClick={onOpen} title={problem?.text}>
-        <span className="need-k">
-          <i />{s.status === 'blocked' || s.team?.blocked ? 'Needs you' : problem?.title ?? (s.team?.failed ? 'Helper task failed' : 'Needs you')}{s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
-          {n > 1 && <span className="need-n">{n}</span>}
-        </span>
-        <span className="need-t">
-          <EngineMark engine={eng.cls} />
-          <span className="grow">
+    <div className={`need${s.recovery && s.status !== 'blocked' ? ' need-recovery' : ''}${selected ? ' active' : ''}`}>
+      <div className="need-row">
+        <button className="need-main" onClick={ask && onPick ? onPick : onOpen} title={problem?.text ?? `${s.title}\n${line}`}>
+          <span className="need-t">
+            <i className="need-dot" />
             <span className="need-title">{s.title}</span>
-            <span className="need-m">{[eng.label, whereOf(s), machine].filter(Boolean).join(' · ')}</span>
+            {n > 1 && <span className="need-n">{n}</span>}
           </span>
-        </span>
-        {ask?.text && <span className={`need-q${ask.kind === 'command' ? ' mono' : ''}`}>{ask.text}{ask.more ? ` (+${ask.more} more)` : ''}</span>}
-        <span className="need-go">{s.team?.blocked ? `${s.team.blocked} helper tasks need approval` : s.team?.failed ? `${s.team.failed} helper ${s.team.failed === 1 ? 'task' : 'tasks'} failed` : s.recovery && !ask ? 'View task' : NEED_GO[ask?.kind ?? ''] ?? 'Review and answer'}<Icon name="forward" size={15} /></span>
-      </button>
-      <div className={`need-foot${s.team?.failed ? ' has-dismiss' : ''}${choosing ? ' is-choosing' : ''}`}>
-        {!choosing ? (
-          <>
-            {!!s.team?.failed && <button className="need-snooze need-dismiss" disabled={dismissing} onClick={() => void dismiss()}
-              title="Clear this helper failure alert on all devices. Its history stays. New failures show alerts.">{dismissing ? 'Dismissing…' : s.team.failed === 1 ? 'Dismiss failure' : 'Dismiss failures'}</button>}
-            <button className="need-snooze" onClick={() => setChoosing(true)}>Snooze…</button>
-          </>
-        ) : (
-          <div className="snooze-opts">
-            {snoozeChoices().map((c) => (
-              <button key={c.label} onClick={() => onSnooze(c.at)}>{c.label}</button>
-            ))}
-            <button className="snooze-x" onClick={() => setChoosing(false)} aria-label="cancel"><Icon name="close" size={14} /></button>
-          </div>
-        )}
+          <span className="need-k">
+            <EngineMark engine={eng.cls} />
+            <span className="need-what">{line}</span>
+            <span className="need-m">{machine}</span>
+          </span>
+        </button>
+        <button className="need-more" aria-label={`More for ${s.title}`} aria-expanded={choosing} onClick={() => setChoosing((c) => !c)}>
+          <Icon name="more" size={15} />
+        </button>
       </div>
+      {choosing && (
+        <div className="need-foot">
+          <span className="need-foot-k">Snooze</span>
+          {snoozeChoices().map((c) => (
+            <button key={c.label} onClick={() => { setChoosing(false); onSnooze(c.at); }}>{c.label}</button>
+          ))}
+          {!!s.team?.failed && <button className="need-dismiss" disabled={dismissing} onClick={() => void dismiss()}
+            title="Clear this helper failure alert on all devices. Its history stays. New failures show alerts.">{dismissing ? 'Dismissing…' : s.team.failed === 1 ? 'Dismiss failure' : 'Dismiss failures'}</button>}
+        </div>
+      )}
       {dismissError && <p className="error" role="alert">{dismissError}</p>}
     </div>
   );
 }
 
 /**
- * A chat in the sidebar. A settled chat is one line: the title, one status
- * at the right edge (its age, "new", or a word that says more), and the
- * agent. A running chat adds a second line: its folder, machine and branch.
+ * A chat in the sidebar. A settled chat is one line: the agent, the title,
+ * and one status at the right edge (its age, "new", or a word that says
+ * more). A running chat has its status dot before the title, so the title
+ * gets the whole line; the second line has the agent, folder, machine,
+ * branch and its clock.
  */
 export function HomeRow({ s, machine, onOpen, note, selected = false, slim = false, actions }: {
   s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean;
@@ -303,14 +307,14 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
         onKeyDown={actions?.onDelete ? (e) => { if (deleteKey(e, e.currentTarget)) { e.preventDefault(); setEnding(true); } } : undefined}
         title={`${s.title}\n${where}`} data-where={where}
       >
-        {slim ? <>{title}{status}{mark}</> : <>
-          <span className="tri-top">{title}{status}</span>
+        {slim ? <>{mark}{title}{status}</> : <>
+          <span className="tri-top"><i className="tri-dot" />{title}</span>
           <span className="tri-bot">
-            <Icon name={s.quick ? 'bolt' : 'folder'} size={12} />
+            {mark}
             <span className="tri-where">{[whereOf(s), machine].filter(Boolean).join(' · ')}</span>
             {note && <span className="tri-note">{note}</span>}
             {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
-            <span className="tri-end">{mark}</span>
+            <span className="tri-end">{status}</span>
           </span>
         </>}
       </button>

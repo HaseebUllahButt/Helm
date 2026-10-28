@@ -85,7 +85,7 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   await shelf(page, 'Settled').waitFor();
   assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Running', 'Settled', 'Machines']);
 
-  // Needs you: only shown when something waits, with an amber count.
+  // Needs you: only shown when something waits, with a white count.
   const needs = shelf(page, 'Needs you');
   assert.equal(await needs.locator('.count').innerText(), '1');
   assert.equal(await needs.locator('.need').count(), 1);
@@ -224,8 +224,8 @@ test('the working mark is still; the light theme keeps every status readable', a
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await boot();
   await page.evaluate(mount);
-  await shelf(page, 'Running').locator('.tstat.working i').first().waitFor();
-  assert.equal(await page.locator('.tstat.working i').first().evaluate(e => getComputedStyle(e).animationName), 'none');
+  await shelf(page, 'Running').locator('.tstat.working').first().waitFor();
+  assert.equal(await page.locator('.tri-row.mood-working .tri-dot').first().evaluate(e => getComputedStyle(e).animationName), 'none');
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await page.waitForTimeout(500);
   for (const kind of ['working', 'unread']) {

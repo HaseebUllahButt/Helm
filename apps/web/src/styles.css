@@ -176,7 +176,9 @@
   --pill-fg:   #0a0a0a;
   --toast-bg:  var(--raised);
   --shadow:    0 1px 0 rgb(255 255 255 / 4%) inset, 0 18px 48px -18px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 25%);
-  --need-bg:   color-mix(in srgb, var(--amber) 7%, var(--raised));
+  /* "Needs you" is white, not yellow (owner, 2026-10-28). Yellow stays
+     for warnings: offline, limits, risky modes. */
+  --need: var(--text); --need-text: var(--text); --on-need: var(--bg);
   --link:      #b7a9ff;
   --diff-add:  var(--emerald);
   --diff-del:  var(--red);
@@ -282,7 +284,7 @@ code, pre, kbd { font-family: var(--mono); }
     position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%;
     border: 2px solid var(--sidebar); background: var(--sky);
   }
-  .rail-chat.rail-need .rail-dot { background: var(--amber); }
+  .rail-chat.rail-need .rail-dot { background: var(--need); }
   @media (prefers-reduced-motion: reduce) { .rail-chat.rail-working .rail-dot { animation: none; } }
   .main { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; }
 }
@@ -468,8 +470,8 @@ code, pre, kbd { font-family: var(--mono); }
 .section .spacer { flex: 1; }
 .section .quiet { text-transform: none; letter-spacing: 0; }
 .section .linkish { text-transform: none; letter-spacing: 0; }
-.section.attention { color: var(--amber-text); }
-.section.attention::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex: none; }
+.section.attention { color: var(--need-text); }
+.section.attention::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--need); flex: none; }
 
 .rows { display: flex; flex-direction: column; gap: 0; }
 
@@ -633,11 +635,11 @@ code, pre, kbd { font-family: var(--mono); }
    colour. */
 .mdot.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--dot-off); }
 .sdot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin: 0 3px; display: inline-block; }
-.sdot.blocked { background: var(--amber); }
+.sdot.blocked { background: var(--need); }
 .badge {
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: var(--t-micro); font-weight: 650; background: var(--amber); color: var(--on-amber);
+  font-size: var(--t-micro); font-weight: 650; background: var(--need); color: var(--on-need);
 }
 
 /* Status chips: a still dot plus a word. */
@@ -646,7 +648,7 @@ code, pre, kbd { font-family: var(--mono); }
   font-size: var(--t-micro); font-weight: 550; letter-spacing: 0.01em; color: var(--mutedfg);
 }
 .chip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.chip.blocked { color: var(--amber-text); }
+.chip.blocked { color: var(--need-text); }
 .chip.working { color: var(--sky); }
 .chip.dot-only { padding: 6px; }
 .chip.dot-only i { width: 8px; height: 8px; }
@@ -1646,7 +1648,7 @@ pre.snippet {
   text-transform: none; letter-spacing: 0; color: var(--mutedfg); font-weight: 400; font-size: var(--t-micro);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
-.section.fold.attention { color: var(--amber-text); }
+.section.fold.attention { color: var(--need-text); }
 
 .fold-toggle {
   display: flex; align-items: center; gap: 8px;
@@ -1774,63 +1776,94 @@ li.marked .usage-share-track { margin-left: 32px; }
    than the screen; the list scrolls, the sheet does not grow. */
 .sheetlist { max-height: 55dvh; overflow-y: auto; margin-bottom: 12px; }
 
-/* "Another thread is waiting on you": a banner from the top on a phone,
-   like the system's own; a card in the top-right corner on a wide screen,
-   where the top centre is the conversation's header. */
-.toast {
-  position: fixed; left: 8px; right: 8px; top: calc(env(safe-area-inset-top) + 8px);
-  z-index: 55; display: flex; align-items: flex-start; overflow: hidden;
-  border-radius: 16px; text-align: left;
-  background: color-mix(in srgb, var(--toast-bg) 92%, transparent);
-  -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4);
-  border: 1px solid var(--line-2);
-  box-shadow: var(--shadow);
-  animation: toast-in 0.32s var(--ease);
+/* Every chat that waits on you, in one black box at the top centre: a pill
+   when closed, the request itself when open. Black in both themes, like a
+   phone's camera island; it is the one place that never changes colour. */
+.island {
+  position: fixed; z-index: 56; top: calc(env(safe-area-inset-top) + 7px); left: 50%;
+  width: min(300px, calc(100vw - 120px)); transform: translateX(-50%);
+  background: #000; color: #ededed; border: 1px solid rgb(255 255 255 / 11%); border-radius: 22px;
+  box-shadow: 0 1px 0 rgb(255 255 255 / 6%) inset, 0 24px 60px -16px rgb(0 0 0 / 85%), 0 2px 8px rgb(0 0 0 / 30%);
+  overflow: hidden; cursor: pointer; text-align: left; outline: none;
+  transition: width .45s cubic-bezier(.3, 1.3, .45, 1), border-radius .45s var(--ease);
+  animation: island-in .45s cubic-bezier(.3, 1.3, .45, 1);
+  --mutedfg: #9e9e9e; --text: #ededed; --text-dim: #c0c0c0;
 }
-/* On a wide screen it sits under the chat's top bar, so the bar's own
-   buttons stay in reach. */
-@media (min-width: 600px) {
-  .toast { left: auto; right: 16px; top: 60px; width: 400px; }
+@keyframes island-in { from { opacity: 0; transform: translateX(-50%) translateY(-10px) scale(.92); } }
+/* On a wide screen it sits over the middle of the chat, not of the window. */
+@media (min-width: 900px) {
+  .island { left: calc(var(--sidebar-w) + (100vw - var(--sidebar-w)) / 2); width: 300px; }
+  .sidebar.collapsed ~ .island { left: calc(52px + (100vw - 52px) / 2); }
+  .island.open { width: 480px; }
 }
-@keyframes toast-in { from { opacity: 0; transform: translateY(-12px) scale(0.98); } }
-.toast { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 12px 12px 14px; }
-.toast::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--amber); }
-.toast-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.toast .toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.toast-chat { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text); font-size: var(--t-body); font-weight: 600; line-height: 1.3; }
-.toast-where { font-size: var(--t-micro); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.toast-kind { display: flex; align-items: center; gap: 7px; margin: 0; font-size: var(--t-meta); font-weight: 600; color: var(--amber-text); }
-.toast-kind i { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex: none; }
-.toast-ask {
-  margin: 0; padding: 8px 10px; border-radius: 10px; background: var(--hover); color: var(--text);
-  font-size: var(--t-body); line-height: 1.4; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+.island.open { width: calc(100vw - 16px); max-width: 480px; border-radius: 20px; cursor: default; }
+.island.flash { width: auto; min-width: 180px; cursor: default; }
+.island-shade { position: fixed; inset: 0; z-index: 55; background: rgb(0 0 0 / 45%); animation: island-shade .3s var(--ease); }
+@keyframes island-shade { from { opacity: 0; } }
+.island-pill { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 7px 0 7px; min-width: 0; }
+.island-logo {
+  position: relative; flex: none; width: 26px; height: 26px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center; background: rgb(255 255 255 / 8%);
 }
-.toast-ask.mono { font: 500 12.5px/1.5 var(--mono); background: var(--code-bg); }
-.toast-ask.whole { display: block; overflow: visible; }
-.toast-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.toast-actions button {
-  display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; margin: 0;
-  border-radius: 9px; border: 1px solid var(--line-2); background: var(--raised); color: var(--text);
-  font-size: var(--t-meta); font-weight: 600;
+.island-logo .mark { width: 16px; height: 16px; background: none; }
+.island-logo .mark svg { width: 13px; height: 13px; }
+/* "Waiting" without a colour: a ring that breathes out from the agent. */
+.island-logo::after {
+  content: ''; position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid rgb(255 255 255 / 55%);
+  animation: island-ring 2.4s ease-in-out 3 forwards;
 }
-.toast-actions button:hover { background: var(--hover); }
-.toast-actions .toast-allow { background: var(--text); color: var(--bg); border-color: transparent; }
-.toast-actions .toast-allow:hover { background: color-mix(in srgb, var(--text) 85%, var(--bg)); }
-.toast-queue { margin-left: auto; font-size: var(--t-micro); color: var(--mutedfg); }
-.toast .error { margin: 0; font-size: var(--t-meta); }
-.toast-dismiss {
-  flex: none; width: 32px; height: 32px; margin: -4px -4px 0 0; padding: 0; border: 0; border-radius: 9px;
-  display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--mutedfg);
+@keyframes island-ring { 0%, 100% { opacity: .9; transform: scale(1); } 50% { opacity: 0; transform: scale(1.25); } }
+.island-title { flex: 1; min-width: 0; font-size: var(--t-meta); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.island-more {
+  flex: none; min-width: 22px; height: 20px; padding: 0 6px; border-radius: 10px; margin-right: 3px;
+  display: inline-flex; align-items: center; justify-content: center; background: #ededed; color: #000; font-size: var(--t-micro); font-weight: 650;
 }
-.toast-dismiss:hover { color: var(--text); background: var(--hover); }
-/* How long it has left, as a hairline along the bottom. */
-.toast-timer {
-  position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; transform-origin: left;
-  background: color-mix(in srgb, var(--amber) 55%, transparent);
-  animation: toast-timer linear forwards;
+.island-nav { display: flex; align-items: center; gap: 2px; flex: none; font-size: var(--t-micro); color: var(--mutedfg); font-variant-numeric: tabular-nums; }
+.island-nav button, .island-x {
+  width: 28px; height: 28px; border-radius: 50%; color: var(--mutedfg);
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
 }
-@keyframes toast-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.island-nav button:hover, .island-x:hover { background: rgb(255 255 255 / 9%); color: #fff; }
+.island-body { padding: 0 14px 12px; animation: island-swap .32s var(--ease); }
+@keyframes island-swap { from { opacity: 0; transform: translateY(5px); } }
+.island-where { margin: -3px 0 10px 29px; font-size: var(--t-micro); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.island-q { margin: 0 0 10px; font-size: var(--t-read); line-height: 1.45; color: #ededed; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--sans); }
+.island-cmd {
+  margin: 0; max-height: 30dvh; overflow: auto; padding: 9px 11px; border-radius: 10px;
+  background: #0d0d0d; border: 1px solid rgb(255 255 255 / 6%); color: #ededed;
+  font: 500 12.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.island-plan { max-height: 34dvh; overflow: auto; padding: 4px 12px; border-radius: 10px; background: #0d0d0d; border: 1px solid rgb(255 255 255 / 6%); font-size: var(--t-meta); color: var(--text-dim); }
+.island-opts { display: flex; flex-direction: column; gap: 4px; }
+.island-opt {
+  display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 11px; border-radius: 10px; text-align: left;
+  background: #0d0d0d; border: 1px solid rgb(255 255 255 / 6%); color: #ededed; font-size: var(--t-body);
+  transition: background .15s, border-color .15s;
+}
+.island-opt:hover:not(:disabled) { background: #161616; border-color: rgb(255 255 255 / 14%); }
+.island-n { flex: none; width: 10px; font: 12px var(--mono); color: var(--mutedfg); }
+.island-ot { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.island-ot small { font-size: var(--t-micro); color: var(--mutedfg); }
+.island kbd { flex: none; font: 11px var(--mono); color: var(--mutedfg); border: 1px solid rgb(255 255 255 / 12%); border-radius: 5px; padding: 1px 5px; }
+/* Key hints only where there is a keyboard. */
+@media (pointer: coarse), (max-width: 599px) { .island kbd { display: none; } }
+.island-acts { display: flex; align-items: center; gap: 4px; margin-top: 12px; flex-wrap: wrap; }
+.island-acts button {
+  height: 32px; padding: 0 10px; border-radius: 9px; display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--t-meta); font-weight: 500; color: var(--text-dim); background: transparent; white-space: nowrap;
+}
+.island-acts button:hover:not(:disabled) { background: rgb(255 255 255 / 8%); color: #fff; }
+.island-acts .island-yes { background: #ededed; color: #000; }
+.island-acts .island-yes:hover:not(:disabled) { background: #fff; color: #000; }
+.island-acts .island-yes kbd { color: rgb(0 0 0 / 55%); border-color: rgb(0 0 0 / 15%); }
+.island-acts .grow { flex: 1; }
+.island .error { margin: 8px 0 0; font-size: var(--t-meta); }
+.island-flash { display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 16px 0 11px; font-size: var(--t-meta); white-space: nowrap; }
+.island-tick { width: 20px; height: 20px; border-radius: 50%; background: #ededed; color: #000; display: inline-flex; align-items: center; justify-content: center; }
+@media (prefers-reduced-motion: reduce) {
+  .island, .island-body, .island-shade { animation: none; transition: none; }
+  .island-logo::after { animation: none; }
+}
 
 /* Pull-to-refresh: a spacer that grows under the finger, then the release
    hint once it is far enough to count. */
@@ -1860,7 +1893,7 @@ button.linkish:disabled { color: var(--icon); }
 .rows.stale .row .mark, .rows.stale .row .glyph { opacity: 0.55; }
 
 /* "waiting 12m" on a permission sheet, and the queued tag on a bubble. */
-.tag.waiting { background: color-mix(in srgb, var(--amber) 14%, transparent); color: var(--amber-text); }
+.tag.waiting { background: var(--accent); color: var(--need-text); }
 .turn.user.queued .bubble { opacity: 0.72; }
 .bubble-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: var(--t-micro); color: var(--mutedfg); }
 
@@ -1901,8 +1934,7 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
   .fold-toggle { min-height: 36px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .toast, .terminal-copied, .selection-copied, .undo, .changes, .lightbox { animation: none; }
-  .toast-timer { display: none; }
+  .terminal-copied, .selection-copied, .undo, .changes, .lightbox { animation: none; }
 }
 
 /* ------------------------------------------------------------ list tails */
@@ -1925,48 +1957,47 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .linkish.addproject { margin-top: 10px; }
 .linkish.more:hover, .linkish.addproject:hover { color: var(--text); }
 
-/* Attention stays readable as a compact thread row. Amber identifies the
-   waiting state; actions keep the same quiet treatment as other threads. */
-.need {
-  display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left;
-  margin: 4px 0 10px; padding: 11px 12px 5px; border-radius: 10px; position: relative; overflow: hidden;
-  background: var(--card);
-  border: 1px solid var(--line);
-  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+/* A chat that waits on you: a plain sidebar row. A white dot that breathes
+   says "waiting" without a colour; the second line says what it wants. */
+.need { position: relative; display: flex; flex-direction: column; width: 100%; text-align: left; border-radius: 8px; }
+.need-row { display: flex; align-items: stretch; min-width: 0; }
+.need-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 9px; border-radius: 8px; text-align: left; color: inherit; }
+.need-main:hover, .need.active .need-main { background: var(--select); }
+.need-t { display: flex; align-items: center; gap: 9px; min-width: 0; }
+/* It breathes three times, then stays still: endless motion redraws the
+   window for as long as anything waits. */
+.need-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--hi); animation: need-breathe 2.4s ease-in-out 3; }
+@keyframes need-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hi) 45%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--hi) 0%, transparent); }
 }
-.need:hover { border-color: var(--line-2); }
-.need-recovery .need-k { color: var(--mutedfg); }
-.need-recovery .need-k i { background: var(--mutedfg); box-shadow: none; }
-.need-k {
-  display: flex; align-items: center; gap: 8px; color: var(--amber-text);
-  font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase;
-}
-.need-k i { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 4px color-mix(in srgb, var(--amber) 16%, transparent); }
+.need-recovery .need-dot { background: var(--mutedfg); animation: none; }
+.need-title { flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.35; }
 .need-n {
-  margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
   display: inline-flex; align-items: center; justify-content: center;
-  background: var(--amber); color: var(--on-amber); font-size: var(--t-micro); letter-spacing: 0;
+  background: var(--pill-bg); color: var(--pill-fg); font-size: var(--t-micro); font-weight: 600;
 }
-.need-t { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.need-t .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.need-title {
-  font-size: var(--t-body); font-weight: 600; letter-spacing: -0.012em; color: var(--text);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.need-k { display: flex; align-items: center; gap: 6px; min-width: 0; margin-left: 16px; font-size: var(--t-micro); color: var(--text-dim); }
+.need-k .mark { flex: none; width: 16px; height: 16px; border-radius: 5px; background: none; }
+.need-k .mark svg { width: 12px; height: 12px; }
+/* What it wants comes first; a long machine name gives way. */
+.need-what { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.need-m { flex: 0 4 auto; min-width: 24px; margin-left: auto; padding-left: 6px; color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The ⋯ holds no column of its own: it shows over the row's right end. */
+.need-more {
+  position: absolute; right: 5px; top: 6px; width: 26px; height: 24px; border-radius: 7px; color: var(--mutedfg);
+  display: inline-flex; align-items: center; justify-content: center; opacity: 0; background: var(--sidebar);
 }
-.need-m { font-size: var(--t-meta); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* What it asked, in its own words, so the card can be judged without opening it. */
-.need-q {
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere;
-  margin: 2px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--accent);
-  font-size: var(--t-meta); line-height: 1.45; color: var(--text-80);
-}
-.need-q.mono { font: 12.5px/1.5 var(--mono); }
-.need-go {
-  display: flex; align-items: center; justify-content: flex-start; gap: 7px;
-  min-height: 28px; padding: 0 1px; max-width: calc(100% - 70px);
-  color: var(--text-dim); font-size: var(--t-meta); font-weight: 500;
-}
-.need-go svg { display: block; }
+.need:hover .need-more, .need-more[aria-expanded="true"], .need-more:focus-visible { opacity: 1; }
+.need-more:hover { background: var(--hover); color: var(--text); }
+@media (pointer: coarse) { .need-more { opacity: .6; } .need-t { padding-right: 26px; } }
+.need-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 10px 8px 26px; }
+.need-foot-k { font-size: var(--t-micro); color: var(--mutedfg); margin-right: 2px; }
+.need-foot button { height: 28px; padding: 0 10px; border-radius: 8px; font-size: var(--t-meta); background: var(--accent); color: var(--text); }
+.need-foot button:hover:not(:disabled) { background: var(--hover); }
+.need-foot .need-dismiss { color: var(--text-dim); }
+@media (prefers-reduced-motion: reduce) { .need-dot { animation: none; } }
 
 /* A run of finished tool calls, folded into what it did. */
 .actgroup.steps > summary .alabel { color: var(--mutedfg); }
@@ -2033,11 +2064,10 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 
 /* A tap should answer back. Hover does not exist on a phone, so without this
    a row acknowledges nothing until the next screen has already loaded. */
-.row:active:not(:disabled), .need:active, .action:active:not(:disabled),
+.row:active:not(:disabled), .need-main:active, .action:active:not(:disabled),
 .chip-pick:active, .iconbtn:active:not(:disabled) {
   background: var(--hover); transition-duration: 0s;
 }
-.need:active { background: var(--hover); }
 
 /* A new screen arrives rather than snapping in. Opacity only: nothing moves,
    so nothing can land in the wrong place under a thumb. */
@@ -2121,7 +2151,6 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
   --pill-fg:   #ffffff;
   --toast-bg:  #ffffff;
   --shadow:    0 18px 48px -20px rgb(26 29 36 / 30%), 0 2px 8px rgb(26 29 36 / 8%);
-  --need-bg:   color-mix(in srgb, var(--amber) 9%, #ffffff);
   --link:      #2a55c4;
   --diff-add-fg: #166534;
   --diff-del-fg: #991b1b;
@@ -2176,8 +2205,6 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 :root[data-theme="light"] .slab { box-shadow: 0 1px 2px rgb(26 29 36 / 6%), 0 12px 28px -20px rgb(26 29 36 / 20%); }
 :root[data-theme="light"] .slab::after { box-shadow: none; }
 :root[data-theme="light"] .segmented button.on { box-shadow: 0 1px 2px rgb(26 29 36 / 12%), inset 0 0 0 1px var(--line-2); }
-:root[data-theme="light"] .need { box-shadow: 0 1px 2px rgb(26 29 36 / 6%); }
-:root[data-theme="light"] .need-title { color: var(--text); }
 :root[data-theme="light"] .switch.on i { background: #fff; }
 :root[data-theme="light"] .diff .add { background: color-mix(in srgb, var(--diff-add) 12%, transparent); }
 :root[data-theme="light"] .diff .del { background: color-mix(in srgb, var(--diff-del) 11%, transparent); }
@@ -2306,8 +2333,8 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .git-agent-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--mutedfg); }
 .git-agent.s-working .git-agent-state { color: var(--sky); }
 .git-agent.s-working .git-agent-state i { background: var(--sky); }
-.git-agent.s-blocked .git-agent-state { color: var(--amber-text); }
-.git-agent.s-blocked .git-agent-state i { background: var(--amber); }
+.git-agent.s-blocked .git-agent-state { color: var(--need-text); }
+.git-agent.s-blocked .git-agent-state i { background: var(--need); }
 .git-shared { display: flex; align-items: center; gap: 6px; padding: 2px 8px 4px; color: var(--amber-text); font-size: var(--t-micro); }
 .git-shared svg { flex: none; }
 
@@ -2348,7 +2375,7 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .git-mini { position: relative; display: inline-flex; }
 .git-mini .mark { width: 18px; height: 18px; border-radius: 5px; }
 .git-mini i { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--mutedfg); border: 2px solid var(--card); }
-.git-mini.s-working i { background: var(--sky); } .git-mini.s-blocked i { background: var(--amber); }
+.git-mini.s-working i { background: var(--sky); } .git-mini.s-blocked i { background: var(--need); }
 .git-more { font-size: var(--t-micro); color: var(--mutedfg); }
 
 /* A commit, opened. */
@@ -2586,25 +2613,6 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .modesheet-label { padding: 8px 12px 2px; font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--mutedfg); }
 
 
-/* A card that is a container: the main tap area, and a quiet row under it. */
-.need-main { display: flex; flex-direction: column; gap: 8px; width: 100%; text-align: left; color: inherit; }
-.need-foot { display: flex; justify-content: flex-end; align-self: flex-end; min-height: 28px; margin-top: -34px; position: relative; }
-.need-foot.has-dismiss { align-self: stretch; margin-top: 4px; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.need-dismiss { color: var(--text-dim); }
-.need-foot.is-choosing { align-self: stretch; margin-top: 4px; }
-.need-snooze { font-size: var(--t-meta); color: var(--mutedfg); padding: 3px 4px; min-height: 28px; border-radius: 6px; }
-.need-snooze:hover { background: var(--hover); color: var(--text); }
-.snooze-opts { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center; }
-.snooze-opts button {
-  height: 32px; padding: 0 12px; border-radius: 16px; font-size: var(--t-meta);
-  background: var(--accent); color: var(--text);
-}
-.snooze-opts button:hover:not(:disabled) { background: var(--hover); }
-.snooze-opts button:disabled { opacity: 0.4; }
-.snooze-custom { display: inline-flex; gap: 6px; align-items: center; }
-.snooze-custom input { width: auto; padding: 4px 8px; font-size: var(--t-meta); border-radius: 15px; height: 30px; }
-.snooze-opts .snooze-x { margin-left: auto; width: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
-
 .bubble-meta .branch { font-size: var(--t-micro); color: var(--mutedfg); padding: 0 6px 0 0; border-radius: 6px; display: inline-flex; align-items: center; gap: 4px; }
 .bubble-meta .branch:hover { color: var(--text); }
 
@@ -2717,7 +2725,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-status[aria-expanded="true"]:not(:hover) { background: none; }
 .delegation-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .delegation-status.state-working, .delegation-status.state-starting { color: var(--sky); }
-.delegation-status.state-blocked { color: var(--amber-text); }
+.delegation-status.state-blocked { color: var(--need-text); }
 .delegation-status.state-error { color: var(--red); }
 .delegation-status.state-done i { background: var(--ok); box-shadow: var(--ok-glow); }
 .delegation-detail { display: grid; gap: 12px; margin: 0 12px; padding: 12px 0 14px; border-top: 1px solid var(--edge); font-size: var(--t-body); }
@@ -2834,7 +2842,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .team-summary summary { position: sticky; top: 0; z-index: 1; background: var(--card); padding: 12px 14px; cursor: pointer; font-size: var(--t-meta); }
 .team-summary summary strong { margin-right: 12px; }
 .team-summary summary span { color: var(--text-dim); }
-.team-summary.needs-attention { border-color: var(--amber-text); }
+.team-summary.needs-attention { border-color: color-mix(in srgb, var(--need) 35%, transparent); }
 .team-summary ul { list-style: none; padding: 0 10px 10px; margin: 0; }
 .team-summary li { border-top: 1px solid var(--line); }
 .team-task { display: flex; align-items: center; gap: 10px; text-align: left; width: 100%; background: transparent; border: none; padding: 12px 4px; }
@@ -2842,15 +2850,16 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .team-task b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
 .team-task small { display: block; color: var(--text-dim); margin-top: 3px; }
 .team-state { flex: none; font-size: var(--t-micro); color: var(--text-dim); }
-.team-state.state-blocked, .team-state.state-error { color: var(--amber-text); }
+.team-state.state-blocked { color: var(--need-text); }
+.team-state.state-error { color: var(--amber-text); }
 .team-result { margin: 0 8px 10px 30px; color: var(--text-dim); font-size: var(--t-meta); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 .team-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
 .team-actions button { min-height: 36px; font-size: var(--t-meta); padding: 6px 10px; }
 .child-requests { display: grid; gap: 4px; max-height: 24vh; overflow-y: auto; }
-.child-requests button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 9px 12px; color: var(--amber-text); }
+.child-requests button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 9px 12px; color: var(--need-text); }
 .child-requests button span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .child-requests small { display: block; color: var(--text-dim); font-size: var(--t-meta); }
-.subagent-request { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 5px 8px; color: var(--amber-text); font-size: var(--t-meta); }
+.subagent-request { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 5px 8px; color: var(--need-text); font-size: var(--t-meta); }
 .subagent-request.subagent-open { color: var(--text-dim); }
 .subagent-request.subagent-open:hover { color: var(--text); }
 .thread-details-launch { position: relative; }
@@ -2913,8 +2922,9 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   margin: 0 6px 8px; padding: 12px 12px 12px 14px; border-radius: 16px;
   background: var(--raised); border: 1px solid var(--line-2); box-shadow: var(--shadow);
   display: flex; flex-direction: column; gap: 10px; font-size: var(--t-meta);
-  animation: toast-in 0.24s var(--ease);
+  animation: recovery-in 0.24s var(--ease);
 }
+@keyframes recovery-in { from { opacity: 0; transform: translateY(-12px) scale(0.98); } }
 .recovery-top { display: flex; align-items: flex-start; gap: 11px; }
 .recovery-icon {
   flex: none; width: 30px; height: 30px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
@@ -3018,7 +3028,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 @media (hover: hover) and (pointer: fine) {
   .row.rowx.tri-row .rowend { position: absolute; right: 6px; bottom: 6px; height: 24px; min-width: 24px; padding: 0 3px; }
   .row.rowx.tri-row.slim .rowend { bottom: auto; top: 50%; transform: translateY(-50%); }
-  .row.rowx.tri-row:is(:hover, :has(.rowend[aria-expanded="true"]), :has(.rowend:focus-visible)) .tri-mark { visibility: hidden; }
+  .row.rowx.tri-row:is(:hover, :has(.rowend[aria-expanded="true"]), :has(.rowend:focus-visible)) :is(.tri-end, .rowmain > .tstat, .rowmain > .chip) { visibility: hidden; }
 }
 .tri-title { flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 450; color: var(--text-dim); overflow: hidden; text-overflow: clip; white-space: nowrap; line-height: 1.35; }
 /* A long name fades out at the edge, like the chat bar's, instead of ending in "…". */
@@ -3026,7 +3036,16 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .row.thread-row.tri:hover .tri-title, .row.thread-row.tri.active .tri-title, .tri-row:hover .tri-title, .thread-row.tri.active .tri-title { color: var(--text); }
 .tri-row .chip { flex: none; font-size: 10.5px; padding: 0 6px; min-height: 18px; }
 .tri-top, .tri-bot { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: var(--t-micro); color: var(--mutedfg); }
-.tri-top { gap: 10px; }
+.tri-top { gap: 9px; }
+/* A running chat's status, before its title: the clock on the line below says the rest. */
+.tri-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dot-off); }
+.tri-row.mood-working .tri-dot { background: var(--sky); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sky) 16%, transparent); }
+.tri-row.mood-needs .tri-dot { background: var(--need); }
+.tri-row.mood-failed .tri-dot { background: var(--red); }
+.tri-row.mood-unread .tri-dot { background: var(--ok); }
+.tri-bot .tstat i { display: none; }
+.tri-bot .tri-mark.mark { width: 16px; height: 16px; margin-left: -4px; background: none; }
+.tri-bot .tri-mark.mark svg { width: 12px; height: 12px; }
 .tri-bot svg { flex: none; opacity: .8; }
 .tri-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tri-note { flex: none; color: var(--text-dim); white-space: nowrap; }
@@ -3048,7 +3067,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tstat.working i { width: 6px; height: 6px; border-radius: 50%; background: var(--sky); }
 /* The chat screen's ".working" line must not size the row's clock. */
 .tri-row .tstat.working { min-height: 0; padding: 0; gap: 5px; font-size: var(--t-micro); }
-.tstat.needs { color: var(--amber-text); font-weight: 650; }
+.tstat.needs { color: var(--need-text); font-weight: 650; }
 .tstat.failed { color: var(--red); }
 .tstat.unread { color: var(--ok); }
 .tstat.unread i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: var(--ok-glow); }
@@ -3075,11 +3094,11 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .section.shelf .count { font-size: var(--t-micro); color: var(--mutedfg); font-weight: 450; }
 .section.shelf .note-inline { font-size: var(--t-micro); }
 .section.shelf .note-inline.fresh { color: var(--ok); font-weight: 550; }
-.section.fold.shelf.attention { color: var(--amber-text); }
+.section.fold.shelf.attention { color: var(--need-text); }
 .section.shelf.attention::before { display: none; }
 .section.shelf.attention .count {
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
-  background: var(--amber); color: var(--on-amber); font-weight: 650;
+  background: var(--need); color: var(--on-need); font-weight: 650;
 }
 .shelf-more {
   display: block; width: 100%; margin-top: 0; padding: 5px 10px; text-align: left;
@@ -3614,7 +3633,7 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 /* ------------------------------------------------------------- Home (wide) */
 
 .pad.column.home { padding-top: 10vh; }
-.home .home-state .attention { color: var(--amber-text); }
+.home .home-state .attention { color: var(--need-text); }
 /* The start box: the message box's plate and chips, with its sheets docked
    above it the same way. */
 .home-ask {

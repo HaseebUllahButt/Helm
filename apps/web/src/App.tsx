@@ -17,7 +17,7 @@ import { beginChat, forgetChat, onStartingChat, sendWhenReady, startAgain, type 
 import { loadDraft } from './draftStore';
 import { EngineMark } from './EngineMark';
 import { SidebarSunset } from './SidebarSunset';
-import { NotificationToast } from './NotificationToast';
+import { WaitingIsland, type IslandCall } from './WaitingIsland';
 import { MachineUpdateNotice } from './MachineUpdateNotice';
 import { sending, useSends } from './send/store';
 import { SendActivity, SendNotice } from './send/SendActivity';
@@ -183,9 +183,6 @@ function supportedViews(views: MainView[]): MainView[] {
   return supported.length ? supported : [{ kind: 'env' }];
 }
 
-/** A request answered elsewhere, or a session that just started waiting -
-    the toast the sidebar cannot show while it is hidden behind a session. */
-interface Toast { envId: string; session: Session; at: number }
 
 function Shell({ client, conn, onSignOut }: {
   client: Client; conn: { online: boolean; reachable: boolean; error?: string }; onSignOut: () => void;
@@ -211,8 +208,10 @@ function Shell({ client, conn, onSignOut }: {
     }
   }, [restoredView]);
   const [downSince, setDownSince] = useState<number | null>(null);
-  /** "thread X needs you" while a different session is on screen. */
-  const [toast, setToast] = useState<Toast | null>(null);
+  /** A chat that just started waiting, and one the owner picked to answer:
+      each opens the waiting box at the top on that chat. */
+  const [islandPing, setIslandPing] = useState<IslandCall | null>(null);
+  const [islandPick, setIslandPick] = useState<IslandCall | null>(null);
   const [palette, setPalette] = useState(false);
   /** The keyboard new-chat box; a folder skips straight to the agent picker. */
   const [newChat, setNewChat] = useState<{ envId?: string; folder?: string; quick?: boolean; draft?: string } | null>(null);
@@ -472,10 +471,11 @@ function Shell({ client, conn, onSignOut }: {
           const looking = top?.kind === 'session' && top.session.id === s.id;
           const asleep = (snoozedRef.current[`${e}:${s.id}`] ?? 0) > Date.now();
           if (!looking && !asleep) {
-            setToast((cur) => {
-              const same = cur?.envId === e && cur.session.id === s.id && Date.now() - cur.at < 3000;
-              if (!same) { try { navigator.vibrate?.(60); } catch { /* no haptics here */ } }
-              return { envId: e, session: same ? { ...cur.session, ...s } : s, at: same ? cur.at : Date.now() };
+            setIslandPing((cur) => {
+              const same = cur?.envId === e && cur.id === s.id && Date.now() - cur.at < 3000;
+              if (same) return cur;
+              try { navigator.vibrate?.(60); } catch { /* no haptics here */ }
+              return { envId: e, id: s.id, at: Date.now() };
             });
           }
         }
@@ -1287,7 +1287,9 @@ function Shell({ client, conn, onSignOut }: {
               <Fold shelf attention defaultOpen title="Needs you" count={blocked.length} remember="sidebar:needs">
                 {blocked.map(({ env: e, s }) => (
                   <NeedCard
-                    key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
+                    key={s.id} s={s} machine={e.name} selected={isOpen({ env: e, s })}
+                    onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
+                    onPick={isOpen({ env: e, s }) ? undefined : () => setIslandPick({ envId: e.id, id: s.id, at: Date.now() })}
                     onSnooze={(until) => snoozeThread(e.id, s, until)}
                     onDismiss={async () => { await client.rpc(e.id, 'session.dismiss-child-failures', { id: s.id }); }}
                   />
@@ -1592,13 +1594,14 @@ function Shell({ client, conn, onSignOut }: {
         )}
       </section>
 
-      {/* Another thread started waiting while this one was open. A tap on
-          the toast is the whole journey to answering it. */}
-      {toast && (
-        <NotificationToast client={client} envId={toast.envId} session={toast.session} machine={envs.find((m) => m.id === toast.envId)?.name}
-          waiting={blocked.filter(({ env: e, s }) => !(e.id === toast.envId && s.id === toast.session.id)).length} onDismiss={() => setToast(null)}
-          onOpen={() => { const t = toast; setToast(null); openSession(t.envId, t.session); }} />
-      )}
+      {/* Every chat that waits on you, except the one on screen: its own
+          card in the chat is the notice for that one. */}
+      <WaitingIsland
+        client={client} ping={islandPing} pick={islandPick}
+        items={blocked.filter(({ env: e, s }) => !(view.kind === 'session' && selected === e.id && view.session.id === s.id))
+          .map(({ env: e, s }) => ({ envId: e.id, machine: e.name, s }))}
+        onOpen={(envId, s) => openSession(envId, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
+      />
 
       {snoozeUndo && (
         <div className="undo" role="status">

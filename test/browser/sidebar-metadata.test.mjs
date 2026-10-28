@@ -30,21 +30,22 @@ before(async () => {
   browser=await chromium.launch({headless:true,...(process.env.HELM_TEST_CHROMIUM?{executablePath:process.env.HELM_TEST_CHROMIUM}:{})});
 });
 after(async()=>browser?.close());
-for(const width of [1280,390])test(`a chat row puts its title and status first, then folder, machine, branch and agent at ${width}px`,async t=>{
+for(const width of [1280,390])test(`a chat row puts its status dot and title first, then agent, folder, machine, branch and clock at ${width}px`,async t=>{
   const page=await browser.newPage({viewport:{width,height:844}});t.after(()=>page.close());
   await page.route('http://helm.test/**',r=>r.fulfill({contentType:'text/html',body:'<div id="root"></div>'}));
   await page.goto('http://helm.test/');await page.addStyleTag({content:css});await page.addScriptTag({content:script});
   const rows=page.locator('.thread-row');await rows.first().waitFor();
   const row=rows.first();
   assert.equal(await row.locator('.tri-top .tri-title').innerText(),'Shared Claude controls');
-  assert.match(await row.locator('.tri-top .tstat.working').innerText(),/^2m 0\ds$/,'a clock since the turn began, on the first line');
+  assert.equal(await row.locator('.tri-top .tri-dot').count(),1,'a status dot before the title');
+  assert.match(await row.locator('.tri-bot .tstat.working').innerText(),/^2m 0\ds$/,'a clock since the turn began, at the end of the second line');
   assert.equal(await row.locator('.tri-bot .tri-where').innerText(),'helm · Laptop');
   assert.equal(await row.locator('.tri-bot .tri-branch').innerText(),'feature/claude-controls-and-long-branch-name');
-  assert.equal(await row.locator('.tri-bot .tri-mark').count(),1,'the agent logo ends the second line');
+  assert.equal(await row.locator('.tri-bot .tri-mark').count(),1,'the agent logo starts the second line');
   assert.equal(await row.locator('.tri-top .tri-where, .tri-top .tri-branch').count(),0);
   assert.equal(await row.getAttribute('title'),'Shared Claude controls\nhelm · Laptop · feature/claude-controls-and-long-branch-name · Claude Code');
   const title=await row.locator('.tri-title').boundingBox(),status=await row.locator('.tstat').boundingBox(),folder=await row.locator('.tri-where').boundingBox(),branch=await row.locator('.tri-branch').boundingBox();
-  assert.ok(title.y<folder.y && Math.abs(title.y-status.y)<8 && Math.abs(folder.y-branch.y)<8 && status.x>title.x);
+  assert.ok(title.y<folder.y && Math.abs(folder.y-status.y)<8 && Math.abs(folder.y-branch.y)<8 && status.x>branch.x);
   assert.equal(await rows.nth(1).locator('.tri-branch').count(),0);
   // One slot, five answers.
   assert.equal(await rows.nth(1).locator('.tstat.quiet').innerText(),'3h','quiet rows show a compact age');
@@ -54,7 +55,7 @@ for(const width of [1280,390])test(`a chat row puts its title and status first, 
   assert.equal(await rows.nth(4).locator('.tstat.unread').innerText(),'2m','a new chat shows a green dot before its age');
   const colours=await page.evaluate(()=>Object.fromEntries([...document.querySelectorAll('.tstat')].map(e=>[e.dataset.mood,getComputedStyle(e).color])));
   assert.equal(new Set(Object.values(colours)).size,5,'each state has its own colour: '+JSON.stringify(colours));
-  // Slim: one line - the title, its age and the agent.
+  // Slim: one line - the agent, the title and its age.
   const slim=rows.nth(5);
   assert.equal(await slim.locator('.tri-bot').count(),0);
   assert.match(await slim.locator('.tstat.quiet').innerText(),/^2h$/);
