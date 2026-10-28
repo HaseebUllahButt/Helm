@@ -4,7 +4,6 @@ import { useNow } from '../useNow';
 import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
 import { useDictation, type Transcribe } from './voice';
 import type { Turn } from './types';
-import { isBigPaste, stashPaste } from './pasteStore';
 import { renumberImages, splitTags, wholeTagEdit } from './attachTags';
 import { Icon } from '../Icon';
 
@@ -125,6 +124,12 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   /** Pictures shown while they are made smaller and saved. */
   const [incoming, setIncoming] = useState<{ key: number; url: string; name: string }[]>([]);
   const incomingSeq = useRef(0);
+  /**
+   * Pictures that landed while their quick previews are still listed. A
+   * finished picture shows before its paste returns (the save goes on in
+   * the background), so without this both copies showed for a moment.
+   */
+  const landedEarly = useRef({ base: 0, pending: 0 });
   const [pick, setPick] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [allQueued, setAllQueued] = useState(false);
@@ -202,10 +207,14 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
     const list = Array.from(files);
     // The picture shows at once, as it is, while it is made smaller.
     const shown = list.filter(looksLikeImage).map((f) => ({ key: ++incomingSeq.current, url: URL.createObjectURL(f), name: f.name || 'image' }));
+    if (!landedEarly.current.pending) landedEarly.current.base = images;
+    landedEarly.current.pending += shown.length;
     if (shown.length) setIncoming((now) => [...now, ...shown]);
     let added;
     try { added = await onAttach(list); }
     finally {
+      landedEarly.current.pending -= shown.length;
+      landedEarly.current.base += (added || []).filter(isImageAttachment).length;
       if (shown.length) setIncoming((now) => now.filter((item) => !shown.includes(item)));
       // After the swap is drawn, so the box never flashes empty.
       setTimeout(() => shown.forEach((item) => URL.revokeObjectURL(item.url)), 1000);
@@ -537,7 +546,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
                   </span>
                 );
               })}
-              {incoming.map((item) => <span key={`incoming-${item.key}`} className="attach-preview" title={item.name} aria-busy="true"><img src={item.url} alt={item.name} /></span>)}
+              {incoming.slice(Math.max(0, (attachments ?? []).filter(isImageAttachment).length - landedEarly.current.base)).map((item) => <span key={`incoming-${item.key}`} className="attach-preview" title={item.name} aria-busy="true"><img src={item.url} alt={item.name} /></span>)}
             </div>
           )}
           {/* The same text drawn behind the box, see-through except for a
@@ -556,17 +565,8 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
               if (!deleteTags(e.currentTarget, e.target.value)) setDraft(e.target.value);
             }}
             onPaste={(e) => {
-              if (take(clipboardFiles(e.clipboardData))) { e.preventDefault(); return; }
-              // A wall of text goes in as a token, not into the box.
-              const text = e.clipboardData?.getData('text/plain') ?? '';
-              if (text && isBigPaste(text)) {
-                e.preventDefault();
-                const el = e.currentTarget;
-                const from = el.selectionStart, to = el.selectionEnd;
-                const token = stashPaste(text);
-                setDraft(draft.slice(0, from) + token + draft.slice(to));
-                requestAnimationFrame(() => { const at = from + token.length; el.focus(); el.setSelectionRange(at, at); });
-              }
+              // Text, however long, goes in as it is: the owner reads and edits it there.
+              if (take(clipboardFiles(e.clipboardData))) e.preventDefault();
             }}
             onKeyDown={(e) => {
               // Enter confirms an IME composition before it is a prompt.
