@@ -164,6 +164,48 @@ test('real browser keeps pending writes on the old socket during a slow hub upgr
   await page.evaluate(() => window.client.close());
 });
 
+test('a real browser keeps an old hub write when its replacement disconnects', async context => {
+  const local = await hub(context);
+  const remote = await hub(context, 3);
+  const page = await pageFor(context, local);
+  await page.evaluate(url => {
+    window.result = window.client.rpc('vm', 'session.input', { data: 'once' });
+    window.result.then(() => { window.finished = true; }, error => { window.failure = error.message; });
+    window.client.learn([location.origin, url]);
+  }, remote.url);
+  await page.waitForFunction(url => window.client.relay === url, remote.url);
+  remote.sockets[0].terminate();
+  await page.waitForFunction(() => !window.client.connected);
+  assert.equal(await page.evaluate(() => window.failure), undefined);
+  const { socket, frame } = local.calls[0];
+  assert.equal(socket.readyState, 1);
+  socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: 'accepted once' }));
+  assert.equal(await page.evaluate(() => window.result), 'accepted once');
+  assert.equal(local.calls.length + remote.calls.length, 1);
+  await page.evaluate(() => window.client.close());
+});
+
+test('a real browser reports a lost old hub write without cancelling the new hub write', async context => {
+  const local = await hub(context);
+  const remote = await hub(context, 3);
+  const page = await pageFor(context, local);
+  await page.evaluate(url => {
+    window.oldResult = window.client.rpc('vm', 'session.input', { data: 'old' })
+      .catch(error => { window.failure = error.message; });
+    window.client.learn([location.origin, url]);
+  }, remote.url);
+  await page.waitForFunction(url => window.client.relay === url, remote.url);
+  remote.onRpc = ({ socket, frame }) => socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: 'accepted once' }));
+  local.sockets[0].terminate();
+  await page.waitForFunction(() => window.failure);
+  assert.match(await page.evaluate(() => window.failure), /disconnected/);
+  assert.equal(await page.evaluate(() => window.client.rpc('vm', 'session.input', { data: 'new' })), 'accepted once');
+  assert.equal(await page.evaluate(() => window.client.connected), true);
+  assert.equal(local.calls.length, 1);
+  assert.equal(remote.calls.length, 1);
+  await page.evaluate(() => window.client.close());
+});
+
 test('large image writes choose the hub before sending on a direct channel', async context => {
   const home = await hub(context);
   const page = await pageFor(context, home);
