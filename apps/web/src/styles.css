@@ -3879,9 +3879,9 @@ details.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
   .main > .banner button, .main > .send-notice button { app-region: no-drag; -webkit-app-region: no-drag; }
 }
 
-/* The bare Helm window on a Linux desktop (windowClose.ts): Helm's own Close
-   button sits in the top right corner, and the top rows keep clear of it the
-   same way they keep clear of Chromium's buttons above. */
+/* The bare Helm window on a desktop that draws no title bar (windowClose.ts):
+   Helm's own Close button sits in the top right corner, and the top rows keep
+   clear of it the same way they keep clear of Chromium's buttons above. */
 :root.app-window { --overlay-right: 36px; }
 .app-window .bar { padding-right: calc(10px + var(--overlay-right)); }
 .app-window .main > .banner, .app-window .main > .send-notice { padding-right: calc(12px + var(--overlay-right)); }
