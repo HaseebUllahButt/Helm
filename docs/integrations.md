@@ -18,12 +18,12 @@ apply to new agent sessions; running agents are not restarted.
   `$CODEX_HOME/config.toml`. `mcp add` cannot set arbitrary HTTP headers,
   and **the manager never rewrites TOML**, so headers need hand editing.
   Plugins are listed from config without asking marketplaces.
-- **Codex chats Helm starts skip online MCP servers** (a `url` entry): each
-  thread gets `mcp_servers.NAME.enabled=false` (`codexRemoteMcpOff`), so the
-  owner's own Codex still has them. Local servers and plugins stay on: Helm
-  chats use the computer-use plugin. Measured 2026-10-28 on 0.165.0: no clear
-  speed gain from either; ChatGPT apps (`features.apps=false`) saved about
-  1.5 s but were left on, as Helm chats have used them.
+- **Codex chats Helm starts skip online MCP servers and ChatGPT apps**: each
+  thread gets `mcp_servers.NAME.enabled=false` for every `url` entry and
+  `features.apps=false` (`codexOnlineOff`), so the owner's own Codex still has
+  them. Local servers and plugins stay on: Helm chats use the computer-use
+  plugin. Measured 2026-10-28 on 0.165.0: apps off saved about 1.5 s a new
+  chat; servers and plugins off gave no clear gain. The owner chose apps off.
 - **Gemini and `agy` are not supported;** their configs are left untouched.
 - **Shared skills:** Codex reads `$HOME/.agents/skills`; Claude does not
   document reading it but follows symlinked skill folders. So a shared
