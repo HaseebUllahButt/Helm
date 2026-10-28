@@ -42,7 +42,7 @@ function machine(t, { unusualPaths = false, herdr = true } = {}) {
     writeFileSync(file, body);
     chmodSync(file, 0o755);
   };
-  for (const name of ['sh', 'bash', 'env', 'mkdir', 'cat', 'chmod', 'ls', 'cp', 'mv', 'rm', 'dirname']) symlinkSync(tool(name), join(bin, name));
+  for (const name of ['sh', 'bash', 'env', 'mkdir', 'cat', 'chmod', 'ls', 'cp', 'mv', 'rm', 'dirname', 'ln', 'readlink']) symlinkSync(tool(name), join(bin, name));
   symlinkSync(gitBin, join(bin, 'git'));
   const fakeHeader = `#!${process.execPath}\nimport { appendFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';\nimport { join } from 'node:path';\nconst args = process.argv.slice(2);\nappendFileSync(process.env.INSTALL_CALLS, JSON.stringify({ tool: process.argv[1].split('/').at(-1), args, cwd: process.cwd() }) + '\\n');\n`;
   executable('node', fakeHeader + `
@@ -57,7 +57,10 @@ else if (args[0] === '--input-type=module') {
     process.exit(result.status ?? 1);
   });
 } else if (args[0] === '-e') process.exit(process.env.FAKE_NO_PTY ? 1 : 0);
-else if (args[0] === 'scripts/build-log-reader.mjs') process.exit(process.env.FAKE_READER_FAIL ? 1 : 0);
+else if (args[0] === 'scripts/build-log-reader.mjs') {
+  if (process.env.FAKE_READER_OUTPUT) { mkdirSync('native/log-index', {recursive:true}); writeFileSync('native/log-index/log-index.test.node', 'new reader'); }
+  process.exit(process.env.FAKE_READER_FAIL ? 1 : 0);
+}
 else if (args[0]?.endsWith('/packages/connect/bin/helm.js')) process.exit(process.env.FAKE_START_FAIL ? 1 : 0);
 else process.exit(90);
 `);
@@ -66,7 +69,7 @@ if (args[0] === '--version') {
   console.log('11.0.0');
   process.exit(process.env.FAKE_NPM_BROKEN ? 1 : 0);
 }
-if (args[0] === 'ci') process.exit(process.env.FAKE_CI_FAIL ? 1 : 0);
+if (args[0] === 'ci') { mkdirSync('node_modules/example', {recursive:true}); writeFileSync('node_modules/example/index.js', 'new dependency'); process.exit(process.env.FAKE_CI_FAIL ? 1 : 0); }
 if (args[0] === '--workspace') { mkdirSync('apps/web/dist', {recursive:true}); writeFileSync('apps/web/dist/index.html', 'app'); process.exit(process.env.FAKE_BUILD_FAIL ? 1 : 0); }
 process.exit(91);
 `);
@@ -89,7 +92,7 @@ chmod +x "$HOME/.local/bin/herdr"\`);
   put(source, 'package.json', '{"name":"private-installer-fixture","version":"1.0.0"}\n');
   put(source, 'package-lock.json', '{"name":"private-installer-fixture","lockfileVersion":3,"packages":{}}\n');
   put(source, 'tracked.txt', 'saved\n');
-  put(source, '.gitignore', 'node_modules/\napps/web/dist/\nignored.txt\n');
+  put(source, '.gitignore', 'node_modules/\napps/web/dist/\nnative/log-index/*.node\nignored.txt\n');
   put(source, 'scripts/build-log-reader.mjs', '// fake build\n');
   put(source, 'packages/connect/bin/helm.js', '// fake start\n');
   git(source, 'add', '.');
@@ -462,4 +465,136 @@ test('failed startup restores the previous source, app and launcher', t => {
   assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), before);
   assert.equal(readFileSync(join(m.dir, 'apps/web/dist/index.html'), 'utf8'), 'working app');
   assert.equal(readFileSync(join(m.home, '.local/bin/helm'), 'utf8'), launcher);
+});
+
+
+// Every wrapper forwards only to a real local file tool. No service command
+// can escape the fixture PATH. Kill the installer after a completed file step.
+function interruptTool(m, name, condition, { signal = true, edit = false } = {}) {
+  const real = tool(name);
+  rmSync(join(m.bin, name));
+  writeFileSync(join(m.bin, name), `#!${process.execPath}
+const {spawnSync} = require('node:child_process');
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const hit = ${condition};
+if (hit && process.env.INTERRUPT_INSTALL) {
+  if (${!signal}) process.exit(74);
+  const result = spawnSync(${JSON.stringify(real)}, args, {stdio:'inherit'});
+  if (result.status !== 0) process.exit(result.status ?? 1);
+  ${edit ? `fs.writeFileSync(${JSON.stringify(join(m.dir, 'tracked.txt'))}, 'owner edit after interruption');` : ''}
+  process.kill(process.ppid, 'SIGKILL');
+  process.exit(0);
+}
+const result = spawnSync(${JSON.stringify(real)}, args, {stdio:'inherit'});
+process.exit(result.status ?? 1);
+`);
+  chmodSync(join(m.bin, name), 0o755);
+}
+function oldInstallation(m) {
+  m.clone();
+  m.put(m.dir, 'node_modules/example/index.js', 'old dependency');
+  m.put(m.dir, 'apps/web/node_modules/keep/index.js', 'old workspace dependency');
+  m.put(m.dir, 'apps/web/dist/index.html', 'old app');
+  m.put(m.dir, 'native/log-index/log-index.old.node', 'old reader');
+  return m.git(m.dir, 'rev-parse', 'HEAD');
+}
+function oldFiles(m) {
+  assert.equal(readFileSync(join(m.dir, 'node_modules/example/index.js'), 'utf8'), 'old dependency');
+  assert.equal(readFileSync(join(m.dir, 'apps/web/node_modules/keep/index.js'), 'utf8'), 'old workspace dependency');
+  assert.equal(readFileSync(join(m.dir, 'apps/web/dist/index.html'), 'utf8'), 'old app');
+  assert.equal(readFileSync(join(m.dir, 'native/log-index/log-index.old.node'), 'utf8'), 'old reader');
+  assert.equal(existsSync(join(m.dir, 'native/log-index/log-index.test.node')), false);
+}
+for (const point of ['source', 'dependencies', 'app']) {
+  test(`SIGKILL after ${point} publication recovers before another fetch or build`, t => {
+    const m = machine(t); const before = oldInstallation(m); m.publish();
+    if (point === 'source') interruptTool(m, 'git', `args.includes('merge') && args.includes(${JSON.stringify(m.dir)})`);
+    else interruptTool(m, 'cp', `args.some(a => a.includes('.release.') && a.endsWith(${JSON.stringify(point === 'app' ? '/apps/web/dist' : '/node_modules')}))`);
+    const killed = m.run({INTERRUPT_INSTALL:'1', FAKE_READER_OUTPUT:'1'});
+    assert.equal(killed.signal, 'SIGKILL', killed.stdout + killed.stderr);
+    assert.equal(existsSync(m.dir + '.install-state'), true);
+    const callsBefore = m.calls().length;
+    // Break the remote: recovery must happen before the next fetch fails.
+    rmSync(m.remote, {recursive:true});
+    const retry = m.run();
+    assert.notEqual(retry.status, 0); assert.match(retry.stderr, /Cannot fetch/);
+    assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), before); oldFiles(m);
+    assert.equal(existsSync(m.dir + '.install-state'), false);
+    assert.equal(m.calls().slice(callsBefore).some(c => c.tool === 'npm' && c.args[0] === 'ci'), false);
+  });
+}
+test('SIGKILL recovery keeps owner edits and does not start another install', t => {
+  const m = machine(t); const before = oldInstallation(m); const target = m.publish();
+  interruptTool(m, 'cp', `args.some(a => a.includes('.release.') && a.endsWith('/apps/web/dist'))`, {edit:true});
+  assert.equal(m.run({INTERRUPT_INSTALL:'1', FAKE_READER_OUTPUT:'1'}).signal, 'SIGKILL');
+  const callsBefore = m.calls().length;
+  const retry = m.run();
+  assert.notEqual(retry.status, 0); assert.match(retry.stdout, /Kept your edits/);
+  assert.equal(readFileSync(join(m.dir, 'tracked.txt'), 'utf8'), 'owner edit after interruption');
+  assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), target);
+  assert.notEqual(target, before); oldFiles(m);
+  assert.equal(existsSync(m.dir + '.install-state'), true);
+  assert.equal(m.calls().slice(callsBefore).some(c => c.tool === 'npm' && c.args[0] === 'ci'), false);
+  // A second recovery attempt must retain the same files and edit.
+  assert.notEqual(m.run().status, 0); oldFiles(m);
+  assert.equal(readFileSync(join(m.dir, 'tracked.txt'), 'utf8'), 'owner edit after interruption');
+});
+test('a failed app copy preserves untouched workspace dependencies', t => {
+  const m = machine(t); const before = oldInstallation(m); m.publish();
+  interruptTool(m, 'cp', `args.some(a => a.includes('.release.') && a.endsWith('/apps/web/dist'))`, {signal:false});
+  assert.notEqual(m.run({INTERRUPT_INSTALL:'1'}).status, 0);
+  assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), before); oldFiles(m);
+});
+test('successful installation keeps the built chat reader', t => {
+  const m = machine(t); passed(m.run({FAKE_READER_OUTPUT:'1'}));
+  assert.equal(readFileSync(join(m.dir, 'native/log-index/log-index.test.node'), 'utf8'), 'new reader');
+});
+
+test('a failed backup copy leaves every installed file unchanged', t => {
+  const m = machine(t); const before = oldInstallation(m); m.publish();
+  interruptTool(m, 'cp', `args.some(a => a.endsWith('.install-state/files/1'))`, {signal:false});
+  assert.notEqual(m.run({INTERRUPT_INSTALL:'1'}).status, 0);
+  assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), before); oldFiles(m);
+  assert.equal(existsSync(m.dir + '.install-state'), false);
+});
+test('SIGKILL during recovery keeps complete copies for a second recovery', t => {
+  const m = machine(t); const before = oldInstallation(m); m.publish();
+  interruptTool(m, 'cp', `args.some(a => a.includes('.release.') && a.endsWith('/apps/web/dist'))`);
+  assert.equal(m.run({INTERRUPT_INSTALL:'1'}).signal, 'SIGKILL');
+  interruptTool(m, 'cp', `args.some(a => a.endsWith('.install-state/files/1'))`);
+  assert.equal(m.run({INTERRUPT_INSTALL:'1'}).signal, 'SIGKILL');
+  assert.equal(existsSync(m.dir + '.install-state/files/1/index.html'), true);
+  rmSync(m.remote, {recursive:true});
+  assert.notEqual(m.run().status, 0);
+  assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), before); oldFiles(m);
+  assert.equal(existsSync(m.dir + '.install-state'), false);
+});
+for (const edit of ['staged', 'hidden']) {
+  test(`SIGKILL recovery preserves ${edit} owner edits and their index state`, t => {
+    const m = machine(t); oldInstallation(m); const target = m.publish();
+    interruptTool(m, 'cp', `args.some(a => a.includes('.release.') && a.endsWith('/apps/web/dist'))`);
+    assert.equal(m.run({INTERRUPT_INSTALL:'1'}).signal, 'SIGKILL');
+    m.put(m.dir, 'tracked.txt', 'keep owner changes');
+    if (edit === 'staged') m.git(m.dir, 'add', 'tracked.txt');
+    else m.git(m.dir, 'update-index', '--assume-unchanged', 'tracked.txt');
+    const status = m.git(m.dir, 'status', '--porcelain');
+    const index = m.git(m.dir, 'ls-files', '-v');
+    assert.notEqual(m.run().status, 0);
+    assert.equal(readFileSync(join(m.dir, 'tracked.txt'), 'utf8'), 'keep owner changes');
+    assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), target);
+    assert.equal(m.git(m.dir, 'status', '--porcelain'), status);
+    assert.equal(m.git(m.dir, 'ls-files', '-v'), index); oldFiles(m);
+  });
+}
+
+test('interrupted installation never rewinds a branch the owner selected afterward', t => {
+  const m = machine(t); oldInstallation(m); const target = m.publish();
+  interruptTool(m, 'cp', `args.some(a => a.includes('.release.') && a.endsWith('/apps/web/dist'))`);
+  assert.equal(m.run({INTERRUPT_INSTALL:'1'}).signal, 'SIGKILL');
+  m.git(m.dir, 'checkout', '-qb', 'owner-choice');
+  assert.notEqual(m.run().status, 0);
+  assert.equal(m.git(m.dir, 'branch', '--show-current'), 'owner-choice');
+  assert.equal(m.git(m.dir, 'rev-parse', 'HEAD'), target);
+  assert.equal(existsSync(m.dir + '.install-state'), true);
 });

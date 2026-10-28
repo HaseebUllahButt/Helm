@@ -316,7 +316,7 @@ async function restoreArtifacts(state) {
   if (!state.artifacts) return; // Journals from older Helm versions have no copy.
   const backup = artifactBackup(state.artifacts);
   for (const [index, { path, existed }] of state.artifacts.paths.entries()) {
-    if (path !== 'apps/web/dist' && path !== 'node_modules' && !/^(apps|packages)\/[^/.][^/]*\/node_modules$/.test(path)) {
+    if (path !== 'apps/web/dist' && path !== 'node_modules' && !/^native\/log-index\/log-index\.[a-zA-Z0-9._-]+\.node$/.test(path) && !/^(apps|packages)\/[^/.][^/]*\/node_modules$/.test(path)) {
       throw new Error('Cannot read the saved update files.');
     }
     const saved = join(backup, String(index));
@@ -504,6 +504,22 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
     if (await git(['rev-parse', 'HEAD']) !== expected || await git(['status', '--porcelain'])) {
       throw new Error('The files changed during the update. Keep your changes and try again.');
     }
+    if (rebuild) {
+      // Reader filenames include their source hash. Save old and new names,
+      // including names that did not exist before this release was built.
+      const paths = new Set();
+      for (const root of [dir, state.release]) {
+        const native = join(root, 'native/log-index');
+        if (!existsSync(native)) continue;
+        for (const name of readdirSync(native)) if (/^log-index\.[a-zA-Z0-9._-]+\.node$/.test(name)) paths.add(`native/log-index/${name}`);
+      }
+      for (const path of paths) {
+        const existed = present(join(dir, path));
+        const index = state.artifacts.paths.length;
+        if (existed) await copyArtifact(join(dir, path), join(artifactBackup(state.artifacts), String(index)));
+        state.artifacts.paths.push({ path, existed });
+      }
+    }
     await checkSourcePaths(dir, git, head, tip);
     state.publishing = true;
     writeUpdateState(state);
@@ -558,6 +574,12 @@ async function finishUpdate(state, restart) {
   const result = await requestRestart();
   if (result.failed.length) { state.phase = 'built'; writeUpdateState(state); }
   else if (!result.restarting.length) await clearUpdateState(state);
+  // Nothing was replaced. Retire the unused watcher before returning; a
+  // private service refusal must not leave a detached program behind.
+  if (!result.restarting.length && worker.exitCode === null && worker.signalCode === null) {
+    worker.ref();
+    await new Promise(resolve => { worker.once('exit', resolve); worker.kill(); });
+  }
   return { updated: true, ...result };
 }
 
