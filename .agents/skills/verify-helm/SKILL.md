@@ -17,7 +17,7 @@ $V up                       # private Helm, its own folder, sockets, port
 $V open                     # hidden browser, 390x844 phone, signed in
 $V click "New chat"         # by visible text, label or placeholder
 $V click "verify-<name>"    # the machine
-$V click "No folder · quick chat"
+$V click "No folder · sketch"
 $V click "fake"
 $V click "Ask anything"; $V type "hello"; $V click send
 $V wait "done."             # the fake reply: "working on it done."
@@ -62,7 +62,7 @@ its own copy, named after its Helm session; `--name <name>` picks another.
 - **fake-slow** works for 2 minutes before answering.
 - `up --real` adds the owner's real logins. Use one only when the change is
   about that CLI itself. A real chat costs money and lands in that account's
-  history: keep it in a quick chat, and delete it after.
+  history: keep it in a sketch, and delete it after.
 
 ## Traps
 
@@ -85,7 +85,7 @@ its own copy, named after its Helm session; `--name <name>` picks another.
   text boxes.
 - The fake agent ignores Stop, never asks questions, and asks again after
   "Always allow". Prove those with a real chat or the tests.
-- The folder step does not take a full path; use the quick-chat row.
+- The folder step does not take a full path; use the sketch row.
 - Never stop Helm processes by name (`pkill -f`, `systemctl stop
   helm-...`): that matches the owner's real Helm. `down` finds this copy's
   processes by its folder.

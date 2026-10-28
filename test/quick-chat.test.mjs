@@ -65,7 +65,7 @@ test('a quick chat gets its own empty folder, keeps it across a restart, and los
   assert.deepEqual(readdirSync(dir), []);
   assert.equal(drivers.at(-1).cwd, dir, 'the agent runs in it');
   // The folder's name is the id, which must never become the title.
-  assert.equal(s.title, 'Quick chat');
+  assert.equal(s.title, 'Sketch');
   assert.equal(s.titleBy, null);
   const listed = (await first.list()).find((x) => x.id === s.id);
   assert.equal(listed.quick, true);
@@ -115,7 +115,7 @@ test('session.start wants exactly one of cwd and quick, and quick only for drive
   const sessions = make();
   await assert.rejects(sessions.start({ quick: true, cwd: '/tmp', profileId: 'claudea' }), /not both/);
   await assert.rejects(sessions.start({ profileId: 'claudea' }), /which folder/);
-  await assert.rejects(sessions.start({ quick: true, profileId: 'shell' }), /cannot start a quick chat/);
+  await assert.rejects(sessions.start({ quick: true, profileId: 'shell' }), /cannot start a sketch/);
   assert.deepEqual((await sessions.list()).filter((s) => s.quick), []);
   await sessions.stop();
 });

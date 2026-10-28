@@ -436,7 +436,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   );
 
   const toggleCanvas = canvas.toggle;
-  const where = [env.name, session.quick ? 'quick chat' : chatFolder(session), eng.label, (session as any).model ?? ''].filter(Boolean).join(' · ');
+  const where = [env.name, session.quick ? 'sketch' : chatFolder(session), eng.label, (session as any).model ?? ''].filter(Boolean).join(' · ');
 
   return (
     <>

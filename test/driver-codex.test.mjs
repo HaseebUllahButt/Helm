@@ -570,7 +570,7 @@ test('plain: initialize, thread/start, turn/start; text streams as deltas', asyn
   assert.deepEqual(sent[0].params.clientInfo.name, 'helm');
   assert.equal(sent[1].method, 'initialized');
   assert.equal(sent[2].method, 'thread/start');
-  assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write' });
+  assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write', config: { 'features.apps': false } });
   assert.equal(sent[3].method, 'turn/start');
   assert.deepEqual(sent[3].params.input, [{ type: 'text', text: 'Reply with exactly the words: hello from helm', text_elements: [] }]);
   assert.equal(sent[3].params.effort, 'low');
@@ -631,13 +631,13 @@ test('each thread names its own session; the shared app-server names none', asyn
   await driver.send('Reply with exactly the words: hello from helm');
   await log.until((e) => e.type === 'turn.done');
   const start = fake.stdinLines().find((l) => l.method === 'thread/start');
-  assert.deepEqual(start.params.config, Object.fromEntries(Object.entries(ids).map(([k, v]) => [`shell_environment_policy.set.${k}`, v])));
+  assert.deepEqual(start.params.config, { 'features.apps': false, ...Object.fromEntries(Object.entries(ids).map(([k, v]) => [`shell_environment_policy.set.${k}`, v])) });
   const serverEnv = readFileSync(envFile, 'utf8');
   for (const k of Object.keys(ids)) assert.doesNotMatch(serverEnv, new RegExp(`^${k}=`, 'm'));
   await driver.kill();
 });
 
-test('a Codex chat starts and resumes without the online MCP servers and keeps local ones', async (t) => {
+test('a Codex chat starts and resumes without online MCP servers or ChatGPT apps, and keeps local ones', async (t) => {
   for (const engineSessionId of [undefined, '01a09e7a-960e-79e2-b7c8-8fc714c00f2a']) {
     const { driver, fake } = make('plain', { engineSessionId });
     t.after(() => driver.kill());
@@ -653,8 +653,8 @@ test('a Codex chat starts and resumes without the online MCP servers and keeps l
     writeFileSync(join(home, 'config.toml'), toml);
     await driver.start();
     const request = fake.stdinLines().find((entry) => entry.method === (engineSessionId ? 'thread/resume' : 'thread/start'));
-    assert.deepEqual(Object.entries(request.params.config ?? {}).filter(([k]) => k.startsWith('mcp_servers.') || k.startsWith('plugins.')),
-      [['mcp_servers.cloudflare.enabled', false], ['mcp_servers.zoho-mail.enabled', false]]);
+    assert.deepEqual(Object.entries(request.params.config ?? {}).filter(([k]) => /^(mcp_servers|plugins|features)\./.test(k)),
+      [['features.apps', false], ['mcp_servers.cloudflare.enabled', false], ['mcp_servers.zoho-mail.enabled', false]]);
     // The owner's file is read, never written.
     assert.equal(readFileSync(join(home, 'config.toml'), 'utf8'), toml);
   }

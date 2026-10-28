@@ -385,7 +385,7 @@ test('the logo opens Home: a quick chat box with chips, and a row per machine', 
       'profile.list': { profiles: [{ id: 'codex', engine: 'codex' }] },
       'session.start': () => {
         window.started.push(true);
-        return { session: { id: 'quick', title: 'Quick chat', quick: true, cwd: '/tmp/q', engine: 'codex', profileId: 'codex', driver: 'codex', turns: 0, status: 'idle', alive: true, updatedAt: Date.now() } };
+        return { session: { id: 'quick', title: 'Sketch', quick: true, cwd: '/tmp/q', engine: 'codex', profileId: 'codex', driver: 'codex', turns: 0, status: 'idle', alive: true, updatedAt: Date.now() } };
       },
     }));
   });

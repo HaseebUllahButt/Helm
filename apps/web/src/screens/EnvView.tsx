@@ -27,7 +27,7 @@ const projectNote = (cwd: string) => {
   return name === cwd ? undefined : cwd;
 };
 
-const pathOf = (s: Session) => (s.quick ? 'quick chat' : shortPath(chatFolder(s)));
+const pathOf = (s: Session) => (s.quick ? 'sketch' : shortPath(chatFolder(s)));
 
 /**
  * How far back a machine screen looks, and what the window does not apply to.
@@ -214,7 +214,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
   // all three are what the words are matched against.
   const q = query.trim().toLowerCase();
   const hit = (s: Session) =>
-    !q || `${s.title} ${s.quick ? 'quick chat' : s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q);
+    !q || `${s.title} ${s.quick ? 'sketch' : s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q);
 
   // Threads this machine's CLIs recorded without helm, beside helm's own.
   const detected = dedupeDetected(sessions, earlier);

@@ -6,7 +6,7 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
 - **Prove (driven 2026-10-15):**
   `$V click "Ask anything"; $V type "hello from me"; $V click send; $V wait "done."`
 - **Proof:** `text` shows "hello from me", a time, and "working on it done.";
-  the header title changes from "Quick chat".
+  the header title changes from "Sketch".
 - **Traps:** the title is made from your words and may drop one ("hello from
   fmap" became "from fmap"). The model chip shows real Devin model names even
   for the fake agent. Streamed replies must not redraw the message editor;

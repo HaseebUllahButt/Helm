@@ -246,12 +246,12 @@ test('the folder step starts with a quick-chat row, and Enter on it skips the fo
   const page=await pageFor(t);
   await folderStep(page);
   const first=page.getByRole('option').first();
-  assert.equal(await first.locator('.palette-title').innerText(),'No folder · quick chat');
+  assert.equal(await first.locator('.palette-title').innerText(),'No folder · sketch');
   assert.equal(await first.getAttribute('aria-selected'),'true');
   await page.keyboard.press('Enter');
   await page.getByRole('combobox',{name:'Search agents'}).waitFor();
   assert.equal(await page.locator('.newchat-steps .on').innerText(),'Agent');
-  assert.match(await page.locator('.newchat-steps').innerText(),/Quick chat/);
+  assert.match(await page.locator('.newchat-steps').innerText(),/Sketch/);
   await page.keyboard.press('Enter');
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.start'));
   const call=await startCall(page);
@@ -354,7 +354,7 @@ test('a name the machine refuses is explained in the box and nothing starts',asy
 test('the palette opens a quick chat on the machine on screen',async t=>{
   const page=await pageFor(t);
   await page.keyboard.press('Control+k');
-  await page.getByRole('combobox').fill('Quick chat');
+  await page.getByRole('combobox').fill('Sketch');
   await page.getByRole('option').filter({hasText:'Ask a short question without a folder.'}).click();
   await page.getByRole('combobox',{name:'Search agents'}).waitFor();
   await page.keyboard.press('Enter');
@@ -363,18 +363,18 @@ test('the palette opens a quick chat on the machine on screen',async t=>{
   assert.deepEqual({env:call.env,quick:call.params.quick},{env:'laptop',quick:true});
 });
 
-for (const width of [1280,390]) test(`a quick chat says "quick chat" where the folder would be, with no Git, at ${width}px`,async t=>{
+for (const width of [1280,390]) test(`a quick chat says "sketch" where the folder would be, with no Git, at ${width}px`,async t=>{
   const page=await pageFor(t);
   await page.setViewportSize({width,height:844});
   await page.evaluate(()=>window.visit('laptop',{kind:'env'}));
   const row=page.locator('.thread-row').filter({hasText:'Quick question'}).first();
   await row.waitFor();
-  assert.equal(await row.locator('.tri-where').innerText(),'quick chat · laptop');
+  assert.equal(await row.locator('.tri-where').innerText(),'sketch · laptop');
   assert.equal(await row.locator('.tri-branch').count(),0);
   await row.click();
   const bar=page.locator('.session-bar');
   await bar.waitFor();
-  assert.equal(await bar.locator('.titles').getAttribute('title'),'laptop · quick chat');
+  assert.equal(await bar.locator('.titles').getAttribute('title'),'laptop · sketch');
   assert.doesNotMatch(await bar.innerText(),/quickone|\.helm/);
   // Git is always in the header; a quick chat's Git sheet says why it is empty.
   assert.equal(await bar.getByRole('button',{name:/^Git/}).count(),1);
@@ -382,7 +382,7 @@ for (const width of [1280,390]) test(`a quick chat says "quick chat" where the f
   await bar.getByRole('button',{name:'more'}).click();
   assert.equal(await page.getByRole('button',{name:'Send to another machine'}).count(),0);
   assert.equal(await page.getByRole('button',{name:'Rename chat'}).count(),1);
-  assert.equal(await bar.locator('.menu-facts').innerText(),'laptop · quick chat');
+  assert.equal(await bar.locator('.menu-facts').innerText(),'laptop · sketch');
 });
 
 test('with the machine\'s folder list, typing searches on the device and shows how fresh it is',async t=>{
