@@ -6,7 +6,7 @@
 - **Prove (driven 2026-10-15):**
   ```sh
   $V key Control+n
-  $V click "verify-<you>"; $V click "No folder · quick chat"; $V click "fake"
+  $V click "verify-<you>"; $V click "No folder · sketch"; $V click "fake"
   $V text | tail -8         # "What is on your mind?", last line "fake"
   ```
 - **Folders open at once** from the list the device keeps; the machine's
@@ -22,13 +22,13 @@
   never an empty page. Prove (driven 2026-10-26): new fake chat, type
   "keep me" without sending, open another chat, `$V key Control+BracketLeft`
   (headless Chrome ignores Alt+Left): "What is on your mind?" with "keep me"
-  in the box, and `rpc session.list` holds one new "Quick chat".
+  in the box, and `rpc session.list` holds one new "Sketch".
 - **Tests:** `test/browser/new-chat`, `chat-home`, `onboarding`;
   `test/quick-chat`, `picker-prefs`, `onboarding`.
 
 ## First chat setup
 
-- **Reach:** New chat, pick a machine, then “No folder · quick chat”.
+- **Reach:** New chat, pick a machine, then “No folder · sketch”.
   Open “First chat help”. Follow the short question and reply check.
 - **Missing account:** install an agent on the chosen machine, open it in a
   terminal, and sign in. Press “Check agents again” without closing the picker.

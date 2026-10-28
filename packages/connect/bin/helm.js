@@ -2105,6 +2105,9 @@ try {
         const directory = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
         const tip = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
         await proveRelease({ directory, tip, prepare: true });
+        if (execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== tip) {
+          throw new ShipError('The source changed during its private check. Run helm ship again.');
+        }
         const r = await ship({ net: requireNetwork(), rpc: hubRpc, check: !rest.includes('--no-check'), waitMs: minutes * 60_000,
           verifyRelease: async ({ tip, net, rpc }) => {
             const info = await rpc(net, net.self, M.ENV_INFO, {}, { timeout: 8000, budget: 8000 });

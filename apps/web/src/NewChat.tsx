@@ -654,7 +654,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
         {step === 'cli' && <details className="newchat-note">
           <summary>First chat help</summary>
           <p>Pick an agent. Send a short question. Wait for its reply before you give it project work.</p>
-          <p>For a first check, use “No folder · quick chat” on the folder step.</p>
+          <p>For a first check, use “No folder · sketch” on the folder step.</p>
           <p>Helm uses the agent accounts on {machine?.name}. Open the agent in a terminal there and sign in first.</p>
           <p>If the chat cannot start, run <code>helm doctor</code> on that machine. Follow its checks, then try again.</p>
         </details>}
