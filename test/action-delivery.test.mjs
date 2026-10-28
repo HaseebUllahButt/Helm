@@ -1,4 +1,6 @@
 import test from 'node:test';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -45,4 +47,43 @@ test('damaged saved records fail closed', async () => {
   writeFileSync(join(dir, readdirSync(dir)[0]), '{');
   assert.throws(() => delivery.status(request.actionId, 'phone'));
   await assert.rejects(delivery.deliver(request, 'phone'));
+});
+
+
+for (const phase of ['acceptance', 'result']) test(`a full disk during ${phase} leaves no temporary file or repeatable approval`, async t => {
+  const dir = join(root, 'full-' + phase);
+  let calls = 0, writes = 0;
+  const sessions = { answer: async () => { calls++; return { ok: true }; } };
+  const delivery = new ActionDelivery(sessions, { dir });
+  const original = fs.writeFileSync;
+  const mocked = t.mock.method(fs, 'writeFileSync', (file, value, options) => {
+    if (typeof file === 'string' && file.startsWith(dir + '/')) {
+      assert.equal(options.flag, 'wx');
+      writes++;
+      if (writes === (phase === 'acceptance' ? 1 : 2)) {
+        original(file, '{"partial":', options);
+        throw Object.assign(new Error('The disk is full.'), { code: 'ENOSPC' });
+      }
+    }
+    return original(file, value, options);
+  });
+  syncBuiltinESMExports();
+  try {
+    if (phase === 'acceptance') {
+      await assert.rejects(delivery.deliver(request, 'phone'), { code: 'ENOSPC' });
+      assert.equal(calls, 0);
+      assert.deepEqual(readdirSync(dir), []);
+      assert.equal(delivery.status(request.actionId, 'phone').state, 'missing');
+    } else {
+      assert.equal((await delivery.deliver(request, 'phone')).state, 'checking');
+      assert.equal(calls, 1);
+      assert.equal(readdirSync(dir).length, 1, 'only the saved pending record remains');
+      const restarted = new ActionDelivery(sessions, { dir });
+      assert.equal((await restarted.deliver(request, 'phone')).state, 'checking');
+      assert.equal(calls, 1);
+    }
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
 });

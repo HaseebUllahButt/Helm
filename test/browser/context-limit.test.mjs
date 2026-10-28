@@ -25,7 +25,7 @@ const chatBundle = (engine) => build({ stdin: { contents: `
     context:{ used:148500, window:383000, full:1000000, model:'claude-opus-5-5', at:1 } };
   window.calls = [];
   window.fail = '';
-  const client = {
+  const client = {pendingActions:()=>[],resumeActions:async()=>[],
     on: () => () => {}, subscribe: () => {},
     rpc: async (env, method, params) => {
       if (method === 'account.contextLimit') {

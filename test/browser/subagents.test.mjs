@@ -25,7 +25,7 @@ before(async () => {
       { id:'claude-main', label:'Claude personal', engine:'claude', auth:'authenticated', available:true, defaultModel:'sonnet', defaultMode:'bypassPermissions', models:['opus','sonnet'], modes:[{id:'default',label:'Ask before acting'},{id:'bypassPermissions',label:'Bypass all checks'},{id:'plan',label:'Plan first'}] },
       { id:'claude-out', label:'Claude work', engine:'claude', auth:'unauthenticated', available:false, modes:[] },
     ];
-    const client = {input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
       on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
       rpc: async (env, method, params) => {
         (window.calls ??= []).push({env,method,params});
@@ -71,7 +71,7 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       labels:{'parent-model':'Parent Model','helper-model':'Helper Model'},favs:favorites,efforts:['low','high'],effort:'low',
       defaults:{effort:'low',mode:'ask'},subagentDefaults:defaults,modes:[{id:'ask',label:'Ask before acting'}]});
     let first = true;
-    const client = {input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},rpc:async(env,method,params)=>{
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},rpc:async(env,method,params)=>{
       (window.calls ??= []).push({method,params});
       if(method==='session.list') return {sessions:[]};
       if(method==='agent.list') return {agents:[
@@ -178,7 +178,7 @@ test('main task click opens the full child conversation and Back returns to its 
     const parent = { id:'parent', title:'Parent chat', cwd:'/project', engine:'codex', profileId:'codex', status:'idle', driver:true };
     const child = { ...parent, id:'child', title:'Inspect child conversation',
       delegation:{parentId:parent.id, task:'Inspect the implementation', status:'done'} };
-    const client = {input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
       on: () => () => {}, subscribe: () => {},
       rpc: async (env, method, params) => {
         (window.calls ??= []).push({env,method,params});
@@ -253,7 +253,7 @@ test('desktop and phone headers open unified details with accessible Git navigat
     import { DrivenSession } from './apps/web/src/session/DrivenSession';
     const env = { id:'header-test', name:'Laptop', online:true, info:{} };
     const parent = { id:'parent', title:'Header layout chat', cwd:'/project', engine:'codex', profileId:'codex', status:'idle', driver:true, delegations:['a','b'] };
-    const client = {input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
       on: () => () => {}, subscribe: () => {},
       rpc: async (env, method, params) => {
         if (method === 'model.list') return { models:[], modes:[] };
@@ -494,7 +494,7 @@ test('Shell back history leaves parent and child chats without cycling between t
     const child = {...parent,id:'child',title:'Child history chat',delegation:{parentId:'parent',task:'Child task',status:'done'}};
     const grandchild = {...child,id:'grandchild',title:'Grandchild history chat',delegation:{parentId:'child',task:'Nested task',status:'done'}};
     const sessions = [parent,child,grandchild];
-    const client = {input:(env,params)=>client.rpc(env,'session.input',params),relay:'http://helm-history-test',subscribe:()=>{},on:()=>()=>{},watchLatency:()=>()=>{},
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),relay:'http://helm-history-test',subscribe:()=>{},on:()=>()=>{},watchLatency:()=>()=>{},
       openDirect:async()=>{},route:async()=>null,environments:async()=>({environments:[env]}),
       rpc:async(env,method,p={})=>{
         if(method==='session.list') return {sessions:p.parentId?sessions.filter(s=>s.delegation?.parentId===p.parentId):[parent]};
@@ -559,7 +559,7 @@ test('a CLI\'s own subagents show beside delegated tasks, looking the same', asy
         native('a3','blocked','Edit the config','Edit: config.js')] };
     const child = { ...parent, id:'child', title:'Delegated review', nativeCards:undefined, team:undefined,
       delegation:{ parentId:'parent', task:'Delegated review', status:'done' } };
-    const client = {input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
       on: () => () => {}, subscribe: () => {},
       rpc: async (env, method, params) => {
         (window.calls ??= []).push({env,method,params});
@@ -633,7 +633,7 @@ test('a terminal thread lists its CLI\'s subagents without a task form', async (
     const parent = { id:'term', title:'Terminal Claude', cwd:'/project', engine:'claude', status:'idle', nativeCli:true, nativeChat:true,
       nativeCards:[{ id:'b1', native:true, title:'Check the docs', agentType:'Explore', model:null, status:'interrupted',
         startedAt:1, updatedAt:2, branch:null, toolUseId:null, last:'Read: README.md' }] };
-    const client = {input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
       on: () => () => {},
       rpc: async (env, method, params) => {
         (window.calls ??= []).push({env,method,params});
@@ -688,7 +688,7 @@ test('a CLI\'s subagent opens as a chat of its whole conversation', async () => 
         { seq:10, type:'turn.done', turnId:'native-1', status:'ok' });
       return out;
     };
-    const client = {input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
       on: () => () => {},
       rpc: async (envId, method, params) => {
         (window.calls ??= []).push({ method, params });
@@ -744,7 +744,7 @@ test('a subagent whose parent can pass messages on takes one from its chat', asy
       startedAt:1, updatedAt:2, branch:null, toolUseId:'spawn1', last:'Saves twice.', canMessage:true };
     const parent = { id:'parent', title:'Fix intake', cwd:'/project', engine:'codex', status:'idle', driver:'codex', nativeCards:[card] };
     let sent = '';
-    const client = {input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
       on: () => () => {},
       rpc: async (envId, method, params) => {
         (window.calls ??= []).push({ method, params });
@@ -808,7 +808,7 @@ test('the Git button is always in the header, and follows the project a chat edi
       ] : [] });
     const scene = chat(location.hash.slice(1), location.hash === '#edited');
     window.asked = [];
-    const client = { on: () => () => {}, subscribe: () => {},
+    const client = {pendingActions:()=>[],resumeActions:async()=>[], on: () => () => {}, subscribe: () => {},
       rpc: async (env, method, params) => {
         if (method === 'model.list') return { models:[], modes:[] };
         if (method === 'agent.list') return { agents:[] };
@@ -866,7 +866,7 @@ test('a terminal chat has the Git button and the full Agents panel', async () =>
     import { SessionView } from './apps/web/src/session/SessionView';
     const env = { id:'git-term', name:'Laptop', online:true, info:{} };
     const session = { id:'term', title:'Terminal Claude', cwd:'/home/me/code/tool', engine:'claude', status:'idle', nativeCli:true, nativeChat:true };
-    const client = { on: () => () => {}, subscribe: () => {}, input: async () => ({ ok:true }),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[], on: () => () => {}, subscribe: () => {}, input: async () => ({ ok:true }),
       rpc: async (env, method, params) => {
         if (method === 'model.list') return { models:[], modes:[] };
         if (method === 'session.commands') return { commands:[] };
@@ -908,7 +908,7 @@ test('helper message drafts survive card changes and another helper send', async
     import {Subagents} from './apps/web/src/session/Subagents';
     const parent={id:'parent',engine:'codex',profileId:'fake',title:'Parent'};
     const children=['first','second'].map(id=>({id,title:id,engine:'codex',profileId:'fake',status:'done',delegation:{parentId:'parent',status:'done'}}));
-    const client={on:()=>()=>{},rpc:async(env,method,params)=>{
+    const client={pendingActions:()=>[],resumeActions:async()=>[],on:()=>()=>{},rpc:async(env,method,params)=>{
       if(method==='session.list')return {sessions:children};
       if(method==='agent.list')return {agents:[]};
       if(method==='session.delegation-result')return {status:'done',complete:true,output:'Finished.'};

@@ -14,7 +14,7 @@ before(async () => {
       import { clipboardImages } from './apps/web/src/session/image';
       window.clipboardImages = clipboardImages;
       window.calls=[]; window.fail=false;
-      const client={input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
+      const client={pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
         if(method==='session.messages')return {messages:[],status:'idle'};
         if(method==='session.pending')return {pending:[]};
         if(method==='session.events')return {events:[],pending:[],last:0,session:{status:'idle'}};

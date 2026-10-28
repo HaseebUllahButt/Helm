@@ -19,7 +19,7 @@ before(async () => {
       const full = new URL(location.href).searchParams.get('full');
       const guard = new URL(location.href).searchParams.get('guard');
       window.calls=[];
-      const client={input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
+      const client={pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
         window.calls.push({method,params});
         if(method==='model.list')return full ? {default:null,models:['provider/old','provider/new'],efforts:['low','high'],modes:guard?BASH_GUARD_MODES:[],nativeControls:[],profileId:'pi-account',prefs:{approved:[],default:'provider/old'},favs:[],effortFavs:[],defaults:{}} : {default:null,models:[],modes:[],nativeControls:nativeControls(engine).filter(k=>k!=='settings')};
         if(method==='model.prefs')return {prefs:{approved:[],default:params.default}};

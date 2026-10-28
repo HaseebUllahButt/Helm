@@ -23,7 +23,7 @@ test('a chat on a fresh browser shows its account limits and reset times from th
     const listeners = new Set();
     window.quota = 4;
     window.emit = (kind, payload) => listeners.forEach(fn => fn('limits-test',kind,payload));
-    const client = {
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],
       on: fn => {listeners.add(fn); return () => listeners.delete(fn)}, subscribe: () => {},
       rpc: async (env, method) => {
         if (method === 'usage.limits') return { unsupported:0, accounts:[
@@ -63,7 +63,7 @@ test('a chat on a fresh browser shows its account limits and reset times from th
     assert.match(five, /^5h: 4% used · resets in 1h 5\dm, at \d/);
     assert.match(seven, /^7d: 59% used · resets [A-Z][a-z]{2} \d/);
     await capture(line, 'chat-limits-line.png');
-    await view.evaluate(() => {window.quota=23;window.emit('session.event',{event:{type:'limits'}})});
+    await view.evaluate(() => {window.quota=23;window.emit('session.event',{id:'chat',events:[{seq:1,at:Date.now(),type:'limits'}]})});
     await line.getByText('5h 23%',{exact:true}).waitFor();
   } finally { await view.close(); }
 });

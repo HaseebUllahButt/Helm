@@ -15,7 +15,7 @@ before(async () => {
     const options={models:['model-a','model-b'],labels:{'model-a':'Model A','model-b':'Model B'},default:'model-a',
       efforts:['low','high'],modes:MODES[engine] || [],favs:[],prefs:{default:'model-a',approved:[]},
       defaults:{effort:'low'},...(engine==='codex' ? {speeds:['fast']} : {})};
-    const client={on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
+    const client={pendingActions:()=>[],resumeActions:async()=>[],on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
       if(method==='model.list') return options;
       if(method==='session.events') return {session:window.current,events:[],pending:[],last:0};
       if(method==='session.watch') return {last:0};
