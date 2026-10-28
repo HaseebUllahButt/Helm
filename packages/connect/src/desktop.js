@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, readdirSync, readlinkSync, rmSync, accessSync, constants } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -96,37 +96,71 @@ function installIcons() {
 }
 
 /**
- * The window is Helm installed as a web app in a browser profile of its own,
- * opened with window controls overlay always on: Helm's own top row fills the
- * window's top edge and Chromium keeps only its small buttons at the right.
- * A plain `--app=` window always has Chromium's bar repeating the chat's name,
- * and the system title bar only hides on a desktop told to draw none (niri
- * needs prefer-no-csd). The overlay looks the same on every desktop. The
- * switch is per browser process, so the window needs its own profile; the
- * owner's everyday one is left alone. Helm signs this window in with the
- * machine's local key, so the separate profile costs nothing to sign into.
+ * The window is Helm installed as a web app in a browser profile of its own.
+ * Where the desktop draws no title bar for a window that asks for none (niri
+ * with prefer-no-csd, Hyprland), the window uses the system title bar and has
+ * no Chromium buttons at all: Helm's own top row is the top edge. Elsewhere
+ * (GNOME, KDE, niri without prefer-no-csd) Chromium draws its frame itself,
+ * so the window opens with window controls overlay always on and Chromium
+ * keeps only its small buttons at the right. A plain `--app=` window always
+ * has Chromium's bar repeating the chat's name. Both settings are per browser
+ * profile, so the window needs its own; the owner's everyday one is left
+ * alone. Helm signs this window in with the machine's local key, so the
+ * separate profile costs nothing to sign into.
  */
 const windowProfile = () => join(HELM_DIR, 'app-window');
 const OVERLAY = '--enable-features=DesktopPWAsWindowControlsOverlayWithNoToggle';
 const appsStore = (dir) => join(dir, 'Default', 'Web Applications', 'Manifest Resources');
 
-function seedWindowProfile(dir) {
-  const file = join(dir, 'Default', 'Preferences');
-  let prefs = {};
-  try { prefs = JSON.parse(readFileSync(file, 'utf8')); } catch { /* new profile */ }
-  // The overlay needs Chromium's own frame; earlier Helm set the system one.
-  if (prefs?.browser?.custom_chrome_frame === true) return;
-  mkdirSync(join(dir, 'Default'), { recursive: true });
-  writeFileSync(file, JSON.stringify({ ...prefs, browser: { ...prefs.browser, custom_chrome_frame: true } }));
+/** Lines of a niri config and the files it includes. */
+function niriConfig(file, seen = new Set()) {
+  if (seen.has(file)) return '';
+  seen.add(file);
+  let text;
+  try { text = readFileSync(file, 'utf8'); } catch { return ''; }
+  const included = [...text.matchAll(/^\s*include\s+"([^"]+)"/gm)]
+    .map((m) => niriConfig(resolve(dirname(file), m[1].replace(/^~(?=\/)/, homedir())), seen));
+  return [text, ...included].join('\n');
 }
+
+/** True where the system title bar is no bar at all. */
+export function desktopDrawsNoBar(env = process.env) {
+  const desktops = (env.XDG_CURRENT_DESKTOP || '').toLowerCase().split(':');
+  if (desktops.includes('hyprland')) return true;
+  if (!desktops.includes('niri')) return false;
+  const file = env.NIRI_CONFIG || join(env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'niri', 'config.kdl');
+  return /^\s*prefer-no-csd\s*$/m.test(niriConfig(file));
+}
+
+const prefsFile = (dir) => join(dir, 'Default', 'Preferences');
+const readPrefs = (dir) => { try { return JSON.parse(readFileSync(prefsFile(dir), 'utf8')); } catch { return null; } };
+
+/**
+ * Set the frame this desktop needs. Returns true when it changed. An open
+ * window would write its own setting back over it as it closes.
+ */
+function seedWindowProfile(dir) {
+  if (profileInUse(dir)) return false;
+  const prefs = readPrefs(dir) ?? {};
+  const custom = !desktopDrawsNoBar();
+  if (prefs?.browser?.custom_chrome_frame === custom) return false;
+  mkdirSync(join(dir, 'Default'), { recursive: true });
+  writeFileSync(prefsFile(dir), JSON.stringify({ ...prefs, browser: { ...prefs.browser, custom_chrome_frame: custom } }));
+  return true;
+}
+
+/** The browser that holds the window profile's lock: its process id, 0 when unknown, or null. */
+function lockHolder(dir) {
+  let target;
+  try { target = readlinkSync(join(dir, 'SingletonLock')); } catch { return null; }
+  return Number(target.split('-').pop()) || 0;
+}
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; } };
 
 /** A browser still running on the window profile holds its lock; a second one would only hand over. */
 function profileInUse(dir) {
-  let target;
-  try { target = readlinkSync(join(dir, 'SingletonLock')); } catch { return false; }
-  const pid = Number(target.split('-').pop());
-  if (!pid) return true;
-  try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
+  const pid = lockHolder(dir);
+  return pid === 0 || (pid !== null && alive(pid));
 }
 
 /**
@@ -195,6 +229,33 @@ export async function installWebApp({ url, browser, timeoutMs = 30_000 }) {
 }
 
 /**
+ * The desktop can change after the window profile was made (the owner turns
+ * on prefer-no-csd). Chromium writes its settings back as it exits, after it
+ * lets go of the lock, so while the Helm window is open the change waits for
+ * that browser to end. It shows the next time the window opens. `onChange`
+ * hears when it is made.
+ */
+export function syncWindowFrame({ onChange = () => {}, everyMs = 500 } = {}) {
+  const dir = windowProfile();
+  if (platform() !== 'linux' || !readPrefs(dir)) return { waiting: false };
+  if (!profileInUse(dir)) {
+    if (seedWindowProfile(dir)) onChange();
+    return { waiting: false };
+  }
+  if (readPrefs(dir)?.browser?.custom_chrome_frame === !desktopDrawsNoBar()) return { waiting: false };
+  let pid = lockHolder(dir);
+  const timer = setInterval(() => {
+    if (pid && alive(pid)) return;
+    // Opened again in the meantime: wait for that browser instead.
+    if (profileInUse(dir)) { pid = lockHolder(dir); return; }
+    clearInterval(timer);
+    if (seedWindowProfile(dir)) onChange();
+  }, everyMs);
+  timer.unref();
+  return { waiting: true, stop: () => clearInterval(timer) };
+}
+
+/**
  * The window class a chromium app window reports, so the launcher can match
  * the window to this entry and show its icon rather than a generic one.
  * Best-effort: it is only ever cosmetic, and getting it wrong costs an icon
@@ -220,7 +281,10 @@ export function installApp({ url, browser, profile = 'Default', appId = null }) 
   // remembering a port.
   const dir = windowProfile();
   if (bin) seedWindowProfile(dir);
-  const opens = appId ? `${OVERLAY} --app-id=${appId}` : `--app=${url}`;
+  // An installed app always keeps a Chromium strip; a plain app window on a
+  // desktop that draws no bar has none at all.
+  const overlay = !!(bin && appId) && !desktopDrawsNoBar();
+  const opens = overlay ? `${OVERLAY} --app-id=${appId}` : `--app=${url}`;
   const exec = bin
     ? `${bin} --user-data-dir=${dir} --profile-directory=${profile} --no-first-run ${opens}`
     : `xdg-open ${url}`;
@@ -234,9 +298,9 @@ export function installApp({ url, browser, profile = 'Default', appId = null }) 
     'Comment=every coding agent, one place - the helm running on this machine',
     `Exec=${exec}`,
     `Icon=${ICON}`,
-    ...(bin ? [`StartupWMClass=${appId ? `chrome-${appId}-${profile}` : wmClass(url, profile)}`] : []),
+    ...(bin ? [`StartupWMClass=${overlay ? `chrome-${appId}-${profile}` : wmClass(url, profile)}`] : []),
     // An installed app opens at its start page; a notice opens a chat from here.
-    ...(appId ? [`X-Helm-Url=${url}`] : []),
+    ...(overlay ? [`X-Helm-Url=${url}`] : []),
     'Categories=Development;',
     'Keywords=helm;agents;claude;codex;',
     'Terminal=false',
@@ -254,20 +318,23 @@ export function installApp({ url, browser, profile = 'Default', appId = null }) 
   run('update-desktop-database', [appsDir()]);
   run('gtk-update-icon-cache', ['-f', '-t', join(dataHome(), 'icons', 'hicolor')]);
 
-  return { file, icons: icons.length, browser: bin, url, windowed: !!bin, overlay: !!(bin && appId) };
+  return { file, icons: icons.length, browser: bin, url, windowed: !!bin, overlay };
 }
 
 /**
- * A launcher written before Helm drew its own top row opens a window with
- * Chromium's bar across the top. Each start brings it up to date, once Helm
- * answers at `url`; until the install works it stays as it was.
+ * A launcher written before Helm drew its own top row, or for another
+ * desktop, opens a window with Chromium's bar or buttons across the top. Each
+ * start brings it up to date, once Helm answers at `url`; until the install
+ * works it stays as it was.
  */
 export async function refreshAppLauncher({ url, install = installWebApp }) {
   if (platform() !== 'linux') return { updated: false };
   let text;
   try { text = readFileSync(join(appsDir(), ENTRY), 'utf8'); } catch { return { updated: false }; }
   const exec = text.match(/^Exec=(.*)$/m)?.[1]?.trim() ?? '';
-  if (exec.includes(OVERLAY) && exec.includes(`--user-data-dir=${windowProfile()} `)) return { updated: false };
+  const bare = desktopDrawsNoBar();
+  const current = bare ? !exec.includes(OVERLAY) && exec.includes('--app=') : exec.includes(OVERLAY);
+  if (current && exec.includes(`--user-data-dir=${windowProfile()} `)) return { updated: false };
   // Only the Helm the launcher opens may rewrite it: a test copy on another
   // port or folder shares this desktop.
   const opens = text.match(/^X-Helm-Url=(.*)$/m)?.[1]?.trim() ?? exec.match(/--app=(\S+)/)?.[1];
@@ -275,6 +342,10 @@ export async function refreshAppLauncher({ url, install = installWebApp }) {
   if (opens !== url || (profile && profile !== windowProfile())) return { updated: false };
   const bin = exec.split(/\s+/)[0];
   if (!bin || bin === 'xdg-open') return { updated: false };
+  if (bare) {
+    installApp({ url, browser: bin });
+    return { updated: true };
+  }
   const appId = await install({ url, browser: bin });
   if (!appId) return { updated: false };
   installApp({ url, browser: bin, appId });
