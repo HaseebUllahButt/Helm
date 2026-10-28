@@ -11,7 +11,7 @@ export type IconName =
   | 'back' | 'forward' | 'popout' | 'up' | 'down' | 'arrow-up' | 'arrow-down'
   | 'more' | 'close' | 'refresh' | 'plus' | 'check' | 'checkbox'
   | 'subagents' | 'git' | 'branch' | 'terminal' | 'raw'
-  | 'star' | 'star-on' | 'bolt' | 'model' | 'effort' | 'shield'
+  | 'star' | 'star-on' | 'bolt' | 'quill' | 'model' | 'effort' | 'shield'
   | 'read' | 'edit' | 'run' | 'search' | 'web' | 'tool' | 'ask' | 'plan' | 'think' | 'alert'
   | 'folder' | 'repo' | 'machine' | 'transfer' | 'image' | 'sidebar' | 'canvas' | 'jump' | 'stop'
   | 'tag' | 'cloud' | 'copy' | 'github' | 'lock' | 'eye' | 'eye-off';
@@ -43,6 +43,8 @@ const PATHS: Record<IconName, JSX.Element> = {
   star: <path d="M12 4.2l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.6l-4.8 2.5.9-5.4-3.9-3.8 5.4-.8z" />,
   'star-on': <path d="M12 4.2l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.6l-4.8 2.5.9-5.4-3.9-3.8 5.4-.8z" fill="currentColor" />,
   bolt: <path d="M13 3L5.5 13.5H12L11 21l7.5-10.5H12z" />,
+  // A quill: a sketch, a chat with no project behind it.
+  quill: <><path d="M21 3C12 3 4.5 8 4.5 18.5l1 1C16 19.5 21 12 21 3z" /><path d="M3 21L16 8M9.5 14.5h5.5" /></>,
   model: <><rect x="6.5" y="6.5" width="11" height="11" rx="2" /><path d="M9.5 3.5v3M14.5 3.5v3M9.5 17.5v3M14.5 17.5v3M3.5 9.5h3M3.5 14.5h3M17.5 9.5h3M17.5 14.5h3" /></>,
   effort: <><path d="M4.5 16a7.5 7.5 0 1115 0" /><path d="M12 16l3.5-4.5" /></>,
   shield: <path d="M12 3.5l7 2.7v5.3c0 4.3-3 7.6-7 9-4-1.4-7-4.7-7-9V6.2z" />,
