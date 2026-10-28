@@ -29,47 +29,97 @@ step "checking what is already here"
 
 need git || die "git is required.  sudo apt install git   (or your package manager)"
 
-if need node; then
-  NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
-  if [ "$NODE_MAJOR" -lt 22 ]; then
-    die "node 22 or newer is required (found $(node -v)).
-    helm uses node's built-in SQLite, which older versions do not have.
-    https://nodejs.org  or:  curl -fsSL https://fnm.vercel.app/install | bash"
-  fi
-  say "node $(node -v)"
-else
-  die "node 22 or newer is required.
-    https://nodejs.org  or:  curl -fsSL https://fnm.vercel.app/install | bash"
-fi
+need node || die "Install Node 22 or newer, then run this installer again. See https://nodejs.org."
+need npm || die "Install npm with Node, then run this installer again."
+NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]') || die "Cannot run Node."
+case "$NODE_MAJOR" in
+  ''|*[!0-9]*) die "Cannot read the Node version." ;;
+esac
+[ "$NODE_MAJOR" -ge 22 ] || die "Install Node 22 or newer. See https://nodejs.org."
+# A version number alone does not prove SQLite is available (early Node 22
+# releases need a flag). Exercise the features without writing a database.
+node --input-type=module -e '
+  import { DatabaseSync } from "node:sqlite";
+  const db = new DatabaseSync(":memory:");
+  if (db.prepare("SELECT 1 AS ok").get().ok !== 1) process.exit(1);
+  db.close();
+  if (typeof fetch !== "function" || typeof WebSocket !== "function") process.exit(1);
+' >/dev/null 2>&1 || die "This Node cannot run Helm. Install a current Node release with built-in SQLite."
+npm --version >/dev/null 2>&1 || die "Cannot run npm. Install npm with Node."
+say "node $(node -v)"
+NODE_BIN=$(command -v node)
+case "$NODE_BIN" in /*) ;; *) NODE_BIN="$PWD/$NODE_BIN" ;; esac
+case "$DIR" in /*) ;; *) DIR="$PWD/$DIR" ;; esac
 
-# herdr owns the terminals helm drives. Without it helm can talk to your
-# machines but cannot run anything on them, so install it now rather than
-# letting the first session fail.
-if need herdr || [ -x "$BIN_DIR/herdr" ]; then
-  say "herdr $("${BIN_DIR}/herdr" --version 2>/dev/null || herdr --version 2>/dev/null || echo present)"
-else
-  step "installing herdr (it owns the agent terminals)"
-  curl -fsSL https://herdr.dev/install.sh | sh || die "could not install herdr - install it yourself and re-run"
+git check-ref-format --branch "$BRANCH" >/dev/null 2>&1 || die "Choose a valid Helm branch with HELM_BRANCH."
+if ! need herdr && [ ! -x "$BIN_DIR/herdr" ]; then
+  need curl || die "Install curl, then run this installer again."
 fi
 
 # ------------------------------------------------------------------ fetch
 
-step "fetching helm"
-if [ -d "$DIR/.git" ]; then
-  git -C "$DIR" fetch --quiet origin "$BRANCH"
-  git -C "$DIR" checkout --quiet "$BRANCH"
-  git -C "$DIR" reset --hard --quiet "origin/$BRANCH"
-  say "updated $DIR"
+step "checking the install folder"
+if [ -e "$DIR" ] || [ -L "$DIR" ]; then
+  [ -d "$DIR" ] || die "The install path is not a folder: $DIR"
+  # Accept .git files too: linked worktrees use them. Never treat a folder
+  # inside another checkout as the install root.
+  if [ -e "$DIR/.git" ]; then
+    ROOT=$(git -C "$DIR" rev-parse --show-toplevel) || die "Cannot read the checkout in $DIR."
+    [ "$(cd "$DIR" && pwd -P)" = "$(cd "$ROOT" && pwd -P)" ] || die "The install folder must be the checkout root."
+    CURRENT_BRANCH=$(git -C "$DIR" symbolic-ref --quiet --short HEAD) || die "Choose a branch in $DIR before installing."
+    [ "$CURRENT_BRANCH" = "$BRANCH" ] || die "Keep branch $CURRENT_BRANCH. Set HELM_BRANCH=$CURRENT_BRANCH to install it."
+    [ "$(git -C "$DIR" remote get-url origin)" = "$REPO" ] || die "The checkout uses another source. Set HELM_REPO to its origin or choose another folder."
+    GIT_DIR=$(git -C "$DIR" rev-parse --absolute-git-dir) || die "Cannot read Git files in $DIR."
+    for STATE in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply sequencer BISECT_LOG; do
+      [ ! -e "$GIT_DIR/$STATE" ] || die "Finish the Git operation in $DIR before installing."
+    done
+    # These index flags hide edits from status. Refuse them rather than clear
+    # the flags or risk building over files Git did not check.
+    INDEX_FLAGS=$(git -C "$DIR" ls-files -v) || die "Cannot check tracked files in $DIR."
+    while IFS= read -r ENTRY; do
+      case "$ENTRY" in
+        [a-zS]' '*) die "Some files are hidden from Git status in $DIR. Clear those flags before installing." ;;
+      esac
+    done <<< "$INDEX_FLAGS"
+    STATUS=$(git -C "$DIR" status --porcelain --untracked-files=all --ignore-submodules=none) || die "Cannot check local files in $DIR."
+    [ -z "$STATUS" ] || die "Save your edits and move untracked files out of $DIR before installing."
+    git -C "$DIR" fetch --quiet --no-tags origin "refs/heads/$BRANCH" || die "Cannot fetch branch $BRANCH."
+    TARGET=$(git -C "$DIR" rev-parse --verify FETCH_HEAD)
+    if [ "$TARGET" = "$(git -C "$DIR" rev-parse HEAD)" ]; then
+      say "$DIR is already current"
+    elif git -C "$DIR" merge-base --is-ancestor "$TARGET" HEAD; then
+      say "kept local commits in $DIR"
+    elif git -C "$DIR" merge-base --is-ancestor HEAD "$TARGET"; then
+      git -C "$DIR" -c core.hooksPath=/dev/null merge --ff-only --no-overwrite-ignore --quiet "$TARGET" \
+        || die "Cannot update $DIR without changing local files."
+      say "updated $DIR"
+    else
+      die "Local and remote commits differ. Keep them and resolve the branch in $DIR before installing."
+    fi
+  elif [ -n "$(ls -A "$DIR")" ]; then
+    die "The install folder is not an empty folder or a Git checkout: $DIR"
+  else
+    git clone --quiet --branch "$BRANCH" --depth 1 -- "$REPO" "$DIR"
+  fi
 else
-  git clone --quiet --branch "$BRANCH" --depth 1 "$REPO" "$DIR"
-  say "cloned into $DIR"
+  git clone --quiet --branch "$BRANCH" --depth 1 -- "$REPO" "$DIR"
+fi
+[ -f "$DIR/package.json" ] && [ -f "$DIR/package-lock.json" ] || die "The checkout needs package.json and package-lock.json."
+
+# Install terminal software only after the checkout passes all safety checks.
+if need herdr || [ -x "$BIN_DIR/herdr" ]; then
+  say "herdr $("${BIN_DIR}/herdr" --version 2>/dev/null || herdr --version 2>/dev/null || echo present)"
+else
+  step "installing herdr (it runs the agent terminals)"
+  curl -fsSL https://herdr.dev/install.sh | sh || die "Cannot install herdr. Install it and run this installer again."
+  need herdr || [ -x "$BIN_DIR/herdr" ] || die "Cannot find herdr after installation. Install it and run this installer again."
 fi
 
 step "installing dependencies"
 # Dev dependencies included on purpose: the web app is built from source here,
 # and vite lives in devDependencies. Skipping them gets you a working daemon
 # and no app to point a phone at.
-(cd "$DIR" && npm install --include=dev --silent --no-fund --no-audit) || die "npm install failed"
+(cd "$DIR" && npm ci --include=dev --silent --no-fund --no-audit) || die "Cannot install the saved dependencies with npm ci."
 
 step "building the chat reader"
 (cd "$DIR" && node scripts/build-log-reader.mjs) || die "could not build the chat reader"
@@ -121,20 +171,23 @@ fi
 
 step "putting helm on your PATH"
 mkdir -p "$BIN_DIR"
-cat > "$BIN_DIR/helm" <<EOF
+# Quote literal paths as Bash words. Double quotes alone still allow dollar
+# signs, backticks and embedded quotes from an install path to become code.
+{
+  cat <<'LAUNCHER'
 #!/usr/bin/env bash
-# helm needs herdr on PATH, which a non-login shell may not have.
-export PATH="\$HOME/.local/bin:\$PATH"
-# Prefer the node this was installed with, but fall back to PATH: a version
-# manager (fnm, nvm) moves the pinned path on every node upgrade, and a shim
-# that dies with "no such file" after one is a broken install.
-NODE_BIN="$(command -v node)"
-[ -x "\$NODE_BIN" ] || NODE_BIN="\$(command -v node)" || {
-  echo "helm: node not found - install Node 22+ and re-run the helm installer" >&2
+# herdr can be outside the PATH of a non-login shell.
+export PATH="$HOME/.local/bin:$PATH"
+LAUNCHER
+  printf 'NODE_BIN=%q\n' "$NODE_BIN"
+  cat <<'LAUNCHER'
+[ -x "$NODE_BIN" ] || NODE_BIN="$(command -v node)" || {
+  echo "helm: Cannot find Node. Install Node and run the Helm installer again." >&2
   exit 1
 }
-exec "\$NODE_BIN" "$DIR/packages/connect/bin/helm.js" "\$@"
-EOF
+LAUNCHER
+  printf 'exec "$NODE_BIN" %q "$@"\n' "$DIR/packages/connect/bin/helm.js"
+} > "$BIN_DIR/helm"
 chmod +x "$BIN_DIR/helm"
 say "$BIN_DIR/helm"
 
