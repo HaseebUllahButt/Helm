@@ -44,6 +44,7 @@ before(async () => {
             ? {path:'/home/test',entries:[{name:'project',path:'/work/project',isDir:true}]}
             : {path:params.path,entries:[{name:'existing',path:params.path+'/existing',isDir:true}]};
           if(method==='project.list') return {projects:[]};
+          if(method==='profile.list' && window.profileFailure) throw new Error('Machine check failed');
           if(method==='profile.list') return window.profileList ?? {profiles:[{id:'claude',engine:'claude',cmd:'claude'}]};
           if(method==='session.start' && window.startGate) await window.startGate(params);
           if(method==='session.start') return {session:{...session,id:'fresh',cwd:params.quick?'/home/test/.helm/quick/fresh':params.cwd,quick:params.quick,nativeCli:false,pty:false,...window.startAs}};
@@ -593,4 +594,31 @@ test('the quiet row has a mobile tap target and pointer selection changes its ap
   assert.ok(geometry.x >= 0 && geometry.x + geometry.width <= 390, 'touch row fits the viewport');
   assert.equal(await page.locator('.palette-foot').count(), 0);
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.HELM_TEST_SCREENSHOT_DIR}/quiet-cli-touch.png` });
+});
+
+test('missing agent setup gives a retry and recovers after sign-in', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => { window.profileList = { profiles: [] }; });
+  await page.getByRole('button', { name: 'New chat', exact: true }).first().click();
+  await page.getByText('laptop', { exact: true }).last().click();
+  await page.getByText('No folder · quick chat', { exact: true }).click();
+  await page.getByText('No agent account is ready on laptop.').waitFor();
+  await page.getByText('First chat help', { exact: true }).click();
+  await page.getByText('Pick an agent. Send a short question.', { exact: false }).waitFor();
+  await page.evaluate(() => { window.profileList = { profiles: [{ id: 'claude', engine: 'claude', cmd: 'claude' }] }; });
+  await page.getByRole('button', { name: 'Check agents again', exact: true }).click();
+  await page.getByRole('option').filter({ hasText: 'Claude' }).first().waitFor();
+});
+
+
+test('a failed account check offers retry without claiming accounts are missing', async t => {
+  const page = await pageFor(t, null, { machines: ['laptop'] });
+  await page.evaluate(() => { window.profileFailure = true; });
+  await page.keyboard.press('Control+Shift+o');
+  await page.getByText('No folder · quick chat', { exact: true }).click();
+  await page.getByRole('alert').filter({ hasText: 'Helm could not check agents on laptop.' }).waitFor();
+  assert.equal(await page.getByText('No agent account is ready on laptop.').count(), 0);
+  await page.evaluate(() => { window.profileFailure = false; });
+  await page.getByRole('button', { name: 'Check agents again', exact: true }).click();
+  await page.getByRole('option').filter({ hasText: 'Claude' }).first().waitFor();
 });
