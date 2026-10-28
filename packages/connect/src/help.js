@@ -58,6 +58,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
 
   helm login [minutes]              Make a temporary password to sign in a device
   helm status                       Show machines, links and agent software
+  helm doctor [--json]              Check installation and connections without changing settings
   helm profiles [--refresh]         List agent accounts on this machine
   helm agents [--json] [--refresh]  List command line accounts, sign-in status and model IDs
   helm run -- <command> [args]      Run a command here through Helm
@@ -152,6 +153,7 @@ Set up this machine
   login            Make a temporary password to sign in a device
   link             Add a phone or browser, like helm add controller
   status           Show machines, links and agent software
+  doctor           Check installation and connections
   network-repair   Fix connections when large packets fail on Linux
   self-update      Get the newest Helm and restart it here
   ship             Merge, push and install a Helm change everywhere
@@ -207,6 +209,14 @@ Run helm help <command> for its options, or helm help --all for all of them.
 `;
 
 const DETAILS = {
+  doctor: `
+  Check this machine, its app, live connection, and known home addresses.
+  The report omits addresses, keys, account data, and raw errors.
+  Nothing is repaired or restarted. Read each suggested step before using it.
+  --json prints the same checks for a support report.
+  Exit 1 means a required local check failed. Warnings alone exit 0.
+  A home health reply does not prove that its live connection works.`,
+
   exec: `
   Run pipelines with: helm exec <machine> --cwd <path> -- sh -lc '<script>'.
   Do not rerun a command if Helm cannot confirm that it started.

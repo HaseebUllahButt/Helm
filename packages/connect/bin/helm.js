@@ -2170,6 +2170,14 @@ try {
       break;
     }
 
+    case 'doctor': {
+      const { diagnose, formatDiagnosis } = await import('../src/doctor.js');
+      const report = await diagnose();
+      console.log(flagOf('json') ? JSON.stringify(report, null, 2) : formatDiagnosis(report));
+      if (!report.ok) process.exitCode = 1;
+      break;
+    }
+
     case 'network-repair': {
       const { ensureTcpRecovery } = await import('../src/network-recovery.js');
       const recovery = await ensureTcpRecovery({ interactive: true });

@@ -180,8 +180,10 @@ every couple of minutes, and on start and reconnect, and starts a newer
 version when it finds one:
 
 - a new version **saved** (committed) in its own Helm checkout;
-- a new release pushed to GitHub;
 - a newer saved version on another of your machines.
+
+GitHub updates start only when you request them. Linux background services
+and macOS login services can take saved versions from your other machines.
 
 Unsaved edits never spread, and a machine only moves forward. If two machines
 both have their own changes, neither is overwritten; an update notice links to
@@ -192,6 +194,11 @@ both have their own changes, neither is overwritten; an update notice links to
 - **Replace with GitHub's version** overrides your changes on every machine.
   They are kept on a `helm-backup-…` branch (and a stash, if unsaved).
   `helm update --replace` does the same from a terminal.
+
+Run `helm doctor` when installation or connections need checking. It checks
+the local app, live connection, background service, and registered home addresses.
+Use `helm doctor --json` for a support report. It omits addresses, keys, account
+data, and raw errors. It does not repair settings or restart software.
 
 ## Threads
 
