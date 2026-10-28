@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { materialize } from './profiles.js';
 import { ENGINES } from './engines.js';
@@ -98,19 +98,32 @@ const keyOf = (p) => JSON.stringify([p.id, p.engine, p.cmd, p.args ?? [], p.env 
 const AUTH_FILE = () => join(HELM_DIR, 'auth.json');
 let loaded = false;
 
+// A sign-in changes this file without changing the saved profile. Recheck
+// immediately instead of hiding a newly signed-in account for ten minutes.
+function loginStamp(profile) {
+  if (profile.engine !== 'codex') return null;
+  const spec = materialize(profile);
+  const home = spec.env.CODEX_HOME ?? process.env.CODEX_HOME;
+  const path = join(home ? expand(home) : join(spec.env.HOME || process.env.HOME || '', '.codex'), 'auth.json');
+  try {
+    const s = statSync(path);
+    return JSON.stringify([path, s.ino, s.size, s.mtimeMs, s.ctimeMs]);
+  } catch { return JSON.stringify([path, 'missing']); }
+}
+
 function load() {
   if (loaded) return;
   loaded = true;
   try {
     for (const [key, v] of Object.entries(JSON.parse(readFileSync(AUTH_FILE(), 'utf8')))) {
-      if (v && typeof v.status === 'string' && typeof v.at === 'number') cache.set(key, { status: v.status, at: v.at });
+      if (v && typeof v.status === 'string' && typeof v.at === 'number') cache.set(key, { status: v.status, at: v.at, stamp: v.stamp });
     }
   } catch { /* first run */ }
 }
 
 function save() {
   const out = {};
-  for (const [key, v] of cache) if (v.at) out[key] = { status: v.status, at: v.at };
+  for (const [key, v] of cache) if (v.at) out[key] = { status: v.status, at: v.at, stamp: v.stamp };
   try {
     const tmp = `${AUTH_FILE()}.tmp`;
     writeFileSync(tmp, JSON.stringify(out), { mode: 0o600 });
@@ -122,14 +135,15 @@ function check(profile) {
   const key = keyOf(profile);
   const hit = cache.get(key);
   if (hit?.pending) return hit.pending;
+  const stamp = loginStamp(profile);
   const pending = probeAuth(profile)
     .catch(() => 'unknown')
     .then((status) => {
-      cache.set(key, { status, at: Date.now() });
+      cache.set(key, { status, at: Date.now(), stamp });
       save();
       return status;
     });
-  cache.set(key, { status: hit?.status, at: hit?.at ?? 0, pending });
+  cache.set(key, { status: hit?.status, at: hit?.at ?? 0, stamp: hit?.stamp, pending });
   return pending;
 }
 
@@ -145,7 +159,7 @@ export async function authStatuses(profiles, { refresh = false, waitMs = 4000 } 
   const waitFor = [];
   for (const p of profiles) {
     const hit = cache.get(keyOf(p));
-    const known = hit && typeof hit.status === 'string';
+    const known = hit && typeof hit.status === 'string' && hit.stamp === loginStamp(p);
     if (refresh || !known || Date.now() - hit.at >= TTL_MS) {
       const job = check(p);
       if (refresh || !known) waitFor.push(job);
