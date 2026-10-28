@@ -774,7 +774,17 @@ async function checkSourcePaths(dir, git, head, tip) {
 export async function rollbackPreviousRelease(dir = ROOT, { restart = true } = {}) {
   return locked(async () => {
     const git = gitIn(dir);
-    await recoverUpdate(dir, git);
+    const resumed = await recoverUpdate(dir, git);
+    if (resumed?.phase === 'built' && resumed.rollbackHold) {
+      const head = await git(['rev-parse', 'HEAD']);
+      const branch = await git(['symbolic-ref', '--quiet', 'HEAD']).catch(() => null);
+      if (head !== resumed.targetHead || branch !== resumed.branch
+        || await git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'])) {
+        return { updated: false, reason: 'The files or selected branch changed. Keep your changes.' };
+      }
+      await checkSourcePaths(dir, git, head, head);
+      return finishUpdate(resumed, restart);
+    }
     const checkpoint = previousRelease();
     if (!checkpoint || checkpoint.dir !== dir) return { updated: false, reason: 'No previous release is saved here.' };
     const head = await git(['rev-parse', 'HEAD']);
@@ -791,7 +801,7 @@ export async function rollbackPreviousRelease(dir = ROOT, { restart = true } = {
       || await git(['rev-parse', checkpoint.ref]) !== checkpoint.previousHead) throw Error('Cannot find the saved source. Keep the saved release.');
     const artifacts = await saveArtifacts(dir, checkpoint.artifacts.paths.map(entry => entry.path));
     const state = { dir, previousHead: head, targetHead: checkpoint.previousHead, artifacts,
-      phase: 'prepared', publishing: true, rollback: true, retainPrevious: true, restart, branch,
+      phase: 'prepared', publishing: false, rollback: true, retainPrevious: true, restart, branch,
       rollbackHold: { dir, restoredHead: checkpoint.previousHead, rejectedHead: head } };
     // Keep the installed commit reachable before moving the selected branch.
     await git(['update-ref', `refs/helm/releases/${artifacts.id}`, head]);
@@ -800,6 +810,8 @@ export async function rollbackPreviousRelease(dir = ROOT, { restart = true } = {
       if (await git(['rev-parse', 'HEAD']) !== head || await git(['symbolic-ref', '--quiet', 'HEAD']).catch(() => null) !== branch
         || await git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'])) throw Error('The files changed. Keep your changes.');
       await checkSourcePaths(dir, git, head, state.targetHead);
+      state.publishing = true;
+      writeUpdateState(state);
       await git(['reset', '--hard', '--quiet', state.targetHead]);
       await restoreArtifacts(checkpoint);
       state.phase = 'built';
@@ -807,8 +819,8 @@ export async function rollbackPreviousRelease(dir = ROOT, { restart = true } = {
     } catch (error) {
       // Keep the journal until a later recovery completes. Never consume the
       // previous checkpoint while restoring its files.
-      await restoreArtifacts(state);
-      if (await git(['rev-parse', 'HEAD']) === state.targetHead && await git(['status', '--porcelain']) === '') {
+      if (state.publishing) await restoreArtifacts(state);
+      if (state.publishing && await git(['rev-parse', 'HEAD']) === state.targetHead && await git(['status', '--porcelain']) === '') {
         await git(['reset', '--hard', '--quiet', head]);
       }
       throw error;

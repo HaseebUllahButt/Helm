@@ -15,6 +15,8 @@ It refuses later owner edits, commits, branch changes, hidden index changes, and
 Rollback saves the current installed files before changing anything.
 Failed rollback keeps its recovery record and leaves the checkpoint intact.
 A second attempt recovers before it tries again.
+If file restoration finished but restart failed, another rollback request retries that restart.
+Edits made before publication remain untouched when the final source check refuses rollback.
 Running agent and terminal hosts remain alive during daemon replacement.
 
 After rollback succeeds, peer sync keeps the restored release.

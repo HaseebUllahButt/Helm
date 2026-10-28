@@ -147,3 +147,55 @@ test('rollback leaves an existing agent alive with the restored files',async t=>
  const answer=once(agent,'message');agent.send('read');assert.equal((await answer)[0],'old dependency');
  assert.equal(agent.exitCode,null);
 });
+
+test('rollback refusal keeps source and app edits made after the snapshot',async t=>{
+ const f=await fixture(t);const marker=join(f.base,'edited');
+ put(f.bin,'git',`#!${process.execPath}
+const {spawnSync}=require('node:child_process');const fs=require('node:fs');
+const args=process.argv.slice(2);const result=spawnSync(${JSON.stringify(gitBin)},args,{stdio:'inherit'});
+if(result.status===0&&args.includes('rev-parse')&&args.at(-1)==='HEAD'&&fs.existsSync(${JSON.stringify(journal())})&&!fs.existsSync(${JSON.stringify(marker)})){
+ fs.writeFileSync(${JSON.stringify(marker)},'once');
+ fs.writeFileSync(${JSON.stringify(join(f.dir,'source'))},'owner source edit');
+ fs.writeFileSync(${JSON.stringify(join(f.dir,'apps/web/dist/index.html'))},'owner app edit');
+}
+process.exit(result.status??1);
+`);chmodSync(join(f.bin,'git'),0o755);
+ await assert.rejects(rollbackPreviousRelease(f.dir,{restart:false}),/files changed/);
+ assert.equal(readFileSync(join(f.dir,'source'),'utf8'),'owner source edit');
+ assert.equal(readFileSync(join(f.dir,'apps/web/dist/index.html'),'utf8'),'owner app edit');
+ assert.equal(JSON.parse(readFileSync(journal())).publishing,false);
+ assert.equal((await rollbackPreviousRelease(f.dir,{restart:false})).updated,false);
+ assert.equal(readFileSync(join(f.dir,'apps/web/dist/index.html'),'utf8'),'owner app edit');
+ assert.equal(readFileSync(checkpointFile(),'utf8'),JSON.stringify(f.checkpoint));
+});
+function refuseRestart(f) {
+ put(f.bin,'systemctl',`#!${process.execPath}
+const fs=require('node:fs');const args=process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(join(f.base,'service-calls'))},JSON.stringify(args)+'\\n');
+process.exit(args.includes('is-active')?0:1);
+`);chmodSync(join(f.bin,'systemctl'),0o755);
+}
+test('rollback retries its built record after a refused restart',async t=>{
+ const f=await fixture(t);refuseRestart(f);
+ const first=await rollbackPreviousRelease(f.dir);
+ assert.equal(first.updated,true);assert.equal(first.failed.length,2);oldFiles(f);
+ const saved=JSON.parse(readFileSync(journal()));assert.equal(saved.phase,'built');
+ const second=await rollbackPreviousRelease(f.dir);
+ assert.equal(second.updated,true);assert.equal(second.failed.length,2);oldFiles(f);
+ assert.deepEqual(JSON.parse(readFileSync(journal())).artifacts,saved.artifacts);
+ assert.equal(readFileSync(checkpointFile(),'utf8'),JSON.stringify(f.checkpoint));
+ assert.equal((await rollbackPreviousRelease(f.dir,{restart:false})).updated,true);oldFiles(f);
+ assert.equal(existsSync(journal()),false);
+});
+test('retrying a built rollback preserves later owner edits',async t=>{
+ const f=await fixture(t);refuseRestart(f);
+ await rollbackPreviousRelease(f.dir);
+ put(f.dir,'source','owner edit after restart refusal');
+ put(f.dir,'apps/web/dist/index.html','owner app after restart refusal');
+ const calls=readFileSync(join(f.base,'service-calls'),'utf8');
+ assert.equal((await rollbackPreviousRelease(f.dir)).updated,false);
+ assert.equal(readFileSync(join(f.dir,'source'),'utf8'),'owner edit after restart refusal');
+ assert.equal(readFileSync(join(f.dir,'apps/web/dist/index.html'),'utf8'),'owner app after restart refusal');
+ assert.equal(readFileSync(join(f.base,'service-calls'),'utf8'),calls);
+ assert.equal(JSON.parse(readFileSync(journal())).phase,'built');
+});
