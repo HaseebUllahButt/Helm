@@ -1247,7 +1247,8 @@ export class Client {
           if (pending.relay !== ws) continue;
           pending.relay = undefined;
           pending.routes?.delete('relay');
-          if (pending.routes?.size) continue;
+          // A dropped direct peer leaves 'direct' in routes; it cannot answer.
+          if (pending.direct?.ready || pending.routes?.has('http')) continue;
           if (!this.closed && pending.recover) { pending.recover(); continue; }
           this.pending.delete(id);
           pending.reject(new Error('disconnected'));
