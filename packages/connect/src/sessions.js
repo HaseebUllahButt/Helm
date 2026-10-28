@@ -851,14 +851,14 @@ export class Sessions extends EventEmitter {
     if (originHandoffId !== null && !/^[a-f0-9]{24}$/.test(originHandoffId)) {
       throw new Error('invalid origin handoff id');
     }
-    if (quick && cwd) throw new Error('a quick chat has no folder: send quick or cwd, not both');
+    if (quick && cwd) throw new Error('a sketch has no folder: send quick or cwd, not both');
     if (!quick && !cwd) throw new Error('which folder? send cwd, or quick for a chat with no folder');
     this.#rewinder.assertRewindUnlocked(null, cwd ? expand(cwd) : null);
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
     if (quick && (brain || delegation || !ENGINES[profile.engine]?.driver)) {
-      throw new Error(`${profile.label || profile.engine} cannot start a quick chat: only agents helm drives can`);
+      throw new Error(`${profile.label || profile.engine} cannot start a sketch: only agents helm drives can`);
     }
     // The account's configured default is what a new session starts with; a
     // model chosen up front always wins.
@@ -1086,7 +1086,7 @@ export class Sessions extends EventEmitter {
       cwd: dir,
       // A quick chat's folder name is its id, which says nothing; it waits
       // for the agent or the first prompts to name it.
-      title: title || (quick ? 'Quick chat' : `${named.split('/').pop() || named}`),
+      title: title || (quick ? 'Sketch' : `${named.split('/').pop() || named}`),
       titleBy: title ? 'user' : null,
       quick: quick || undefined,
       // The brain is a thread like any other - same driver, same events, same
@@ -1565,7 +1565,7 @@ export class Sessions extends EventEmitter {
   async openCanvas(id, { path, requestId }) {
     const s = this.get(id);
     if (!this.#index.has(id) || s.engine === 'shell') throw new Error('canvas needs a saved agent chat');
-    if (s.quick || !s.cwd) throw new Error('this quick chat has no project folder; use an HTML file or a spin URL');
+    if (s.quick || !s.cwd) throw new Error('this sketch has no project folder; use an HTML file or a spin URL');
     if (!/^[a-f0-9]{24}$/.test(requestId ?? '')) throw new Error('invalid canvas request ID');
     const selected = await canvasPath(s.cwd, path);
     if (s.canvas?.requestId === requestId) {

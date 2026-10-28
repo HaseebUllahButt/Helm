@@ -805,7 +805,7 @@ async function printSearch() {
   if (json) { console.log(JSON.stringify({ query, results, offline }, null, 2)); return; }
   if (!results.length) console.log(`No chats match "${query}"${offline.length ? ` on the machines that answered` : ''}.`);
   for (const hit of results) {
-    const where = hit.quick ? 'quick chat' : hit.cwd.replace(/^\/(home|Users)\/[^/]+/, '~');
+    const where = hit.quick ? 'sketch' : hit.cwd.replace(/^\/(home|Users)\/[^/]+/, '~');
     const who = hit.who === 'you' ? 'you' : hit.who === 'agent' ? 'agent' : 'title';
     console.log(`${hit.id.slice(0, 6)}  ${hit.machine}  ${where}  ${hit.title}${hit.archived ? '  (Settled)' : ''}`);
     if (hit.snippet) console.log(`        ${who}: ${hit.snippet}`);

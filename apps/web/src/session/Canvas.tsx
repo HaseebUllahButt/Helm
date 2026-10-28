@@ -225,7 +225,7 @@ function CanvasHead({ title, sub, onBack, onClose, children }: { title: string; 
 }
 
 /** Not problems, just what this chat's canvas holds: said quietly, never in red. */
-const NO_FOLDER = 'This quick chat has no folder, so there are no notes to show.';
+const NO_FOLDER = 'This sketch has no folder, so there are no notes to show.';
 const NOT_GIT = 'Notes and docs show here when the chat’s folder is a Git project.';
 
 function CanvasPicker({ client, env, cwd, tree, error, changed, pages, onPage, onOpen, onCreated, onClose }: {

@@ -203,7 +203,7 @@ export async function runChat(args, { connection, input = process.stdin, output 
   try {
     const opened = await openChat(args, { rpc: connection.rpc.bind(connection) });
     session = opened.session;
-    output.write(`\nHelm ${session.id} · ${safe(session.engine)} · ${session.quick ? 'quick chat' : safe(session.cwd)}\nThe Helm app shows the same chat and approval requests.\nReconnect: helm chat --attach ${session.id}\n${HELP}`);
+    output.write(`\nHelm ${session.id} · ${safe(session.engine)} · ${session.quick ? 'sketch' : safe(session.cwd)}\nThe Helm app shows the same chat and approval requests.\nReconnect: helm chat --attach ${session.id}\n${HELP}`);
     chat = new ManagedChat(connection, session.id, { write: (text) => output.write(text), detach: () => finish() });
     await connection.rpc(M.SESSION_WATCH, { id: session.id, watchId });
     await chat.sync();

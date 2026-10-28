@@ -133,9 +133,8 @@ export function Browse({ client, env, path, title = 'Pick a folder', action = 'S
             {!path && onQuick && (
               <div className="rows">
                 <button className="row" onClick={onQuick}>
-                  <span className="glyph"><Icon name="bolt" size={16} /></span>
                   <span className="grow">
-                    <span className="rt"><span className="rt-text">Start without a folder</span></span>
+                    <span className="rt"><span className="rt-text">Start a sketch</span></span>
                     <span className="rm">Ask a question without a project folder.</span>
                   </span>
                   <span className="chev"><Icon name="forward" size={15} /></span>
