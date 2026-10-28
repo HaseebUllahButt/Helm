@@ -268,21 +268,23 @@ const THREAD_VARS = ['HELM_SESSION_ID', 'HELM_PROFILE_ID', 'HELM_ENGINE', 'HELM_
 const serverEnv = (env = {}) => Object.fromEntries(Object.entries(env).filter(([k]) => !THREAD_VARS.includes(k)));
 
 /**
- * Online MCP servers (a `url` in the account's config.toml) cost a new chat
- * seconds of connecting before its first answer. Helm's chats start without
- * them; local ones stay. Codex takes the override per thread, so the owner's
- * config.toml and their own Codex are unchanged. Read at each start, so an
- * edit to config.toml counts at once.
+ * Online MCP servers (a `url` in the account's config.toml) and ChatGPT apps
+ * (ChatGPT's own links to GitHub and the like) cost a new chat seconds of
+ * connecting before its first answer. Helm's chats start without them; local
+ * servers and plugins stay. Codex takes the override per thread, so the
+ * owner's config.toml and their own Codex are unchanged. Read at each start,
+ * so an edit to config.toml counts at once.
  */
-export function codexRemoteMcpOff(env = {}) {
+export function codexOnlineOff(env = {}) {
+  const off = { 'features.apps': false };
   let config;
-  try { config = parseToml(readFileSync(join(expand(env.CODEX_HOME || '~/.codex'), 'config.toml'), 'utf8')); } catch { return {}; }
+  try { config = parseToml(readFileSync(join(expand(env.CODEX_HOME || '~/.codex'), 'config.toml'), 'utf8')); } catch { return off; }
   const servers = config?.mcp_servers;
-  if (!servers || typeof servers !== 'object') return {};
+  if (!servers || typeof servers !== 'object') return off;
   // A dot in a name would split the override path, so such a server stays on.
-  return Object.fromEntries(Object.entries(servers)
+  return { ...off, ...Object.fromEntries(Object.entries(servers)
     .filter(([name, c]) => !name.includes('.') && c && typeof c.url === 'string' && c.enabled !== false)
-    .map(([name]) => [`mcp_servers.${name}.enabled`, false]));
+    .map(([name]) => [`mcp_servers.${name}.enabled`, false])) };
 }
 
 /** One app-server process, shared by every thread on the same account. */
@@ -1017,7 +1019,7 @@ export class CodexDriver extends Driver {
   /** What a thread is opened with, on start and on a later reload. */
   #threadParams() {
     const { approvalPolicy, approvalsReviewer, sandbox } = this.#policy();
-    const config = { ...codexRemoteMcpOff(this.env), ...Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
+    const config = { ...codexOnlineOff(this.env), ...Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
       .map((k) => [`shell_environment_policy.set.${k}`, this.env[k]])) };
     return { cwd: this.cwd, approvalPolicy, approvalsReviewer, sandbox, ...(this.model ? { model: this.model } : {}),
       ...(this.instructions ? { developerInstructions: this.instructions } : {}),
