@@ -36,7 +36,7 @@ test('a launcher with another name still counts when it opens the Helm window', 
   assert.equal(findEntry(dir, profile), null, 'another app window is not Helm');
   writeFileSync(join(dir, 'chrome-abc-Default.desktop'),
     `[Desktop Entry]\nExec=/usr/bin/chromium --user-data-dir=${profile} --profile-directory=Default --app=http://127.0.0.1:8787/\nStartupWMClass=chrome-127.0.0.1__-Default\n`);
-  assert.deepEqual(findEntry(dir, profile), { exec: `/usr/bin/chromium --user-data-dir=${profile} --profile-directory=Default --app=http://127.0.0.1:8787/`, wmClass: 'chrome-127.0.0.1__-Default' });
+  assert.deepEqual(findEntry(dir, profile), { exec: `/usr/bin/chromium --user-data-dir=${profile} --profile-directory=Default --app=http://127.0.0.1:8787/`, wmClass: 'chrome-127.0.0.1__-Default', url: '' });
   // Chromium's own "install app" names the app by its id instead of its address.
   rmSync(join(dir, 'chrome-abc-Default.desktop'));
   writeFileSync(join(dir, 'chrome-xyz-Default.desktop'),
@@ -45,5 +45,5 @@ test('a launcher with another name still counts when it opens the Helm window', 
   writeFileSync(join(dir, 'chrome-xyz-Default.desktop'), '[Desktop Entry]\nExec=/usr/bin/chromium --user-data-dir=/elsewhere --app-id=xyz\n');
   assert.equal(findEntry(dir, profile), null, 'an app in another browser profile is not Helm');
   writeFileSync(join(dir, 'helm-app.desktop'), '[Desktop Entry]\nExec=helm-window\nStartupWMClass=helm\n');
-  assert.deepEqual(findEntry(dir, profile), { exec: 'helm-window', wmClass: 'helm' }, 'Helm\'s own launcher wins');
+  assert.deepEqual(findEntry(dir, profile), { exec: 'helm-window', wmClass: 'helm', url: '' }, 'Helm\'s own launcher wins');
 });

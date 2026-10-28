@@ -213,7 +213,7 @@ async function up() {
     ? (strFlag('tunnel', true) === true ? 'auto' : strFlag('tunnel'))
     : null;
 
-  await bringUp({
+  const started = await bringUp({
     port: port(),
     password: strFlag('password'),
     name: strFlag('name'),
@@ -223,6 +223,12 @@ async function up() {
     host: strFlag('host', '0.0.0.0'),
     temporary: rest.includes('--temporary'),
   });
+  if (platform() === 'linux') {
+    // An older launcher opens Helm under Chromium's bar; update it in the background.
+    import('../src/desktop.js').then((m) => m.refreshAppLauncher({ url: `http://127.0.0.1:${started.port}/` }))
+      .then((r) => r.updated && console.log('helm: the Helm app now opens with its own top row'))
+      .catch((err) => console.error(`helm: app launcher: ${err.message}`));
+  }
 }
 
 /**
@@ -385,9 +391,10 @@ async function joinCmd() {
 
 async function installLocalApp(net) {
   if (platform() !== 'linux') return;
-  const { installApp } = await import('../src/desktop.js');
+  const { installApp, installWebApp } = await import('../src/desktop.js');
   try {
-    installApp({ url: `http://127.0.0.1:${net.port ?? 8787}/` });
+    const url = `http://127.0.0.1:${net.port ?? 8787}/`;
+    installApp({ url, appId: await installWebApp({ url }) });
     console.log('  Helm is in your applications, already signed in.');
   } catch (err) { console.log(`  Helm did not add the app launcher: ${err.message}`); }
 }
@@ -1974,7 +1981,7 @@ try {
       break;
 
     case 'app': {
-      const { installApp, removeApp } = await import('../src/desktop.js');
+      const { installApp, installWebApp, removeApp } = await import('../src/desktop.js');
       if (rest.includes('--remove') || rest.includes('remove')) {
         const { removed, icons } = removeApp();
         console.log(removed
@@ -1985,7 +1992,8 @@ try {
       const net = requireNetwork();
       const at = `http://127.0.0.1:${net.port ?? 8787}/`;
       const pick = rest[rest.indexOf('--browser') + 1];
-      const r = installApp({ url: at, browser: rest.includes('--browser') ? pick : undefined });
+      const browser = rest.includes('--browser') ? pick : undefined;
+      const r = installApp({ url: at, browser, appId: await installWebApp({ url: at, browser }) });
       console.log(`\n  Helm is in your applications. Opening ${r.url}.`);
       console.log(r.windowed
         ? `  Helm opens in a separate ${r.browser} window and signs in automatically.`

@@ -47,6 +47,12 @@ machine -> folder -> chat. Each chat runs one profile: a CLI on an account.
 - **Grey bar on the installed app:** an app installed from one address and sent
   to another shows Chrome's address strip. Install the desktop app from the
   machine's own address (`helm app`).
+- **Chromium's bar on the desktop app:** a plain `--app=` window always has it,
+  and "system title bar" hides it only where the desktop draws none (niri needs
+  prefer-no-csd). The launcher opens Helm installed as a web app in its own
+  profile with the overlay switch on, so Helm's top row is the top edge
+  everywhere. A launcher change reaches a machine only when Helm rewrites the
+  file: each start does it (`refreshAppLauncher`).
 - **A laptop's hub is plain http on its local network** (bound to `0.0.0.0` so
   a phone on the same wifi is fast). On a network you do not trust, run
   `helm up --install --host 127.0.0.1`.

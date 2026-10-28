@@ -26,7 +26,7 @@ const dataHome = () => process.env.XDG_DATA_HOME || join(homedir(), '.local', 's
 
 const parseEntry = (text) => {
   const get = (key) => new RegExp(`^${key}=(.*)$`, 'm').exec(text)?.[1]?.trim() ?? '';
-  return { exec: get('Exec'), wmClass: get('StartupWMClass') };
+  return { exec: get('Exec'), wmClass: get('StartupWMClass'), url: get('X-Helm-Url') };
 };
 
 /**
@@ -129,10 +129,14 @@ function raise(wmClass, env) {
 }
 
 /** Start the Helm app, already pointed at the chat. */
-function launch(exec, hash, env) {
+function launch({ exec, url }, hash, env) {
   // A launcher's %U and similar stand for files to open; there are none.
   const parts = exec.split(/\s+/).filter((arg) => arg && !/^%[a-zA-Z]$/.test(arg))
     .map((arg) => (arg.startsWith('--app=') && hash ? `${arg}${hash}` : arg));
+  // An installed app takes the page to open as a launch address of its own.
+  if (hash && url && parts.some((arg) => arg.startsWith('--app-id='))) {
+    parts.push(`--app-launch-url-for-shortcuts-menu-item=${url}${hash}`);
+  }
   if (!parts.length) return;
   try {
     spawn(parts[0], parts.slice(1), { env, detached: true, stdio: 'ignore' }).unref();
@@ -198,7 +202,7 @@ export function createDesktopNotifier({ onOpen = () => false } = {}) {
       const raised = raise(entry.wmClass, env);
       // No Helm window anywhere: open one, already on the chat.
       if (!told && !raised) {
-        launch(entry.exec, target.envId && target.sessionId ? `#open=${target.envId}/${target.sessionId}` : '', env);
+        launch(entry, target.envId && target.sessionId ? `#open=${target.envId}/${target.sessionId}` : '', env);
       }
     });
     return true;
