@@ -23,6 +23,15 @@ owner's home or network to bypass this check.
   `gossip`, `lan-discovery`, `direct-mesh`, `auth`, `local-login`,
   `hub-authz`, `roster-trust`.
 
+## Check installation and connections
+- Run `helm doctor` on the affected machine. Use `--json` for a support report.
+  It reads status only. It never starts a service or changes settings.
+- The live connection check stays on loopback. A healthy remote home must not
+  hide a failed local service. A home health reply proves only its web response.
+- Reports omit addresses, keys, account data, and raw errors. A route count
+  does not prove a missing machine is asleep. Check that machine separately.
+- **Tests:** `test/doctor`, `help`.
+
 ## Send a project or a task to another machine
 - **Prove (driven 2026-10-21):** use two private Helm copies, each with its
   own home and sockets, paired only with each other. Open the source machine,

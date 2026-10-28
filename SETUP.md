@@ -53,6 +53,7 @@ If you already own a domain, point it at the VM, configure Caddy to proxy to
 If setup cannot reach the address, inspect both sides:
 
 ```bash
+helm doctor
 journalctl --user -u helm-serve -n 50
 sudo journalctl -u caddy -n 50
 ```
