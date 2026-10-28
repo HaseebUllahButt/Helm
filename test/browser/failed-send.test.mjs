@@ -11,10 +11,11 @@ before(async () => {
     stdin: { contents: `
       import React from 'react'; import { createRoot } from 'react-dom/client';
       import { DrivenSession } from './apps/web/src/session/DrivenSession';
-      window.sends=[]; window.answers=[]; window.deliveryIds=[];
+      window.sends=[]; window.answers=[]; window.deliveryIds=[]; window.savedActions=[];
       const listeners=new Set();
+      window.checkDelivery=(checking)=>{window.savedActions=checking?[{env:'laptop',params:{id:'failed-send-test'}}]:[];listeners.forEach(fn=>fn('laptop','delivery',{}));};
       window.emitTurn=(turn)=>listeners.forEach(fn=>fn('laptop','session.event',{id:'failed-send-test',events:[{seq:1,at:Date.now(),type:'turn.start',turnId:'local-confirmed',queued:true,...turn}]}));
-      const client={input:(env,params,_timeout,messageId)=>{window.deliveryIds.push(messageId);return client.rpc(env,'session.input',params);},on:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
+      const client={pendingActions:()=>window.savedActions,resumeActions:async()=>[],input:(env,params,_timeout,messageId)=>{window.deliveryIds.push(messageId);return client.rpc(env,'session.input',params);},on:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
         if(method==='session.messages')return {messages:[],status:'idle'};
         if(method==='session.events')return {events:[],pending:[],last:0,session:{status:'idle'}};
         if(method==='model.list')return {models:[],default:null};
@@ -270,4 +271,16 @@ test('a late attached-message confirmation keeps newer writing and removes the s
   await p.locator('.queued-row').waitFor(); await p.locator('.failed-send').waitFor({ state: 'detached' });
   await p.locator('.slab .attach-preview').waitFor({ state: 'detached' });
   assert.equal(await box.inputValue(), 'keep this newer draft [Image #1]');
+});
+
+
+test('the chat shows Checking delivery until the saved result is confirmed', async t => {
+  const p = await browser.newPage(); t.after(() => p.close());
+  await p.route('http://helm.test/**', r => r.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
+  await p.goto('http://helm.test/'); await p.addScriptTag({ content: script });
+  await p.locator('textarea').waitFor();
+  await p.evaluate(() => window.checkDelivery(true));
+  await p.getByRole('status').filter({ hasText: 'Checking delivery' }).waitFor();
+  await p.evaluate(() => window.checkDelivery(false));
+  await p.getByText('Checking delivery…', { exact: true }).waitFor({ state: 'detached' });
 });

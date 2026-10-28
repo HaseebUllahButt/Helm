@@ -1,3 +1,4 @@
+import { assertRestoreReviewed } from './restore-guard.js';
 import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
 import { encodeTunnelFrame, decodeTunnelFrame } from '../../protocol/tunnel-frame.js';
@@ -73,9 +74,11 @@ import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
 import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
+import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
 import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
+import { ActionDelivery } from './action-delivery.js';
 import { InputDelivery } from './input-delivery.js';
 import { ChatEventStream } from './event-stream.js';
 import { SessionUpdates } from './session-updates.js';
@@ -397,6 +400,7 @@ export class Daemon {
   constructor({
     name, port = 8787, extra = [], advertised = [], advertiseLan = true,
   } = {}) {
+    assertRestoreReviewed(HELM_DIR);
     const net = loadNetwork();
     if (!net) throw new Error('this machine is not in a network - run `helm up`');
     this.net = net;
@@ -860,6 +864,7 @@ export class Daemon {
 
   async #tick() {
     if (this.#stopped) return;
+    this.routes();
     void this.#checkNetworkRecovery().catch(error => console.warn('[helm] packet-size recovery:', error.message));
     await this.#publishSelf();
 
@@ -1110,6 +1115,8 @@ export class Daemon {
    * it is the machine's own, and the measured round trip - plus what the
    * local network discovery has heard. What `helm status` prints.
    */
+  connectionHistory = new ConnectionHistory(join(HELM_DIR, 'connection-history.json'));
+
   routes() {
     const net = loadNetwork() ?? this.net;
     const name = (id) => net.machines?.[id]?.name ?? id;
@@ -1125,11 +1132,11 @@ export class Daemon {
     const reached = new Set(table.map((r) => r.env));
     return {
       recovery: this.networkRecovery,
-      machines: [
+      ...this.connectionHistory.observe([
         ...table.map((r) => ({ ...r, name: name(r.env) })),
         ...Object.keys(net.machines ?? {}).filter((id) => id !== this.id && !net.revoked?.[id] && !reached.has(id))
           .map((env) => ({ env, name: name(env), url: null })),
-      ],
+      ]),
       lan: this.lan?.status() ?? { on: false, reason: 'not started', heard: [] },
     };
   }
@@ -2067,6 +2074,18 @@ export class Daemon {
       case M.SESSION_CONNECT: return { session: await this.sessions.connect(p.id) };
       case M.SESSION_DETACH:  return this.sessions.detach(p.id, p.watcher);
       case M.SESSION_RESIZE:  return this.sessions.resize(p.id, p.cols, p.rows);
+      case 'session.action-status':
+        await this.sessionRecovery;
+        if (p.kind === 'input') {
+          this.inputDelivery ??= new InputDelivery(this.sessions);
+          return this.inputDelivery.status(p.actionId, caller);
+        }
+        this.actionDelivery ??= new ActionDelivery(this.sessions);
+        return this.actionDelivery.status(p.actionId, caller);
+      case 'session.answer-deliver':
+        await this.sessionRecovery;
+        this.actionDelivery ??= new ActionDelivery(this.sessions);
+        return this.actionDelivery.deliver(p, caller);
       case M.SESSION_DELIVER:
         await this.sessionRecovery;
         this.inputDelivery ??= new InputDelivery(this.sessions);

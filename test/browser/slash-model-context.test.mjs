@@ -22,7 +22,7 @@ before(async () => {
       prefs:{default:'model-a',approved:[]},defaults:{effort:'low'}};
     const child={id:'kid-1',title:'Write the tests',engine:'claude',profileId:'claude',status:'idle',cwd:'/project',delegation:{parentId:'chat',status:'completed'}};
     const child2={...child,id:'kid-2',title:'Check the docs'};
-    const client={input:(env,params)=>client.rpc(env,'session.input',params),on:(l)=>{listeners.add(l);return()=>listeners.delete(l)},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
+    const client={pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),on:(l)=>{listeners.add(l);return()=>listeners.delete(l)},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
       if(method==='model.list') return options;
       if(method==='session.events') return {session:window.current,events:[{seq:1,at:Date.now(),type:'turn.start',turnId:'t1',text:'go'},{seq:2,at:Date.now(),type:'status',status:'idle'}],pending:[],last:2,status:'idle'};
       if(method==='session.watch') return {last:seq};

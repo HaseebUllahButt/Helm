@@ -138,7 +138,7 @@ test('health checks stop when a server stalls while sending its reply', async t 
   const address = await server(t, (_, res) => { res.writeHead(200); res.write('{'); requested(); });
   const probe = probeHealth(address, 'expected', { timeout: 100 });
   await arrived;
-  assert.equal(await probe, 'unavailable');
+  assert.equal(await probe, 'timed-out');
 });
 
 test('the real CLI preserves a damaged registration and returns a safe JSON report', async t => {

@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { installFromCheckout } from '../packages/connect/src/update.js';
 import { ship, machineState, ShipError } from '../packages/connect/src/ship.js';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-ship-'));
@@ -27,6 +28,7 @@ function repos() {
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
   execFileSync('git', ['clone', '-q', origin, main], { stdio: 'ignore' });
   git(main, 'checkout', '-q', '-b', 'main');
+  git(main, 'config', 'user.name', 'test'); git(main, 'config', 'user.email', 'test@example.invalid');
   commit(main, 'a.txt', 'one\n');
   git(main, 'push', '-q', 'origin', 'main');
   git(main, 'worktree', 'add', '-q', '-b', 'helm/x', wt);
@@ -71,6 +73,7 @@ function run(r, over = {}) {
     lines,
     result: ship({
       cwd: r.wt, net, rpc, checks: async () => {}, log: (l) => lines.push(l), updateLock: (work) => work(),
+      install: (dir, source) => installFromCheckout(dir, source, {rebuild:false, restart:false}),
       now: () => clock, sleep: async (ms) => { clock += ms; }, waitMs: 60_000, ...over.ship,
     }),
   };
@@ -238,4 +241,40 @@ test("the merge commit is newer than both parents, even in the same second", asy
   const { result } = run(r);
   await result;
   assert.ok(Number(git(r.main, 'log', '-1', '--format=%ct', 'main')) > Math.max(...parents));
+});
+
+test('runs private release proof only after all online machines have the release', async () => {
+  const r = repos();
+  let checked = false;
+  const {result} = run(r, {network:{offline:false}, ship:{verifyRelease:async ({tip}) => {
+    assert.equal(git(r.installed, 'rev-parse', 'HEAD'), tip);
+    checked = true;
+  }}});
+  assert.equal((await result).ok, true);
+  assert.equal(checked, true);
+});
+test('a failed private release proof prevents a shipped result', async () => {
+  const r = repos();
+  const {result} = run(r, {network:{offline:false}, ship:{verifyRelease:async () => {throw Error('Reconnect failed');}}});
+  await assert.rejects(result, /Reconnect failed/);
+});
+
+test('a failed installation result stops ship before proof or a shipped message', async () => {
+  const r = repos(); let proved = false;
+  const {lines,result} = run(r,{network:{offline:false},ship:{
+    install:async()=>({updated:false,reason:'Keep the local saved changes.'}),
+    verifyRelease:async()=>{proved=true;},
+  }});
+  await assert.rejects(result,/Cannot install.*Keep the local saved changes/s);
+  assert.equal(proved,false);assert.equal(lines.some(line=>line.includes('Shipped ')),false);
+});
+test('a refused restart cannot pass ship even when the installed version is current', async () => {
+  const r = repos(); let proved = false;
+  const {lines,result} = run(r,{network:{offline:false},ship:{
+    install:async(dir,source)=>{await installFromCheckout(dir,source,{rebuild:false,restart:false});return {updated:true,restarting:[],failed:['helm-serve.service']};},
+    verifyRelease:async()=>{proved=true;},
+  }});
+  await assert.rejects(result,/Helm could not restart/);
+  assert.equal(git(r.installed,'rev-parse','HEAD'),git(r.main,'rev-parse','main'));
+  assert.equal(proved,false);assert.equal(lines.some(line=>line.includes('Shipped ')),false);
 });

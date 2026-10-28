@@ -133,6 +133,8 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   const [at, setAt] = useState(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [accountCheck, setAccountCheck] = useState(0);
+  const [accountError, setAccountError] = useState('');
 
   // Folder step.
   const [home, setHome] = useState<DirEntry[] | null>(null);
@@ -182,7 +184,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   useEffect(() => {
     if (!machine) return;
     let stale = false;
-    setHome(null); setAccounts(null); setPicker(null); setViewHidden(false); setOpened(new Set()); setInside({}); setAnchor(null);
+    setHome(null); setViewHidden(false); setOpened(new Set()); setInside({}); setAnchor(null);
     setIndex(null); setCreating(null);
     setGh(null); setGhLogin(undefined); setChosen(''); setCloneFrom(null); setFinding(null); setCloneParent(savedParent(machine.id));
     // Home as this device last saw it, at once; the machine's answer replaces it.
@@ -201,6 +203,13 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       .then((fresh) => { if (!stale) { setIndex(fresh); setNow(Date.now()); } })
       .catch(() => { if (!stale) setIndex((now) => now ?? 'remote'); })
       .finally(() => { if (!stale) setIndexing(false); });
+    return () => { stale = true; };
+  }, [client, machine]);
+
+  useEffect(() => {
+    if (!machine) return;
+    let stale = false;
+    setAccountError(''); setAccounts(null); setPicker(null);
     // The remembered list first, so the agent step never waits on a slow
     // machine; the machine's own answer replaces it when it lands.
     const stop = watchAccounts(client, machine.id, (r) => {
@@ -209,9 +218,9 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       const prefs: PickerPrefs = r.picker ?? { hidden: local?.hidden ?? [], last: local?.account ?? null };
       setPicker({ ...prefs, onMachine: !!r.picker });
       setAccounts(accountsFrom(r.profiles));
-    }, (message) => { if (!stale) { setAccounts((now) => now ?? []); setError(message); } });
+    }, (message) => { if (!stale) { setAccounts((now) => now ?? []); setAccountError(message); } });
     return () => { stale = true; stop(); };
-  }, [client, machine]);
+  }, [client, machine, accountCheck]);
 
   const expand = (path: string, id: string) => {
     setOpened((all) => new Set(all).add(id));
@@ -642,6 +651,23 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
             : quick ? <>Pick an agent for a <b>sketch</b>.</>
             : <>Pick an agent in <b>{leaf(folder)}</b>.</>}
         </h2>
+        {step === 'cli' && <details className="newchat-note">
+          <summary>First chat help</summary>
+          <p>Pick an agent. Send a short question. Wait for its reply before you give it project work.</p>
+          <p>For a first check, use “No folder · sketch” on the folder step.</p>
+          <p>Helm uses the agent accounts on {machine?.name}. Open the agent in a terminal there and sign in first.</p>
+          <p>If the chat cannot start, run <code>helm doctor</code> on that machine. Follow its checks, then try again.</p>
+        </details>}
+        {step === 'cli' && accountError && <div className="banner warn" role="alert">
+          Helm could not check agents on {machine?.name}. {accountError}
+          <button type="button" className="ghost" onClick={() => setAccountCheck(n => n + 1)}>Check agents again</button>
+        </div>}
+        {step === 'cli' && accounts !== null && !accounts.length && !accountError && <div className="newchat-signin">
+          <p>No agent account is ready on {machine?.name}.</p>
+          <p>Install an agent on that machine. Open it in a terminal and sign in. Then check again.</p>
+          <p>Run <code>helm doctor</code> there if the account still does not appear.</p>
+          <button type="button" className="ghost" onClick={() => setAccountCheck(n => n + 1)}>Check agents again</button>
+        </div>}
         {step === 'cli' && cloneFrom && <p className="newchat-note">Helm will copy {cloneFrom} into {folder}.</p>}
         <input
           ref={input} className="palette-input" value={q} placeholder={placeholder} disabled={busy || (step === 'github' && !!gh && !gh.login)}

@@ -6,6 +6,7 @@ import { NETWORK_FILE } from '@helm/protocol/network';
 import { M } from '@helm/protocol';
 import { hubRpc } from './hub-client.js';
 import { findWebRoot } from './web-build.js';
+import { connectionSupport } from '@helm/protocol/connection-report';
 
 const exec = promisify(execFile);
 const command = (file, args) => exec(file, args, { timeout: 3000, maxBuffer: 64 * 1024 });
@@ -58,8 +59,26 @@ export async function probeHealth(address, network, { fetcher = fetch, timeout =
     if (body?.ok !== true) return 'invalid-reply';
     if (body.network !== network) return 'wrong-network';
     return 'ok';
-  } catch { return 'unavailable'; }
+  } catch (error) {
+    const code = error?.cause?.code ?? error?.code;
+    if (code === 'CERT_HAS_EXPIRED') return 'certificate-expired';
+    if (code === 'ERR_TLS_CERT_ALTNAME_INVALID') return 'certificate-name';
+    if (['DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'].includes(code)) return 'certificate-trust';
+    if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) return 'name-lookup';
+    if (code === 'ECONNREFUSED') return 'connection-refused';
+    if (['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(code) || error?.name === 'TimeoutError') return 'timed-out';
+    return 'unavailable';
+  }
 }
+
+const healthFailures = {
+  'certificate-expired': ['The secure web certificate has expired.', 'Renew the certificate on that home. Keep secure connection checks enabled.'],
+  'certificate-name': ['The secure web certificate belongs to another address.', "Check the saved address and that home's certificate."],
+  'certificate-trust': ['The secure web certificate cannot be verified.', "Check that home's certificate and this machine's date."],
+  'name-lookup': ['The home name could not be found.', "Check its saved name and this machine's network settings."],
+  'connection-refused': ['The connection was refused.', 'Check that Helm and the web service are running on that home.'],
+  'timed-out': ['The connection did not answer in time.', 'Check the home, its network, and its web service.'],
+};
 
 const validNetwork = net => net && typeof net.id === 'string' && typeof net.self === 'string'
   && typeof net.key === 'string' && net.machines && typeof net.machines === 'object'
@@ -130,6 +149,10 @@ export async function diagnose({
       checks.push(check('routes', reached === machines.length ? 'ok' : 'warning',
         `${reached} of ${machines.length} other machines have a route from here.`,
         reached < machines.length ? 'Run helm doctor on an unreachable machine. It may be asleep or disconnected.' : undefined));
+      const detail = connectionSupport(routes.value);
+      checks.push(...detail.checks);
+      for (const [i, event] of detail.history.entries()) checks.push(check(`history-${i}`, 'info',
+        `${event.machine}: ${event.state === 'connected' ? 'connection found' : event.state === 'disconnected' ? 'connection lost' : 'connection path changed'} at ${new Date(event.at).toISOString()}.`));
       if (routes.value.recovery?.repair) checks.push(check('packet-recovery', 'warning', 'Large network packet recovery needs setup.', 'Run helm network-repair on this machine.'));
     }
   }
@@ -140,6 +163,7 @@ export async function diagnose({
   const results = await Promise.all(homes.map(address => health(address, net.id).catch(() => 'unavailable')));
   results.forEach((result, i) => checks.push(result === 'ok'
     ? check(`home-${i + 1}`, 'ok', `Home address ${i + 1} answers for this Helm network.`)
+    : healthFailures[result] ? check(`home-${i + 1}`, 'warning', `Home address ${i + 1}: ${healthFailures[result][0]}`, healthFailures[result][1])
     : check(`home-${i + 1}`, 'warning', result === 'wrong-network'
       ? `Home address ${i + 1} belongs to another Helm network.`
       : result === 'invalid-address' ? `Home address ${i + 1} is not a valid Helm address.`

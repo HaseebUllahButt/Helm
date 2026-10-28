@@ -19,7 +19,7 @@ before(async () => {
       options:question?[]:[{id:'allow',role:'allow',label:'Allow'},{id:'deny',role:'deny',label:'Deny'}]});
     const native=permission('native-question','spawn-card',true);
     const unrelated=permission('unrelated',undefined);
-    const client={on:()=>()=>{},subscribe:()=>{},rpc:async(env,method,params)=>{
+    const client={pendingActions:()=>[],resumeActions:async()=>[],on:()=>()=>{},subscribe:()=>{},rpc:async(env,method,params)=>{
       (window.calls??=[]).push({method,params});
       if(method==='session.list')return {sessions:[parent,worker,child]};
       if(method==='model.list')return {models:[],modes:[]};

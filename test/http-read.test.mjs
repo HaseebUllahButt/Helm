@@ -10,7 +10,7 @@ process.env.HELM_DIR = join(root, 'home');
 process.env.HELM_DB = join(root, 'hub.sqlite');
 for (const [key, name] of Object.entries({ HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(root, name);
 const N = await import('@helm/protocol/network');
-const { startRelay } = await import('@helm/relay');
+const { startRelay } = await import('../apps/relay/src/server.js');
 const net = N.createNetwork({ name: 'read-test', port: 8787 });
 const phone = N.issueDevice(net, 'phone');
 const hub = await startRelay({ port: 0, host: '127.0.0.1', dbFile: process.env.HELM_DB, openLogin: false });
@@ -59,7 +59,7 @@ test('the visual host has its own restrictive policy without weakening app respo
 });
 
 test('authenticated HTTP snapshots cross the real hub RPC router and are never browser cached', async () => {
-  for (const method of ['session.events', 'session.messages', 'session.visual', 'session.list', 'model.list', 'session.commands', 'env.info', 'project.list']) {
+  for (const method of ['session.events', 'session.messages', 'session.visual', 'session.list', 'model.list', 'session.commands', 'env.info', 'project.list', 'net.routes']) {
     const response = await read(method, { id: 'chat' });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -111,4 +111,25 @@ test('a large read answer is compressed for a client that accepts it', async () 
   assert.equal((await response.json()).result.params.text, text);
   const small = await read('session.list', {});
   assert.equal(small.headers.get('content-encoding'), null);
+});
+
+
+test('ordinary action requests keep sender identity and reject untracked writes', async () => {
+  const action = (method, params, token = phone.token) => fetch(base + '/api/action', {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ env: net.self, method, params }),
+  });
+  for (const method of ['session.deliver', 'session.answer-deliver', 'session.action-status']) {
+    const response = await action(method, { actionId: 'a'.repeat(32) });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(calls.at(-1).method, method);
+    assert.equal(calls.at(-1).sub, phone.id);
+  }
+  const before = calls.length;
+  for (const method of ['session.input', 'session.answer', 'session.start', 'env.update']) {
+    assert.equal((await action(method, {})).status, 403);
+  }
+  assert.equal((await action('session.deliver', {}, 'bad')).status, 401);
+  assert.equal(calls.length, before);
 });

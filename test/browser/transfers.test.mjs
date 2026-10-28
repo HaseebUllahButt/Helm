@@ -11,7 +11,7 @@ test('task return review preserves local choices and offers the original convers
     const root = createRoot(document.getElementById('root'));
     const transfer = {handoffId:'handoff',role:'source',status:'conflict',machineId:'remote',machineName:'VM',
       folder:'/returned-copy',conflicts:['app.js']};
-    const client = {rpc:async(env,method,params)=>{
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],rpc:async(env,method,params)=>{
       window.request={env,method,params};
       return {session:{id:'original',cwd:'/project'}};
     }};
@@ -40,7 +40,7 @@ test('the menu sends the task to another machine and keeps notifications, on des
     import { createRoot } from 'react-dom/client';
     import { DrivenSession } from './apps/web/src/session/DrivenSession';
     const session = {id:'thread',title:'Build feature',cwd:'/project',engine:'codex',profileId:'codex',status:'idle',driver:true,notifyDone:true};
-    const client = {
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],
       on:()=>()=>{}, subscribe:()=>{},
       rpc:async(_env,method,params)=>{
         if(method==='session.notify') {window.notificationRequest=params; return {session:{...session,notifyDone:params.on}};}
@@ -90,7 +90,7 @@ test('Send task includes env, keeps a retry identity, and opens the destination 
     const session = {id:'original',cwd:'/project',profileId:'codex',engine:'codex',title:'Build feature'};
     const preflight = {files:2,bytes:20,envFiles:['.env'],skipped:0,skippedEntries:[],warnings:[],requiresAcknowledgement:false};
     window.attempts = [];
-    const client = {
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],
       transferPreview:async(_env,_folder,includeEnv)=>{
         window.previewEnv = includeEnv;
         return {rootName:'project',preflight};
@@ -144,7 +144,7 @@ test('Send task honors the env choice at phone and desktop widths', async () => 
     import { createRoot } from 'react-dom/client';
     import { TransferView } from './apps/web/src/Transfer';
     const source={id:'source',name:'Laptop',online:true,info:{}}, target={id:'target',name:'VM',online:true,info:{}};
-    const client={
+    const client={pendingActions:()=>[],resumeActions:async()=>[],
       transferPreview:async(_env,_folder,includeEnv)=>({rootName:'project',preflight:{
         files:1,bytes:20,envFiles:includeEnv?['.env']:[],skipped:includeEnv?0:1,
         skippedEntries:[],warnings:[],requiresAcknowledgement:false}}),

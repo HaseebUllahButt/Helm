@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { M } from '@helm/protocol';
-import { locked } from './update.js';
+import { locked, installFromCheckout } from './update.js';
 
 /**
  * `helm ship`: the rollout every Helm change ends with, as one command. It
@@ -100,7 +100,7 @@ function runCheck(dir) {
 export async function ship({
   cwd = process.cwd(), net, rpc, check = true, waitMs = 10 * 60_000, log = console.log,
   now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), checks = runCheck,
-  updateLock = locked,
+  updateLock = locked, install = installFromCheckout, verifyRelease = async () => {},
 } = {}) {
   const top = git(cwd, ['rev-parse', '--show-toplevel']);
   const branch = git(top, ['branch', '--show-current']);
@@ -185,7 +185,9 @@ export async function ship({
     for (let told = false; !moved;) {
       moved = await updateLock(async () => {
         try {
-          git(installed, ['pull', '-q', '--ff-only', mainDir, 'main']);
+          const result = await install(installed, mainDir);
+          if (!result?.updated) throw new Error(result?.reason || 'The installed files did not update.');
+          if (result.failed?.length) throw new Error('Helm could not restart. Run helm doctor.');
           return { done: true };
         } catch (err) {
           return { error: err };
@@ -198,7 +200,7 @@ export async function ship({
         await sleep(STEP_MS);
       }
     }
-    if (moved.error) throw new ShipError(`Git did not move ${installed} to main:\n${moved.error.message}`);
+    if (moved.error) throw new ShipError(`Cannot install the new release in ${installed}:\n${moved.error.message}`);
     log(`  Moved ${installed} to ${short(tip)}.`);
   }
 
@@ -247,6 +249,7 @@ export async function ship({
   if (late.length) log(`  ! Still waiting after ${Math.round(waitMs / 60_000)} min: ${late.join(', ')}.`);
   if (stuck.length) log(`  ! Stuck: ${stuck.join(', ')}. Read the reason above.`);
   const everywhere = !late.length && !stuck.length;
+  if (everywhere) await verifyRelease({ tip, net, rpc });
   log(!everywhere ? `  ${short(tip)} did not reach every online machine.`
     : pushed ? `  Shipped ${short(tip)}. Every online machine runs it.`
       : `  Every online machine runs ${short(tip)}, but origin does not have it.`);

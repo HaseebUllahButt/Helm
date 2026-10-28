@@ -176,7 +176,7 @@ test('a failed install rolls HEAD back so a healthy retry rebuilds the release',
     await assert.rejects(() => selfUpdate(installed, { restart: false }), /Command failed/);
     assert.equal(git(installed, ['rev-parse', 'HEAD']), before, 'a failed install restores the old source');
 
-    writeFileSync(npm, `#!/bin/sh\necho call >> "${calls}"\nexit 0\n`);
+    writeFileSync(npm, `#!/bin/sh\necho call >> "${calls}"\nmkdir -p apps/web/dist; echo app > apps/web/dist/index.html\nexit 0\n`);
     chmodSync(npm, 0o755);
     const retry = await selfUpdate(installed, { restart: false });
     assert.equal(retry.updated, true);
@@ -204,7 +204,7 @@ test('a failed app build also rolls back and can complete on retry', async () =>
     assert.equal(git(installed, ['rev-parse', 'HEAD']), before,
       'the source is restored even when the build command fails');
 
-    writeFileSync(npm, `#!/bin/sh\necho call >> "${calls}"\nexit 0\n`);
+    writeFileSync(npm, `#!/bin/sh\necho call >> "${calls}"\nmkdir -p apps/web/dist; echo app > apps/web/dist/index.html\nexit 0\n`);
     chmodSync(npm, 0o755);
     assert.equal((await selfUpdate(installed, { restart: false })).updated, true);
     assert.equal(git(installed, ['rev-parse', 'HEAD']), git(remote, ['rev-parse', 'HEAD']));
@@ -222,7 +222,7 @@ test('a failed Rust build restores the old release and a retry builds before the
   commit(remote, 'add the Rust reader');
   const bin = mkdtempSync(join(tmpdir(), 'helm-update-bin-'));
   const calls = join(bin, 'calls'), npm = join(bin, 'npm');
-  writeFileSync(npm, `#!/bin/sh\necho "$*" >> "${calls}"\nexit 0\n`);
+  writeFileSync(npm, `#!/bin/sh\necho "$*" >> "${calls}"\nmkdir -p apps/web/dist; echo app > apps/web/dist/index.html\nexit 0\n`);
   chmodSync(npm, 0o755);
   const previous = process.env.PATH;
   process.env.PATH = `${bin}:${previous}`;
@@ -262,13 +262,13 @@ test('an interrupted post-reset transaction is journaled and recovered', async (
 test('real npm preserves an older lockfile through a failed build and retry', async () => {
   const { remote, installed } = make();
   mkdirSync(join(remote, 'apps/web'), { recursive: true });
-  writeFileSync(join(remote, '.gitignore'), 'node_modules/\n');
+  writeFileSync(join(remote, '.gitignore'), 'node_modules/\ndist/\n');
   writeFileSync(join(remote, 'package.json'), JSON.stringify({
     name: 'update-fixture', version: '1.0.0', private: true, workspaces: ['apps/web'],
   }));
   writeFileSync(join(remote, 'apps/web/package.json'), JSON.stringify({
     name: '@helm/web', version: '1.0.0',
-    scripts: { build: 'node -e "process.exit(process.env.HELM_TEST_BUILD_FAIL === \'1\' ? 1 : 0)"' },
+    scripts: { build: 'node -e "require(\'fs\').mkdirSync(\'dist\',{recursive:true});require(\'fs\').writeFileSync(\'dist/index.html\',\'app\');process.exit(process.env.HELM_TEST_BUILD_FAIL === \'1\' ? 1 : 0)"' },
   }));
   execFileSync('npm', ['install', '--package-lock-only', '--lockfile-version=2', '--ignore-scripts', '--no-audit', '--no-fund'], {
     cwd: remote, stdio: 'pipe',

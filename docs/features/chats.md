@@ -11,11 +11,14 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   fmap" became "from fmap"). The model chip shows real Devin model names even
   for the fake agent. Streamed replies must not redraw the message editor;
   approval cards and settings still update while a draft stays in the box.
-- **Errors (driven 2026-10-24):** make each `session.deliver` request return
-  a timeout in the private browser. After two minutes, expect "Send not
-  confirmed", a plain timeout message, and Retry send. Restore replies and
-  select Retry send. Expect one reply and the original message ID on every
-  attempt. Check `errors` and inspect `shot` at phone size.
+- **Delivery:** the browser saves the action number and content before sending.
+  If live links fail, ordinary web requests send chat messages and approvals.
+  A lost reply triggers a result check. Opening the chat checks saved actions
+  again. The chat shows "Checking delivery" while a result is unknown.
+  Approvals interrupted during delivery stay unknown after a restart. Never
+  replay them: the agent can already have acted.
+- **Tests:** `test/action-delivery`, `input-delivery`, `http-read`;
+  `test/browser/client-actions`, `client-reconnect`.
 - **Rule:** app errors use `apps/web/src/errors.ts`. Keep clear, short messages.
   Put technical text behind Details on failed tasks. Log each distinct error once.
   Retry an unconfirmed send with its original

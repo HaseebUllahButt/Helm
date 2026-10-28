@@ -16,7 +16,7 @@ before(async () => {
       import { SessionView } from './apps/web/src/App';
       import { MODES } from './packages/connect/src/modes.js';
       window.calls = [];
-      const client = { on: () => () => {}, subscribe: () => () => {}, rpc: async (env, method, params) => {
+      const client = {pendingActions:()=>[],resumeActions:async()=>[], on: () => () => {}, subscribe: () => () => {}, rpc: async (env, method, params) => {
         window.calls.push({ method, params });
         if (method === 'session.messages') return { messages: [{role:'assistant',text:'Existing conversation',tools:[]}], status: 'idle' };
         if (method === 'session.events') return {events:[], pending:[], last:0};

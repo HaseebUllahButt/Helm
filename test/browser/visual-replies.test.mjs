@@ -24,7 +24,7 @@ before(async () => {
     const root=createRoot(document.getElementById('root'));
     const read=async ref=>{window.reads=(window.reads||0)+1;if(window.failRead)throw Error('Machine offline');return {html:window.visualHtml||${JSON.stringify(source)}}};
     window.render=(ref='ref')=>root.render(<Transcript status="idle" loaded readVisual={read} turns={[{id:'local-visual-1',local:true,text:'',at:1,done:{status:'ok'},items:[{id:'visual-1',kind:'visual',text:'',status:'ok',startedAt:1,visual:{ref,title:'Desk clamp clearance',height:420,bytes:1000}}]}]}/>);
-    const client={subscribe:()=>()=>{},on:()=>()=>{},rpc:async(env,method,p)=>{
+    const client={pendingActions:()=>[],resumeActions:async()=>[],subscribe:()=>()=>{},on:()=>()=>{},rpc:async(env,method,p)=>{
       if(method==='session.visual'){window.lastVisualRead={env,...p};return read(p.ref)};
       if(method==='session.messages')return {messages:[{role:'assistant',text:'',tools:[],visual:{ref:'ref',title:'Native diagram',height:420,bytes:1000}}],status:'idle'};
       if(method==='session.events')return {events:[],pending:[],last:0,session:{status:'idle'}};

@@ -36,7 +36,7 @@ before(async () => {
       {seq:6,at:6,type:'turn.done',turnId:'t1',status:'ok'},
     ];
     window.reads=[];
-    const client={on:()=>()=>{},subscribe:()=>{},rpc:async(_env,method,params)=>{
+    const client={pendingActions:()=>[],resumeActions:async()=>[],on:()=>()=>{},subscribe:()=>{},rpc:async(_env,method,params)=>{
       if(method==='session.visual'){window.reads.push(params);return {html:pages[params.ref]};}
       if(method==='session.events')return {session:window.chats[params.id],events:params.since||params.id!=='a'?[]:events,pending:[],last:params.id==='a'?6:0};
       if(method==='session.watch')return {last:0};

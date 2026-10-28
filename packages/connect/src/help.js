@@ -59,6 +59,11 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm login [minutes]              Make a temporary password to sign in a device
   helm status                       Show machines, links and agent software
   helm doctor [--json]              Check installation and connections without changing settings
+  helm backup key <file>            Make a private backup key. Keep a separate safe copy.
+  helm backup create <folder> <file> --key-file <file> --offline
+                                    Encrypt a stopped data copy. Never use a running Helm folder.
+  helm backup restore <file> <folder> --key-file <file>
+                                    Restore to a new offline folder. Keep saved work blocked for review.
   helm profiles [--refresh]         List agent accounts on this machine
   helm agents [--json] [--refresh]  List command line accounts, sign-in status and model IDs
   helm run -- <command> [args]      Run a command here through Helm
@@ -123,7 +128,9 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm dictate [--to <id>]          Start recording; run again to stop and turn speech into text
   helm proxy <host>                 Connect through SSH ProxyCommand (used by ~/.ssh/config)
   helm self-update                  Get the newest Helm and restart it on this machine
+  helm self-update --rollback       Restore the saved previous release. Keep later edits and saved changes.
   helm ship                         Merge this branch into main, push it and install it on every online machine
+                                    Check a private chat and its approval before and after installation.
     --no-check                      Skip npm run check before the merge
     --wait <minutes>                Wait this long for the machines to restart (default: 10)
   helm service install|uninstall    Install or remove the background service
@@ -154,6 +161,7 @@ Set up this machine
   link             Add a phone or browser, like helm add controller
   status           Show machines, links and agent software
   doctor           Check installation and connections
+  backup           Save or inspect an offline encrypted backup
   network-repair   Fix connections when large packets fail on Linux
   self-update      Get the newest Helm and restart it here
   ship             Merge, push and install a Helm change everywhere
@@ -209,6 +217,13 @@ Run helm help <command> for its options, or helm help --all for all of them.
 `;
 
 const DETAILS = {
+  backup: `
+  Keep keys out of command arguments. Use a private key file and keep a separate safe copy.
+  Back up a stopped data copy. This command never stops services for you.
+  Restored data stays offline. Startup remains blocked for review.
+  Old backups do not include later device removals or completed work.
+  See docs/backups.md before recovery.`,
+
   doctor: `
   Check this machine, its app, live connection, and known home addresses.
   The report omits addresses, keys, account data, and raw errors.

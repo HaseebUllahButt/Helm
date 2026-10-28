@@ -50,6 +50,12 @@
   `usage-recovery`.
 
 ## Updates
+- `helm ship` checks a free private chat before merging and after the machines
+  update. It restarts the private daemon, checks the same approval, then uses it
+  and checks that one provider turn completes. It never creates owner chats.
+  A failed proof prevents a successful ship result. The local check needs
+  Playwright and its Chromium browser. Run `node scripts/release-proof.mjs`
+  to see its failed step. This does not prove every network or operating system.
 - **Prove (screen only):** `$V key Control+Shift+s; $V click Updates; $V
   text` shows "verify-<you>" and the repo's current commit.
 - **Traps:** never press either GitHub button in the private copy: it runs

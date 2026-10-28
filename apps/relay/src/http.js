@@ -371,7 +371,7 @@ function announceNewDevice(device) {
 const HTTP_READ_METHODS = new Set([
   'session.events', 'session.messages', 'session.visual', 'session.list', 'session.commands',
   'model.list', 'env.info', 'session.watch', 'session.unwatch',
-  'project.list',
+  'project.list', 'net.routes',
 ]);
 
 export function makeHttpHandler({ online, kick, connectedDevices = () => new Set(), callEnv }) {
@@ -563,6 +563,26 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
     const who = identify(clientTokenFrom(req.headers.authorization));
     if (!who) return json(res, 401, { error: 'unauthorized' });
     const { net, claims } = who;
+
+    if (path === '/api/action' && req.method === 'POST') {
+      let body;
+      try { body = await readBody(req, 64 * 1024 * 1024); }
+      catch { return json(res, 400, { error: 'Cannot read this action.' }); }
+      if (!body || typeof body.env !== 'string' || !Object.hasOwn(net.machines, body.env)
+        || !body.params || typeof body.params !== 'object' || Array.isArray(body.params)) {
+        return json(res, 400, { error: 'Choose a valid machine and action.' });
+      }
+      if (!['session.deliver', 'session.answer-deliver', 'session.action-status'].includes(body.method)) {
+        return json(res, 403, { error: 'This action cannot use this connection.' });
+      }
+      if (!callEnv) return json(res, 503, { error: 'The machine is not connected.' });
+      try {
+        const result = await callEnv(body.env, body.method, body.params, { timeout: 12_000, sub: claims.sub });
+        return json(res, 200, { result });
+      } catch (error) {
+        return json(res, 503, { error: String(error?.message || error), code: error?.code });
+      }
+    }
 
     if (path === '/api/read' && req.method === 'POST') {
       let body;

@@ -51,6 +51,127 @@ NODE_BIN=$(command -v node)
 case "$NODE_BIN" in /*) ;; *) NODE_BIN="$PWD/$NODE_BIN" ;; esac
 case "$DIR" in /*) ;; *) DIR="$PWD/$DIR" ;; esac
 
+# A lock belongs to the installer process, not to its child build commands.
+# Read saved values as data. Never source a recovery record as shell code.
+INSTALL_ROOT="$DIR"
+JOURNAL="${INSTALL_ROOT}.install-state"
+INSTALL_LOCK="${INSTALL_ROOT}.install-lock"
+OWN_TRANSACTION=no
+STAGE=""
+
+remove_release_record() {
+  local SAVED_STAGE=""
+  if [ -f "$JOURNAL/stage" ]; then IFS= read -r SAVED_STAGE < "$JOURNAL/stage"; fi
+  case "$SAVED_STAGE" in
+    "$INSTALL_ROOT".release.*)
+      [[ "${SAVED_STAGE#"$INSTALL_ROOT".release.}" =~ ^[0-9]+$ ]] || return 1
+      rm -rf -- "$SAVED_STAGE" ;;
+    "") ;;
+    *) return 1 ;;
+  esac
+  rm -rf -- "$JOURNAL"
+}
+
+recover_release() {
+  [ -d "$JOURNAL" ] || return 0
+  local PHASE="preparing" OLD NEXT STATUS HEAD_NOW SAVED_BRANCH NOW_BRANCH ITEM EXISTED INDEX=0
+  if [ -f "$JOURNAL/phase" ]; then IFS= read -r PHASE < "$JOURNAL/phase"; fi
+  case "$PHASE" in
+    preparing|complete) remove_release_record; return ;;
+    publishing) ;;
+    *) say "Cannot read the saved installation. Keep $JOURNAL."; return 1 ;;
+  esac
+  IFS= read -r OLD < "$JOURNAL/previous" || return 1
+  IFS= read -r NEXT < "$JOURNAL/target" || return 1
+  [[ "$OLD" =~ ^[0-9a-f]{40,64}$ && "$NEXT" =~ ^[0-9a-f]{40,64}$ ]] || return 1
+  IFS= read -r SAVED_BRANCH < "$JOURNAL/branch" || return 1
+  NOW_BRANCH=$(git -C "$INSTALL_ROOT" symbolic-ref --quiet --short HEAD) || return 1
+  if [ "$NOW_BRANCH" != "$SAVED_BRANCH" ]; then
+    say "The selected branch changed. Keep your changes and $JOURNAL."
+    return 1
+  fi
+  HEAD_NOW=$(git -C "$INSTALL_ROOT" rev-parse HEAD) || return 1
+  if [ "$HEAD_NOW" != "$OLD" ] && [ "$HEAD_NOW" != "$NEXT" ]; then
+    say "The saved version changed. Keep your changes and $JOURNAL."
+    return 1
+  fi
+  # Validate every copy before removing any installed file. Backups remain
+  # intact throughout recovery, so a second interruption can be retried.
+  while IFS= read -r -d '' ITEM && IFS= read -r -d '' EXISTED; do
+    [[ "$ITEM" = node_modules || "$ITEM" = apps/web/dist || "$ITEM" =~ ^(apps|packages)/[^/.][^/]*/node_modules$ || "$ITEM" =~ ^native/log-index/log-index\.[a-zA-Z0-9._-]+\.node$ ]] || return 1
+    case "$EXISTED" in
+      yes) [ -e "$JOURNAL/files/$INDEX" ] || [ -L "$JOURNAL/files/$INDEX" ] || return 1 ;;
+      no) ;;
+      *) return 1 ;;
+    esac
+    INDEX=$((INDEX + 1))
+  done < "$JOURNAL/paths"
+  [ "$INDEX" -gt 0 ] || return 1
+  STATUS=$(git -C "$INSTALL_ROOT" status --porcelain --untracked-files=all --ignore-submodules=none) || return 1
+  # Hidden index flags can conceal owner edits. Refuse source rollback too.
+  local FLAGS ENTRY
+  FLAGS=$(git -C "$INSTALL_ROOT" ls-files -v) || return 1
+  while IFS= read -r ENTRY; do
+    case "$ENTRY" in [a-zS]' '*) STATUS="hidden edits" ;; esac
+  done <<< "$FLAGS"
+  if [ -z "$STATUS" ]; then
+    git -C "$INSTALL_ROOT" reset --hard --quiet "$OLD" || return 1
+  fi
+  INDEX=0
+  while IFS= read -r -d '' ITEM && IFS= read -r -d '' EXISTED; do
+    rm -rf -- "$INSTALL_ROOT/$ITEM" || return 1
+    if [ "$EXISTED" = yes ]; then
+      mkdir -p "$(dirname "$INSTALL_ROOT/$ITEM")" || return 1
+      cp -a -- "$JOURNAL/files/$INDEX" "$INSTALL_ROOT/$ITEM" || return 1
+    fi
+    INDEX=$((INDEX + 1))
+  done < "$JOURNAL/paths"
+  if [ -f "$JOURNAL/launcher" ]; then
+    mkdir -p "$BIN_DIR" || return 1
+    cp -p -- "$JOURNAL/launcher" "$BIN_DIR/helm" || return 1
+  elif [ -f "$JOURNAL/no-launcher" ]; then
+    rm -- "$BIN_DIR/helm" 2>/dev/null || [ ! -e "$BIN_DIR/helm" ] || return 1
+  else
+    return 1
+  fi
+  if [ -n "$STATUS" ]; then
+    say "Kept your edits and restored the working app and dependencies."
+    say "Keep $JOURNAL. Resolve the saved installation before installing again."
+    return 1
+  fi
+  if [ -f "$JOURNAL/launcher" ]; then
+    "$BIN_DIR/helm" start || { say "Cannot restart the previous installation. Keep $JOURNAL."; return 1; }
+  fi
+  say "Restored the previous installation."
+  remove_release_record || return 1
+}
+
+cleanup_release() {
+  local RESULT=$?
+  trap - EXIT
+  if [ "$OWN_TRANSACTION" = yes ] && [ -d "$JOURNAL" ]; then
+    if [ "$RESULT" = 0 ]; then
+      printf 'complete\n' > "$JOURNAL/phase.new"
+      mv -- "$JOURNAL/phase.new" "$JOURNAL/phase"
+      remove_release_record || RESULT=1
+    else
+      recover_release || RESULT=1
+    fi
+  fi
+  rm -f -- "$INSTALL_LOCK"
+  exit "$RESULT"
+}
+
+if ! ln -s "$$" "$INSTALL_LOCK" 2>/dev/null; then
+  LOCK_OWNER=$(readlink "$INSTALL_LOCK") || die "Cannot read the installation lock. Keep $INSTALL_LOCK."
+  [[ "$LOCK_OWNER" =~ ^[1-9][0-9]*$ ]] || die "Cannot read the installation lock. Keep $INSTALL_LOCK."
+  if kill -0 "$LOCK_OWNER" 2>/dev/null; then die "An installer is already running."; fi
+  rm -f -- "$INSTALL_LOCK"
+  ln -s "$$" "$INSTALL_LOCK" || die "Another installer started. Try again later."
+fi
+trap cleanup_release EXIT
+recover_release || die "Cannot finish installation recovery. Keep the saved files in $JOURNAL."
+
 git check-ref-format --branch "$BRANCH" >/dev/null 2>&1 || die "Choose a valid Helm branch with HELM_BRANCH."
 if ! need herdr && [ ! -x "$BIN_DIR/herdr" ]; then
   need curl || die "Install curl, then run this installer again."
@@ -90,9 +211,7 @@ if [ -e "$DIR" ] || [ -L "$DIR" ]; then
     elif git -C "$DIR" merge-base --is-ancestor "$TARGET" HEAD; then
       say "kept local commits in $DIR"
     elif git -C "$DIR" merge-base --is-ancestor HEAD "$TARGET"; then
-      git -C "$DIR" -c core.hooksPath=/dev/null merge --ff-only --no-overwrite-ignore --quiet "$TARGET" \
-        || die "Cannot update $DIR without changing local files."
-      say "updated $DIR"
+      say "preparing the new release for $DIR"
     else
       die "Local and remote commits differ. Keep them and resolve the branch in $DIR before installing."
     fi
@@ -105,6 +224,36 @@ else
   git clone --quiet --branch "$BRANCH" --depth 1 -- "$REPO" "$DIR"
 fi
 [ -f "$DIR/package.json" ] && [ -f "$DIR/package-lock.json" ] || die "The checkout needs package.json and package-lock.json."
+
+# Check ignored local paths before downloading or building software.
+if [ -n "${TARGET:-}" ]; then
+  while IFS= read -r -d '' ITEM; do
+    if [ -e "$DIR/$ITEM" ] || [ -L "$DIR/$ITEM" ]; then
+      git -C "$DIR" ls-files --error-unmatch -- "$ITEM" >/dev/null 2>&1 ||
+        die "Cannot update $DIR without changing local files."
+    fi
+  done < <(git -C "$DIR" diff --name-only --diff-filter=A -z HEAD "$TARGET")
+fi
+
+# Keep the serving checkout and its dependencies unchanged during preparation.
+LIVE_DIR="$DIR"
+PREVIOUS=$(git -C "$LIVE_DIR" rev-parse HEAD)
+TARGET="${TARGET:-$PREVIOUS}"
+if git -C "$LIVE_DIR" merge-base --is-ancestor "$TARGET" HEAD; then TARGET="$PREVIOUS"; fi
+STAGE="${LIVE_DIR}.release.$$"
+mkdir -m 700 "$JOURNAL"
+OWN_TRANSACTION=yes
+mkdir -m 700 "$JOURNAL/files"
+printf '%s\n' "$STAGE" > "$JOURNAL/stage"
+printf '%s\n' "$PREVIOUS" > "$JOURNAL/previous"
+printf '%s\n' "$TARGET" > "$JOURNAL/target"
+git -C "$LIVE_DIR" symbolic-ref --quiet --short HEAD > "$JOURNAL/branch"
+printf 'preparing\n' > "$JOURNAL/phase"
+PATHS=()
+git clone --quiet --no-hardlinks --no-checkout -- "$LIVE_DIR" "$STAGE"
+git -C "$STAGE" fetch --quiet -- "$LIVE_DIR" "$TARGET"
+git -C "$STAGE" checkout --quiet --detach "$TARGET"
+DIR="$STAGE"
 
 # Install terminal software only after the checkout passes all safety checks.
 if need herdr || [ -x "$BIN_DIR/herdr" ]; then
@@ -167,6 +316,65 @@ else
   say "  then re-run this installer."
 fi
 
+# Check the prepared app before publishing anything.
+[ -f "$DIR/apps/web/dist/index.html" ] || die "The new app is missing. Keep the working release."
+[ -z "$(git -C "$LIVE_DIR" status --porcelain --untracked-files=all)" ] || die "Save your edits before installing."
+[ "$(git -C "$LIVE_DIR" rev-parse HEAD)" = "$PREVIOUS" ] || die "The saved version changed. Run the installer again."
+if [ -e "$BIN_DIR/helm" ]; then
+  cp -p -- "$BIN_DIR/helm" "$JOURNAL/launcher"
+else
+  : > "$JOURNAL/no-launcher"
+fi
+PATHS=(node_modules apps/web/dist)
+for ITEM in "$LIVE_DIR"/apps/*/node_modules "$LIVE_DIR"/packages/*/node_modules "$STAGE"/apps/*/node_modules "$STAGE"/packages/*/node_modules "$LIVE_DIR"/native/log-index/log-index.*.node "$STAGE"/native/log-index/log-index.*.node; do
+  [ -e "$ITEM" ] || [ -L "$ITEM" ] || continue
+  ITEM="${ITEM#"$LIVE_DIR/"}"
+  ITEM="${ITEM#"$STAGE/"}"
+  case " ${PATHS[*]} " in *" $ITEM "*) ;; *) PATHS+=("$ITEM");; esac
+done
+# Finish all saved copies before changing source or serving files.
+INDEX=0
+: > "$JOURNAL/paths"
+for ITEM in "${PATHS[@]}"; do
+  EXISTED=no
+  if [ -e "$LIVE_DIR/$ITEM" ] || [ -L "$LIVE_DIR/$ITEM" ]; then
+    cp -a -- "$LIVE_DIR/$ITEM" "$JOURNAL/files/$INDEX"
+    EXISTED=yes
+  fi
+  printf '%s\0%s\0' "$ITEM" "$EXISTED" >> "$JOURNAL/paths"
+  INDEX=$((INDEX + 1))
+done
+[ -z "$(git -C "$LIVE_DIR" status --porcelain --untracked-files=all --ignore-submodules=none)" ] || die "Save your edits before installing."
+[ "$(git -C "$LIVE_DIR" rev-parse HEAD)" = "$PREVIOUS" ] || die "The saved version changed. Run the installer again."
+printf 'publishing\n' > "$JOURNAL/phase.new"
+mv -- "$JOURNAL/phase.new" "$JOURNAL/phase"
+# Flush the record and saved files before publication. Do not follow links:
+# node_modules can itself link to a development checkout owned by another chat.
+node --input-type=module -e '
+  import { readdirSync, lstatSync, openSync, fsyncSync, closeSync } from "node:fs";
+  import { join, dirname } from "node:path";
+  function flush(path) {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) for (const name of readdirSync(path)) flush(join(path, name));
+    const fd = openSync(path, "r");
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+  }
+  flush(process.argv[1]);
+  const parent = openSync(dirname(process.argv[1]), "r");
+  try { fsyncSync(parent); } finally { closeSync(parent); }
+' "$JOURNAL" || die "Cannot save installation recovery files."
+git -C "$LIVE_DIR" -c core.hooksPath=/dev/null merge --ff-only --no-overwrite-ignore --quiet "$TARGET" \
+  || die "Cannot update $LIVE_DIR without changing local files."
+for ITEM in "${PATHS[@]}"; do
+  rm -rf -- "$LIVE_DIR/$ITEM"
+  if [ -e "$STAGE/$ITEM" ] || [ -L "$STAGE/$ITEM" ]; then
+    mkdir -p "$(dirname "$LIVE_DIR/$ITEM")"
+    cp -a -- "$STAGE/$ITEM" "$LIVE_DIR/$ITEM"
+  fi
+done
+DIR="$LIVE_DIR"
+
 # -------------------------------------------------------------------- link
 
 step "putting helm on your PATH"
@@ -200,6 +408,17 @@ esac
 
 step "starting helm"
 "$BIN_DIR/helm" start || die "could not start Helm - run helm start to see why"
+# Hand the saved files to the installed updater before deleting this journal.
+# Older selected branches can still install without this newer helper.
+if [ -f "$DIR/packages/connect/src/update.js" ]; then
+  node --input-type=module -e '
+    import { pathToFileURL } from "node:url";
+    const [dir, journal] = process.argv.slice(1);
+    const update = await import(pathToFileURL(`${dir}/packages/connect/src/update.js`));
+    if (typeof update.checkpointInstalledRelease === "function") await update.checkpointInstalledRelease(dir, journal);
+  ' "$DIR" "$JOURNAL" || die "Cannot keep the previous release. Keep the saved installation."
+fi
+
 
 printf '\n%s\n' "-------------------------------------------------------------"
 if [ "$ON_PATH" = no ]; then

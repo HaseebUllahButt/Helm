@@ -24,13 +24,23 @@ owner's home or network to bypass this check.
   `hub-authz`, `roster-trust`.
 
 ## Check installation and connections
+- Open Settings and select **Check connection**. Each answering machine reports
+  its paths to the others. A failed read identifies the device-to-machine step.
+  A route proves a path is present, not that a chat or agent can run.
+- Open **Recent connection changes** for observations from each machine. The
+  last 100 changes survive restarts. Samples run every 15 seconds and on checks;
+  short failures between samples may be absent. Last seen means a route was
+  observed, not that a message was delivered.
+- Select **Save support report** to download fixed fields with generated
+  machine names. Reports omit addresses, keys, raw errors and chat data.
 - Run `helm doctor` on the affected machine. Use `--json` for a support report.
   It reads status only. It never starts a service or changes settings.
 - The live connection check stays on loopback. A healthy remote home must not
   hide a failed local service. A home health reply proves only its web response.
 - Reports omit addresses, keys, account data, and raw errors. A route count
   does not prove a missing machine is asleep. Check that machine separately.
-- **Tests:** `test/doctor`, `help`.
+- **Tests:** `test/doctor`, `connection-history`, `help`;
+  `test/browser/connection-check`.
 
 ## Send a project or a task to another machine
 - **Prove (driven 2026-10-21):** use two private Helm copies, each with its

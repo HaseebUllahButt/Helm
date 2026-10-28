@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type
 import { Confirm, TextPrompt } from '../Modal';
 import { recacheWarning, type Recache } from '@helm/usage/recache';
 import { Markdown } from '../Markdown';
+import { DeliveryStatus } from './DeliveryStatus';
 import { Composer } from './Composer';
 import { Controls, trayPrefs, type Kind } from './Controls';
 import { LimitsLine } from './LimitsLine';
@@ -439,6 +440,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
 
   return (
     <>
+      <DeliveryStatus client={client} env={env.id} id={session.id} />
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         {/* As in a Helm chat: the title and what needs a look now. Where it

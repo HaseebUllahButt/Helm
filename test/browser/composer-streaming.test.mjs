@@ -12,7 +12,7 @@ test('streamed replies do not redraw the message box, and its actions stay curre
     let seq=3; const listeners=new Set(); window.calls=[]; window.composerRenders=0;
     const initial={id:'stream-test',engine:'claude',driver:'claude',profileId:'claude',model:'a',status:'working',cwd:'/project',title:'Stream'};
     window.emit=(events)=>{const stamped=events.map(e=>({seq:++seq,at:Date.now(),...e}));for(const f of listeners)f('machine','session.event',{id:initial.id,events:stamped});};
-    const client={on:f=>{listeners.add(f);return()=>listeners.delete(f)},subscribe:()=>()=>{},input:async(e,p)=>window.calls.push({method:'session.input',params:p}),rpc:async(e,m,p)=>{
+    const client={pendingActions:()=>[],resumeActions:async()=>[],on:f=>{listeners.add(f);return()=>listeners.delete(f)},subscribe:()=>()=>{},input:async(e,p)=>window.calls.push({method:'session.input',params:p}),rpc:async(e,m,p)=>{
       if(m==='session.events')return {session:initial,pending:[],last:3,events:[
         {seq:1,at:Date.now(),type:'turn.start',turnId:'t',text:'Continue'},
         {seq:2,at:Date.now(),type:'status',status:'working'},
