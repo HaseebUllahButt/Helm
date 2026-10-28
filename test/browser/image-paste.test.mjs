@@ -90,6 +90,22 @@ for(const mode of ['Native','Driven']){
     assert.equal(await p.locator('.attach-preview').count(),0);
     assert.equal(await p.locator('textarea').inputValue(),'');
   });
+  test(`${mode} two quick pastes both stay, numbered in order`,async t=>{
+    const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
+    await p.evaluate(async()=>{
+      const c=document.createElement('canvas');c.width=32;c.height=24;c.getContext('2d').fillRect(0,0,32,24);
+      const blob=await new Promise(resolve=>c.toBlob(resolve,'image/png'));
+      const ta=document.querySelector('textarea');ta.focus();
+      for(const name of ['a.png','b.png']){const dt=new DataTransfer();dt.items.add(new File([blob],name,{type:'image/png'}));ta.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));}
+      // The preview shows before the picture is made smaller.
+      if(!document.querySelector('.attach-preview img'))await new Promise(resolve=>requestAnimationFrame(resolve));
+      window.shownAtOnce=document.querySelectorAll('.attach-preview img').length;
+    });
+    assert.equal(await p.evaluate(()=>window.shownAtOnce),2);
+    await p.waitForFunction(()=>document.querySelector('textarea').value.includes('[Image #2]'));
+    assert.equal((await p.locator('textarea').inputValue()).trim(),'[Image #1] [Image #2]');
+    assert.equal(await p.locator('.attach-preview').count(),2);
+  });
   test(`${mode} draft images stay with their machine and chat`,async t=>{
     const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
     await paste(p);
