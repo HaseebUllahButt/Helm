@@ -224,8 +224,8 @@ test('the working mark is still; the light theme keeps every status readable', a
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await boot();
   await page.evaluate(mount);
-  await shelf(page, 'Running').locator('.tstat.working i').first().waitFor();
-  assert.equal(await page.locator('.tstat.working i').first().evaluate(e => getComputedStyle(e).animationName), 'none');
+  await shelf(page, 'Running').locator('.tstat.working').first().waitFor();
+  assert.equal(await page.locator('.tri-row.mood-working .tri-dot').first().evaluate(e => getComputedStyle(e).animationName), 'none');
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await page.waitForTimeout(500);
   for (const kind of ['working', 'unread']) {

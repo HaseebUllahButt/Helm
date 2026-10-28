@@ -272,9 +272,11 @@ export function NeedCard({ s, machine, selected = false, onOpen, onPick, onSnooz
 }
 
 /**
- * A chat in the sidebar. A settled chat is one line: the title, one status
- * at the right edge (its age, "new", or a word that says more), and the
- * agent. A running chat adds a second line: its folder, machine and branch.
+ * A chat in the sidebar. A settled chat is one line: the agent, the title,
+ * and one status at the right edge (its age, "new", or a word that says
+ * more). A running chat has its status dot before the title, so the title
+ * gets the whole line; the second line has the agent, folder, machine,
+ * branch and its clock.
  */
 export function HomeRow({ s, machine, onOpen, note, selected = false, slim = false, actions }: {
   s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean;
@@ -305,14 +307,14 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
         onKeyDown={actions?.onDelete ? (e) => { if (deleteKey(e, e.currentTarget)) { e.preventDefault(); setEnding(true); } } : undefined}
         title={`${s.title}\n${where}`} data-where={where}
       >
-        {slim ? <>{title}{status}{mark}</> : <>
-          <span className="tri-top">{title}{status}</span>
+        {slim ? <>{mark}{title}{status}</> : <>
+          <span className="tri-top"><i className="tri-dot" />{title}</span>
           <span className="tri-bot">
-            <Icon name={s.quick ? 'bolt' : 'folder'} size={12} />
+            {mark}
             <span className="tri-where">{[whereOf(s), machine].filter(Boolean).join(' · ')}</span>
             {note && <span className="tri-note">{note}</span>}
             {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
-            <span className="tri-end">{mark}</span>
+            <span className="tri-end">{status}</span>
           </span>
         </>}
       </button>

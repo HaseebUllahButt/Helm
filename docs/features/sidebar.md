@@ -27,10 +27,11 @@ until `text` starts with "helm / Search anything".
 ## Home shelves
 - **Rules:** the owner calls the shelf of recently finished chats
   "Settled". The sidebar shows live and Helm-known chats only, on purpose.
-- **Rules (owner, 2026-10-24):** a Settled chat is one line: title, one
-  status (its age, a green dot when not opened yet, "Needs you" or
-  "Failed"), and the agent logo. A Running chat keeps a second line with
-  its folder, machine, branch and agent logo; the owner wants these. A
+- **Rules (owner, 2026-10-28, idea A):** a Settled chat is one line: the
+  agent logo, the title, and one status (its age, a green dot when not
+  opened yet, "Needs you" or "Failed"). A Running chat has its status dot
+  before the title, so the title gets the whole line; the second line has
+  the agent logo, folder, machine, branch and the clock. A
   machine shows a word only for news ("2 running", or the age when
   offline). The top bar shows only the dot while connected. Shelf headers
   have no divider lines.

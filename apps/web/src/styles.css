@@ -3028,7 +3028,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 @media (hover: hover) and (pointer: fine) {
   .row.rowx.tri-row .rowend { position: absolute; right: 6px; bottom: 6px; height: 24px; min-width: 24px; padding: 0 3px; }
   .row.rowx.tri-row.slim .rowend { bottom: auto; top: 50%; transform: translateY(-50%); }
-  .row.rowx.tri-row:is(:hover, :has(.rowend[aria-expanded="true"]), :has(.rowend:focus-visible)) .tri-mark { visibility: hidden; }
+  .row.rowx.tri-row:is(:hover, :has(.rowend[aria-expanded="true"]), :has(.rowend:focus-visible)) :is(.tri-end, .rowmain > .tstat, .rowmain > .chip) { visibility: hidden; }
 }
 .tri-title { flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 450; color: var(--text-dim); overflow: hidden; text-overflow: clip; white-space: nowrap; line-height: 1.35; }
 /* A long name fades out at the edge, like the chat bar's, instead of ending in "…". */
@@ -3036,7 +3036,16 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .row.thread-row.tri:hover .tri-title, .row.thread-row.tri.active .tri-title, .tri-row:hover .tri-title, .thread-row.tri.active .tri-title { color: var(--text); }
 .tri-row .chip { flex: none; font-size: 10.5px; padding: 0 6px; min-height: 18px; }
 .tri-top, .tri-bot { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: var(--t-micro); color: var(--mutedfg); }
-.tri-top { gap: 10px; }
+.tri-top { gap: 9px; }
+/* A running chat's status, before its title: the clock on the line below says the rest. */
+.tri-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dot-off); }
+.tri-row.mood-working .tri-dot { background: var(--sky); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sky) 16%, transparent); }
+.tri-row.mood-needs .tri-dot { background: var(--need); }
+.tri-row.mood-failed .tri-dot { background: var(--red); }
+.tri-row.mood-unread .tri-dot { background: var(--ok); }
+.tri-bot .tstat i { display: none; }
+.tri-bot .tri-mark.mark { width: 16px; height: 16px; margin-left: -4px; background: none; }
+.tri-bot .tri-mark.mark svg { width: 12px; height: 12px; }
 .tri-bot svg { flex: none; opacity: .8; }
 .tri-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tri-note { flex: none; color: var(--text-dim); white-space: nowrap; }
