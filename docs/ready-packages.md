@@ -82,4 +82,6 @@ A complete installer needs a fixed Node.js version, matching native programs,
 a compatible Linux system library baseline, and an isolated startup check of
 those exact files. Copying the current dependency folder would not meet that
 requirement. The checked web package remains useful with a working source
-install. It is not a complete ready-built installer.
+install. It is not a complete ready-built installer. A separate
+[current Linux package](linux-package.md) pins Node.js 22.23.3 and carries
+matching dependencies and the terminal runtime.
