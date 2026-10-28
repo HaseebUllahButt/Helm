@@ -68,3 +68,18 @@ help, send, and reply path. It does not prove paid-agent sign-in, macOS startup,
 native Windows startup, or transfer between physical machines.
 
 Tests: `test/ready-package.test.mjs`, `test/browser/new-chat.test.mjs`.
+
+## Complete Linux artifact assessment
+
+The current dependency folder uses 218 MiB. It contains native programs for
+several systems. On this Linux x86_64 machine, Node.js 26.8.1 uses native module
+version 147. The installed terminal dependency, `node-pty`, has no matching
+binary and fails to load. The `node-datachannel` dependency loads successfully.
+The private fake-chat proof uses Helm's available terminal path; it does not
+prove that this missing dependency can run on another Linux computer.
+
+A complete installer needs a fixed Node.js version, matching native programs,
+a compatible Linux system library baseline, and an isolated startup check of
+those exact files. Copying the current dependency folder would not meet that
+requirement. The checked web package remains useful with a working source
+install. It is not a complete ready-built installer.
