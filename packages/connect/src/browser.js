@@ -81,6 +81,10 @@ const pointerTarget = el => {
  * drives it through Chromium's own channel. Without a screen (a server) it
  * is one shared hidden Chromium. Nothing starts until a tab is used.
  */
+let ownerLogins = false;
+/** Only the Helm service starts browsers with the owner's own logins; tests never read real profiles. */
+export const useOwnerLogins = () => { ownerLogins = true; };
+
 export class BrowserManager {
   constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = 45000, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500 } = {}) {
     this.launchWindow = launchWindow; this.windowCheck = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
@@ -128,7 +132,7 @@ export class BrowserManager {
       try { storageState = JSON.parse(await readFile(join(this.directory, sessionId, 'storage.json'), 'utf8')); } catch (error) { hasStorage = error.code !== 'ENOENT'; }
       if (!hasStorage) {
         seed = loginSeed;
-        if (!seed) { const choice = await this.loginDefault(sessionId); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
+        if (!seed) { this.owner(sessionId); const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
         if (seed) { if (!seed.cookies.length && seed.failed) throw new Error(seed.warnings?.[0] || 'Could not copy the default browser logins.'); storageState = { cookies: seed.cookies, origins: [] }; }
       }
       // Set the user agent before any popup's first request. Each page also
@@ -172,7 +176,7 @@ export class BrowserManager {
     if (this.shared && !this.shared.helmClosed) return Promise.resolve(this.shared);
     return this.openingShared ||= (async () => {
       const folder = sharedProfile(this.directory), fresh = !existsSync(folder); mkdirSync(folder, { recursive: true, mode: 0o700 });
-      let seed; if (fresh) { const choice = await this.savedLoginDefault(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey).catch(() => null); }
+      let seed; if (fresh) { const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey).catch(() => null); }
       let context;
       try { context = await this.launchWindow(folder, { name: 'helm-browser' }); }
       catch (error) { throw new Error(`The browser could not open a window. ${String(error.message).split('\n')[0]}`); }
@@ -311,6 +315,15 @@ export class BrowserManager {
       await this.writePrivate(file, { profileKey: profile.key }); return { profileKey: profile.key };
     }
     return this.savedLoginDefault();
+  }
+  /**
+   * The logins a new browser starts with: the profile the owner chose, else
+   * the system default browser's most recently used profile.
+   */
+  async startingProfile() {
+    const choice = await this.savedLoginDefault(); if (choice.profileKey || !ownerLogins) return choice;
+    const profiles = await this.logins.listProfiles().catch(() => []);
+    return { profileKey: profiles.find(profile => profile.readable)?.key ?? null };
   }
   async savedLoginDefault() {
     try { const choice = JSON.parse(await readFile(join(this.directory, 'logins.json'), 'utf8')); return { profileKey: typeof choice.profileKey === 'string' ? choice.profileKey : null }; } catch { return { profileKey: null }; }
@@ -875,4 +888,4 @@ export class BrowserManager {
 /** A machine with no browser to start gets no browser note: it would only steer the agent to a tool that fails. */
 export function browserReady() { return !!(process.env.HELM_WINDOW_CHROMIUM || executable() || hasPlaywrightChromium()); }
 
-export function browserNote() { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. For an owner step, point with helm browser point; do not click. Never ask for passwords. Suggest helm browser profiles and helm browser logins "<profile>" to copy logins. Respect the request on signed-in sites.]`; }
+export function browserNote() { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. For an owner step, point with helm browser point; do not click. Never ask for passwords. When a site needs a login, pick the fitting profile from helm browser profiles and run helm browser logins "<profile>". Respect the request on signed-in sites.]`; }

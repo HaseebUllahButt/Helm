@@ -110,10 +110,15 @@ The owner uses the same browser window. Helm has no browser panel.
 
 ## Logins
 
+A new window starts with the logins of the profile the owner chose, else
+the system default browser's most recently used profile (only in the Helm
+service; tests never read real profiles). An agent picks another profile
+itself when a site needs it.
+
 `helm browser profiles` lists browser profiles on the chat's machine.
 `helm browser logins "<profile>" [--default]` copies cookies from a Helium,
-Chromium, Chrome, Brave, Edge or Vivaldi profile. The machine default stores
-only the profile name; cookies live only in each chat's private storage.
+Chromium, Chrome, Brave, Edge or Vivaldi profile into the shared window. The
+machine default stores only the profile name.
 
 - A profile is found by any name a person uses: the browser ("helium"),
   the profile ("work", "Profile 7", its email), both ("work in chrome",
