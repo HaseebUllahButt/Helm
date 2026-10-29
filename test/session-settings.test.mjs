@@ -141,3 +141,74 @@ test('stopping a terminal Pi mid-reply presses Esc there, and never at its promp
     assert.deepEqual(host.writes,['\x1b']);
   } finally {await sessions.stop();}
 });
+
+test('an ACP setting the agent refuses or does not answer is not saved as accepted', async t => {
+  const { DevinDriver } = await import('../packages/connect/src/drivers/devin.js');
+  const { fakeCli } = await import('./helpers.mjs');
+  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ profiles: [{ id: 'devin', engine: 'devin', cmd: 'devin' }] }));
+  const models = ['swe-2-max', 'swe-2-fast', 'swe-2-mini'];
+  const options = ({ model = 'swe-2-max', effort = 'high', mode = 'accept-edits' } = {}) => ({ configOptions: [
+    { id: 'mode', currentValue: mode, options: [{ value: 'accept-edits', name: 'Code' }, { value: 'ask', name: 'Ask' }] },
+    { id: 'model', currentValue: model, options: models.map(value => ({ value, name: value })) },
+    { id: 'thought_level', currentValue: effort, options: [{ value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }] },
+  ] });
+  // The agent answers ordinary changes, refuses 'medium' thinking and the
+  // 'ask' mode, and never answers a switch to swe-2-fast.
+  const writes = [];
+  let onData;
+  const emit = message => onData?.(`${JSON.stringify(message)}\n`);
+  const reported = { model: 'swe-2-max', effort: 'high', mode: 'accept-edits' };
+  const pipe = {
+    write(data) {
+      const message = JSON.parse(data);
+      writes.push(message);
+      if (message.method !== 'session/set_config_option') return;
+      const { configId, value } = message.params;
+      if (value === 'swe-2-fast') return;
+      if (value === 'medium' || value === 'ask') {
+        queueMicrotask(() => emit({ jsonrpc: '2.0', id: message.id, error: { code: -32602, message: 'not offered' } }));
+        return;
+      }
+      reported[{ thought_level: 'effort' }[configId] ?? configId] = value;
+      queueMicrotask(() => emit({ jsonrpc: '2.0', id: message.id, result: options(reported) }));
+    },
+    end() {}, kill() {}, detach() {},
+    onData(callback) { onData = callback; },
+    onExit() {},
+  };
+  const fake = fakeCli('devin', 'plain');
+  const procHost = { hasProc: () => true, procPipe: () => pipe, async openProc() {} };
+  const sessions = new Sessions(new EventEmitter(), { nativeDiscovery: false, nativeHost: new Host(),
+    makeDriver: (engine, opts) => new DevinDriver({ ...opts, cmd: fake.cmd, engineSessionId: 'acp-session', procHost, procId: 'adopted' }) });
+  t.after(() => sessions.stop());
+  const s = await sessions.start({ cwd: root, profileId: 'devin', model: 'swe-2-max', effort: 'high', mode: 'edit' });
+  const saved = () => ({ model: sessions.get(s.id).model, effort: sessions.get(s.id).effort, mode: sessions.get(s.id).mode });
+  const first = saved();
+  assert.equal(first.model, 'swe-2-max');
+
+  const refusedEffort = await sessions.setEffort(s.id, 'medium');
+  assert.equal(refusedEffort.ok, false);
+  assert.equal(saved().effort, first.effort, 'a refused thinking level is not saved');
+  const refusedMode = await sessions.setMode(s.id, 'read');
+  assert.equal(refusedMode.ok, false);
+  assert.equal(saved().mode, first.mode, 'a refused mode is not saved');
+
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const held = sessions.setModel(s.id, 'swe-2-fast', { pick: true });
+  while (!writes.some(message => message.params?.value === 'swe-2-fast')) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(15_000);
+  const unanswered = await held;
+  assert.equal(unanswered.ok, false);
+  assert.equal(saved().model, 'swe-2-max', 'an unanswered model is not saved as accepted');
+  t.mock.timers.reset();
+
+  const late = writes.find(message => message.params?.value === 'swe-2-fast');
+  reported.model = 'swe-2-fast';
+  emit({ jsonrpc: '2.0', id: late.id, result: options(reported) });
+  while (saved().model !== 'swe-2-fast') await new Promise(resolve => setImmediate(resolve));
+  assert.equal(saved().model, 'swe-2-fast', 'the agent\'s later report still lands');
+
+  const accepted = await sessions.setModel(s.id, 'swe-2-mini', { pick: true });
+  assert.equal(accepted.ok, true);
+  assert.equal(saved().model, 'swe-2-mini', 'an answered change saves as before');
+});
