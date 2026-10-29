@@ -598,8 +598,12 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       try {
         // HTTP is polling, with no socket subscription to leak on disconnect.
         const watch = body.method === 'session.watch';
+        // Let a slow reply use the time the browser still has. Older clients
+        // omit the deadline and keep the existing default.
+        const timeout = Number.isFinite(body.timeoutMs) && body.timeoutMs > 0
+          ? Math.min(30_000, Math.ceil(body.timeoutMs)) : 12_000;
         const result = await callEnv(body.env, watch ? 'session.events' : body.method,
-          watch ? { id: body.params.id, tail: 1 } : body.params, { timeout: 12_000, sub: claims.sub });
+          watch ? { id: body.params.id, tail: 1 } : body.params, { timeout, sub: claims.sub });
         return json(res, 200, { result: watch
           ? { ok: true, last: result.last, status: result.session?.status } : result });
       } catch (error) {

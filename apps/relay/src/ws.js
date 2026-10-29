@@ -787,6 +787,7 @@ export function createWsLayer() {
     // a malformed frame confined to its socket, including normal close cleanup.
     sock.on('error', () => sock.terminate());
     sock.isAlive = true;
+    sock.progressBytes = sock._socket?.bytesRead ?? 0;
     sock.on('pong', () => { sock.isAlive = true; });
 
     if (auth.role === 'env') {
@@ -913,6 +914,20 @@ export function createWsLayer() {
     }
   }
 
+  // A large machine reply can hide its own ping behind upload bytes.
+  // A control frame confirms receipt before the whole reply has arrived.
+  const uploadProgress = setInterval(() => {
+    for (const sock of online.values()) {
+      const bytes = sock._socket?.bytesRead ?? 0;
+      if (bytes > sock.progressBytes && sock.readyState === 1) {
+        sock.isAlive = true;
+        sock.ping();
+      }
+      sock.progressBytes = bytes;
+    }
+  }, 5000);
+  uploadProgress.unref?.();
+
   const heartbeat = setInterval(() => {
     // Revocations can arrive from anywhere - the CLI writing the roster file,
     // gossip from another hub - so sweep live sockets against the current
@@ -963,6 +978,7 @@ export function createWsLayer() {
       send(tunnel.initiator, T.TUNNEL_CLOSE, { sid: tunnel.initiatorSid, reason: 'hub stopped' });
     }
     clearInterval(heartbeat);
+    clearInterval(uploadProgress);
     clearInterval(redeliver);
     stopWatch();
   };

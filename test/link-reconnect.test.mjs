@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { WebSocketServer } from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
 
 const dir = mkdtempSync(join(tmpdir(), 'helm-link-reconnect-'));
 process.env.HELM_DIR = dir;
@@ -179,4 +179,69 @@ test('a hub reply that is still arriving survives heartbeat checks', async conte
   const closed = new Promise(resolve => socket.once('close', resolve));
   heartbeat(); await closed;
   assert.equal(setup.link.connected, false, 'a link with no byte progress still closes');
+});
+
+
+test('heartbeat and route recovery keep a link while its upload drains', { timeout: 10000 }, async context => {
+  const setup = await fixture(context, null, { recoveryTimeout: 4321 });
+  let heartbeat, recover, client;
+  const interval = globalThis.setInterval, timeout = globalThis.setTimeout, send = WebSocket.prototype.send;
+  context.mock.method(globalThis, 'setInterval', (fn, ms, ...args) => {
+    if (ms === 20000) { heartbeat = fn; return { unref() {} }; }
+    return interval(fn, ms, ...args);
+  });
+  context.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => {
+    if (ms === 4321) { recover = fn; return { unref() {} }; }
+    return timeout(fn, ms, ...args);
+  });
+  context.mock.method(WebSocket.prototype, 'send', function (...args) {
+    if (!this._isServer) client = this;
+    return send.apply(this, args);
+  });
+  let accept;
+  const connected = new Promise(resolve => { accept = resolve; });
+  setup.webSockets.once('connection', socket => { socket._socket.pause(); accept(socket); });
+  setup.link.start(); await setup.ready;
+  const socket = await connected;
+  setup.link.send('large', { data: 'x'.repeat(16 * 1024 * 1024) });
+  assert.ok(client.bufferedAmount > 0, 'the paused hub leaves queued upload bytes');
+  heartbeat();
+  setup.link.recover();
+  const delivered = new Promise(resolve => socket.on('message', raw => {
+    if (JSON.parse(raw).t === 'large') resolve();
+  }));
+  socket._socket.resume(); await delivered;
+  heartbeat(); recover();
+  assert.equal(setup.link.connected, true);
+  assert.equal(setup.upgrades(), 1);
+  const closed = new Promise(resolve => socket.once('close', resolve));
+  heartbeat(); await closed;
+  assert.equal(setup.link.connected, false, 'a stopped upload still permits recovery');
+});
+
+test('small writes alone cannot keep a silent hub connection alive', async context => {
+  const setup = await fixture(context, null);
+  let heartbeat;
+  const interval = globalThis.setInterval;
+  context.mock.method(globalThis, 'setInterval', (fn, ms, ...args) => {
+    if (ms === 20000) { heartbeat = fn; return { unref() {} }; }
+    return interval(fn, ms, ...args);
+  });
+  let accept;
+  const connected = new Promise(resolve => { accept = resolve; });
+  setup.webSockets.once('connection', accept);
+  setup.link.start(); await setup.ready;
+  const socket = await connected;
+  const write = async () => {
+    const received = new Promise(resolve => socket.on('message', function got(raw) {
+      if (JSON.parse(raw).t !== 'event') return;
+      socket.off('message', got); resolve();
+    }));
+    setup.link.send('event', { text: 'small update' }); await received;
+  };
+  await write(); heartbeat();
+  await write();
+  const closed = new Promise(resolve => socket.once('close', resolve));
+  heartbeat(); await closed;
+  assert.equal(setup.link.connected, false, 'local write completion is not proof from the hub');
 });

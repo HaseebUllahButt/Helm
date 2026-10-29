@@ -219,7 +219,8 @@ export function Terminal({ client, env, sessionId }: {
         show(payload.text ?? '', !!payload.reset);
       }
       // Back after a drop: ask for everything, since pushes were missed.
-      if (kind === 'connection' && payload?.online) attach();
+      if ((kind === 'connection' && payload?.online)
+        || (e === env && kind === 'transport' && payload?.gap)) attach();
       if (e === env && kind === 'session.exit' && payload?.id === sessionId) {
         xterm.write('\r\n\x1b[2m[ The terminal ended. ]\x1b[0m\r\n');
       }

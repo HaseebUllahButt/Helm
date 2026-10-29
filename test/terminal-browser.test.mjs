@@ -98,6 +98,7 @@ function mountTerminal({ firstScreen } = {}) {
         calls,
         client,
         cleanup,
+        emit(env, kind, payload) { sessionListener(env, kind, payload); },
         emitOutput(text) { sessionListener('machine-1', 'session.data', { id: 'session-1', text }); },
       }));
     });
@@ -154,5 +155,20 @@ test('plain and OSC localhost links open the chat browser on its machine', async
     assert.ok(opens.every(call => call.env === 'machine-1' && call.params.id === 'session-1'));
     assert.equal(opens[0].params.url, 'http://localhost:5173/');
     assert.equal(opens[1].params.url, 'http://localhost:5173/path');
+  } finally { cleanup(); }
+});
+
+
+test('a terminal catches up only when its own direct link lost events', async () => {
+  const { calls, emit, cleanup } = await mountTerminal();
+  try {
+    const count = () => calls.filter(call => call.method === 'session.attach').length;
+    const initial = count();
+    emit('other', 'transport', { direct: false, gap: true });
+    emit('machine-1', 'transport', { direct: true });
+    assert.equal(count(), initial);
+    emit('machine-1', 'transport', { direct: false, gap: true });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(count(), initial + 1);
   } finally { cleanup(); }
 });

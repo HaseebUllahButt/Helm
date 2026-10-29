@@ -113,6 +113,20 @@ const SYNC_EVERY_MS = 2 * 60_000;
  * phone that can only reach the VM and a laptop that can only be reached on
  * the LAN still meet, as long as some hub can see both of them.
  */
+function watchLinkProgress(ws) {
+  let received = ws?._socket?.bytesRead ?? 0;
+  const written = () => (ws?._socket?.bytesWritten ?? 0) - (ws?._socket?.writableLength ?? 0);
+  let sent = written();
+  let queued = ws?._socket?.writableLength ?? 0;
+  return () => {
+    const bytes = ws?._socket?.bytesRead ?? 0;
+    const outgoing = written();
+    const moved = bytes > received || (queued > 0 && outgoing > sent);
+    received = bytes; sent = outgoing; queued = ws?._socket?.writableLength ?? 0;
+    return moved;
+  };
+}
+
 export class Link {
   #ws = null;
   #backoff = RECONNECT_MIN;
@@ -181,13 +195,20 @@ export class Link {
       this.start();
       return;
     }
-    this.#probeTimer = setTimeout(() => {
-      this.#probeTimer = null;
+    const progress = watchLinkProgress(this.#ws);
+    const check = () => {
       if (this.#stopped) return;
+      if (progress()) {
+        this.#probeTimer = setTimeout(check, this.recoveryTimeout);
+        this.#probeTimer.unref?.();
+        return;
+      }
+      this.#probeTimer = null;
       this.#reset();
       this.#backoff = RECONNECT_MIN;
       this.start();
-    }, this.recoveryTimeout);
+    };
+    this.#probeTimer = setTimeout(check, this.recoveryTimeout);
     this.#probeTimer.unref?.();
     this.#ping();
   }
@@ -211,13 +232,11 @@ export class Link {
   #heartbeat() {
     clearInterval(this.#beat);
     this.#waiting = false;
-    let received = this.#ws?._socket?.bytesRead ?? 0;
+    const progress = watchLinkProgress(this.#ws);
     this.#beat = setInterval(() => {
-      const bytes = this.#ws?._socket?.bytesRead ?? 0;
-      const flowing = bytes > received;
-      received = bytes;
-      // A large reply can take longer than a heartbeat on a slow link.
-      // WebSocket emits message only after the entire reply arrives.
+      const flowing = progress();
+      // Pings can wait behind a large upload. Keep the link while incoming
+      // bytes arrive or its queued output drains, not merely while we queue more.
       if (this.#waiting && !flowing) {
         // A close event follows, and with it the usual reconnect.
         console.warn(`[helm] ${this.url}: heartbeat timed out`);
@@ -315,6 +334,7 @@ export class Link {
       this.daemon.onLinkUp(this);
     });
 
+    ws.on('ping', () => { if (current()) this.#alive(); });
     ws.on('message', (raw) => {
       if (!current()) return;
       let msg;

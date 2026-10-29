@@ -15,6 +15,9 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   If live links fail, ordinary web requests send chat messages and approvals.
   A lost reply triggers a result check. Opening the chat checks saved actions
   again. The chat shows "Checking delivery" while a result is unknown.
+  A saved chat message with the same message number also confirms delivery.
+  This proof ends the check without sending again. Live replies stay visible
+  while a history read waits.
   Approvals interrupted during delivery stay unknown after a restart. Never
   replay them: the agent can already have acted.
 - **Tests:** `test/action-delivery`, `input-delivery`, `http-read`;

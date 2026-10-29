@@ -16,6 +16,7 @@ const phone = N.issueDevice(net, 'phone');
 const hub = await startRelay({ port: 0, host: '127.0.0.1', dbFile: process.env.HELM_DB, openLogin: false });
 const base = `http://127.0.0.1:${hub.server.address().port}`;
 const calls = [];
+let heldRead;
 const daemon = new WebSocket(base.replace('http:', 'ws:') + '/ws?role=self', {
   headers: { authorization: `Bearer ${N.machineToken(N.loadNetwork())}` },
 });
@@ -23,6 +24,7 @@ daemon.on('message', raw => {
   const msg = JSON.parse(raw);
   if (msg.t !== 'rpc') return;
   calls.push(msg);
+  if (msg.params?.hold) { heldRead?.(msg); return; }
   const result = msg.method === 'session.events'
     ? { events: [{ seq: 41 }], last: 41, pending: [], session: { status: 'working' } }
     : { method: msg.method, params: msg.params };
@@ -132,4 +134,25 @@ test('ordinary action requests keep sender identity and reject untracked writes'
   }
   assert.equal((await action('session.deliver', {}, 'bad')).status, 401);
   assert.equal(calls.length, before);
+});
+
+
+test('web reads use the remaining browser deadline with a bounded server wait', async t => {
+  const original = globalThis.setTimeout;
+  for (const [requested, expected] of [[19000, 19000], [90000, 30000], [-1, 12000]]) {
+    let expire;
+    const mock = t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => {
+      if (ms === expected) { expire = fn; return { unref() {} }; }
+      return original(fn, ms, ...args);
+    });
+    const arrived = new Promise(resolve => { heldRead = resolve; });
+    const response = read('session.events', { id: 'slow', hold: true }, phone.token, { timeoutMs: requested });
+    await arrived;
+    assert.equal(typeof expire, 'function');
+    expire();
+    const r = await response;
+    assert.equal(r.status, 503);
+    assert.match((await r.json()).error, /did not respond/);
+    mock.mock.restore(); heldRead = undefined;
+  }
 });

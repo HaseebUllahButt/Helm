@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { webcrypto } from 'node:crypto';
 import { build } from 'esbuild';
 
 const source = readFileSync(new URL('../apps/web/src/client.ts', import.meta.url), 'utf8');
@@ -65,7 +66,11 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     addEventListener: (kind, fn) => documents.set(kind, fn),
     removeEventListener: (kind) => documents.delete(kind),
   };
+  const storage = new Map();
   const context = {
+    crypto: webcrypto,
+    localStorage: { get length() { return storage.size; }, key: i => [...storage.keys()][i],
+      getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     module: { exports: {} }, exports: {},
     JSON: { stringify: JSON.stringify, parse: (...args) => { parses++; return JSON.parse(...args); } },
     performance: { now: () => now }, Date: class extends Date { static now() { return now; } },
@@ -693,17 +698,14 @@ test('repeated focus events cannot postpone dead-socket detection indefinitely',
 });
 
 test('project reads escape a silent direct connection instead of timing out', async () => {
-  const setup = harness({ delays: { 'http://good/api/read': 100 } });
-  setup.start(); await setup.advance(10);
-  await setup.client.openDirect('vm'); setup.peers[0].open();
-  const request = setup.client.rpc('vm', 'project.list', {}, 20000);
-  await setup.advance(1500);
-  const frame = setup.sockets[0].frames.find(frame => frame.method === 'project.list');
-  assert.ok(frame);
-  setup.sockets[0].message({ t: 'rpcResult', id: frame.id, ok: true, result: { projects: [] } });
-  assert.equal((await request).projects.length, 0);
-  assert.equal(setup.client.directTo('vm'), false);
-  setup.client.close();
+  const h = harness(); h.start(); await h.advance(10);
+  await h.client.openDirect('vm'); h.peers[0].open();
+  const request = h.client.rpc('vm', 'project.list', {}, 20000);
+  await h.advance(1510);
+  assert.equal((await request).fresh, true);
+  assert.equal(h.sockets[0].frames.some(frame => frame.method === 'project.list'), false);
+  assert.equal(h.client.directTo('vm'), false);
+  h.client.close();
 });
 
 test('a dropped socket recovers pending project reads but never replays project writes', async () => {
@@ -754,12 +756,10 @@ test('direct negotiation expires and old peer callbacks cannot drop a replacemen
 });
 
 test('successful read fallback retires the silent peer for subsequent calls', async () => {
-  const h = harness({ delays: { 'http://good/api/read': 100 } }); h.start(); await h.advance(10);
+  const h = harness(); h.start(); await h.advance(10);
   await h.client.openDirect('machine'); h.peers[0].open();
-  const request = h.client.rpc('machine', 'session.events'); await h.advance(1500);
-  const frame = h.sockets[0].frames.find(f => f.t === 'rpc');
-  h.sockets[0].message({ t: 'rpcResult', id: frame.id, ok: true, result: 'fresh' });
-  assert.equal(await request, 'fresh'); assert.equal(h.client.directTo('machine'), false);
+  const request = h.client.rpc('machine', 'session.events'); await h.advance(1510);
+  assert.equal((await request).fresh, true); assert.equal(h.client.directTo('machine'), false);
   const next = h.client.rpc('machine', 'session.events');
   const nextFrame = h.sockets[0].frames.at(-1);
   assert.equal(nextFrame.t, 'rpc');
@@ -769,11 +769,12 @@ test('successful read fallback retires the silent peer for subsequent calls', as
 });
 
 test('an early hedge error does not reject the slower direct success', async () => {
-  const h = harness({ delays: { 'http://good/api/read': 100 } }); h.start(); await h.advance(10);
+  const statuses = {};
+  const h = harness({ statuses }); h.start(); await h.advance(10);
   await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
-  const request = h.client.rpc('machine', 'session.events'); await h.advance(1500);
-  const frame = h.sockets[0].frames.find(f => f.t === 'rpc');
-  h.sockets[0].message({ t: 'rpcResult', id: frame.id, ok: false, error: { message: 'environment is not connected' } });
+  statuses['http://good'] = 503;
+  const request = h.client.rpc('machine', 'session.events'); await h.advance(1510);
+  const frame = peer.channel.frames.find(f => f.t === 'rpc');
   peer.message({ t: 'rpcResult', id: frame.id, ok: true, result: 'fresh' });
   assert.equal(await request, 'fresh'); assert.equal(h.client.directTo('machine'), true);
   h.client.close();
@@ -787,7 +788,7 @@ test('safe chat reads use authenticated HTTP when WebSocket upgrades are unavail
     const sent = h.requests.at(-1);
     assert.equal(sent.url, 'http://good/api/read');
     assert.equal(sent.init.headers.authorization, 'Bearer test-token');
-    assert.deepEqual(JSON.parse(sent.init.body), { env: 'machine', method, params: { id: 'chat' } });
+    assert.deepEqual(JSON.parse(sent.init.body), { env: 'machine', method, params: { id: 'chat' }, timeoutMs: 30000 });
   }
   assert.equal(h.sockets.length, 1); // HTTP reads do not stop the socket retry loop.
   h.client.close();
@@ -868,10 +869,11 @@ test('the parent read deadline cancels a running HTTP backup', async () => {
 test('HTTP reads fail over promptly from a dead remembered relay and cancel the losing request', async () => {
   const h = harness({ endpoints: ['http://old', 'http://good'], delays: { 'http://old': Infinity, 'http://good': 10 } });
   const request = h.client.rpc('machine', 'session.events', {}, 20000);
-  await h.advance(399); assert.equal(h.requests.length, 1);
+  await h.advance(2999); assert.equal(h.requests.length, 1);
   await h.advance(20);
   assert.equal((await request).fresh, true);
   assert.equal(h.requests.length, 2);
+  assert.equal(JSON.parse(h.requests[1].init.body).timeoutMs, 17000);
   assert.equal(h.requests[0].init.signal.aborted, true);
   assert.equal(h.timers.size, 0, 'winning a read clears its deadline and stagger timers');
   h.client.close();
@@ -1010,7 +1012,8 @@ test('a direct link stops the hub copy of events, and losing it takes the copy b
   const before = h.events.filter(e => e.kind === 'connection').length;
   h.peers[0].channel.close();
   assert.deepEqual(hub.frames.filter(f => f.env === 'vm' && /subscribe/.test(f.t)).map(f => f.t), ['subscribe', 'unsubscribe', 'subscribe']);
-  assert.equal(h.events.filter(e => e.kind === 'connection' && e.payload.online).length, before + 1, 'screens resync the gap');
+  assert.equal(h.events.filter(e => e.kind === 'connection' && e.payload.online).length, before, 'other machines do not resync');
+  assert.ok(h.events.some(e => e.env === 'vm' && e.kind === 'transport' && !e.payload.direct));
   h.client.close();
 });
 
@@ -1175,5 +1178,106 @@ test('a stalled direct chat read tries other hubs after one grace period', async
   assert.equal((await read).fresh, true);
   assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 1);
   assert.equal(h.client.directTo('machine'), false);
+  h.client.close();
+});
+
+
+test('slow direct fragments do not start duplicate history downloads', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
+  const read = h.client.rpc('machine', 'session.events');
+  const frame = peer.channel.frames.find(f => f.method === 'session.events');
+  const body = JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: { text: 'a'.repeat(2000) } });
+  const size = Math.ceil(body.length / 4);
+  for (let i = 0; i < 4; i++) {
+    await h.advance(1000);
+    peer.message({ t: 'dc-chunk', gid: 'slow', n: 4, i, data: body.slice(i * size, (i + 1) * size) });
+  }
+  assert.equal((await read).text.length, 2000);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  assert.equal(h.sockets[0].frames.some(f => f.method === 'session.events'), false);
+  assert.equal(h.client.directTo('machine'), true);
+  h.client.close();
+});
+
+test('a read deadline does not disconnect a direct link receiving fragments', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
+  const read = h.client.rpc('machine', 'session.events', {}, 4000).catch(e => e.message);
+  for (let i = 0; i < 3; i++) {
+    await h.advance(1000);
+    peer.message({ t: 'dc-chunk', gid: 'slow', n: 5, i, data: 'part' });
+  }
+  await h.advance(1001);
+  assert.match(await read, /timed out/);
+  assert.equal(h.client.directTo('machine'), true);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  h.client.close();
+});
+
+test('web reads give a slow healthy hub time before asking another hub', async () => {
+  const h = harness({ endpoints: ['http://one', 'http://two', 'http://three', 'http://four'], delays: { 'http://one': 2500 } });
+  const read = h.client.rpc('machine', 'session.events', {}, 20000);
+  await h.advance(2400);
+  assert.equal(h.requests.length, 1);
+  await h.advance(101);
+  assert.equal((await read).fresh, true);
+  assert.equal(h.requests.length, 1);
+  h.client.close();
+});
+
+
+test('unrelated live events cannot postpone recovery of a lost direct reply', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
+  const read = h.client.rpc('machine', 'session.events');
+  await h.advance(1000);
+  peer.message({ t: 'event', kind: 'session.update', payload: { session: { id: 'another' } } });
+  await h.advance(501);
+  assert.equal((await read).fresh, true);
+  assert.equal(h.client.directTo('machine'), true, 'a backup win does not close the working event channel');
+  h.client.close();
+});
+
+
+test('a received message confirms delivery while its receipt is still lost', async () => {
+  const h = harness({ delays: { 'http://good/api/action': Infinity } }); h.start(); await h.advance(200);
+  const actionId = 'a'.repeat(32);
+  let result;
+  const done = h.client.input('pc', { id: 'chat', data: 'once' }, 120000, actionId).then(value => { result = value; });
+  await h.advance(1600);
+  assert.equal(h.client.pendingActions().length, 1);
+  h.sockets[0].message({ t: 'event', env: 'pc', kind: 'session.event', payload: {
+    id: 'wrong-chat', events: [{ type: 'turn.start', messageId: actionId }],
+  } });
+  assert.equal(h.client.pendingActions().length, 1, 'proof must belong to this chat');
+  h.sockets[0].message({ t: 'event', env: 'pc', kind: 'session.event', payload: {
+    id: 'chat', events: [{ type: 'turn.start', messageId: actionId }],
+  } });
+  await done;
+  assert.equal(result.confirmed, 'log');
+  assert.equal(h.client.pendingActions().length, 0);
+  const writes = h.sockets[0].frames.filter(frame => frame.method === 'session.deliver').length;
+  const requests = h.requests.filter(req => req.url.endsWith('/api/action')).length;
+  await h.advance(121000);
+  assert.equal(h.sockets[0].frames.filter(frame => frame.method === 'session.deliver').length, writes);
+  assert.equal(h.requests.filter(req => req.url.endsWith('/api/action')).length, requests, 'confirmation stops retries');
+  h.client.close();
+});
+
+test('saved delivery checks use a working direct link without another send', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('pc'); const peer = h.peers[0]; peer.open();
+  const actionId = 'b'.repeat(32);
+  h.client.saveAction({ env: 'pc', method: 'session.deliver', actionId, started: true,
+    params: { id: 'chat', data: 'once', messageId: actionId } });
+  const done = h.client.resumeActions('pc', 'chat');
+  const frame = peer.channel.frames.find(frame => frame.method === 'session.action-status');
+  assert.ok(frame);
+  peer.message({ t: 'rpcResult', id: frame.id, ok: true, result: { state: 'done', result: { ok: true } } });
+  await done;
+  assert.equal(h.client.pendingActions().length, 0);
+  assert.equal(peer.channel.frames.some(frame => frame.method === 'session.deliver'), false);
+  assert.equal(h.requests.some(req => req.url.endsWith('/api/action')), false);
   h.client.close();
 });
