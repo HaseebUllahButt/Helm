@@ -160,7 +160,7 @@ async function hold() {
   };
   // Playwright's own Chromium may not be downloaded (or downloadable here);
   // the machine's Chromium does the same job.
-  const system = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].find((p) => existsSync(p));
+  const system = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome', '/usr/bin/brave'].find((p) => existsSync(p));
   const context = await chromium.launchPersistentContext(join(s.root, 'browser'), options).catch((e) => {
     if (!system || !/Executable doesn't exist/.test(e.message)) throw e;
     return chromium.launchPersistentContext(join(s.root, 'browser'), { ...options, executablePath: system });
@@ -275,7 +275,7 @@ async function compare(before, after, out) {
   const file = resolve(out ?? join(dirname(resolve(after)), 'before-after.png'));
   const { compareHtml } = await import('./proof-media.mjs');
   const { chromium } = await import('@playwright/test');
-  const system = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].find((p) => existsSync(p));
+  const system = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome', '/usr/bin/brave'].find((p) => existsSync(p));
   const browser = await chromium.launch({ headless: true }).catch((e) => {
     if (!system || !/Executable doesn't exist/.test(e.message)) throw e;
     return chromium.launch({ headless: true, executablePath: system });

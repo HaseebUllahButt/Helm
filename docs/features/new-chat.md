@@ -45,6 +45,10 @@
   app; it uses the machine's `gh` login. The repo list is kept in
   `~/.helm/github-repos.json` and fetched again after 10 minutes. The chat
   starts at once; messages wait until the repo is in.
+- **Unused clone chat (owner, 2026-10-29):** leaving it keeps it only while
+  the clone runs or failed. Once the repo is in, leaving an unused one
+  removes it and keeps the folder; going back starts a chat in that folder,
+  without a second clone.
 - **Prove (driven 2026-10-15):** without `--real` it shows the signed-out
   screen. With `up --real` (owner's list, read only), clone a public repo
   into the scratch folder:
