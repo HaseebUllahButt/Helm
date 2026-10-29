@@ -333,9 +333,27 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   };
   // A lost reply is confirmed only by this send's identity. Other devices
   // can send the same words, pictures or references as a separate message.
+  useEffect(() => {
+    const restore = (event: Event) => {
+      const { env: machine, id, text } = (event as CustomEvent).detail;
+      if (machine === env.id && id === session.id) setDraft([text, live.get()].filter(Boolean).join('\n\n'));
+    };
+    window.addEventListener('helm:restore-draft', restore);
+    return () => window.removeEventListener('helm:restore-draft', restore);
+  }, [env.id, session.id]);
   const turnsNow = useRef(log.turns);
   turnsNow.current = log.turns;
   const arrived = (messageId: string) => turnsNow.current.some((turn) => turn.messageId === messageId);
+  useEffect(() => {
+    try {
+      const pending = new Set(client.pendingActions().filter(action => action.env === env.id
+        && action.params.id === session.id && action.method === 'session.deliver').map(action => action.actionId));
+      if (!pending.size) return;
+      for (const turn of log.turns) {
+        if (turn.messageId && pending.has(turn.messageId)) client.confirmDelivered(env.id, session.id, turn.messageId);
+      }
+    } catch (error) { setError(errorMessage(error)); }
+  }, [client, env.id, session.id, log.last]);
   const sendText = async (body: string, atts: Attachment[], sentReferences = references) => {
     const fingerprint = JSON.stringify([env.id, session.id, body, atts.map(a => [a.name, a.mime, a.data]), sentReferences.map(item => item.id)]);
     const messageId = retryDeliveryIds.current.get(fingerprint) ?? newMessageId();

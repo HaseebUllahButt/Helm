@@ -45,7 +45,11 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
     let paint: ReturnType<typeof setTimeout> | undefined;
     let writer: ReturnType<typeof setTimeout> | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    let networkRead = false, more = false, filling = false, logFirst = 0;
+    let networkRead = false, more = false, filling = false, logFirst = 0, liveVersion = 0;
+    let stale = true, fetchVersion = 0;
+    let updateCheck: ReturnType<typeof setTimeout> | undefined;
+    let announced: { lastSeq: number; status?: string } | undefined;
+    let watchTarget: { last: number; status?: string } | undefined;
     const buffered = new Map<number, HelmEvent>();
     const watchId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const visible = () => !stopped && !document.hidden;
@@ -98,12 +102,12 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
       retryDelay = Math.min(retryDelay * 2, RENEW_MS);
     };
     const drain = () => {
-      if (!visible() || !log.loaded || fetching) return;
+      if (!visible() || !log.loaded) return;
       const next: HelmEvent[] = [];
       for (const event of [...buffered.values()].sort((a, b) => a.seq - b.seq)) {
         if (event.seq <= log.last) { buffered.delete(event.seq); continue; }
-        if (event.seq !== log.last + 1) { if (next.length) changed(next); void refresh(); return; }
-        consume([event]); buffered.delete(event.seq); next.push(event);
+        if (event.seq !== log.last + 1) { if (next.length) changed(next); if (!fetching) void refresh(); return; }
+        consume([event]); liveVersion++; buffered.delete(event.seq); next.push(event);
       }
       if (next.length) changed(next);
     };
@@ -134,8 +138,8 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
     const refresh = async () => {
       if (!visible()) return;
       if (fetching) { refreshAgain = true; return; }
-      fetching = true; networkRead = true; refreshAgain = false;
-      const version = visibilityVersion;
+      fetching = true; networkRead = true; refreshAgain = false; stale = true; fetchVersion = visibilityVersion;
+      const version = visibilityVersion, liveAtStart = liveVersion, lastAtStart = log.last;
       clearTimeout(retry); retry = undefined;
       setSyncing(true);
       let failed = false;
@@ -144,8 +148,13 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
         // One tail read serves cold opens, reconnects, and live gaps alike.
         const r = await read();
         if (!visible() || version !== visibilityVersion) return;
+        // Live replies may have passed this snapshot while it travelled.
+        // Keep them. A lower server cursor from before this request is still
+        // a real reset and must replace the old log.
+        const liveAhead = liveVersion !== liveAtStart && r.last >= lastAtStart && r.last < log.last;
+        const livePending = log.pending;
         const boundary = r.firstSeq ?? r.events[0]?.seq ?? 0;
-        const overlap = log.loaded && r.last >= log.last && boundary <= log.last + 1;
+        const overlap = log.loaded && (r.last >= log.last || liveAhead) && boundary <= log.last + 1;
         // A catch-up read during a reply mostly repeats what is on screen.
         // Rebuilding then made every message a new object and redrew a long
         // chat whole, many times a reply. When no event already here gained
@@ -167,13 +176,18 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
           raw = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
           if (!altered && added.every(event => event.seq > log.last && event.type !== 'history.reset')) fresh = added.sort((a, b) => a.seq - b.seq);
         }
-        if (r.last < log.last) buffered.clear();
-        if (fresh && r.last >= log.last) { for (const event of fresh) apply(log, event); }
+        if (r.last < log.last && !liveAhead) buffered.clear();
+        if (fresh && (r.last >= log.last || liveAhead)) { for (const event of fresh) apply(log, event); }
         else rebuild();
-        log.loaded = true; log.pending = r.pending ?? [];
-        if (r.session?.status) log.status = r.session.status;
+        log.loaded = true;
+        if (liveAhead) {
+          const resolved = new Set(raw.filter(e => e.type === 'permission.resolved').map(e => e.requestId));
+          log.pending = [...new Map([...(r.pending ?? []), ...livePending].map(p => [p.requestId, p])).values()]
+            .filter(p => !resolved.has(p.requestId));
+        } else log.pending = r.pending ?? [];
+        if (r.session?.status && !(liveAhead && raw.some(e => e.seq > r.last && e.type === 'status'))) log.status = r.session.status;
         noteWindow(r.logFirst); publish();
-        setError(''); setSyncing(false); retryDelay = 1000;
+        stale = false; setError(''); setSyncing(false); retryDelay = 1000;
         dirty = true; persist();
         void fill();
       } catch (e: any) {
@@ -182,8 +196,11 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
       } finally {
         fetching = false;
         if (visible()) {
+          if (!failed) drain();
+          const target = watchTarget; watchTarget = undefined;
+          if (target && (target.last > log.last || target.last < lastAtStart
+            || (target.last === log.last && target.status && target.status !== log.status))) refreshAgain = true;
           if (refreshAgain) { refreshAgain = false; void refresh(); }
-          else if (!failed) drain();
         }
       }
     };
@@ -197,18 +214,30 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
       try {
         const r = await client.rpc<{ last: number; status?: string }>(env, 'session.watch', { id: sessionId, watchId }, 10_000);
         if (!visible()) release();
-        else if (version === visibilityVersion && !fetching && (!log.loaded || r.last !== log.last || (r.status && r.status !== log.status))) void refresh();
+        else if (version === visibilityVersion) {
+          const changed = !log.loaded || r.last !== log.last || (r.status && r.status !== log.status);
+          if (fetching) { if (changed) watchTarget = r; }
+          else if (stale || changed) void refresh();
+        }
       } catch { if (visible()) scheduleRetry(); }
       finally {
         renewing = false;
         if (visible() && version !== visibilityVersion) void renew();
       }
     };
-    const catchUp = () => { if (visible()) { void renew(); void refresh(); } };
+    const catchUp = () => {
+      if (!visible()) return;
+      // A route notice is not evidence of missing messages. The small watch
+      // reply tells us whether history changed before we download it again.
+      void renew();
+      if ((!log.loaded || stale) && !fetching) void refresh();
+      else if (fetching && fetchVersion !== visibilityVersion) refreshAgain = true;
+    };
     const hide = () => {
       visibilityVersion++; buffered.clear(); persist();
       clearTimeout(paint); paint = undefined; urgentPaint = false;
       clearTimeout(retry); retry = undefined;
+      clearTimeout(updateCheck); updateCheck = undefined;
       release();
     };
     const onVisibility = () => {
@@ -223,8 +252,16 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
       }
       if ((kind === 'connection' && payload?.online)
         || (machine === env && ((kind === 'presence' && payload?.online) || kind === 'transport'))) catchUp();
-      if (machine === env && kind === 'session.update' && payload?.session?.id === sessionId
-        && !fetching && (payload.session.lastSeq > log.last || payload.session.status !== log.status)) void refresh();
+      if (machine === env && kind === 'session.update' && payload?.session?.id === sessionId) {
+        announced = payload.session;
+        // The list notice can beat the same chat's live events. Give them
+        // time to arrive before downloading history for an apparent gap.
+        if (!updateCheck) updateCheck = setTimeout(() => {
+          updateCheck = undefined;
+          if (visible() && announced && (announced.lastSeq > log.last
+            || (announced.lastSeq === log.last && announced.status && announced.status !== log.status))) void refresh();
+        }, 1000);
+      }
     });
     client.subscribe(env);
     // Cached text can paint offline. It never controls the network cursor,
@@ -301,7 +338,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
     window.addEventListener('pagehide', hide);
     return () => {
       stopped = true;
-      off(); clearInterval(timer); clearTimeout(paint); clearTimeout(retry);
+      off(); clearInterval(timer); clearTimeout(paint); clearTimeout(retry); clearTimeout(updateCheck);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', catchUp);
       window.removeEventListener('pageshow', catchUp);

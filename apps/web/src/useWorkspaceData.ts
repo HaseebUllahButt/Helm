@@ -176,6 +176,7 @@ export function useWorkspaceData(client: Client, connected: boolean) {
         else loadEnvs();
       }
       if (kind === 'connection' && (payload.online || payload.reachable)) loadEnvs();
+      if (kind === 'transport' && payload?.gap && envId) loadSessions(envId);
       if (kind !== 'session.update' || !envId) return;
       const update = payload?.session as Session | undefined;
       if (update?.id) {

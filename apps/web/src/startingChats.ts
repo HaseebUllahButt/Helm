@@ -1,6 +1,7 @@
 import { errorMessage } from './errors';
 import type { Client, Session } from './client';
-import { saveDraft } from './draftStore';
+import { retryableDelivery } from '@helm/protocol/reliable-input';
+import { loadDraft, saveDraft } from './draftStore';
 
 /**
  * New chats whose agent is still starting.
@@ -92,15 +93,17 @@ function attempt(client: Client, chat: StartingChat) {
       chat.session = session;
       const origin = origins.get(chat.id);
       if (origin) origins.set(session.id, origin);
-      // In before the chat opens, so it opens on the message rather than
-      // empty for a moment. If it cannot go in, it waits in the box instead.
-      const send = (data: string) => client.input(chat.envId, { id: session.id, data })
-        .catch(() => { chat.draft = [data, chat.draft].filter(Boolean).join('\n\n'); });
-      const first = chat.message;
-      if (first) await send(first);
-      // Sent again while the first was going in: that one follows it.
-      const more = chat.message.slice(first.length).replace(/^\n+/, '');
-      if (more) await send(more);
+      // Start the send as the chat opens, without waiting for agent startup or
+      // its receipt. The live chat can confirm it from its saved message ID.
+      if (chat.message) void Promise.resolve().then(() => client.input(chat.envId, { id: session.id, data: chat.message }))
+        .catch((error) => {
+          if (retryableDelivery(error)) return;
+          chat.draft = [chat.message, loadDraft(chat.envId, session.id)].filter(Boolean).join('\n\n');
+          saveDraft(chat.envId, session.id, chat.draft);
+          window.dispatchEvent(new CustomEvent('helm:restore-draft', {
+            detail: { env: chat.envId, id: session.id, text: chat.message },
+          }));
+        });
       chat.state = 'started';
       if (!chat.message) cameUpEmpty.add(session.id);
       if (chat.draft) saveDraft(chat.envId, session.id, chat.draft);

@@ -9,7 +9,7 @@ before(async () => {
   const bundle = await build({ stdin: { contents: `
     import { createRoot } from 'react-dom/client';
     import { useSessionLog } from './apps/web/src/session/useSessionLog';
-    const client = { subscribe() {}, on() { return () => {}; }, rpc: window.rpc };
+    const client = { subscribe() {}, on(fn) { window.emit = fn; return () => {}; }, rpc: window.rpc };
     function App() {
       const state = useSessionLog(client, 'machine', 'chat', { wholeChat: false });
       window.state = state;
@@ -37,14 +37,26 @@ async function chat(t, { page: pageSize = Infinity } = {}) {
   await page.goto('http://helm-test/');
   const log = [...reply(1, 1)];
   const calls = [];
+  let hold;
+  const holdNext = (pending = [], fail = false) => {
+    let release, started;
+    const gate = new Promise(resolve => { release = resolve; });
+    const waiting = new Promise(resolve => { started = resolve; });
+    hold = { gate, started, pending, fail };
+    t.after(release);
+    return { release, waiting };
+  };
   await page.exposeFunction('rpc', async (_env, method, params = {}) => {
-    const last = log.at(-1).seq;
+    const snapshot = [...log];
+    const last = snapshot.at(-1).seq;
     if (method === 'session.watch') return { last };
     if (method === 'session.unwatch') return { ok: true };
     calls.push(params);
-    const shape = events => ({ events, last, pending: [], session: { status: 'idle' }, logFirst: 1 });
-    if (params.tail) { const events = log.slice(-params.tail); return { ...shape(events), firstSeq: events[0].seq }; }
-    const after = log.filter(event => event.seq > params.since);
+    const held = hold; hold = undefined;
+    if (held) { held.started(); await held.gate; if (held.fail) throw new Error('read failed'); }
+    const shape = events => ({ events, last, pending: held?.pending ?? [], session: { status: 'idle' }, logFirst: 1 });
+    if (params.tail) { const events = snapshot.slice(-params.tail); return { ...shape(events), firstSeq: events[0].seq }; }
+    const after = snapshot.filter(event => event.seq > params.since);
     // pageSize stands in for the machine's byte budget per page.
     const size = Math.min(params.limit, pageSize);
     return { ...shape(after.slice(0, size)), hasMore: after.length > size, firstSeq: after[0]?.seq ?? 0 };
@@ -54,7 +66,7 @@ async function chat(t, { page: pageSize = Infinity } = {}) {
   const settle = async () => page.waitForFunction(() => !window.state.syncing);
   await page.waitForFunction(() => window.state?.log.loaded);
   await settle();
-  return { page, log, calls, texts, settle };
+  return { page, log, calls, texts, settle, holdNext };
 }
 
 test('a focus after new replies asks only for the events after the last one shown', async t => {
@@ -103,4 +115,76 @@ test('a very long gap, or a reset log, opens at the end again', async t => {
   await page.waitForFunction(last => window.state.log.last === last, log.at(-1).seq);
   await settle();
   assert.ok(calls.slice(seen).some(call => call.tail), 'a reset log is read from its end');
+});
+
+
+test('live replies appear while a history check waits, and its old reply cannot erase them', async t => {
+  const { page, calls, texts, settle, holdNext } = await chat(t);
+  const held = holdNext();
+  await page.evaluate(() => { void window.state.refresh(); });
+  await held.waiting;
+  const events = reply(5, 2);
+  await page.evaluate(events => window.emit('machine', 'session.event', { id: 'chat', events }), events);
+  await page.waitForFunction(() => window.state.log.last === 8, undefined, { timeout: 2000 });
+  assert.deepEqual(await texts(), ['Answer 1', 'Answer 2']);
+  held.release();
+  await settle();
+  assert.deepEqual(await texts(), ['Answer 1', 'Answer 2']);
+  assert.equal(calls.length, 2);
+});
+
+test('repeated online notices do not queue more history reads behind a slow read', async t => {
+  const { page, calls, settle, holdNext } = await chat(t);
+  const held = holdNext();
+  await page.evaluate(() => { void window.state.refresh(); });
+  await held.waiting;
+  for (let n = 0; n < 4; n++) {
+    await page.evaluate(() => window.emit('machine', 'presence', { online: true }));
+  }
+  held.release();
+  await settle();
+  assert.equal(calls.length, 2);
+});
+
+
+const visibility = (page, hidden) => page.evaluate(hidden => {
+  Object.defineProperty(document, 'hidden', { configurable: true, value: hidden });
+  document.dispatchEvent(new Event('visibilitychange'));
+}, hidden);
+
+test('showing an idle chat again finishes a history check hidden mid-flight', async t => {
+  const { page, holdNext, settle } = await chat(t);
+  const held = holdNext();
+  await page.evaluate(() => { void window.state.refresh(); });
+  await held.waiting;
+  await visibility(page, true); await visibility(page, false);
+  held.release();
+  await settle();
+  assert.equal(await page.evaluate(() => window.state.error), '');
+});
+
+test('showing an idle chat retries a failed history check', async t => {
+  const { page, holdNext, settle } = await chat(t);
+  const held = holdNext([], true);
+  await page.evaluate(() => { void window.state.refresh(); });
+  await held.waiting; held.release();
+  await page.waitForFunction(() => !!window.state.error);
+  await visibility(page, true); await visibility(page, false);
+  await settle();
+  assert.equal(await page.evaluate(() => window.state.error), '');
+});
+
+test('an older history reply keeps its unanswered question and does not restore a resolved one', async t => {
+  const { page, holdNext, settle } = await chat(t);
+  const held = holdNext([{ requestId: 'open', text: 'Approve?' }, { requestId: 'done', text: 'Already answered' }]);
+  await page.evaluate(() => { void window.state.refresh(); });
+  await held.waiting;
+  await page.evaluate(() => window.emit('machine', 'session.event', { id: 'chat', events: [
+    { seq: 5, type: 'permission.resolved', requestId: 'done' },
+    { seq: 6, type: 'status', status: 'working' },
+  ] }));
+  await page.waitForFunction(() => window.state.log.last === 6);
+  held.release(); await settle();
+  assert.deepEqual(await page.evaluate(() => window.state.log.pending.map(p => p.requestId)), ['open']);
+  assert.equal(await page.evaluate(() => window.state.log.status), 'working');
 });

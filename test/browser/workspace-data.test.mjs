@@ -118,3 +118,18 @@ test('a live chat update survives an older list response and triggers one catch-
   await page.waitForFunction(() => window.data.sessions.machine?.[0]?.status === 'idle', null, { timeout: 2500 });
   assert.equal(await page.evaluate(() => window.data.sessions.machine[0].updatedAt), 2);
 });
+
+
+test('a direct link gap reloads only that machine chat list', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.readEnvs = async () => ({ environments: ['one', 'two'].map(id => ({ id, name: id, online: true, info: {} })) });
+    window.reads = [];
+    window.readRpc = async (env, method) => { if (method === 'session.list') window.reads.push(env); return { sessions: [] }; };
+    window.mount();
+  });
+  await page.waitForFunction(() => window.data.liveListsSeen.current.size === 2);
+  await page.evaluate(() => { window.reads = []; window.emit('one', 'transport', { direct: false, gap: true }); });
+  await page.waitForFunction(() => window.reads.length === 1);
+  assert.deepEqual(await page.evaluate(() => window.reads), ['one']);
+});

@@ -491,6 +491,7 @@ type Pending = {
   routes?: Set<RpcRoute>;
   recover?: () => void;
   readKey?: string;
+  quietAfter?: number;
   sentAt?: Partial<Record<RpcRoute, number>>;
 };
 type Listener = (env: string, kind: string, payload: any) => void;
@@ -515,6 +516,7 @@ interface Peer {
   disconnectedTimer?: ReturnType<typeof setTimeout>;
   /** When the channel last carried anything, and whether a check is out. */
   heard?: number;
+  payloadAt?: number;
   checking?: boolean;
   /** Reads the machine's compressed frames (peer.js DeflateLink). */
   inflate?: { write: (bytes: ArrayBuffer) => void; close: () => void };
@@ -525,7 +527,7 @@ interface Peer {
  * machine flushes after each frame and may split the bytes anywhere, so they
  * are read as one stream, not message by message.
  */
-function inflater(onFrame: (msg: Record<string, any>) => void, onError: () => void) {
+function inflater(onFrame: (msg: Record<string, any>) => void, onError: () => void, onPartial: () => void) {
   const stream = new DecompressionStream('deflate-raw');
   const writer = stream.writable.getWriter();
   const reader = stream.readable.pipeThrough(new TextDecoderStream()).getReader();
@@ -542,6 +544,7 @@ function inflater(onFrame: (msg: Record<string, any>) => void, onError: () => vo
         try { msg = JSON.parse(line); } catch { continue; }
         if (msg && typeof msg === 'object' && !Array.isArray(msg)) onFrame(msg);
       }
+      if (text.length) onPartial();
     }
   })().catch(onError);
   return {
@@ -559,12 +562,13 @@ function inflater(onFrame: (msg: Record<string, any>) => void, onError: () => vo
  */
 const DC_CHUNK_AT = 16_000;
 const DC_CHUNK_TYPE = 'dc-chunk';
-// Kept deliberately narrow, matching the hub's authenticated /api/read route.
+// Kept narrow. Action status uses the authenticated /api/action route;
+// the other reads use /api/read.
 // Untracked writes must never acquire replay semantics.
 const HTTP_READ_METHODS = new Set([
   'session.events', 'session.messages', 'session.visual', 'session.list', 'model.list',
   'session.commands', 'env.info', 'session.watch', 'session.unwatch',
-  'project.list', 'net.routes',
+  'project.list', 'net.routes', 'session.action-status',
 ]);
 
 /** A held chat list with a machine's changes applied, or null if they do not fit it. */
@@ -1571,25 +1575,42 @@ export class Client {
       .map(item => this.deliverAction(item)));
   }
   private delivering = new Map<string, Promise<any>>();
+  private deliveryProof = new Map<string, () => void>();
+  confirmDelivered(env: string, id: string, actionId: string) {
+    let action: any;
+    try { action = JSON.parse(localStorage.getItem(this.deliveryKey() + '.' + actionId) || 'null'); } catch { return; }
+    if (!action || action.env !== env || action.params?.id !== id || action.actionId !== actionId
+      || action.method !== 'session.deliver' || action.legacy) return;
+    this.saveAction(action, true);
+    this.deliveryProof.get(actionId)?.();
+  }
   private deliverAction(action: any, timeout = 120_000): Promise<any> {
     const active = this.delivering.get(action.actionId);
     if (active) return active;
     this.saveAction(action);
-    const running = this.checkAction(action, timeout).finally(() => this.delivering.delete(action.actionId));
+    const stop = new AbortController();
+    const proof = new Promise(resolve => this.deliveryProof.set(action.actionId, () => {
+      stop.abort(); resolve({ ok: true, confirmed: 'log' });
+    }));
+    const running = Promise.race([proof, this.checkAction(action, timeout, stop.signal)]).finally(() => {
+      this.delivering.delete(action.actionId);
+      this.deliveryProof.delete(action.actionId);
+    });
     this.delivering.set(action.actionId, running);
     return running;
   }
-  private async checkAction(action: any, timeout: number): Promise<any> {
+  private async checkAction(action: any, timeout: number, signal: AbortSignal): Promise<any> {
     const { env, method, params, actionId } = action;
     if (action.legacy) throw Object.assign(new Error('Checking delivery. Check the terminal before sending again.'), { code: 'delivery_pending' });
     let firstAttempt = !action.started;
     if (firstAttempt) { action.started = true; this.saveAction(action); }
     const deadline = Date.now() + timeout;
-    while (!this.closed && Date.now() < deadline) {
+    while (!this.closed && !signal.aborted && Date.now() < deadline) {
       try {
         const wait = Math.max(1, Math.min(10_000, deadline - Date.now()));
-        const status = firstAttempt ? { state: 'missing' } : await this.readHttp<any>(env, 'session.action-status',
-          { actionId, kind: method === 'session.deliver' ? 'input' : 'answer' }, wait, undefined, '/api/action');
+        const status = firstAttempt ? { state: 'missing' } : await this.call<any>(env, 'session.action-status',
+          { actionId, kind: method === 'session.deliver' ? 'input' : 'answer' }, wait);
+        if (signal.aborted) return;
         firstAttempt = false;
         if (status.state === 'done') {
           this.saveAction(action, true);
@@ -1609,6 +1630,7 @@ export class Client {
               new Promise((resolve, reject) => {
                 const delay = Math.min(1500, wait / 2);
                 timer = setTimeout(() => {
+                  if (signal.aborted) { resolve({ ok: true }); return; }
                   this.readHttp(env, method, params, wait - delay, backup.signal, '/api/action').then(resolve, reject);
                 }, delay);
               }),
@@ -1622,6 +1644,7 @@ export class Client {
           }
         }
       } catch (error: any) {
+        if (signal.aborted) return;
         if (method === 'session.deliver' && error?.code === 'delivery_unsupported') {
           // This explicit refusal means no durable input was accepted.
           // Legacy terminal writes get one attempt, retained as uncertain if its reply is lost.
@@ -1633,6 +1656,7 @@ export class Client {
         }
         if (!retryableDelivery(error) && error?.code) throw error;
       }
+      if (signal.aborted) return;
       this.emit(env, 'delivery', { id: params.id });
       await new Promise(resolve => setTimeout(resolve, 500));
     }
@@ -1689,6 +1713,14 @@ export class Client {
     return r;
   }
 
+  private readGrace(env: string, method: string, timeout: number) {
+    const samples = this.rttSamples?.get(env);
+    const rtt = samples?.length ? Math.min(...samples) : 0;
+    const previous = this.readDurations?.get(`${env}:${method}`) || 0;
+    const justWoke = this.wokeAt > 0 && Date.now() - this.wokeAt < 5000;
+    return justWoke ? 500 : Math.min(8000, Math.max(1500, rtt * 2 + 250, previous * 1.5 + 250), timeout / 2);
+  }
+
   private call<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
     // Watching an open chat includes restored tabs and deep links, which
     // never visit the machine screen that originally started direct links.
@@ -1719,6 +1751,7 @@ export class Client {
     // A model list asked with `settled` waits on the machine for its refresh
     // to end. That wait is not a stalled route, so it is never raced.
     const hedge = HTTP_READ_METHODS.has(method) && !(method === 'model.list' && params?.settled === true);
+    const hedgeAfter = this.readGrace(env, method, timeout);
     return new Promise<T>((resolve, reject) => {
       const started = Date.now();
       let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -1730,7 +1763,7 @@ export class Client {
         reject: (error) => { clear(); reject(error); },
         ...(direct ? { direct: peer, env } : { relay: this.ws! }),
         routes: new Set([direct ? 'direct' : 'relay']),
-        ...(hedge ? { readKey: `${env}:${method}`, sentAt: { [direct ? 'direct' : 'relay']: started } } : {}),
+        ...(hedge ? { readKey: `${env}:${method}`, quietAfter: hedgeAfter, sentAt: { [direct ? 'direct' : 'relay']: started } } : {}),
       });
       const frame = JSON.stringify({ t: 'rpc', id, env, method, params });
       // Prefer the direct channel: relaying costs two internet round trips
@@ -1760,17 +1793,6 @@ export class Client {
       // These reads (and the idempotent view lease) are safe to race over the
       // hub too; never replay prompts, approvals, or other writes this way.
       if (hedge) {
-        // A slow but healthy link must not multiply a large history download.
-        // Keep quick recovery when no latency is known, with a bounded grace
-        // period once the machine's round-trip cost has been measured.
-        const samples = this.rttSamples?.get(env);
-        const rtt = samples?.length ? Math.min(...samples) : 0;
-        const previousRead = this.readDurations?.get(`${env}:${method}`) || 0;
-        // Just after waking, the route is the doubt, not the machine: the
-        // first reads try the web route after 0.5 s instead of 1.5 s.
-        const justWoke = this.wokeAt > 0 && Date.now() - this.wokeAt < 5000;
-        const hedgeAfter = justWoke ? 500
-          : Math.min(8000, Math.max(1500, rtt * 2 + 250, previousRead * 1.5 + 250), timeout / 2);
         const httpFallback = (elapsed: number) => {
           const pending = this.pending.get(id);
           if (!pending || pending.routes?.has('http')) return;
@@ -1785,43 +1807,40 @@ export class Client {
           );
         };
         this.pending.get(id)!.recover = () => httpFallback(Date.now() - started);
-        fallback = setTimeout(() => {
-          const pending = this.pending.get(id);
-          if (!pending) return;
-          pending.hedged = true;
-          if (sent && this.connected) {
-            pending.relay = this.ws!;
-            pending.routes?.add('relay');
-            if (pending.sentAt) pending.sentAt.relay = Date.now();
-            try {
-              this.ws!.send(frame);
-              // The direct path already used its grace period. Do not wait
-              // through the same delay again before trying other hubs.
-              httpFallback(Date.now() - started);
-              return;
-            } catch { pending.routes?.delete('relay'); }
+        const recover = () => {
+          if (!this.pending.has(id)) return;
+          // Fragments and compressed data prove that the direct path still
+          // works. Duplicating a slow reply would consume the same upload.
+          if (sent && peer?.payloadAt !== undefined && Date.now() - peer.payloadAt < hedgeAfter) {
+            fallback = setTimeout(recover, hedgeAfter);
+            return;
           }
-          // Some networks pass HTTPS but stall WebSocket traffic, and an
-          // apparently open peer can also survive a network change silently.
-          httpFallback(hedgeAfter);
-        }, hedgeAfter);
+          // Use one backup path. Sending over the hub socket and HTTP at
+          // once makes the remote machine upload the same reply twice.
+          httpFallback(Date.now() - started);
+        };
+        fallback = setTimeout(recover, hedgeAfter);
       }
       deadline = setTimeout(() => {
         clear();
         if (this.pending.delete(id)) reject(new Error(`${method} timed out`));
         // Durable delivery can finish on its other route. Its short attempt
         // budget is not evidence that the channel itself has stopped.
-        if (sent && peer && !['session.deliver', 'session.answer'].includes(method)) this.dropDirect(env, peer);
+        if (sent && peer && !['session.deliver', 'session.answer'].includes(method)
+          && (peer.heard === undefined || Date.now() - peer.heard >= hedgeAfter)) this.dropDirect(env, peer);
       }, timeout);
     });
   }
 
   private async readHttp<T>(env: string, method: string, params: any, timeout: number, signal?: AbortSignal, path = '/api/read'): Promise<T> {
+    if (method === 'session.action-status') path = '/api/action';
     if (this.closed) throw new Error('client closed');
     if (signal?.aborted) throw new Error('read cancelled');
     const bases = [...new Set([this.relay, ...this.endpoints])].filter(Boolean).filter(reachableFromHere);
     if (!bases.length) throw new Error('not connected');
-    const body = JSON.stringify({ env, method, params });
+    const started = Date.now();
+    const staggerAfter = path === '/api/read'
+      ? Math.max(3000, this.readGrace(env, method, timeout)) : 400;
     // A reconnect may find another hub while this read is already waiting on
     // an obsolete relay. Race known, eligible endpoints with a short head
     // start for the current one; authentication and the body stay
@@ -1853,7 +1872,9 @@ export class Client {
         const base = bases[next++], controller = new AbortController();
         controllers.add(controller); active++;
         this.httpAt<{ result: T }>(base, path, {
-          method: 'POST', body, signal: controller.signal,
+          method: 'POST', body: JSON.stringify({ env, method, params,
+            ...(path === '/api/read' ? { timeoutMs: Math.max(1, timeout - (Date.now() - started)) } : {}) }),
+          signal: controller.signal,
         }).then(reply => done(undefined, reply.result)).catch(error => {
           if (settled) return;
           lastError = error; active--;
@@ -1861,7 +1882,7 @@ export class Client {
           if (next < bases.length) launch();
           else if (!active) done(lastError);
         });
-        if (next < bases.length) stagger = setTimeout(launch, Math.min(400, Math.max(1, timeout / 2)));
+        if (next < bases.length) stagger = setTimeout(launch, Math.min(staggerAfter, Math.max(1, timeout / 2)));
       };
       deadline = setTimeout(() => done(new Error(`${method} timed out`)), timeout);
       launch();
@@ -1891,7 +1912,8 @@ export class Client {
     msg.ok ? pending.resolve(msg.result) : pending.reject(Object.assign(new Error(msg.error?.message ?? 'failed'), { code: msg.error?.code }));
     // Retire the unresponsive peer after its fallback succeeds, so the next
     // chat does not pay the same hedge delay again.
-    if (msg.ok && route !== 'direct' && pending.hedged && pending.env && pending.direct) {
+    if (msg.ok && route !== 'direct' && pending.hedged && pending.env && pending.direct
+      && (pending.direct.heard === undefined || Date.now() - pending.direct.heard >= (pending.quietAfter ?? 1500))) {
       this.dropDirect(pending.env, pending.direct);
     }
   }
@@ -2009,7 +2031,8 @@ export class Client {
       // machine ignores the hello and keeps sending text.
       if (typeof DecompressionStream === 'function' && typeof TextDecoderStream === 'function') {
         try {
-          peer.inflate = inflater(handle, () => this.dropDirect(env, peer, 'The direct link sent data Helm could not read.'));
+          peer.inflate = inflater(handle, () => this.dropDirect(env, peer, 'The direct link sent data Helm could not read.'),
+            () => { peer.payloadAt = Date.now(); });
           channel.send(JSON.stringify({ t: 'hello', zip: 'deflate-raw' }));
         } catch { peer.inflate = undefined; }
       }
@@ -2066,6 +2089,11 @@ export class Client {
         this.seenEvents.delete(this.seenOrder.shift()!);
       }
     }
+    if (kind === 'session.event') {
+      for (const event of payload?.events ?? []) {
+        if (event.type === 'turn.start' && event.messageId) this.confirmDelivered(env, payload.id, event.messageId);
+      }
+    }
     this.emit(env, kind, payload);
   }
 
@@ -2113,6 +2141,7 @@ export class Client {
     if (entry.n !== n || entry.parts[i] !== undefined) return null;
     entry.parts[i] = data;
     entry.got++;
+    peer.payloadAt = Date.now();
     if (peer.fragments.size > 8) {
       const oldest = peer.fragments.keys().next().value as string | undefined;
       if (oldest !== undefined) peer.fragments.delete(oldest);
@@ -2134,10 +2163,9 @@ export class Client {
     try { peer.channel.close(); peer.pc.close(); } catch { /* already gone */ }
     peer.inflate?.close();
     const gap = this.wakeHub(env);
-    this.emit(env, 'transport', { direct: false });
-    // The hub held this machine's events back, so some may be lost. Screens
-    // already reload everything after a reconnect; this is one.
-    if (gap && this.connected) this.emit('', 'connection', { online: true, hub: this.relay });
+    this.emit(env, 'transport', { direct: false, gap });
+    // The machine-scoped transport notice catches up its open chats. Other
+    // machines did not lose their link and must not download history again.
     // Losing it is not the end of trying for it.
     this.retryDirect(env);
   }

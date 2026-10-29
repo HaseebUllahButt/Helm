@@ -23,7 +23,10 @@
   "keep me" without sending, open another chat, `$V key Control+BracketLeft`
   (headless Chrome ignores Alt+Left): "What is on your mind?" with "keep me"
   in the box, and `rpc session.list` holds one new "Sketch".
-- **Tests:** `test/browser/new-chat`, `chat-home`, `onboarding`;
+- **First message:** open the chat as soon as it exists. Do not wait for
+  the first message receipt. Keep an uncertain send under its saved message
+  number. Only a clear refusal returns the text to the box.
+- **Tests:** `test/startingChats`; `test/browser/new-chat`, `chat-home`, `onboarding`;
   `test/quick-chat`, `picker-prefs`, `onboarding`.
 
 ## First chat setup
