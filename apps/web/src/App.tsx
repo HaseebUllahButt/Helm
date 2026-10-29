@@ -13,7 +13,7 @@ import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
 import { StartingTerminalView } from './session/StartingTerminalView';
 import { beginTerminal, type StartingTerminal } from './startingTerminals';
-import { beginChat, forgetChat, onStartingChat, sendWhenReady, startAgain, type StartingChat } from './startingChats';
+import { beginChat, startingChatsError, restoreStartingChats, forgetChat, onStartingChat, sendWhenReady, startAgain, type StartingChat } from './startingChats';
 import { loadDraft } from './draftStore';
 import { EngineMark } from './EngineMark';
 import { SidebarSunset } from './SidebarSunset';
@@ -388,7 +388,7 @@ function Shell({ client, conn, onSignOut }: {
       mode: s.mode && s.mode !== 'plan' ? s.mode : undefined,
     };
     return beginChat(client, {
-      envId, title: s.quick ? 'Sketch' : whereOf(s), folder: s.quick ? null : folder,
+      startParams: params, envId, title: s.quick ? 'Sketch' : whereOf(s), folder: s.quick ? null : folder,
       account: s.account ?? s.profileId, profileId: s.profileId, engine: s.engine, agent: engineOf(s.engine).label,
     }, () => client.rpc<{ session: Session }>(envId, 'session.start', params, 70_000).then((r) => r.session), draft);
   };
@@ -788,6 +788,15 @@ function Shell({ client, conn, onSignOut }: {
     forgetChat(chat.id);
   };
   useEffect(() => onStartingChat((chat) => chatStarted.current(chat)), []);
+  useEffect(() => {
+    if (startingChatsError()) { setError(startingChatsError()); return; }
+    const restored = restoreStartingChats(client, envs.filter(e => e.online).map(e => e.id));
+    if (startingChatsError()) { setError(startingChatsError()); return; }
+    const latest = restored.sort((a, b) => b.since - a.since)[0];
+    if (latest && nav.current.stack.at(-1)?.kind === 'env') {
+      navigate([{ kind: 'env' }, { kind: 'starting', startId: latest.id }], latest.envId);
+    }
+  }, [client, envs]);
   const back = () => {
     // One history entry per push, so any stack deeper than its root has
     // somewhere to pop to. At the root there is no such entry; there the ‹

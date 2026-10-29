@@ -622,3 +622,26 @@ test('a failed account check offers retry without claiming accounts are missing'
   await page.getByRole('button', { name: 'Check agents again', exact: true }).click();
   await page.getByRole('option').filter({ hasText: 'Claude' }).first().waitFor();
 });
+
+test('reload restores a queued first message with the same start and delivery numbers', async t => {
+  const page = await pageFor(t, null, { machines: ['laptop'] });
+  await page.evaluate(() => { window.startGate = () => new Promise(() => {}); });
+  await page.keyboard.press('Control+Shift+o');
+  await page.getByRole('option', { name: /No folder/ }).click();
+  await page.getByRole('option', { name: /Claude/ }).first().click();
+  const box = page.getByRole('textbox', { name: /Message/ });
+  await box.fill('keep queued words');
+  await page.getByRole('button', { name: 'send', exact: true }).click();
+  const held = await page.evaluate(() => JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k => k.startsWith('helm.startingChat.v1:')))));
+  assert.equal(held.message, 'keep queued words');
+  await page.reload();
+  await page.addScriptTag({ content: script });
+  await page.evaluate(() => window.mount(['laptop']));
+  await page.waitForFunction(() => window.calls.some(c => c.method === 'session.input'));
+  const start = await startCall(page);
+  assert.equal(start.params.startId, held.id);
+  assert.equal(start.params.profileId, held.startParams.profileId);
+  const send = await page.evaluate(() => window.calls.find(c => c.method === 'session.input'));
+  assert.equal(send.params.data, 'keep queued words');
+  await page.waitForFunction(() => !Object.keys(localStorage).some(k => k.startsWith('helm.startingChat.v1:')));
+});

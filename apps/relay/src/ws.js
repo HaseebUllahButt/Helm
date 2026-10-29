@@ -13,6 +13,7 @@ import { loadOwner, mergeOwner, ownerHash } from '../../../packages/protocol/own
 import { fanOut, isNew } from './notify.js';
 import { desktop } from './desktop-notify.js';
 import { encodeTunnelFrame, decodeTunnelFrame } from '../../../packages/protocol/tunnel-frame.js';
+import { CHUNK_AT, CHUNK_MAX, chunkText } from '../../../packages/protocol/frame-chunks.js';
 
 const HEARTBEAT_MS = 30_000;
 // Longer than the CLI's 120s call timeout: the relay must not report a
@@ -51,9 +52,43 @@ export function createWsLayer() {
     get: (id) => online.get(id) ?? mesh?.machines().get(id),
   };
 
+  // A browser counts a frame only once it is whole, so one large reply on a
+  // slow link read as a dead socket and was fetched again. A client that
+  // asks (chunks=1) gets each large text frame as pieces, back to back, in
+  // the shape a direct channel uses (frame-chunks.js).
+  let pieceGroups = 0;
   const send = (sock, t, extra) => {
-    if (sock?.readyState === 1) sock.send(encodeTunnelFrame({ t, ...extra }, sock.binaryTunnel === true));
+    if (sock?.readyState !== 1) return;
+    const frame = encodeTunnelFrame({ t, ...extra }, sock.binaryTunnel === true);
+    if (!sock.chunks || typeof frame !== 'string' || frame.length <= CHUNK_AT || frame.length > CHUNK_AT * CHUNK_MAX) {
+      sock.send(frame);
+      return;
+    }
+    const pieces = chunkText(frame, `h${(++pieceGroups).toString(36)}`, t === T.RPC_RESULT ? extra?.id : undefined);
+    for (const piece of pieces) sock.send(piece);
   };
+
+  /** Whether a browser or another hub here wants this machine's live events. */
+  function watched(envId) {
+    for (const subs of clients.values()) if (subs.has(envId)) return true;
+    for (const sock of online.values()) if (sock.hubSubscriptions?.has(envId)) return true;
+    return false;
+  }
+
+  /**
+   * Tell a machine that asked (watched=1) when that changes. A machine sent
+   * every event to every hub, and a hub with nobody watching dropped them:
+   * on a slow upload that delayed every reply behind events nobody read.
+   */
+  function tellWatched(envId) {
+    const sock = online.get(envId);
+    if (!sock?.watchReports) return;
+    const on = watched(envId);
+    if (sock.watchedTold === on) return;
+    sock.watchedTold = on;
+    send(sock, T.WATCHED, { on });
+  }
+  function tellAllWatched() { for (const envId of online.keys()) tellWatched(envId); }
 
   /**
    * Every machine needs every other machine's public key for the SSH mesh,
@@ -99,8 +134,11 @@ export function createWsLayer() {
     }
   }
 
+  // Machines attached here send their events here already. Asking other
+  // hubs for them too doubled that traffic, and kept those hubs telling the
+  // machine that someone watched.
   function watchMesh() {
-    mesh?.watch(new Set([...clients.values()].flatMap(subs => [...subs])));
+    mesh?.watch(new Set([...clients.values()].flatMap(subs => [...subs]).filter(id => !online.has(id))));
   }
 
   function meshChanged() {
@@ -355,6 +393,7 @@ export function createWsLayer() {
         sock.hubSubscriptions = new Set(Array.isArray(msg.envs)
           ? msg.envs.filter(id => net.machines[id] && !net.revoked?.[id]) : []);
         publishHubState(sock);
+        tellAllWatched();
         return;
       }
 
@@ -569,11 +608,13 @@ export function createWsLayer() {
       case T.SUBSCRIBE:
         clients.get(sock)?.add(msg.env);
         watchMesh();
+        tellWatched(msg.env);
         return;
 
       case T.UNSUBSCRIBE:
         clients.get(sock)?.delete(msg.env);
         watchMesh();
+        tellWatched(msg.env);
         return;
 
       case T.RPC: {
@@ -782,7 +823,8 @@ export function createWsLayer() {
   });
 
   wss.on('connection', (sock, req, auth) => {
-    sock.binaryTunnel = new URL(req.url, 'http://localhost').searchParams.get('binaryTunnel') === '1';
+    const asked = new URL(req.url, 'http://localhost').searchParams;
+    sock.binaryTunnel = asked.get('binaryTunnel') === '1';
     // Protocol/transport errors occur before the JSON message handler. Keep
     // a malformed frame confined to its socket, including normal close cleanup.
     sock.on('error', () => sock.terminate());
@@ -799,6 +841,7 @@ export function createWsLayer() {
       // terminal backend it has - kept on the socket so anything asking does
       // not need a db read per request.
       sock.info = auth.info || {};
+      sock.watchReports = asked.get('watched') === '1';
       online.set(envId, sock);
       q.stateSet.run(envId, JSON.stringify(auth.info || {}), now());
 
@@ -822,6 +865,8 @@ export function createWsLayer() {
       });
       broadcastPeers();
       notifyPresence(envId, true);
+      watchMesh();
+      tellWatched(envId);
       // A machine that just connected may have queued handoffs waiting for
       // it; handing them over is part of joining, not a separate command.
       sweepHandoffs();
@@ -835,7 +880,9 @@ export function createWsLayer() {
       sock.ownerHere = !!auth.local && !auth.machine;
       clients.set(sock, new Set());
       markSeen(sock.sub);
-      send(sock, T.WELCOME, { version: PROTOCOL_VERSION, role: 'client', ...(sock.binaryTunnel ? { binaryTunnel: 1 } : {}) });
+      sock.chunks = asked.get('chunks') === '1';
+      send(sock, T.WELCOME, { version: PROTOCOL_VERSION, role: 'client', ...(sock.binaryTunnel ? { binaryTunnel: 1 } : {}),
+        ...(sock.chunks ? { chunks: 1 } : {}) });
     }
 
     sock.on('message', (raw) => {
@@ -872,10 +919,15 @@ export function createWsLayer() {
           q.stateSet.run(sock.envId, JSON.stringify(auth.info || {}), now());
           notifyPresence(sock.envId, false);
           broadcastPeers();
+          watchMesh();
         }
+        // Another hub's watch list went with its socket.
+        if (sock.hubSubscriptions?.size) tellAllWatched();
       } else {
+        const subs = clients.get(sock);
         clients.delete(sock);
         watchMesh();
+        for (const envId of subs ?? []) tellWatched(envId);
         // Leaving is the last moment it was here. Skipped for a member that
         // has just been removed: its socket closing is the kick, and writing
         // a row for it would leave a trace of someone the owner cut.

@@ -13,6 +13,8 @@ function mountTerminal({ firstScreen } = {}) {
   const calls = [];
   let nextInterval = 0;
   let sessionListener;
+  const events = new Map();
+  const documents = new Map();
 
   class FakeXterm {
     static instance;
@@ -69,7 +71,8 @@ function mountTerminal({ firstScreen } = {}) {
     clearInterval(id) { intervals.delete(id); },
     setTimeout: () => 1,
     clearTimeout() {},
-    window: { addEventListener() {}, removeEventListener() {} },
+    window: { addEventListener(k, fn) { events.set(k, fn); }, removeEventListener(k) { events.delete(k); } },
+    document: { hidden: false, addEventListener(k, fn) { documents.set(k, fn); }, removeEventListener(k) { documents.delete(k); } },
     navigator: {},
   };
 
@@ -98,6 +101,8 @@ function mountTerminal({ firstScreen } = {}) {
         calls,
         client,
         cleanup,
+        wake() { documents.get('visibilitychange')?.(); },
+        renew() { [...intervals.values()].find(i => i.delay === 25000).callback(); },
         emit(env, kind, payload) { sessionListener(env, kind, payload); },
         emitOutput(text) { sessionListener('machine-1', 'session.data', { id: 'session-1', text }); },
       }));
@@ -105,7 +110,7 @@ function mountTerminal({ firstScreen } = {}) {
 }
 
 test('a terminal opened from here draws the screen its start brought, without asking again', async () => {
-  const firstScreen = { watcher: 'w-1', text: '$ ', cols: 100, rows: 30, later: [{ text: 'hi', reset: false }] };
+  const firstScreen = { watcher: 'w-1', text: '$ ', position: 2, cols: 100, rows: 30, later: [{ text: 'hi', position: 4, reset: false }] };
   const { xterm, calls, cleanup } = await mountTerminal({ firstScreen });
   try {
     await new Promise((resolve) => setImmediate(resolve));
@@ -171,4 +176,82 @@ test('a terminal catches up only when its own direct link lost events', async ()
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(count(), initial + 1);
   } finally { cleanup(); }
+});
+
+
+const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+
+for (const text of ['abc', '🙂é中']) {
+  test(`a late terminal snapshot keeps only output after its position: ${text}`, async () => {
+    const h = await mountTerminal();
+    try {
+      let release;
+      h.client.rpc = (_env, method) => method === 'session.attach'
+        ? new Promise(resolve => { release = resolve; }) : Promise.resolve({});
+      h.emit('machine-1', 'transport', { gap: true });
+      // This push partly overlaps the snapshot. Positions count UTF-16 units.
+      h.emit('machine-1', 'session.data', { id: 'session-1', text: text + 'tail', position: 100 + text.length + 4 });
+      release({ text: 'screen' + text, pty: true, position: 100 + text.length });
+      await settle();
+      const writes = h.xterm.writes;
+      assert.deepEqual(writes.slice(writes.lastIndexOf('<reset>')), ['<reset>', 'screen' + text, 'tail']);
+    } finally { h.cleanup(); }
+  });
+}
+
+test('terminal reconnect reads cannot overlap or replace a newer screen', async () => {
+  const h = await mountTerminal();
+  try {
+    const reads = [];
+    h.client.rpc = (_env, method) => method === 'session.attach'
+      ? new Promise(resolve => reads.push(resolve)) : Promise.resolve({});
+    h.emit('machine-1', 'transport', { gap: true });
+    h.emit('machine-1', 'connection', { online: true });
+    assert.equal(reads.length, 1);
+    reads[0]({ text: 'old', pty: true, position: 3 });
+    await settle();
+    assert.equal(reads.length, 2);
+    reads[1]({ text: 'new', pty: true, position: 6 });
+    await settle();
+    assert.equal(h.xterm.writes.at(-1), 'new');
+  } finally { h.cleanup(); }
+});
+
+test('showing a terminal reads the missing screen rather than only renewing it', async () => {
+  const h = await mountTerminal();
+  try {
+    h.client.rpc = (_env, method, params) => {
+      h.calls.push({ method, params });
+      return Promise.resolve({ text: params.renew ? null : 'missed output', pty: true, position: 100 });
+    };
+    h.wake(); await settle();
+    assert.equal(h.calls.at(-1).params.renew, false);
+    assert.equal(h.xterm.writes.at(-1), 'missed output');
+  } finally { h.cleanup(); }
+});
+
+test('an older host snapshot is reread after racing output without appending duplicate bytes', async () => {
+  const h = await mountTerminal();
+  try {
+    let release, reads = 0;
+    h.client.rpc = (_env, method) => {
+      if (method !== 'session.attach') return Promise.resolve({});
+      if (++reads === 1) return new Promise(resolve => { release = resolve; });
+      return Promise.resolve({ text: '$ newer', pty: true });
+    };
+    h.emit('machine-1', 'transport', { gap: true });
+    h.emitOutput('newer');
+    release({ text: '$ new', pty: true });
+    await settle();
+    assert.equal(reads, 2);
+    assert.deepEqual(h.xterm.writes.slice(-2), ['<reset>', '$ newer']);
+  } finally { h.cleanup(); }
+});
+
+
+test('a first screen skips early output already included in its snapshot', async () => {
+  const h = await mountTerminal({ firstScreen: { watcher: 'first', text: '$ 🙂é中', position: 6, cols: 80, rows: 24,
+    later: [{ text: '🙂é中', position: 6 }, { text: '!', position: 7 }] } });
+  try { assert.deepEqual(h.xterm.writes, ['<reset>', '$ 🙂é中', '!']); }
+  finally { h.cleanup(); }
 });

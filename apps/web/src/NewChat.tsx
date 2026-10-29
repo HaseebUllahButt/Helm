@@ -437,11 +437,13 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       ...(cloneFrom ? { clone: { repo: cloneFrom, login: gh?.login ?? undefined } } : {}),
     };
     const env = machine.id;
-    onClose();
-    onStarting(
-      { envId: env, title: quick ? 'Sketch' : where(folder), folder: quick ? null : folder, account: a.account, profileId: a.profile.id, engine: a.engine, agent: engineOf(a.engine).label },
-      () => client.rpc<{ session: Session }>(env, 'session.start', params, cloneFrom ? 120_000 : 70_000).then((r) => r.session),
-    );
+    try {
+      onStarting(
+        { startParams: params, envId: env, title: quick ? 'Sketch' : where(folder), folder: quick ? null : folder, account: a.account, profileId: a.profile.id, engine: a.engine, agent: engineOf(a.engine).label },
+        () => client.rpc<{ session: Session }>(env, 'session.start', params, cloneFrom ? 120_000 : 70_000).then((r) => r.session),
+      );
+      onClose();
+    } catch { setError('Cannot save this chat. Keep your text and try again.'); setBusy(false); }
   };
 
   const rows = useMemo((): Row[] => {

@@ -52,6 +52,8 @@ import { modeFor, modesFor } from '../modes.js';
  */
 
 const MAX_OUTPUT = 32_000;
+/** How long a picker change may wait for the agent. Claude's control limit is 15 s too. */
+const OPTION_TIMEOUT_MS = 15_000;
 /** A diff here is whole files, so it needs a tighter cap than output does. */
 const MAX_DIFF = 8_000;
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
@@ -381,13 +383,18 @@ export class AcpDriver extends Driver {
     this.log(`${this.engine}: set ${configId}=${value} refused: ${error.message}`);
     const current = this.#options.find((o) => o.id === configId)?.currentValue ?? null;
     this.push('error', {
-      message: `${this.spec.label ?? this.engine} does not offer "${value}" here - it stays on ${current ?? 'its default'}. (${error.message})`,
+      // No answer is not a refusal: the change can still land, and a late
+      // answer moves the picker then. Do not name a value it stays on.
+      message: error.timeout
+        ? `${this.spec.label ?? this.engine} did not confirm "${value}" in time. Check the current setting before you try again.`
+        : `${this.spec.label ?? this.engine} does not offer "${value}" here - it stays on ${current ?? 'its default'}. (${error.message})`,
       kind: 'settings',
     });
-    if (configId === 'model' && current !== this.model) {
+    // No reported value is no news: the caller keeps the last one it had.
+    if (configId === 'model' && current != null && current !== this.model) {
       this.model = current;
       this.push('settings', { model: current });
-    } else if (configId === this.spec.effortId && current !== this.effort) {
+    } else if (configId === this.spec.effortId && current != null && current !== this.effort) {
       this.effort = current;
       this.push('settings', { effort: current });
     } else if (configId === 'mode') {
@@ -493,16 +500,31 @@ export class AcpDriver extends Driver {
     this.#onUpdate({ update: { sessionUpdate: 'available_commands_update', availableCommands: list } });
   }
 
-  /** Set a picker value by whichever verb this session advertised. */
+  /**
+   * Set a picker value by whichever verb this session advertised.
+   *
+   * An agent busy with a turn can leave this unanswered. The owner's
+   * "saving" then never ended, and each new try added another waiting call.
+   * After OPTION_TIMEOUT_MS the call ends unconfirmed, like Claude's own
+   * limit; a late answer still moves the pickers to what the agent reports.
+   */
   async #setOption(configId, value) {
     const option = this.#options.find((o) => o.id === configId);
-    if (option?._legacy === 'session/set_mode') {
-      return this.#call('session/set_mode', { sessionId: this.engineSessionId, modeId: value });
-    }
-    if (option?._legacy === 'session/set_model') {
-      return this.#call('session/set_model', { sessionId: this.engineSessionId, modelId: value });
-    }
-    return this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: option?._configId ?? configId, value });
+    const [method, params] = option?._legacy === 'session/set_mode'
+      ? ['session/set_mode', { sessionId: this.engineSessionId, modeId: value }]
+      : option?._legacy === 'session/set_model'
+        ? ['session/set_model', { sessionId: this.engineSessionId, modelId: value }]
+        : ['session/set_config_option', { sessionId: this.engineSessionId, configId: option?._configId ?? configId, value }];
+    const id = this.#nextId();
+    const timer = setTimeout(() => {
+      const waiting = this.#calls.get(id);
+      if (!waiting) return;
+      this.#calls.set(id, (late) => { if (late?.result) this.#optionsChanged(late.result); });
+      waiting({ error: { message: `no answer in ${OPTION_TIMEOUT_MS / 1000} s`, timeout: true } });
+    }, OPTION_TIMEOUT_MS);
+    timer.unref?.();
+    try { return await this.#call(method, params, id); }
+    finally { clearTimeout(timer); }
   }
 
   #syncInfo() {
@@ -516,6 +538,7 @@ export class AcpDriver extends Driver {
     const normalized = this.spec.normalizeModel?.(requested, this.catalog()) ?? null;
     const model = normalized?.model ?? requested;
     const resolvedEffort = normalized?.effort ?? null;
+    const before = this.model;
     this.model = requested || null;
     const cached = this.#options.find((o) => o.id === 'model');
     const cachedValue = cached?.currentValue;
@@ -523,7 +546,8 @@ export class AcpDriver extends Driver {
     const r = await this.#setOption('model', model);
     if (r.error) {
       this.#refused('model', requested, r.error);
-      return;
+      if (this.model === (requested || null)) this.model = before;
+      return false;
     }
     const changed = this.#optionsChanged(r.result);
     const responseOption = this.#configOptions(r.result).find((o) => o.id === 'model');
@@ -545,9 +569,11 @@ export class AcpDriver extends Driver {
       this.push('settings', { model: actual });
     }
     if (resolvedEffort) await this.#applyEffort(resolvedEffort, true);
+    return true;
   }
 
   async #applyEffort(effort, forceSettings = false) {
+    const before = this.effort;
     this.effort = effort || null;
     const cached = this.#options.find((o) => o.id === this.spec.effortId);
     const cachedValue = cached?.currentValue;
@@ -555,7 +581,8 @@ export class AcpDriver extends Driver {
     const r = await this.#setOption(this.spec.effortId, effort);
     if (r.error) {
       this.#refused(this.spec.effortId, effort, r.error);
-      return;
+      if (this.effort === (effort || null)) this.effort = before;
+      return false;
     }
     const changed = this.#optionsChanged(r.result);
     const responseOption = this.#configOptions(r.result).find((o) => o.id === this.spec.effortId);
@@ -571,6 +598,7 @@ export class AcpDriver extends Driver {
     if ((forceSettings || effort !== actual) && (!this.#live || !changed.some((o) => o.id === this.spec.effortId))) {
       this.push('settings', { effort: actual });
     }
+    return true;
   }
 
   /**
@@ -983,22 +1011,30 @@ export class AcpDriver extends Driver {
     if (this.status === 'blocked' && !this.pending.size) this.push('status', { status: 'working' });
   }
 
+  // `{ applied: false }`: the agent refused the change or did not answer.
+  // Sessions then keep the last reported value instead of the request.
   async setModel(model) {
-    await this.#applyModel(model);
+    return await this.#applyModel(model) === false ? { applied: false } : {};
   }
 
   async setMode(id) {
+    const before = this.mode;
     this.mode = id;
     const mode = this.spec.acpMode(id);
     if (this.#pipe && this.engineSessionId && mode) {
       const r = await this.#setOption('mode', mode);
-      if (r.error) this.#refused('mode', mode, r.error);
-      else this.#takeOptions(r.result);
+      if (r.error) {
+        this.#refused('mode', mode, r.error);
+        if (this.mode === id) this.mode = before;
+        return { applied: false };
+      }
+      this.#takeOptions(r.result);
     }
+    return {};
   }
 
   async setEffort(effort) {
-    await this.#applyEffort(effort);
+    return await this.#applyEffort(effort) === false ? { applied: false } : {};
   }
 
   async kill() {

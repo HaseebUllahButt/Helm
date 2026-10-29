@@ -135,3 +135,60 @@ test('a quick chat that fails to start leaves no folder behind', async () => {
   assert.equal(readdirSync(QUICK_DIR).length, before);
   await sessions.stop();
 });
+
+test('a reserved chat is saved before its driver starts', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  let entering, release;
+  const entered = new Promise(resolve => { entering = resolve; });
+  const proceed = new Promise(resolve => { release = resolve; });
+  const sessions = new Sessions(new StubRuntime(), {
+    makeDriver: (engine, opts) => Object.assign(new FakeDriver({engine, ...opts}), {
+      start: async () => { entering(); await proceed; },
+    }),
+  });
+  const starting = sessions.start({quick:true, profileId:'claudea',reservedSessionId:'abcdef123456'});
+  await entered;
+  // A second index reader models restart before the driver handshake finishes.
+  const restored = new Sessions(new StubRuntime());
+  assert.equal(restored.get('abcdef123456').id,'abcdef123456');
+  release();
+  assert.equal((await starting).id,'abcdef123456');
+  await restored.stop(); await sessions.stop();
+});
+
+test('a missing account can be fixed and retried through the saved start receipt', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { StartReceipts } = await import('../packages/connect/src/start-receipts.js');
+  const { make, drivers } = await setup('retry-account');
+  const sessions=make(), receipts=new StartReceipts(sessions);
+  const params={quick:true,profileId:'retry-account',startId:'c'.repeat(32)};
+  const path=join(process.env.HELM_DIR,'profiles.json'), original=readFileSync(path,'utf8');
+  try {
+    await assert.rejects(receipts.start(params,'owner'),error=>error.startRetrySafe === true);
+    assert.equal(drivers.length,0);
+    const profiles=JSON.parse(original);
+    profiles.profiles.push({...profiles.profiles.find(p=>p.id==='claudea'),id:'retry-account'});
+    writeFileSync(path,JSON.stringify(profiles));
+    const session=await receipts.start(params,'owner');
+    assert.equal((await receipts.start(params,'owner')).id,session.id);
+    assert.equal(drivers.length,1);
+  } finally { writeFileSync(path,original); await sessions.stop(); }
+});
+
+test('a failed driver setup cannot repeat through its saved start receipt', async () => {
+  const { StartReceipts } = await import('../packages/connect/src/start-receipts.js');
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  let fixed=false, attempts=0;
+  const sessions=new Sessions(new StubRuntime(), {
+    makeDriver: (engine,opts)=>Object.assign(new FakeDriver({engine,...opts}), {
+      start:async()=>{ attempts++; if(!fixed) throw new Error('Agent setup stopped.'); },
+    }),
+  });
+  const receipts=new StartReceipts(sessions), params={quick:true,profileId:'claudea',startId:'d'.repeat(32)};
+  try {
+    await assert.rejects(receipts.start(params,'owner'),error=>error.startRetrySafe === false);
+    fixed=true;
+    await assert.rejects(receipts.start(params,'owner'),/setup stopped/);
+    assert.equal(attempts,1);
+  } finally { await sessions.stop(); }
+});

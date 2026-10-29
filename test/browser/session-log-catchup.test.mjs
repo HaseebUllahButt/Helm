@@ -11,7 +11,7 @@ before(async () => {
     import { useSessionLog } from './apps/web/src/session/useSessionLog';
     const client = { subscribe() {}, on(fn) { window.emit = fn; return () => {}; }, rpc: window.rpc };
     function App() {
-      const state = useSessionLog(client, 'machine', 'chat', { wholeChat: false });
+      const state = useSessionLog(client, 'machine', 'chat', { wholeChat: window.wholeChat ?? false });
       window.state = state;
       return null;
     }
@@ -29,15 +29,18 @@ const reply = (seq, n) => [
   { seq: seq + 3, type: 'turn.done', turnId: `t${seq}`, status: 'ok', at: seq + 3 },
 ];
 
-async function chat(t, { page: pageSize = Infinity } = {}) {
+async function chat(t, { page: pageSize = Infinity, wholeChat = false, initialReplies = 1 } = {}) {
   const context = await browser.newContext();
   t.after(() => context.close());
   const page = await context.newPage();
   await page.route('http://helm-test/**', route => route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
   await page.goto('http://helm-test/');
-  const log = [...reply(1, 1)];
+  const log = Array.from({ length: initialReplies }, (_, i) => reply(1 + i * 4, i + 1)).flat();
+  await page.evaluate(value => { window.wholeChat = value; }, wholeChat);
   const calls = [];
   let hold;
+  let olderHold;
+  if (wholeChat) { let release, started; const gate = new Promise(r => { release = r; }); const waiting = new Promise(r => { started = r; }); olderHold = { gate, release, started, waiting }; t.after(release); }
   const holdNext = (pending = [], fail = false) => {
     let release, started;
     const gate = new Promise(resolve => { release = resolve; });
@@ -46,16 +49,19 @@ async function chat(t, { page: pageSize = Infinity } = {}) {
     t.after(release);
     return { release, waiting };
   };
+  const firstOlderHold = olderHold;
   await page.exposeFunction('rpc', async (_env, method, params = {}) => {
     const snapshot = [...log];
     const last = snapshot.at(-1).seq;
     if (method === 'session.watch') return { last };
     if (method === 'session.unwatch') return { ok: true };
     calls.push(params);
+    if (params.before && olderHold) { const held = olderHold; olderHold = undefined; held.started(); await held.gate; }
     const held = hold; hold = undefined;
     if (held) { held.started(); await held.gate; if (held.fail) throw new Error('read failed'); }
     const shape = events => ({ events, last, pending: held?.pending ?? [], session: { status: 'idle' }, logFirst: 1 });
     if (params.tail) { const events = snapshot.slice(-params.tail); return { ...shape(events), firstSeq: events[0].seq }; }
+    if (params.before) { const events = snapshot.filter(event => event.seq < params.before).slice(-200); return { ...shape(events), firstSeq: events[0]?.seq ?? 0 }; }
     const after = snapshot.filter(event => event.seq > params.since);
     // pageSize stands in for the machine's byte budget per page.
     const size = Math.min(params.limit, pageSize);
@@ -66,7 +72,7 @@ async function chat(t, { page: pageSize = Infinity } = {}) {
   const settle = async () => page.waitForFunction(() => !window.state.syncing);
   await page.waitForFunction(() => window.state?.log.loaded);
   await settle();
-  return { page, log, calls, texts, settle, holdNext };
+  return { page, log, calls, texts, settle, holdNext, olderHold: firstOlderHold };
 }
 
 test('a focus after new replies asks only for the events after the last one shown', async t => {
@@ -187,4 +193,36 @@ test('an older history reply keeps its unanswered question and does not restore 
   held.release(); await settle();
   assert.deepEqual(await page.evaluate(() => window.state.log.pending.map(p => p.requestId)), ['open']);
   assert.equal(await page.evaluate(() => window.state.log.status), 'working');
+});
+
+
+test('showing a chat publishes a final event hidden before its redraw', async t => {
+  const { page, log, texts } = await chat(t);
+  await page.clock.install();
+  const events = [
+    { seq: 5, type: 'item.delta', id: 'a1', text: ' final' },
+    { seq: 6, type: 'status', status: 'working' },
+    { seq: 7, type: 'permission.request', requestId: 'question', title: 'Approve?', kind: 'command' },
+  ];
+  log.push(...events);
+  await page.evaluate(events => {
+    window.emit('machine', 'session.event', { id: 'chat', events });
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, events);
+  await visibility(page, false);
+  await page.waitForFunction(() => window.state.log.last === 7);
+  assert.deepEqual(await page.evaluate(() => window.state.log.pending.map(p => p.requestId)), ['question']);
+  assert.deepEqual(await texts(), ['Answer 1 final']);
+  assert.equal(await page.evaluate(() => window.state.log.status), 'working');
+});
+
+test('showing an idle chat resumes older pages stopped while hidden', async t => {
+  const { page, olderHold: held, calls } = await chat(t, { initialReplies: 110, wholeChat: true });
+  await held.waiting;
+  await visibility(page, true); held.release();
+  await page.waitForFunction(() => !window.state.loadingEarlier);
+  await visibility(page, false);
+  await page.waitForFunction(() => window.state.log.turns.length === 110);
+  assert.ok(calls.filter(p => p.before).length >= 2);
 });

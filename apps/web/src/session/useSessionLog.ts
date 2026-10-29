@@ -41,6 +41,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
   useEffect(() => {
     let stopped = false, fetching = false, pagingBack = false, renewing = false, refreshAgain = false;
     let log = emptyLog(), raw: HelmEvent[] = [], first = 0, windowVersion = 0, visibilityVersion = 0;
+    let needsPaint = false;
     let dirty = false, retryDelay = 1000, urgentPaint = false;
     let paint: ReturnType<typeof setTimeout> | undefined;
     let writer: ReturnType<typeof setTimeout> | undefined;
@@ -57,7 +58,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
 
     const publish = () => {
       clearTimeout(paint); paint = undefined; urgentPaint = false;
-      if (visible()) setState({ ...log, pending: [...log.pending] });
+      if (visible()) { needsPaint = false; setState({ ...log, pending: [...log.pending] }); }
     };
     const persist = () => {
       clearTimeout(writer); writer = undefined;
@@ -72,7 +73,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
       return log.turns.some(turn => turn.items.some(item => item.id === event.id && item.kind === 'text'));
     };
     const changed = (events: HelmEvent[]) => {
-      dirty = true;
+      dirty = true; needsPaint = true;
       const urgent = events.some(readable);
       // Text can replace a waiting tool redraw. The reducer still sees every
       // event in order; priority changes painting, never conversation order.
@@ -229,6 +230,8 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
       if (!visible()) return;
       // A route notice is not evidence of missing messages. The small watch
       // reply tells us whether history changed before we download it again.
+      if (needsPaint) publish();
+      if (log.loaded && !stale) void fill();
       void renew();
       if ((!log.loaded || stale) && !fetching) void refresh();
       else if (fetching && fetchVersion !== visibilityVersion) refreshAgain = true;

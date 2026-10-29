@@ -77,13 +77,14 @@ export class Terminals extends EventEmitter {
       env: { ...(exactEnv ? {} : process.env), ...env, TERM: env.TERM || 'xterm-256color' },
     });
 
-    const t = { pty: child, ring: createReplayBuffer(RING_BYTES), pending: '', timer: null, views: new Map(), sizes: new Map(), lead: null, lastOut: 0, lastData: Date.now(), cols, rows };
+    const t = { pty: child, ring: createReplayBuffer(RING_BYTES), pending: '', position: 0, timer: null, views: new Map(), sizes: new Map(), lead: null, lastOut: 0, lastData: Date.now(), cols, rows };
     this.#live.set(id, t);
 
     child.onData((chunk) => {
       // The ring is kept whether or not anyone is looking, so that opening the
       // terminal shows what happened while you were away.
       t.ring.append(chunk);
+      t.position += chunk.length; // UTF-16 units, like JavaScript slice().
       t.lastData = Date.now();
       if (!this.#viewed(t)) return;
       t.pending += chunk;
@@ -130,7 +131,7 @@ export class Terminals extends EventEmitter {
     if (!t.pending) return;
     const text = t.pending;
     t.pending = '';
-    this.emit('data', { id, text });
+    this.emit('data', { id, text, position: t.position });
   }
 
   /** How long it has drawn nothing, with nobody looking; 0 while watched. */
@@ -160,6 +161,12 @@ export class Terminals extends EventEmitter {
     // opening the laptop's CLI would otherwise leave the laptop 45 columns wide.
     if (cols && rows) this.resize(id, cols, rows, viewer);
     return ring;
+  }
+
+  /** Snapshot and output positions use UTF-16 units, never encoded byte counts. */
+  snapshot(id, options) {
+    const text = this.view(id, options);
+    return { text, position: this.#live.get(id).position };
   }
 
   /** Still watching, nothing to redraw. */

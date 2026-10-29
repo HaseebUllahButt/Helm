@@ -1,3 +1,4 @@
+import { StartReceipts } from './start-receipts.js';
 import { assertRestoreReviewed } from './restore-guard.js';
 import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
@@ -106,6 +107,15 @@ const UPDATE_AFTER_START_MS = 20_000;
 const SYNC_EVERY_MS = 2 * 60_000;
 
 /**
+ * The hubs a live event goes to. A hub with no browser or hub watching this
+ * machine drops live events; sending them still cost this machine's upload,
+ * ahead of every reply. Hubs keep digests for the brain whoever watches.
+ */
+export function eventLinks(links, kind) {
+  return links.filter((link) => link.watched !== false || kind === E.DIGEST);
+}
+
+/**
  * One connection to one hub.
  *
  * A machine keeps one of these open to every hub it can currently reach,
@@ -144,6 +154,9 @@ export class Link {
     this.url = url;
     this.id = url;
     this.connected = false;
+    // False only after this hub said nobody there watches this machine
+    // (T.WATCHED). An older hub never says, and keeps every event.
+    this.watched = true;
     this.rtt = null;
     this.recoveryTimeout = recoveryTimeout;
     // Set when this address came from a machine announcing itself on the
@@ -319,7 +332,7 @@ export class Link {
       `${this.url.replace(/^http/, 'ws')}/ws` +
       `?name=${encodeURIComponent(this.daemon.name)}` +
       `&info=${encodeURIComponent(JSON.stringify(info))}` +
-      '&binaryTunnel=1' +
+      '&binaryTunnel=1&watched=1' +
       (isSelf ? '&role=self' : ''),
       { headers: { authorization: `Bearer ${credential}` }, handshakeTimeout: 15_000 }
     );
@@ -330,6 +343,7 @@ export class Link {
       if (!current()) { ws.terminate(); return; }
       this.#backoff = RECONNECT_MIN;
       this.connected = true;
+      this.watched = true;
       this.#heartbeat();
       this.daemon.onLinkUp(this);
     });
@@ -1259,7 +1273,8 @@ export class Daemon {
    */
   #emit(kind, payload, to) {
     const eid = `${this.#boot}:${++this.#emitted}`;
-    this.broadcastFrame(T.EVENT, { kind, payload, eid, ...(to ? { to } : {}) });
+    const frame = { kind, payload, eid, ...(to ? { to } : {}) };
+    for (const link of eventLinks(this.live, kind)) link.send(T.EVENT, frame);
     this.peers?.broadcast(kind, payload, eid, to);
   }
 
@@ -1346,6 +1361,10 @@ export class Daemon {
     if (this.mesh?.receive(link, msg)) return;
     switch (msg.t) {
       case T.WELCOME:
+        return;
+
+      case T.WATCHED:
+        link.watched = msg.on !== false;
         return;
 
       case T.RPC: {
@@ -2083,8 +2102,10 @@ export class Daemon {
       case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
-        const { originHandoffId: _originHandoffId, delegation: _delegation, attach, ...start } = p;
-        const session = await this.sessions.start({ ...start, quick: start.quick === true, size: attach ?? null });
+        const { originHandoffId: _originHandoffId, delegation: _delegation, reservedSessionId: _reservedSessionId, attach, ...start } = p;
+        await this.sessionRecovery;
+        this.startReceipts ??= new StartReceipts(this.sessions);
+        const session = await this.startReceipts.start({ ...start, quick: start.quick === true, size: attach ?? null }, caller);
         // A new terminal's first screen comes back with it, so the app can
         // draw it without a second trip - a whole second over a slow link.
         // Its output is pushed only from this view on, so nothing is missed
@@ -2092,7 +2113,7 @@ export class Daemon {
         const first = attach && session.pty
           ? await this.sessions.attach(session.id, { cols: attach.cols, rows: attach.rows, watcher: attach.watcher }).catch(() => null)
           : null;
-        return first ? { session, attach: { text: first.text, pty: true } } : { session };
+        return first ? { session, attach: { text: first.text, position: first.position, pty: true } } : { session };
       }
       case M.SESSION_LINK:    return this.sessions.linkChild(p.id, p.child);
       // Attaching starts a push stream of the screen (E.SESSION_DATA); the

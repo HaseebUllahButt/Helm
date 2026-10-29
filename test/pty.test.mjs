@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { createReplayBuffer } from '../packages/connect/src/replay-buffer.js';
 
 // A terminal helm owns, against a real shell: bytes go in and come back, the
 // program is told how big the viewer is, output only travels while somebody
@@ -110,3 +113,49 @@ test('a connected native client keeps output after a lease gap while a disconnec
 });
 
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
+
+
+// Drive the real host logic even when this Node has no native PTY addon.
+function fakeTerminal(t) {
+  let output;
+  const child = { pid: 1, onData(fn) { output = fn; }, onExit() {}, resize() {}, kill() {} };
+  const source = readFileSync(new URL('../packages/connect/src/pty.js', import.meta.url), 'utf8')
+    .replace(/^import .*;$/gm, '').replace(/export /g, '').replace('let ptyModule;', 'let ptyModule = suppliedPty;');
+  const Host = new Function('suppliedPty', 'EventEmitter', 'createReplayBuffer', 'homedir', source + '; return Terminals;')(
+    { spawn: () => child }, EventEmitter, createReplayBuffer, () => '/unused');
+  const terms = new Host();
+  t.after(() => terms.closeAll());
+  return { terms, output: text => output(text) };
+}
+
+test('terminal snapshots and streamed multibyte text share UTF-16 positions', async t => {
+  const { terms, output } = fakeTerminal(t);
+  await terms.open('positions');
+  terms.snapshot('positions');
+  const pieces = [];
+  terms.on('data', piece => pieces.push(piece));
+  output('🙂é中');
+  assert.equal(pieces[0].position, 4);
+  assert.equal(pieces[0].position, pieces[0].text.length);
+  // A pending stream chunk can be present in the snapshot before its push.
+  output('tail');
+  const snapshot = terms.snapshot('positions');
+  assert.deepEqual(snapshot, { text: '🙂é中tail', position: 8 });
+  terms.close('positions'); // flush is unnecessary: snapshot already contains it
+});
+
+test('a renewed expired terminal needs a snapshot to recover its missing output', async t => {
+  const { terms, output } = fakeTerminal(t);
+  await terms.open('expired');
+  terms.view('expired');
+  const pieces = [];
+  terms.on('data', piece => pieces.push(piece));
+  output('visible');
+  const now = Date.now;
+  t.mock.method(Date, 'now', () => now() + 61000);
+  output('missed-🙂é中');
+  assert.equal(pieces.length, 1);
+  terms.renew('expired');
+  assert.equal(pieces.length, 1);
+  assert.deepEqual(terms.snapshot('expired'), { text: 'visiblemissed-🙂é中', position: 18 });
+});

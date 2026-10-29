@@ -839,10 +839,26 @@ export class Sessions extends EventEmitter {
 
   /** A new chat is on disk before anyone is told it exists. */
   async start(options) {
-    try { return await this.#start(options); } finally { this.flush(); }
+    let setupStarted = false;
+    try {
+      const session = await this.#start({ ...options, onStartSetup: () => { setupStarted = true; } });
+      if (options.reservedSessionId) this.#saveStart(session.id);
+      return session;
+    } catch (error) {
+      // Only failures before chat setup can safely repeat under this number.
+      error.startRetrySafe = !setupStarted;
+      throw error;
+    } finally { this.flush(); }
   }
 
-  async #start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null, size = null, helperWorktree = null }) {
+  #saveStart(id) {
+    this.#save();
+    this.flush();
+    const saved = JSON.parse(readFileSync(INDEX_FILE, 'utf8'));
+    if (!saved.sessions?.some(s => s.id === id)) throw new Error('Cannot save this chat. Check free disk space.');
+  }
+
+  async #start({ reservedSessionId, onStartSetup, cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null, size = null, helperWorktree = null }) {
     if (originAutomationId != null) {
       if (!/^[A-Za-z0-9._:-]{1,120}$/.test(originAutomationId)) throw new Error('invalid automation identity');
       const existing = this.findAutomationSession(originAutomationId);
@@ -898,6 +914,7 @@ export class Sessions extends EventEmitter {
       if (quick || brain || delegation) throw new Error('only a new chat in a folder can clone a repo');
       if (!this.cloner) throw new Error('this machine cannot clone from GitHub');
       const login = typeof clone.login === 'string' ? clone.login : null;
+      onStartSetup();
       const job = await this.cloner.begin({ repo: clone.repo, target: cwd, login: login ?? undefined });
       if (job.state !== 'done') {
         if (!ENGINES[profile.engine]?.driver) {
@@ -909,7 +926,8 @@ export class Sessions extends EventEmitter {
     // A repo whose helm.json asks for it gives every new chat its own
     // worktree (session-worktrees.js); made once the chat has its id.
     const own = await this.#worktrees.plan({ cwd, quick, brain, clone, delegation });
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning, own, chatWorktree: helperWorktree });
+    onStartSetup();
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning, own, reservedSessionId, chatWorktree: helperWorktree });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -920,7 +938,7 @@ export class Sessions extends EventEmitter {
     const named = dir;
     // A CLI in a terminal has no chat to show progress in: its worktree and
     // setup are done before its pane opens, and problems go to the log.
-    const id = randomBytes(6).toString('hex');
+    const id = reservedSessionId ?? randomBytes(6).toString('hex');
     let chatWorktree;
     if (own && !spec.plain) {
       const made = await this.#worktrees.make(own, id);
@@ -938,7 +956,7 @@ export class Sessions extends EventEmitter {
     // than borrowing a herdr pane and reading its screen back. Where the pty
     // addon is missing the old path still works, slowly.
     if (spec.plain && await this.terminals.ensure()) {
-      return this.#startTerminal({ dir, profileId, title, env: spec.env, parent: lineage, originHandoffId, size });
+      return this.#startTerminal({ dir, profileId, title, env: spec.env, parent: lineage, originHandoffId, size, reservedSessionId });
     }
 
     const handle = await this.runtime.createSession({
@@ -1021,10 +1039,10 @@ export class Sessions extends EventEmitter {
     return session;
   }
 
-  async #startTerminal({ dir, profileId, title, env, parent = null, originHandoffId = null, size = null }) {
+  async #startTerminal({ dir, profileId, title, env, parent = null, originHandoffId = null, size = null, reservedSessionId }) {
     this.#rewinder.assertRewindUnlocked(null, dir);
     const session = {
-      id: randomBytes(6).toString('hex'),
+      id: reservedSessionId ?? randomBytes(6).toString('hex'),
       pty: true,
       profileId,
       engine: 'shell',
@@ -1056,9 +1074,9 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null, cloning = null, own = null, chatWorktree = null }) {
+  async #startDriven({ reservedSessionId, cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null, cloning = null, own = null, chatWorktree = null }) {
     this.#rewinder.assertRewindUnlocked(null, cwd ? expand(cwd) : null);
-    const id = randomBytes(6).toString('hex');
+    const id = reservedSessionId ?? randomBytes(6).toString('hex');
     // The chat's own worktree, before its agent starts there. When it
     // cannot be made the chat still starts, in the folder asked for, and
     // says why.
@@ -1139,6 +1157,7 @@ export class Sessions extends EventEmitter {
       return session;
     }
     this.#index.set(session.id, session);
+    if (reservedSessionId) this.#saveStart(session.id);
     let driver = null;
     try {
       driver = await this.#driver(session);
@@ -1855,7 +1874,9 @@ export class Sessions extends EventEmitter {
     if (s.nativeChat && s.engine === 'claude') return this.#natives.nativeMode(s, mode);
     if (!s.driver) throw new Error('not a headless session');
     const d = this.#drivers.get(id);
-    if (d) await d.setMode(mode);
+    // A driver that says not applied (an ACP refusal, or no answer) keeps
+    // the value it last reported; a later report may still change it.
+    if (d && (await d.setMode(mode))?.applied === false) return { ok: false, session: s };
     s.mode = mode;
     this.#save();
     this.emit('session', s);
@@ -1874,7 +1895,7 @@ export class Sessions extends EventEmitter {
     if (!s.driver) throw new Error('not a headless session');
     const value = effort === 'auto' ? null : effort || null;
     const d = this.#drivers.get(id);
-    if (d) await d.setEffort(value);
+    if (d && (await d.setEffort(value))?.applied === false) return { ok: false, session: s };
     s.effort = d && ['pi', 'omp'].includes(s.engine) ? d.effort : value;
     if (d && s.engine === 'claude') s.engineEffort = value;
     this.#save();
@@ -1937,6 +1958,7 @@ export class Sessions extends EventEmitter {
     if (d) {
       const r = await d.setModel(value, { ask });
       if (r?.ask) return { ok: false, ask: r.ask, session: s };
+      if (r?.applied === false) return { ok: false, session: s };
     }
     s.model = d && ['pi', 'omp'].includes(s.engine) ? d.model : value;
     this.#save();

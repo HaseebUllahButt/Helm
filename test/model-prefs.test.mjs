@@ -192,3 +192,17 @@ test('a new session uses machine-held CLI defaults and starts notifications on',
   assert.equal(picked.mode, 'ask');
   assert.equal(picked.speed, 'normal');
 });
+
+
+test('a single default change preserves newer choices from another screen', async () => {
+  const { saveStartPrefs, startPrefs } = await import('../packages/connect/src/settings.js');
+  const profile = { engine: 'codex', cmd: 'codex', env: { CODEX_HOME: '/private-default-test' } };
+  saveStartPrefs(profile, { effort: 'low', mode: 'edit' });
+  saveStartPrefs(profile, { effort: 'low', mode: 'read', speed: 'fast' });
+  saveStartPrefs(profile, { patch: 'effort', effort: 'high', mode: 'edit' });
+  assert.deepEqual(startPrefs(profile), { effort: 'high', mode: 'read', speed: 'fast' });
+  saveStartPrefs(profile, { patch: 'speed', speed: '' });
+  assert.deepEqual(startPrefs(profile), { effort: 'high', mode: 'read' });
+  saveStartPrefs(profile, {});
+  assert.equal(startPrefs(profile), null);
+});

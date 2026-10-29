@@ -87,6 +87,7 @@ for(const engine of ['claude','codex','opencode','opencode2','devin','grok','cur
     for(const call of calls.filter(c=>['model.prefs','profile.defaults'].includes(c.method)))assert.equal(call.params.profileId,engine+'-account');
     assert.deepEqual(calls.find(c=>c.method==='picker.prefs').params.favs,{[engine]:['model-b']});
     assert.equal(calls.filter(c=>c.method==='picker.prefs').length,1);
+    assert.deepEqual(calls.find(c=>c.method==='profile.defaults').params, {profileId:engine+'-account',patch:'effort',effort:'high'});
     assert.equal(await page.locator('textarea').count(),1);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     assert.deepEqual(errors,[]);
