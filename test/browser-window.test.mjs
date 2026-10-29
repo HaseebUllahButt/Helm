@@ -12,7 +12,7 @@ process.env.HELM_NO_SERVICE = '1';
 test.after(() => rm(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
-const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow, stopWindow, profilePid, trimProfile, browserPaths, systemChromium } = await import('../packages/connect/src/browser-window.js');
+const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow, stopWindow, profilePid, trimProfile, browserPaths, systemChromium, screenEnv } = await import('../packages/connect/src/browser-window.js');
 const { chromium } = await import('playwright');
 const realChromium = [process.env.HELM_TEST_CHROMIUM, systemChromium(), chromium.executablePath()].find(path => path && existsSync(path));
 // Playwright's own Chromium, else the system one Helm itself falls back to.
@@ -42,6 +42,10 @@ test('a screen is needed for a window: a display on Linux, always on a Mac or Wi
   assert.equal(canOpenWindow({ WAYLAND_DISPLAY: 'wayland-1' }, 'linux'), true);
   assert.equal(canOpenWindow({ DISPLAY: ':0' }, 'linux'), true);
   assert.equal(canOpenWindow({}, 'darwin'), true);
+  // Helm's service can start before the desktop: the desktop's display is found later.
+  assert.equal(canOpenWindow({}, 'linux', () => ({ WAYLAND_DISPLAY: 'wayland-1' })), true);
+  assert.deepEqual(screenEnv({}, 'linux', () => ({ WAYLAND_DISPLAY: 'wayland-1' })), { WAYLAND_DISPLAY: 'wayland-1' });
+  assert.deepEqual(screenEnv({ DISPLAY: ':0', XAUTHORITY: '/x' }, 'linux', () => assert.fail('own display wins')), { DISPLAY: ':0', XAUTHORITY: '/x' });
 });
 
 test('any installed Chromium-based browser is used, plain Chromium first', { skip: process.platform === 'win32' }, t => {
@@ -297,4 +301,12 @@ test('a Helm restart leaves the window open; the next Helm takes its tabs back w
   assert.equal((await next.run('one', opened.tab.id, { kind: 'evaluate', script: 'performance.timeOrigin' })).value, loadedAt, 'the page was not reloaded');
   assert.equal((await next.run('one', opened.tab.id, { kind: 'evaluate', script: 'document.querySelector("#name").value' })).value, 'kept');
   assert.equal((await next.contexts.get('one')).pages().length, 1, 'no extra tab was opened');
+});
+
+test('a screen that appears after Helm starts turns windows on, and they stay on', () => {
+  let screen = false;
+  const manager = new BrowserManager({ session: sid => ({ id: sid }), canWindow: () => screen });
+  assert.equal(manager.canWindow, false);
+  screen = true; assert.equal(manager.canWindow, true);
+  screen = false; assert.equal(manager.canWindow, true);
 });

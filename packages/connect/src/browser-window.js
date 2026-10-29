@@ -2,16 +2,44 @@
 // beside Helm. The agent drives the tabs through Chromium's own channel, so
 // it never moves the owner's mouse or types on their keyboard; the owner
 // just uses the window.
-import { existsSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { browserArgs, ignoredBrowserArgs } from './browser-identity.js';
 
+const SCREEN_KEYS = ['WAYLAND_DISPLAY', 'DISPLAY', 'XAUTHORITY'];
+const pickScreen = env => Object.fromEntries(SCREEN_KEYS.filter(key => env[key]).map(key => [key, env[key]]));
+let noDesktopUntil = 0;
+/**
+ * The desktop's display as systemd knows it. Helm's service can start at boot,
+ * before the desktop exists, so its own settings have no display; the desktop
+ * tells systemd at login. A Wayland socket is the last sign of a screen.
+ */
+function desktopScreen(env = process.env) {
+  if (Date.now() < noDesktopUntil) return {};
+  try {
+    const known = Object.fromEntries(execFileSync('systemctl', ['--user', 'show-environment'], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] })
+      .split('\n').map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+    const screen = pickScreen(known); if (screen.WAYLAND_DISPLAY || screen.DISPLAY) return screen;
+  } catch { /* no systemd here */ }
+  try { const socket = readdirSync(env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.()}`).find(name => /^wayland-\d+$/.test(name)); if (socket) return { WAYLAND_DISPLAY: socket }; } catch { /* no runtime folder */ }
+  noDesktopUntil = Date.now() + 10000;
+  return {};
+}
+/** The display settings a window needs, found again each time until there is a screen. */
+export function screenEnv(env = process.env, platform = process.platform, desktop = env === process.env ? desktopScreen : () => ({})) {
+  if (platform !== 'linux') return {};
+  const own = pickScreen(env);
+  return own.WAYLAND_DISPLAY || own.DISPLAY ? own : desktop(env);
+}
 /** A screen to open a window on: always on a Mac or Windows, a display on Linux. */
-export const canOpenWindow = (env = process.env, platform = process.platform) =>
-  platform === 'darwin' || platform === 'win32' || !!(env.WAYLAND_DISPLAY || env.DISPLAY);
+export const canOpenWindow = (env = process.env, platform = process.platform, desktop) => {
+  if (platform === 'darwin' || platform === 'win32') return true;
+  const screen = screenEnv(env, platform, desktop);
+  return !!(screen.WAYLAND_DISPLAY || screen.DISPLAY);
+};
 
 // Any Chromium-based browser the owner has installed works: Helm drives it
 // through Chromium's own channel. Plain Chromium and Chrome come first, then
@@ -47,12 +75,12 @@ export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
   const running = await attachWindow(chromium, profileDir);
   if (running) return running;
   const system = process.env.HELM_WINDOW_CHROMIUM || systemChromium();
-  if (system) { try { return await startWindow(chromium, system, profileDir, args); } catch { /* Playwright's way below */ } }
+  if (system) { try { return await startWindow(chromium, system, profileDir, args, { ...process.env, ...screenEnv() }); } catch { /* Playwright's way below */ } }
   // No "controlled by automated test software" bar: it is the owner's window.
   // Chromium's own sandbox stays on, so no "--no-sandbox" warning bar either;
   // only a machine where the sandbox cannot start goes without it. A window
   // started this way closes when Helm does.
-  const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ignoredBrowserArgs, args, timeout: 15000 };
+  const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ignoredBrowserArgs, args, timeout: 15000, env: { ...process.env, ...screenEnv() } };
   const attempts = [...(system ? [{ executablePath: system }, { executablePath: system, chromiumSandbox: false }] : []), {}, { chromiumSandbox: false }];
   let failure;
   for (const extra of attempts) {
@@ -137,7 +165,7 @@ async function attachWindow(chromium, profileDir) {
  * systemd scope), so restarting Helm never closes the window. Helm talks to
  * it on a port only this machine can reach, written in the profile folder.
  */
-async function startWindow(chromium, executable, profileDir, args) {
+async function startWindow(chromium, executable, profileDir, args, env = process.env) {
   rmSync(join(profileDir, PORT_FILE), { force: true });
   // Open the first window at the requested page, after its logins and input
   // hooks are ready. An unused New Tab page also makes the driver set up a
@@ -145,7 +173,7 @@ async function startWindow(chromium, executable, profileDir, args) {
   const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--no-startup-window', ...args];
   const scoped = process.platform === 'linux' && !process.env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
   for (const [command, list] of [...(scoped ? [[scoped, ['--user', '--scope', '--collect', '--quiet', executable, ...argv]]] : []), [executable, argv]]) {
-    const child = spawn(command, list, { detached: true, stdio: 'ignore' });
+    const child = spawn(command, list, { detached: true, stdio: 'ignore', env });
     let exited = false; child.on('error', () => { exited = true; }); child.on('exit', () => { exited = true; }); child.unref();
     for (const until = Date.now() + 15000; Date.now() < until && !exited && !existsSync(join(profileDir, PORT_FILE));) await new Promise(done => setTimeout(done, 100));
     let port; try { port = Number(readFileSync(join(profileDir, PORT_FILE), 'utf8').split('\n')[0]); } catch { /* did not start */ }

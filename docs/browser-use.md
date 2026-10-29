@@ -17,6 +17,10 @@ The owner uses the same browser window. Helm has no browser panel.
   machine's own local link, so agent actions never cross the phone link,
   and `localhost` reaches dev servers there. Outside an agent chat, pass
   `--session <chat-id>`.
+- **A screen found late still counts.** Helm's service can start at boot,
+  before the desktop. Each time it needs a window it looks again: its own
+  display settings, then the desktop's settings in systemd, then a Wayland
+  socket. Once it sees a screen, agent browsers are windows from then on.
 - **A real window, no picture in Helm.** On a machine with a screen each
   chat's browser is a real Chromium window with its own profile folder (a
   new chat starts with the default profile's logins). The agent drives it
