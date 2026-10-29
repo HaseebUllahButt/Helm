@@ -464,7 +464,7 @@ test('opencode: model changes replace effort options and clear models without ef
   assert.equal(driver.effort, 'high');
 });
 
-test('devin: a model change the agent never confirms ends in 15 s, and a late answer still lands', async (t) => {
+test('devin: a model change with no answer ends in 15 s without a refusal, and a late answer still lands', async (t) => {
   const fake = fakeCli('devin', 'plain');
   const fast = 'swe-2-fast';
   const withFast = (current) => fusionOptions('high').map((option) => option.id === 'model'
@@ -488,11 +488,16 @@ test('devin: a model change the agent never confirms ends in 15 s, and a late an
   const held = pipe.writes.find((m) => m.params?.value === fast);
   t.mock.timers.tick(15_000);
   await change;
-  assert.match(events.of('error').at(-1).message, /did not confirm "swe-2-fast"\. It stays on /);
-  assert.equal(driver.model, FUSION_CANONICAL, 'an unconfirmed change keeps the model the agent reports');
+  const notice = events.of('error').at(-1).message;
+  assert.equal(notice, 'Devin did not confirm "swe-2-fast" in time. Check the current setting before you try again.');
+  assert.doesNotMatch(notice, /stays on|does not offer|refused/, 'no answer is not a refusal');
+  assert.equal(driver.model, FUSION_CANONICAL, 'until it answers, the model is the one the agent last reported');
 
+  const errors = events.of('error').length;
   pipe.emit({ jsonrpc: '2.0', id: held.id, result: { configOptions: withFast(fast) } });
   const moved = await events.until((event) => event.type === 'settings' && event.model === fast);
   assert.equal(moved.model, fast, 'the late answer moves the picker to what the agent now runs');
   assert.equal(driver.model, fast);
+  assert.equal(driver.info.model, fast);
+  assert.equal(events.of('error').length, errors, 'the late answer adds no failure');
 });

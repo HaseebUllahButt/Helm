@@ -383,8 +383,10 @@ export class AcpDriver extends Driver {
     this.log(`${this.engine}: set ${configId}=${value} refused: ${error.message}`);
     const current = this.#options.find((o) => o.id === configId)?.currentValue ?? null;
     this.push('error', {
+      // No answer is not a refusal: the change can still land, and a late
+      // answer moves the picker then. Do not name a value it stays on.
       message: error.timeout
-        ? `${this.spec.label ?? this.engine} did not confirm "${value}". It stays on ${current ?? 'its default'}. Try again when the reply ends.`
+        ? `${this.spec.label ?? this.engine} did not confirm "${value}" in time. Check the current setting before you try again.`
         : `${this.spec.label ?? this.engine} does not offer "${value}" here - it stays on ${current ?? 'its default'}. (${error.message})`,
       kind: 'settings',
     });
@@ -502,8 +504,8 @@ export class AcpDriver extends Driver {
    *
    * An agent busy with a turn can leave this unanswered. The owner's
    * "saving" then never ended, and each new try added another waiting call.
-   * After OPTION_TIMEOUT_MS it counts as refused, like Claude's own limit;
-   * a late answer still moves the pickers to what the agent reports.
+   * After OPTION_TIMEOUT_MS the call ends unconfirmed, like Claude's own
+   * limit; a late answer still moves the pickers to what the agent reports.
    */
   async #setOption(configId, value) {
     const option = this.#options.find((o) => o.id === configId);
