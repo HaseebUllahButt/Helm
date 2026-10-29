@@ -33,6 +33,12 @@ export function sameSession(known: Session, update: Session) {
   return true;
 }
 
+/** List replies and pushes can cross on different routes. */
+function olderSession(update: Session & { lastSeq?: number }, known: Session & { lastSeq?: number }) {
+  if (update.updatedAt != null && known.updatedAt != null && update.updatedAt !== known.updatedAt) return update.updatedAt < known.updatedAt;
+  return update.lastSeq != null && known.lastSeq != null && update.lastSeq < known.lastSeq;
+}
+
 export function useWorkspaceData(client: Client, connected: boolean) {
   const scope = workspaceScope(client.token);
   const active = useRef(true);
@@ -47,6 +53,7 @@ export function useWorkspaceData(client: Client, connected: boolean) {
   const sessionRequests = useRef(new Set<string>());
   const envRequest = useRef(false);
   const envAgain = useRef(false);
+  const pushedPresence = useRef(new Map<string, { online: boolean; name?: string }>());
   const relist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const listRetries = useRef<Record<string, number>>({});
   const pushedDuringList = useRef<Record<string, Map<string, Session>>>({});
@@ -79,9 +86,14 @@ export function useWorkspaceData(client: Client, connected: boolean) {
     if (!active.current) return;
     if (envRequest.current) { envAgain.current = true; return; }
     envRequest.current = true;
+    pushedPresence.current.clear();
     client.environments()
       .then((result) => {
         if (!active.current) return;
+        result.environments = result.environments.map(env => {
+          const presence = pushedPresence.current.get(env.id);
+          return presence ? { ...env, online: presence.online, name: presence.name ?? env.name } : env;
+        });
         liveEnvsSeen.current = true;
         setEnvs((current) => keepUnchanged(current, result.environments));
         setEnvError('');
@@ -97,12 +109,15 @@ export function useWorkspaceData(client: Client, connected: boolean) {
   }, [client, scope]);
 
   const recordSession = useCallback((envId: string, update: Session) => {
+    const known = sessionsRef.current[envId]?.find(session => session.id === update.id);
+    if (known && olderSession(update, known)) return;
     const during = pushedDuringList.current[envId];
-    if (during) during.set(update.id, { ...during.get(update.id), ...update, recovery: update.recovery });
+    const prior = during?.get(update.id);
+    if (during && (!prior || !olderSession(update, prior))) during.set(update.id, { ...prior, ...update, recovery: update.recovery });
     setSessions((all) => {
       const list = all[envId];
       const known = list?.find((session) => session.id === update.id);
-      if (!known || sameSession(known, update)) return all;
+      if (!known || olderSession(update, known) || sameSession(known, update)) return all;
       return { ...all, [envId]: list!.map((session) => session === known
         ? { ...session, ...update, recovery: update.recovery } : session) };
     });
@@ -123,7 +138,7 @@ export function useWorkspaceData(client: Client, connected: boolean) {
         const list = pushed.size
           ? result.sessions.map((session) => {
             const update = pushed.get(session.id);
-            return update ? { ...session, ...update, recovery: update.recovery } : session;
+            return update && !olderSession(update, session) ? { ...session, ...update, recovery: update.recovery } : session;
           })
           : result.sessions;
         setSessions((current) => {
@@ -152,6 +167,7 @@ export function useWorkspaceData(client: Client, connected: boolean) {
   }, [loadSessions]);
 
   const setPresence = useCallback((envId: string, online: boolean, name?: string) => {
+    if (envRequest.current) pushedPresence.current.set(envId, { online, name: name ?? pushedPresence.current.get(envId)?.name });
     setEnvs((list) => list.some((env) => env.id === envId && (env.online !== online || (name ?? env.name) !== env.name))
       ? list.map((env) => env.id === envId ? { ...env, online, name: name ?? env.name } : env)
       // The same word again (the offline check repeats it every 10 s): nothing to redraw.

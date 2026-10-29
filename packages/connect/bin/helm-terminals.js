@@ -60,7 +60,7 @@ const send = (sock, msg) => {
 };
 const broadcast = (msg) => { for (const c of clients) send(c, msg); };
 
-terminals.on('data', ({ id, text }) => broadcast({ t: 'data', id, text }));
+terminals.on('data', ({ id, text, position }) => broadcast({ t: 'data', id, text, position }));
 terminals.on('exit', ({ id, code }) => { nativeSessions.delete(id); broadcast({ t: 'exit', id, code }); armIdleExit(); });
 setInterval(() => {
   for (const id of nativeSessions.keys()) {
@@ -183,7 +183,7 @@ async function handle(msg, viewer) {
         }
         return { ok: true, pid: terminal.pty.pid };
       }
-    case 'view':    return { text: terminals.view(msg.id, { ...msg, viewer }) };
+    case 'view':    return terminals.snapshot(msg.id, { ...msg, viewer });
     case 'renew':   return terminals.renew(msg.id, viewer);
     case 'unview':  terminals.unview(msg.id, viewer); return { ok: true };
     case 'write':   terminals.write(msg.id, msg.data, viewer); return { ok: true };

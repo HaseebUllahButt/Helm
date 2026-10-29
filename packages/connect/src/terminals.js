@@ -290,7 +290,7 @@ export class TerminalHost extends EventEmitter {
       this.#nativeSessions.set(msg.session.id, msg.session);
       this.emit('native.open', msg.session);
     }
-    if (msg.t === 'data') this.emit('data', { id: msg.id, text: msg.text });
+    if (msg.t === 'data') this.emit('data', { id: msg.id, text: msg.text, position: msg.position });
     if (msg.t === 'exit') {
       this.#ids.delete(msg.id);
       this.#nativeSessions.delete(msg.id);
@@ -382,11 +382,12 @@ export class TerminalHost extends EventEmitter {
     return { id, pid: r?.pid ?? null };
   }
 
-  async view(id, { cols, rows, persistent = false } = {}) {
+  async snapshot(id, { cols, rows, persistent = false } = {}) {
     await this.ensure();
-    const r = await this.#call({ t: 'view', id, cols, rows, persistent });
-    return r.text;
+    return this.#call({ t: 'view', id, cols, rows, persistent });
   }
+
+  async view(id, options) { return (await this.snapshot(id, options)).text; }
 
   renew(id)              { return this.#call({ t: 'renew', id }); }
   unview(id)             { return this.#call({ t: 'unview', id }).catch(() => {}); }
@@ -514,6 +515,7 @@ export class NativeHosts extends EventEmitter {
   nativeSessions() { return this.#all().flatMap((h) => h.nativeSessions()); }
   open(id, opts) { return this.#current.open(id, opts); }
   view(id, opts) { return this.#owner(id).view(id, opts); }
+  snapshot(id, opts) { return this.#owner(id).snapshot(id, opts); }
   renew(id) { return this.#owner(id).renew(id); }
   unview(id) { return this.#owner(id).unview(id); }
   write(id, data) { return this.#owner(id).write(id, data); }

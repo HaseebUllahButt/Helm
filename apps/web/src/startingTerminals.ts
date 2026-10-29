@@ -30,9 +30,10 @@ export interface StartingTerminal {
 export interface FirstScreen {
   watcher: string;
   text: string;
+  position?: number;
   cols: number;
   rows: number;
-  later: { text: string; reset: boolean }[];
+  later: { text: string; reset: boolean; position?: number }[];
 }
 
 const terminals = new Map<string, StartingTerminal>();
@@ -78,13 +79,13 @@ export async function openTerminal(client: Client, envId: string, cwd: string): 
   // The machine pushes output from the moment it takes the screen, and a
   // push can arrive before the reply does. Listen first; keep this
   // terminal's pieces once its id is known.
-  let early: { id: string; text: string; reset: boolean }[] = [];
+  let early: { id: string; text: string; reset: boolean; position?: number }[] = [];
   let mine: string | null = null;
   const off = client.on((e, kind, payload) => {
     if (e !== envId || kind !== 'session.data' || !payload?.id || (mine && payload.id !== mine)) return;
-    early.push({ id: payload.id, text: payload.text ?? '', reset: !!payload.reset });
+    early.push({ id: payload.id, text: payload.text ?? '', reset: !!payload.reset, position: payload.position });
   });
-  let r: { session: Session; attach?: { text: string | null } };
+  let r: { session: Session; attach?: { text: string | null; position?: number } };
   try {
     r = await client.rpc(envId, 'session.start', { cwd, profileId: 'shell', attach: { ...size, watcher } }, 45_000);
   } catch (e) { off(); throw e; }
@@ -98,8 +99,8 @@ export async function openTerminal(client: Client, envId: string, cwd: string): 
   // for its screen itself when it is opened later.
   const expiry = setTimeout(() => { if (screens.get(id)?.watcher === watcher) screens.delete(id); off(); }, 30_000);
   screens.set(id, {
-    watcher, text: r.attach.text ?? '', ...size,
-    get later() { return early.map(({ text, reset }) => ({ text, reset })); },
+    watcher, text: r.attach.text ?? '', position: r.attach.position, ...size,
+    get later() { return early.map(({ text, reset, position }) => ({ text, reset, position })); },
     stop: () => { clearTimeout(expiry); off(); },
   });
   return r.session;

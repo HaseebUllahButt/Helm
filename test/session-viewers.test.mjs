@@ -75,3 +75,20 @@ test('a detached terminal poll cannot send stale screen data to a new watch', as
   assert.deepEqual(data, []);
   assert.equal(timers.size, 1, 'only the new watch keeps polling');
 });
+
+
+test('PTY attachment preserves the host snapshot position and supports older hosts', async t => {
+  const { viewers, sessions } = fixture(t, async () => ({ text: '' }));
+  sessions.get().pty = true;
+  sessions.watch = () => {};
+  const terminal = { snapshot: async () => ({ text: '🙂é中', position: 40 }), renew: async () => ({ ok: true }) };
+  // Use a separate core with the actual PTY snapshot interface.
+  const positioned = new SessionViewers(sessions, { terminal: () => terminal });
+  const screen = await positioned.attach('chat');
+  assert.equal(screen.position, 40);
+  assert.equal(screen.text, '🙂é中');
+  assert.equal((await positioned.attach('chat', { renew: true })).text, null);
+  terminal.snapshot = async () => ({ text: 'old host' });
+  assert.equal((await positioned.attach('chat')).position, undefined);
+  positioned.stop();
+});

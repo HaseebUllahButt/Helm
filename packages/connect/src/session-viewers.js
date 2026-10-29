@@ -199,10 +199,11 @@ export class SessionViewers {
     // also why a renewal deliberately returns nothing to draw.
     if (s.pty) {
       this.#sessions.watch(id, watcher);
-      const text = renew
-        ? (await this.#core.terminal(s).renew(id), null)
-        : await this.#core.terminal(s).view(id, { cols, rows });
-      return { text, pty: true, session: wire(s) };
+      const terminal = this.#core.terminal(s);
+      const screen = renew
+        ? (await terminal.renew(id), { text: null })
+        : terminal.snapshot ? await terminal.snapshot(id, { cols, rows }) : { text: await terminal.view(id, { cols, rows }) };
+      return { ...screen, pty: true, session: wire(s) };
     }
     const existing = this.#watchers.get(id);
     if (existing) {
