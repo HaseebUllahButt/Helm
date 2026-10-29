@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { build } from 'esbuild';
 const bundle = await build({ entryPoints: ['apps/web/src/startingChats.ts'], bundle: true, write: false, format: 'cjs' });
-function fixture(saved = new Map()) {
+function fixture(saved = new Map(), { denyRemoval = false } = {}) {
   const events = [];
   const context = { module: { exports: {} }, exports: {}, Date, crypto: globalThis.crypto, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
     window: { dispatchEvent: event => events.push(event) },
-    localStorage: { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key), get length() { return saved.size; }, key: i => [...saved.keys()][i] ?? null } };
+    localStorage: { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => { if (denyRemoval) throw new Error('Cannot remove saved start'); return saved.delete(key); }, get length() { return saved.size; }, key: i => [...saved.keys()][i] ?? null } };
   vm.runInNewContext(bundle.outputFiles[0].text, context);
   return { ...context.module.exports, saved, events };
 }
@@ -157,4 +157,29 @@ test('retry after a safe start refusal keeps queued words and both numbers', asy
   const result=await delivered;
   assert.equal(result.params.data,'keep through refusal');
   assert.equal(result.messageId,number);
+});
+
+
+for (const persisted of [true,false]) test(`a retained offline failure keeps only the required start backup: ${persisted}`, async () => {
+  const h=fixture(); let created;
+  const start=new Promise(resolve=>{created=resolve;});
+  const chat=h.beginChat({input:async()=>{throw Object.assign(new Error('Final offline refusal'),
+    {code:'offline',deliveryRetained:true,deliveryPersisted:persisted});}}, {envId:'pc'},()=>start);
+  h.sendWhenReady(chat.id,'final failure words'); created({id:'created'}); await start;
+  for(let i=0;i<8;i++) await Promise.resolve();
+  assert.equal(chat.draft,'');
+  assert.equal(h.events.length,0);
+  assert.equal(h.saved.has('helm.startingChat.v1:'+chat.id),!persisted);
+});
+
+test('successful input never restores accepted text when saved-start removal fails', async () => {
+  const h=fixture(new Map(),{denyRemoval:true}); let created;
+  const start=new Promise(resolve=>{created=resolve;});
+  const chat=h.beginChat({input:async()=>({ok:true})},{envId:'pc'},()=>start);
+  h.sendWhenReady(chat.id,'already accepted'); created({id:'created'}); await start;
+  for(let i=0;i<8;i++) await Promise.resolve();
+  assert.equal(chat.draft,'');
+  assert.equal(h.events.length,0);
+  assert.equal(h.saved.has('helm-draft:pc:created'),false);
+  assert.equal(h.saved.has('helm.startingChat.v1:'+chat.id),true);
 });

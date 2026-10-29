@@ -147,15 +147,14 @@ function attempt(client: Client, chat: StartingChat) {
         if (!chat.message) { removeSaved(chat.id); return; }
         try {
           await Promise.resolve().then(() => client.input(chat.envId, { id: session.id, data: chat.message }, 120_000, chat.messageId));
-          removeSaved(chat.id);
         } catch (error) {
-          if (retryableDelivery(error)) return;
           // The saved failure card already owns these words.
           const failure = error as { deliveryRetained?: boolean; deliveryPersisted?: boolean };
           if (failure?.deliveryRetained === true) {
             if (failure.deliveryPersisted === true) removeSaved(chat.id);
             return;
           }
+          if (retryableDelivery(error)) return;
           chat.draft = [chat.message, loadDraft(chat.envId, session.id)].filter(Boolean).join('\n\n');
           localStorage.setItem(`helm-draft:${chat.envId}:${session.id}`, chat.draft);
           // Keep the start copy if saving the live draft failed.
@@ -163,7 +162,10 @@ function attempt(client: Client, chat: StartingChat) {
           window.dispatchEvent(new CustomEvent('helm:restore-draft', {
             detail: { env: chat.envId, id: session.id, text: chat.message },
           }));
+          return;
         }
+        // A cleanup failure cannot turn accepted words into a fresh draft.
+        removeSaved(chat.id);
       };
       if (chat.draft) localStorage.setItem(`helm-draft:${chat.envId}:${session.id}`, chat.draft);
       void deliver().catch(() => { /* The saved start still holds the text. */ });
