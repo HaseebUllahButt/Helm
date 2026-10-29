@@ -2,6 +2,7 @@ import { RTCPeerConnection } from 'node-datachannel/polyfill';
 import { constants, createDeflateRaw } from 'node:zlib';
 import { nativeDirectConfig } from './direct-config.js';
 import { encodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
+import { CHUNK_AT, CHUNK_TYPE, chunkText } from '../../protocol/frame-chunks.js';
 
 /**
  * Direct connections to clients.
@@ -22,22 +23,19 @@ import { encodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../../prot
  * frame that still fails to send drops the link, and the app falls back to
  * the hub.
  */
-export const DC_CHUNK_AT = 16_000;
-export const DC_CHUNK_TYPE = 'dc-chunk';
+export const DC_CHUNK_AT = CHUNK_AT;
+export const DC_CHUNK_TYPE = CHUNK_TYPE;
+/** Says that a piece of the reply to request `rid` follows (compressed links). */
+export const DC_PROGRESS_TYPE = 'dc-progress';
 
-/** Split a large frame into chunk frames. Small frames pass through as-is. */
-export function fragment(frame, gid) {
+/**
+ * Split a large frame into chunk frames. Small frames pass through as-is.
+ * `rid` names the request a reply answers, so the app can see that reply
+ * still arriving before its last piece; events carry none.
+ */
+export function fragment(frame, gid, rid) {
   if (Buffer.isBuffer(frame)) return fragmentTunnelFrame(frame);
-  if (frame.length <= DC_CHUNK_AT) return [frame];
-  const n = Math.ceil(frame.length / DC_CHUNK_AT);
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    out.push(JSON.stringify({
-      t: DC_CHUNK_TYPE, gid, i, n,
-      data: frame.slice(i * DC_CHUNK_AT, (i + 1) * DC_CHUNK_AT),
-    }));
-  }
-  return out;
+  return chunkText(frame, gid, rid);
 }
 
 /** Best-effort send of one (possibly fragmented) frame; never throws. */
@@ -59,6 +57,8 @@ function sendFrame(channel, frame) {
 }
 
 const HIGH_WATER = 512 * 1024;
+/** How long a link reported as disconnected may stay with nothing moving. */
+const DISCONNECTED_GRACE_MS = 5000;
 
 function waitChannel(channel, event = 'bufferedamountlow') {
   return new Promise(resolve => {
@@ -75,7 +75,7 @@ function waitChannel(channel, event = 'bufferedamountlow') {
   });
 }
 
-async function sendBuffered(channel, frame) {
+async function sendBuffered(channel, frame, rid) {
   if (!channel) return false;
   channel.bufferedAmountLowThreshold = HIGH_WATER / 2;
   const deadline = Date.now() + 120_000;
@@ -83,7 +83,7 @@ async function sendBuffered(channel, frame) {
     await waitChannel(channel, 'open');
   }
   if (channel.readyState !== 'open') return false;
-  const pieces = fragment(frame, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+  const pieces = fragment(frame, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, rid);
   for (const piece of pieces) {
     while (channel.readyState === 'open' && channel.bufferedAmount > HIGH_WATER && Date.now() < deadline) {
       await waitChannel(channel);
@@ -118,8 +118,12 @@ export class DeflateLink {
     this.#z.on('error', () => {});
   }
 
-  /** Resolves false when the frame could not be sent; the link is then broken. */
-  send(frame) {
+  /**
+   * Resolves false when the frame could not be sent; the link is then broken.
+   * With `rid`, a small text frame goes before each compressed piece: the
+   * stream mixes frames, so only this says which request is still arriving.
+   */
+  send(frame, rid) {
     const run = this.#queue.then(async (ok) => {
       if (!ok) return false;
       this.#z.write(`${frame}\n`);
@@ -131,6 +135,7 @@ export class DeflateLink {
           await waitChannel(this.channel);
         }
         if (this.channel.readyState !== 'open' || Date.now() >= deadline) return false;
+        if (rid != null) this.channel.send(JSON.stringify({ t: DC_PROGRESS_TYPE, rid }));
         this.channel.send(bytes.subarray(at, at + DC_CHUNK_AT));
       }
       return true;
@@ -268,7 +273,24 @@ export class PeerHub {
       if (['failed', 'closed'].includes(pc.connectionState)) {
         this.drop(peerId, peer);
       } else if (pc.connectionState === 'disconnected') {
-        peer.disconnectedTimer = setTimeout(() => this.drop(peerId, peer), 5000);
+        // ICE checks wait in the same queue as a large upload, so a busy
+        // link can read as disconnected while it still works. Keep it while
+        // the app's frames arrive or our queued bytes leave; 'failed' still
+        // drops it at once.
+        // Bytes that left our buffer only count while it was full: then
+        // each one needs the app's acknowledgement.
+        const drained = () => (peer.sentBytes ?? 0) - (peer.channel?.bufferedAmount ?? 0);
+        let queued = peer.channel?.bufferedAmount ?? 0, gone = drained();
+        const check = () => {
+          if (this.#peers.get(peerId) !== peer || pc.connectionState !== 'disconnected') return;
+          const now = drained();
+          const moving = Date.now() - (peer.heardAt ?? 0) < DISCONNECTED_GRACE_MS || (queued > 0 && now > gone);
+          queued = peer.channel?.bufferedAmount ?? 0; gone = now;
+          if (!moving) { this.drop(peerId, peer); return; }
+          peer.disconnectedTimer = setTimeout(check, DISCONNECTED_GRACE_MS);
+          peer.disconnectedTimer.unref?.();
+        };
+        peer.disconnectedTimer = setTimeout(check, DISCONNECTED_GRACE_MS);
         peer.disconnectedTimer.unref?.();
       }
     };
@@ -277,6 +299,13 @@ export class PeerHub {
       if (this.#peers.get(peerId) !== peer) { channel.close(); return; }
       peer.channel = channel;
       peer.fragments = new Map();
+      // Count what we hand the channel, so a disconnected link can show
+      // whether its queue still drains (see onconnectionstatechange).
+      const send = channel.send.bind(channel);
+      channel.send = (data) => {
+        peer.sentBytes = (peer.sentBytes ?? 0) + (typeof data === 'string' ? Buffer.byteLength(data) : data?.byteLength ?? 0);
+        return send(data);
+      };
       channel.onopen = () => clearTimeout(peer.deadline);
       if (channel.readyState === 'open') clearTimeout(peer.deadline);
       channel.onmessage = (ev) => this.#onRaw(peer, ev.data);
@@ -287,6 +316,7 @@ export class PeerHub {
   }
 
   #onRaw(peer, raw) {
+    peer.heardAt = Date.now();
     let msg;
     try { msg = (peer.tunnelFrames ??= new TunnelFrames()).decode(raw); } catch { return; }
     if (msg?.t === DC_CHUNK_TYPE && typeof msg.gid === 'string') {
@@ -353,7 +383,7 @@ export class PeerHub {
       // each fragmented frame together: interleaving more than eight would
       // evict still-live assemblies at the caller and silently lose replies.
       const frame = JSON.stringify({ t: 'rpcResult', ...body });
-      const run = (peer.sendChain ?? Promise.resolve()).then(() => peer.zip ? peer.zip.send(frame) : sendBuffered(peer.channel, frame));
+      const run = (peer.sendChain ?? Promise.resolve()).then(() => peer.zip ? peer.zip.send(frame, body.id) : sendBuffered(peer.channel, frame, body.id));
       peer.sendChain = run.catch(() => {});
       return run.then(ok => {
         if (!ok) this.drop(peer.id, peer);

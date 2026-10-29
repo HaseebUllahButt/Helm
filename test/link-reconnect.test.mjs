@@ -9,13 +9,13 @@ import WebSocket, { WebSocketServer } from 'ws';
 const dir = mkdtempSync(join(tmpdir(), 'helm-link-reconnect-'));
 process.env.HELM_DIR = dir;
 const { createNetwork, hubProof, hubHello } = await import('@helm/protocol/network');
-const { Link } = await import('../packages/connect/src/agent.js');
+const { Link, Daemon, eventLinks } = await import('../packages/connect/src/agent.js');
 const { hubRpc } = await import('../packages/connect/src/hub-client.js');
 const net = createNetwork({ name: 'test' });
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
 async function fixture(context, firstUpgrade, linkOptions = {}) {
-  let upgrades = 0;
+  let upgrades = 0, lastUrl = '';
   const sockets = new Set();
   const webSockets = new WebSocketServer({ noServer: true });
   const server = createServer(async (request, response) => {
@@ -28,6 +28,7 @@ async function fixture(context, firstUpgrade, linkOptions = {}) {
   server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   server.on('upgrade', (request, socket, head) => {
     upgrades++;
+    lastUrl = request.url;
     if (upgrades === 1 && firstUpgrade) return firstUpgrade(socket);
     webSockets.handleUpgrade(request, socket, head, connection => webSockets.emit('connection', connection));
   });
@@ -42,7 +43,7 @@ async function fixture(context, firstUpgrade, linkOptions = {}) {
     for (const socket of sockets) socket.destroy();
     webSockets.close(); server.close();
   });
-  return { link, daemon, ready, url, webSockets, upgrades: () => upgrades };
+  return { link, daemon, ready, url, webSockets, upgrades: () => upgrades, lastUrl: () => lastUrl };
 }
 
 test('a timed-out hub proof does not prevent the CLI from trying another known hub', async context => {
@@ -244,4 +245,28 @@ test('small writes alone cannot keep a silent hub connection alive', async conte
   const closed = new Promise(resolve => socket.once('close', resolve));
   heartbeat(); await closed;
   assert.equal(setup.link.connected, false, 'local write completion is not proof from the hub');
+});
+
+test('a hub with nobody watching gets no live events after it says so, and a new socket starts watched', async context => {
+  const setup = await fixture(context, null);
+  setup.link.start();
+  await setup.ready;
+  assert.equal(new URL(setup.lastUrl(), setup.url).searchParams.get('watched'), '1', 'the machine asks to hear it');
+  assert.equal(setup.link.watched, true, 'an older hub never says, so events keep going');
+  const daemon = Object.create(Daemon.prototype);
+  await daemon.onFrame(setup.link, { t: 'watched', on: false });
+  assert.equal(setup.link.watched, false);
+  const quiet = setup.link, other = { watched: true };
+  assert.deepEqual(eventLinks([quiet, other], 'session.event'), [other]);
+  assert.deepEqual(eventLinks([quiet, other], 'digest'), [quiet, other], 'every hub keeps digests');
+  await daemon.onFrame(setup.link, { t: 'watched', on: true });
+  assert.deepEqual(eventLinks([quiet, other], 'session.event'), [quiet, other]);
+
+  await daemon.onFrame(setup.link, { t: 'watched', on: false });
+  let reconnected;
+  const again = new Promise(resolve => { reconnected = resolve; });
+  setup.daemon.onLinkUp = reconnected;
+  for (const client of setup.webSockets.clients) client.terminate();
+  await again;
+  assert.equal(setup.link.watched, true, 'the next socket waits for that hub to say again');
 });

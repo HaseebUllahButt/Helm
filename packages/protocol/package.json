@@ -18,6 +18,7 @@
     "./visual": "./visual.js",
     "./brief": "./brief.js",
     "./owner-seen": "./owner-seen.js",
-    "./connection-report": "./connection-report.js"
+    "./connection-report": "./connection-report.js",
+    "./frame-chunks": "./frame-chunks.js"
   }
 }

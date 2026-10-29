@@ -34,6 +34,10 @@ export const T = {
   // daemon -> every connected hub. Each hub fans out only to browser
   // subscriptions stored there, so phones and sessions may live on
   // different machines without putting push endpoints in the roster.
+  // hub -> daemon that asked (`watched=1`): whether any browser or other
+  // hub here wants its live events. Off means it may skip sending them.
+  WATCHED: 'watched',       // { on }
+
   NOTIFY: 'notify',         // { payload: { title, body, tag, envId, sessionId } }
                             //   or { payload: { tag, envId, sessionId, resolve: true } }  close the stale one
 

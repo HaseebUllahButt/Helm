@@ -159,7 +159,7 @@ const fusionOptions = (effort = 'high') => [
   ] },
 ];
 
-const adoptPipe = ({ response, buffered = [] } = {}) => {
+const adoptPipe = ({ response, buffered = [], hold = () => false } = {}) => {
   let onData;
   let onExit;
   let closed = false;
@@ -172,9 +172,11 @@ const adoptPipe = ({ response, buffered = [] } = {}) => {
   };
   return {
     writes,
+    emit,
     write(data) {
       const message = JSON.parse(data);
       writes.push(message);
+      if (hold(message)) return;
       if (message.method === 'session/set_config_option' || message.method === 'session/prompt') {
         queueMicrotask(() => emit({ jsonrpc: '2.0', id: message.id, ...response(message) }));
       }
@@ -460,4 +462,42 @@ test('opencode: model changes replace effort options and clear models without ef
   assert.deepEqual(driver.catalog().efforts, ['low', 'high', 'max']);
   assert.equal(driver.catalog().effort, 'high');
   assert.equal(driver.effort, 'high');
+});
+
+test('devin: a model change with no answer ends in 15 s without a refusal, and a late answer still lands', async (t) => {
+  const fake = fakeCli('devin', 'plain');
+  const fast = 'swe-2-fast';
+  const withFast = (current) => fusionOptions('high').map((option) => option.id === 'model'
+    ? { ...option, currentValue: current, options: [...option.options, { value: fast, name: 'SWE 2 Fast' }] } : option);
+  const pipe = adoptPipe({
+    response: () => ({ result: { configOptions: withFast(FUSION_CANONICAL) } }),
+    hold: (message) => message.method === 'session/set_config_option' && message.params.value === fast,
+  });
+  const driver = new DevinDriver({
+    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'edit',
+    model: FUSION_CANONICAL, engineSessionId: 'e910dc39002c',
+    procHost: hosted(pipe), procId: 'adopted',
+  });
+  const events = collect(driver);
+  t.after(() => driver.kill());
+  await driver.start();
+
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const change = driver.setModel(fast);
+  while (!pipe.writes.some((m) => m.params?.value === fast)) await new Promise(setImmediate);
+  const held = pipe.writes.find((m) => m.params?.value === fast);
+  t.mock.timers.tick(15_000);
+  await change;
+  const notice = events.of('error').at(-1).message;
+  assert.equal(notice, 'Devin did not confirm "swe-2-fast" in time. Check the current setting before you try again.');
+  assert.doesNotMatch(notice, /stays on|does not offer|refused/, 'no answer is not a refusal');
+  assert.equal(driver.model, FUSION_CANONICAL, 'until it answers, the model is the one the agent last reported');
+
+  const errors = events.of('error').length;
+  pipe.emit({ jsonrpc: '2.0', id: held.id, result: { configOptions: withFast(fast) } });
+  const moved = await events.until((event) => event.type === 'settings' && event.model === fast);
+  assert.equal(moved.model, fast, 'the late answer moves the picker to what the agent now runs');
+  assert.equal(driver.model, fast);
+  assert.equal(driver.info.model, fast);
+  assert.equal(events.of('error').length, errors, 'the late answer adds no failure');
 });
