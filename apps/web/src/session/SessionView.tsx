@@ -59,7 +59,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
 }) {
   const isShell = session.engine === 'shell';
   const isExternal = !!session.external;
-  const readVisual = useCallback((ref: string) => client.rpc<{ html?: string; pdf?: string }>(env.id, 'session.visual', { id: session.id, ref }, 60_000), [client, env.id, session.id]);
+  const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...(page === undefined ? {} : { page }) }, 60_000), [client, env.id, session.id]);
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);

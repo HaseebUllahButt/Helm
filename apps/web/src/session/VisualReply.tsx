@@ -5,8 +5,9 @@ import { useDialog } from '../useDialog';
 import { Icon } from '../Icon';
 import type { Visual } from './types';
 
-/** A saved page comes back as HTML; a PDF as its bytes in base64. */
-export type VisualReader = (ref: string) => Promise<{ html?: string; pdf?: string }>;
+/** A saved page comes back as HTML. A PDF gives its page list, then one page picture per call. */
+export interface PdfPages { total: number; pages: { width: number; height: number }[] }
+export type VisualReader = (ref: string, page?: number) => Promise<{ html?: string; image?: string } & Partial<PdfPages>>;
 export const Visuals = createContext<VisualReader | undefined>(undefined);
 /** The chat's canvas, when it has one: which page it shows, and how to show another. */
 export interface CanvasVisuals { shown?: string; show: (visual: Visual) => void }
@@ -78,34 +79,24 @@ export function useVisualHtml(read: VisualReader | undefined, ref: string, activ
   return { html, error, retry: () => setRetry(value => value + 1) };
 }
 
-/**
- * Reads a saved PDF once `active` and gives a local address for it. The
- * browser's own reader shows it: nothing in Helm can change the file.
- */
-export function usePdfUrl(read: VisualReader | undefined, ref: string, active: boolean) {
-  const [url, setUrl] = useState<string>();
+/** Reads a PDF's page list; Retry asks again. */
+export function usePdfPages(read: VisualReader | undefined, ref: string) {
+  const [list, setList] = useState<PdfPages>();
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
   useEffect(() => {
-    if (!active) return;
-    let stale = false, made: string | undefined;
-    setUrl(undefined); setError('');
+    let stale = false;
+    setList(undefined); setError('');
     if (!read) { setError('Connect to this chat’s machine to load the PDF.'); return; }
     read(ref).then(result => {
       if (stale) return;
-      if (typeof result.pdf !== 'string') { setError('Update Helm on this machine to show PDFs.'); return; }
-      const bytes = Uint8Array.from(atob(result.pdf), c => c.charCodeAt(0));
-      made = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-      setUrl(made);
+      if (!Array.isArray(result.pages)) { setError('Update Helm on this machine to show PDFs.'); return; }
+      setList({ total: result.total ?? result.pages.length, pages: result.pages });
     }).catch(err => { if (!stale) setError(errorMessage(err, { fallback: 'Helm cannot load this PDF.' })); });
-    return () => { stale = true; if (made) URL.revokeObjectURL(made); };
-  }, [active, read, ref, retry]);
-  return { url, error, retry: () => setRetry(value => value + 1) };
+    return () => { stale = true; };
+  }, [read, ref, retry]);
+  return { list, error, retry: () => setRetry(value => value + 1) };
 }
-
-/** Phones often cannot show a PDF inside a page; they open it on its own. */
-export const pdfInline = () => typeof navigator === 'undefined' || navigator.pdfViewerEnabled !== false;
-export const pdfName = (title: string) => `${title.replace(/[^\p{L}\p{N} _.-]/gu, '').slice(0, 80) || 'document'}.pdf`;
 
 export function saveVisual(html: string, title: string) {
   const url = URL.createObjectURL(new Blob([visualDocument(html, { theme: currentTheme(), expanded: true })], { type: 'text/html;charset=utf-8' }));
@@ -154,7 +145,7 @@ export function VisualReply({ visual, read: supplied }: { visual: Visual; read?:
   </div>;
   // A PDF opens beside the chat, never inside it: the card only names it.
   if (visual.kind === 'pdf') return <div ref={ref} className="visual-reply visual-link">
-    <span className="visual-link-text"><strong>{visual.title}</strong><small>{inCanvas ? 'Shown in canvas' : `PDF · ${Math.max(1, Math.round(visual.bytes / 1024)).toLocaleString()} KB`}</small></span>
+    <span className="visual-link-text"><strong>{visual.title}</strong><small>{inCanvas ? 'Shown in canvas' : `PDF · ${visual.total ?? visual.pages ?? 1} ${(visual.total ?? visual.pages) === 1 ? 'page' : 'pages'}`}</small></span>
     {canvas && !inCanvas && <span className="visual-actions"><button onClick={() => canvas.show(visual)}>Open in canvas</button></span>}
   </div>;
   // The page shows in one place at a time: while the canvas has it, the chat

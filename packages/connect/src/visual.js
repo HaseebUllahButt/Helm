@@ -1,6 +1,9 @@
-import { readFile, stat } from 'node:fs/promises';
+import { mkdtemp, open, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse, parseFragment, serialize } from 'parse5';
 import { visualDocument } from '@helm/protocol/visual';
@@ -8,9 +11,15 @@ import { visualDocument } from '@helm/protocol/visual';
 export const MAX_VISUAL_BYTES = 4 * 1024 * 1024;
 const MAX_HTML_BYTES = 512 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
-/** A PDF is stored as it is, so a document of many pages fits. */
-export const MAX_PDF_BYTES = 16 * 1024 * 1024;
-const isPdf = (bytes) => bytes.subarray(0, 5).toString('latin1') === '%PDF-';
+/**
+ * A PDF becomes one picture per page on the machine that publishes it, so
+ * any device can show it without a PDF reader. Each page keeps the picture
+ * limit; the page count and total keep a long PDF from filling the chat.
+ */
+export const MAX_PDF_PAGES = 100;
+export const MAX_PDF_BYTES = 24 * 1024 * 1024;
+const PDF_WIDTH = 1600;
+const exec = promisify(execFile);
 
 /** Live pages stay separate from saved HTML; never fetch an agent's URL here. */
 export function visualUrl(value) {
@@ -21,15 +30,26 @@ export function visualUrl(value) {
   return url.href;
 }
 
-export function validateVisual({ html, pdf, title = 'Visual reply', height = 420, renderId, placement, url }) {
-  if (pdf !== undefined) {
-    // A PDF is shown by the browser's own reader, read-only, never as a page.
-    const bytes = typeof pdf === 'string' && url === undefined && html === undefined ? Buffer.from(pdf, 'base64') : Buffer.alloc(0);
-    if (!isPdf(bytes) || bytes.length > MAX_PDF_BYTES) throw new Error('a PDF visual must be a PDF file up to 16 MiB');
+export function validateVisual({ html, pages, total, title = 'Visual reply', height = 420, renderId, placement, url }) {
+  if (pages !== undefined) {
+    // A PDF is page pictures, shown read-only in the canvas, never as a page.
+    if (url !== undefined || html !== undefined || !Array.isArray(pages) || !pages.length || pages.length > MAX_PDF_PAGES) throw new Error(`a PDF visual must have 1–${MAX_PDF_PAGES} page pictures`);
+    let bytes = 0;
+    const checked = pages.map((page) => {
+      const data = typeof page?.data === 'string' ? Buffer.from(page.data, 'base64') : Buffer.alloc(0);
+      if (!data.length || data.length > MAX_IMAGE_BYTES) throw new Error('each PDF page must be a picture up to 2 MiB');
+      const mime = imageMime(data);
+      if (mime === 'image/svg+xml') throw new Error('PDF pages must be JPEG, PNG or WebP pictures');
+      if (![page.width, page.height].every(n => Number.isInteger(n) && n > 0 && n <= 10_000)) throw new Error('invalid PDF page size');
+      bytes += data.length;
+      return { data: data.toString('base64'), mime, width: page.width, height: page.height };
+    });
+    if (bytes > MAX_PDF_BYTES) throw new Error('PDF pages exceed 24 MiB');
+    if (!Number.isInteger(total) || total < pages.length) throw new Error('invalid PDF page count');
     if (typeof title !== 'string' || !title.trim() || title.length > 160) throw new Error('visual title must be 1–160 characters');
     if (!/^[a-f0-9]{24}$/.test(renderId ?? '')) throw new Error('invalid render ID');
     if (placement !== undefined && placement !== 'canvas') throw new Error('invalid visual placement');
-    return { pdf: bytes.toString('base64'), kind: 'pdf', title: title.trim(), height: 420, renderId, ...(placement ? { placement } : {}) };
+    return { pages: checked, total, kind: 'pdf', title: title.trim(), height: 420, renderId, ...(placement ? { placement } : {}) };
   }
   if (url !== undefined) {
     url = visualUrl(url);
@@ -64,13 +84,67 @@ export function imageMime(bytes) {
   throw new Error('local visual assets must be PNG, JPEG, GIF, WebP, AVIF, or SVG images');
 }
 
-/** Read a PDF on the publishing machine, before any remote RPC. */
-export async function preparePdf(file) {
+/** The width and height in a JPEG's frame header. */
+function jpegSize(bytes) {
+  for (let i = 2; i + 9 < bytes.length;) {
+    if (bytes[i] !== 0xff) return null;
+    const marker = bytes[i + 1], length = bytes.readUInt16BE(i + 2);
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return { height: bytes.readUInt16BE(i + 5), width: bytes.readUInt16BE(i + 7) };
+    i += 2 + length;
+  }
+  return null;
+}
+
+/**
+ * Turn a PDF into page pictures with poppler's pdftoppm, on this machine,
+ * before any remote RPC. JPEG at 1600 px wide keeps text sharp and a page
+ * well under the picture limit; a page that is still too large is redone
+ * smaller.
+ */
+export async function preparePdf(file, { run = exec } = {}) {
   const path = resolve(file), source = await stat(path);
-  if (!source.isFile() || source.size > MAX_PDF_BYTES) throw new Error(`a PDF must be a file up to 16 MiB; ${basename(path)} is ${(source.size / 1024 / 1024).toFixed(1)} MiB`);
-  const bytes = await readFile(path);
-  if (!isPdf(bytes)) throw new Error(`${basename(path)} is not a PDF file`);
-  return bytes.toString('base64');
+  if (!source.isFile()) throw new Error(`${basename(path)} is not a file`);
+  const head = Buffer.alloc(5);
+  const handle = await open(path); try { await handle.read(head, 0, 5, 0); } finally { await handle.close(); }
+  if (head.toString('latin1') !== '%PDF-') throw new Error(`${basename(path)} is not a PDF file`);
+  const missing = (error) => error?.code === 'ENOENT' ? new Error('Install poppler-utils on this machine to show PDFs (it has no pdftoppm).') : error;
+  let total = 0;
+  try {
+    const { stdout } = await run('pdfinfo', [path], { maxBuffer: 1024 * 1024, timeout: 30_000 });
+    total = Number(/^Pages:\s+(\d+)/m.exec(stdout)?.[1] ?? 0);
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw missing(error);
+    throw new Error(`Cannot read ${basename(path)}: ${String(error.stderr || error.message).trim().split('\n')[0]}`);
+  }
+  const count = Math.min(total || MAX_PDF_PAGES, MAX_PDF_PAGES);
+  const dir = await mkdtemp(join(tmpdir(), 'helm-pdf-'));
+  try {
+    const draw = async (prefix, width, quality, first = 1, last = count) => {
+      try { await run('pdftoppm', ['-jpeg', '-jpegopt', `quality=${quality},optimize=y`, '-scale-to-x', String(width), '-scale-to-y', '-1', '-f', String(first), '-l', String(last), path, join(dir, prefix)], { timeout: 300_000 }); }
+      catch (error) { throw error?.code === 'ENOENT' ? missing(error) : new Error(`Cannot turn ${basename(path)} into pictures: ${String(error.stderr || error.message).trim().split('\n')[0]}`); }
+    };
+    await draw('page', PDF_WIDTH, 85);
+    const names = (await readdir(dir)).filter(n => n.startsWith('page')).sort((a, b) => Number(/(\d+)\.jpg$/.exec(a)[1]) - Number(/(\d+)\.jpg$/.exec(b)[1]));
+    if (!names.length) throw new Error(`${basename(path)} has no pages`);
+    const pages = [];
+    let bytes = 0;
+    for (const name of names) {
+      let data = await readFile(join(dir, name));
+      if (data.length > MAX_IMAGE_BYTES) {
+        const n = Number(/(\d+)\.jpg$/.exec(name)[1]);
+        await draw(`small${n}-`, 1200, 70, n, n);
+        const [again] = (await readdir(dir)).filter(f => f.startsWith(`small${n}-`));
+        data = await readFile(join(dir, again));
+        if (data.length > MAX_IMAGE_BYTES) throw new Error(`page ${n} of ${basename(path)} is too detailed to show (over 2 MiB as a picture)`);
+      }
+      const size = jpegSize(data);
+      if (!size) throw new Error('pdftoppm made a picture Helm cannot read');
+      bytes += data.length;
+      if (bytes > MAX_PDF_BYTES) throw new Error(`${basename(path)} is too large to show: its pages pass 24 MiB as pictures`);
+      pages.push({ data: data.toString('base64'), ...size });
+    }
+    return { pages, total: Math.max(total, pages.length) };
+  } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
 /** Snapshot local assets on the publishing machine, before any remote RPC. */

@@ -302,8 +302,8 @@ const DETAILS = {
   With --session, paths start from the selected chat's folder.
   Canvas shows file changes and lets the owner edit and save files.
   HTML pages and pictures show a saved copy, like helm render.
-  A PDF (up to 16 MiB) shows a saved copy in the browser's PDF reader.
-  The owner can read a PDF but cannot change it.
+  A PDF shows its pages as pictures, up to 100 pages; the owner cannot change it.
+  PDFs need pdftoppm (package poppler-utils) on the machine that runs this.
   Run the command again after edits to show the new copy.
   Use an http/https Spin URL to show a live website.
   Use the public Spin address.
@@ -314,6 +314,7 @@ const DETAILS = {
 
   render: `
   A picture file (png, jpg, gif, webp, avif, svg) is shown as it is.
+  A PDF becomes one picture per page (needs pdftoppm from poppler-utils).
   Otherwise write one self-contained HTML file: inline CSS/JS, SVG or canvas.
   It runs in an isolated frame: no app state, network fetch, external
   scripts or forms. Local images (img/srcset, SVG, CSS url()) are embedded:

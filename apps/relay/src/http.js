@@ -107,8 +107,7 @@ export const SECURITY_HEADERS = {
     "img-src 'self' data: blob:",
     "connect-src 'self' https: wss: http: ws:",
     // Live canvas pages use their own sandbox; saved visuals keep their stricter policy.
-    // blob: shows a PDF from the chat in the browser's own reader.
-    "frame-src 'self' blob: https: http:",
+    "frame-src 'self' https: http:",
     "frame-ancestors 'none'",
   ].join('; '),
   'x-content-type-options': 'nosniff',

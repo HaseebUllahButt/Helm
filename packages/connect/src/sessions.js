@@ -1597,17 +1597,23 @@ export class Sessions extends EventEmitter {
   renderVisual(id, params) {
     const s = this.get(id);
     if (!this.#index.has(id) || s.engine === 'shell') throw new Error('visual replies need a saved agent chat');
-    const { html, pdf, kind, title, height, renderId, placement, url } = validateVisual(params);
+    const { html, pages, total, kind, title, height, renderId, placement, url } = validateVisual(params);
     const itemId = `visual-${renderId}`;
-    const data = pdf ?? Buffer.from(html).toString('base64');
+    // A PDF keeps each page picture on its own, and a short list of them as
+    // its saved copy, so a device loads only the pages it shows.
+    const parts = pages?.map(page => ({ ...this.events.putAttachment(id, { filename: `${renderId}.jpg`, mime: page.mime, data: page.data }), mime: page.mime, width: page.width, height: page.height }));
+    const data = parts
+      ? Buffer.from(JSON.stringify({ total, pages: parts.map(({ ref, mime, width, height }) => ({ ref, mime, width, height })) })).toString('base64')
+      : Buffer.from(html).toString('base64');
     const ref = createHash('sha256').update(Buffer.from(data, 'base64')).digest('hex').slice(0, 32);
     const prior = this.events.tail(id, 0).find(e => e.type === 'item.start' && e.id === itemId);
     if (prior) {
       if (prior.visual?.ref !== ref || prior.visual.title !== title || prior.visual.height !== height || prior.visual.placement !== placement || prior.visual.url !== url || prior.visual.kind !== kind) throw new Error('render ID already used for a different visual');
       return { visual: prior.visual };
     }
-    const stored = this.events.putAttachment(id, pdf ? { filename: `${renderId}.pdf`, mime: 'application/pdf', data } : { filename: `${renderId}.html`, mime: 'text/html', data });
-    const visual = { ref: stored.ref, title, height, bytes: stored.bytes, ...(kind ? { kind } : {}), ...(placement ? { placement } : {}), ...(url ? { url } : {}) };
+    const stored = this.events.putAttachment(id, parts ? { filename: `${renderId}.json`, mime: 'application/json', data } : { filename: `${renderId}.html`, mime: 'text/html', data });
+    const bytes = parts ? parts.reduce((sum, part) => sum + part.bytes, 0) : stored.bytes;
+    const visual = { ref: stored.ref, title, height, bytes, ...(kind ? { kind, pages: parts.length, total } : {}), ...(placement ? { placement } : {}), ...(url ? { url } : {}) };
     const active = s.driver && !s.external ? this.events.activeTurn(id) : null;
     const turnId = active?.turnId ?? `local-visual-${renderId}`;
     const append = event => {
@@ -1626,14 +1632,23 @@ export class Sessions extends EventEmitter {
     return { visual };
   }
 
-  readVisual(id, ref) {
+  /** A saved page, or for a PDF its page list, or one page picture by number. */
+  readVisual(id, ref, page) {
     this.get(id);
     if (!this.#index.has(id)) throw new Error('no such saved agent chat');
     const found = /^[a-f0-9]{32}$/.test(ref ?? '') && this.events.tail(id, 0).find(e => e.visual?.ref === ref);
     if (!found) throw new Error('no such visual in this chat');
     const data = this.events.attachment(id, ref);
     if (!data) throw new Error('this visual is no longer stored');
-    return found.visual.kind === 'pdf' ? { pdf: data } : { html: Buffer.from(data, 'base64').toString('utf8') };
+    const text = Buffer.from(data, 'base64').toString('utf8');
+    if (found.visual.kind !== 'pdf') return { html: text };
+    const list = JSON.parse(text);
+    if (page === undefined) return { total: list.total, pages: list.pages.map(({ width, height }) => ({ width, height })) };
+    const part = Number.isInteger(page) ? list.pages[page] : undefined;
+    if (!part) throw new Error('no such page in this PDF');
+    const picture = this.events.attachment(id, part.ref);
+    if (!picture) throw new Error('this page is no longer stored');
+    return { image: `data:${part.mime};base64,${picture}` };
   }
 
   /** Backfill images when an existing imported chat is opened after upgrade. */

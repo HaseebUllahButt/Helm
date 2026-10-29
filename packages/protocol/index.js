@@ -210,7 +210,7 @@ export const M = {
   SESSION_CANVAS: 'session.canvas', // { id, path, requestId } -> { canvas } select a project file beside chat
   SESSION_CANVAS_CLOSED: 'session.canvas-closed', // { id, requestId } -> { canvas }  the owner closed it; no device opens that ask again
   SESSION_RENDER: 'session.render',   // { id, html, title?, height?, renderId, placement?: 'canvas', url? } -> { visual } saved, never provider work
-  SESSION_VISUAL: 'session.visual',   // { id, ref } -> { html } lazy authenticated snapshot read
+  SESSION_VISUAL: 'session.visual',   // { id, ref, page? } -> { html } | PDF { total, pages } | { image } lazy authenticated snapshot read
   SESSION_WATCH: 'session.watch',     // { id } -> { ok, last }   start/renew E.SESSION_EVENT pushes
   SESSION_UNWATCH: 'session.unwatch', // { id }
   SESSION_SEARCH: 'session.search',   // { query, limit? } -> { results[] }  chats here whose words (yours or the agent's) hold every word typed

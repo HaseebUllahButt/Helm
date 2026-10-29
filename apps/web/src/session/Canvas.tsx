@@ -6,7 +6,7 @@ import { Markdown } from '../Markdown';
 import { ago } from '../screens/common';
 import { FileView } from './CodeView';
 import { SideDock, readLocal, writeLocal } from './SideDock';
-import { liveUrl, pdfInline, pdfName, saveVisual, usePdfUrl, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
+import { liveUrl, saveVisual, usePdfPages, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
 import type { Visual } from './types';
 
 // The page editor is large; it loads the first time a note is edited.
@@ -217,25 +217,54 @@ function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: 
 }
 
 /**
- * A PDF in the browser's own reader. It is read-only: the canvas offers no
- * edit or save. A phone that cannot show a PDF in a page opens it on its own.
+ * A PDF as its page pictures, one under the other. It is read-only: the
+ * canvas offers no edit or save. Only pages near the view load, and a page
+ * far from it lets its picture go, so a long PDF stays light on a phone.
  */
 function CanvasPdf({ visual, read, onBack, onClose }: { visual: Visual; read?: VisualReader; onBack: () => void; onClose: () => void }) {
-  const { url, error, retry } = usePdfUrl(read, visual.ref, true);
-  const inline = pdfInline();
-  // Hide the reader's toolbar: it has draw and download buttons. Zoom still works.
-  const view = url && `${url}#toolbar=0&navpanes=0&view=FitH`;
+  const { list, error, retry } = usePdfPages(read, visual.ref);
+  // The app turns off pinch zoom, so small text on a phone needs this.
+  const [zoom, setZoom] = useState(false);
+  const count = list ? list.pages.length === list.total ? `${list.total} ${list.total === 1 ? 'page' : 'pages'}` : `First ${list.pages.length} of ${list.total} pages` : 'PDF';
   return <div className="canvas-file canvas-page">
     <div className="canvas-pad canvas-top">
-      <CanvasHead title={visual.title} sub="PDF from the agent" onBack={onBack} onClose={onClose}>
-        {url && inline && <a className="files-chip" href={view} target="_blank" rel="noopener">Open in new tab</a>}
+      <CanvasHead title={visual.title} sub={count} onBack={onBack} onClose={onClose}>
+        {list && <button className="files-chip" aria-pressed={zoom} onClick={() => setZoom(!zoom)}>{zoom ? 'Fit width' : 'Zoom'}</button>}
       </CanvasHead>
     </div>
-    {url ? inline ? <iframe className="visual-frame canvas-pdf" title={visual.title} src={view} />
-        : <div className="git-state">This browser cannot show a PDF here. <a className="files-chip" href={url} download={pdfName(visual.title)}>Open PDF</a></div>
+    {list ? <div className={`canvas-body canvas-pdf${zoom ? ' zoomed' : ''}`} role="document" aria-label={visual.title}>
+        {list.pages.map((page, i) => <PdfPage key={i} read={read!} visualRef={visual.ref} index={i} width={page.width} height={page.height} />)}
+      </div>
       : <div className={`git-state${error ? ' bad' : ''}`} role={error ? 'alert' : 'status'}>
         {error ? <>{error} <button className="files-chip" onClick={retry}>Retry</button></> : 'Loading PDF…'}
       </div>}
+  </div>;
+}
+
+/** How far outside the view a page starts to load, and keeps its picture. */
+const NEAR = '150% 0px';
+
+function PdfPage({ read, visualRef, index, width, height }: { read: VisualReader; visualRef: string; index: number; width: number; height: number }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [near, setNear] = useState(false);
+  const [image, setImage] = useState<string>();
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    const observer = new IntersectionObserver(entries => setNear(entries.some(e => e.isIntersecting)), { root: box.current?.closest('.canvas-pdf'), rootMargin: NEAR });
+    if (box.current) observer.observe(box.current);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!near) { setImage(undefined); return; }
+    let stale = false;
+    setFailed(false);
+    read(visualRef, index).then(r => { if (!stale && typeof r.image === 'string' && r.image.startsWith('data:image/')) setImage(r.image); else if (!stale) setFailed(true); })
+      .catch(() => { if (!stale) setFailed(true); });
+    return () => { stale = true; };
+  }, [near, read, visualRef, index]);
+  return <div ref={box} className="pdf-page" style={{ aspectRatio: `${width} / ${height}` }} data-page={index + 1}>
+    {image ? <img src={image} alt={`Page ${index + 1}`} draggable={false} />
+      : <span className="pdf-page-note" role={failed ? 'alert' : undefined}>{failed ? `Helm cannot load page ${index + 1}.` : `Page ${index + 1}`}</span>}
   </div>;
 }
 

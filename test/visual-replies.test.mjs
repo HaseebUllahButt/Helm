@@ -10,7 +10,7 @@ process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-visual-test-'));
 process.env.HELM_NO_SERVICE = '1';
 for (const [key, name] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(process.env.HELM_DIR, name);
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-const { prepareVisual, preparePdf, validateVisual, MAX_VISUAL_BYTES, MAX_PDF_BYTES, withVisualMessages } = await import('../packages/connect/src/visual.js');
+const { prepareVisual, preparePdf, validateVisual, MAX_VISUAL_BYTES, MAX_PDF_PAGES, withVisualMessages } = await import('../packages/connect/src/visual.js');
 const { runVisualCommand } = await import('../packages/connect/src/visual-cli.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { EventLog, activeTurnFromEvents } = await import('../packages/connect/src/events.js');
@@ -154,32 +154,52 @@ test('native visuals sit between the messages surrounding publication, not at th
   assert.equal(messages.length, 2);
 });
 
-test('a PDF opens in canvas as its own bytes, read-only; other files named .pdf are refused', async t => {
+test('a PDF becomes page pictures on the publishing machine; the canvas reads one page at a time', async t => {
   const pdf = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
   writeFileSync(file('doc.pdf'), pdf);
   writeFileSync(file('fake.pdf'), 'PRIVATE_TOKEN=do-not-send');
-  writeFileSync(file('huge.pdf'), Buffer.concat([pdf, Buffer.alloc(MAX_PDF_BYTES)]));
+  // A tiny real JPEG frame header: 3 x 2 pixels.
+  const jpeg = Buffer.from('ffd8ffc0000b080002000301011100ffd9', 'hex');
+  const runs = [];
+  const run = async (command, args) => {
+    runs.push([command, ...args]);
+    if (command === 'pdfinfo') return { stdout: 'Producer: test\nPages:          3\n' };
+    const prefix = args.at(-1), first = Number(args[args.indexOf('-f') + 1]), last = Number(args[args.indexOf('-l') + 1]);
+    for (let n = first; n <= last; n++) writeFileSync(`${prefix}-${n}.jpg`, jpeg);
+    return { stdout: '' };
+  };
+  const made = await preparePdf(file('doc.pdf'), { run });
+  assert.equal(made.total, 3);
+  assert.deepEqual(made.pages.map(p => [p.width, p.height]), [[3, 2], [3, 2], [3, 2]]);
+  assert.ok(runs[1].includes('-jpeg') && runs[1].includes('1600'), 'JPEG at 1600 px keeps text sharp');
+  await assert.rejects(preparePdf(file('fake.pdf'), { run }), /not a PDF/);
+  const none = async () => { throw Object.assign(new Error('spawn pdfinfo ENOENT'), { code: 'ENOENT' }); };
+  await assert.rejects(preparePdf(file('doc.pdf'), { run: none }), /^Error: Install poppler-utils on this machine to show PDFs/);
+
   let call;
   const options = { print: () => {}, self: () => 'local', rpc: async (...args) => { call = args; return { visual: { ref: 'ok' } }; }, findSession: async () => ({}), env: { HELM_SESSION_ID: 'native1' } };
-  await runVisualCommand('canvas', [file('doc.pdf'), '--title', 'Before and Now'], options);
-  assert.equal(call[1], 'session.render', 'a PDF is a saved copy, not a project file');
-  assert.equal(call[2].pdf, pdf.toString('base64'));
-  assert.equal(call[2].html, undefined);
-  assert.equal(call[2].placement, 'canvas');
-  await assert.rejects(runVisualCommand('canvas', [file('fake.pdf')], options), /not a PDF/);
-  await assert.rejects(preparePdf(file('huge.pdf')), /16 MiB/);
-  const pdfParams = { renderId: params(9).renderId, pdf: pdf.toString('base64'), title: 'Before and Now', placement: 'canvas' };
-  assert.throws(() => validateVisual({ ...pdfParams, pdf: Buffer.from('<h1>no</h1>').toString('base64') }), /PDF file/);
-  assert.throws(() => validateVisual({ ...pdfParams, html: '<h1>both</h1>' }), /PDF file/);
+  await runVisualCommand('canvas', [file('fake.pdf'), '--title', 'Before and Now'], options).catch(e => assert.match(e.message, /not a PDF|poppler/));
+  assert.equal(call, undefined, 'nothing is sent when the PDF cannot be read');
+
+  const pdfParams = { renderId: params(9).renderId, pages: made.pages, total: 3, title: 'Before and Now', placement: 'canvas' };
+  assert.throws(() => validateVisual({ ...pdfParams, pages: [{ data: Buffer.from('<h1>no</h1>').toString('base64'), width: 3, height: 2 }] }), /local visual assets must be/);
+  assert.throws(() => validateVisual({ ...pdfParams, pages: Array(MAX_PDF_PAGES + 1).fill(made.pages[0]) }), /1–100 page pictures/);
+  assert.throws(() => validateVisual({ ...pdfParams, html: '<h1>both</h1>' }), /page pictures/);
+  assert.throws(() => validateVisual({ ...pdfParams, total: 1 }), /page count/);
 
   writeFileSync(file('sessions.json'), JSON.stringify({ version: 1, sessions: [{ id: 'pdf1', engine: 'claude', nativeCli: true, status: 'idle', cwd: '/tmp', title: 'PDF' }] }));
   const sessions = new Sessions(new EventEmitter(), { makeDriver: () => { throw new Error('must not start a provider'); } });
   t.after(() => sessions.stop());
   const { visual } = sessions.renderVisual('pdf1', pdfParams);
   assert.equal(visual.kind, 'pdf');
-  assert.equal(visual.bytes, pdf.length);
+  assert.equal(visual.pages, 3);
+  assert.equal(visual.bytes, jpeg.length * 3);
   assert.equal(sessions.get('pdf1').canvas.visual.ref, visual.ref);
-  assert.deepEqual(sessions.readVisual('pdf1', visual.ref), { pdf: pdf.toString('base64') });
+  assert.deepEqual(sessions.readVisual('pdf1', visual.ref), { total: 3, pages: [{ width: 3, height: 2 }, { width: 3, height: 2 }, { width: 3, height: 2 }] });
+  assert.deepEqual(sessions.readVisual('pdf1', visual.ref, 2), { image: `data:image/jpeg;base64,${jpeg.toString('base64')}` });
+  assert.throws(() => sessions.readVisual('pdf1', visual.ref, 3), /no such page/);
+  assert.throws(() => sessions.readVisual('pdf1', visual.ref, '0'), /no such page/);
+  assert.ok(JSON.stringify(sessions.history('pdf1', { tail: 50 }).events).length < 2000, 'page pictures stay out of history frames');
   assert.deepEqual(sessions.renderVisual('pdf1', pdfParams), { visual }, 'a retry keeps one copy');
   assert.throws(() => sessions.renderVisual('pdf1', { ...params(9), placement: 'canvas' }), /different visual/);
 });
