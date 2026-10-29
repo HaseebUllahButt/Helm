@@ -5,6 +5,8 @@ import { apply, emptyLog, type HelmEvent, type LogState, type Permission } from 
 import { loadCached, saveCached } from './logCache';
 
 const TAIL = 200;
+const CATCH_UP = 1000;
+const CATCH_UP_PAGES = 10;
 const RENEW_MS = 10_000;
 type History = {
   events: HelmEvent[]; pending: Permission[]; last: number; hasMore?: boolean;
@@ -108,14 +110,22 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
 
     // A chat already on screen asks only for what came after it: each focus
     // and reconnect sent the last TAIL events again, many times a reply on a
-    // slow link. A gap wider than TAIL, or a reset log, still opens at the end.
+    // slow link. A gap of a few pages is read page by page: opening at the
+    // end instead drops the history behind it, and the reader who was up
+    // there lands at the front of the new window. Only a reset log or a very
+    // long gap opens at the end.
     const read = async (): Promise<History> => {
       if (log.loaded && log.last > 0) {
         const after = log.last;
-        const r = await client.rpc<History>(env, 'session.events', { id: sessionId, since: after, limit: TAIL }, 20_000);
-        const joins = r.last === after ? !r.events.length : r.events[0]?.seq === after + 1 && r.events.at(-1)?.seq === r.last;
-        if (joins && !r.hasMore && !r.events.some(event => event.type === 'history.reset')) {
-          return { ...r, firstSeq: after + 1 };
+        const events: HelmEvent[] = [];
+        for (let page = 0; page < CATCH_UP_PAGES; page++) {
+          const since = events.at(-1)?.seq ?? after;
+          const r = await client.rpc<History>(env, 'session.events', { id: sessionId, since, limit: CATCH_UP }, 20_000);
+          const joins = r.last === since ? !r.events.length : r.events[0]?.seq === since + 1;
+          if (!joins || r.events.some(event => event.type === 'history.reset')) break;
+          events.push(...r.events);
+          if (!r.hasMore && (events.at(-1)?.seq ?? after) === r.last) return { ...r, events, firstSeq: after + 1 };
+          if (!r.events.length) break;
         }
       }
       return client.rpc<History>(env, 'session.events', { id: sessionId, tail: TAIL }, 20_000);
