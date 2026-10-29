@@ -34,7 +34,7 @@ before(async () => {
     window.mount = () => {
       const envs = ['laptop','vm'].map(id => ({id,name:id === 'laptop' ? 'Laptop' : 'vm',online:true,info:{}}));
       window.calls = [];
-      const client = {token,relay:'http://helm-test',
+      const client = {pendingActions:()=>[],resumeActions:async()=>[],token,relay:'http://helm-test',
         environments:async()=>({environments:envs}), on:()=>()=>{}, subscribe:()=>{}, watchLatency:()=>()=>{},
         openDirect:async()=>{}, route:async()=>null,
         input:(env,params)=>client.rpc(env,'session.input',params),

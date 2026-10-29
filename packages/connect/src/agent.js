@@ -1,3 +1,4 @@
+import { StartReceipts } from './start-receipts.js';
 import { assertRestoreReviewed } from './restore-guard.js';
 import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
@@ -2101,8 +2102,10 @@ export class Daemon {
       case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
-        const { originHandoffId: _originHandoffId, delegation: _delegation, attach, ...start } = p;
-        const session = await this.sessions.start({ ...start, quick: start.quick === true, size: attach ?? null });
+        const { originHandoffId: _originHandoffId, delegation: _delegation, reservedSessionId: _reservedSessionId, attach, ...start } = p;
+        await this.sessionRecovery;
+        this.startReceipts ??= new StartReceipts(this.sessions);
+        const session = await this.startReceipts.start({ ...start, quick: start.quick === true, size: attach ?? null }, caller);
         // A new terminal's first screen comes back with it, so the app can
         // draw it without a second trip - a whole second over a slow link.
         // Its output is pushed only from this view on, so nothing is missed

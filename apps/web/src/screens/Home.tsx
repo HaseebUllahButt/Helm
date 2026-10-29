@@ -122,11 +122,11 @@ export function Home({ client, machines, near, onOpenMachine, onStart }: {
       model: now.model || undefined, effort: now.effort || undefined,
       mode: now.mode && now.mode !== 'plan' ? now.mode : undefined, speed: now.speed || undefined,
     };
-    onStart(
-      { envId: env, title: 'Sketch', folder: null, account: agent.account, profileId: agent.profile.id, engine: agent.engine, agent: engineOf(agent.engine).label },
+    try { onStart(
+      { startParams: params, envId: env, title: 'Sketch', folder: null, account: agent.account, profileId: agent.profile.id, engine: agent.engine, agent: engineOf(agent.engine).label },
       () => client.rpc<{ session: Session }>(env, 'session.start', params, 70_000).then((r) => r.session),
       text.trim(),
-    );
+    ); } catch { setError('Cannot save this chat. Keep your text and try again.'); }
   };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); start(); }
