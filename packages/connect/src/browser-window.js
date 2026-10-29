@@ -13,12 +13,24 @@ import { browserArgs, ignoredBrowserArgs } from './browser-identity.js';
 export const canOpenWindow = (env = process.env, platform = process.platform) =>
   platform === 'darwin' || platform === 'win32' || !!(env.WAYLAND_DISPLAY || env.DISPLAY);
 
-// The owner's own Chromium looks and feels like their browser; Playwright's
-// build is the fallback when none is installed or it will not start.
-export const systemChromium = () => [
-  '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-].find(existsSync);
+// Any Chromium-based browser the owner has installed works: Helm drives it
+// through Chromium's own channel. Plain Chromium and Chrome come first, then
+// the others. Playwright's build is the fallback when none is installed or it
+// will not start.
+const LINUX_BROWSERS = ['chromium', 'chromium-browser', 'google-chrome-stable', 'google-chrome', 'brave', 'brave-browser',
+  'microsoft-edge-stable', 'microsoft-edge', 'vivaldi-stable', 'vivaldi', 'helium-browser', 'helium'];
+const MAC_BROWSERS = ['Chromium', 'Google Chrome', 'Brave Browser', 'Microsoft Edge', 'Vivaldi', 'Helium'];
+const WINDOWS_BROWSERS = ['Chromium/Application/chrome.exe', 'Google/Chrome/Application/chrome.exe', 'BraveSoftware/Brave-Browser/Application/brave.exe',
+  'Microsoft/Edge/Application/msedge.exe', 'Vivaldi/Application/vivaldi.exe'];
+/** Where each browser may be installed, in order of preference. */
+export const browserPaths = (env = process.env, platform = process.platform) => {
+  if (platform === 'darwin') return MAC_BROWSERS.map(name => `/Applications/${name}.app/Contents/MacOS/${name}`);
+  if (platform === 'win32') return WINDOWS_BROWSERS.flatMap(path => [env.LOCALAPPDATA, env.ProgramFiles, env['ProgramFiles(x86)']].filter(Boolean).map(root => join(root, path)));
+  // A service has a short PATH, so the usual folders are always searched too.
+  const folders = [...new Set([...(env.PATH || '').split(':').filter(Boolean), '/usr/local/bin', '/usr/bin', '/snap/bin'])];
+  return LINUX_BROWSERS.flatMap(name => folders.map(folder => join(folder, name)));
+};
+export const systemChromium = (env = process.env, platform = process.platform) => browserPaths(env, platform).find(existsSync);
 
 /**
  * One Chromium per thread, with its own profile folder, so its tabs are tabs

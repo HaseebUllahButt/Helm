@@ -32,7 +32,7 @@ test('ambiguous and missing targets return ranked candidates instead of choosing
   assert.equal(resolveTarget('Send button', [...elements, { ref: 5, role: 'button', name: 'Send', disabled: true }]).ref, 2);
   assert.equal(resolveTarget('Send button', [{ ref: 1, role: 'button', name: 'Send', inViewport: false }, { ref: 2, role: 'button', name: 'Send' }]).ref, 2);
 });
-test('Bowser steps map without changing existing kind actions', () => {
+test('short step forms map without changing existing kind actions', () => {
   const old = { kind: 'type', ref: 2, text: 'Ada' }; assert.equal(normalizeAction(old), old);
   assert.equal(normalizeAction({ goto: 'example.com' }).kind, 'navigate');
   assert.equal(normalizeAction({ click: 'Send' }).target, 'Send');
@@ -78,7 +78,7 @@ test('flows fill nested values, require every parameter, and save only successfu
 });
 test('read-only gates alias batches and flow replays before any step', async () => {
   const manager = new BrowserManager({ directory: join(directory, 'gates'), session: id => ({ id, mode: 'readonly' }) });
-  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [] };
+  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', downloads: [] };
   manager.tabs.set(tab.id, tab); let calls = 0; manager.perform = async () => { calls++; return {}; };
   await assert.rejects(manager.run('one', tab.id, { actions: [{ goto: 'example.com' }, { click: 'Send' }] }), /read-only/);
   await manager.run('one', tab.id, { actions: [{ check: 'Done' }, { wait_for: 'Done' }] }); assert.equal(calls, 1);
@@ -88,9 +88,11 @@ test('read-only gates alias batches and flow replays before any step', async () 
 });
 test('batch failure stops delivery and cannot save a failed flow', async () => {
   const manager = new BrowserManager({ directory: join(directory, 'batch'), session: id => ({ id }) });
-  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [] };
+  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', downloads: [] };
   manager.tabs.set(tab.id, tab); manager.look = async () => ({ text: 'Page' }); let calls = 0;
-  manager.bowserAction = async () => { if (++calls === 2) throw new Error('failed'); return {}; };
+  // Run the batch itself; stand in for each step.
+  const batch = manager.perform.bind(manager);
+  manager.perform = async (tab, action, inBatch) => { if (action.kind === 'batch') return batch(tab, action, inBatch); if (++calls === 2) throw new Error('failed'); return {}; };
   const result = await manager.run('one', tab.id, { actions: [{ click: '{{target}}' }, { click: 'Missing' }, { click: 'Never' }], with: { target: 'Send' }, save_as: 'failed' });
   assert.equal(result.failedAt, 1); assert.equal(calls, 2); assert.deepEqual((await manager.listFlows('one')).flows, []);
   await assert.rejects(manager.run('one', tab.id, { actions: [{ actions: [] }] }), /nonnested/);

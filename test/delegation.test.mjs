@@ -1184,8 +1184,7 @@ test('the browser note rides along only where a browser can start', async () => 
   const { helmBrief } = await import('../packages/connect/src/delegation.js');
   const { browserReady, browserNote } = await import('../packages/connect/src/browser.js');
   assert.equal(helmBrief({}).includes('[Helm browser:'), browserReady());
-  assert.doesNotMatch(browserNote({ bowser: false }), /bowser/i, 'no pointer to a tool this machine lacks');
-  assert.match(browserNote({ bowser: true }), /--engine bowser/);
+  assert.doesNotMatch(browserNote(), /bowser|--engine/i);
 });
 
 // Every chat pays for these notes before it does any work, and every message
@@ -1198,9 +1197,9 @@ test('the notes every agent gets match the committed size', async () => {
   const { readFileSync } = await import('node:fs');
   const budget = JSON.parse(readFileSync(new URL('./agent-context-budget.json', import.meta.url), 'utf8'));
   const net = { self: 'a', machines: { a: { id: 'a', name: 'Laptop' }, b: { id: 'b', name: 'VM', kind: 'vm' }, c: { id: 'c', name: 'HomePC', kind: 'pc' } } };
-  // The browser note depends on this machine; count the version without Bowser.
+  // Only machines that can start a browser get its note; count it once.
   const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:')).join('\n');
-  const notes = [brief, browserNote({ bowser: false }), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
+  const notes = [brief, browserNote(), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
   assert.deepEqual(
     { notesBytes: Buffer.byteLength(notes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
     { notesBytes: budget.notesBytes, reminderBytes: budget.reminderBytes },
