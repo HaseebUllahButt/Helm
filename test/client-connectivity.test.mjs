@@ -1200,19 +1200,22 @@ test('slow direct fragments do not start duplicate history downloads', async () 
   h.client.close();
 });
 
-test('a read deadline does not disconnect a direct link receiving fragments', async () => {
-  const h = harness(); h.start(); await h.advance(200);
+test('a read waits while its pieces arrive and expires after they stop', async () => {
+  const h = harness({delays:{'http://good/api/read':Infinity}}); h.start(); await h.advance(200);
   await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
-  const read = h.client.rpc('machine', 'session.events', {}, 4000).catch(e => e.message);
+  let ended = false;
+  const read = h.client.rpc('machine', 'session.events', {}, 4000).catch(e => { ended = true; return e.message; });
   const frame = peer.channel.frames.find(f => f.method === 'session.events');
   for (let i = 0; i < 3; i++) {
     await h.advance(1000);
-    peer.message({ t: 'dc-chunk', gid: 'slow', rid: frame.id, n: 5, i, data: i ? 'part' : JSON.stringify({t:'rpcResult',id:frame.id,ok:true}).slice(0,-1) });
+    peer.message({t:'dc-chunk',gid:'slow',rid:frame.id,n:5,i,data:'part'});
   }
   await h.advance(1001);
-  assert.match(await read, /timed out/);
+  assert.equal(ended, false);
   assert.equal(h.client.directTo('machine'), true);
   assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  await h.advance(3000);
+  assert.match(await read, /timed out/);
   h.client.close();
 });
 
@@ -1372,4 +1375,21 @@ test('compressed progress belongs only to the request named by the machine', asy
   assert.deepEqual(h.requests.filter(r=>r.url.endsWith('/api/read')).map(r=>JSON.parse(r.init.body).method),['session.watch']);
   peer.message({t:'rpcResult',id:rpc.id,ok:true,result:{ok:true}});
   await large; h.client.close();
+});
+
+
+test('a history reply can finish after its original deadline while its pieces arrive', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const socket = h.sockets[0];
+  const read = h.client.rpc('machine','session.events',{},20000);
+  const frame = socket.frames.find(f=>f.method==='session.events');
+  const body = JSON.stringify({t:'rpcResult',id:frame.id,ok:true,result:{text:'x'.repeat(400000)}});
+  const n = 40, size = Math.ceil(body.length/n);
+  for (let i=0;i<n;i++) {
+    await h.advance(1000);
+    socket.message({t:'dc-chunk',gid:'long',rid:frame.id,n,i,data:body.slice(i*size,(i+1)*size)});
+  }
+  assert.equal((await read).text.length,400000);
+  assert.equal(h.requests.filter(r=>r.url.endsWith('/api/read')).length,0);
+  h.client.close();
 });

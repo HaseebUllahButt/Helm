@@ -1764,6 +1764,11 @@ export class Client {
     const hedgeAfter = this.readGrace(env, method, timeout, params);
     return new Promise<T>((resolve, reject) => {
       const started = Date.now();
+      const expires = () => {
+        const progress = this.pending.get(id)?.payloadAt;
+        return HTTP_READ_METHODS.has(method) && progress !== undefined
+          ? Math.min(started + Math.max(timeout, 120_000), progress + timeout) : started + timeout;
+      };
       let deadline: ReturnType<typeof setTimeout> | undefined;
       let fallback: ReturnType<typeof setTimeout> | undefined;
       const http = HTTP_READ_METHODS.has(method) ? new AbortController() : undefined;
@@ -1803,7 +1808,7 @@ export class Client {
       // These reads (and the idempotent view lease) are safe to race over the
       // hub too; never replay prompts, approvals, or other writes this way.
       if (hedge) {
-        const httpFallback = (elapsed: number) => {
+        const httpFallback = () => {
           const pending = this.pending.get(id);
           if (!pending || pending.routes?.has('http')) return;
           clearTimeout(fallback);
@@ -1811,12 +1816,12 @@ export class Client {
           pending.hedged = true;
           pending.routes?.add('http');
           if (pending.sentAt) pending.sentAt.http = Date.now();
-          this.readHttp<T>(env, method, params, timeout - elapsed, http?.signal).then(
+          this.readHttp<T>(env, method, params, Math.max(1, expires() - Date.now()), http?.signal).then(
             result => this.receiveRpc({ id, ok: true, result }, 'http'),
             error => this.receiveRpc({ id, ok: false, error }, 'http'),
           );
         };
-        this.pending.get(id)!.recover = () => httpFallback(Date.now() - started);
+        this.pending.get(id)!.recover = () => httpFallback();
         const recover = () => {
           if (!this.pending.has(id)) return;
           // Fragments and compressed data prove that the direct path still
@@ -1828,7 +1833,7 @@ export class Client {
           }
           // Use one backup path. Sending over the hub socket and HTTP at
           // once makes the remote machine upload the same reply twice.
-          httpFallback(Date.now() - started);
+          httpFallback();
         };
         // Older pages are background work. A lost route can still recover,
         // but a slow page must not compete with its own duplicate upload.
@@ -1836,14 +1841,18 @@ export class Client {
           fallback = setTimeout(recover, hedgeAfter);
         }
       }
-      deadline = setTimeout(() => {
+      const expire = () => {
+        if (!this.pending.has(id)) return;
+        const remaining = expires() - Date.now();
+        if (remaining > 0) { deadline = setTimeout(expire, remaining); return; }
         clear();
         if (this.pending.delete(id)) reject(new Error(`${method} timed out`));
         // Durable delivery can finish on its other route. Its short attempt
         // budget is not evidence that the channel itself has stopped.
         if (sent && peer && !['session.deliver', 'session.answer'].includes(method)
           && (peer.heard === undefined || Date.now() - peer.heard >= hedgeAfter)) this.dropDirect(env, peer);
-      }, timeout);
+      };
+      deadline = setTimeout(expire, timeout);
     });
   }
 
