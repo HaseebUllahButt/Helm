@@ -76,6 +76,7 @@ import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { useDesktopScreen } from './browser-window.js';
 import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
 import { ActionDelivery } from './action-delivery.js';
@@ -424,6 +425,8 @@ export class Daemon {
       log: (line) => console.error(`[helm] ${line}`),
     });
     this.executions = new ExecutionJobs();
+    // Helm's service can start before the desktop; its browser windows find the screen later.
+    useDesktopScreen();
     this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id), appProcessRoots: id => this.sessions.appProcessRoots(id) } });
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),
@@ -2107,7 +2110,7 @@ export class Daemon {
       case M.SESSION_CANVAS: return this.sessions.openCanvas(p.id, p);
       case M.SESSION_CANVAS_CLOSED: return this.sessions.closeCanvas(p.id, p.requestId);
       case M.SESSION_RENDER: return this.sessions.renderVisual(p.id, p);
-      case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref);
+      case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref, p.page);
       case M.SESSION_EVENTS:
         await this.sessions.prepareHistory(p.id);
         return this.sessions.history(p.id, {

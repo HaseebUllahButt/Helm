@@ -8,7 +8,7 @@ import { normalizeAction, readOnlyAction, resolveTarget } from './browser-target
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } from './browser-identity.js';
 import * as browserLogins from './browser-logins.js';
-import { canOpenWindow, systemChromium, launchWindow as openWindow, windowProfile, windowName, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
+import { canOpenWindow, systemChromium, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -82,11 +82,13 @@ const pointerTarget = el => {
  * is one shared hidden Chromium. Nothing starts until a tab is used.
  */
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 30 * 60000, actionTimeoutMs = 45000, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow(), ownerQuietMs = 2500 } = {}) {
-    this.launchWindow = launchWindow; this.canWindow = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = 45000, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500 } = {}) {
+    this.launchWindow = launchWindow; this.windowCheck = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
     this.logins = logins; this.loginImports = new Map(); this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
     this.flows = new BrowserFlows(directory);
   }
+  /** A screen can appear after Helm starts, when its service starts before the desktop. Once seen, windows stay on. */
+  get canWindow() { return this.screenSeen ||= !!(typeof this.windowCheck === 'function' ? this.windowCheck() : this.windowCheck); }
   async start() {
     if (!this.starting) this.starting = (async () => {
       if (this.browser?.isConnected()) return this.browser;
@@ -146,35 +148,71 @@ export class BrowserManager {
     try { return await pending; } catch (error) { this.contexts.delete(sessionId); throw error; }
   }
   /**
-   * The thread's own Chromium, in a window on this machine's screen. Its
-   * profile folder keeps what the window signed in to. A new thread starts
-   * signed in to what the owner chose as the default profile's logins.
+   * A chat's tabs, in the one window on this machine's screen that every
+   * chat shares. The window's profile folder keeps what it signed in to.
    */
   async windowContext(sessionId, loginSeed) {
-    const folder = windowProfile(this.directory, sessionId), fresh = !existsSync(folder); mkdirSync(folder, { recursive: true, mode: 0o700 });
-    let seed = loginSeed;
-    if (fresh && !seed) { const choice = await this.loginDefault(sessionId); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
-    let context;
-    try { context = await this.launchWindow(folder, { name: windowName(sessionId) }); }
-    catch (error) { throw new Error(`The browser could not open a window. ${String(error.message).split('\n')[0]}`); }
-    context.helmWindow = true; context.setDefaultTimeout(10000); context.setDefaultNavigationTimeout(15000);
-    try {
-      // Sign-ins from before (or from a hidden browser on this machine) come along.
+    const context = await this.sharedWindow();
+    if (!context.helmJoined.has(sessionId)) {
+      context.helmJoined.add(sessionId);
+      // Sign-ins this chat made in its own window, before the window was shared.
       let storage; try { storage = JSON.parse(await readFile(join(this.directory, sessionId, 'storage.json'), 'utf8')); } catch { /* nothing signed in yet */ }
-      if (fresh && storage?.cookies?.length) await context.addCookies(storage.cookies).catch(() => {});
-      if (seed?.cookies?.length) await context.addCookies(seed.cookies).catch(() => {});
-      await context.exposeBinding('__helmOwnerInput', ({ page }) => this.ownerInput(page));
-      await context.addInitScript(WINDOW_PAGE_SCRIPT);
-    } catch (error) { await context.close().catch(() => {}); throw error; }
-    // Some browser launchers open a blank tab: the first tab Helm needs takes it.
-    // A window still open from before a restart keeps its tabs as they are.
-    context.helmSpare = context.helmAttached ? null : context.pages()[0] || null;
-    if (context.helmAttached) for (const page of context.pages()) this.register(sessionId, page).adopted = true;
-    context.on('page', page => this.register(sessionId, page));
-    context.on('close', () => void this.windowClosed(sessionId, context).catch(() => {}));
+      if (storage?.cookies?.length) await context.addCookies(storage.cookies).catch(() => {});
+    }
+    if (loginSeed?.cookies?.length) await context.addCookies(loginSeed.cookies).catch(() => {});
     this.windowContexts.set(sessionId, context);
-    this.timer ||= setInterval(() => void this.sweep().catch(() => {}), 2000); this.timer.unref?.();
     return context;
+  }
+  /**
+   * The one window. A new window starts signed in to what the owner chose as
+   * the default profile's logins. A window still open from before a restart
+   * keeps its tabs; each chat takes its own back by address.
+   */
+  sharedWindow() {
+    if (this.shared && !this.shared.helmClosed) return Promise.resolve(this.shared);
+    return this.openingShared ||= (async () => {
+      const folder = sharedProfile(this.directory), fresh = !existsSync(folder); mkdirSync(folder, { recursive: true, mode: 0o700 });
+      let seed; if (fresh) { const choice = await this.savedLoginDefault(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey).catch(() => null); }
+      let context;
+      try { context = await this.launchWindow(folder, { name: 'helm-browser' }); }
+      catch (error) { throw new Error(`The browser could not open a window. ${String(error.message).split('\n')[0]}`); }
+      context.helmWindow = true; context.helmJoined = new Set(); context.setDefaultTimeout(10000); context.setDefaultNavigationTimeout(15000);
+      try {
+        if (seed?.cookies?.length) await context.addCookies(seed.cookies).catch(() => {});
+        await context.exposeBinding('__helmOwnerInput', ({ page }) => this.ownerInput(page));
+        await context.addInitScript(WINDOW_PAGE_SCRIPT);
+      } catch (error) { await context.close().catch(() => {}); throw error; }
+      // Some browser launchers open a blank tab: the first tab Helm needs takes it.
+      context.helmSpare = context.helmAttached ? null : context.pages()[0] || null;
+      context.helmUnclaimed = context.helmAttached ? new Set(context.pages()) : new Set();
+      // A tab belongs to the chat that opened it, or to the chat whose page
+      // opened it as a popup. A tab the owner opens stays theirs.
+      context.on('page', page => void this.claimPage(context, page).catch(() => {}));
+      context.on('close', () => void this.sharedClosed(context).catch(() => {}));
+      this.shared = context;
+      this.timer ||= setInterval(() => void this.sweep().catch(() => {}), 2000); this.timer.unref?.();
+      return context;
+    })().finally(() => { this.openingShared = null; });
+  }
+  /** A popup goes to the chat whose page opened it. Helm registers the tabs it opens itself. */
+  async claimPage(context, page) {
+    const opener = await page.opener().catch(() => null), sessionId = opener && [...this.tabs.values()].find(t => t.page === opener)?.sessionId;
+    if (sessionId && this.windowContexts.get(sessionId) === context) { this.register(sessionId, page); this.persistSoon(sessionId); }
+  }
+  /** The owner closed the window: every chat's tabs are kept, asleep. */
+  async sharedClosed(context) {
+    context.helmClosed = true; if (this.shared === context) this.shared = null;
+    for (const [sid, value] of [...this.windowContexts]) if (value === context) await this.windowClosed(sid, context).catch(() => {});
+  }
+  /** Close the window once no chat has a tab in it, unless the owner has tabs of their own there. */
+  async closeIfEmpty() {
+    const context = this.shared; if (!context || context.helmClosed || this.stopping) return;
+    if ([...this.windowContexts.values()].includes(context)) return;
+    const own = context.pages().filter(page => !page.isClosed() && ![NEW_TAB, 'about:blank', 'chrome://newtab/'].includes(page.url()));
+    if (own.length) return;
+    this.shared = null; context.helmClosed = true;
+    await stopWindow(sharedProfile(this.directory)); await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
+    await trimProfile(sharedProfile(this.directory));
   }
   /**
    * A new tab. In a window it opens at its address: an empty tab sent
@@ -272,7 +310,10 @@ export class BrowserManager {
       mkdirSync(this.directory, { recursive: true, mode: 0o700 }); await chmod(this.directory, 0o700);
       await this.writePrivate(file, { profileKey: profile.key }); return { profileKey: profile.key };
     }
-    try { const choice = JSON.parse(await readFile(file, 'utf8')); return { profileKey: typeof choice.profileKey === 'string' ? choice.profileKey : null }; } catch { return { profileKey: null }; }
+    return this.savedLoginDefault();
+  }
+  async savedLoginDefault() {
+    try { const choice = JSON.parse(await readFile(join(this.directory, 'logins.json'), 'utf8')); return { profileKey: typeof choice.profileKey === 'string' ? choice.profileKey : null }; } catch { return { profileKey: null }; }
   }
   async importLogins(sessionId, profileKey) {
     this.owner(sessionId);
@@ -364,8 +405,9 @@ export class BrowserManager {
         if (this.tabs.has(row.id)) continue;
         const context = await this.context(sessionId);
         // The window stayed open through a restart: its tab is already there, loaded.
-        const kept = [...this.tabs.values()].find(t => t.sessionId === sessionId && t.adopted && t.page.url() === row.url);
-        if (kept) kept.adopted = false;
+        const left = [...(context.helmUnclaimed || [])].find(page => !page.isClosed() && page.url() === row.url);
+        if (left) context.helmUnclaimed.delete(left);
+        const kept = left ? this.register(sessionId, left) : null;
         let address = 'about:blank'; try { address = httpUrl(row.url); } catch { /* keep the tab available to retry */ }
         restore.push({ row, context, kept, address });
       }
@@ -404,7 +446,7 @@ export class BrowserManager {
     const live = () => [...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t));
     const answer = tabs => ({ tabs, running: !!this.browser, canWindow: this.canWindow, open: this.windowContexts.has(sessionId) });
     // A window left open through a Helm restart is taken back, tabs as they are.
-    if (this.canWindow && !this.contexts.has(sessionId) && !this.stopping && windowOpen(windowProfile(this.directory, sessionId))) {
+    if (this.canWindow && !this.contexts.has(sessionId) && !this.stopping && (this.shared || windowOpen(sharedProfile(this.directory))) && (await this.savedRows(sessionId)).length) {
       try { await this.context(sessionId); await this.recover(sessionId); } catch { /* listed asleep below */ }
     }
     // Listing never opens a window: a closed window's tabs are listed asleep.
@@ -744,14 +786,15 @@ export class BrowserManager {
     if ([...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) return;
     const pending = this.contexts.get(sessionId), context = await pending;
     if (!context || this.contexts.get(sessionId) !== pending) return;
-    await this.save(sessionId).catch(() => {}); this.contexts.delete(sessionId); await context.close();
+    await this.save(sessionId).catch(() => {}); this.contexts.delete(sessionId);
+    if (context.helmWindow) { this.windowContexts.delete(sessionId); this.recovered.delete(sessionId); await this.closeIfEmpty(); } else await context.close();
     if (!this.headlessInUse()) await this.shutdownBrowser();
   }
   async save(sessionId) { const context = await this.contexts.get(sessionId); if (context) { (this.savedAt ||= new Map()).set(sessionId, this.now()); await this.saveContext(sessionId, context); } }
   async close(sessionId, tabId) {
     // A sleeping tab closes without waking its window.
     if (this.canWindow && !this.contexts.has(sessionId) && !this.tabs.has(tabId)) { this.owner(sessionId); const rows = await this.savedRows(sessionId); if (!rows.some(row => row.id === tabId)) throw new Error('browser tab not found in this thread'); await writeFile(join(this.directory, sessionId, 'tabs.json'), JSON.stringify(rows.filter(row => row.id !== tabId)), { mode: 0o600 }); return { ok: true }; }
-    await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (this.serial.has(tab.id)) throw new Error('wait for the current browser action to finish'); await this.save(sessionId); tab.explicitClose = true; await tab.page.close(); await this.persistTabs(sessionId); if (![...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) { const context = await this.contexts.get(sessionId); this.contexts.delete(sessionId); await context?.close(); } if (!this.headlessInUse()) await this.shutdownBrowser(); return { ok: true }; }
+    await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (this.serial.has(tab.id)) throw new Error('wait for the current browser action to finish'); await this.save(sessionId); tab.explicitClose = true; await tab.page.close(); await this.persistTabs(sessionId); if (![...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) { const context = await this.contexts.get(sessionId); this.contexts.delete(sessionId); if (context?.helmWindow) { this.windowContexts.delete(sessionId); this.recovered.delete(sessionId); await this.closeIfEmpty(); } else await context?.close(); } if (!this.headlessInUse()) await this.shutdownBrowser(); return { ok: true }; }
   async sweep() {
     for (const sid of [...this.contexts.keys()]) {
       const tabs = [...this.tabs.values()].filter(t => t.sessionId === sid && t.engine === 'chromium');
@@ -774,22 +817,16 @@ export class BrowserManager {
     const looking = tab => Promise.race([tab.page.evaluate(() => document.visibilityState === 'visible' && document.hasFocus()), new Promise(done => setTimeout(() => done(false), 1000).unref?.())]).catch(() => false);
     return (await Promise.all(tabs.map(looking))).some(Boolean);
   }
-  /** Close a chat's window and keep its tabs asleep, as when the owner closes it. */
+  /** Close a chat's tabs and keep them asleep; the window closes when no chat has a tab left. */
   async putAway(sessionId) {
-    const context = this.windowContexts.get(sessionId);
     await this.save(sessionId).catch(() => {}); await this.persistTabs(sessionId);
     this.suspending.add(sessionId);
-    try {
-      this.windowContexts.delete(sessionId); this.contexts.delete(sessionId); this.recovered.delete(sessionId);
-      await this.closeWindow(sessionId, context);
-      for (const tab of [...this.tabs.values()]) if (tab.sessionId === sessionId && tab.engine === 'chromium') this.tabs.delete(tab.id);
-    } finally { this.suspending.delete(sessionId); }
-    await trimProfile(windowProfile(this.directory, sessionId));
+    try { await this.closeTabs(sessionId); } finally { this.suspending.delete(sessionId); }
+    await this.closeIfEmpty();
   }
-  async closeWindow(sessionId, context) {
-    // A window Helm started on its own keeps running without Helm: stop it.
-    if (!context || context.helmDetach) await stopWindow(windowProfile(this.directory, sessionId));
-    await (context?.helmDetach ? context.helmDetach() : context?.close())?.catch(() => {});
+  async closeTabs(sessionId) {
+    this.windowContexts.delete(sessionId); this.contexts.delete(sessionId); this.recovered.delete(sessionId);
+    for (const tab of [...this.tabs.values()]) if (tab.sessionId === sessionId && tab.engine === 'chromium') { this.tabs.delete(tab.id); await tab.page?.close().catch(() => {}); }
   }
   /** The chat was deleted: its window, tabs, downloads and sign-ins go too. */
   async forget(sessionId) {
@@ -800,11 +837,13 @@ export class BrowserManager {
       this.windowContexts.delete(sessionId); this.contexts.delete(sessionId); this.recovered.delete(sessionId);
       clearTimeout(this.persistTimers?.get(sessionId)); this.persistTimers?.delete(sessionId); this.savedAt?.delete(sessionId);
       for (const [key, orphan] of this.orphans || []) if (orphan.sessionId === sessionId) this.orphans.delete(key);
-      if (context?.helmWindow || this.canWindow) await this.closeWindow(sessionId, context);
+      if (context?.helmWindow) await this.closeTabs(sessionId);
       else await context?.close().catch(() => {});
       for (const tab of [...this.tabs.values()]) if (tab.sessionId === sessionId) this.tabs.delete(tab.id);
+      await stopWindow(windowProfile(this.directory, sessionId));
       await rm(join(this.directory, sessionId), { recursive: true, force: true });
     } finally { this.suspending.delete(sessionId); }
+    await this.closeIfEmpty();
     if (this.browser && !this.headlessInUse()) await this.shutdownBrowser();
   }
   /**
@@ -815,23 +854,25 @@ export class BrowserManager {
   async tidy() {
     let names; try { names = readdirSync(this.directory); } catch { return; }
     for (const name of names) {
-      if (name === 'flows' || !/^[\w:-]{1,160}$/.test(name)) continue;
+      if (name === 'flows' || name === 'window' || !/^[\w:-]{1,160}$/.test(name)) continue;
       const folder = join(this.directory, name);
       let info; try { info = statSync(folder); } catch { continue; }
       if (!info.isDirectory() || this.contexts.has(name)) continue;
       let alive; try { alive = !!this.session(name); } catch { alive = false; }
       const touched = Math.max(info.mtimeMs, ...['tabs.json', 'storage.json'].map(file => { try { return statSync(join(folder, file)).mtimeMs; } catch { return 0; } }));
       if (!alive && this.now() - touched > 24 * 3600000) await this.forget(name);
-      else await trimProfile(windowProfile(this.directory, name));
+      // Each chat kept its own window before the window was shared; that profile goes.
+      else { await stopWindow(windowProfile(this.directory, name)); await rm(windowProfile(this.directory, name), { recursive: true, force: true }).catch(() => {}); }
     }
+    await trimProfile(sharedProfile(this.directory));
   }
   async shutdownBrowser() { const browser = this.browser; this.browser = null; await browser?.close(); if (!this.tabs.size) { clearInterval(this.timer); this.timer = null; } }
   async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } // A window Helm can come back to stays open on the owner's screen.
-    for (const context of this.windowContexts.values()) await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
-    this.windowContexts.clear(); await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
+    for (const context of new Set([...this.windowContexts.values(), this.shared].filter(Boolean))) await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
+    this.windowContexts.clear(); this.shared = null; await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
 }
 
 /** A machine with no browser to start gets no browser note: it would only steer the agent to a tool that fails. */
 export function browserReady() { return !!(process.env.HELM_WINDOW_CHROMIUM || executable() || hasPlaywrightChromium()); }
 
-export function browserNote() { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, the owner shares the window. For an owner step, point with helm browser point; do not click. Never ask for passwords. Suggest helm browser profiles and helm browser logins "<profile>" to copy logins. Respect the request on signed-in sites.]`; }
+export function browserNote() { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. For an owner step, point with helm browser point; do not click. Never ask for passwords. Suggest helm browser profiles and helm browser logins "<profile>" to copy logins. Respect the request on signed-in sites.]`; }

@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // A new chat that clones a repo first: the chat is there the moment it is
-// asked for, listed like any other, and survives being left. What is sent
+// asked for, listed like any other, and survives being left while the
+// repo comes down. Once it is in, an unused one goes like any chat. What is sent
 // while the repo comes down waits and goes to the agent once it is in; the
 // agent never starts in a folder that is not there yet.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-clone-chat-'));
@@ -96,6 +97,26 @@ test('the chat is there at once; a message waits for the repo, then goes to the 
   assert.equal(after.engineSessionId, 'engine-clone');
   assert.equal(drivers[0].cwd, target, 'the agent runs in the clone');
   assert.deepEqual(drivers[0].sent, ['what is in here?'], 'the waiting message goes in');
+  await sessions.stop();
+});
+
+test('an unused chat is kept while its clone runs or failed, and goes once the repo is in', async () => {
+  const { make, cloner } = await setup('unused');
+  const sessions = make();
+  const target = join(process.env.HELM_DIR, 'work', 'unused');
+  const s = await sessions.start({ cwd: target, profileId: 'claudea', clone: { repo: 'me/unused' } });
+  assert.deepEqual(await sessions.discardEmpty(s.id), { ok: true, discarded: false }, 'kept while the clone runs');
+  cloner.job.finish('failed', 'No network.');
+  await tick();
+  assert.deepEqual(await sessions.discardEmpty(s.id), { ok: true, discarded: false }, 'kept to try again');
+
+  await sessions.retryClone(s.id);
+  cloner.job.finish('done');
+  await tick();
+  assert.equal(sessions.get(s.id).clone.state, 'done');
+  assert.deepEqual(await sessions.discardEmpty(s.id), { ok: true, discarded: true }, 'an unused chat goes once the repo is in');
+  assert.throws(() => sessions.get(s.id), /unknown session/);
+  assert.ok(existsSync(target), 'the cloned folder stays');
   await sessions.stop();
 });
 

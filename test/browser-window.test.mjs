@@ -12,7 +12,7 @@ process.env.HELM_NO_SERVICE = '1';
 test.after(() => rm(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
-const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow, stopWindow, profilePid, trimProfile, browserPaths, systemChromium } = await import('../packages/connect/src/browser-window.js');
+const { canOpenWindow, windowName, windowProfile, sharedProfile, windowOpen, launchWindow, stopWindow, profilePid, trimProfile, browserPaths, systemChromium, screenEnv } = await import('../packages/connect/src/browser-window.js');
 const { chromium } = await import('playwright');
 const realChromium = [process.env.HELM_TEST_CHROMIUM, systemChromium(), chromium.executablePath()].find(path => path && existsSync(path));
 // Playwright's own Chromium, else the system one Helm itself falls back to.
@@ -42,6 +42,10 @@ test('a screen is needed for a window: a display on Linux, always on a Mac or Wi
   assert.equal(canOpenWindow({ WAYLAND_DISPLAY: 'wayland-1' }, 'linux'), true);
   assert.equal(canOpenWindow({ DISPLAY: ':0' }, 'linux'), true);
   assert.equal(canOpenWindow({}, 'darwin'), true);
+  // Helm's service can start before the desktop: the desktop's display is found later.
+  assert.equal(canOpenWindow({}, 'linux', () => ({ WAYLAND_DISPLAY: 'wayland-1' })), true);
+  assert.deepEqual(screenEnv({}, 'linux', () => ({ WAYLAND_DISPLAY: 'wayland-1' })), { WAYLAND_DISPLAY: 'wayland-1' });
+  assert.deepEqual(screenEnv({ DISPLAY: ':0', XAUTHORITY: '/x' }, 'linux', () => assert.fail('own display wins')), { DISPLAY: ':0', XAUTHORITY: '/x' });
 });
 
 test('any installed Chromium-based browser is used, plain Chromium first', { skip: process.platform === 'win32' }, t => {
@@ -65,7 +69,7 @@ test('a native browser starts at the requested page with copied logins already p
   const server = createServer((req, res) => { cookie ??= req.headers.cookie || ''; res.setHeader('Content-Type', 'text/html'); res.end('<title>Signed in</title><button>Ready</button>'); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'first-')), session: id => ({ id }), canWindow: true, launchWindow });
-  const folder = windowProfile(manager.directory, 'one');
+  const folder = sharedProfile(manager.directory);
   t.after(async () => { await manager.stop(); await stopWindow(folder); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   mkdirSync(join(manager.directory, 'one'), { recursive: true });
   writeFileSync(join(manager.directory, 'one', 'storage.json'), JSON.stringify({ cookies: [{ name: 'who', value: 'owner', domain: '127.0.0.1', path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' }], origins: [] }));
@@ -139,7 +143,7 @@ test('tabs open in the thread’s own window, already signed in; the agent works
   writeFileSync(join(manager.directory, 'one', 'storage.json'), JSON.stringify({ cookies: [{ name: 'who', value: 'owner', domain: '127.0.0.1', path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' }], origins: [] }));
   const a = await manager.open('one', { url }), b = await manager.open('one', { url: `${url}/#b` });
   assert.equal(windows.length, 1);
-  assert.equal(windows[0].name, windowName('one'), 'the window is named so the desktop never gives it the keyboard');
+  assert.equal(windows[0].name, 'helm-browser', 'the window is named so the desktop never gives it the keyboard');
   const listed = await manager.list('one');
   assert.equal(listed.open, true); assert.equal(listed.canWindow, true);
   assert.deepEqual(listed.tabs.map(tab => tab.id).sort(), [a.tab.id, b.tab.id].sort());
@@ -194,6 +198,31 @@ test('a closed window keeps its tabs asleep; listing does not reopen it, the age
   // The agent's next step opens the window again, on the same tab and page.
   assert.equal((await manager.run('one', a.tab.id, { kind: 'evaluate', script: 'location.origin' })).value, url);
   assert.equal(windows.length, 2); assert.equal((await manager.list('one')).open, true);
+});
+
+test('every chat shares one window: each has its own tabs, the owner keeps theirs, and the window closes when no chat needs it', { timeout: 60000, skip: noChromium }, async t => {
+  const { manager, url, windows } = await setup(t);
+  const a = await manager.open('one', { url }), b = await manager.open('two', { url: `${url}/#two` });
+  assert.equal(windows.length, 1, 'one window for both chats');
+  const context = await manager.contexts.get('one');
+  assert.equal(await manager.contexts.get('two'), context);
+  assert.deepEqual((await manager.list('one')).tabs.map(tab => tab.id), [a.tab.id]);
+  assert.deepEqual((await manager.list('two')).tabs.map(tab => tab.id), [b.tab.id]);
+  // A popup belongs to the chat whose page opened it; a tab the owner opens stays theirs.
+  const popup = context.waitForEvent('page');
+  await manager.run('one', a.tab.id, { kind: 'evaluate', script: `void window.open(${JSON.stringify(`${url}/#popup`)})` });
+  await (await popup).waitForLoadState();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await manager.list('one')).tabs.length, 2);
+  const own = await context.newPage(); await own.goto(`${url}/#mine`);
+  assert.equal((await manager.list('two')).tabs.length, 1, 'the owner’s tab is not given to a chat');
+  // Closing a chat's last tab leaves the window for the other chat, and for the owner's tab.
+  await manager.close('two', b.tab.id);
+  assert.equal(context.pages().includes(own), true);
+  for (const tab of (await manager.list('one')).tabs) await manager.close('one', tab.id);
+  assert.ok(manager.shared, 'the owner still has a tab there');
+  await own.close(); await manager.closeIfEmpty();
+  assert.equal(manager.shared, null, 'no chat and no owner tab: the window closes');
 });
 
 test('a new tab opens at its address, so it never sits on about:blank while the site answers', { timeout: 60000, skip: noChromium }, async t => {
@@ -276,7 +305,7 @@ test('a Helm restart leaves the window open; the next Helm takes its tabs back w
   const before = process.env.HELM_WINDOW_CHROMIUM; process.env.HELM_WINDOW_CHROMIUM = wrapper;
   t.after(() => { if (before === undefined) delete process.env.HELM_WINDOW_CHROMIUM; else process.env.HELM_WINDOW_CHROMIUM = before; });
   const { manager, url } = await setup(t, { launchWindow });
-  const folder = windowProfile(manager.directory, 'one');
+  const folder = sharedProfile(manager.directory);
   // This Chromium outlives the test process; a failed check must still close it.
   t.after(() => stopWindow(folder));
   const opened = await manager.open('one', { url });
@@ -297,4 +326,12 @@ test('a Helm restart leaves the window open; the next Helm takes its tabs back w
   assert.equal((await next.run('one', opened.tab.id, { kind: 'evaluate', script: 'performance.timeOrigin' })).value, loadedAt, 'the page was not reloaded');
   assert.equal((await next.run('one', opened.tab.id, { kind: 'evaluate', script: 'document.querySelector("#name").value' })).value, 'kept');
   assert.equal((await next.contexts.get('one')).pages().length, 1, 'no extra tab was opened');
+});
+
+test('a screen that appears after Helm starts turns windows on, and they stay on', () => {
+  let screen = false;
+  const manager = new BrowserManager({ session: sid => ({ id: sid }), canWindow: () => screen });
+  assert.equal(manager.canWindow, false);
+  screen = true; assert.equal(manager.canWindow, true);
+  screen = false; assert.equal(manager.canWindow, true);
 });
