@@ -2,6 +2,7 @@ import { RTCPeerConnection } from 'node-datachannel/polyfill';
 import { constants, createDeflateRaw } from 'node:zlib';
 import { nativeDirectConfig } from './direct-config.js';
 import { encodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
+import { CHUNK_AT, CHUNK_TYPE, chunkText } from '../../protocol/frame-chunks.js';
 
 /**
  * Direct connections to clients.
@@ -22,8 +23,8 @@ import { encodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../../prot
  * frame that still fails to send drops the link, and the app falls back to
  * the hub.
  */
-export const DC_CHUNK_AT = 16_000;
-export const DC_CHUNK_TYPE = 'dc-chunk';
+export const DC_CHUNK_AT = CHUNK_AT;
+export const DC_CHUNK_TYPE = CHUNK_TYPE;
 /** Says that a piece of the reply to request `rid` follows (compressed links). */
 export const DC_PROGRESS_TYPE = 'dc-progress';
 
@@ -34,16 +35,7 @@ export const DC_PROGRESS_TYPE = 'dc-progress';
  */
 export function fragment(frame, gid, rid) {
   if (Buffer.isBuffer(frame)) return fragmentTunnelFrame(frame);
-  if (frame.length <= DC_CHUNK_AT) return [frame];
-  const n = Math.ceil(frame.length / DC_CHUNK_AT);
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    out.push(JSON.stringify({
-      t: DC_CHUNK_TYPE, gid, i, n, ...(rid != null ? { rid } : {}),
-      data: frame.slice(i * DC_CHUNK_AT, (i + 1) * DC_CHUNK_AT),
-    }));
-  }
-  return out;
+  return chunkText(frame, gid, rid);
 }
 
 /** Best-effort send of one (possibly fragmented) frame; never throws. */

@@ -106,6 +106,15 @@ const UPDATE_AFTER_START_MS = 20_000;
 const SYNC_EVERY_MS = 2 * 60_000;
 
 /**
+ * The hubs a live event goes to. A hub with no browser or hub watching this
+ * machine drops live events; sending them still cost this machine's upload,
+ * ahead of every reply. Hubs keep digests for the brain whoever watches.
+ */
+export function eventLinks(links, kind) {
+  return links.filter((link) => link.watched !== false || kind === E.DIGEST);
+}
+
+/**
  * One connection to one hub.
  *
  * A machine keeps one of these open to every hub it can currently reach,
@@ -144,6 +153,9 @@ export class Link {
     this.url = url;
     this.id = url;
     this.connected = false;
+    // False only after this hub said nobody there watches this machine
+    // (T.WATCHED). An older hub never says, and keeps every event.
+    this.watched = true;
     this.rtt = null;
     this.recoveryTimeout = recoveryTimeout;
     // Set when this address came from a machine announcing itself on the
@@ -319,7 +331,7 @@ export class Link {
       `${this.url.replace(/^http/, 'ws')}/ws` +
       `?name=${encodeURIComponent(this.daemon.name)}` +
       `&info=${encodeURIComponent(JSON.stringify(info))}` +
-      '&binaryTunnel=1' +
+      '&binaryTunnel=1&watched=1' +
       (isSelf ? '&role=self' : ''),
       { headers: { authorization: `Bearer ${credential}` }, handshakeTimeout: 15_000 }
     );
@@ -330,6 +342,7 @@ export class Link {
       if (!current()) { ws.terminate(); return; }
       this.#backoff = RECONNECT_MIN;
       this.connected = true;
+      this.watched = true;
       this.#heartbeat();
       this.daemon.onLinkUp(this);
     });
@@ -1259,7 +1272,8 @@ export class Daemon {
    */
   #emit(kind, payload, to) {
     const eid = `${this.#boot}:${++this.#emitted}`;
-    this.broadcastFrame(T.EVENT, { kind, payload, eid, ...(to ? { to } : {}) });
+    const frame = { kind, payload, eid, ...(to ? { to } : {}) };
+    for (const link of eventLinks(this.live, kind)) link.send(T.EVENT, frame);
     this.peers?.broadcast(kind, payload, eid, to);
   }
 
@@ -1346,6 +1360,10 @@ export class Daemon {
     if (this.mesh?.receive(link, msg)) return;
     switch (msg.t) {
       case T.WELCOME:
+        return;
+
+      case T.WATCHED:
+        link.watched = msg.on !== false;
         return;
 
       case T.RPC: {
