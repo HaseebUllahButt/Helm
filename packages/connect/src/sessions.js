@@ -1855,7 +1855,9 @@ export class Sessions extends EventEmitter {
     if (s.nativeChat && s.engine === 'claude') return this.#natives.nativeMode(s, mode);
     if (!s.driver) throw new Error('not a headless session');
     const d = this.#drivers.get(id);
-    if (d) await d.setMode(mode);
+    // A driver that says not applied (an ACP refusal, or no answer) keeps
+    // the value it last reported; a later report may still change it.
+    if (d && (await d.setMode(mode))?.applied === false) return { ok: false, session: s };
     s.mode = mode;
     this.#save();
     this.emit('session', s);
@@ -1874,7 +1876,7 @@ export class Sessions extends EventEmitter {
     if (!s.driver) throw new Error('not a headless session');
     const value = effort === 'auto' ? null : effort || null;
     const d = this.#drivers.get(id);
-    if (d) await d.setEffort(value);
+    if (d && (await d.setEffort(value))?.applied === false) return { ok: false, session: s };
     s.effort = d && ['pi', 'omp'].includes(s.engine) ? d.effort : value;
     if (d && s.engine === 'claude') s.engineEffort = value;
     this.#save();
@@ -1937,6 +1939,7 @@ export class Sessions extends EventEmitter {
     if (d) {
       const r = await d.setModel(value, { ask });
       if (r?.ask) return { ok: false, ask: r.ask, session: s };
+      if (r?.applied === false) return { ok: false, session: s };
     }
     s.model = d && ['pi', 'omp'].includes(s.engine) ? d.model : value;
     this.#save();

@@ -390,10 +390,11 @@ export class AcpDriver extends Driver {
         : `${this.spec.label ?? this.engine} does not offer "${value}" here - it stays on ${current ?? 'its default'}. (${error.message})`,
       kind: 'settings',
     });
-    if (configId === 'model' && current !== this.model) {
+    // No reported value is no news: the caller keeps the last one it had.
+    if (configId === 'model' && current != null && current !== this.model) {
       this.model = current;
       this.push('settings', { model: current });
-    } else if (configId === this.spec.effortId && current !== this.effort) {
+    } else if (configId === this.spec.effortId && current != null && current !== this.effort) {
       this.effort = current;
       this.push('settings', { effort: current });
     } else if (configId === 'mode') {
@@ -537,6 +538,7 @@ export class AcpDriver extends Driver {
     const normalized = this.spec.normalizeModel?.(requested, this.catalog()) ?? null;
     const model = normalized?.model ?? requested;
     const resolvedEffort = normalized?.effort ?? null;
+    const before = this.model;
     this.model = requested || null;
     const cached = this.#options.find((o) => o.id === 'model');
     const cachedValue = cached?.currentValue;
@@ -544,7 +546,8 @@ export class AcpDriver extends Driver {
     const r = await this.#setOption('model', model);
     if (r.error) {
       this.#refused('model', requested, r.error);
-      return;
+      if (this.model === (requested || null)) this.model = before;
+      return false;
     }
     const changed = this.#optionsChanged(r.result);
     const responseOption = this.#configOptions(r.result).find((o) => o.id === 'model');
@@ -566,9 +569,11 @@ export class AcpDriver extends Driver {
       this.push('settings', { model: actual });
     }
     if (resolvedEffort) await this.#applyEffort(resolvedEffort, true);
+    return true;
   }
 
   async #applyEffort(effort, forceSettings = false) {
+    const before = this.effort;
     this.effort = effort || null;
     const cached = this.#options.find((o) => o.id === this.spec.effortId);
     const cachedValue = cached?.currentValue;
@@ -576,7 +581,8 @@ export class AcpDriver extends Driver {
     const r = await this.#setOption(this.spec.effortId, effort);
     if (r.error) {
       this.#refused(this.spec.effortId, effort, r.error);
-      return;
+      if (this.effort === (effort || null)) this.effort = before;
+      return false;
     }
     const changed = this.#optionsChanged(r.result);
     const responseOption = this.#configOptions(r.result).find((o) => o.id === this.spec.effortId);
@@ -592,6 +598,7 @@ export class AcpDriver extends Driver {
     if ((forceSettings || effort !== actual) && (!this.#live || !changed.some((o) => o.id === this.spec.effortId))) {
       this.push('settings', { effort: actual });
     }
+    return true;
   }
 
   /**
@@ -1004,22 +1011,30 @@ export class AcpDriver extends Driver {
     if (this.status === 'blocked' && !this.pending.size) this.push('status', { status: 'working' });
   }
 
+  // `{ applied: false }`: the agent refused the change or did not answer.
+  // Sessions then keep the last reported value instead of the request.
   async setModel(model) {
-    await this.#applyModel(model);
+    return await this.#applyModel(model) === false ? { applied: false } : {};
   }
 
   async setMode(id) {
+    const before = this.mode;
     this.mode = id;
     const mode = this.spec.acpMode(id);
     if (this.#pipe && this.engineSessionId && mode) {
       const r = await this.#setOption('mode', mode);
-      if (r.error) this.#refused('mode', mode, r.error);
-      else this.#takeOptions(r.result);
+      if (r.error) {
+        this.#refused('mode', mode, r.error);
+        if (this.mode === id) this.mode = before;
+        return { applied: false };
+      }
+      this.#takeOptions(r.result);
     }
+    return {};
   }
 
   async setEffort(effort) {
-    await this.#applyEffort(effort);
+    return await this.#applyEffort(effort) === false ? { applied: false } : {};
   }
 
   async kill() {
