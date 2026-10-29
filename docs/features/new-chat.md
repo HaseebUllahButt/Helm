@@ -26,7 +26,13 @@
 - **First message:** open the chat as soon as it exists. Do not wait for
   the first message receipt. Keep an uncertain send under its saved message
   number. Only a clear refusal returns the text to the box.
-- **Tests:** `test/startingChats`; `test/browser/new-chat`, `chat-home`, `onboarding`;
+- **Start recovery:** save the caller's start number before setup. Retry and
+  reload reuse that number. Save queued words and their message number before
+  clearing the box. Restore them only for the same signed-in device.
+  A crash after chat creation recovers the reserved chat. A crash during
+  folder, clone, or terminal setup can leave no saved chat. Keep the queued
+  words and stop with a recovery error; do not repeat uncertain setup.
+- **Tests:** `test/start-receipts`, `test/startingChats`; `test/browser/new-chat`, `chat-home`, `onboarding`;
   `test/quick-chat`, `picker-prefs`, `onboarding`.
 
 ## First chat setup

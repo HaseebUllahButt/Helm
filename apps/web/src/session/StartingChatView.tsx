@@ -21,6 +21,8 @@ import { useAccountLimits } from './useAccountLimits';
 export function StartingChatView({ client, env, startId, onBack }: {
   client: Client; env: Environment; startId: string; onBack: () => void;
 }) {
+  const [saveError, setSaveError] = useState('');
+  const safely = (run: () => void) => { try { run(); setSaveError(''); } catch { setSaveError('Cannot save this chat. Keep your text and try again.'); } };
   const [, redraw] = useState(0);
   const chat = startingChat(startId);
   const [draft, setDraftRaw] = useState(() => chat?.draft ?? '');
@@ -55,7 +57,7 @@ export function StartingChatView({ client, env, startId, onBack }: {
 
   const failed = chat.state === 'failed';
   const waited = Math.floor((now - chat.since) / 1000);
-  const setDraft = (text: string) => { setDraftRaw(text); draftChat(startId, text); };
+  const setDraft = (text: string) => { setDraftRaw(text); safely(() => draftChat(startId, text)); };
 
   return (
     <>
@@ -90,12 +92,13 @@ export function StartingChatView({ client, env, startId, onBack }: {
         <EmptyChat cwd={chat.folder ?? undefined} quick={!chat.folder} machine={env.name} agent={chat.agent}
           note={!failed && <span className="starting-line" role="status"> · <Icon name="think" size={12} />starting…</span>} />
       )}
-      <Transcript turns={turns} status="idle" loaded empty="" onWithdraw={failed || !message || chat.session ? undefined : () => unsendChat(startId)} />
+      <Transcript turns={turns} status="idle" loaded empty="" onWithdraw={failed || !message || chat.session ? undefined : () => safely(() => unsendChat(startId))} />
       {message && !failed && <p className="starting-note" role="status"><Icon name="think" size={12} />Sends as soon as {chat.agent} is ready.</p>}
+      {saveError && <p role="alert" className="error">{saveError}</p>}
       <Composer
         draft={draft} setDraft={setDraft} engine={chat.engine} keys={false}
         canAttach={false} statusLine={<LimitsLine windows={limits} account={chat.profileId} />}
-        onSend={() => { if (draft.trim()) sendWhenReady(startId, draft); }}
+        onSend={() => { if (draft.trim()) safely(() => sendWhenReady(startId, draft)); }}
       />
     </>
   );

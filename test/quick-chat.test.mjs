@@ -135,3 +135,23 @@ test('a quick chat that fails to start leaves no folder behind', async () => {
   assert.equal(readdirSync(QUICK_DIR).length, before);
   await sessions.stop();
 });
+
+test('a reserved chat is saved before its driver starts', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  let entering, release;
+  const entered = new Promise(resolve => { entering = resolve; });
+  const proceed = new Promise(resolve => { release = resolve; });
+  const sessions = new Sessions(new StubRuntime(), {
+    makeDriver: (engine, opts) => Object.assign(new FakeDriver({engine, ...opts}), {
+      start: async () => { entering(); await proceed; },
+    }),
+  });
+  const starting = sessions.start({quick:true, profileId:'claudea',reservedSessionId:'abcdef123456'});
+  await entered;
+  // A second index reader models restart before the driver handshake finishes.
+  const restored = new Sessions(new StubRuntime());
+  assert.equal(restored.get('abcdef123456').id,'abcdef123456');
+  release();
+  assert.equal((await starting).id,'abcdef123456');
+  await restored.stop(); await sessions.stop();
+});

@@ -1,7 +1,7 @@
 import { errorMessage } from './errors';
 import type { Client, Session } from './client';
-import { retryableDelivery } from '@helm/protocol/reliable-input';
-import { loadDraft, saveDraft } from './draftStore';
+import { newMessageId, retryableDelivery } from '@helm/protocol/reliable-input';
+import { loadDraft } from './draftStore';
 
 /**
  * New chats whose agent is still starting.
@@ -9,12 +9,12 @@ import { loadDraft, saveDraft } from './draftStore';
  * A CLI takes a second or more to come up - several for some agents, more
  * over a slow link - and the picker used to sit there until it had. Now the
  * chat opens at once and says it is starting; what you type meanwhile waits
- * here and goes in the moment the agent is ready, even if you have looked
- * away by then. Kept outside React (and outside browser history, which can
- * only hold plain data) so leaving the screen does not lose the start.
+ * here and goes in when the agent is ready. Saved before sending so a
+ * reload can recover the same start and message numbers.
  */
 
 export interface StartInfo {
+  startParams?: Record<string, unknown>;
   envId: string;
   title: string;
   /** Where it runs, as the picker showed it; null for a quick chat. */
@@ -29,10 +29,12 @@ export interface StartInfo {
 
 export interface StartingChat extends StartInfo {
   id: string;
+  owner?: string;
   state: 'starting' | 'failed' | 'started';
   error?: string;
   session?: Session;
   /** What was sent before the agent was ready; goes in once it is. */
+  messageId?: string;
   message: string;
   /** Typed but not sent; becomes the chat's draft. */
   draft: string;
@@ -42,7 +44,46 @@ export interface StartingChat extends StartInfo {
 const chats = new Map<string, StartingChat>();
 const runs = new Map<string, () => Promise<Session>>();
 const listeners = new Set<(chat: StartingChat) => void>();
-let seq = 0;
+const storageKey = 'helm.startingChat.v1:';
+function persist(chat: StartingChat) {
+  try { localStorage.setItem(storageKey + chat.id, JSON.stringify(chat)); }
+  catch { throw new Error('Cannot save this chat. Keep your text and try again.'); }
+}
+function removeSaved(id: string) { localStorage.removeItem(storageKey + id); }
+// Read before React restores a history entry that names a starting chat.
+let restoreError = '';
+try {
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith(storageKey)) continue;
+    const chat = JSON.parse(localStorage.getItem(key) ?? 'null') as StartingChat;
+    if (chat?.id && chat.envId && chat.startParams) chats.set(chat.id, chat);
+    else throw new Error('Invalid saved start');
+  }
+} catch { restoreError = 'Cannot read saved chats. Check browser storage and reload.'; }
+export const startingChatsError = () => restoreError;
+function owner(client: Client) {
+  if (!client.token) return 'local';
+  try {
+    const claims = JSON.parse(atob(client.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return claims.net && claims.sub ? JSON.stringify([claims.net, claims.sub]) : undefined;
+  } catch { return undefined; }
+}
+const active = new Set<string>();
+export function restoreStartingChats(client: Client, online: string[]) {
+  const restored: StartingChat[] = [];
+  const identity = owner(client);
+  if (!identity) { restoreError = 'Cannot check this device. Sign in again.'; return restored; }
+  for (const chat of chats.values()) {
+    if (chat.owner !== identity || !chat.startParams || !online.includes(chat.envId) || active.has(chat.id)) continue;
+    if (runs.has(chat.id)) continue;
+    runs.set(chat.id, () => client.rpc<{ session: Session }>(chat.envId, 'session.start',
+      { ...chat.startParams, startId: chat.id }, 120_000).then(r => r.session));
+    restored.push(chat);
+    attempt(client, chat);
+  }
+  return restored;
+}
 
 /**
  * Chats that came up with nothing sent in them. One is known to be empty,
@@ -71,9 +112,14 @@ export function onStartingChat(listener: (chat: StartingChat) => void) {
 
 /** Start a chat in the background and return its placeholder at once. */
 export function beginChat(client: Client, info: StartInfo, run: () => Promise<Session>, draft = ''): StartingChat {
-  const chat: StartingChat = { ...info, id: `start-${Date.now().toString(36)}-${++seq}`, state: 'starting', message: '', draft, since: Date.now() };
+  const identity = owner(client);
+  if (!identity) throw new Error('Cannot check this device. Sign in again.');
+  const chat: StartingChat = { ...info, owner: identity, id: newMessageId(), state: 'starting', message: '', draft, since: Date.now() };
+  persist(chat);
   chats.set(chat.id, chat);
-  runs.set(chat.id, run);
+  runs.set(chat.id, info.startParams
+    ? () => client.rpc<{ session: Session }>(info.envId, 'session.start', { ...info.startParams, startId: chat.id }, 120_000).then(r => r.session)
+    : run);
   origins.set(chat.id, { info, run });
   attempt(client, chat);
   return chat;
@@ -86,6 +132,8 @@ export function startAgain(client: Client, key: string, draft = ''): StartingCha
 }
 
 function attempt(client: Client, chat: StartingChat) {
+  if (active.has(chat.id)) return;
+  active.add(chat.id);
   chat.state = 'starting'; chat.error = undefined; chat.since = Date.now();
   notify(chat);
   runs.get(chat.id)!().then(
@@ -93,25 +141,43 @@ function attempt(client: Client, chat: StartingChat) {
       chat.session = session;
       const origin = origins.get(chat.id);
       if (origin) origins.set(session.id, origin);
-      // Start the send as the chat opens, without waiting for agent startup or
-      // its receipt. The live chat can confirm it from its saved message ID.
-      if (chat.message) void Promise.resolve().then(() => client.input(chat.envId, { id: session.id, data: chat.message }))
-        .catch((error) => {
+      // Save the target before delivery. Reloads repeat this exact delivery ID.
+      persist(chat);
+      const deliver = async () => {
+        if (!chat.message) { removeSaved(chat.id); return; }
+        try {
+          await Promise.resolve().then(() => client.input(chat.envId, { id: session.id, data: chat.message }, 120_000, chat.messageId));
+          removeSaved(chat.id);
+        } catch (error) {
           if (retryableDelivery(error)) return;
+          // The saved failure card already owns these words.
+          const failure = error as { deliveryRetained?: boolean; deliveryPersisted?: boolean };
+          if (failure?.deliveryRetained === true) {
+            if (failure.deliveryPersisted === true) removeSaved(chat.id);
+            return;
+          }
           chat.draft = [chat.message, loadDraft(chat.envId, session.id)].filter(Boolean).join('\n\n');
-          saveDraft(chat.envId, session.id, chat.draft);
+          localStorage.setItem(`helm-draft:${chat.envId}:${session.id}`, chat.draft);
+          // Keep the start copy if saving the live draft failed.
+          removeSaved(chat.id);
           window.dispatchEvent(new CustomEvent('helm:restore-draft', {
             detail: { env: chat.envId, id: session.id, text: chat.message },
           }));
-        });
+        }
+      };
+      if (chat.draft) localStorage.setItem(`helm-draft:${chat.envId}:${session.id}`, chat.draft);
+      void deliver().catch(() => { /* The saved start still holds the text. */ });
+      active.delete(chat.id);
       chat.state = 'started';
       if (!chat.message) cameUpEmpty.add(session.id);
-      if (chat.draft) saveDraft(chat.envId, session.id, chat.draft);
       runs.delete(chat.id);
       notify(chat);
     },
-    (e) => { chat.state = 'failed'; chat.error = errorMessage(e); notify(chat); },
-  );
+  ).catch((e) => {
+    active.delete(chat.id); chat.state = 'failed'; chat.error = errorMessage(e);
+    try { persist(chat); } catch { /* Keep the last saved copy. */ }
+    notify(chat);
+  });
 }
 
 export function retryChat(client: Client, id: string) {
@@ -123,8 +189,9 @@ export function retryChat(client: Client, id: string) {
 export function sendWhenReady(id: string, text: string) {
   const chat = chats.get(id);
   if (!chat || !text.trim()) return;
-  chat.message = chat.message ? `${chat.message}\n\n${text}` : text;
-  chat.draft = '';
+  const next = { ...chat, message: chat.message ? `${chat.message}\n\n${text}` : text, messageId: chat.messageId ?? newMessageId(), draft: '' };
+  persist(next);
+  Object.assign(chat, next);
   notify(chat);
 }
 
@@ -132,14 +199,15 @@ export function sendWhenReady(id: string, text: string) {
 export function unsendChat(id: string) {
   const chat = chats.get(id);
   if (!chat || chat.session || !chat.message) return;
-  chat.draft = chat.draft ? `${chat.message}\n\n${chat.draft}` : chat.message;
-  chat.message = '';
+  const next = { ...chat, draft: chat.draft ? `${chat.message}\n\n${chat.draft}` : chat.message, message: '', messageId: undefined };
+  persist(next);
+  Object.assign(chat, next);
   notify(chat);
 }
 
 export function draftChat(id: string, text: string) {
   const chat = chats.get(id);
-  if (chat && chat.state !== 'started') chat.draft = text;
+  if (chat && chat.state !== 'started') { persist({ ...chat, draft: text }); chat.draft = text; }
 }
 
 /** Done with a placeholder: its chat has opened, or it was given up on. */
