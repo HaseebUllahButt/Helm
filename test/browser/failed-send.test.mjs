@@ -63,7 +63,7 @@ test('a failed send after the owner typed on is kept on a card, retried as sent,
   await retry.evaluate(button => { button.click(); button.click(); });
   await p.waitForFunction(() => window.sends.length === 2);
   assert.deepEqual(await p.evaluate(() => window.sends[1]),
-    { id: 'failed-send-test', data: 'first message', references: [] });
+    { id: 'failed-send-test', data: 'first message', references: [], attachments: [] });
   await p.evaluate(() => window.answers[1].reject(new Error('still nothing')));
   await p.locator('.failed-send', { hasText: 'Still nothing' }).waitFor();
   assert.equal(await p.evaluate(() => window.sends.length), 2);

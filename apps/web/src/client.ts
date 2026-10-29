@@ -1554,17 +1554,69 @@ export class Client {
   }
 
   private deliveryKey() { return 'helm.pending-actions.' + this.token; }
-  pendingActions(): any[] {
+  private savedActions(): any[] {
     const prefix = this.deliveryKey() + '.';
     const saved = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key?.startsWith(prefix)) continue;
       const action = JSON.parse(localStorage.getItem(key) || 'null');
-      if (!action?.actionId || !action?.params) throw new Error('Cannot read saved deliveries. Check the chat before sending again.');
+      if (!/^[a-f0-9]{32}$/.test(action?.actionId ?? '') || typeof action.env !== 'string'
+        || !['session.deliver', 'session.answer-deliver'].includes(action.method) || typeof action.params?.id !== 'string'
+        || (action.method === 'session.deliver' && typeof action.params.data !== 'string')
+        || (action.params.attachments !== undefined && (!Array.isArray(action.params.attachments)
+          || action.params.attachments.some((file: any) => typeof file?.filename !== 'string'
+            || typeof file?.mime !== 'string' || typeof file?.data !== 'string')))) {
+        throw new Error('Cannot read saved deliveries. Check the chat before sending again.');
+      }
       saved.push(action);
     }
     return saved;
+  }
+  private confirmedActions = new Set<string>();
+  private failedDeliveryActions = new Map<string, any>();
+  deliveryStorageError = '';
+  pendingActions(): any[] {
+    return this.savedActions().filter(action => !action.failure && !this.confirmedActions.has(action.actionId)
+      && !this.failedDeliveryActions.has(action.actionId));
+  }
+  failedActions(): any[] {
+    const failed = new Map(this.savedActions().filter(action => action.failure && !this.confirmedActions.has(action.actionId)).map(action => [action.actionId, action]));
+    for (const [id, action] of this.failedDeliveryActions) failed.set(id, action);
+    return [...failed.values()];
+  }
+  dismissFailedAction(actionId: string) {
+    const action = this.failedActions().find(item => item.actionId === actionId);
+    if (action) {
+      this.saveAction(action, true);
+      this.failedDeliveryActions.delete(actionId);
+      this.emit(action.env, 'delivery', { id: action.params.id });
+    }
+  }
+  private finishAction(action: any) {
+    this.failedDeliveryActions.delete(action.actionId);
+    this.confirmedActions.add(action.actionId);
+    try {
+      this.saveAction(action, true);
+      this.confirmedActions.delete(action.actionId);
+    } catch {
+      this.deliveryStorageError = 'Cannot clear saved deliveries. Check this chat before sending again.';
+      this.emit(action.env, 'delivery', { id: action.params.id });
+    }
+  }
+  private failAction(action: any, error: any) {
+    // Keep the complete message until the owner can read and dismiss its failure.
+    const failed = { ...action, failure: { message: String(error.message ?? error), code: error.code } };
+    this.failedDeliveryActions.set(action.actionId, failed);
+    try {
+      this.saveAction(failed);
+      this.failedDeliveryActions.delete(action.actionId);
+      return true;
+    } catch {
+      this.deliveryStorageError = 'Cannot save the failed message. Keep this chat open to keep its words.';
+      this.emit(action.env, 'delivery', { id: action.params.id });
+      return false;
+    }
   }
   private saveAction(action: any, remove = false) {
     // Separate records keep simultaneous tabs from replacing each other's work.
@@ -1584,13 +1636,14 @@ export class Client {
     try { action = JSON.parse(localStorage.getItem(this.deliveryKey() + '.' + actionId) || 'null'); } catch { return; }
     if (!action || action.env !== env || action.params?.id !== id || action.actionId !== actionId
       || action.method !== 'session.deliver' || action.legacy) return;
-    this.saveAction(action, true);
     this.deliveryProof.get(actionId)?.();
+    this.finishAction(action);
   }
   private deliverAction(action: any, timeout = 120_000): Promise<any> {
     const active = this.delivering.get(action.actionId);
     if (active) return active;
-    this.saveAction(action);
+    // A resumed action is already saved. A full store must not block its receipt check.
+    if (!action.started) this.saveAction(action);
     const stop = new AbortController();
     const proof = new Promise(resolve => this.deliveryProof.set(action.actionId, () => {
       stop.abort(); resolve({ ok: true, confirmed: 'log' });
@@ -1604,10 +1657,12 @@ export class Client {
   }
   private async checkAction(action: any, timeout: number, signal: AbortSignal): Promise<any> {
     const { env, method, params, actionId } = action;
+    if (action.failure) throw Object.assign(new Error(action.failure.message), { code: action.failure.code, deliveryRejected: true });
     if (action.legacy) throw Object.assign(new Error('Checking delivery. Check the terminal before sending again.'), { code: 'delivery_pending' });
     let firstAttempt = !action.started;
     if (firstAttempt) { action.started = true; this.saveAction(action); }
     const deadline = Date.now() + timeout;
+    let finalFailure = false;
     while (!this.closed && !signal.aborted && Date.now() < deadline) {
       try {
         const wait = Math.max(1, Math.min(10_000, deadline - Date.now()));
@@ -1616,8 +1671,12 @@ export class Client {
         if (signal.aborted) return;
         firstAttempt = false;
         if (status.state === 'done') {
-          this.saveAction(action, true);
-          if (status.error) throw Object.assign(new Error(status.error.message), { code: status.error.code });
+          if (status.error) {
+            finalFailure = true;
+            throw Object.assign(new Error(typeof status.error === 'string' ? status.error : status.error.message),
+              { code: status.error.code ?? 'delivery_failed' });
+          }
+          this.finishAction(action);
           return status.result;
         }
         if (status.state === 'missing') {
@@ -1642,7 +1701,12 @@ export class Client {
             throw error.errors?.find((item: any) => item.code) ?? error.errors?.[0] ?? error;
           } finally { clearTimeout(timer); backup.abort(); }
           if (method === 'session.deliver' || result.state === 'done') {
-            this.saveAction(action, true);
+            if (method !== 'session.deliver' && result.error) {
+              finalFailure = true;
+              throw Object.assign(new Error(typeof result.error === 'string' ? result.error : result.error.message),
+                { code: result.error.code ?? 'delivery_failed' });
+            }
+            this.finishAction(action);
             return method === 'session.deliver' ? result : result.result;
           }
         }
@@ -1657,7 +1721,14 @@ export class Client {
           this.saveAction(action, true);
           return result;
         }
-        if (!retryableDelivery(error) && error?.code) throw error;
+        // Other coded failures can follow acceptance, such as a full receiver disk.
+        // Read the receipt before treating those failures as final.
+        if (finalFailure || ['invalid_argument', 'delivery_conflict', 'unknown_method'].includes(error?.code)) {
+          error.deliveryRejected = true;
+          error.deliveryPersisted = this.failAction(action, error);
+          error.deliveryRetained = true;
+          throw error;
+        }
       }
       if (signal.aborted) return;
       this.emit(env, 'delivery', { id: params.id });

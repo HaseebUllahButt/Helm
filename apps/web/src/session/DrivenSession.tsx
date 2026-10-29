@@ -54,7 +54,7 @@ const ENGINE_LABEL: Record<string, string> = {
 type Attachment = { name: string; mime: string; data: string; url: string };
 /** Words whose send failed after the composer had moved on, kept until sent or dismissed. */
 type FailedSend = { id: string; messageId: string; body: string; references: string[]; attachments: Attachment[]; error: string; retrying?: boolean; restoredRevision?: number };
-const rejectedDelivery = (error: { code?: string }) => !!error.code && !retryableDelivery(error);
+const rejectedDelivery = (error: { code?: string; deliveryRejected?: boolean }) => error.deliveryRejected || (!!error.code && !retryableDelivery(error));
 
 /**
  * A headless agent session: the transcript built from helm's own events,
@@ -435,7 +435,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         && references.length === failed.references.length
         && references.every((item, i) => item.id === failed.references[i]);
       await client.input(env.id, { id: session.id, data: failed.body, references: failed.references,
-        ...(failed.attachments.length ? { attachments: failed.attachments.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) } : {}) }, 120_000, failed.messageId);
+        attachments: failed.attachments.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 120_000, failed.messageId);
       if (restoredDraft && editRevision.current === revision) { setDraft(''); setReferences([]); }
       if (failed.attachments.length) await setAttachments(current => current.filter(image => !failed.attachments.includes(image)));
       for (const [fingerprint, messageId] of retryDeliveryIds.current) {

@@ -17,11 +17,16 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   again. The chat shows "Checking delivery" while a result is unknown.
   A saved chat message with the same message number also confirms delivery.
   This proof ends the check without sending again. Live replies stay visible
-  while a history read waits.
+  while a history read waits. A final failed receipt keeps the full request
+  until the owner dismisses its visible failure. It cannot replay as pending.
+  Receipt checks must work when browser storage is full. Storage cleanup must
+  never block a live message. Initial receiver disk errors stay unknown until
+  a receipt proves their result. `deliveryRetained` tells first-message recovery
+  that the saved failure already holds its words.
   Approvals interrupted during delivery stay unknown after a restart. Never
   replay them: the agent can already have acted.
 - **Tests:** `test/action-delivery`, `input-delivery`, `http-read`;
-  `test/browser/client-actions`, `client-reconnect`.
+  `test/browser/client-actions`, `client-reconnect`, `delivery-recovery`.
 - **Rule:** app errors use `apps/web/src/errors.ts`. Keep clear, short messages.
   Put technical text behind Details on failed tasks. Log each distinct error once.
   Retry an unconfirmed send with its original
