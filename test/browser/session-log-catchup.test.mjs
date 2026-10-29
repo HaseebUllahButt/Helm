@@ -29,7 +29,7 @@ const reply = (seq, n) => [
   { seq: seq + 3, type: 'turn.done', turnId: `t${seq}`, status: 'ok', at: seq + 3 },
 ];
 
-async function chat(t) {
+async function chat(t, { page: pageSize = Infinity } = {}) {
   const context = await browser.newContext();
   t.after(() => context.close());
   const page = await context.newPage();
@@ -45,7 +45,9 @@ async function chat(t) {
     const shape = events => ({ events, last, pending: [], session: { status: 'idle' }, logFirst: 1 });
     if (params.tail) { const events = log.slice(-params.tail); return { ...shape(events), firstSeq: events[0].seq }; }
     const after = log.filter(event => event.seq > params.since);
-    return { ...shape(after.slice(0, params.limit)), hasMore: after.length > params.limit, firstSeq: after[0]?.seq ?? 0 };
+    // pageSize stands in for the machine's byte budget per page.
+    const size = Math.min(params.limit, pageSize);
+    return { ...shape(after.slice(0, size)), hasMore: after.length > size, firstSeq: after[0]?.seq ?? 0 };
   });
   await page.addScriptTag({ content: script });
   const texts = () => page.evaluate(() => window.state.log.turns.map(turn => turn.items.map(item => item.text).join('')));
@@ -69,8 +71,23 @@ test('a focus after new replies asks only for the events after the last one show
   assert.deepEqual(await texts(), ['Answer 1', 'Answer 2']);
 });
 
-test('a gap wider than one page, or a reset log, opens at the end again', async t => {
-  const { page, log, calls, settle } = await chat(t);
+test('a gap of several pages is read page by page and keeps the chat behind it', async t => {
+  const { page, log, calls, texts, settle } = await chat(t, { page: 50 });
+  for (let n = 0; n < 60; n++) log.push(...reply(5 + n * 4, n + 2));
+  const seen = calls.length;
+  await page.evaluate(() => dispatchEvent(new Event('focus')));
+  await page.waitForFunction(last => window.state.log.last === last, log.at(-1).seq);
+  await settle();
+  const reads = calls.slice(seen);
+  assert.ok(reads.every(call => !call.tail), JSON.stringify(reads));
+  assert.ok(reads.filter(call => call.since).length >= 5, 'it read each page');
+  const shown = await texts();
+  assert.equal(shown.length, 61);
+  assert.equal(shown[0], 'Answer 1', 'the first reply is still there');
+});
+
+test('a very long gap, or a reset log, opens at the end again', async t => {
+  const { page, log, calls, settle } = await chat(t, { page: 10 });
   for (let n = 0; n < 60; n++) log.push(...reply(5 + n * 4, n + 2));
   let seen = calls.length;
   await page.evaluate(() => dispatchEvent(new Event('focus')));

@@ -857,8 +857,22 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
 });
 
 /** Where the reader left each chat, by `place`: the first thing on screen
- * and how far below the top it sat. No entry means at the latest message. */
-const places = new Map<string, { anchors: string[]; offset: number[] }>();
+ * and how far below the top it sat. No entry means at the latest message.
+ * A reload for a new build keeps it too: Helm reloads by itself while the
+ * owner reads, and the chat must open where they were reading. */
+const PLACES = 'helm-chat-places';
+const places = new Map<string, { anchors: string[]; offset: number[] }>(readPlaces());
+
+function readPlaces(): [string, { anchors: string[]; offset: number[] }][] {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(PLACES) || '[]');
+    return Array.isArray(saved) ? saved : [];
+  } catch { return []; }
+}
+
+function savePlaces() {
+  try { sessionStorage.setItem(PLACES, JSON.stringify([...places])); } catch { /* storage may be unavailable */ }
+}
 
 function placeOf(el: HTMLElement) {
   const top = el.getBoundingClientRect().top;
@@ -869,7 +883,10 @@ function placeOf(el: HTMLElement) {
     for (const node of el.querySelectorAll<HTMLElement>(`[${attr}]`)) {
       const box = node.getBoundingClientRect();
       if (!box.height || box.bottom <= top) continue;
-      anchors.push(`[${attr}="${CSS.escape(node.getAttribute(attr)!)}"]`);
+      const sel = `[${attr}="${CSS.escape(node.getAttribute(attr)!)}"]`;
+      // A message and its reply share a turn id; only the first is found again.
+      if (el.querySelector(sel) !== node) continue;
+      anchors.push(sel);
       offset.push(box.top - top);
       break;
     }
@@ -913,12 +930,15 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
   useLayoutEffect(() => {
     const el = box.current;
     if (!el || !place) return;
-    return () => {
+    const keep = () => {
       // Left before it got back to the old place: that place still stands.
       if (cameBack.current) places.set(place, cameBack.current);
       else if (stuck.current) places.delete(place);
       else places.set(place, placeOf(el));
     };
+    const unload = () => { keep(); savePlaces(); };
+    window.addEventListener('pagehide', unload);
+    return () => { window.removeEventListener('pagehide', unload); keep(); };
   }, [place]);
   // Away from the bottom: the "Latest" pill shows. `unread` only says there is something new down there.
   const [away, setAway] = useState(false);
@@ -966,7 +986,9 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
       const b = node.getBoundingClientRect();
       if (!b.height || b.top < top - 1) continue;
       const attr = node.hasAttribute('data-item-id') ? 'data-item-id' : 'data-turn-id';
-      hold.current = { sel: `[${attr}="${CSS.escape(node.getAttribute(attr)!)}"]`, top: b.top - top };
+      const sel = `[${attr}="${CSS.escape(node.getAttribute(attr)!)}"]`;
+      if (el.querySelector(sel) !== node) continue;
+      hold.current = { sel, top: b.top - top };
       return;
     }
   };
