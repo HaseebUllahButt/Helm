@@ -506,6 +506,8 @@ interface Peer {
   channel: RTCDataChannel;
   ready: boolean;
   negotiation: string;
+  /** Last successful request on this exact channel. */
+  answeredAt?: number;
   remoteReady: boolean;
   candidates: RTCIceCandidateInit[];
   fragments: Map<string, { n: number; parts: string[]; got: number }>;
@@ -1595,13 +1597,25 @@ export class Client {
           return status.result;
         }
         if (status.state === 'missing') {
-          let result;
+          // Both routes use the receiver's saved action ID. Give the web
+          // backup a head start after 1.5 s without expiring the live call.
+          // A backup failure must not discard a slower successful live reply.
+          const backup = new AbortController();
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          let result: any;
           try {
-            result = await this.call(env, method, params, Math.min(1500, wait));
-          } catch {
-            // Both methods bind this ID to the saved content at the receiver.
-            result = await this.readHttp<any>(env, method, params, wait, undefined, '/api/action');
-          }
+            result = await Promise.any([
+              this.call(env, method, params, wait),
+              new Promise((resolve, reject) => {
+                const delay = Math.min(1500, wait / 2);
+                timer = setTimeout(() => {
+                  this.readHttp(env, method, params, wait - delay, backup.signal, '/api/action').then(resolve, reject);
+                }, delay);
+              }),
+            ]);
+          } catch (error: any) {
+            throw error.errors?.find((item: any) => item.code) ?? error.errors?.[0] ?? error;
+          } finally { clearTimeout(timer); backup.abort(); }
           if (method === 'session.deliver' || result.state === 'done') {
             this.saveAction(action, true);
             return method === 'session.deliver' ? result : result.result;
@@ -1681,9 +1695,9 @@ export class Client {
     if (method === 'session.watch') void this.openDirect(env).catch(() => {});
     if (this.closed) return Promise.reject(new Error('client closed'));
     const peer = this.peers.get(env);
-    // Tiny persistent settings writes should use the acknowledged hub route
-    // when available. An apparently open peer can stop answering after a
-    // phone changes networks, leaving a default save waiting until timeout.
+    // Use a recently proven direct link for settings too. An open channel
+    // alone is insufficient after a network change. Never replay a write.
+    const directAnswered = peer?.answeredAt !== undefined && Date.now() - peer.answeredAt < 10_000;
     const settingsWrite = ['profile.defaults', 'model.prefs', 'picker.prefs',
       'session.model', 'session.effort', 'session.mode', 'session.speed'].includes(method);
     // Image uploads can fill the data channel's send buffer while its
@@ -1694,7 +1708,7 @@ export class Client {
       && params.attachments?.some((image: { data?: string }) => (image.data?.length ?? 0) > DC_CHUNK_AT))
       || (method === 'voice.transcribe' && (params.audio?.length ?? 0) > DC_CHUNK_AT);
     const direct = peer?.ready && peer.channel.readyState === 'open'
-      && !((settingsWrite || imageUpload) && this.connected);
+      && !(((settingsWrite && !directAnswered) || imageUpload) && this.connected);
     if (!direct && !this.connected) {
       return HTTP_READ_METHODS.has(method)
         ? this.readHttp<T>(env, method, params, timeout)
@@ -1781,10 +1795,9 @@ export class Client {
             if (pending.sentAt) pending.sentAt.relay = Date.now();
             try {
               this.ws!.send(frame);
-              if (this.pending.has(id)) {
-                const httpAfter = Math.min(hedgeAfter, (timeout - hedgeAfter) / 2);
-                fallback = setTimeout(() => httpFallback(hedgeAfter + httpAfter), httpAfter);
-              }
+              // The direct path already used its grace period. Do not wait
+              // through the same delay again before trying other hubs.
+              httpFallback(Date.now() - started);
               return;
             } catch { pending.routes?.delete('relay'); }
           }
@@ -1796,7 +1809,9 @@ export class Client {
       deadline = setTimeout(() => {
         clear();
         if (this.pending.delete(id)) reject(new Error(`${method} timed out`));
-        if (sent && peer) this.dropDirect(env, peer);
+        // Durable delivery can finish on its other route. Its short attempt
+        // budget is not evidence that the channel itself has stopped.
+        if (sent && peer && !['session.deliver', 'session.answer'].includes(method)) this.dropDirect(env, peer);
       }, timeout);
     });
   }
@@ -1857,6 +1872,7 @@ export class Client {
     const pending = this.pending.get(msg.id);
     if (!pending) return;
     pending.routes?.delete(route);
+    if (msg.ok && route === 'direct' && pending.direct) pending.direct.answeredAt = Date.now();
     if (!msg.ok && route === 'relay' && msg.error?.code === 'offline' && pending.recover) {
       pending.recover();
       this.refreshReachability();
@@ -1929,6 +1945,7 @@ export class Client {
 
   /** The network moved under us: everything we know about routes is stale. */
   private retryDirectNow() {
+    for (const peer of this.peers.values()) peer.answeredAt = undefined;
     for (const env of this.wantDirect) {
       const timer = this.directRetry.get(env);
       if (timer) clearTimeout(timer);
