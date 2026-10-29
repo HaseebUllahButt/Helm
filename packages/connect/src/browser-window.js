@@ -11,7 +11,9 @@ import { browserArgs, ignoredBrowserArgs } from './browser-identity.js';
 
 const SCREEN_KEYS = ['WAYLAND_DISPLAY', 'DISPLAY', 'XAUTHORITY'];
 const pickScreen = env => Object.fromEntries(SCREEN_KEYS.filter(key => env[key]).map(key => [key, env[key]]));
-let noDesktopUntil = 0;
+let noDesktopUntil = 0, desktopLookup = false;
+/** Only the Helm service asks the desktop: tests hide the screen to keep browsers hidden. */
+export const useDesktopScreen = () => { desktopLookup = true; };
 /**
  * The desktop's display as systemd knows it. Helm's service can start at boot,
  * before the desktop exists, so its own settings have no display; the desktop
@@ -29,7 +31,7 @@ function desktopScreen(env = process.env) {
   return {};
 }
 /** The display settings a window needs, found again each time until there is a screen. */
-export function screenEnv(env = process.env, platform = process.platform, desktop = env === process.env ? desktopScreen : () => ({})) {
+export function screenEnv(env = process.env, platform = process.platform, desktop = env === process.env && desktopLookup ? desktopScreen : () => ({})) {
   if (platform !== 'linux') return {};
   const own = pickScreen(env);
   return own.WAYLAND_DISPLAY || own.DISPLAY ? own : desktop(env);

@@ -21,6 +21,8 @@ The owner uses the same browser window. Helm has no browser panel.
   before the desktop. Each time it needs a window it looks again: its own
   display settings, then the desktop's settings in systemd, then a Wayland
   socket. Once it sees a screen, agent browsers are windows from then on.
+  Only the service looks past its own settings (`useDesktopScreen`): tests
+  remove the display settings to keep their browsers hidden.
 - **A real window, no picture in Helm.** On a machine with a screen each
   chat's browser is a real Chromium window with its own profile folder (a
   new chat starts with the default profile's logins). The agent drives it

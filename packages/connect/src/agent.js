@@ -76,6 +76,7 @@ import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { useDesktopScreen } from './browser-window.js';
 import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
 import { ActionDelivery } from './action-delivery.js';
@@ -424,6 +425,8 @@ export class Daemon {
       log: (line) => console.error(`[helm] ${line}`),
     });
     this.executions = new ExecutionJobs();
+    // Helm's service can start before the desktop; its browser windows find the screen later.
+    useDesktopScreen();
     this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id), appProcessRoots: id => this.sessions.appProcessRoots(id) } });
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),
