@@ -23,9 +23,12 @@ The owner uses the same browser window. Helm has no browser panel.
   socket. Once it sees a screen, agent browsers are windows from then on.
   Only the service looks past its own settings (`useDesktopScreen`): tests
   remove the display settings to keep their browsers hidden.
-- **A real window, no picture in Helm.** On a machine with a screen each
-  chat's browser is a real Chromium window with its own profile folder (a
-  new chat starts with the default profile's logins). The agent drives it
+- **One window, a tab per page.** On a machine with a screen every chat's
+  tabs share one real browser window with one profile folder (a new window
+  starts with the default profile's logins). Helm registers the tabs it
+  opens; a popup goes to the chat whose page opened it; a tab the owner
+  opens stays theirs. Logins are shared by all chats.
+- **No picture in Helm.** The agent drives it
   from inside Chromium, never through the desktop, so it never takes the
   owner's keyboard or mouse. Helm does not show or stream the page. A machine without a screen (the VM) uses a hidden Chromium,
   which is never started where windows can show.
@@ -37,10 +40,11 @@ The owner uses the same browser window. Helm has no browser panel.
   scrolls, the agent's next step waits until they are still for 2.5 s (at
   most 20 s). Closing the window keeps its tabs as asleep; listing tabs
   never opens it.
-- **It cleans up after itself.** A window nobody used for 30 minutes
-  closes, unless the owner is looking at it; its tabs sleep and come back
-  with the next step. Deleting a chat closes its window and removes its
-  folder. Windows start with `--disable-component-update`, so a chat's
+- **It cleans up after itself.** A chat's tabs that nobody used for 10
+  minutes close, unless the owner is looking at one; they sleep and come
+  back with the next step. The window closes when no chat has a tab there
+  and the owner has none of their own. Deleting a chat closes its tabs and
+  removes its folder; tidying removes the per-chat windows of before. Windows start with `--disable-component-update`, so a chat's
   profile does not fetch ~150 MB of speech, DRM (Widevine) and model files;
   DRM video does not play there. Some time after Helm starts, closed
   windows lose component downloads and graphics files. Folders of chats gone
@@ -67,7 +71,7 @@ The owner uses the same browser window. Helm has no browser panel.
 
 ## Traps
 
-- On niri the window needs this rule (app id `helm-browser-<chat>`):
+- On niri the window needs this rule (app id `helm-browser`):
 
   ```kdl
   window-rule {

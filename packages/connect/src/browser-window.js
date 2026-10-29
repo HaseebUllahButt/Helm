@@ -188,6 +188,9 @@ async function startWindow(chromium, executable, profileDir, args, env = process
 /** A tab Helm opens with no address shows Chromium's New Tab page, not about:blank. */
 export const NEW_TAB = 'chrome://newtab/';
 
+/** Every chat's tabs share one window, with one profile folder. */
+export const sharedProfile = (directory) => join(directory, 'window');
+/** Where a chat kept its own window before the window was shared. */
 export const windowProfile = (directory, sessionId) => join(directory, sessionId, 'window');
 /** Each chat's window has its own app id for desktop window rules. */
 export const windowName = (sessionId) => `helm-browser-${String(sessionId).replace(/[^\w-]/g, '').slice(0, 40)}`;

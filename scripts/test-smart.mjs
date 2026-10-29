@@ -302,7 +302,7 @@ async function main() {
     console.log('  Name the tests to run (docs/features lists tests per feature), or add --near or --wide.');
   }
 
-  // Browser tests need Playwright's Chromium; fall back to the system one when it is missing.
+  // Browser tests need Playwright's Chromium; fall back to any Chromium-based browser Helm would use.
   const env = { ...process.env };
   // Started from inside a node --test run, the runner would report to that
   // parent and skip our reporters.
@@ -310,7 +310,8 @@ async function main() {
   if (browser && !env.HELM_TEST_CHROMIUM) {
     const { chromium } = await import('@playwright/test').catch(() => ({}));
     const own = chromium?.executablePath?.();
-    const system = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].find(isFile);
+    const { systemChromium } = await import('../packages/connect/src/browser-window.js');
+    const system = systemChromium();
     if ((!own || !isFile(own)) && system) env.HELM_TEST_CHROMIUM = system;
   }
 
