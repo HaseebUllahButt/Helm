@@ -2107,7 +2107,7 @@ export class Daemon {
       case M.SESSION_CANVAS: return this.sessions.openCanvas(p.id, p);
       case M.SESSION_CANVAS_CLOSED: return this.sessions.closeCanvas(p.id, p.requestId);
       case M.SESSION_RENDER: return this.sessions.renderVisual(p.id, p);
-      case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref);
+      case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref, p.page);
       case M.SESSION_EVENTS:
         await this.sessions.prepareHistory(p.id);
         return this.sessions.history(p.id, {

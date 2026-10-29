@@ -42,7 +42,14 @@
 - **Rules:** Notes and docs come from the chat's own folder, Git or not, as
   agents name files from there (`git.files` walks a folder outside Git,
   skips node_modules and hidden folders, and lets any Git project inside
-  list its own files). Only a quick chat borrows the Git project it edited. Its
+  list its own files). Only a quick chat borrows the Git project it edited.
+  `helm canvas|render <file.pdf>` turns each page into a JPEG (1600 px wide)
+  with poppler's `pdftoppm` on the machine that runs the command, and saves
+  each page as its own attachment, plus a page list as the visual's copy.
+  Limits: 100 pages, 2 MiB a page, 24 MiB in all. Canvas shows the pages
+  one under the other, read-only, and loads only those near the view
+  (`session.visual` with `page`). No PDF reader is needed on the viewing
+  device. Without poppler-utils the command says what to install. Its
   first screen also lists the chat's pictures and pages, so Back from a
   page never ends on an error. Saves go through
   `git.write` with the hash the file was read at: a file the agent changed
