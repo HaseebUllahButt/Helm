@@ -2092,7 +2092,7 @@ export class Daemon {
         const first = attach && session.pty
           ? await this.sessions.attach(session.id, { cols: attach.cols, rows: attach.rows, watcher: attach.watcher }).catch(() => null)
           : null;
-        return first ? { session, attach: { text: first.text, pty: true } } : { session };
+        return first ? { session, attach: { text: first.text, position: first.position, pty: true } } : { session };
       }
       case M.SESSION_LINK:    return this.sessions.linkChild(p.id, p.child);
       // Attaching starts a push stream of the screen (E.SESSION_DATA); the

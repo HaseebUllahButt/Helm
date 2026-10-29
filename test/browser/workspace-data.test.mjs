@@ -133,3 +133,40 @@ test('a direct link gap reloads only that machine chat list', async t => {
   await page.waitForFunction(() => window.reads.length === 1);
   assert.deepEqual(await page.evaluate(() => window.reads), ['one']);
 });
+
+
+test('an older pushed update cannot overwrite a newer list snapshot', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.readEnvs = async () => ({ environments: [{ id: 'machine', name: 'Laptop', online: true, info: {} }] });
+    window.readRpc = (_env, method) => method === 'session.list'
+      ? new Promise(resolve => { window.releaseList = resolve; }) : Promise.resolve({});
+    window.mount();
+  });
+  await page.waitForFunction(() => !!window.releaseList);
+  await page.evaluate(() => {
+    window.emit('machine', 'session.update', { session: { id: 'chat', status: 'working', updatedAt: 2, lastSeq: 2 } });
+    window.releaseList({ sessions: [{ id: 'chat', status: 'idle', updatedAt: 3, lastSeq: 3 }] });
+  });
+  await page.waitForFunction(() => window.data.liveListsSeen.current.has('machine'));
+  assert.equal(await page.evaluate(() => window.data.sessions.machine[0].status), 'idle');
+  assert.equal(await page.evaluate(() => window.data.sessions.machine[0].lastSeq), 3);
+});
+
+test('a slow machine snapshot cannot undo a newer presence event', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.seed({ id: 'chat' });
+    window.readEnvs = () => new Promise(resolve => { window.releaseEnvs = resolve; });
+    window.readRpc = async () => ({ sessions: [] });
+    window.mount();
+  });
+  await page.waitForFunction(() => !!window.releaseEnvs);
+  await page.evaluate(() => {
+    window.emit('machine', 'presence', { env: 'machine', online: false, name: 'Renamed' });
+    window.releaseEnvs({ environments: [{ id: 'machine', name: 'Old name', online: true, info: {} }] });
+  });
+  await page.waitForFunction(() => window.data.liveEnvsSeen.current);
+  assert.equal(await page.evaluate(() => window.data.envs[0].online), false);
+  assert.equal(await page.evaluate(() => window.data.envs[0].name), 'Renamed');
+});

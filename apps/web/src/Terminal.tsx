@@ -173,19 +173,55 @@ export function Terminal({ client, env, sessionId }: {
      * scrollback every time and we would redraw it, which is a flicker once
      * every renewal for no reason.
      */
+    type Piece = { text: string; reset?: boolean; position?: number };
+    let position: number | undefined;
+    let attaching = false, attachAgain = false, outputVersion = 0;
+    let buffered: Piece[] = [];
+    const drawPiece = (piece: Piece) => {
+      if (piece.position !== undefined) {
+        if (position !== undefined) {
+          if (piece.position <= position) return;
+          const from = piece.position - piece.text.length;
+          if (from > position) { attachAgain = true; if (!attaching) void attach(); return; }
+          show(piece.text.slice(Math.max(0, position - from)), !!piece.reset);
+        } else show(piece.text, !!piece.reset);
+        position = piece.position;
+      } else show(piece.text, !!piece.reset);
+    };
     const attach = async (renew = false) => {
+      if (attaching) { if (!renew) attachAgain = true; return; }
+      attaching = true;
+      const version = outputVersion, startPosition = position;
+      buffered = [];
       try {
-        const r = await client.rpc<{ text: string | null; pty?: boolean }>(env, 'session.attach', {
+        const r = await client.rpc<{ text: string | null; pty?: boolean; position?: number }>(env, 'session.attach', {
           id: sessionId, lines: 400, ansi: true, cols: xterm.cols, rows: xterm.rows, renew, watcher,
         });
         if (stopped) return;
         isPty = !!r.pty;
         if (r.text == null) return;
-        // A pty's reply is the whole scrollback, so it always replaces what we
-        // have: anything else would draw the bytes twice after a reconnect.
+        if (r.position === undefined && version !== outputVersion) {
+          // An older host gives no boundary. Read again instead of guessing
+          // which live bytes its screen already contains.
+          attachAgain = true;
+          return;
+        }
+        if (r.position !== undefined && startPosition !== undefined && r.position < startPosition) return;
         if (isPty || r.text !== seen) show(r.text, true);
+        position = r.position;
+        if (position !== undefined) {
+          for (const piece of buffered.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))) {
+            if (piece.position === undefined) { attachAgain = true; continue; }
+            drawPiece(piece);
+          }
+        }
       } catch { /* offline; the reconnect handler tries again */ }
+      finally {
+        attaching = false; buffered = [];
+        if (attachAgain && !stopped) { attachAgain = false; void attach(); }
+      }
     };
+    const catchUp = () => { if (!document.hidden) void attach(); };
 
     xterm.textarea?.addEventListener('focus', () => setTyping(true));
     // A tap on a key can blur for a moment before it takes the focus back.
@@ -216,7 +252,10 @@ export function Terminal({ client, env, sessionId }: {
 
     const off = client.on((e, kind, payload) => {
       if (e === env && kind === 'session.data' && payload?.id === sessionId) {
-        show(payload.text ?? '', !!payload.reset);
+        const piece = { text: payload.text ?? '', reset: !!payload.reset, position: payload.position };
+        outputVersion++;
+        if (attaching) buffered.push(piece);
+        drawPiece(piece);
       }
       // Back after a drop: ask for everything, since pushes were missed.
       if ((kind === 'connection' && payload?.online)
@@ -246,8 +285,9 @@ export function Terminal({ client, env, sessionId }: {
 
     if (first) {
       isPty = true;
-      show(first.text, true);
-      for (const piece of first.later) show(piece.text, piece.reset);
+      show(first.text, true); position = first.position;
+      if (first.later.some(piece => first.position === undefined || piece.position === undefined)) void attach();
+      else for (const piece of first.later) drawPiece(piece);
       // It was opened at a guess of our size; now the real one is known.
       if (xterm.cols !== first.cols || xterm.rows !== first.rows) {
         client.rpc(env, 'session.resize', { id: sessionId, cols: xterm.cols, rows: xterm.rows }, 10_000).catch(() => {});
@@ -255,7 +295,10 @@ export function Terminal({ client, env, sessionId }: {
     } else attach();
     // The renew keeps a watching viewer registered, so output stops being
     // pushed to a phone that has gone away.
-    const renew = setInterval(() => attach(true), 25_000);
+    const renew = setInterval(() => { if (!document.hidden) void attach(true); }, 25_000);
+    document.addEventListener('visibilitychange', catchUp);
+    window.addEventListener('focus', catchUp);
+    window.addEventListener('pageshow', catchUp);
     // On a computer the terminal is what you came for: type straight away.
     if (window.matchMedia?.('(pointer: fine)').matches) xterm.focus();
 
@@ -263,6 +306,9 @@ export function Terminal({ client, env, sessionId }: {
       stopped = true;
       term.current = null;
       clearInterval(renew);
+      document.removeEventListener('visibilitychange', catchUp);
+      window.removeEventListener('focus', catchUp);
+      window.removeEventListener('pageshow', catchUp);
       clearTimeout(frame);
       if (noteTimer.current) clearTimeout(noteTimer.current);
       stopRepeat();
