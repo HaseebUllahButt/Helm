@@ -46,9 +46,10 @@ test('a screen is needed for a window: a display on Linux, always on a Mac or Wi
 
 test('any installed Chromium-based browser is used, plain Chromium first', { skip: process.platform === 'win32' }, t => {
   const folder = mkdtempSync(join(tmpdir(), 'helm-browsers-')); t.after(() => rmSync(folder, { recursive: true, force: true }));
-  const env = { PATH: folder };
-  writeFileSync(join(folder, 'brave'), ''); assert.equal(browserPaths(env, 'linux').find(existsSync), join(folder, 'brave'));
-  writeFileSync(join(folder, 'chromium'), ''); assert.equal(browserPaths(env, 'linux').find(existsSync), join(folder, 'chromium'));
+  // Only the test folder counts, so a browser installed on this machine does not change the answer.
+  const first = () => browserPaths({ PATH: folder }, 'linux').find(path => path.startsWith(folder) && existsSync(path));
+  writeFileSync(join(folder, 'brave'), ''); assert.equal(first(), join(folder, 'brave'));
+  writeFileSync(join(folder, 'chromium'), ''); assert.equal(first(), join(folder, 'chromium'));
   // A service's short PATH still finds browsers in the usual folders.
   assert.ok(browserPaths({ PATH: '' }, 'linux').includes('/usr/bin/brave'));
   assert.equal(browserPaths({}, 'darwin')[2], '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser');
