@@ -839,10 +839,15 @@ export class Sessions extends EventEmitter {
 
   /** A new chat is on disk before anyone is told it exists. */
   async start(options) {
+    let setupStarted = false;
     try {
-      const session = await this.#start(options);
+      const session = await this.#start({ ...options, onStartSetup: () => { setupStarted = true; } });
       if (options.reservedSessionId) this.#saveStart(session.id);
       return session;
+    } catch (error) {
+      // Only failures before chat setup can safely repeat under this number.
+      error.startRetrySafe = !setupStarted;
+      throw error;
     } finally { this.flush(); }
   }
 
@@ -853,7 +858,7 @@ export class Sessions extends EventEmitter {
     if (!saved.sessions?.some(s => s.id === id)) throw new Error('Cannot save this chat. Check free disk space.');
   }
 
-  async #start({ reservedSessionId, cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null, size = null, helperWorktree = null }) {
+  async #start({ reservedSessionId, onStartSetup, cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null, size = null, helperWorktree = null }) {
     if (originAutomationId != null) {
       if (!/^[A-Za-z0-9._:-]{1,120}$/.test(originAutomationId)) throw new Error('invalid automation identity');
       const existing = this.findAutomationSession(originAutomationId);
@@ -909,6 +914,7 @@ export class Sessions extends EventEmitter {
       if (quick || brain || delegation) throw new Error('only a new chat in a folder can clone a repo');
       if (!this.cloner) throw new Error('this machine cannot clone from GitHub');
       const login = typeof clone.login === 'string' ? clone.login : null;
+      onStartSetup();
       const job = await this.cloner.begin({ repo: clone.repo, target: cwd, login: login ?? undefined });
       if (job.state !== 'done') {
         if (!ENGINES[profile.engine]?.driver) {
@@ -920,6 +926,7 @@ export class Sessions extends EventEmitter {
     // A repo whose helm.json asks for it gives every new chat its own
     // worktree (session-worktrees.js); made once the chat has its id.
     const own = await this.#worktrees.plan({ cwd, quick, brain, clone, delegation });
+    onStartSetup();
     if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning, own, reservedSessionId, chatWorktree: helperWorktree });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 

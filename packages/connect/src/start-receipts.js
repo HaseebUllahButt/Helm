@@ -24,15 +24,15 @@ export class StartReceipts {
     if (held && held.digest !== digest) throw fail('This start number belongs to another chat.', 'start_conflict');
     if (this.active.has(key)) return this.active.get(key);
     if (held) {
-      if (held.error) throw fail(held.error.message, held.error.code);
+      if (held.error && held.retrySafe !== true) throw fail(held.error.message, held.error.code);
       // A saved result also prevents a deleted chat from being created again.
       if (held.result) return held.result;
       let session;
       try { session = this.sessions.get(held.id); } catch { /* no saved chat */ }
       if (session) { write({ ...held, result: session }); return session; }
-      throw fail('Helm stopped during chat setup. Check the folder before starting another chat.', 'start_uncertain');
+      if (!held.error || held.retrySafe !== true) throw fail('Helm stopped during chat setup. Check the folder before starting another chat.', 'start_uncertain');
     }
-    const record = { digest, id: randomBytes(6).toString('hex') };
+    const record = { digest, id: held?.id ?? randomBytes(6).toString('hex') };
     write(record);
     const running = Promise.resolve().then(async () => {
       let session;
@@ -40,7 +40,7 @@ export class StartReceipts {
         session = await this.sessions.start({ ...request, reservedSessionId: record.id });
       } catch (error) {
         // Keep the reservation even when recording a failure fails.
-        write({ ...record, error: { message: error.message, code: error.code ?? 'start_failed' } });
+        write({ ...record, retrySafe: error.startRetrySafe === true, error: { message: error.message, code: error.code ?? 'start_failed' } });
         throw error;
       }
       write({ ...record, result: session });

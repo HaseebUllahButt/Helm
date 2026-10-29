@@ -136,3 +136,25 @@ test('a failure kept only in memory retains the queued start copy for reload', a
   assert.equal(saved.message,'keep saved words');
   assert.equal(saved.messageId,chat.messageId);
 });
+
+test('retry after a safe start refusal keeps queued words and both numbers', async () => {
+  const h=fixture(); let fixed=false, created, sent;
+  const refused=new Promise(resolve=>{created=resolve;});
+  const delivered=new Promise(resolve=>{sent=resolve;});
+  let firstId;
+  const client={rpc:async(_,method,params)=>{
+    firstId ??= params.startId;
+    assert.equal(params.startId,firstId);
+    if(!fixed) { created(); throw new Error('Account is not ready.'); }
+    return {session:{id:'created'}};
+  },input:async(_,params,timeout,messageId)=>{sent({params,messageId});}};
+  const chat=h.beginChat(client,{envId:'pc',startParams:{quick:true}},()=>{});
+  h.sendWhenReady(chat.id,'keep through refusal');
+  await refused; for(let i=0;i<4;i++) await Promise.resolve();
+  assert.equal(chat.state,'failed');
+  const number=chat.messageId;
+  fixed=true; h.retryChat(client,chat.id);
+  const result=await delivered;
+  assert.equal(result.params.data,'keep through refusal');
+  assert.equal(result.messageId,number);
+});

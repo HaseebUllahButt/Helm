@@ -55,3 +55,27 @@ test('a damaged receipt blocks retry; old callers still work without IDs', async
   await assert.rejects(f.make().start(params,'owner'),SyntaxError);
   assert.equal((await f.make().start({quick:true})).id,'legacy');
 });
+
+test('a safe refusal retries the same reserved chat after its cause is fixed', async t => {
+  const f=fixture(t), create=f.sessions.start; let fixed=false, attempts=0;
+  f.sessions.start=async p => {
+    attempts++;
+    if (!fixed) throw Object.assign(new Error('Choose an available account.'),{startRetrySafe:true});
+    return create(p);
+  };
+  await assert.rejects(f.make().start(params,'owner'),/available account/);
+  fixed=true;
+  const session=await f.make().start(params,'owner');
+  assert.equal((await f.make().start(params,'owner')).id,session.id);
+  assert.equal(attempts,2);
+  assert.equal(f.count(),1);
+});
+
+test('a partial setup failure stays blocked even after its cause is fixed', async t => {
+  const f=fixture(t); let attempts=0;
+  f.sessions.start=async () => { attempts++; throw new Error('Setup stopped after creating a folder.'); };
+  await assert.rejects(f.make().start(params,'owner'),/creating a folder/);
+  f.sessions.start=async () => { attempts++; return {id:'duplicate'}; };
+  await assert.rejects(f.make().start(params,'owner'),/creating a folder/);
+  assert.equal(attempts,1);
+});
