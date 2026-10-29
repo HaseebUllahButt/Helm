@@ -302,6 +302,8 @@ const DETAILS = {
   With --session, paths start from the selected chat's folder.
   Canvas shows file changes and lets the owner edit and save files.
   HTML pages and pictures show a saved copy, like helm render.
+  A PDF (up to 16 MiB) shows a saved copy in the browser's PDF reader.
+  The owner can read a PDF but cannot change it.
   Run the command again after edits to show the new copy.
   Use an http/https Spin URL to show a live website.
   Use the public Spin address.

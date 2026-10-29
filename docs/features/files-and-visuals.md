@@ -42,7 +42,12 @@
 - **Rules:** Notes and docs come from the chat's own folder, Git or not, as
   agents name files from there (`git.files` walks a folder outside Git,
   skips node_modules and hidden folders, and lets any Git project inside
-  list its own files). Only a quick chat borrows the Git project it edited. Its
+  list its own files). Only a quick chat borrows the Git project it edited.
+  `helm canvas <file.pdf>` saves the PDF (up to 16 MiB, the bytes as they
+  are) and shows it read-only in the browser's own reader from a `blob:`
+  address (the app's CSP allows `frame-src blob:`). Where
+  `navigator.pdfViewerEnabled` is false (Android), Canvas shows an Open PDF
+  link instead of a frame. Its
   first screen also lists the chat's pictures and pages, so Back from a
   page never ends on an error. Saves go through
   `git.write` with the hash the file was read at: a file the agent changed

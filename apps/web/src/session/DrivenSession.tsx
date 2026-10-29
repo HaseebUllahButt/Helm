@@ -105,7 +105,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [cameUpEmpty] = useState(() => startedEmpty(session.id));
   useEffect(() => { if (log.loaded) loadedChat(session.id); }, [log.loaded, session.id]);
   const loaded = log.loaded || cameUpEmpty;
-  const readVisual = useCallback((ref: string) => client.rpc<{ html: string }>(env.id, 'session.visual', { id: session.id, ref }, 60_000), [client, env.id, session.id]);
+  const readVisual = useCallback((ref: string) => client.rpc<{ html?: string; pdf?: string }>(env.id, 'session.visual', { id: session.id, ref }, 60_000), [client, env.id, session.id]);
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
   // Typing must not redraw the conversation, so the words live outside this

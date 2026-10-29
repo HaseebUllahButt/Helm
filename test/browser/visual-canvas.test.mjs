@@ -37,7 +37,7 @@ before(async () => {
     ];
     window.reads=[];
     const client={pendingActions:()=>[],resumeActions:async()=>[],on:()=>()=>{},subscribe:()=>{},rpc:async(_env,method,params)=>{
-      if(method==='session.visual'){window.reads.push(params);return {html:pages[params.ref]};}
+      if(method==='session.visual'){window.reads.push(params);return params.ref==='doc'?{pdf:btoa('%PDF-1.4\\n%%EOF\\n')}:{html:pages[params.ref]};}
       if(method==='session.events')return {session:window.chats[params.id],events:params.since||params.id!=='a'?[]:events,pending:[],last:params.id==='a'?6:0};
       if(method==='session.watch')return {last:0};
       if(method==='model.list')return {models:[],modes:[]};
@@ -164,6 +164,30 @@ test('the agent opens the canvas once per request, a closed canvas stays closed,
   await canvas(page).getByRole('heading', { name: 'Plan' }).waitFor();
   await page.evaluate(() => window.show('a', {}));
   await page.frameLocator('.canvas iframe.visual-frame').getByText('Inline chart').waitFor();
+});
+
+test('a PDF opens read-only in the browser reader, or as a link where the browser has none', async t => {
+  const pdf = { requestId: 'p1', visual: { ref: 'doc', title: 'Before and Now', height: 420, bytes: 2048, kind: 'pdf', placement: 'canvas' } };
+  for (const reader of [true, false]) {
+    const page = await open(t, 1280);
+    await page.evaluate(on => Object.defineProperty(Navigator.prototype, 'pdfViewerEnabled', { get: () => on, configurable: true }), reader);
+    await request(page, 'a', pdf);
+    await canvas(page).getByText('Before and Now').waitFor();
+    if (reader) {
+      const frame = canvas(page).locator('iframe.canvas-pdf');
+      await frame.waitFor();
+      assert.match(await frame.getAttribute('src'), /^blob:http:\/\/helm\.test\/.+#toolbar=0/, 'the reader hides its draw and download buttons');
+      assert.equal(await frame.getAttribute('sandbox'), null, 'a sandboxed frame cannot run the PDF reader');
+      await canvas(page).getByRole('link', { name: 'Open in new tab' }).waitFor();
+    } else {
+      const link = canvas(page).getByRole('link', { name: 'Open PDF' });
+      await link.waitFor();
+      assert.equal(await link.getAttribute('download'), 'Before and Now.pdf');
+      assert.equal(await canvas(page).locator('iframe').count(), 0);
+    }
+    assert.equal(await canvas(page).getByRole('button', { name: /^(Save|Edit)$/ }).count(), 0, 'a PDF has no edit or save controls');
+    assert.match(SECURITY_HEADERS['content-security-policy'], /frame-src [^;]*blob:/);
+  }
 });
 
 test('the owner collapses a page to one line, the device remembers it, and Show brings it back', async t => {

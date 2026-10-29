@@ -10,7 +10,7 @@ process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-visual-test-'));
 process.env.HELM_NO_SERVICE = '1';
 for (const [key, name] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(process.env.HELM_DIR, name);
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-const { prepareVisual, validateVisual, MAX_VISUAL_BYTES, withVisualMessages } = await import('../packages/connect/src/visual.js');
+const { prepareVisual, preparePdf, validateVisual, MAX_VISUAL_BYTES, MAX_PDF_BYTES, withVisualMessages } = await import('../packages/connect/src/visual.js');
 const { runVisualCommand } = await import('../packages/connect/src/visual-cli.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { EventLog, activeTurnFromEvents } = await import('../packages/connect/src/events.js');
@@ -152,6 +152,36 @@ test('native visuals sit between the messages surrounding publication, not at th
   const events = [{ type: 'item.start', kind: 'visual', at: Date.parse('2026-10-12T12:00:01Z'), visual: { title: 'V' }, id: 'v' }];
   assert.deepEqual(withVisualMessages(messages, events).map(m => m.visual?.title ?? m.role), ['user', 'V', 'assistant']);
   assert.equal(messages.length, 2);
+});
+
+test('a PDF opens in canvas as its own bytes, read-only; other files named .pdf are refused', async t => {
+  const pdf = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
+  writeFileSync(file('doc.pdf'), pdf);
+  writeFileSync(file('fake.pdf'), 'PRIVATE_TOKEN=do-not-send');
+  writeFileSync(file('huge.pdf'), Buffer.concat([pdf, Buffer.alloc(MAX_PDF_BYTES)]));
+  let call;
+  const options = { print: () => {}, self: () => 'local', rpc: async (...args) => { call = args; return { visual: { ref: 'ok' } }; }, findSession: async () => ({}), env: { HELM_SESSION_ID: 'native1' } };
+  await runVisualCommand('canvas', [file('doc.pdf'), '--title', 'Before and Now'], options);
+  assert.equal(call[1], 'session.render', 'a PDF is a saved copy, not a project file');
+  assert.equal(call[2].pdf, pdf.toString('base64'));
+  assert.equal(call[2].html, undefined);
+  assert.equal(call[2].placement, 'canvas');
+  await assert.rejects(runVisualCommand('canvas', [file('fake.pdf')], options), /not a PDF/);
+  await assert.rejects(preparePdf(file('huge.pdf')), /16 MiB/);
+  const pdfParams = { renderId: params(9).renderId, pdf: pdf.toString('base64'), title: 'Before and Now', placement: 'canvas' };
+  assert.throws(() => validateVisual({ ...pdfParams, pdf: Buffer.from('<h1>no</h1>').toString('base64') }), /PDF file/);
+  assert.throws(() => validateVisual({ ...pdfParams, html: '<h1>both</h1>' }), /PDF file/);
+
+  writeFileSync(file('sessions.json'), JSON.stringify({ version: 1, sessions: [{ id: 'pdf1', engine: 'claude', nativeCli: true, status: 'idle', cwd: '/tmp', title: 'PDF' }] }));
+  const sessions = new Sessions(new EventEmitter(), { makeDriver: () => { throw new Error('must not start a provider'); } });
+  t.after(() => sessions.stop());
+  const { visual } = sessions.renderVisual('pdf1', pdfParams);
+  assert.equal(visual.kind, 'pdf');
+  assert.equal(visual.bytes, pdf.length);
+  assert.equal(sessions.get('pdf1').canvas.visual.ref, visual.ref);
+  assert.deepEqual(sessions.readVisual('pdf1', visual.ref), { pdf: pdf.toString('base64') });
+  assert.deepEqual(sessions.renderVisual('pdf1', pdfParams), { visual }, 'a retry keeps one copy');
+  assert.throws(() => sessions.renderVisual('pdf1', { ...params(9), placement: 'canvas' }), /different visual/);
 });
 
 test('live canvas accepts only web URLs without credentials and keeps saved HTML separate', () => {

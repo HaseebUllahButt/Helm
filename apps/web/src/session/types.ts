@@ -13,7 +13,7 @@ export type ItemKind = 'text' | 'thinking' | 'tool' | 'command' | 'edit' | 'suba
  * A saved page. `placement: 'canvas'` asks for it beside the chat; `url`
  * makes it a live page whose saved snapshot is only a link to it.
  */
-export interface Visual { ref: string; title: string; height: number; bytes: number; placement?: 'canvas'; url?: string }
+export interface Visual { ref: string; title: string; height: number; bytes: number; placement?: 'canvas'; url?: string; kind?: 'pdf' }
 export type ItemStatus = 'streaming' | 'ok' | 'error' | 'declined';
 
 export interface Change { path: string; kind: string; diff: string }

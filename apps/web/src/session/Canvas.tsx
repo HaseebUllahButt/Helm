@@ -6,7 +6,7 @@ import { Markdown } from '../Markdown';
 import { ago } from '../screens/common';
 import { FileView } from './CodeView';
 import { SideDock, readLocal, writeLocal } from './SideDock';
-import { liveUrl, saveVisual, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
+import { liveUrl, pdfInline, pdfName, saveVisual, usePdfUrl, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
 import type { Visual } from './types';
 
 // The page editor is large; it loads the first time a note is edited.
@@ -194,6 +194,7 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
  * Helm; sites that refuse to be framed still open in a new tab.
  */
 function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: VisualReader; onBack: () => void; onClose: () => void }) {
+  if (visual.kind === 'pdf') return <CanvasPdf visual={visual} read={read} onBack={onBack} onClose={onClose} />;
   const live = visual.url !== undefined, url = liveUrl(visual);
   // Live apps need their own storage and module origin, never Helm's origin.
   const separateOrigin = url && new URL(url).origin !== location.origin;
@@ -211,6 +212,29 @@ function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: 
       : html ? <VisualFrame html={html} title={visual.title} expanded onEscape={onClose} />
       : <div className={`git-state${error ? ' bad' : ''}`} role={error ? 'alert' : 'status'}>
         {error ? <>{error} <button className="files-chip" onClick={retry}>Retry</button></> : 'Loading visual…'}
+      </div>}
+  </div>;
+}
+
+/**
+ * A PDF in the browser's own reader. It is read-only: the canvas offers no
+ * edit or save. A phone that cannot show a PDF in a page opens it on its own.
+ */
+function CanvasPdf({ visual, read, onBack, onClose }: { visual: Visual; read?: VisualReader; onBack: () => void; onClose: () => void }) {
+  const { url, error, retry } = usePdfUrl(read, visual.ref, true);
+  const inline = pdfInline();
+  // Hide the reader's toolbar: it has draw and download buttons. Zoom still works.
+  const view = url && `${url}#toolbar=0&navpanes=0&view=FitH`;
+  return <div className="canvas-file canvas-page">
+    <div className="canvas-pad canvas-top">
+      <CanvasHead title={visual.title} sub="PDF from the agent" onBack={onBack} onClose={onClose}>
+        {url && inline && <a className="files-chip" href={view} target="_blank" rel="noopener">Open in new tab</a>}
+      </CanvasHead>
+    </div>
+    {url ? inline ? <iframe className="visual-frame canvas-pdf" title={visual.title} src={view} />
+        : <div className="git-state">This browser cannot show a PDF here. <a className="files-chip" href={url} download={pdfName(visual.title)}>Open PDF</a></div>
+      : <div className={`git-state${error ? ' bad' : ''}`} role={error ? 'alert' : 'status'}>
+        {error ? <>{error} <button className="files-chip" onClick={retry}>Retry</button></> : 'Loading PDF…'}
       </div>}
   </div>;
 }

@@ -1597,16 +1597,17 @@ export class Sessions extends EventEmitter {
   renderVisual(id, params) {
     const s = this.get(id);
     if (!this.#index.has(id) || s.engine === 'shell') throw new Error('visual replies need a saved agent chat');
-    const { html, title, height, renderId, placement, url } = validateVisual(params);
+    const { html, pdf, kind, title, height, renderId, placement, url } = validateVisual(params);
     const itemId = `visual-${renderId}`;
-    const ref = createHash('sha256').update(html).digest('hex').slice(0, 32);
+    const data = pdf ?? Buffer.from(html).toString('base64');
+    const ref = createHash('sha256').update(Buffer.from(data, 'base64')).digest('hex').slice(0, 32);
     const prior = this.events.tail(id, 0).find(e => e.type === 'item.start' && e.id === itemId);
     if (prior) {
-      if (prior.visual?.ref !== ref || prior.visual.title !== title || prior.visual.height !== height || prior.visual.placement !== placement || prior.visual.url !== url) throw new Error('render ID already used for a different visual');
+      if (prior.visual?.ref !== ref || prior.visual.title !== title || prior.visual.height !== height || prior.visual.placement !== placement || prior.visual.url !== url || prior.visual.kind !== kind) throw new Error('render ID already used for a different visual');
       return { visual: prior.visual };
     }
-    const stored = this.events.putAttachment(id, { filename: `${renderId}.html`, mime: 'text/html', data: Buffer.from(html).toString('base64') });
-    const visual = { ref: stored.ref, title, height, bytes: stored.bytes, ...(placement ? { placement } : {}), ...(url ? { url } : {}) };
+    const stored = this.events.putAttachment(id, pdf ? { filename: `${renderId}.pdf`, mime: 'application/pdf', data } : { filename: `${renderId}.html`, mime: 'text/html', data });
+    const visual = { ref: stored.ref, title, height, bytes: stored.bytes, ...(kind ? { kind } : {}), ...(placement ? { placement } : {}), ...(url ? { url } : {}) };
     const active = s.driver && !s.external ? this.events.activeTurn(id) : null;
     const turnId = active?.turnId ?? `local-visual-${renderId}`;
     const append = event => {
@@ -1628,10 +1629,11 @@ export class Sessions extends EventEmitter {
   readVisual(id, ref) {
     this.get(id);
     if (!this.#index.has(id)) throw new Error('no such saved agent chat');
-    if (!/^[a-f0-9]{32}$/.test(ref ?? '') || !this.events.tail(id, 0).some(e => e.visual?.ref === ref)) throw new Error('no such visual in this chat');
+    const found = /^[a-f0-9]{32}$/.test(ref ?? '') && this.events.tail(id, 0).find(e => e.visual?.ref === ref);
+    if (!found) throw new Error('no such visual in this chat');
     const data = this.events.attachment(id, ref);
     if (!data) throw new Error('this visual is no longer stored');
-    return { html: Buffer.from(data, 'base64').toString('utf8') };
+    return found.visual.kind === 'pdf' ? { pdf: data } : { html: Buffer.from(data, 'base64').toString('utf8') };
   }
 
   /** Backfill images when an existing imported chat is opened after upgrade. */

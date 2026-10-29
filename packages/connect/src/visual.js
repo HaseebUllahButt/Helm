@@ -8,6 +8,9 @@ import { visualDocument } from '@helm/protocol/visual';
 export const MAX_VISUAL_BYTES = 4 * 1024 * 1024;
 const MAX_HTML_BYTES = 512 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+/** A PDF is stored as it is, so a document of many pages fits. */
+export const MAX_PDF_BYTES = 16 * 1024 * 1024;
+const isPdf = (bytes) => bytes.subarray(0, 5).toString('latin1') === '%PDF-';
 
 /** Live pages stay separate from saved HTML; never fetch an agent's URL here. */
 export function visualUrl(value) {
@@ -18,7 +21,16 @@ export function visualUrl(value) {
   return url.href;
 }
 
-export function validateVisual({ html, title = 'Visual reply', height = 420, renderId, placement, url }) {
+export function validateVisual({ html, pdf, title = 'Visual reply', height = 420, renderId, placement, url }) {
+  if (pdf !== undefined) {
+    // A PDF is shown by the browser's own reader, read-only, never as a page.
+    const bytes = typeof pdf === 'string' && url === undefined && html === undefined ? Buffer.from(pdf, 'base64') : Buffer.alloc(0);
+    if (!isPdf(bytes) || bytes.length > MAX_PDF_BYTES) throw new Error('a PDF visual must be a PDF file up to 16 MiB');
+    if (typeof title !== 'string' || !title.trim() || title.length > 160) throw new Error('visual title must be 1–160 characters');
+    if (!/^[a-f0-9]{24}$/.test(renderId ?? '')) throw new Error('invalid render ID');
+    if (placement !== undefined && placement !== 'canvas') throw new Error('invalid visual placement');
+    return { pdf: bytes.toString('base64'), kind: 'pdf', title: title.trim(), height: 420, renderId, ...(placement ? { placement } : {}) };
+  }
   if (url !== undefined) {
     url = visualUrl(url);
     if (placement !== 'canvas') throw new Error('live pages must open in canvas');
@@ -50,6 +62,15 @@ export function imageMime(bytes) {
     if (nodes.length === 1 && nodes[0].tagName === 'svg') return 'image/svg+xml';
   }
   throw new Error('local visual assets must be PNG, JPEG, GIF, WebP, AVIF, or SVG images');
+}
+
+/** Read a PDF on the publishing machine, before any remote RPC. */
+export async function preparePdf(file) {
+  const path = resolve(file), source = await stat(path);
+  if (!source.isFile() || source.size > MAX_PDF_BYTES) throw new Error(`a PDF must be a file up to 16 MiB; ${basename(path)} is ${(source.size / 1024 / 1024).toFixed(1)} MiB`);
+  const bytes = await readFile(path);
+  if (!isPdf(bytes)) throw new Error(`${basename(path)} is not a PDF file`);
+  return bytes.toString('base64');
 }
 
 /** Snapshot local assets on the publishing machine, before any remote RPC. */
