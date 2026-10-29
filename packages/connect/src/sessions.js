@@ -2140,9 +2140,10 @@ export class Sessions extends EventEmitter {
    */
   async discardEmpty(id) {
     const s = this.#index.get(id);
-    // A chat that cloned a repo is kept: it is where that repo was asked
-    // for, and leaving it while the clone runs is the point.
-    if (!s || s.brain || s.engine === 'shell' || s.pty || s.hasInput || (s.prompts ?? 0) > 0 || s.clone) {
+    // A chat that clones a repo is kept while the clone runs or failed:
+    // leaving it then is the point, and its bar or "Try again" is there.
+    // Once the repo is in, an unused one goes like any other; the folder stays.
+    if (!s || s.brain || s.engine === 'shell' || s.pty || s.hasInput || (s.prompts ?? 0) > 0 || (s.clone && s.clone.state !== 'done')) {
       return { ok: true, discarded: false };
     }
     await this.kill(id);
