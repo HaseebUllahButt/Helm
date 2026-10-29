@@ -8,7 +8,7 @@ import { WebSocketServer } from 'ws';
 
 const dir = mkdtempSync(join(tmpdir(), 'helm-link-reconnect-'));
 process.env.HELM_DIR = dir;
-const { createNetwork, hubProof, hubHello } = await import('../packages/protocol/network.js');
+const { createNetwork, hubProof, hubHello } = await import('@helm/protocol/network');
 const { Link } = await import('../packages/connect/src/agent.js');
 const { hubRpc } = await import('../packages/connect/src/hub-client.js');
 const net = createNetwork({ name: 'test' });
@@ -146,4 +146,37 @@ test('stopping during description cannot start a new connection', async context 
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(setup.upgrades(), 0);
   assert.equal(setup.link.connected, false);
+});
+
+
+test('a hub reply that is still arriving survives heartbeat checks', async context => {
+  const setup = await fixture(context, null);
+  let heartbeat;
+  const interval = globalThis.setInterval;
+  context.mock.method(globalThis, 'setInterval', (fn, ms, ...args) => {
+    if (ms === 20000) { heartbeat = fn; return { unref() {} }; }
+    return interval(fn, ms, ...args);
+  });
+  let accept;
+  const connection = new Promise(resolve => { accept = resolve; });
+  setup.webSockets.once('connection', accept);
+  setup.link.start(); await setup.ready;
+  const socket = await connection;
+  heartbeat();
+  // A fragmented reply has no complete application message yet. A control
+  // ping confirms that the receiver consumed all bytes preceding it.
+  socket.send('{"t":"large",', { fin: false });
+  const pong = new Promise(resolve => socket.once('pong', resolve));
+  socket.ping(); await pong;
+  heartbeat();
+  assert.equal(setup.link.connected, true);
+  let delivered;
+  const frame = new Promise(resolve => { delivered = resolve; });
+  setup.daemon.onFrame = async (_link, value) => delivered(value);
+  socket.send('"value":"complete"}', { fin: true });
+  assert.deepEqual(await frame, { t: 'large', value: 'complete' });
+  heartbeat();
+  const closed = new Promise(resolve => socket.once('close', resolve));
+  heartbeat(); await closed;
+  assert.equal(setup.link.connected, false, 'a link with no byte progress still closes');
 });

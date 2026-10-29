@@ -298,3 +298,26 @@ test('an uncertain terminal write is never repeated with the saved message numbe
   assert.equal(terminalWrites, 1);
   await page.evaluate(() => window.client.close());
 });
+
+
+test('a slow direct delivery survives a failed web backup without closing its channel', async context => {
+  const home = await hub(context);
+  const page = await pageFor(context, home);
+  await page.route('**/api/action', async route => {
+    await route.abort();
+    await page.evaluate(() => {
+      window.client.receiveRpc({ id: window.deliveryFrame.id, ok: true, result: { ok: true } }, 'direct');
+    });
+  });
+  await page.evaluate(() => {
+    window.directClosed = false;
+    window.client.peers.set('laptop', {
+      ready: true, fragments: new Map(),
+      channel: { readyState: 'open', send(raw) { window.deliveryFrame = JSON.parse(raw); }, close() { window.directClosed = true; } },
+      pc: { close() { window.directClosed = true; } },
+    });
+  });
+  assert.deepEqual(await page.evaluate(() => window.client.input('laptop', { id: 'chat', data: 'slow but delivered' }, 5000)), { ok: true });
+  assert.equal(await page.evaluate(() => window.directClosed), false);
+  await page.evaluate(() => window.client.close());
+});

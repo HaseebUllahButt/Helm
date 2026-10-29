@@ -209,8 +209,14 @@ export class Link {
   #heartbeat() {
     clearInterval(this.#beat);
     this.#waiting = false;
+    let received = this.#ws?._socket?.bytesRead ?? 0;
     this.#beat = setInterval(() => {
-      if (this.#waiting) {
+      const bytes = this.#ws?._socket?.bytesRead ?? 0;
+      const flowing = bytes > received;
+      received = bytes;
+      // A large reply can take longer than a heartbeat on a slow link.
+      // WebSocket emits message only after the entire reply arrives.
+      if (this.#waiting && !flowing) {
         // A close event follows, and with it the usual reconnect.
         console.warn(`[helm] ${this.url}: heartbeat timed out`);
         try { this.#ws?.terminate(); } catch { /* already gone */ }

@@ -693,7 +693,7 @@ test('repeated focus events cannot postpone dead-socket detection indefinitely',
 });
 
 test('project reads escape a silent direct connection instead of timing out', async () => {
-  const setup = harness();
+  const setup = harness({ delays: { 'http://good/api/read': 100 } });
   setup.start(); await setup.advance(10);
   await setup.client.openDirect('vm'); setup.peers[0].open();
   const request = setup.client.rpc('vm', 'project.list', {}, 20000);
@@ -754,7 +754,7 @@ test('direct negotiation expires and old peer callbacks cannot drop a replacemen
 });
 
 test('successful read fallback retires the silent peer for subsequent calls', async () => {
-  const h = harness(); h.start(); await h.advance(10);
+  const h = harness({ delays: { 'http://good/api/read': 100 } }); h.start(); await h.advance(10);
   await h.client.openDirect('machine'); h.peers[0].open();
   const request = h.client.rpc('machine', 'session.events'); await h.advance(1500);
   const frame = h.sockets[0].frames.find(f => f.t === 'rpc');
@@ -769,7 +769,7 @@ test('successful read fallback retires the silent peer for subsequent calls', as
 });
 
 test('an early hedge error does not reject the slower direct success', async () => {
-  const h = harness(); h.start(); await h.advance(10);
+  const h = harness({ delays: { 'http://good/api/read': 100 } }); h.start(); await h.advance(10);
   await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
   const request = h.client.rpc('machine', 'session.events'); await h.advance(1500);
   const frame = h.sockets[0].frames.find(f => f.t === 'rpc');
@@ -1142,5 +1142,38 @@ test('while the socket is down, the status poll says reachable once, not every 1
   const machineReads = h.requests.filter(r => r.url.endsWith('/api/machines')).length;
   assert.ok(machineReads >= 3, `the poll keeps reading machine status (${machineReads})`);
   assert.ok(told() <= drops(), `reachable was told ${told()} times for ${drops()} drops`);
+  h.client.close();
+});
+
+
+test('settings use a proven direct link without waiting for the hub', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
+  const read = h.client.rpc('machine', 'session.events');
+  const frame = peer.channel.frames.at(-1);
+  peer.message({ t: 'rpcResult', id: frame.id, ok: true, result: {} }); await read;
+  const saved = h.client.rpc('machine', 'session.effort', { id: 'chat', effort: 'high' });
+  const write = peer.channel.frames.at(-1);
+  assert.equal(write.method, 'session.effort');
+  assert.equal(h.sockets[0].frames.some(f => f.method === 'session.effort'), false);
+  peer.message({ t: 'rpcResult', id: write.id, ok: true, result: { saved: true } });
+  assert.equal((await saved).saved, true);
+  await h.advance(10001);
+  const later = h.client.rpc('machine', 'session.effort', { id: 'chat', effort: 'low' });
+  const hubWrite = h.sockets[0].frames.at(-1);
+  assert.equal(hubWrite.method, 'session.effort');
+  h.sockets[0].message({ t: 'rpcResult', id: hubWrite.id, ok: true, result: {} }); await later;
+  h.client.close();
+});
+
+test('a stalled direct chat read tries other hubs after one grace period', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('machine'); h.peers[0].open();
+  h.client.rttSamples.set('machine', [2400]);
+  const read = h.client.rpc('machine', 'session.events', { id: 'chat' }, 30000);
+  await h.advance(5060);
+  assert.equal((await read).fresh, true);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 1);
+  assert.equal(h.client.directTo('machine'), false);
   h.client.close();
 });

@@ -45,9 +45,10 @@ test('blocked live connections recover lost chat and approval replies, including
   });
   server.on('upgrade', (req, socket) => socket.destroy());
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { release(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); rmSync(root, { recursive: true, force: true }); });
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
-  t.after(async () => { release(); await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); rmSync(root, { recursive: true, force: true }); });
+  t.after(() => browser.close());
   const bundle = await build({ stdin: { contents: "import { Client } from './apps/web/src/client'; window.Client = Client;", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, format: 'iife' });
   const page = await browser.newPage();
   const url = 'http://127.0.0.1:' + server.address().port;
