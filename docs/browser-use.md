@@ -2,10 +2,17 @@
 
 Each chat has its own browser, run with Patchright on the chat's machine.
 Open a tab with `helm browser open <url>`.
-The owner uses the external Chromium window. Helm has no browser panel.
+The owner uses the same browser window. Helm has no browser panel.
 
 ## Decisions
 
+- **Any Chromium-based browser.** Helm uses the browser the owner already
+  has: Chromium, Chrome, Brave, Edge, Vivaldi or Helium, in that order
+  (`browserPaths` in browser-window.js). They all speak Chromium's own
+  channel, so the same code drives each one. Helm reads pages as text and
+  numbered controls first; screenshots are the last resort. The goal is
+  computer use, not one browser: Bowser was removed so the browser path has
+  one engine to grow from.
 - **It runs on the chat's machine.** The agent CLI reaches it through that
   machine's own local link, so agent actions never cross the phone link,
   and `localhost` reaches dev servers there. Outside an agent chat, pass
@@ -18,7 +25,7 @@ The owner uses the external Chromium window. Helm has no browser panel.
   which is never started where windows can show.
 - **Local terminal links use the chat's machine.** Opening a local link
   checks that its server still belongs to the chat, then opens its address
-  in the external Chromium window. No public link is made. Discovery runs
+  in the chat's browser window. No public link is made. Discovery runs
   only when the owner opens a link. Paths and queries stay intact.
 - **Owner and agent share the window.** When the owner clicks, types or
   scrolls, the agent's next step waits until they are still for 2.5 s (at
@@ -63,11 +70,12 @@ The owner uses the external Chromium window. Helm has no browser panel.
   }
   ```
 
-- Chromium must already be installed (an existing browser,
-  `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at daemon
-  start, and loads no browser driver until a browser is needed.
-- Readiness and launch use the same system browser list, including macOS
-  Chrome. `HELM_WINDOW_CHROMIUM` selects only the visible browser;
+- A Chromium-based browser must already be installed (one from the list
+  above, `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at
+  daemon start, and loads no browser driver until a browser is needed. A
+  service has a short PATH, so Linux also searches /usr/local/bin, /usr/bin
+  and /snap/bin.
+- Readiness and launch use the same system browser list. `HELM_WINDOW_CHROMIUM` selects only the visible browser;
   `HELM_CHROMIUM_PATH` selects the hidden browser.
 - Chats share no tab limit. Keep every saved tab when Helm restarts.
 - Hidden tabs use full Chromium. The headless shell has no native PDF
@@ -106,15 +114,8 @@ only the profile name; cookies live only in each chat's private storage.
   `helium-browser-flags.conf`.
 
 - Sites that also need local storage or device-bound keys may still ask to
-  sign in through the external Chromium window.
+  sign in through the chat's browser window.
 - Linux reads basic, libsecret and KWallet keys; unlock the keyring if
   copying fails. macOS keychain is best effort. Windows app-bound encrypted
   logins cannot be imported.
 - Copying needs Node 22.16 or newer (SQLite support).
-
-## Bowser
-
-With `bowser-computer` installed (or `HELM_BOWSER_PATH`), `--engine bowser`
-reuses Bowser's browser and logins through one lasting MCP bridge. Bowser's
-own human pause stays in charge: Helm never resumes it. The Bowser tab
-belongs to one Helm chat at a time, and does not support Show me.

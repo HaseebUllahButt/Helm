@@ -12,9 +12,9 @@ process.env.HELM_NO_SERVICE = '1';
 test.after(() => rm(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
-const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow, stopWindow, profilePid, trimProfile } = await import('../packages/connect/src/browser-window.js');
+const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow, stopWindow, profilePid, trimProfile, browserPaths, systemChromium } = await import('../packages/connect/src/browser-window.js');
 const { chromium } = await import('playwright');
-const realChromium = [process.env.HELM_TEST_CHROMIUM, '/usr/bin/chromium', '/usr/bin/google-chrome', chromium.executablePath()].find(path => path && existsSync(path));
+const realChromium = [process.env.HELM_TEST_CHROMIUM, systemChromium(), chromium.executablePath()].find(path => path && existsSync(path));
 // Playwright's own Chromium, else the system one Helm itself falls back to.
 const starts = options => chromium.launch({ headless: true, ...options }).then(browser => browser.close().then(() => true), () => false);
 const pinned = process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM }
@@ -42,6 +42,17 @@ test('a screen is needed for a window: a display on Linux, always on a Mac or Wi
   assert.equal(canOpenWindow({ WAYLAND_DISPLAY: 'wayland-1' }, 'linux'), true);
   assert.equal(canOpenWindow({ DISPLAY: ':0' }, 'linux'), true);
   assert.equal(canOpenWindow({}, 'darwin'), true);
+});
+
+test('any installed Chromium-based browser is used, plain Chromium first', { skip: process.platform === 'win32' }, t => {
+  const folder = mkdtempSync(join(tmpdir(), 'helm-browsers-')); t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const env = { PATH: folder };
+  writeFileSync(join(folder, 'brave'), ''); assert.equal(browserPaths(env, 'linux').find(existsSync), join(folder, 'brave'));
+  writeFileSync(join(folder, 'chromium'), ''); assert.equal(browserPaths(env, 'linux').find(existsSync), join(folder, 'chromium'));
+  // A service's short PATH still finds browsers in the usual folders.
+  assert.ok(browserPaths({ PATH: '' }, 'linux').includes('/usr/bin/brave'));
+  assert.equal(browserPaths({}, 'darwin')[2], '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser');
+  assert.ok(browserPaths({ ProgramFiles: 'C:/Program Files' }, 'win32').some(path => path.endsWith('msedge.exe')));
 });
 
 test('a native browser starts at the requested page with copied logins already present', { timeout: 60000, skip: noChromium }, async t => {

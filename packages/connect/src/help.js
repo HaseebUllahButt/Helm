@@ -33,7 +33,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm join <CODE> --at <url>       Join a network, like 'helm join CODE url'
 
   helm devices                      controllers that can drive this network
-  helm browser open <url>            browse with your agent (Chromium or --engine bowser)
+  helm browser open <url>            browse with your agent in a Chromium-based browser
   helm browser tabs | look <id>      list tabs or read text and numbered controls
   helm machines                     machines in this network
   helm redesignate [machine] <kind> what a machine is for: pc or vm
@@ -207,7 +207,7 @@ Chats and agents
   dictate          Record speech and turn it into text
 
 Pages and links
-  browser          Use Chromium tabs that the owner also sees
+  browser          Use browser tabs that the owner also sees
   share, spin      Make a public link (a Spin) to a port here
   preview          Take a screenshot of an HTML file; report script errors
   render           Save a picture or HTML page in this chat
@@ -322,14 +322,14 @@ const DETAILS = {
   Use helm canvas instead to open the visual beside the conversation.`,
 
   browser: `
-  Tabs use Chromium on this machine.
+  Tabs use a Chromium-based browser on this machine:
+  Chromium, Chrome, Brave, Edge, Vivaldi or Helium.
   localhost reaches your development servers.
   The owner shares these tabs with you.
-  On machines with a screen, use the external Chromium window.
+  On machines with a screen, the tabs open in a window of that browser.
   Helm has no browser panel.
   The window does not take keyboard control.
   Your actions wait while the owner uses the window.
-  Use --engine bowser for Bowser Computer Use, if installed.
     look <tab>        Read page text and numbered elements without a screenshot.
     act <tab> <JSON>  Run actions: '{"actions":[{"click":"the Save button"},{"check":"Saved"}]}'
                       Use exact page text or targets for checks.

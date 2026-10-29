@@ -13,7 +13,8 @@ process.env.HELM_NO_SERVICE = '1';
 delete process.env.WAYLAND_DISPLAY; delete process.env.DISPLAY;
 for (const [key, file] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(process.env.HELM_DIR, file);
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-const { BrowserManager, BowserBridge } = await import('../packages/connect/src/browser.js');
+const { BrowserManager } = await import('../packages/connect/src/browser.js');
+const { systemChromium } = await import('../packages/connect/src/browser-window.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
 const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
 
@@ -30,7 +31,7 @@ test('Mac Chrome is ready without Linux browsers or a Playwright download', () =
     fs.readdirSync = () => [];
     syncBuiltinESMExports();
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
-    for (const key of ['HELM_CHROMIUM_PATH', 'HELM_TEST_CHROMIUM', 'HELM_WINDOW_CHROMIUM', 'HELM_BOWSER_PATH']) delete process.env[key];
+    for (const key of ['HELM_CHROMIUM_PATH', 'HELM_TEST_CHROMIUM', 'HELM_WINDOW_CHROMIUM']) delete process.env[key];
     process.env.PATH = '';
     const { browserReady } = await import(${JSON.stringify(browser)});
     const { systemChromium } = await import(${JSON.stringify(window)});
@@ -81,41 +82,15 @@ test('browser is lazy and actions cannot cross thread boundaries', async () => {
   let launched = 0;
   const manager = new BrowserManager({ session: sid => ['one', 'two'].includes(sid) ? { id: sid } : null, launch: () => { launched++; throw new Error('unexpected launch'); } });
   assert.deepEqual((await manager.list('one')).tabs, []); assert.equal(launched, 0);
-  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
+  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
   await assert.rejects(manager.run('two', 'tab', { kind: 'look' }), /not found/);
   assert.deepEqual(await manager.run('one', 'tab', { kind: 'console' }), { entries: [] });
   await manager.stop();
 });
 
-test('Bowser reuses one bridge and propagates a human pause instead of bypassing it', async () => {
-  let starts = 0;
-  const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => {};
-  child.stdin = { write: source => { const request = JSON.parse(source); queueMicrotask(() => child.stdout.emit('data', Buffer.from(JSON.stringify({ id: request.id, result: request.params.name === 'act' ? { isError: true, content: [{ type: 'text', text: 'Automation is paused by the owner' }] } : { content: [{ type: 'text', text: 'Page controls' }] } }) + '\n'))); } };
-  const bridge = new BowserBridge({ bin: '/test/bowser', spawnProcess: () => { starts++; return child; } });
-  assert.equal((await bridge.call('look')).content[0].text, 'Page controls'); await bridge.call('look'); assert.equal(starts, 1);
-  await assert.rejects(bridge.call('act', { actions: [] }), /paused/); bridge.stop();
-});
-
-test('Bowser owner is reserved before startup and survives Chromium shutdown', async () => {
-  let release, started; const ready = new Promise(resolve => { started = resolve; });
-  const browser = new EventEmitter(); browser.isConnected = () => true; browser.close = async () => browser.emit('disconnected');
-  const bowser = { call: async () => { started(); await new Promise(resolve => { release = resolve; }); return { content: [] }; }, stop() {} };
-  const manager = new BrowserManager({ session: sid => ({ id: sid }), launch: async () => browser, bowser });
-  const first = manager.open('ownerone', { engine: 'bowser' }); await ready;
-  await assert.rejects(manager.open('ownertwo', { engine: 'bowser' }), /shared/); release(); const result = await first;
-  await manager.start(); await manager.shutdownBrowser(); assert.equal(manager.tabs.get(result.tab.id).engine, 'bowser'); await manager.stop();
-});
-
-test('Bowser EPIPE rejects its requests without an unhandled stream error', async () => {
-  const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.stdin = new EventEmitter(); child.stdin.write = () => {}; child.kill = () => {};
-  const bridge = new BowserBridge({ bin: '/test/bowser', spawnProcess: () => child });
-  const pending = bridge.call('look'), rejected = assert.rejects(pending, /EPIPE/);
-  child.stdin.emit('error', new Error('EPIPE')); await rejected; assert.equal(bridge.child, null);
-});
-
 test('download retention evicts old files and rejects oversized completed downloads', async () => {
   const manager = new BrowserManager({ session: sid => ({ id: sid }) });
-  const tab = { id: 'download-tab', sessionId: 'downloads', engine: 'bowser', downloads: [] }; manager.tabs.set(tab.id, tab);
+  const tab = { id: 'download-tab', sessionId: 'downloads', engine: 'chromium', downloads: [] }; manager.tabs.set(tab.id, tab);
   const folder = join(process.env.HELM_DIR, 'download-fixture'); mkdirSync(folder);
   for (let i = 0; i < 3; i++) { const path = join(folder, String(i)); writeFileSync(path, ''); truncateSync(path, 128 * 1024 * 1024); tab.downloads.push({ id: String(i), name: String(i), path, at: i, status: i < 2 ? 'ready' : 'pending' }); }
   await manager.finishDownload(tab, tab.downloads[2]); assert.equal(tab.downloads[0].status, 'expired'); assert.equal(existsSync(tab.downloads[0].path), false);
@@ -125,7 +100,7 @@ test('download retention evicts old files and rejects oversized completed downlo
 
 test('a read-only agent can inspect a tab but cannot mutate it through browser CLI', async () => {
   const manager = new BrowserManager({ session: sid => ({ id: sid, mode: 'readonly' }) });
-  manager.tabs.set('tab', { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], console: [] });
+  manager.tabs.set('tab', { id: 'tab', sessionId: 'one', engine: 'chromium', downloads: [], console: [] });
   await assert.rejects(manager.run('one', 'tab', { kind: 'type', text: 'no' }), /read-only/);
   await assert.rejects(manager.run('one', 'tab', { kind: 'dialog', accept: true }), /read-only/);
   await assert.rejects(manager.run('one', 'tab', { kind: 'batch', actions: [{ kind: 'evaluate', script: '1' }] }), /read-only/);
@@ -270,7 +245,7 @@ test('full Chromium is tried first; a pinned path wins; the system browser is th
   try {
     await run({ HELM_CHROMIUM_PATH: '/pinned/chrome' }, () => browser); assert.deepEqual(calls, ['/pinned/chrome']);
     await run({}, () => browser); assert.deepEqual(calls, [undefined], 'the Chromium channel selects the full browser');
-    const system = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
+    const system = systemChromium();
     const error = await run({}, options => { if (!options.executablePath) throw new Error('Executable doesn\'t exist'); return browser; });
     if (system) { assert.equal(error, undefined); assert.deepEqual(calls, [undefined, system]); } else assert.match(error.message, /could not start/);
   } finally { chromium.launch = real; for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; }
@@ -282,7 +257,7 @@ test('real browser isolation, batched actions, uploads, answering a dialog, and 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}`, directory = join(process.env.HELM_DIR, 'live');
   let launches = 0, manager;
-  const launch = async () => { launches++; return chromium.launch({ headless: true, ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) }); };
+  const launch = async () => { launches++; const path = process.env.HELM_TEST_CHROMIUM || systemChromium(); return chromium.launch({ headless: true, ...(path ? { executablePath: path } : {}) }); };
   manager = new BrowserManager({ directory, session: sid => ({ id: sid }), launch, canWindow: false });
   t.after(async () => { await manager.stop(); await new Promise(resolve => server.close(resolve)); });
   const first = await manager.open('one', { url }); const second = await manager.open('two', { url }); assert.equal(launches, 1);
@@ -336,8 +311,6 @@ test('the agent’s cursor is drawn in a window tab only, and point guides witho
   await assert.rejects(manager.run('one', 'tab', { kind: 'point' }), /choose a target/);
   manager.tabs.set('read', { ...tab, id: 'read', sessionId: 'reader', pointer: null }); await manager.run('reader', 'read', { kind: 'point', selector: 'button' });
   assert.equal(manager.tabs.get('read').pointer.by, 'guide');
-  manager.tabs.set('shared', { id: 'shared', sessionId: 'one', engine: 'bowser', downloads: [] });
-  await assert.rejects(manager.run('one', 'shared', { kind: 'point', ref: 1 }), /isolated Chromium/);
   await manager.stop();
 });
 
