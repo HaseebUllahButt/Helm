@@ -3,13 +3,12 @@ import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { readFile, writeFile, rm, chmod, stat, rename } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
-import { spawn } from 'node:child_process';
 import { HELM_DIR } from './paths.js';
 import { normalizeAction, readOnlyAction, resolveTarget } from './browser-targets.js';
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } from './browser-identity.js';
 import * as browserLogins from './browser-logins.js';
-import { canOpenWindow, systemChromium, launchWindow as openWindow, windowProfile, windowName, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
+import { canOpenWindow, systemChromium, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -59,7 +58,6 @@ async function launchChromium() {
 const playwrightBrowsers = () => process.env.PLAYWRIGHT_BROWSERS_PATH
   || join(homedir(), process.platform === 'darwin' ? 'Library/Caches/ms-playwright' : process.platform === 'win32' ? 'AppData/Local/ms-playwright' : '.cache/ms-playwright');
 const hasPlaywrightChromium = () => { try { return readdirSync(playwrightBrowsers()).some(name => name.startsWith('chromium-')); } catch { return false; } };
-const bowserBin = () => process.env.HELM_BOWSER_PATH || (process.env.PATH || '').split(':').map(p => join(p, 'bowser-computer')).find(existsSync);
 const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 const MAX_THREAD_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 const POINTER_WORDS = { click: 'Clicking', hover: 'Pointing at', type: 'Typing into', select: 'Choosing in', upload: 'Uploading into', drag: 'Dragging', scroll: 'Scrolling', point: '' };
@@ -77,59 +75,29 @@ const pointerTarget = el => {
     box: rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null };
 };
 
-/** One persistent stdio bridge to the owner's Bowser. Closing it leaves Bowser intact. */
-export class BowserBridge {
-  constructor({ bin = bowserBin(), spawnProcess = spawn } = {}) { this.bin = bin; this.spawnProcess = spawnProcess; this.pending = new Map(); this.sequence = 0; }
-  async call(name, args = {}) {
-    if (!this.child) {
-      if (!this.bin) throw new Error('Bowser Computer Use is not installed on this machine');
-      this.child = this.spawnProcess(this.bin, ['browser-mcp'], { stdio: ['pipe', 'pipe', 'pipe'] });
-      let buffer = '';
-      this.child.stdout.on('data', bytes => {
-        buffer += bytes.toString();
-        if (buffer.length > 12 * 1024 * 1024) { this.stop(); return; }
-        for (let end; (end = buffer.indexOf('\n')) >= 0;) {
-          const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-          try { const reply = JSON.parse(line), waiter = this.pending.get(reply.id); if (waiter) { this.pending.delete(reply.id); clearTimeout(waiter.timer); reply.error ? waiter.reject(new Error(reply.error.message)) : waiter.resolve(reply.result); } } catch { /* nonprotocol diagnostic */ }
-        }
-      });
-      this.child.stderr.on('data', () => {});
-      const child = this.child;
-      child.on('error', error => { if (this.child === child) this.stop(error); });
-      child.on('exit', () => { if (this.child === child) this.stop(new Error('Bowser bridge closed')); });
-      child.stdin.on?.('error', error => { if (this.child === child) this.stop(error); });
-    }
-    const requestId = ++this.sequence;
-    const child = this.child;
-    const result = await new Promise((resolveCall, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(requestId); reject(new Error('Bowser action timed out; inspect the browser before retrying')); }, 45000); timer.unref?.();
-      this.pending.set(requestId, { resolve: resolveCall, reject, timer });
-      try { child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: requestId, method: 'tools/call', params: { name, arguments: args } }) + '\n', error => { if (error && this.child === child) this.stop(error); }); }
-      catch (error) { this.stop(error); }
-    });
-    if (result?.isError) throw new Error(result.content?.filter(p => p.type === 'text').map(p => p.text).join('\n') || 'Bowser action failed');
-    return result;
-  }
-  stop(error = new Error('Bowser bridge stopped')) { const child = this.child; this.child = null; child?.kill(); for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); } this.pending.clear(); }
-}
-
 /**
  * A thread's browser. On a machine with a screen it is a real Chromium
  * window, one per thread, that never takes the owner's keyboard: the agent
  * drives it through Chromium's own channel. Without a screen (a server) it
  * is one shared hidden Chromium. Nothing starts until a tab is used.
  */
+let ownerLogins = false;
+/** Only the Helm service starts browsers with the owner's own logins; tests never read real profiles. */
+export const useOwnerLogins = () => { ownerLogins = true; };
+
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, bowser = new BowserBridge(), idleMs = 10 * 60000, windowIdleMs = 30 * 60000, actionTimeoutMs = 45000, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow(), ownerQuietMs = 2500 } = {}) {
-    this.launchWindow = launchWindow; this.canWindow = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
-    this.logins = logins; this.loginImports = new Map(); this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.bowser = bowser; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = 45000, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500 } = {}) {
+    this.launchWindow = launchWindow; this.windowCheck = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
+    this.logins = logins; this.loginImports = new Map(); this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
     this.flows = new BrowserFlows(directory);
   }
+  /** A screen can appear after Helm starts, when its service starts before the desktop. Once seen, windows stay on. */
+  get canWindow() { return this.screenSeen ||= !!(typeof this.windowCheck === 'function' ? this.windowCheck() : this.windowCheck); }
   async start() {
     if (!this.starting) this.starting = (async () => {
       if (this.browser?.isConnected()) return this.browser;
       const launch = this.launch || launchChromium;
-      try { this.browser = await launch(); } catch (error) { throw new Error(`Chromium could not start. Set HELM_CHROMIUM_PATH or install it with npx playwright install chromium. ${error.message}`); }
+      try { this.browser = await launch(); } catch (error) { throw new Error(`The browser could not start. Install a Chromium-based browser (Chromium, Chrome, Brave, Edge, Vivaldi or Helium), or set HELM_CHROMIUM_PATH. ${error.message}`); }
       const browser = this.browser;
       browser.on('disconnected', () => {
         if (this.browser !== browser) return;
@@ -164,7 +132,7 @@ export class BrowserManager {
       try { storageState = JSON.parse(await readFile(join(this.directory, sessionId, 'storage.json'), 'utf8')); } catch (error) { hasStorage = error.code !== 'ENOENT'; }
       if (!hasStorage) {
         seed = loginSeed;
-        if (!seed) { const choice = await this.loginDefault(sessionId); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
+        if (!seed) { this.owner(sessionId); const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
         if (seed) { if (!seed.cookies.length && seed.failed) throw new Error(seed.warnings?.[0] || 'Could not copy the default browser logins.'); storageState = { cookies: seed.cookies, origins: [] }; }
       }
       // Set the user agent before any popup's first request. Each page also
@@ -184,35 +152,71 @@ export class BrowserManager {
     try { return await pending; } catch (error) { this.contexts.delete(sessionId); throw error; }
   }
   /**
-   * The thread's own Chromium, in a window on this machine's screen. Its
-   * profile folder keeps what the window signed in to. A new thread starts
-   * signed in to what the owner chose as the default profile's logins.
+   * A chat's tabs, in the one window on this machine's screen that every
+   * chat shares. The window's profile folder keeps what it signed in to.
    */
   async windowContext(sessionId, loginSeed) {
-    const folder = windowProfile(this.directory, sessionId), fresh = !existsSync(folder); mkdirSync(folder, { recursive: true, mode: 0o700 });
-    let seed = loginSeed;
-    if (fresh && !seed) { const choice = await this.loginDefault(sessionId); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
-    let context;
-    try { context = await this.launchWindow(folder, { name: windowName(sessionId) }); }
-    catch (error) { throw new Error(`Chromium could not open a window. ${String(error.message).split('\n')[0]}`); }
-    context.helmWindow = true; context.setDefaultTimeout(10000); context.setDefaultNavigationTimeout(15000);
-    try {
-      // Sign-ins from before (or from a hidden browser on this machine) come along.
+    const context = await this.sharedWindow();
+    if (!context.helmJoined.has(sessionId)) {
+      context.helmJoined.add(sessionId);
+      // Sign-ins this chat made in its own window, before the window was shared.
       let storage; try { storage = JSON.parse(await readFile(join(this.directory, sessionId, 'storage.json'), 'utf8')); } catch { /* nothing signed in yet */ }
-      if (fresh && storage?.cookies?.length) await context.addCookies(storage.cookies).catch(() => {});
-      if (seed?.cookies?.length) await context.addCookies(seed.cookies).catch(() => {});
-      await context.exposeBinding('__helmOwnerInput', ({ page }) => this.ownerInput(page));
-      await context.addInitScript(WINDOW_PAGE_SCRIPT);
-    } catch (error) { await context.close().catch(() => {}); throw error; }
-    // Some browser launchers open a blank tab: the first tab Helm needs takes it.
-    // A window still open from before a restart keeps its tabs as they are.
-    context.helmSpare = context.helmAttached ? null : context.pages()[0] || null;
-    if (context.helmAttached) for (const page of context.pages()) this.register(sessionId, page).adopted = true;
-    context.on('page', page => this.register(sessionId, page));
-    context.on('close', () => void this.windowClosed(sessionId, context).catch(() => {}));
+      if (storage?.cookies?.length) await context.addCookies(storage.cookies).catch(() => {});
+    }
+    if (loginSeed?.cookies?.length) await context.addCookies(loginSeed.cookies).catch(() => {});
     this.windowContexts.set(sessionId, context);
-    this.timer ||= setInterval(() => void this.sweep().catch(() => {}), 2000); this.timer.unref?.();
     return context;
+  }
+  /**
+   * The one window. A new window starts signed in to what the owner chose as
+   * the default profile's logins. A window still open from before a restart
+   * keeps its tabs; each chat takes its own back by address.
+   */
+  sharedWindow() {
+    if (this.shared && !this.shared.helmClosed) return Promise.resolve(this.shared);
+    return this.openingShared ||= (async () => {
+      const folder = sharedProfile(this.directory), fresh = !existsSync(folder); mkdirSync(folder, { recursive: true, mode: 0o700 });
+      let seed; if (fresh) { const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey).catch(() => null); }
+      let context;
+      try { context = await this.launchWindow(folder, { name: 'helm-browser' }); }
+      catch (error) { throw new Error(`The browser could not open a window. ${String(error.message).split('\n')[0]}`); }
+      context.helmWindow = true; context.helmJoined = new Set(); context.setDefaultTimeout(10000); context.setDefaultNavigationTimeout(15000);
+      try {
+        if (seed?.cookies?.length) await context.addCookies(seed.cookies).catch(() => {});
+        await context.exposeBinding('__helmOwnerInput', ({ page }) => this.ownerInput(page));
+        await context.addInitScript(WINDOW_PAGE_SCRIPT);
+      } catch (error) { await context.close().catch(() => {}); throw error; }
+      // Some browser launchers open a blank tab: the first tab Helm needs takes it.
+      context.helmSpare = context.helmAttached ? null : context.pages()[0] || null;
+      context.helmUnclaimed = context.helmAttached ? new Set(context.pages()) : new Set();
+      // A tab belongs to the chat that opened it, or to the chat whose page
+      // opened it as a popup. A tab the owner opens stays theirs.
+      context.on('page', page => void this.claimPage(context, page).catch(() => {}));
+      context.on('close', () => void this.sharedClosed(context).catch(() => {}));
+      this.shared = context;
+      this.timer ||= setInterval(() => void this.sweep().catch(() => {}), 2000); this.timer.unref?.();
+      return context;
+    })().finally(() => { this.openingShared = null; });
+  }
+  /** A popup goes to the chat whose page opened it. Helm registers the tabs it opens itself. */
+  async claimPage(context, page) {
+    const opener = await page.opener().catch(() => null), sessionId = opener && [...this.tabs.values()].find(t => t.page === opener)?.sessionId;
+    if (sessionId && this.windowContexts.get(sessionId) === context) { this.register(sessionId, page); this.persistSoon(sessionId); }
+  }
+  /** The owner closed the window: every chat's tabs are kept, asleep. */
+  async sharedClosed(context) {
+    context.helmClosed = true; if (this.shared === context) this.shared = null;
+    for (const [sid, value] of [...this.windowContexts]) if (value === context) await this.windowClosed(sid, context).catch(() => {});
+  }
+  /** Close the window once no chat has a tab in it, unless the owner has tabs of their own there. */
+  async closeIfEmpty() {
+    const context = this.shared; if (!context || context.helmClosed || this.stopping) return;
+    if ([...this.windowContexts.values()].includes(context)) return;
+    const own = context.pages().filter(page => !page.isClosed() && ![NEW_TAB, 'about:blank', 'chrome://newtab/'].includes(page.url()));
+    if (own.length) return;
+    this.shared = null; context.helmClosed = true;
+    await stopWindow(sharedProfile(this.directory)); await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
+    await trimProfile(sharedProfile(this.directory));
   }
   /**
    * A new tab. In a window it opens at its address: an empty tab sent
@@ -310,7 +314,19 @@ export class BrowserManager {
       mkdirSync(this.directory, { recursive: true, mode: 0o700 }); await chmod(this.directory, 0o700);
       await this.writePrivate(file, { profileKey: profile.key }); return { profileKey: profile.key };
     }
-    try { const choice = JSON.parse(await readFile(file, 'utf8')); return { profileKey: typeof choice.profileKey === 'string' ? choice.profileKey : null }; } catch { return { profileKey: null }; }
+    return this.savedLoginDefault();
+  }
+  /**
+   * The logins a new browser starts with: the profile the owner chose, else
+   * the system default browser's most recently used profile.
+   */
+  async startingProfile() {
+    const choice = await this.savedLoginDefault(); if (choice.profileKey || !ownerLogins) return choice;
+    const profiles = await this.logins.listProfiles().catch(() => []);
+    return { profileKey: profiles.find(profile => profile.readable)?.key ?? null };
+  }
+  async savedLoginDefault() {
+    try { const choice = JSON.parse(await readFile(join(this.directory, 'logins.json'), 'utf8')); return { profileKey: typeof choice.profileKey === 'string' ? choice.profileKey : null }; } catch { return { profileKey: null }; }
   }
   async importLogins(sessionId, profileKey) {
     this.owner(sessionId);
@@ -402,8 +418,9 @@ export class BrowserManager {
         if (this.tabs.has(row.id)) continue;
         const context = await this.context(sessionId);
         // The window stayed open through a restart: its tab is already there, loaded.
-        const kept = [...this.tabs.values()].find(t => t.sessionId === sessionId && t.adopted && t.page.url() === row.url);
-        if (kept) kept.adopted = false;
+        const left = [...(context.helmUnclaimed || [])].find(page => !page.isClosed() && page.url() === row.url);
+        if (left) context.helmUnclaimed.delete(left);
+        const kept = left ? this.register(sessionId, left) : null;
         let address = 'about:blank'; try { address = httpUrl(row.url); } catch { /* keep the tab available to retry */ }
         restore.push({ row, context, kept, address });
       }
@@ -440,28 +457,16 @@ export class BrowserManager {
   async list(sessionId) {
     this.owner(sessionId);
     const live = () => [...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t));
-    const answer = tabs => ({ tabs, bowser: !!bowserBin(), running: !!this.browser, canWindow: this.canWindow, open: this.windowContexts.has(sessionId) });
+    const answer = tabs => ({ tabs, running: !!this.browser, canWindow: this.canWindow, open: this.windowContexts.has(sessionId) });
     // A window left open through a Helm restart is taken back, tabs as they are.
-    if (this.canWindow && !this.contexts.has(sessionId) && !this.stopping && windowOpen(windowProfile(this.directory, sessionId))) {
+    if (this.canWindow && !this.contexts.has(sessionId) && !this.stopping && (this.shared || windowOpen(sharedProfile(this.directory))) && (await this.savedRows(sessionId)).length) {
       try { await this.context(sessionId); await this.recover(sessionId); } catch { /* listed asleep below */ }
     }
     // Listing never opens a window: a closed window's tabs are listed asleep.
     if (this.canWindow && !this.contexts.has(sessionId)) return answer([...live(), ...(await this.savedRows(sessionId)).filter(row => !this.tabs.has(row.id)).map(row => ({ ...row, asleep: true }))]);
     await this.recover(sessionId); return answer(live()); }
-  async open(sessionId, { url = 'about:blank', engine = 'chromium' } = {}) {
+  async open(sessionId, { url = 'about:blank' } = {}) {
     await this.recover(sessionId); url = httpUrl(url);
-    if (engine === 'bowser') {
-      if ([...this.tabs.values()].some(t => t.engine === 'bowser' && t.sessionId !== sessionId)) throw new Error('Bowser is shared; close its Helm tab in the other thread first');
-      const existing = [...this.tabs.values()].find(t => t.engine === 'bowser' && t.sessionId === sessionId);
-      const tab = existing || { id: id(), sessionId, engine, title: 'Bowser shared browser', console: [], network: [], downloads: [] };
-      // Reserve the shared browser before asynchronous startup/navigation.
-      this.tabs.set(tab.id, tab);
-      try {
-        const result = url === 'about:blank' ? await this.bowser.call('look', { budget: 0 }) : await this.bowser.call('act', { actions: [...(!existing ? [{ tab: 'new' }] : []), { goto: url }], budget: 0 });
-        tab.url = url; tab.lastUsed = this.now(); this.timer ||= setInterval(() => void this.sweep().catch(() => {}), 2000); this.timer.unref?.(); return { tab: this.metadata(tab), text: result.content?.filter(p => p.type === 'text').map(p => p.text).join('\n') };
-      } catch (error) { if (!existing) this.tabs.delete(tab.id); throw error; }
-    }
-    if (engine !== 'chromium') throw new Error('unknown browser engine');
     const context = await this.context(sessionId);
     const page = await this.newPage(context, url);
     const tab = this.register(sessionId, page);
@@ -522,7 +527,6 @@ export class BrowserManager {
   }
   async look(tab, budget = 6000) {
     integer(budget, 0, 20000);
-    if (tab.engine === 'bowser') { const result = await this.bowser.call('look', { budget }); return { text: result.content.filter(p => p.type === 'text').map(p => p.text).join('\n') }; }
     const result = await tab.page.evaluate(limit => {
       const visible = el => { const r = el.getBoundingClientRect(), s = el.ownerDocument.defaultView.getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert]'); };
       const selector = 'a[href],button,input:not([type=hidden]),textarea,select,option,summary,label[for],[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menu],[role=menuitem],[role=option],[role=combobox],[role=switch],[role=textbox],[role=searchbox],[contenteditable=true],[onclick]';
@@ -618,7 +622,6 @@ export class BrowserManager {
       return result;
     }
     if (kind === 'check') {
-      if (tab.engine === 'bowser') throw new Error('deterministic checks need a Chromium tab');
       if (action.expect != null && typeof action.expect !== 'boolean') throw new Error('check expect must be true or false');
       const wanted = text(action.check, 2000);
       await this.settle(tab);
@@ -637,8 +640,6 @@ export class BrowserManager {
       if (!check.pass) { const error = new Error(`check failed: ${JSON.stringify(wanted)} expected ${check.expect}`); error.check = check; throw error; }
       return { ...check, ...(!inBatch ? view : {}) };
     }
-    if (kind === 'point' && tab.engine === 'bowser') throw new Error('pointing works in isolated Chromium tabs, not Bowser');
-    if (tab.engine === 'bowser') return this.bowserAction(tab, action);
     const page = tab.page;
     // Resolve a plain target once. Both the pointer and the action use the
     // same element, without reading the whole page a second time.
@@ -719,22 +720,6 @@ export class BrowserManager {
     tab.cursor = { x, y };
     await tab.page.evaluate(drawPointer, { ...tab.pointer, guide: kind === 'point' }).catch(() => {});
   }
-  async bowserAction(tab, action) {
-    const kind = action.kind, target = action.ref || action.name || action.selector || action.target;
-    if (kind === 'bowser') { if (!['act', 'look', 'eval', 'flows', 'tabs', 'screenshot'].includes(action.tool)) throw new Error('unknown Bowser tool'); return this.bowser.call(action.tool, action.args || {}); }
-    const actions = kind === 'navigate' ? [{ goto: httpUrl(action.url) }] : kind === 'click' ? [{ click: target, double: !!action.double, button: action.button || 'left' }]
-      : kind === 'hover' ? [{ hover: target }] : kind === 'type' ? [{ type: text(action.text), ...(target ? { into: target, clear: !action.append } : {}), ...(action.enter ? { enter: true } : {}) }] : kind === 'key' ? [{ key: text(action.key, 100) }]
-      : kind === 'scroll' ? [{ scroll: action.direction || ((action.dy || 0) < 0 ? 'up' : 'down'), pages: action.pages ?? Math.max(0.1, Math.abs(action.dy || 500) / 800) }] : kind === 'select' ? [{ select: target, option: action.option ?? action.value }]
-      : kind === 'upload' ? [{ upload: target, paths: action.files }] : kind === 'back' ? [{ back: true }] : kind === 'wait' ? [{ wait_for: action.text, timeout: (action.timeout || 10000) / 1000 }]
-      : kind === 'dialog' ? [{ dialog: action.accept ? 'accept' : 'dismiss', text: action.text }] : kind === 'reload' ? [{ key: 'Control+r' }] : null;
-    if (kind === 'evaluate') { const result = await this.bowser.call('eval', { js: action.script }); return { text: result.content.filter(p => p.type === 'text').map(p => p.text).join('\n') }; }
-    if (!actions || kind === 'click' && action.x != null) throw new Error('Bowser uses numbered elements or names. Use its text controls below, or open an isolated Chromium tab for direct pointer control.');
-    let upload;
-    if (kind === 'upload') { upload = await this.uploads(tab, action); actions[0].paths = upload.paths; }
-    let result; try { result = await this.bowser.call('act', { actions, budget: 6000 }); } finally { await upload?.cleanup(); }
-    if (kind === 'navigate') tab.url = action.url;
-    return { tab: this.metadata(tab), text: result.content.filter(p => p.type === 'text').map(p => p.text).join('\n') };
-  }
   async uploads(tab, action) {
     if (action.uploads) {
       if (!Array.isArray(action.uploads) || !action.uploads.length || action.uploads.length > 10) throw new Error('upload 1–10 files, up to 8 MiB total');
@@ -751,7 +736,6 @@ export class BrowserManager {
     return { paths: action.files.map(f => resolve(text(f, 4000))), cleanup: async () => {} };
   }
   async capture(tab, { fullPage = false, maxWidth = 1280 } = {}) {
-    if (tab.engine === 'bowser') { const result = await this.bowser.call('screenshot', { max_size: maxWidth }); const part = result.content.find(p => p.type === 'image'); if (!part) throw new Error('Bowser did not return a screenshot'); return { image: `data:${part.mimeType};base64,${part.data}` }; }
     let bytes;
     if (fullPage) bytes = await tab.page.screenshot({ type: 'jpeg', quality: 75, fullPage: true, scale: 'css', timeout: 10000 });
     else {
@@ -815,16 +799,16 @@ export class BrowserManager {
     if ([...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) return;
     const pending = this.contexts.get(sessionId), context = await pending;
     if (!context || this.contexts.get(sessionId) !== pending) return;
-    await this.save(sessionId).catch(() => {}); this.contexts.delete(sessionId); await context.close();
+    await this.save(sessionId).catch(() => {}); this.contexts.delete(sessionId);
+    if (context.helmWindow) { this.windowContexts.delete(sessionId); this.recovered.delete(sessionId); await this.closeIfEmpty(); } else await context.close();
     if (!this.headlessInUse()) await this.shutdownBrowser();
   }
   async save(sessionId) { const context = await this.contexts.get(sessionId); if (context) { (this.savedAt ||= new Map()).set(sessionId, this.now()); await this.saveContext(sessionId, context); } }
   async close(sessionId, tabId) {
     // A sleeping tab closes without waking its window.
     if (this.canWindow && !this.contexts.has(sessionId) && !this.tabs.has(tabId)) { this.owner(sessionId); const rows = await this.savedRows(sessionId); if (!rows.some(row => row.id === tabId)) throw new Error('browser tab not found in this thread'); await writeFile(join(this.directory, sessionId, 'tabs.json'), JSON.stringify(rows.filter(row => row.id !== tabId)), { mode: 0o600 }); return { ok: true }; }
-    await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (this.serial.has(tab.id)) throw new Error('wait for the current browser action to finish'); await this.save(sessionId); if (tab.page) { tab.explicitClose = true; await tab.page.close(); } else { this.tabs.delete(tab.id); this.bowser.stop(); } await this.persistTabs(sessionId); if (![...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) { const context = await this.contexts.get(sessionId); this.contexts.delete(sessionId); await context?.close(); } if (!this.headlessInUse()) await this.shutdownBrowser(); return { ok: true }; }
+    await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (this.serial.has(tab.id)) throw new Error('wait for the current browser action to finish'); await this.save(sessionId); tab.explicitClose = true; await tab.page.close(); await this.persistTabs(sessionId); if (![...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) { const context = await this.contexts.get(sessionId); this.contexts.delete(sessionId); if (context?.helmWindow) { this.windowContexts.delete(sessionId); this.recovered.delete(sessionId); await this.closeIfEmpty(); } else await context?.close(); } if (!this.headlessInUse()) await this.shutdownBrowser(); return { ok: true }; }
   async sweep() {
-    for (const tab of this.tabs.values()) if (tab.engine === 'bowser' && this.now() - tab.lastUsed > this.idleMs && !this.serial.has(tab.id)) this.bowser.stop();
     for (const sid of [...this.contexts.keys()]) {
       const tabs = [...this.tabs.values()].filter(t => t.sessionId === sid && t.engine === 'chromium');
       // Sign-ins made since the last save survive Chromium dying with Helm.
@@ -846,22 +830,16 @@ export class BrowserManager {
     const looking = tab => Promise.race([tab.page.evaluate(() => document.visibilityState === 'visible' && document.hasFocus()), new Promise(done => setTimeout(() => done(false), 1000).unref?.())]).catch(() => false);
     return (await Promise.all(tabs.map(looking))).some(Boolean);
   }
-  /** Close a chat's window and keep its tabs asleep, as when the owner closes it. */
+  /** Close a chat's tabs and keep them asleep; the window closes when no chat has a tab left. */
   async putAway(sessionId) {
-    const context = this.windowContexts.get(sessionId);
     await this.save(sessionId).catch(() => {}); await this.persistTabs(sessionId);
     this.suspending.add(sessionId);
-    try {
-      this.windowContexts.delete(sessionId); this.contexts.delete(sessionId); this.recovered.delete(sessionId);
-      await this.closeWindow(sessionId, context);
-      for (const tab of [...this.tabs.values()]) if (tab.sessionId === sessionId && tab.engine === 'chromium') this.tabs.delete(tab.id);
-    } finally { this.suspending.delete(sessionId); }
-    await trimProfile(windowProfile(this.directory, sessionId));
+    try { await this.closeTabs(sessionId); } finally { this.suspending.delete(sessionId); }
+    await this.closeIfEmpty();
   }
-  async closeWindow(sessionId, context) {
-    // A window Helm started on its own keeps running without Helm: stop it.
-    if (!context || context.helmDetach) await stopWindow(windowProfile(this.directory, sessionId));
-    await (context?.helmDetach ? context.helmDetach() : context?.close())?.catch(() => {});
+  async closeTabs(sessionId) {
+    this.windowContexts.delete(sessionId); this.contexts.delete(sessionId); this.recovered.delete(sessionId);
+    for (const tab of [...this.tabs.values()]) if (tab.sessionId === sessionId && tab.engine === 'chromium') { this.tabs.delete(tab.id); await tab.page?.close().catch(() => {}); }
   }
   /** The chat was deleted: its window, tabs, downloads and sign-ins go too. */
   async forget(sessionId) {
@@ -872,11 +850,13 @@ export class BrowserManager {
       this.windowContexts.delete(sessionId); this.contexts.delete(sessionId); this.recovered.delete(sessionId);
       clearTimeout(this.persistTimers?.get(sessionId)); this.persistTimers?.delete(sessionId); this.savedAt?.delete(sessionId);
       for (const [key, orphan] of this.orphans || []) if (orphan.sessionId === sessionId) this.orphans.delete(key);
-      if (context?.helmWindow || this.canWindow) await this.closeWindow(sessionId, context);
+      if (context?.helmWindow) await this.closeTabs(sessionId);
       else await context?.close().catch(() => {});
-      for (const tab of [...this.tabs.values()]) if (tab.sessionId === sessionId) { this.tabs.delete(tab.id); if (tab.engine === 'bowser') this.bowser.stop(); }
+      for (const tab of [...this.tabs.values()]) if (tab.sessionId === sessionId) this.tabs.delete(tab.id);
+      await stopWindow(windowProfile(this.directory, sessionId));
       await rm(join(this.directory, sessionId), { recursive: true, force: true });
     } finally { this.suspending.delete(sessionId); }
+    await this.closeIfEmpty();
     if (this.browser && !this.headlessInUse()) await this.shutdownBrowser();
   }
   /**
@@ -887,23 +867,25 @@ export class BrowserManager {
   async tidy() {
     let names; try { names = readdirSync(this.directory); } catch { return; }
     for (const name of names) {
-      if (name === 'flows' || !/^[\w:-]{1,160}$/.test(name)) continue;
+      if (name === 'flows' || name === 'window' || !/^[\w:-]{1,160}$/.test(name)) continue;
       const folder = join(this.directory, name);
       let info; try { info = statSync(folder); } catch { continue; }
       if (!info.isDirectory() || this.contexts.has(name)) continue;
       let alive; try { alive = !!this.session(name); } catch { alive = false; }
       const touched = Math.max(info.mtimeMs, ...['tabs.json', 'storage.json'].map(file => { try { return statSync(join(folder, file)).mtimeMs; } catch { return 0; } }));
       if (!alive && this.now() - touched > 24 * 3600000) await this.forget(name);
-      else await trimProfile(windowProfile(this.directory, name));
+      // Each chat kept its own window before the window was shared; that profile goes.
+      else { await stopWindow(windowProfile(this.directory, name)); await rm(windowProfile(this.directory, name), { recursive: true, force: true }).catch(() => {}); }
     }
+    await trimProfile(sharedProfile(this.directory));
   }
   async shutdownBrowser() { const browser = this.browser; this.browser = null; await browser?.close(); if (!this.tabs.size) { clearInterval(this.timer); this.timer = null; } }
-  async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } this.bowser.stop(); // A window Helm can come back to stays open on the owner's screen.
-    for (const context of this.windowContexts.values()) await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
-    this.windowContexts.clear(); await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
+  async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } // A window Helm can come back to stays open on the owner's screen.
+    for (const context of new Set([...this.windowContexts.values(), this.shared].filter(Boolean))) await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
+    this.windowContexts.clear(); this.shared = null; await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
 }
 
 /** A machine with no browser to start gets no browser note: it would only steer the agent to a tool that fails. */
-export function browserReady() { return !!(process.env.HELM_WINDOW_CHROMIUM || executable() || hasPlaywrightChromium() || bowserBin()); }
+export function browserReady() { return !!(process.env.HELM_WINDOW_CHROMIUM || executable() || hasPlaywrightChromium()); }
 
-export function browserNote({ bowser = !!bowserBin() } = {}) { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, the owner uses external Chromium.${bowser ? ' Bowser Computer Use is installed: --engine bowser.' : ''} For an owner step, point with helm browser point; do not click. Never ask for passwords. Suggest helm browser profiles and helm browser logins "<profile>" to copy logins. Respect the request on signed-in sites.]`; }
+export function browserNote() { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. For an owner step, point with helm browser point; do not click. Never ask for passwords. When a site needs a login, pick the fitting profile from helm browser profiles and run helm browser logins "<profile>". Respect the request on signed-in sites.]`; }
