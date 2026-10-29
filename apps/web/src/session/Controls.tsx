@@ -175,8 +175,10 @@ export function trayPrefs({ client, env, engine, profileId, options, setOptions,
         }, 15_000);
         setOptions((now) => now && { ...now, prefs: r.prefs });
       } else {
+        // Older machines still need the full copy. Updated machines apply
+        // only this field, so a stale picker cannot undo another device.
         const r: any = await client.rpc(env, 'profile.defaults', {
-          profileId, ...(options.defaults ?? {}), [kind]: value,
+          profileId, ...(options.defaults ?? {}), [kind]: value, patch: kind,
         }, 15_000);
         setOptions((now) => now && { ...now, defaults: r.defaults });
       }

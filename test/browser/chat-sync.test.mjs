@@ -227,11 +227,12 @@ test('two independent device views keep their own watch across refresh and close
   assert.equal(await text(a),'old still live');assert.equal(remote.watchers.size,2);
 });
 
-test('chat reads recover through the hub when a direct channel stays open but silent',async t=>{
+test('chat reads recover through HTTP when a direct channel stays open but silent',async t=>{
   const bundle=await build({stdin:{contents:`
     import { Client } from './apps/web/src/client';
     window.checkRoute = async method => {
-      const client=new Client([], 'test-token'), calls=[];
+      const client=new Client(['http://helm.test'], 'test-token'), calls=[];
+      window.fetch=async()=>{calls.push('http');return {ok:true,json:async()=>({result:{latest:true}})};}
       client.ws={readyState:WebSocket.OPEN,send:frame=>{
         calls.push('hub');const msg=JSON.parse(frame),pending=client.pending.get(msg.id);
         client.pending.delete(msg.id);pending?.resolve({latest:true});
@@ -245,9 +246,9 @@ test('chat reads recover through the hub when a direct channel stays open but si
   const context=await browser.newContext();t.after(()=>context.close());
   const page=await context.newPage();await page.addScriptTag({content:bundle.outputFiles[0].text});
   for(const method of ['session.events','session.watch','session.list','session.messages']){
-    assert.deepEqual(await page.evaluate(method=>window.checkRoute(method),method),{calls:['direct','hub'],result:{latest:true}});
+    assert.deepEqual(await page.evaluate(method=>window.checkRoute(method),method),{calls:['direct','http'],result:{latest:true}});
   }
-  for(const method of ['session.input','session.answer']){
+  for(const method of ['session.input','session.rename']){
     const result=await page.evaluate(method=>window.checkRoute(method),method);
     assert.deepEqual(result.calls,['direct']);assert.match(result.result.error,/timed out/);
   }

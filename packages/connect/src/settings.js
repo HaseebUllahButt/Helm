@@ -92,15 +92,17 @@ export function saveSubagentPrefs(profile, values = {}) {
   return next;
 }
 
-/** Replace the non-model start defaults for one account. */
+/** Replace defaults, or change only the fields sent by a single-choice picker. */
 export function saveStartPrefs(profile, values = {}) {
   const cfg = loadSettings();
   cfg.starts ??= {};
-  const clean = {};
+  const patch = ['effort', 'mode', 'speed'].includes(values.patch) ? values.patch : null;
+  const clean = patch ? { ...startPrefs(profile, cfg) } : {};
   for (const key of ['effort', 'mode', 'speed']) {
+    if (patch && key !== patch) continue;
     const value = typeof values[key] === 'string' ? values[key].trim() : '';
     if (key === 'mode' && value === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
-    if (value) clean[key] = value;
+    if (value) clean[key] = value; else delete clean[key];
   }
   const key = accountKey(profile);
   if (Object.keys(clean).length) cfg.starts[key] = clean;

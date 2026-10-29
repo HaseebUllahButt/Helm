@@ -1191,7 +1191,7 @@ test('slow direct fragments do not start duplicate history downloads', async () 
   const size = Math.ceil(body.length / 4);
   for (let i = 0; i < 4; i++) {
     await h.advance(1000);
-    peer.message({ t: 'dc-chunk', gid: 'slow', n: 4, i, data: body.slice(i * size, (i + 1) * size) });
+    peer.message({ t: 'dc-chunk', gid: 'slow', rid: frame.id, n: 4, i, data: body.slice(i * size, (i + 1) * size) });
   }
   assert.equal((await read).text.length, 2000);
   assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
@@ -1204,9 +1204,10 @@ test('a read deadline does not disconnect a direct link receiving fragments', as
   const h = harness(); h.start(); await h.advance(200);
   await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
   const read = h.client.rpc('machine', 'session.events', {}, 4000).catch(e => e.message);
+  const frame = peer.channel.frames.find(f => f.method === 'session.events');
   for (let i = 0; i < 3; i++) {
     await h.advance(1000);
-    peer.message({ t: 'dc-chunk', gid: 'slow', n: 5, i, data: 'part' });
+    peer.message({ t: 'dc-chunk', gid: 'slow', rid: frame.id, n: 5, i, data: i ? 'part' : JSON.stringify({t:'rpcResult',id:frame.id,ok:true}).slice(0,-1) });
   }
   await h.advance(1001);
   assert.match(await read, /timed out/);
@@ -1280,4 +1281,95 @@ test('saved delivery checks use a working direct link without another send', asy
   assert.equal(peer.channel.frames.some(frame => frame.method === 'session.deliver'), false);
   assert.equal(h.requests.some(req => req.url.endsWith('/api/action')), false);
   h.client.close();
+});
+
+
+test('another fragmented reply cannot delay a lost read backup', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
+  const large = h.client.rpc('machine', 'session.events');
+  const largeId = peer.channel.frames.find(f => f.method === 'session.events').id;
+  const small = h.client.rpc('machine', 'session.watch', { id: 'other-chat' });
+  await h.advance(1000);
+  peer.message({ t:'dc-chunk', gid:'large', rid:largeId, n:2, i:0, data:JSON.stringify({t:'rpcResult',id:largeId,ok:true,result:{text:'large'}}).slice(0,-1) });
+  await h.advance(501);
+  assert.equal((await small).fresh, true);
+  assert.deepEqual(h.requests.filter(r => r.url.endsWith('/api/read')).map(r => JSON.parse(r.init.body).method), ['session.watch']);
+  peer.message({t:'dc-chunk',gid:'large',n:2,i:1,data:'}'});
+  assert.equal((await large).text, 'large');
+  h.client.close();
+});
+
+test('a large relay reply keeps its socket alive while each piece arrives', async () => {
+  const h = harness({ pong: false }); h.start(); await h.advance(200);
+  const socket = h.sockets[0];
+  assert.match(socket.url, /[?&]chunks=1/);
+  const read = h.client.rpc('machine', 'session.events', { before: 500, pageBytes: 1000000 }, 60000);
+  const frame = socket.frames.find(f => f.method === 'session.events');
+  const body = JSON.stringify({t:'rpcResult',id:frame.id,ok:true,result:{text:'x'.repeat(220000)}});
+  const n = Math.ceil(body.length / 15000);
+  for (let i = 0; i < n; i++) {
+    await h.advance(2000);
+    socket.message({t:'dc-chunk',gid:'relay-large',rid:frame.id,n,i,data:body.slice(i*15000,(i+1)*15000)});
+    assert.equal(socket.readyState, 1);
+  }
+  assert.equal((await read).text.length, 220000);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  h.client.close();
+});
+
+test('a slow background history page is not downloaded twice', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const read = h.client.rpc('machine', 'session.events', { before: 300, pageBytes: 1000000 });
+  const frame = h.sockets[0].frames.find(f => f.method === 'session.events');
+  await h.advance(5000);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  h.sockets[0].message({t:'rpcResult',id:frame.id,ok:true,result:{events:[]}});
+  await read; h.client.close();
+});
+
+test('direct data keeps a disconnected ICE path alive until the data stops', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
+  peer.connectionState = 'disconnected'; peer.onconnectionstatechange();
+  for (let i = 0; i < 30; i++) {
+    await h.advance(1000);
+    peer.message({t:'event',kind:'session.update',payload:{session:{id:'chat'}}});
+    assert.equal(h.client.directTo('machine'), true);
+  }
+  await h.advance(5001);
+  assert.equal(h.client.directTo('machine'), false);
+  h.client.close();
+});
+
+test('settings keep using a proven direct link while live data continues', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
+  const read = h.client.rpc('machine','session.watch',{id:'chat'});
+  const frame = peer.channel.frames.find(f => f.method === 'session.watch');
+  peer.message({t:'rpcResult',id:frame.id,ok:true,result:{last:1}}); await read;
+  await h.advance(12000);
+  peer.message({t:'event',kind:'session.update',payload:{session:{id:'chat'}}});
+  const write = h.client.rpc('machine','session.effort',{id:'chat',effort:'high'});
+  const setting = peer.channel.frames.find(f => f.method === 'session.effort');
+  assert.ok(setting);
+  assert.equal(h.sockets[0].frames.some(f => f.method === 'session.effort'), false);
+  peer.message({t:'rpcResult',id:setting.id,ok:true,result:{ok:true}}); await write;
+  h.client.close();
+});
+
+
+test('compressed progress belongs only to the request named by the machine', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
+  const large = h.client.rpc('machine','session.events');
+  const rpc = peer.channel.frames.find(f => f.method === 'session.events');
+  const small = h.client.rpc('machine','session.watch',{id:'other'});
+  await h.advance(1000);
+  peer.message({t:'dc-progress',rid:rpc.id});
+  await h.advance(501);
+  assert.equal((await small).fresh, true);
+  assert.deepEqual(h.requests.filter(r=>r.url.endsWith('/api/read')).map(r=>JSON.parse(r.init.body).method),['session.watch']);
+  peer.message({t:'rpcResult',id:rpc.id,ok:true,result:{ok:true}});
+  await large; h.client.close();
 });

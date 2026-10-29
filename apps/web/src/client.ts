@@ -492,6 +492,7 @@ type Pending = {
   recover?: () => void;
   readKey?: string;
   quietAfter?: number;
+  payloadAt?: number;
   sentAt?: Partial<Record<RpcRoute, number>>;
 };
 type Listener = (env: string, kind: string, payload: any) => void;
@@ -516,7 +517,6 @@ interface Peer {
   disconnectedTimer?: ReturnType<typeof setTimeout>;
   /** When the channel last carried anything, and whether a check is out. */
   heard?: number;
-  payloadAt?: number;
   checking?: boolean;
   /** Reads the machine's compressed frames (peer.js DeflateLink). */
   inflate?: { write: (bytes: ArrayBuffer) => void; close: () => void };
@@ -527,7 +527,7 @@ interface Peer {
  * machine flushes after each frame and may split the bytes anywhere, so they
  * are read as one stream, not message by message.
  */
-function inflater(onFrame: (msg: Record<string, any>) => void, onError: () => void, onPartial: () => void) {
+function inflater(onFrame: (msg: Record<string, any>) => void, onError: () => void) {
   const stream = new DecompressionStream('deflate-raw');
   const writer = stream.writable.getWriter();
   const reader = stream.readable.pipeThrough(new TextDecoderStream()).getReader();
@@ -544,7 +544,6 @@ function inflater(onFrame: (msg: Record<string, any>) => void, onError: () => vo
         try { msg = JSON.parse(line); } catch { continue; }
         if (msg && typeof msg === 'object' && !Array.isArray(msg)) onFrame(msg);
       }
-      if (text.length) onPartial();
     }
   })().catch(onError);
   return {
@@ -1093,7 +1092,7 @@ export class Client {
   }
 
   private prepareSocket(hub: string) {
-    const ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/ws`, ['helm', this.token]);
+    const ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/ws?chunks=1`, ['helm', this.token]);
     let cancel!: () => void;
     const ready = new Promise<WebSocket>((resolve, reject) => {
       const timer = setTimeout(() => finish(new Error('socket connection timed out')), 20_000);
@@ -1209,10 +1208,11 @@ export class Client {
     if (!migrating) this.relay = hub;
 
     await new Promise<void>((resolve, reject) => {
-      const url = `${hub.replace(/^http/, 'ws')}/ws`;
+      const url = `${hub.replace(/^http/, 'ws')}/ws?chunks=1`;
       // Keep credentials out of URLs and access logs.
       const ws = prepared?.ws ?? new WebSocket(url, ['helm', this.token]);
       if (!migrating) this.ws = ws;
+      const assembly: Pick<Peer, 'fragments'> = { fragments: new Map() };
       let settled = false, stopped = false;
       let drain: ReturnType<typeof setTimeout> | undefined;
       let lastReceived = Date.now(), awaiting = false;
@@ -1227,6 +1227,7 @@ export class Client {
       const stop = (reason: string, retry = true) => {
         if (stopped) return;
         stopped = true;
+        assembly.fragments.clear();
         clearTimeout(handshake); clearInterval(heartbeat); clearTimeout(drain); clearTimeout(woke);
         this.socketCleanups.delete(cleanup);
         ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
@@ -1333,9 +1334,11 @@ export class Client {
       };
       ws.onmessage = (ev) => {
         if (stopped) return;
-        let msg: any;
-        try { msg = JSON.parse(ev.data); } catch { return; }
-        if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+        const msg = this.accumulate(assembly, ev.data, rid => {
+          lastReceived = Date.now(); awaiting = false;
+          this.notePayload(ws, rid);
+        });
+        if (!msg) return;
         lastReceived = Date.now(); awaiting = false;
         if (msg.t === 'ping') { ws.send(JSON.stringify({ t: 'pong' })); return; }
         if (msg.t === 'rpcResult') {
@@ -1713,10 +1716,16 @@ export class Client {
     return r;
   }
 
-  private readGrace(env: string, method: string, timeout: number) {
+  private readKey(env: string, method: string, params: any = {}) {
+    const shape = method === 'session.events'
+      ? `:${params.before !== undefined ? 'before' : params.since !== undefined ? 'since' : 'tail'}:${params.pageBytes ?? 'default'}` : '';
+    return `${env}:${method}${shape}`;
+  }
+
+  private readGrace(env: string, method: string, timeout: number, params: any = {}) {
     const samples = this.rttSamples?.get(env);
     const rtt = samples?.length ? Math.min(...samples) : 0;
-    const previous = this.readDurations?.get(`${env}:${method}`) || 0;
+    const previous = this.readDurations?.get(this.readKey(env, method, params)) || 0;
     const justWoke = this.wokeAt > 0 && Date.now() - this.wokeAt < 5000;
     return justWoke ? 500 : Math.min(8000, Math.max(1500, rtt * 2 + 250, previous * 1.5 + 250), timeout / 2);
   }
@@ -1729,7 +1738,8 @@ export class Client {
     const peer = this.peers.get(env);
     // Use a recently proven direct link for settings too. An open channel
     // alone is insufficient after a network change. Never replay a write.
-    const directAnswered = peer?.answeredAt !== undefined && Date.now() - peer.answeredAt < 10_000;
+    const directAnswered = peer?.answeredAt !== undefined && Date.now() - peer.answeredAt < 60_000
+      && peer.heard !== undefined && Date.now() - peer.heard < 10_000;
     const settingsWrite = ['profile.defaults', 'model.prefs', 'picker.prefs',
       'session.model', 'session.effort', 'session.mode', 'session.speed'].includes(method);
     // Image uploads can fill the data channel's send buffer while its
@@ -1751,7 +1761,7 @@ export class Client {
     // A model list asked with `settled` waits on the machine for its refresh
     // to end. That wait is not a stalled route, so it is never raced.
     const hedge = HTTP_READ_METHODS.has(method) && !(method === 'model.list' && params?.settled === true);
-    const hedgeAfter = this.readGrace(env, method, timeout);
+    const hedgeAfter = this.readGrace(env, method, timeout, params);
     return new Promise<T>((resolve, reject) => {
       const started = Date.now();
       let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -1763,7 +1773,7 @@ export class Client {
         reject: (error) => { clear(); reject(error); },
         ...(direct ? { direct: peer, env } : { relay: this.ws! }),
         routes: new Set([direct ? 'direct' : 'relay']),
-        ...(hedge ? { readKey: `${env}:${method}`, quietAfter: hedgeAfter, sentAt: { [direct ? 'direct' : 'relay']: started } } : {}),
+        ...(hedge ? { readKey: this.readKey(env, method, params), quietAfter: hedgeAfter, sentAt: { [direct ? 'direct' : 'relay']: started } } : {}),
       });
       const frame = JSON.stringify({ t: 'rpc', id, env, method, params });
       // Prefer the direct channel: relaying costs two internet round trips
@@ -1811,7 +1821,8 @@ export class Client {
           if (!this.pending.has(id)) return;
           // Fragments and compressed data prove that the direct path still
           // works. Duplicating a slow reply would consume the same upload.
-          if (sent && peer?.payloadAt !== undefined && Date.now() - peer.payloadAt < hedgeAfter) {
+          const payloadAt = this.pending.get(id)?.payloadAt;
+          if (payloadAt !== undefined && Date.now() - payloadAt < hedgeAfter) {
             fallback = setTimeout(recover, hedgeAfter);
             return;
           }
@@ -1819,7 +1830,11 @@ export class Client {
           // once makes the remote machine upload the same reply twice.
           httpFallback(Date.now() - started);
         };
-        fallback = setTimeout(recover, hedgeAfter);
+        // Older pages are background work. A lost route can still recover,
+        // but a slow page must not compete with its own duplicate upload.
+        if (!(method === 'session.events' && params.before !== undefined && params.pageBytes)) {
+          fallback = setTimeout(recover, hedgeAfter);
+        }
       }
       deadline = setTimeout(() => {
         clear();
@@ -1840,7 +1855,7 @@ export class Client {
     if (!bases.length) throw new Error('not connected');
     const started = Date.now();
     const staggerAfter = path === '/api/read'
-      ? Math.max(3000, this.readGrace(env, method, timeout)) : 400;
+      ? Math.max(3000, this.readGrace(env, method, timeout, params)) : 400;
     // A reconnect may find another hub while this read is already waiting on
     // an obsolete relay. Race known, eligible endpoints with a short head
     // start for the current one; authentication and the body stay
@@ -2014,8 +2029,13 @@ export class Client {
       if (['failed', 'closed'].includes(pc.connectionState)) {
         this.dropDirect(env, peer, 'The direct link closed. Helm is using the backup connection.');
       } else if (pc.connectionState === 'disconnected') {
-        peer.disconnectedTimer = setTimeout(() => this.dropDirect(env, peer,
-          'The direct link stopped answering. Helm is using the backup connection.'), 5000);
+        const check = () => {
+          if (this.peers.get(env) !== peer || pc.connectionState !== 'disconnected') return;
+          if (peer.heard !== undefined && Date.now() - peer.heard < 5000) {
+            peer.disconnectedTimer = setTimeout(check, 5000);
+          } else this.dropDirect(env, peer, 'The direct link stopped answering. Helm is using the backup connection.');
+        };
+        peer.disconnectedTimer = setTimeout(check, 5000);
       }
     };
 
@@ -2031,8 +2051,7 @@ export class Client {
       // machine ignores the hello and keeps sending text.
       if (typeof DecompressionStream === 'function' && typeof TextDecoderStream === 'function') {
         try {
-          peer.inflate = inflater(handle, () => this.dropDirect(env, peer, 'The direct link sent data Helm could not read.'),
-            () => { peer.payloadAt = Date.now(); });
+          peer.inflate = inflater(handle, () => this.dropDirect(env, peer, 'The direct link sent data Helm could not read.'));
           channel.send(JSON.stringify({ t: 'hello', zip: 'deflate-raw' }));
         } catch { peer.inflate = undefined; }
       }
@@ -2041,6 +2060,7 @@ export class Client {
     };
     channel.onclose = () => this.dropDirect(env, peer);
     const handle = (msg: Record<string, any>) => {
+      if (msg.t === 'dc-progress') { this.notePayload(peer, msg.rid); return; }
       if (msg.t === 'rpcResult') {
         this.receiveRpc(msg, 'direct');
         return;
@@ -2050,7 +2070,7 @@ export class Client {
     channel.onmessage = (ev) => {
       peer.heard = Date.now();
       if (typeof ev.data !== 'string') { peer.inflate?.write(ev.data); return; }
-      const msg = this.accumulate(peer, ev.data);
+      const msg = this.accumulate(peer, ev.data, rid => this.notePayload(peer, rid));
       if (msg != null) handle(msg);
     };
 
@@ -2122,7 +2142,13 @@ export class Client {
    * Parse a possibly-fragmented direct-channel frame once. Returns the
    * message when complete, or null while waiting for more pieces.
    */
-  private accumulate(peer: Peer, raw: any): Record<string, any> | null {
+  private notePayload(source: Peer | WebSocket, id: unknown) {
+    // Only progress for this exact request can postpone its backup.
+    const pending = typeof id === 'string' ? this.pending.get(id) : undefined;
+    if (pending && (pending.direct === source || pending.relay === source)) pending.payloadAt = Date.now();
+  }
+
+  private accumulate(peer: Pick<Peer, 'fragments'>, raw: any, onPartial?: (rid: unknown) => void): Record<string, any> | null {
     if (typeof raw !== 'string') return null;
     let msg: any;
     try { msg = JSON.parse(raw); } catch { return null; }
@@ -2141,7 +2167,7 @@ export class Client {
     if (entry.n !== n || entry.parts[i] !== undefined) return null;
     entry.parts[i] = data;
     entry.got++;
-    peer.payloadAt = Date.now();
+    onPartial?.(msg.rid);
     if (peer.fragments.size > 8) {
       const oldest = peer.fragments.keys().next().value as string | undefined;
       if (oldest !== undefined) peer.fragments.delete(oldest);
