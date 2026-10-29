@@ -37,7 +37,9 @@ before(async () => {
     ];
     window.reads=[];
     const client={pendingActions:()=>[],resumeActions:async()=>[],on:()=>()=>{},subscribe:()=>{},rpc:async(_env,method,params)=>{
-      if(method==='session.visual'){window.reads.push(params);return {html:pages[params.ref]};}
+      if(method==='session.visual'){window.reads.push(params);if(params.ref!=='doc')return {html:pages[params.ref]};
+        if(params.page===undefined)return {total:40,pages:Array.from({length:30},()=>({width:1600,height:900}))};
+        return {image:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aBZkAAAAASUVORK5CYII='};}
       if(method==='session.events')return {session:window.chats[params.id],events:params.since||params.id!=='a'?[]:events,pending:[],last:params.id==='a'?6:0};
       if(method==='session.watch')return {last:0};
       if(method==='model.list')return {models:[],modes:[]};
@@ -164,6 +166,29 @@ test('the agent opens the canvas once per request, a closed canvas stays closed,
   await canvas(page).getByRole('heading', { name: 'Plan' }).waitFor();
   await page.evaluate(() => window.show('a', {}));
   await page.frameLocator('.canvas iframe.visual-frame').getByText('Inline chart').waitFor();
+});
+
+test('a PDF shows as page pictures, read-only, loading only the pages near the view', async t => {
+  const pdf = { requestId: 'p1', visual: { ref: 'doc', title: 'Before and Now', height: 420, bytes: 2048, kind: 'pdf', pages: 30, total: 40, placement: 'canvas' } };
+  for (const width of [1280, 390]) {
+    const page = await open(t, width);
+    await request(page, 'a', pdf);
+    const dock = page.locator('.canvas');
+    await dock.getByText('First 30 of 40 pages').waitFor();
+    assert.equal(await dock.locator('.pdf-page').count(), 30);
+    await dock.getByRole('img', { name: 'Page 1', exact: true }).waitFor();
+    const loaded = () => page.evaluate(() => [...new Set(window.reads.filter(r => r.ref === 'doc' && r.page !== undefined).map(r => r.page))]);
+    assert.ok(!(await loaded()).includes(29), 'the last page waits until it is near the view');
+    assert.equal(await dock.locator('img').count() < 30, true);
+    await dock.locator('.pdf-page').last().scrollIntoViewIfNeeded();
+    await dock.getByRole('img', { name: 'Page 30', exact: true }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('.pdf-page[data-page="1"] img'));
+    await dock.getByRole('button', { name: 'Zoom' }).click();
+    assert.ok(await dock.locator('.pdf-page').first().evaluate(el => el.getBoundingClientRect().width > el.parentElement.clientWidth), 'Zoom makes a page wider than the canvas');
+    await dock.getByRole('button', { name: 'Fit width' }).click();
+    assert.equal(await dock.locator('iframe, textarea, [contenteditable]').count(), 0);
+    assert.equal(await dock.getByRole('button', { name: /^(Save|Edit|Create file)$/ }).count(), 0, 'a PDF has no edit or save controls');
+  }
 });
 
 test('the owner collapses a page to one line, the device remembers it, and Show brings it back', async t => {
