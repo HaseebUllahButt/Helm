@@ -134,6 +134,11 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `navigator.clipboard.readText()` holds "working on it done.", the
   selection stays, and "Copied" shows. At 1280×800 a real double-click on a
   word copies it.
+- **Speed:** `node scripts/bench-stream/run.mjs` streams PandaCode's 50 KB
+  reply (W1) through a private Helm and reports the page's main-thread work.
+  The machine is shared with other chats, so compare two builds in turns,
+  not with numbers from another day. On 2026-10-30 (i7-11390H, Brave),
+  Helm used 5.3 s for the 32 s reply and PandaCode's own preview 10.7 s.
 - **Traps:** iPhone handles and Safari permissions still need a device.
 - **Tests:** `test/browser/activity-fold`, `chat-fold`,
   `history-pagination`, `transcript-performance`, `copy-selection`,
