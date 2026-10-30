@@ -44,6 +44,7 @@ import { useChatKeys, useDeleteKey } from './chatKeys';
 import { Canvas, chatPages, useCanvas } from './Canvas';
 import { CanvasContext, type VisualReader } from './VisualReply';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
+import { MovedNotice } from './MoveChat';
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
@@ -78,7 +79,7 @@ function lastEditedDir(turns: Turn[]): string {
   return '';
 }
 
-export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onSendFolder, onOpenMachineSession, onOpenNative, reviewChildren }: {
+export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onSendFolder, onMove, onOpenMachineSession, onOpenNative, reviewChildren }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account and so apply on all of them. */
   machines?: Environment[];
@@ -96,6 +97,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   /** Open one of Claude Code's own subagents as a read-only chat. */
   onOpenNative?: (agent: NativeAgent) => void;
   onSendTask?: () => void;
+  /** Move this chat, with its conversation, to another machine. */
+  onMove?: () => void;
   onSendFolder?: () => void;
   onOpenMachineSession?: (machineId: string, session: Session) => void;
 }) {
@@ -840,6 +843,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <div className="menu" onClick={() => setMenu(null)}>
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename chat</button>
             {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
+            {onMove && <button onClick={onMove}>Move to another machine</button>}
             {!session.brain && onSendTask && !session.external && (
               <button disabled={!env.online} onClick={onSendTask}>Send to another machine</button>
             )}
@@ -855,6 +859,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         )}
       </div>
 
+      <MovedNotice client={client} session={session} onOpenSession={onOpenMachineSession} />
       <TaskReturn client={client} envId={env.id} transfer={session.taskTransfer}
         original={session.parent} onOpenSession={onOpenMachineSession} />
       <ExternalSessionNotice session={session}

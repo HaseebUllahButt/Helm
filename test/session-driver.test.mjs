@@ -543,6 +543,24 @@ test('discardEmpty only removes unused ordinary chats', async () => {
   await sessions.kill(brain.id);
 });
 
+test('a moved chat stays when left unused, and its old copy takes no messages', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  const here = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  sessions.setMove(here.id, { movedFrom: { machineId: 'aa11', machineName: 'Laptop', sessionId: 'old1' } });
+  assert.deepEqual(await sessions.discardEmpty(here.id), { ok: true, discarded: false });
+
+  const away = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  sessions.setMove(away.id, { moving: { moveId: 'a'.repeat(24), machineName: 'VM' } });
+  await assert.rejects(sessions.input(away.id, 'hello'), /moving this chat to VM/);
+  sessions.setMove(away.id, { moving: null, movedAway: { machineId: 'bb22', machineName: 'VM', sessionId: 'new1', at: 1 } });
+  assert.equal(sessions.get(away.id).moving, undefined);
+  await assert.rejects(sessions.input(away.id, 'hello'), /moved to VM\. Continue it there/);
+  assert.deepEqual(await sessions.discardEmpty(away.id), { ok: true, discarded: false });
+  await sessions.kill(here.id);
+  await sessions.kill(away.id);
+});
+
 test('a daemon restart lists a driven session as idle and resumable', async (t) => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });

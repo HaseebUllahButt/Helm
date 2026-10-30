@@ -11,10 +11,15 @@ const homePath = (path, home) => resolve(home, path === '~' ? '.' : path.startsW
  * not constrain an unchecked protected-argument stream.
  */
 export class CopyArguments extends Transform {
-  constructor(targetFolder, { home = homedir() } = {}) {
+  constructor(targetFolder, { home = homedir(), sendJobId = null } = {}) {
     super();
     this.target = homePath(targetFolder, home);
     this.home = home;
+    // A Send job (send-engine.js) adds its own options. Its partial folder
+    // carries the job id, and it prunes only its private stage, never a
+    // folder it sends to again.
+    this.sendJobId = sendJobId;
+    this.stage = !!sendJobId && this.target.endsWith(`.helm-partial-${sendJobId}`);
     this.pending = Buffer.alloc(0);
     this.checked = false;
   }
@@ -33,8 +38,14 @@ export class CopyArguments extends Transform {
       while (args.length && args[0] !== '.') {
         const arg = args.shift();
         if (['--stats', '--mkpath', '--from0'].includes(arg)) continue;
-        if (/^--(?:compress-level|timeout)=\d{1,6}$/.test(arg)) continue;
-        if (arg === '--partial-dir' && args.shift() === '.helm-transfer-partial') continue;
+        // --bwlimit only slows the copy down; tests use it to watch a send in progress.
+        if (/^--(?:compress-level|timeout|bwlimit)=\d{1,6}$/.test(arg)) continue;
+        if (arg === '--partial-dir' && args[0] === '.helm-transfer-partial') { args.shift(); continue; }
+        if (this.sendJobId) {
+          if (['--checksum-choice=xxh128', '--compress-choice=zstd', '--delay-updates'].includes(arg)) continue;
+          if (this.stage && ['--delete-delay', '--delete-excluded'].includes(arg)) continue;
+          if (arg === '--partial-dir' && args[0] === `.helm-partial-${this.sendJobId}`) { args.shift(); continue; }
+        }
         throw new Error(`The copy option ${arg.slice(0, 80)} is not supported.`);
       }
       if (args.length !== 2 || args[0] !== '.' || !args[1]

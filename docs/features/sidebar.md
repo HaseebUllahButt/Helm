@@ -57,7 +57,8 @@ until `text` starts with "helm / Search anything".
 
 ## Rename, archive, delete
 - **Sees:** each row has a ⋯ button ("actions for <title>") with **Rename
-  thread**, **Archive thread**, **Delete thread**. Delete asks: "Delete
+  thread**, **Move to another machine** (see machines.md), **Archive
+  thread**, **Delete thread**. Delete asks: "Delete
   "<title>"? This ends the agent and permanently removes the thread from
   helm." with **Cancel** / **Delete**. Archived chats fold under
   "ARCHIVED" on the machine screen. The chat's own ⋯ menu ("more") has the

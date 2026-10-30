@@ -54,6 +54,7 @@ import { transcribe, canTranscribe, setGroqKey, directVoice } from './voice.js';
 import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
 import { Handoffs } from './handoffs.js';
 import { TaskTransfers } from './task-transfer.js';
+import { ChatMoves } from './chat-move.js';
 import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { CliUpdater } from './cli-updates.js';
@@ -566,6 +567,12 @@ export class Daemon {
       },
     });
     this.taskTransfers.start();
+    this.chatMoves = new ChatMoves({
+      sendEngine: this.sendEngine,
+      network: () => loadNetwork() ?? this.net,
+      sessions: this.sessions,
+      rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
+    });
     this.forwards.begin().catch((err) => console.error(`[helm] forwards: ${err.message}`));
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
@@ -587,7 +594,7 @@ export class Daemon {
     this.sessionRecovery = this.sessions.adoptTerminals()
       .catch(() => {})
       .then(() => this.sessions.resume())
-      .then(() => { if (!this.#stopped) { this.inputDelivery.resume(); this.schedules?.start(); this.sessions.startLimitRecovery(); } })
+      .then(() => { if (!this.#stopped) { this.inputDelivery.resume(); this.schedules?.start(); this.sessions.startLimitRecovery(); this.chatMoves.start(); } })
       .catch((error) => console.error(`[helm] session recovery: ${error.message}`));
     // Caches worth having warm, none worth being late for: they start once
     // the links are up. Re-reading the shell's aliases blocks for a moment,
@@ -2348,6 +2355,12 @@ export class Daemon {
         return this.handoffs.returned(p, caller);
       case M.TASK_STATUS:
         return this.taskTransfers.status(p, caller);
+      case M.CHAT_MOVE:
+        return this.chatMoves.move(p, caller);
+      case M.CHAT_MOVE_STATUS:
+        return this.chatMoves.status(p, caller);
+      case M.CHAT_ADOPT:
+        return this.chatMoves.adopt(p, caller);
       case M.TASK_RETRY_RETURN:
         return this.taskTransfers.retryReturn(p, caller);
       case M.HANDOFF_STATUS:

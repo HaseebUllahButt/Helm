@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { bulkPlan, bulkWarnings, discardPlan } from '../packages/connect/src/bulk-transfer.js';
+import { bulkPlan, bulkWarnings, discardPlan, progressFrom } from '../packages/connect/src/bulk-transfer.js';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-bulk-policy-'));
 test.after(() => rmSync(root, { recursive: true, force: true }));
@@ -37,4 +37,10 @@ for (const git of [false, true]) test(`bulk --no-env excludes root and nested en
       if (!git) assert.equal(plan.bytes, includeEnv ? 88 : 32, 'estimate excludes dependency bytes and omitted env');
     } finally { discardPlan(plan); }
   }
+});
+
+test('copy progress reads rsync 3.5 lines with a B after the bytes, and older lines', () => {
+  assert.deepEqual(progressFrom('      1,212,416B  38% 1,051,379B/s    0:00:01  \r'), { bytes: 1212416, percent: 38, rate: '1,051,379B/s' });
+  assert.deepEqual(progressFrom('      1,212,416  38%    1.00MB/s    0:00:01  \r'), { bytes: 1212416, percent: 38, rate: '1.00MB/s' });
+  assert.equal(progressFrom('sending incremental file list'), null);
 });

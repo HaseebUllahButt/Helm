@@ -147,7 +147,7 @@ export function markerDigest(folder, handoffId) {
 /** rsync --info=progress2 lines: "  12,345,678  45%   10.20MB/s    0:00:03". */
 export function progressFrom(chunk) {
   const text = String(chunk).slice(-MAX_PROGRESS_LINE);
-  const all = [...text.matchAll(/([\d,]+)\s+(\d{1,3})%\s+([\d.]+\w+\/s)?/g)];
+  const all = [...text.matchAll(/([\d,]+)B?\s+(\d{1,3})%\s+([\d.,]+\w+\/s)?/g)];
   const last = all[all.length - 1];
   if (!last) return null;
   return { bytes: Number(last[1].replace(/,/g, '')), percent: Number(last[2]), rate: last[3] ?? null };
