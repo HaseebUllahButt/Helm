@@ -38,6 +38,28 @@ test('copy arguments reject other folders, remote file options, extra paths and 
   }
 });
 
+// What rsync 3.5 puts in the stream for a Send job (send-engine.js flags).
+const sendArgs = (id, extra = []) => ['--compress-level=1', '--timeout=120', '--checksum-choice=xxh128', '--compress-choice=zstd',
+  ...extra, '--stats', '--partial-dir', `.helm-partial-${id}`, '--mkpath'];
+const job = 'a'.repeat(24);
+
+test('a Send job passes its own options; deletion only into its private stage', async () => {
+  const pass = async (folder, args, options) => {
+    const gate = new CopyArguments(folder, options);
+    const out = [];
+    gate.on('data', (bytes) => out.push(bytes));
+    const error = once(gate, 'error').then(([e]) => e);
+    gate.end(packed([...args, '.', folder]));
+    return Promise.race([once(gate, 'end').then(() => null), error]);
+  };
+  const stage = `/home/me/app.helm-partial-${job}`;
+  assert.equal(await pass(stage, sendArgs(job, ['--delete-delay', '--delete-excluded']), { sendJobId: job }), null);
+  assert.equal(await pass('/home/me/app', sendArgs(job, ['--delay-updates']), { sendJobId: job }), null);
+  assert.match((await pass('/home/me/app', sendArgs(job, ['--delete-delay']), { sendJobId: job })).message, /--delete-delay is not supported/);
+  assert.match((await pass(stage, sendArgs('b'.repeat(24)), { sendJobId: job })).message, /--partial-dir is not supported/);
+  assert.match((await pass(stage, sendArgs(job), {})).message, /--checksum-choice=xxh128 is not supported/);
+});
+
 async function copyFixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'helm-copy-arguments-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
