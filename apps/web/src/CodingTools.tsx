@@ -48,7 +48,8 @@ export function CodingTools({ client, env }: { client: Client; env: Environment 
     try {
       const r = await client.rpc<Info>(env.id, 'cli.versions', { refresh }, 60_000);
       if (!alive.current) return null;
-      setInfo(r); setError(''); setNow(Date.now());
+      // Read every 3 seconds during an update: the same answer draws nothing.
+      setInfo((was) => was && JSON.stringify(was) === JSON.stringify(r) ? was : r); setError(''); setNow(Date.now());
       return r;
     } catch (e: any) {
       if (alive.current) setError(/unknown method|not supported/i.test(e.message)
@@ -65,7 +66,7 @@ export function CodingTools({ client, env }: { client: Client; env: Environment 
     if (!running) return;
     let reading = false;
     const t = setInterval(() => {
-      if (reading) return;
+      if (reading || document.hidden) return;
       reading = true;
       void load(false).finally(() => { reading = false; });
     }, 3_000);

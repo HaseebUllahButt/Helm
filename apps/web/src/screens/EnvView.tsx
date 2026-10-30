@@ -132,7 +132,8 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
   // out to the internet and came back, which is direct in name only.
   const [route, setRoute] = useState<{ local?: string; remote?: string } | null>(null);
   const look = useCallback(() => {
-    client.route(env.id).then((r) => setRoute(r)).catch(() => {});
+    // Asked every 10 seconds: the same pair of addresses draws nothing.
+    client.route(env.id).then((r) => setRoute((was) => was && r && was.local === r.local && was.remote === r.remote ? was : r)).catch(() => {});
   }, [client, env.id]);
   useEffect(() => { if (direct) look(); else setRoute(null); }, [direct, look]);
   useLiveInterval(direct ? 10_000 : null, look, [look]);

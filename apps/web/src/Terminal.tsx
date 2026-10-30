@@ -222,6 +222,13 @@ export function Terminal({ client, env, sessionId }: {
       }
     };
     const catchUp = () => { if (!document.hidden) void attach(); };
+    // Out of sight, the terminal stops taking output: the machine stops
+    // sending it, and what is already on its way is not drawn. Back in
+    // sight, catchUp reads the screen as it is now.
+    const shownOrHidden = () => {
+      if (document.hidden) client.rpc(env, 'session.detach', { id: sessionId, watcher }, 5_000).catch(() => {});
+      else void attach();
+    };
 
     xterm.textarea?.addEventListener('focus', () => setTyping(true));
     // A tap on a key can blur for a moment before it takes the focus back.
@@ -251,7 +258,7 @@ export function Terminal({ client, env, sessionId }: {
     });
 
     const off = client.on((e, kind, payload) => {
-      if (e === env && kind === 'session.data' && payload?.id === sessionId) {
+      if (e === env && kind === 'session.data' && payload?.id === sessionId && !document.hidden) {
         const piece = { text: payload.text ?? '', reset: !!payload.reset, position: payload.position };
         outputVersion++;
         if (attaching) buffered.push(piece);
@@ -296,7 +303,7 @@ export function Terminal({ client, env, sessionId }: {
     // The renew keeps a watching viewer registered, so output stops being
     // pushed to a phone that has gone away.
     const renew = setInterval(() => { if (!document.hidden) void attach(true); }, 25_000);
-    document.addEventListener('visibilitychange', catchUp);
+    document.addEventListener('visibilitychange', shownOrHidden);
     window.addEventListener('focus', catchUp);
     window.addEventListener('pageshow', catchUp);
     // On a computer the terminal is what you came for: type straight away.
@@ -306,7 +313,7 @@ export function Terminal({ client, env, sessionId }: {
       stopped = true;
       term.current = null;
       clearInterval(renew);
-      document.removeEventListener('visibilitychange', catchUp);
+      document.removeEventListener('visibilitychange', shownOrHidden);
       window.removeEventListener('focus', catchUp);
       window.removeEventListener('pageshow', catchUp);
       clearTimeout(frame);

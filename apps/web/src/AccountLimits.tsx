@@ -26,23 +26,26 @@ export function useAccountLimits(client: Client, targets: Environment[]): Accoun
   useEffect(() => {
     let live = true;
     const busy = new Set<string>();
+    // Only while in sight, and a machine that says the same again draws nothing.
     const refresh = () => {
+      if (document.hidden) return;
       setNow(Date.now());
       for (const env of targets) {
         if (busy.has(env.id)) continue;
         busy.add(env.id);
         client.rpc<LimitsReport>(env.id, 'usage.limits', {}, 15_000).then(report => {
           if (!live) return;
-          setReports(r => ({ ...r, [env.id]: report }));
-          setFailed(f => ({ ...f, [env.id]: false }));
+          setReports(r => JSON.stringify(r[env.id]) === JSON.stringify(report) ? r : { ...r, [env.id]: report });
+          setFailed(f => f[env.id] === false ? f : { ...f, [env.id]: false });
         }).catch(() => {
-          if (live) setFailed(f => ({ ...f, [env.id]: true }));
+          if (live) setFailed(f => f[env.id] ? f : { ...f, [env.id]: true });
         }).finally(() => busy.delete(env.id));
       }
     };
     refresh();
     const timer = setInterval(refresh, 30_000);
-    return () => { live = false; clearInterval(timer); };
+    document.addEventListener('visibilitychange', refresh);
+    return () => { live = false; clearInterval(timer); document.removeEventListener('visibilitychange', refresh); };
   }, [client, targets.map(e => e.id).join(',')]);
   return { reports, failed, now };
 }

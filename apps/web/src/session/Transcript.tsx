@@ -975,6 +975,7 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
   // step or message that starts on screen, and how far below the top. Older
   // history arrives above in the background, sometimes inside the message
   // that is half off the top, so the next one down is what must not move.
+  const slices = useRef(new Map<string, { from: Item[]; revision?: number; start: number; end: number; part: Item[] }>());
   const hold = useRef<{ sel: string; top: number } | undefined>(undefined);
   const holdFrame = useRef(0);
   const markHold = () => {
@@ -1055,8 +1056,15 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
     // Growth the correction does not explain happened below: new work.
     if (h - prev.h > Math.max(0, moved) + 1) setUnread(true);
   }, [turns, revision, status, loaded, earlier, loadingEarlier]);
-  // After any move above, the reader's place is wherever they now are.
-  useLayoutEffect(markHold, [turns, revision, status, loaded, earlier, loadingEarlier]);
+  // After any move above, the reader's place is wherever they now are. The
+  // correction above put the held step back where it was, so while it is
+  // still there it is still the place: no need to measure every step above
+  // it again on each streamed word.
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (el && !stuck.current && hold.current && el.querySelector(hold.current.sel)) return;
+    markHold();
+  }, [turns, revision, status, loaded, earlier, loadingEarlier]);
   useEffect(() => () => cancelAnimationFrame(holdFrame.current), []);
 
   /** Jump to the previous or next thing you asked - the landmarks of a long thread. */
@@ -1109,6 +1117,16 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
       onResend={onResend ? resend : undefined} onWithdraw={onWithdraw ? withdraw : undefined}
       onBranch={onBranch && t !== turns[0] ? branch : undefined} onRewind={onRewind ? rewind : undefined} />
   );
+  // A turn split around a hosted answer draws as slices. The same slice of
+  // an unchanged turn must be the same list, or every slice draws again on
+  // each streamed word anywhere in the chat.
+  const slice = (t: Turn, key: string, start: number, end = t.items.length) => {
+    const kept = slices.current.get(key);
+    if (kept && kept.from === t.items && kept.revision === t.revision && kept.start === start && kept.end === end) return kept.part;
+    const part = t.items.slice(start, end);
+    slices.current.set(key, { from: t.items, revision: t.revision, start, end, part });
+    return part;
+  };
   const flow: ReactNode[] = [];
   for (const t of turns) {
     if (hostedIds.has(t.id)) continue;
@@ -1117,11 +1135,11 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
     let prev = 0;
     hosted.forEach((c, k) => {
       const cut = Math.max(prev, Math.min(c.insideAt ?? t.items.length, t.items.length));
-      if (k === 0 || cut > prev) flow.push(view(t, t.items.slice(prev, cut), k === 0, false, `${t.id}#${k}`));
+      if (k === 0 || cut > prev) flow.push(view(t, slice(t, `${t.id}#${k}`, prev, cut), k === 0, false, `${t.id}#${k}`));
       flow.push(view(c));
       prev = cut;
     });
-    flow.push(view(t, t.items.slice(prev), false, true, `${t.id}#end`));
+    flow.push(view(t, slice(t, `${t.id}#end`, prev), false, true, `${t.id}#end`));
   }
 
   return (

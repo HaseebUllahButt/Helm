@@ -1,6 +1,6 @@
 import type { SendJob } from '../client';
 import { Icon } from '../Icon';
-import { sendName, sendPercent, sending } from './store';
+import { sendName, sendPercent, sending, useSendPart, type SendStore } from './store';
 
 export function SendActivity({ jobs, onOpen }: { jobs: SendJob[]; onOpen: (job: SendJob) => void }) {
   const active = jobs.filter(sending);
@@ -15,6 +15,10 @@ export function SendActivity({ jobs, onOpen }: { jobs: SendJob[]; onOpen: (job: 
       </span>
     </button>)}</div>
   </div>;
+}
+/** The sidebar's sends, drawn on their own progress steps only. */
+export function LiveSendActivity({ store, onOpen }: { store: SendStore; onOpen: (job: SendJob) => void }) {
+  return <SendActivity jobs={useSendPart(store, snapshot => snapshot.jobs)} onOpen={onOpen} />;
 }
 export function SendNotice({ job, onOpen, onDismiss }: { job: SendJob; onOpen: () => void; onDismiss: () => void }) {
   return <div className="send-notice" role="status">

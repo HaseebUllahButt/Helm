@@ -31,17 +31,22 @@ export function usePipeline(client: Client, env: Environment, cwd: string, branc
   const refresh = useCallback((clear = false) => { if (clear) setSnapshot(null); force.current = true; setAttempt(n => n + 1); }, []);
   useEffect(() => { setSnapshot(null); setError(''); }, [client, env.id, env.online, cwd, branch, head, sessionId]);
   useEffect(() => {
-    let stale = false, busy = false;
+    let stale = false, busy = false, shown = '';
     const load = async () => {
       if (stale || busy || !env.online || !cwd) return;
-      busy = true; setLoading(true);
       const fresh = force.current; force.current = false;
+      // A routine check every 30 seconds shows no "loading": only a first
+      // load or one the owner asked for does. The same answer draws nothing.
+      const showLoading = fresh || !shown;
+      busy = true; if (showLoading) setLoading(true);
       try {
         const data = await client.rpc<PipelineSnapshot>(env.id, 'git.monitor', { cwd, force: fresh, sessionId }, 90_000);
         if (!data || typeof data.supported !== 'boolean' || !Array.isArray(data.errors)) throw new Error('Update Helm on this machine to monitor GitHub build checks.');
-        if (!stale) { setSnapshot(data); setError(''); }
+        const text = JSON.stringify(data);
+        if (!stale && text !== shown) { shown = text; setSnapshot(data); }
+        if (!stale) setError('');
       } catch (e: any) { if (!stale) setError(errorMessage(e, { machine: env.name, fallback: 'Helm cannot load GitHub status.' })); }
-      finally { busy = false; if (!stale) setLoading(false); }
+      finally { busy = false; if (!stale && showLoading) setLoading(false); }
     };
     void load();
     const timer = setInterval(() => { if (!document.hidden) void load(); }, 30_000);

@@ -22,6 +22,6 @@ export function useLiveInterval(ms: number | null, fn: () => void, deps: readonl
     document.addEventListener('visibilitychange', wake);
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', wake); };
     // The callback is read through a ref; deps are the caller's own
-    // interests, like any other effect.
-  }, deps); // eslint-disable-line react-hooks/exhaustive-deps
+    // interests, like any other effect. A new pace, or none, starts over.
+  }, [ms, ...deps]); // eslint-disable-line react-hooks/exhaustive-deps
 }
