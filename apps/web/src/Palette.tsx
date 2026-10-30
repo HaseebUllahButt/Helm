@@ -185,6 +185,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['Ctrl/⌘ Shift O', 'Start a chat in a browser tab'],
     ['Ctrl Tab', 'Next running chat'],
     ['Ctrl Shift Tab', 'Previous running chat'],
+    ['Ctrl/⌘ B', 'Show or hide the sidebar'],
     ['Ctrl/⌘ [', 'Back'],
     ['Ctrl/⌘ ]', 'Forward'],
     ['Ctrl/⌘ Shift S', 'Settings'],

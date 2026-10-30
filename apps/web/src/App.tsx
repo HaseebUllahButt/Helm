@@ -273,9 +273,12 @@ function Shell({ client, conn, onSignOut }: {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem('helm.sidebar-collapsed') === '1'; } catch { return false; }
   });
-  const collapseSidebar = (collapsed: boolean) => {
-    setSidebarCollapsed(collapsed);
-    try { localStorage.setItem('helm.sidebar-collapsed', collapsed ? '1' : '0'); } catch { /* full */ }
+  const collapseSidebar = (collapsed: boolean | ((was: boolean) => boolean)) => {
+    setSidebarCollapsed((was) => {
+      const next = typeof collapsed === 'function' ? collapsed(was) : collapsed;
+      try { localStorage.setItem('helm.sidebar-collapsed', next ? '1' : '0'); } catch { /* full */ }
+      return next;
+    });
   };
 
   /**
@@ -513,6 +516,9 @@ function Shell({ client, conn, onSignOut }: {
       const ctrlN = !e.shiftKey && (e.key === 'n' || e.key === 'N') && !el?.closest?.('.xterm');
       // A new chat from the start: machine first. "In this folder" is Ctrl+Shift+N.
       if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
+      // Fold or unfold the sidebar, as in VS Code. A terminal keeps Ctrl+B:
+      // it is "back one letter" to a shell and tmux's prefix key.
+      if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyB' && !el?.closest?.('.xterm')) { e.preventDefault(); collapseSidebar((was) => !was); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       // Settings and usage from anywhere. Letters with Ctrl/Cmd+Shift that
@@ -1228,8 +1234,8 @@ function Shell({ client, conn, onSignOut }: {
             ><Gear /></button>
             <button
               className="iconbtn collapse-toggle"
-              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              title={sidebarCollapsed ? 'Expand sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)'}
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-keyshortcuts="Control+B Meta+B"
               onClick={() => collapseSidebar(!sidebarCollapsed)}
             ><Icon name="sidebar" size={17} /></button>
           </span>

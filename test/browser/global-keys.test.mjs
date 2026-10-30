@@ -115,6 +115,21 @@ test('a new terminal is on screen at once, and says why when it cannot open', as
   await page.waitForFunction(()=>history.state?.stack?.at(-1)?.session?.id === 'sh1', null, {timeout:3000});
 });
 
+test('Ctrl+B folds and unfolds the sidebar, and a terminal keeps the key', async t => {
+  const page = await pageFor(t);
+  const sidebar = page.locator('aside.sidebar');
+  await page.keyboard.press('Control+KeyB');
+  await page.waitForFunction(()=>document.querySelector('aside.sidebar').classList.contains('collapsed'));
+  assert.equal(await page.evaluate(()=>localStorage.getItem('helm.sidebar-collapsed')), '1');
+  await page.keyboard.press('Control+KeyB');
+  await page.waitForFunction(()=>!document.querySelector('aside.sidebar').classList.contains('collapsed'));
+  await page.keyboard.press('Control+Alt+KeyT');
+  await page.locator('.xterm').waitFor({timeout:3000});
+  await page.locator('.xterm textarea').focus();
+  await page.keyboard.press('Control+KeyB');
+  assert.equal(await sidebar.evaluate(el=>el.classList.contains('collapsed')), false, 'Ctrl+B in a terminal folded the sidebar');
+});
+
 test('the shortcuts list names both keys', async t => {
   const page = await pageFor(t);
   await page.keyboard.press('Control+Slash');
@@ -122,6 +137,7 @@ test('the shortcuts list names both keys', async t => {
   assert.match(text, /Settings/);
   assert.match(text, /Show usage, limits, and cost/);
   assert.match(text, /Open a terminal/);
+  assert.match(text, /Show or hide the sidebar/);
 });
 
 test('bare keys open nothing: every shortcut needs Ctrl/Cmd', async t => {
