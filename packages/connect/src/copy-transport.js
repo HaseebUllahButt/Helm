@@ -301,7 +301,8 @@ export class CopyReceiver {
       window: copyWindow(request.window),
       cipher,
       child,
-      input: new CopyArguments(request.targetFolder),
+      // The receiver's home, the same one the send was checked against.
+      input: new CopyArguments(request.targetFolder, { home: this.sendReceiver.home, sendJobId: request.sendJob?.id ?? null }),
       release: beginTransferActivity(),
       sender: null,
       receiver: null,

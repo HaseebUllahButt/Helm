@@ -8,8 +8,10 @@ home. Return materialization refuses folders outside that home. Never use the
 owner's home or network to bypass this check.
 
 ## Machines and devices
-- **Prove (driven 2026-10-15):** `$V text` on Home shows "verify-<you>" and
-  "idle"; `$V click "verify-<you> idle"` opens its screen. `$V key
+- **Reach (owner, 2026-10-30):** machines left the sidebar. Open one from
+  Home (the logo, on a computer) or from search on any screen.
+- **Prove (driven 2026-10-15):** `$V click "Search anything"; $V type
+  verify-<you>; $V key Enter` opens its screen. `$V key
   Control+Shift+s; $V click "Devices & pairing"; $V text` shows "Linux
   Chrome · this device · online now".
 - **Traps:** never press "Make join command" or remove devices on the real
@@ -62,6 +64,30 @@ owner's home or network to bypass this check.
 - **Tests:** `test/transfers`, `task-transfer`, `transfer-cli`,
   `transfer-check`, `transfer-activity`, `code-transfer`, `handoffs`,
   `send-engine`, `send-recovery`; `test/browser/transfers`, `send-v2`.
+
+## Move a chat to another machine
+- **Reach:** ⋯ on a sidebar row or in the chat → **Move to another machine**.
+  Claude and Codex chats only; not helpers, terminal chats or a working reply.
+- **Rules:** the move copies the folder, then the CLI's own conversation
+  file with a new id and the new folder path (`chat-move.js`). Only `cwd`,
+  `*roots` and the id change: Claude signs its thinking, so message text
+  stays byte for byte. The target opens it as a saved chat ("Moved from
+  …"); the next message resumes it with full memory. The old copy is
+  archived, shows "Moved to …" and refuses messages. Both copies are kept
+  when left unused (`discardEmpty`). Each step is saved; a restart
+  continues it, and **Try again** resends what changed.
+- **Prove (driven 2026-10-30):** pair two private copies (join code from
+  `helm add pc` against the first copy's address), give both a `claude`
+  account whose `auth status` says logged in, write a Claude transcript into
+  the first copy's home and open it with `rpc session.resume`. Move it from
+  the row ⋯; "Open chat on …" shows its messages and "Moved from". A real
+  Claude resumed a moved conversation in a new folder and still knew a word
+  from before the move.
+- **Traps:** both copies are hidden Send jobs (`internal`), so no "View …
+  on …" notice appears. The receiver checks rsync's options per job
+  (`copy-arguments.js`); a new Send flag needs a line there.
+- **Tests:** `test/chat-move`, `session-driver`, `copy-arguments`,
+  `send-engine`.
 
 ## `helm exec` and `helm copy`
 - **Not yet driven** against the copy. `$V rpc exec.start

@@ -82,6 +82,8 @@ async function pageFor(testContext, viewport, options = {}) {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.route('http://helm-test/**', route => route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
   await page.goto('http://helm-test/');
+  // Settled starts folded; these tests read its rows, so it starts open here.
+  await page.evaluate(() => localStorage.setItem('helm-fold:sidebar:settled-folded', '1'));
   const boot = async () => { await page.addStyleTag({ content: css }); await page.addScriptTag({ content: script }); };
   testContext.after(() => assert.deepEqual(errors, []));
   return { page, boot };
@@ -328,18 +330,10 @@ test('Running counts only working threads and excludes idle native sessions', as
     ], sessions));
   });
   const sidebar = page.locator('.sidebar');
-  const rows = sidebar.locator('.row.machine');
-  const laptop = rows.filter({ hasText: 'laptop' });
-  await laptop.waitFor();
-  assert.equal(await laptop.locator('.rm').textContent(), '1 running');
-  assert.equal(await laptop.locator('.badge').textContent(), '1');
-  // One line each: a word only when there is news; the rest is in the tooltip.
-  assert.equal(await rows.filter({ hasText: 'vm' }).locator('.rm').count(), 0, 'an idle machine says nothing');
-  assert.equal(await rows.filter({ hasText: 'vm' }).getAttribute('title'), 'vm · online · idle');
-  assert.equal(await rows.filter({ hasText: 'old' }).locator('.rm').textContent(), '2d ago');
-  assert.equal(await rows.filter({ hasText: 'old' }).getAttribute('title'), 'old · offline · seen 2d ago');
   const runningSection = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Running$/ }) });
-  assert.ok(await runningSection.getByText('Busy', { exact: true }).isVisible());
+  await runningSection.getByText('Busy', { exact: true }).waitFor();
+  // Machines live on Home and in search; the sidebar is only an inbox.
+  assert.equal(await sidebar.locator('.row.machine').count(), 0);
   assert.equal(await runningSection.getByText('Idle alive', { exact: true }).count(), 0);
   assert.equal(await runningSection.getByText('External idle', { exact: true }).count(), 0);
   assert.equal(await runningSection.getByText('Shared idle', { exact: true }).count(), 0);
@@ -361,15 +355,11 @@ test('Running counts only working threads and excludes idle native sessions', as
   assert.equal(await homeRows.filter({ hasText: 'laptop' }).locator('.rm').textContent(), '1 running');
   assert.equal(await homeRows.filter({ hasText: 'laptop' }).locator('.badge').textContent(), '1');
   assert.equal(await homeRows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'Nothing is running.');
-  const machineSummaries = await rows.locator('.rm').allTextContents();
-  const runningTotal = machineSummaries.reduce((total, text) => total + (+(/^(\d+) running$/.exec(text)?.[1] ?? 0)), 0);
-  assert.equal(runningTotal, +(/(\d+) running/.exec(readout)[1]), 'sidebar per-machine counts add up to the readout');
+  assert.match(await homeRows.filter({ hasText: 'old' }).locator('.rm').textContent(), /^Offline · seen 2d ago$/);
   const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Settled$/ }) });
   assert.equal(await done.locator('.tri-title').count(), 5);
   assert.ok(await done.getByText('Idle alive', { exact: true }).isVisible());
   assert.ok(await done.getByText('Shared stopped', { exact: true }).isVisible());
-  await rows.filter({ hasText: 'vm' }).click();
-  await page.locator('.main.showing h1').filter({ hasText: 'vm' }).waitFor();
 });
 
 test('the logo opens Home: a quick chat box with chips, and a row per machine', async t => {
@@ -458,7 +448,7 @@ test('One search control opens the palette, keys work, selection has no left bar
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await sidebar.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, 'sidebar-simple-search.png') });
   // Search shares its line with the square New chat button; together they fill it.
   const lineBounds = await sidebar.locator('.side-actions').boundingBox();
-  const padBounds = await sidebar.locator('.side-pad').boundingBox();
+  const padBounds = await sidebar.locator('.side-pad').first().boundingBox();
   assert.ok(lineBounds.width >= padBounds.width * 0.9, `search line ${lineBounds.width}px spans the ${padBounds.width}px sidebar pad`);
   const palette = page.getByRole('dialog', { name: 'Search and actions' });
   const paletteInput = palette.getByRole('combobox', { name: 'Search chats, machines, and actions' });
@@ -482,15 +472,7 @@ test('One search control opens the palette, keys work, selection has no left bar
   await page.keyboard.press('Control+k');
   await palette.waitFor();
   await page.keyboard.press('Escape');
-  const selectedMachine = sidebar.locator('.row.machine[aria-current="true"]');
-  await selectedMachine.waitFor();
-  assert.match(await selectedMachine.getAttribute('class'), /\bactive\b/);
-  const selectedStyle = await selectedMachine.evaluate(element => ({
-    background: getComputedStyle(element).backgroundColor,
-    barDisplay: getComputedStyle(element, '::after').display,
-  }));
-  assert.notEqual(selectedStyle.background, 'rgba(0, 0, 0, 0)', 'the selected machine keeps its highlight');
-  assert.equal(selectedStyle.barDisplay, 'none', 'the selected machine has no left bar');
+  assert.equal(await sidebar.locator('.row.machine').count(), 0, 'machines live on Home and in search');
   const otherActiveBar = await page.evaluate(() => {
     const list = document.createElement('div');
     list.className = 'rows';
@@ -562,12 +544,19 @@ for (const width of [1280, 390]) test(`one VM brain stays the entry point while 
       {id:'vm',name:'VM',online:false,info:{}},
     ],{laptop:[{...vmBrain,id:'former-laptop-brain'}],why:[]}));
   });
-  const entry = page.locator('.sidebar').getByRole('button',{name:/Helm brain/});
-  await entry.waitFor();
-  assert.equal(await entry.count(),1);
-  assert.match(await entry.innerText(),/offline/);
-  assert.match(await entry.getAttribute('title'),/VM · .* · offline/);
-  await entry.click();
+  assert.equal(await page.locator('.sidebar').getByRole('button',{name:/Helm brain/}).count(),0,'the brain left the sidebar');
+  if (width < 500) {
+    await page.locator('.sidebar').getByRole('button',{name:'Search chats, machines, and folders'}).click();
+    await page.getByRole('combobox',{name:'Search chats, machines, and actions'}).fill('brain');
+    await page.getByRole('option',{name:/^Helm brain/}).click();
+  } else {
+    await page.locator('.sidebar .brand-home').click();
+    const entry = page.locator('.home-brain').getByRole('button',{name:/Helm brain/});
+    await entry.waitFor();
+    assert.match(await entry.innerText(),/VM · Codex/);
+    assert.match(await entry.innerText(),/offline/);
+    await entry.click();
+  }
   await page.getByRole('heading',{name:'Brain',exact:true}).waitFor();
   assert.equal(await page.getByText('Select an account',{exact:true}).count(),0,'a cold offline open retains the VM conversation');
   assert.match(await page.locator('.main .bar .titles').getAttribute('title'),/^VM\b/);
@@ -585,7 +574,9 @@ test('opening the online brain validates the VM provider before entering the con
     client.rpc=(env,method,params)=>{window.brainCalls.push({env,method,params});return method==='brain.open' ? Promise.resolve({session:brain,envId:'vm',created:false}) : rpc(env,method,params)};
     window.mount(client);
   });
-  await page.locator('.sidebar').getByRole('button',{name:/Helm brain/}).click();
+  await page.locator('.sidebar').getByRole('button',{name:'Search chats, machines, and folders'}).click();
+  await page.getByRole('combobox',{name:'Search chats, machines, and actions'}).fill('brain');
+  await page.getByRole('option',{name:/^Helm brain/}).click();
   await page.getByRole('heading',{name:'Helm brain',exact:true}).waitFor();
   assert.deepEqual(await page.evaluate(()=>window.brainCalls.filter(c=>c.method==='brain.open').map(c=>c.env)),['vm']);
 });
@@ -646,11 +637,13 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
   const starting = running.locator('.thread-row').filter({ hasText: 'claude starting' });
   assert.equal(await starting.locator('.tstat.working').textContent(), 'starting');
   assert.equal(await running.locator('.thread-row').filter({ hasText: 'claude children' }).locator('.tstat.working').count(), 1);
-  const laptop = sidebar.locator('.row.machine').filter({ hasText: 'Laptop' });
-  assert.equal(await laptop.locator('.rm').textContent(), `${n * 3} running`);
-  assert.equal(await laptop.getAttribute('title'), `Laptop · online · ${n * 3} running · ${n} status unavailable`,
-    'threads the machine cannot read are counted, not called idle');
-  assert.equal(await laptop.locator('.badge').textContent(), String(n));
+  // The machine counts live on Home (a computer's main pane).
+  if (width > 500) {
+    await page.getByRole('button', { name: 'Home' }).click();
+    const laptop = page.locator('.main .home .row.machine').filter({ hasText: 'Laptop' });
+    assert.equal(await laptop.locator('.rm').textContent(), `${n * 3} running`);
+    assert.equal(await laptop.locator('.badge').textContent(), String(n));
+  }
 
   // A turn that finishes moves to Done; a new turn moves it back at once.
   await page.evaluate(() => window.push('grok-working', { status: 'idle' }));
@@ -670,7 +663,9 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
   await page.screenshot({ path: `/tmp/helm-running-done-${width}.png` });
 
   // The machine screen sorts the same threads the same way.
-  await laptop.click();
+  await sidebar.getByRole('button', { name: 'Search chats, machines, and folders' }).click();
+  await page.getByRole('combobox', { name: 'Search chats, machines, and actions' }).fill('Laptop');
+  await page.getByRole('option', { name: /^Laptop online/ }).click();
   const main = page.locator('.main');
   const working = main.locator('div.section', { hasText: /^Running$/ }).locator('xpath=following-sibling::div[1]');
   await working.locator('.rowx').first().waitFor();
@@ -763,11 +758,13 @@ for (const width of [1280, 390]) test(`an offline machine's last known work is n
     window.mount(client);
   });
   const sidebar = page.locator('.sidebar');
-  const machine = sidebar.locator('.row.machine').filter({ hasText: 'HomePC' });
-  await machine.waitFor();
+  const search = sidebar.getByRole('button', { name: 'Search chats, machines, and folders' });
+  await search.waitFor();
   assert.equal(await sidebar.locator('.fold-title', { hasText: /^Running$/ }).count(), 0);
   assert.equal(await sidebar.getByText('Was busy', { exact: true }).count(), 0);
-  await machine.click();
+  await search.click();
+  await page.getByRole('combobox', { name: 'Search chats, machines, and actions' }).fill('HomePC');
+  await page.getByRole('option', { name: /^HomePC offline/ }).click();
   const main = page.locator('.main');
   const row = main.locator('.rowx').filter({ hasText: 'Was busy' });
   await row.waitFor();
@@ -776,8 +773,8 @@ for (const width of [1280, 390]) test(`an offline machine's last known work is n
   await page.screenshot({ path: `/tmp/helm-offline-machine-${width}.png` });
 });
 
-test('a working brain says so in the sidebar, where its machine count already includes it', async testContext => {
-  const { page, boot } = await pageFor(testContext, { width: 390, height: 844 });
+test('a working brain says so on Home, where its machine count already includes it', async testContext => {
+  const { page, boot } = await pageFor(testContext, { width: 1280, height: 844 });
   await boot();
   await page.evaluate(() => {
     const brain = { id: 'brain', title: 'Helm brain', cwd: '/home/helm', engine: 'claude', profileId: 'claude', driver: 'claude',
@@ -785,8 +782,9 @@ test('a working brain says so in the sidebar, where its machine count already in
     window.mount(window.makeClient([{ id: 'vm', name: 'VM', online: true, info: {} }], { vm: [brain] }));
   });
   const sidebar = page.locator('.sidebar');
-  await sidebar.locator('.brain-entry .chip.working').waitFor();
-  assert.equal(await sidebar.locator('.row.machine').filter({ hasText: 'VM' }).locator('.rm').textContent(), '1 running');
+  await page.getByRole('button', { name: 'Home' }).click();
+  await page.locator('.home-brain').getByText('working', { exact: true }).waitFor();
+  assert.equal(await page.locator('.home .row.machine').filter({ hasText: 'VM' }).locator('.rm').textContent(), '1 running');
   assert.equal(await sidebar.locator('.thread-row').count(), 0, 'the brain keeps its own place, not a second row');
 });
 

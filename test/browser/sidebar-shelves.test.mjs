@@ -83,7 +83,16 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   await page.evaluate(mount);
   const sidebar = page.locator('.sidebar');
   await shelf(page, 'Settled').waitFor();
-  assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Running', 'Settled', 'Machines']);
+  // An inbox: what needs you, what runs, what finished; Settled last. No machines.
+  assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Running', 'Finished', 'Settled']);
+  // Folded Settled sits at the foot of the sidebar, not under the last shelf.
+  const foot = await page.evaluate(() => {
+    const scroll = document.querySelector('.sidebar > .scroll').getBoundingClientRect();
+    const settled = document.querySelector('.side-bottom').getBoundingClientRect();
+    return { gap: scroll.bottom - settled.bottom, top: settled.top };
+  });
+  assert.ok(foot.gap >= 0 && foot.gap < 24, `Settled ends ${foot.gap}px above the sidebar foot`);
+  assert.ok(foot.top > 400, `Settled starts low on the screen, at ${foot.top}px`);
 
   // Needs you: only shown when something waits, with a white count.
   const needs = shelf(page, 'Needs you');
@@ -105,36 +114,47 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   assert.equal(await page.locator('.tstat.working i').first().evaluate(e => getComputedStyle(e).animationName), 'none');
   assert.deepEqual(await page.evaluate(() => document.getAnimations().filter(a => a.effect?.getTiming().iterations === Infinity).map(a => a.animationName)), []);
 
-  // Settled: one line each, newest first, an unopened finish shows a green dot.
+  // Finished: only the chat that finished since you last looked, with a green dot.
+  const finished = shelf(page, 'Finished');
+  assert.deepEqual(await titlesIn(finished), ['Write the release notes']);
+  const fresh = finished.locator('.tri-row').filter({ hasText: 'Write the release notes' });
+  assert.equal(await fresh.locator('.tstat').innerText(), '5m');
+  assert.equal(await fresh.locator('.tstat.unread').count(), 1);
+  assert.ok(await fresh.evaluate(e => e.getBoundingClientRect().height < 40), 'rows are one line');
+  assert.equal(await fresh.locator('.tri-mark').count(), 1, 'a finished row keeps its agent logo');
+  assert.ok(await working.locator('.tri-row').first().locator('.tri-bot .tri-where').isVisible(), 'a running row shows its folder');
+
+  // Settled starts folded, at the bottom, with its count.
   const settled = shelf(page, 'Settled');
+  assert.equal(await settled.locator('.count').innerText(), '43');
+  assert.equal((await titlesIn(settled)).length, 0);
+  await settled.locator('.fold-toggle[aria-expanded="false"]').click();
   const settledTitles = await titlesIn(settled);
   assert.equal(settledTitles.length, 10, 'ten to start with');
-  assert.deepEqual(settledTitles.slice(0, 3), ['Write the release notes', 'Tidy the settings page', 'Investigate slow startup']);
-  const fresh = settled.locator('.tri-row').filter({ hasText: 'Write the release notes' });
-  assert.equal(await fresh.locator('.tstat').innerText(), '5m');
-  assert.equal(await settled.locator('.tstat.unread').count(), 1, 'only the unopened one');
-  assert.equal(await fresh.locator('.tstat.unread').count(), 1);
-  assert.ok(await settled.locator('.tri-row').first().evaluate(e => e.getBoundingClientRect().height < 40), 'rows are one line');
-  assert.equal(await settled.locator('.tri-row').first().locator('.tri-mark').count(), 1, 'a settled row keeps its agent logo');
-  assert.ok(await working.locator('.tri-row').first().locator('.tri-bot .tri-where').isVisible(), 'a running row shows its folder');
-  assert.equal(await settled.locator('.note-inline.fresh').innerText(), '1 new');
+  assert.deepEqual(settledTitles.slice(0, 2), ['Tidy the settings page', 'Investigate slow startup']);
+  assert.equal(await settled.locator('.tstat.unread').count(), 0);
   await shot(page, `sidebar-shelves-${width}.png`);
   await page.locator('.sidebar .scroll').evaluate(e => { e.scrollTop = e.scrollHeight; });
   await shot(page, `sidebar-shelves-${width}-scrolled.png`);
   await page.locator('.sidebar .scroll').evaluate(e => { e.scrollTop = 0; });
 
-  // 44 in all, ten shown: Show 25 more, then the last 9.
+  // 43 in all, ten shown: Show 25 more, then the last 8.
   await settled.getByRole('button', { name: 'Show 25 more' }).click();
   assert.equal((await titlesIn(settled)).length, 35);
-  await settled.getByRole('button', { name: 'Show 9 more' }).click();
-  assert.equal((await titlesIn(settled)).length, 44);
+  await settled.getByRole('button', { name: 'Show 8 more' }).click();
+  assert.equal((await titlesIn(settled)).length, 43);
   assert.equal(await settled.getByRole('button', { name: /Show .* more/ }).count(), 0);
 
-  // Opening the unopened chat clears the dot, and it stays cleared.
+  // Opening the finished chat clears the dot. It stays in Finished while you are in it.
   await fresh.locator('.thread-row').click();
-  await settled.locator('.tstat.unread').waitFor({ state: 'detached' });
+  await finished.locator('.tstat.unread').waitFor({ state: 'detached' });
   assert.equal(await fresh.locator('.thread-row').getAttribute('aria-current'), 'page');
   assert.ok(await page.evaluate(() => JSON.parse(localStorage.getItem('helm-seen:v1')).at['Write the release notes'] > 0));
+  // Leave it for another chat (on a phone, for the list): the one you read moves to Settled.
+  if (width < 500) await page.locator('.session-bar').getByRole('button', { name: 'Back', exact: true }).click();
+  else await working.locator('.tri-row').filter({ hasText: 'Fix flaky login test' }).locator('.thread-row').click();
+  await finished.waitFor({ state: 'detached' });
+  assert.equal(await settled.locator('.tri-row').filter({ hasText: 'Write the release notes' }).count(), 1);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll');
 });
 
@@ -157,10 +177,11 @@ test('a chat opened on another device shows no green dot here; opening one here,
       ? (window.seen.push(params.id), Promise.resolve({ ok: true })) : rpc(env, method, params);
     window.mount(client);
   });
-  const settled = shelf(page, 'Settled');
-  await settled.waitFor();
-  assert.equal(await settled.locator('.tri-row').filter({ hasText: 'Read on the phone' }).locator('.tstat.unread').count(), 0);
-  const unread = settled.locator('.tri-row').filter({ hasText: 'Not read anywhere' });
+  const finished = shelf(page, 'Finished');
+  await finished.waitFor();
+  assert.deepEqual(await titlesIn(finished), ['Not read anywhere'], 'chats read here or elsewhere are settled');
+  assert.equal(await shelf(page, 'Settled').locator('.count').innerText(), '2');
+  const unread = finished.locator('.tri-row').filter({ hasText: 'Not read anywhere' });
   assert.equal(await unread.locator('.tstat.unread').count(), 1);
   // Read on this device before the machine kept it: handed over once, unprompted.
   await page.waitForFunction(() => window.seen.includes('Read here before the update'));
@@ -193,13 +214,14 @@ test('the chat you are in stays on its shelf when it is folded or paged', async 
   await page.evaluate(mount);
   const settled = shelf(page, 'Settled');
   await settled.waitFor();
+  await settled.locator('.fold-toggle[aria-expanded="false"]').click();
   assert.equal(await settled.getByText('Older chat 21', { exact: true }).count(), 0, 'beyond the first ten');
   await settled.getByRole('button', { name: 'Show 25 more' }).click();
   await settled.getByText('Older chat 21', { exact: true }).click();
   await settled.locator('.thread-row[aria-current="page"]').waitFor();
   // Fold it: the header gains a count, and the chat you are in stays.
   await settled.locator('.fold-toggle[aria-expanded="true"]').click();
-  assert.equal(await settled.locator('.count').innerText(), '44');
+  assert.equal(await settled.locator('.count').innerText(), '43');
   assert.deepEqual(await titlesIn(settled), ['Older chat 21']);
     await settled.locator('.fold-toggle[aria-expanded="false"]').click();
   assert.equal((await titlesIn(settled)).length, 10 + 1, 'ten, plus the chat you are in');
@@ -251,6 +273,7 @@ test('archiving from Home says so, and Undo brings the chat back', async t => {
       ? (window.archived.push(params), Promise.resolve({ ok: true })) : rpc(env, method, params);
     window.mount(client);
   });
+  await shelf(page, 'Settled').locator('.fold-toggle[aria-expanded="false"]').click();
   await page.getByRole('button', { name: 'Show actions for Write the release notes' }).click();
   await page.getByRole('button', { name: 'Archive chat' }).click();
   const notice = page.getByRole('status').filter({ hasText: 'Archived Write the release notes' });

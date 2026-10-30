@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { render, loadHighlighting, hasHighlighting } from './md';
+import { render, renderNodes, loadHighlighting, hasHighlighting } from './md';
 
 /**
  * Agent prose as prose. The transcript is markdown - headings, lists, fenced
@@ -72,13 +72,6 @@ function liveCodeBlock(lang: string) {
   return { block, code };
 }
 
-/** Sanitised HTML as nodes, ready to add to the box. */
-const parse = (html: string) => {
-  const t = document.createElement('template');
-  t.innerHTML = html;
-  return t.content;
-};
-
 export const Markdown = memo(function Markdown({ text, className = '', live = false }: { text: string; className?: string; live?: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const highlighted = useHighlighting();
@@ -117,7 +110,7 @@ export const Markdown = memo(function Markdown({ text, className = '', live = fa
     if (cut > now.settled.length) {
       while (el.childNodes.length > now.nodes) el.lastChild!.remove();
       now.open = undefined;
-      el.append(parse(render(text.slice(now.settled.length, cut))));
+      el.append(renderNodes(text.slice(now.settled.length, cut)));
       now.settled = text.slice(0, cut);
       now.nodes = el.childNodes.length;
     }
@@ -137,7 +130,7 @@ export const Markdown = memo(function Markdown({ text, className = '', live = fa
         return;
       }
       while (el.childNodes.length > now.nodes) el.lastChild!.remove();
-      if (before) el.append(parse(render(before)));
+      if (before) el.append(renderNodes(before));
       const { block, code } = liveCodeBlock(open.lang);
       code.textContent = body;
       el.append(block);
@@ -146,7 +139,7 @@ export const Markdown = memo(function Markdown({ text, className = '', live = fa
     }
     while (el.childNodes.length > now.nodes) el.lastChild!.remove();
     now.open = undefined;
-    el.append(parse(render(text.slice(cut))));
+    el.append(renderNodes(text.slice(cut)));
   }, [text, live, html, highlighted]);
 
   // One delegated handler for every copy button in this message.

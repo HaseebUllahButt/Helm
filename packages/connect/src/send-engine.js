@@ -50,6 +50,8 @@ export class SendEngine {
       r.lastSave = now;
       saveRecord(this.file(r.job.id), { job: r.job, options: r.options, intent: r.intent, receipt: r.receipt, attempted: r.attempted });
     }
+    // A copy that is one step of a bigger action (a chat move) shows as that action, not as a Send.
+    if (r.job.internal) return;
     const publish = () => {
       r.emitTimer = null; r.lastEmit = Date.now();
       try { this.emit({ job: structuredClone(r.job) }); } catch { /* a disconnected app cannot stop a send */ }
@@ -82,12 +84,12 @@ export class SendEngine {
     const id = randomBytes(12).toString('hex'), now = Date.now();
     const r = { options: { ...params, includeEnv: params.includeEnv !== false }, job: {
       id, createdAt: now, updatedAt: now, finishedAt: null, source: { machineId: net.self, name: net.machines[net.self]?.name, path, kind },
-      target: { machineId: peer.id, name: peer.name, path: destination }, again: !!old && old.job.target.path === destination, phase: 'preparing', bytes: { total: null, sent: 0 }, files: { total: null, sent: 0 }, rate: null, eta: null, changed: null, route: null, error: null, left: [] } };
+      target: { machineId: peer.id, name: peer.name, path: destination }, again: !!old && old.job.target.path === destination, ...(params.internal ? { internal: true } : {}), phase: 'preparing', bytes: { total: null, sent: 0 }, files: { total: null, sent: 0 }, rate: null, eta: null, changed: null, route: null, error: null, left: [] } };
     this.jobs.set(id, r); this.update(r, true); this.launch(r);
     return { job: structuredClone(r.job) };
   }
   status({ jobId }, caller) { this.authorize(caller); return { job: structuredClone(this.get(jobId).job) }; }
-  list({ limit = 50 } = {}, caller) { this.authorize(caller); if (!Number.isInteger(limit) || limit < 1) throw new Error('invalid job limit'); return { jobs: [...this.jobs.values()].map(r => r.job).sort((a,b) => Number(ACTIVE.has(b.phase)) - Number(ACTIVE.has(a.phase)) || b.createdAt - a.createdAt).slice(0, limit).map(j => structuredClone(j)) }; }
+  list({ limit = 50 } = {}, caller) { this.authorize(caller); if (!Number.isInteger(limit) || limit < 1) throw new Error('invalid job limit'); return { jobs: [...this.jobs.values()].map(r => r.job).filter(j => !j.internal).sort((a,b) => Number(ACTIVE.has(b.phase)) - Number(ACTIVE.has(a.phase)) || b.createdAt - a.createdAt).slice(0, limit).map(j => structuredClone(j)) }; }
   acceptReceipt(r, receipt) {
     const n = this.net();
     const intentDigest = createHash('sha256').update(JSON.stringify({ ...r.intent, source: n.self })).digest('hex');
@@ -210,7 +212,7 @@ export class SendEngine {
         }
         r.attempted = true; r.job.phase = 'sending'; this.update(r, true);
         const progress = { write: chunk => {
-          const text = String(chunk); const match = [...text.matchAll(/([\d,]+)\s+\d+%/g)].at(-1);
+          const text = String(chunk); const match = [...text.matchAll(/([\d,]+)B?\s+\d+%/g)].at(-1);
           if (match) { r.job.bytes.sent = Number(match[1].replaceAll(',', '')); this.update(r); }
         } };
         await this.copy({ machine: r.job.target.machineId, source: plan.path, targetFolder: plan.kind === 'file' ? dirname(r.job.target.path) : r.job.target.path,
@@ -248,8 +250,9 @@ export class SendEngine {
             run.abort.signal.addEventListener('abort', abort, { once: true });
             child.stdout.on('data', chunk => {
               output = (output + chunk).slice(-16384);
-              const lines = [...output.matchAll(/([\d,]+)\s+\d+%\s+([\d.]+)([kMGT]?)B\/s\s+(\d+):(\d+):(\d+).*?(?:xfr#(\d+))?/g)];
-              const p = lines.at(-1); if (p) { r.job.bytes.sent = Number(p[1].replaceAll(',','')); r.job.rate = Number(p[2]) * ({ '': 1, k: 1024, M: 1048576, G: 1073741824, T: 1099511627776 }[p[3]]); r.job.eta = Number(p[4])*3600+Number(p[5])*60+Number(p[6]); const x = output.match(/xfr#(\d+)/g)?.at(-1); if (x) r.job.files.sent = Number(x.slice(4)); this.update(r); }
+              // rsync 3.5 writes "1,212,416B  38% 1,051,379B/s"; older ones leave out the B and the commas in the rate.
+              const lines = [...output.matchAll(/([\d,]+)B?\s+\d+%\s+([\d.,]+)([kMGT]?)B\/s\s+(\d+):(\d+):(\d+).*?(?:xfr#(\d+))?/g)];
+              const p = lines.at(-1); if (p) { r.job.bytes.sent = Number(p[1].replaceAll(',','')); r.job.rate = Number(p[2].replaceAll(',','')) * ({ '': 1, k: 1024, M: 1048576, G: 1073741824, T: 1099511627776 }[p[3]]); r.job.eta = Number(p[4])*3600+Number(p[5])*60+Number(p[6]); const x = output.match(/xfr#(\d+)/g)?.at(-1); if (x) r.job.files.sent = Number(x.slice(4)); this.update(r); }
             });
             child.stderr.on('data', c => { r.tail = ((r.tail ?? '') + c).slice(-8192); });
             child.once('error', reject); child.once('close', code => { run.abort.signal.removeEventListener('abort', abort); resolve(code); });

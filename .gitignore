@@ -15,3 +15,4 @@ dist/
 # Rust log reader outputs are built for the current machine.
 native/log-index/target/
 native/log-index/*.node
+scripts/bench-stream/results/

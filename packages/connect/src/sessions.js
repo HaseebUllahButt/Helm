@@ -1833,6 +1833,19 @@ export class Sessions extends EventEmitter {
     return { ok: true, session: s };
   }
 
+  /** Mark a chat moving, moved away, or moved here (chat-move.js). A null field clears it. */
+  setMove(id, fields) {
+    const session = this.get(id);
+    for (const key of ['moving', 'movedAway', 'movedFrom']) {
+      if (!(key in fields)) continue;
+      if (fields[key]) session[key] = fields[key];
+      else delete session[key];
+    }
+    session.updatedAt = Date.now();
+    this.#save();
+    this.emit('session', session);
+  }
+
   setTaskTransfer(id, transfer) {
     const session = this.get(id);
     session.taskTransfer = transfer;
@@ -2036,7 +2049,13 @@ export class Sessions extends EventEmitter {
   }
 
   // Sending messages (session-delivery.js)
-  input(id, text, options) { return this.#delivery.input(id, text, options); }
+  async input(id, text, options) {
+    const s = this.#index.get(id);
+    // The conversation lives on the other machine now; a turn here would split it.
+    if (s?.movedAway) throw new Error(`This chat moved to ${s.movedAway.machineName}. Continue it there.`);
+    if (s?.moving) throw new Error(`Helm is moving this chat to ${s.moving.machineName}. Wait until the move ends.`);
+    return this.#delivery.input(id, text, options);
+  }
   dequeue(id, turnId) { return this.#delivery.dequeue(id, turnId); }
   editQueued(id, turnId, text, attachments) { return this.#delivery.editQueued(id, turnId, text, attachments); }
   reorderQueue(id, turnIds) { return this.#delivery.reorderQueue(id, turnIds); }
@@ -2165,7 +2184,9 @@ export class Sessions extends EventEmitter {
     // A chat that clones a repo is kept while the clone runs or failed:
     // leaving it then is the point, and its bar or "Try again" is there.
     // Once the repo is in, an unused one goes like any other; the folder stays.
-    if (!s || s.brain || s.engine === 'shell' || s.pty || s.hasInput || (s.prompts ?? 0) > 0 || (s.clone && s.clone.state !== 'done')) {
+    // A moved chat holds a whole conversation, though nobody typed in it here.
+    if (!s || s.brain || s.engine === 'shell' || s.pty || s.hasInput || (s.prompts ?? 0) > 0 || (s.clone && s.clone.state !== 'done')
+      || s.movedFrom || s.movedAway || s.moving) {
       return { ok: true, discarded: false };
     }
     await this.kill(id);

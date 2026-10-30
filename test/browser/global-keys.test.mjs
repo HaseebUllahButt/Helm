@@ -66,6 +66,8 @@ async function pageFor(t, context) {
   t.after(()=>assert.deepEqual(errors,[]));
   await page.route('http://helm-test/**',route=>route.fulfill({contentType:'text/html',body:'<div id="root"></div>'}));
   await page.goto('http://helm-test/');
+  // Settled starts folded; these tests read its rows, so it starts open here.
+  await page.evaluate(() => localStorage.setItem('helm-fold:sidebar:settled-folded', '1'));
   await page.addScriptTag({content:script});
   await page.evaluate(()=>window.mount());
   await page.locator('.sidebar').waitFor();

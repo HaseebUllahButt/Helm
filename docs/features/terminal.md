@@ -6,7 +6,8 @@ Helm restart. Whoever typed last sets the size.
 ## Open, type, close
 - **Prove (driven 2026-10-15):**
   ```sh
-  $V click "verify-<you> idle"; $V click terminal; sleep 2
+  $V click "Search anything"; $V type verify-<you>; $V key Enter
+  $V click terminal; sleep 2
   $V eval "document.querySelector('.xterm textarea').focus()"
   $V type 'echo fmap-$((40+2))'; $V key Enter; sleep 1
   $V eval "document.querySelector('.xterm-rows').innerText"   # ends in fmap-42
