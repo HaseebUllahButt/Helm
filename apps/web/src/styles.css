@@ -441,6 +441,8 @@ code, pre, kbd { font-family: var(--mono); }
 .pad.column { max-width: var(--measure); width: 100%; margin: 0 auto; }
 @media (min-width: 900px) { .pad.column { padding: 22px 24px 40px; } }
 .side-pad { padding: 10px 10px 16px; flex: 1; }
+.side-pad.side-bottom { flex: none; padding-top: 0; padding-bottom: 10px; }
+.side-bottom:empty { display: none; }
 /* Zoomed in, the list's scrollbars came and went many times a second, and
    every row shook sideways: keep the bar's room, never scroll sideways. */
 .sidebar > .scroll { overflow-x: hidden; scrollbar-gutter: stable; }

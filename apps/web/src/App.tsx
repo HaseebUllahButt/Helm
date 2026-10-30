@@ -1308,6 +1308,15 @@ function Shell({ client, conn, onSignOut }: {
               </Fold>
             )}
 
+            {runningNow.length > 0 && (
+              <Fold
+                shelf defaultOpen title="Running" count={runningNow.length} remember="sidebar:working"
+                peek={runningNow.some(isOpen) ? <div className="rows plain">{runningNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
+              >
+                <div className="rows plain">{runningNow.map((x) => homeRow(x))}</div>
+              </Fold>
+            )}
+
             {finishedNow.length > 0 && (
               <Fold
                 shelf defaultOpen title="Finished" count={finishedNow.length} remember="sidebar:finished"
@@ -1315,15 +1324,6 @@ function Shell({ client, conn, onSignOut }: {
                 peek={finishedNow.some(isOpen) ? <div className="rows plain">{finishedNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
               >
                 <div className="rows plain">{finishedNow.map((x) => homeRow(x, true))}</div>
-              </Fold>
-            )}
-
-            {runningNow.length > 0 && (
-              <Fold
-                shelf defaultOpen title="Running" count={runningNow.length} remember="sidebar:working"
-                peek={runningNow.some(isOpen) ? <div className="rows plain">{runningNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
-              >
-                <div className="rows plain">{runningNow.map((x) => homeRow(x))}</div>
               </Fold>
             )}
 
@@ -1365,7 +1365,14 @@ function Shell({ client, conn, onSignOut }: {
               { kind: 'env' }, { kind: 'transfer', cwd: job.source.path, jobId: job.id },
             ], job.source.machineId)} />
 
-            {/* Settled starts folded: the chats you already looked at. */}
+            {/* Setup, spend and pairing are a page of their own now - the
+                gear up top. */}
+            {error && <div className="error">{error}</div>}
+            {envError && <p className="note" role="status">{envs.length ? 'Helm shows saved chats and is reconnecting.' : 'Helm is connecting to your machines.'}</p>}
+          </div>
+          {/* Settled sits at the foot of the sidebar, folded at first: the
+              chats you already looked at (owner, 2026-10-30). */}
+          <div className="side-pad side-bottom">
             {settledNow.length > 0 && (
               <Fold
                 shelf title="Settled" count={settledNow.length} remember="sidebar:settled-folded"
@@ -1378,11 +1385,6 @@ function Shell({ client, conn, onSignOut }: {
                 />
               </Fold>
             )}
-
-            {/* Setup, spend and pairing are a page of their own now - the
-                gear up top. */}
-            {error && <div className="error">{error}</div>}
-            {envError && <p className="note" role="status">{envs.length ? 'Helm shows saved chats and is reconnecting.' : 'Helm is connecting to your machines.'}</p>}
           </div>
         </div>
       </aside>
