@@ -16,7 +16,7 @@ before(async () => {
     const token = 'helm1.' + btoa(JSON.stringify({net:'network',sub:'device'})) + '.test';
     window.scope = workspace.workspaceScope(token);
     window.workspace = workspace;
-    window.makeClient = (envs, sessions, relay='http://helm-test', extra={}) => ({token, relay,
+    window.makeClient = (envs, sessions, relay='http://helm-test', extra={}) => ({token, relay, pendingActions: () => [], failedActions: () => [], resumeActions: async () => [],
       input(env, params) { return this.rpc(env, 'session.input', params); },
       environments: async () => ({ environments: envs }),
       on: () => () => {}, subscribe: () => {}, watchLatency: () => () => {},

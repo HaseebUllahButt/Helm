@@ -20,7 +20,7 @@ before(async () => {
     const scope = workspace.workspaceScope(token);
     const listeners = new Set();
     window.emit = (kind, payload) => listeners.forEach(fn => fn('machine', kind, payload));
-    const client = {token,relay:'http://helm-test',
+    const client = {token,relay:'http://helm-test',pendingActions:()=>[],failedActions:()=>[],resumeActions:async()=>[],
       environments:()=>window.envs?window.envs():new Promise(()=>{}),
       on:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},subscribe:()=>{},
       watchLatency:()=>()=>{},openDirect:async()=>{},route:async()=>null,
