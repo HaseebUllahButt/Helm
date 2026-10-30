@@ -212,7 +212,7 @@ export class SendEngine {
         }
         r.attempted = true; r.job.phase = 'sending'; this.update(r, true);
         const progress = { write: chunk => {
-          const text = String(chunk); const match = [...text.matchAll(/([\d,]+)\s+\d+%/g)].at(-1);
+          const text = String(chunk); const match = [...text.matchAll(/([\d,]+)B?\s+\d+%/g)].at(-1);
           if (match) { r.job.bytes.sent = Number(match[1].replaceAll(',', '')); this.update(r); }
         } };
         await this.copy({ machine: r.job.target.machineId, source: plan.path, targetFolder: plan.kind === 'file' ? dirname(r.job.target.path) : r.job.target.path,
@@ -250,8 +250,9 @@ export class SendEngine {
             run.abort.signal.addEventListener('abort', abort, { once: true });
             child.stdout.on('data', chunk => {
               output = (output + chunk).slice(-16384);
-              const lines = [...output.matchAll(/([\d,]+)\s+\d+%\s+([\d.]+)([kMGT]?)B\/s\s+(\d+):(\d+):(\d+).*?(?:xfr#(\d+))?/g)];
-              const p = lines.at(-1); if (p) { r.job.bytes.sent = Number(p[1].replaceAll(',','')); r.job.rate = Number(p[2]) * ({ '': 1, k: 1024, M: 1048576, G: 1073741824, T: 1099511627776 }[p[3]]); r.job.eta = Number(p[4])*3600+Number(p[5])*60+Number(p[6]); const x = output.match(/xfr#(\d+)/g)?.at(-1); if (x) r.job.files.sent = Number(x.slice(4)); this.update(r); }
+              // rsync 3.5 writes "1,212,416B  38% 1,051,379B/s"; older ones leave out the B and the commas in the rate.
+              const lines = [...output.matchAll(/([\d,]+)B?\s+\d+%\s+([\d.,]+)([kMGT]?)B\/s\s+(\d+):(\d+):(\d+).*?(?:xfr#(\d+))?/g)];
+              const p = lines.at(-1); if (p) { r.job.bytes.sent = Number(p[1].replaceAll(',','')); r.job.rate = Number(p[2].replaceAll(',','')) * ({ '': 1, k: 1024, M: 1048576, G: 1073741824, T: 1099511627776 }[p[3]]); r.job.eta = Number(p[4])*3600+Number(p[5])*60+Number(p[6]); const x = output.match(/xfr#(\d+)/g)?.at(-1); if (x) r.job.files.sent = Number(x.slice(4)); this.update(r); }
             });
             child.stderr.on('data', c => { r.tail = ((r.tail ?? '') + c).slice(-8192); });
             child.once('error', reject); child.once('close', code => { run.abort.signal.removeEventListener('abort', abort); resolve(code); });
