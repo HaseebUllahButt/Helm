@@ -3,12 +3,13 @@ import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice } from './
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
 import { useNow } from './useNow';
-import { isUnread, markSeen, seenHere, useSeenVersion } from './threadStatus';
+import { isUnread, markSeen, seenHere, unseenFinish, useSeenVersion } from './threadStatus';
+import { usePageHidden } from './usePageHidden';
 import { Palette, ShortcutsHelp, type PaletteItem, type PaletteSearchResults } from './Palette';
 import { NewChat } from './NewChat';
 import type { Account } from './accounts';
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
-import { DrivenSession } from './session/DrivenSession';
+import { DrivenSession as DrivenSessionScreen } from './session/DrivenSession';
 import { MoveChat, canMove } from './session/MoveChat';
 import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
@@ -20,8 +21,8 @@ import { EngineMark } from './EngineMark';
 import { SidebarSunset } from './SidebarSunset';
 import { WaitingIsland, type IslandCall } from './WaitingIsland';
 import { MachineUpdateNotice } from './MachineUpdateNotice';
-import { sending, useSends } from './send/store';
-import { SendActivity, SendNotice } from './send/SendActivity';
+import { sameSends, sending, useSendPart, useSendWatch } from './send/store';
+import { LiveSendActivity, SendNotice } from './send/SendActivity';
 import { Icon } from './Icon';
 import { deferredScreen } from './deferredScreen';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth } from './store';
@@ -42,7 +43,8 @@ import { EnvView } from './screens/EnvView';
 import { Home, type HomeBrain } from './screens/Home';
 import { BrainView } from './screens/Brain';
 import { Start } from './screens/Start';
-import { SessionView } from './session/SessionView';
+import { SessionView as SessionViewScreen } from './session/SessionView';
+import { steady } from './steady';
 
 // Tests import the model list editor from here, where it used to live.
 export { ModelPrefsView };
@@ -185,6 +187,10 @@ function supportedViews(views: MainView[]): MainView[] {
 }
 
 
+// The open chat draws again when its chat changes, not on every sidebar update.
+const DrivenSession = steady(DrivenSessionScreen);
+const SessionView = steady(SessionViewScreen);
+
 function Shell({ client, conn, onSignOut }: {
   client: Client; conn: { online: boolean; reachable: boolean; error?: string }; onSignOut: () => void;
 }) {
@@ -201,7 +207,15 @@ function Shell({ client, conn, onSignOut }: {
   const [selected, setSelected] = useState<string | null>(savedSend?.selected ?? cached.view?.envId ?? null);
   const [stack, setStack] = useState<MainView[]>(() => savedSend ? supportedViews(savedSend.stack) : (cached.view
     ? [{ kind: 'env' }, { kind: 'session', session: cached.view.session }] : [{ kind: 'env' }]));
-  const sends = useSends(client, envs);
+  // Only which sends exist and where they go: their progress redraws the
+  // send rows alone, not every chat and sidebar row with them.
+  const sendStore = useSendWatch(client, envs);
+  const sends = {
+    store: sendStore,
+    notices: useSendPart(sendStore, snapshot => snapshot.notices),
+    running: useSendPart(sendStore, snapshot => snapshot.jobs.filter(sending), sameSends),
+    done: useSendPart(sendStore, snapshot => snapshot.jobs.filter(job => job.phase === 'done'), sameSends),
+  };
   const [error, setError] = useState('');
   useEffect(() => {
     if (!savedSend && !cached.view && restoredView && !location.hash && nav.current.depth === 0 && nav.current.stack.length === 1) {
@@ -757,6 +771,24 @@ function Shell({ client, conn, onSignOut }: {
     navigate([{ kind: 'env' }, { kind: 'session', session: s, reviewChildren: reviewChildren ? ++attentionVisit.current : undefined }], envId);
   };
   openSessionRef.current = openSession;
+  // A sidebar row keeps its handlers while its chat is unchanged, so an
+  // update to one chat redraws that row, not every row in the sidebar.
+  // The handlers call today's functions, never the ones the row was made with.
+  const rowLatest = useRef({ openSession, threadActions });
+  rowLatest.current = { openSession, threadActions };
+  const rowCalls = useRef(new WeakMap<Session, { env: Environment; onOpen: () => void; actions: ReturnType<typeof threadActions> }>());
+  const rowCallsFor = (e: Environment, s: Session) => {
+    const known = rowCalls.current.get(s);
+    // Which actions a row has depends on its machine too (Move needs it online).
+    if (known?.env === e) return known;
+    // Each action the row has now, calling the newest version of itself.
+    type Actions = ReturnType<typeof threadActions>;
+    const actions = Object.fromEntries(Object.entries(threadActions(e, s)).map(([key, act]) => [key, act
+      && ((...args: unknown[]) => (rowLatest.current.threadActions(e, s)[key as keyof Actions] as ((...args: unknown[]) => unknown) | undefined)?.(...args))])) as Actions;
+    const made = { env: e, onOpen: () => rowLatest.current.openSession(e.id, s), actions };
+    rowCalls.current.set(s, made);
+    return made;
+  };
   // The pushed record already holds the change. Asking for every chat again
   // here downloaded a whole list for each update to the open chat.
   const onSessionChanged = (envId: string) => (s: Session) => {
@@ -1151,9 +1183,10 @@ function Shell({ client, conn, onSignOut }: {
   const savedIn = (list: typeof doneNow) => list.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));
   useSeenVersion();
   const isOpen = ({ env: e, s }: { env: Environment; s: Session }) => selected === e.id && view.kind === 'session' && view.session.id === s.id;
-  const homeRow = (x: { env: Environment; s: Session }, slim = false) => (
-    <HomeRow key={x.s.id} s={x.s} machine={x.env.name} slim={slim} selected={isOpen(x)} onOpen={() => openSession(x.env.id, x.s)} actions={threadActions(x.env, x.s)} />
-  );
+  const homeRow = (x: { env: Environment; s: Session }, slim = false) => {
+    const calls = rowCallsFor(x.env, x.s);
+    return <HomeRow key={x.s.id} s={x.s} machine={x.env.name} slim={slim} selected={isOpen(x)} onOpen={calls.onOpen} actions={calls.actions} />;
+  };
   // A chat you have open is a chat you have seen, including what it finishes while you watch.
   const openId = view.kind === 'session' ? view.session.id : null;
   const openStamp = everyone.find(({ s }) => s.id === openId)?.s;
@@ -1166,9 +1199,14 @@ function Shell({ client, conn, onSignOut }: {
   const finishedNow = doneNow.filter(({ s }) => isUnread(s) || (s.id === openId && reviewing.current.keep));
   const settledNow = doneNow.filter((x) => !finishedNow.includes(x));
   // The machine keeps the look too, so the tick clears on every device.
+  // Only a finish the machine has not seen yet needs telling: each tell is
+  // saved and sent to every screen, and a working chat changes every second.
+  // A hidden page has seen nothing; it tells when it is back in sight.
+  const pageHidden = usePageHidden();
   useEffect(() => {
-    if (openId && selected && markSeen(openId)) client.rpc(selected, 'session.seen', { id: openId }).catch(() => { /* an older machine: this device still knows */ });
-  }, [openId, openStamp?.updatedAt, openStamp?.status]);
+    if (!openId || !selected || !openStamp || pageHidden || !unseenFinish(openStamp)) return;
+    if (markSeen(openId)) client.rpc(selected, 'session.seen', { id: openId }).catch(() => { /* an older machine: this device still knows */ });
+  }, [openId, openStamp?.updatedAt, openStamp?.status, openStamp?.seenAt, pageHidden]);
   // Chats this device opened before its machine kept the look: hand each
   // over once, so a chat read here stops showing as new everywhere else.
   const handedOver = useRef(new Set<string>());
@@ -1367,7 +1405,7 @@ function Shell({ client, conn, onSignOut }: {
               </div>
             )}
 
-            <SendActivity jobs={sends.jobs} onOpen={(job) => navigate([
+            <LiveSendActivity store={sends.store} onOpen={(job) => navigate([
               { kind: 'env' }, { kind: 'transfer', cwd: job.source.path, jobId: job.id },
             ], job.source.machineId)} />
 
@@ -1401,12 +1439,12 @@ function Shell({ client, conn, onSignOut }: {
             sends.store.dismiss(job.id);
             navigate([{ kind: 'env' }, { kind: 'transfer', cwd: job.source.path, jobId: job.id }], job.source.machineId);
           }} />)}
-        {view.kind !== 'transfer' && sends.jobs.some(sending) && <div className="send-mobile-status">
+        {view.kind !== 'transfer' && sends.running.length > 0 && <div className="send-mobile-status">
           <button className="linkish" onClick={() => {
-            const job = sends.jobs.find(sending)!;
+            const job = sends.running[0];
             navigate([{ kind: 'env' }, { kind: 'transfer', cwd: job.source.path, jobId: job.id }], job.source.machineId);
-          }}>{sends.jobs.filter(sending).length > 1 ? `${sends.jobs.filter(sending).length} sends in progress`
-            : `Sending to ${sends.jobs.find(sending)!.target.name} · View`}</button>
+          }}>{sends.running.length > 1 ? `${sends.running.length} sends in progress`
+            : `Sending to ${sends.running[0].target.name} · View`}</button>
         </div>}
         <MachineUpdateNotice envs={envs} onOpen={() => push({ kind: 'updates' })} />
         {view.kind === 'app-settings' ? (
@@ -1463,7 +1501,7 @@ function Shell({ client, conn, onSignOut }: {
           <EnvView
             key={env.id}
             client={client} env={env} wide={wide} onBack={back}
-            sendJobs={sends.jobs} sendTarget={envs.find(e => e.id !== env.id && e.name.toLowerCase() === 'vm')?.name ?? envs.find(e => e.id !== env.id && e.online)?.name}
+            sendJobs={sends.done} sendTarget={envs.find(e => e.id !== env.id && e.name.toLowerCase() === 'vm')?.name ?? envs.find(e => e.id !== env.id && e.online)?.name}
             sessions={(sessions[env.id] ?? []).filter(listedThread)} reload={reloadEnv}
             isSnoozed={(s) => snoozedNow(env.id, s.id)}
             remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions.filter((s) => listedThread(s)

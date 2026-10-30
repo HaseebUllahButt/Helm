@@ -187,27 +187,39 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false, o
   const list = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let stale = false, inFlight = false;
+    let stale = false, inFlight = false, missed = false, shown = '';
     let debounce: ReturnType<typeof setTimeout> | undefined;
     setData(null); setError('');
     const load = async () => {
       if (stale || inFlight || !env.online) return;
-      inFlight = true;
+      if (document.hidden) { missed = true; return; }
+      inFlight = true; missed = false;
       try {
         const r = await client.rpc<GitGraphData>(env.id, 'git.graph', { cwd }, 25_000);
-        if (!stale) { setData(r); setError(''); }
+        // The same history again draws nothing new.
+        const text = JSON.stringify(r);
+        if (!stale && text !== shown) { shown = text; setData(r); }
+        if (!stale) setError('');
       } catch (e: any) { if (!stale) setError(errorMessage(e, { fallback: 'Helm cannot load Git history.' })); }
       finally { inFlight = false; }
     };
     void load();
     const timer = setInterval(() => { if (!document.hidden) void load(); }, 15_000);
+    // A chat that starts or stops is when the history usually moves. Its
+    // other updates (counters, every second while it works) change nothing here.
+    const statuses = new Map<string, string>();
     const off = client.on((id, kind, payload: any) => {
-      if ((id === env.id && ['session.update', 'session.exit'].includes(kind)) || (kind === 'connection' && payload?.online)) {
-        clearTimeout(debounce);
-        debounce = setTimeout(() => void load(), 600);
-      }
+      if (id === env.id && kind === 'session.update') {
+        const s = payload?.session;
+        if (!s?.id || statuses.get(s.id) === s.status) return;
+        statuses.set(s.id, s.status);
+      } else if (!(id === env.id && kind === 'session.exit') && !(kind === 'connection' && payload?.online)) return;
+      clearTimeout(debounce);
+      debounce = setTimeout(() => void load(), 600);
     });
-    return () => { stale = true; clearInterval(timer); clearTimeout(debounce); off(); };
+    const back = () => { if (!document.hidden && missed) void load(); };
+    document.addEventListener('visibilitychange', back);
+    return () => { stale = true; clearInterval(timer); clearTimeout(debounce); off(); document.removeEventListener('visibilitychange', back); };
   }, [client, env.id, env.online, cwd, refreshKey, attempt]);
 
   const rows = useMemo(() => graphRows(data?.commits ?? []), [data]);

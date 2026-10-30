@@ -1,6 +1,6 @@
 import { errorMessage } from '../errors';
 import { useDismiss } from '../useDismiss';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { useNow, waitingSince } from '../useNow';
 import { ThreadStatus, moodOf, isUnread, useSeenVersion } from '../threadStatus';
@@ -281,17 +281,20 @@ export function NeedCard({ s, machine, selected = false, onOpen, onPick, onSnooz
  * gets the whole line; the second line has the agent, folder, machine,
  * branch and its clock.
  */
-export function HomeRow({ s, machine, onOpen, note, selected = false, slim = false, actions }: {
+export const HomeRow = memo(function HomeRow({ s, machine, onOpen, note, selected = false, slim = false, actions }: {
   s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean;
   /** One line: the title, its status and the agent. */
   slim?: boolean;
   /** Rename, archive, delete - the same ⋯ the machine screen's rows have. */
   actions?: { onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void };
 }) {
-  const now = useNow();
   useSeenVersion();
   const eng = engineOf(s.engine);
   const mood = moodOf(s, isUnread(s));
+  // The age is the only thing here that changes with time, and an age in
+  // hours or days turns over far less often than one in minutes.
+  const age = Date.now() - (s.updatedAt ?? 0);
+  const now = useNow(age < 3_600_000 ? 15_000 : age < 86_400_000 ? 60_000 : 600_000, mood !== 'working' && mood !== 'needs' && mood !== 'failed' && !(note && slim));
   const name = shownTitle(s.title);
   const where = [whereOf(s), machine, s.branch, eng.label].filter(Boolean).join(' · ');
   // A word that says more than the age does takes its place.
@@ -324,7 +327,7 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
       {actions && <ThreadActions s={s} {...actions} ending={ending} setEnding={setEnding} />}
     </div>
   );
-}
+});
 
 export function StatusChip({ status, at }: { status: string; at?: number }) {
   // `at` is when the thread entered this status: "working" gains "14m",

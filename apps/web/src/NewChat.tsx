@@ -354,7 +354,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   // "checked 20s ago" keeps counting while the picker is open.
   useEffect(() => {
     if (step !== 'folder' && step !== 'github') return;
-    const t = setInterval(() => setNow(Date.now()), 10_000);
+    const t = setInterval(() => { if (!document.hidden) setNow(Date.now()); }, 10_000);
     return () => clearInterval(t);
   }, [step]);
 
