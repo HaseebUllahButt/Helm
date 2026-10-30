@@ -2,7 +2,7 @@ import { errorMessage } from '../errors';
 import { useCopySelection } from '../useCopySelection';
 import type { Transcribe } from './voice';
 import { useDismiss } from '../useDismiss';
-import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { recacheWarning, type Recache } from '@helm/usage/recache';
 import { Markdown } from '../Markdown';
@@ -157,6 +157,10 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   // it is usually a second or two.
   const refresh = useCallback(async (): Promise<void> => {
     if (isShell || !mounted.current) return;
+    // A hidden page reads nothing. Each read also keeps the machine watching
+    // this chat for us; it stops once we stop asking, and the page reads
+    // once when it is back in sight.
+    if (document.hidden) return;
     if (reading.current) { readAgain.current = true; return; }
     reading.current = true;
     let success = false;
@@ -173,7 +177,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       if (!r.unchanged && r.messages) {
         const text = JSON.stringify(r.messages);
         if (shown.current.id !== session.id || shown.current.text !== text) {
-          setMessages(r.messages);
+          const fresh = r.messages;
+          // A message that did not change keeps its old copy, so only the new and changed ones draw again.
+          setMessages((now) => keepSameMessages(now, fresh));
           saveMessages(env.id, session.id, r.messages);
         }
         shown.current = { id: session.id, text, version: r.version ?? '' };
@@ -594,7 +600,12 @@ function NativeClaudeApprovals({ client, env, sessionId, handle, children }: {
   </div></div>;
 }
 
-function Chat({ messages, status, compacting = false, readVisual, canvas }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader; canvas?: CanvasVisuals }) {
+function keepSameMessages(was: Message[] | null, next: Message[]): Message[] {
+  if (!was?.length) return next;
+  return next.map((m, i) => was[i] && JSON.stringify(was[i]) === JSON.stringify(m) ? was[i] : m);
+}
+
+const Chat = memo(function Chat({ messages, status, compacting = false, readVisual, canvas }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader; canvas?: CanvasVisuals }) {
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
@@ -638,9 +649,9 @@ function Chat({ messages, status, compacting = false, readVisual, canvas }: { me
       {unread && <button className="jump" onClick={jump}><Icon name="arrow-down" size={14} />new</button>}
     </div>
   );
-}
+});
 
-function Turn({ m }: { m: Message }) {
+const Turn = memo(function Turn({ m }: { m: Message }) {
   if (m.visual) return <div className="turn assistant"><VisualReply visual={m.visual} /></div>;
   if (m.role === 'user') {
     const display = userMessage(m.text, m.attachments);
@@ -678,4 +689,4 @@ function Turn({ m }: { m: Message }) {
       {!m.text && !m.tools.length && m.thinking && <div className="act"><span className="aicon"><Icon name="think" size={15} /></span><span className="alabel">Thinking</span></div>}
     </div>
   );
-}
+});

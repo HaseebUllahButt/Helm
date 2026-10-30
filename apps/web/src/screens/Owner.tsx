@@ -60,7 +60,8 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
   // the owner has an edit of their own in it.
   const shown = useRef('');
   const take = (next: OwnerState, keepText = false) => {
-    setState(next);
+    // Read again every few seconds while the keeper runs: the same list draws nothing.
+    setState((was) => was && JSON.stringify(was) === JSON.stringify(next) ? was : next);
     const lines = next.record.lines.join('\n');
     const before = shown.current;
     shown.current = lines;
@@ -88,7 +89,7 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
     if (!state?.keeper.running) return;
     let reading = false;
     const timer = setInterval(() => {
-      if (reading) return;
+      if (reading || document.hidden) return;
       reading = true;
       void load(true).finally(() => { reading = false; });
     }, 3000);

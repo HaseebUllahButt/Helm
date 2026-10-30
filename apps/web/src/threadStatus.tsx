@@ -100,6 +100,13 @@ export function isUnread(s: Thread): boolean {
   return s.updatedAt > Math.max(state.since, state.at[s.id] ?? 0, s.seenAt ?? 0);
 }
 
+/** Finished since the machine last heard of a look, on any device. */
+export function unseenFinish(s: Thread): boolean {
+  if (!s.updatedAt || (s.turns ?? 0) < 1) return false;
+  if (s.status !== 'idle' && s.status !== 'done') return false;
+  return s.updatedAt > (s.seenAt ?? 0);
+}
+
 // ------------------------------------------------------------- turn clock
 
 /**

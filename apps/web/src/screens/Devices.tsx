@@ -64,7 +64,9 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
       asking = true;
       try {
         const r = await client.devices(pairingBase.current);
-        setDevices(r.devices);
+        // This check runs out of sight too, to close a used link at once;
+        // the same list again draws nothing.
+        setDevices((was) => JSON.stringify(was) === JSON.stringify(r.devices) ? was : r.devices);
         const fresh = r.devices.find((d) => !knownAtInvite.current.has(d.id));
         if (fresh) {
           setInvite(null);

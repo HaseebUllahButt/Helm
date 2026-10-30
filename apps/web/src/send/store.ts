@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { Client, Environment, SendJob } from '../client';
 import { workspaceScope } from '../workspaceCache';
 
@@ -12,10 +12,10 @@ export function sendAction(jobs: SendJob[], sourceId: string, path: string, defa
 export const sendPercent = (job: SendJob) => job.bytes.total && job.bytes.total > 0
   ? Math.min(100, Math.round(job.bytes.sent / job.bytes.total * 100)) : null;
 
-type Snapshot = { jobs: SendJob[]; notices: SendJob[]; errors: Record<string, string> };
+export type SendSnapshot = { jobs: SendJob[]; notices: SendJob[]; errors: Record<string, string> };
 /** Shared by all views, scoped to the signed-in Client. No browser-owned transfer jobs. */
 export class SendStore {
-  private snapshot: Snapshot = { jobs: [], notices: [], errors: {} };
+  private snapshot: SendSnapshot = { jobs: [], notices: [], errors: {} };
   private listeners = new Set<() => void>();
   private watchers = new Map<object, string[]>();
   private busy = new Set<string>();
@@ -35,7 +35,7 @@ export class SendStore {
   }
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
-  private publish(snapshot: Snapshot) { this.snapshot = snapshot; this.listeners.forEach(listener => listener()); }
+  private publish(snapshot: SendSnapshot) { this.snapshot = snapshot; this.listeners.forEach(listener => listener()); }
   private remember(id: string) {
     this.seen.add(id);
     try { localStorage.setItem(this.key, JSON.stringify([...this.seen].slice(-100))); } catch { /* storage unavailable */ }
@@ -131,9 +131,35 @@ export function sendStore(client: Client) {
   if (!store) { store = new SendStore(client); stores.set(client, store); }
   return store;
 }
-export function useSends(client: Client, envs: Pick<Environment, 'id' | 'online'>[] = []) {
+/** Keep the store fed for these machines, without drawing anything on its updates. */
+export function useSendWatch(client: Client, envs: Pick<Environment, 'id' | 'online'>[] = []) {
   const store = useMemo(() => sendStore(client), [client]);
   const ids = envs.filter(env => env.online).map(env => env.id).sort().join('\n');
   useEffect(() => store.watch(ids ? ids.split('\n') : []), [store, ids]);
+  return store;
+}
+export function useSends(client: Client, envs: Pick<Environment, 'id' | 'online'>[] = []) {
+  const store = useSendWatch(client, envs);
   return { store, ...useSyncExternalStore(store.subscribe, store.getSnapshot) };
 }
+/**
+ * One part of the sends. Progress arrives every second or two while a send
+ * runs; a screen that shows only which sends exist, not how far each is,
+ * redraws when that part changes, not on each progress step.
+ */
+export function useSendPart<T>(store: SendStore, pick: (snapshot: SendSnapshot) => T, same: (a: T, b: T) => boolean = Object.is): T {
+  const last = useRef<{ store: SendStore; snapshot: SendSnapshot; value: T } | null>(null);
+  const read = () => {
+    const snapshot = store.getSnapshot();
+    const was = last.current;
+    if (was?.store === store && was.snapshot === snapshot) return was.value;
+    const value = pick(snapshot);
+    if (was?.store === store && same(was.value, value)) { was.snapshot = snapshot; return was.value; }
+    last.current = { store, snapshot, value };
+    return value;
+  };
+  return useSyncExternalStore(store.subscribe, read);
+}
+const sendKey = (job: SendJob) => `${job.source.machineId}\n${job.id}\n${job.source.path}\n${job.target.name}`;
+/** The same sends to the same places, however far each has got. */
+export const sameSends = (a: SendJob[], b: SendJob[]) => a.length === b.length && a.every((job, i) => sendKey(job) === sendKey(b[i]));

@@ -90,17 +90,25 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
 
   useEffect(() => {
     if (!taskResult) return;
-    let live = true, asking = false;
+    // Checked every 3 seconds while in sight, until the work is back. The
+    // same answer again draws nothing.
+    let live = true, asking = false, done = false, shown = '';
     const refresh = () => {
-      if (asking) return;
+      if (asking || done || document.hidden) return;
       asking = true;
       client.rpc<{ return: TaskReturnState }>(source.id, 'task.status', { handoffId })
-        .then((reply) => { if (live) setReturnState(reply.return); }).catch(() => {})
+        .then((reply) => {
+          if (!live) return;
+          const text = JSON.stringify(reply.return);
+          if (text !== shown) { shown = text; setReturnState(reply.return); }
+          if (reply.return?.status === 'returned') { done = true; clearInterval(timer); }
+        }).catch(() => {})
         .finally(() => { asking = false; });
     };
     void refresh();
     const timer = setInterval(refresh, 3000);
-    return () => { live = false; clearInterval(timer); };
+    document.addEventListener('visibilitychange', refresh);
+    return () => { live = false; clearInterval(timer); document.removeEventListener('visibilitychange', refresh); };
   }, [client, source.id, source.online, handoffId, taskResult]);
 
   useEffect(() => {
