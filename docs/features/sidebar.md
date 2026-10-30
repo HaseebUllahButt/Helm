@@ -28,8 +28,8 @@ until `text` starts with "helm / Search anything".
 
 ## Home shelves
 - **Rules (owner, 2026-10-30): the sidebar is an inbox.** Top to bottom:
-  slim search and +, Needs you, Finished, Running, Snoozed, then Settled,
-  folded at first. No machines and no brain: machines are on Home and in
+  slim search and +, Needs you, Running, Finished, Snoozed. Settled is
+  pinned to the foot of the sidebar, folded at first. No machines and no brain: machines are on Home and in
   search; the brain is on Home and in search ("Helm brain").
 - **Finished:** a chat that stopped since you last looked (`isUnread`,
   synced through the machine's `seenAt`). The chat you open stays in

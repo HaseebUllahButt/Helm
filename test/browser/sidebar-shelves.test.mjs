@@ -83,8 +83,16 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   await page.evaluate(mount);
   const sidebar = page.locator('.sidebar');
   await shelf(page, 'Settled').waitFor();
-  // An inbox: what needs you and what finished first, Settled last. No machines.
-  assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Finished', 'Running', 'Settled']);
+  // An inbox: what needs you, what runs, what finished; Settled last. No machines.
+  assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Running', 'Finished', 'Settled']);
+  // Folded Settled sits at the foot of the sidebar, not under the last shelf.
+  const foot = await page.evaluate(() => {
+    const scroll = document.querySelector('.sidebar > .scroll').getBoundingClientRect();
+    const settled = document.querySelector('.side-bottom').getBoundingClientRect();
+    return { gap: scroll.bottom - settled.bottom, top: settled.top };
+  });
+  assert.ok(foot.gap >= 0 && foot.gap < 24, `Settled ends ${foot.gap}px above the sidebar foot`);
+  assert.ok(foot.top > 400, `Settled starts low on the screen, at ${foot.top}px`);
 
   // Needs you: only shown when something waits, with a white count.
   const needs = shelf(page, 'Needs you');

@@ -448,7 +448,7 @@ test('One search control opens the palette, keys work, selection has no left bar
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await sidebar.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, 'sidebar-simple-search.png') });
   // Search shares its line with the square New chat button; together they fill it.
   const lineBounds = await sidebar.locator('.side-actions').boundingBox();
-  const padBounds = await sidebar.locator('.side-pad').boundingBox();
+  const padBounds = await sidebar.locator('.side-pad').first().boundingBox();
   assert.ok(lineBounds.width >= padBounds.width * 0.9, `search line ${lineBounds.width}px spans the ${padBounds.width}px sidebar pad`);
   const palette = page.getByRole('dialog', { name: 'Search and actions' });
   const paletteInput = palette.getByRole('combobox', { name: 'Search chats, machines, and actions' });
