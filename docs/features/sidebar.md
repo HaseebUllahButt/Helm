@@ -6,8 +6,8 @@ until `text` starts with "helm / Search anything".
 ## Home (computer)
 - **Rules (owner, 2026-10-27):** the helm logo top left is the way home. A
   wide screen opens on the first machine once; after that no machine is
-  picked by itself. Home is a quick-chat box and one plain row per machine
-  (no cards: chats stay in the sidebar). The box starts on the machine open
+  picked by itself. Home is a quick-chat box, one plain row per machine
+  (no cards: chats stay in the sidebar), then the Helm brain row. The box starts on the machine open
   before Home and has the message box's chips: machine, agent, model,
   thinking, permissions. Enter starts the quick chat at once and sends the
   text when the agent is up (`sendWhenReady`). A chip's list drops under the
@@ -18,6 +18,8 @@ until `text` starts with "helm / Search anything".
   the model and thinking chips list the account's models; start nothing.
 
 ## Folded sidebar (computer only)
+- **Rules:** the folded rail keeps the inbox: needs you (amber), finished
+  (green), working (blue).
 - **Prove (driven 2026-10-17):** `open --desktop`, start a fake-ask chat and
   a fake-slow chat, `click "collapse sidebar"`, then
   `eval '[...document.querySelectorAll(".side-rail button")].map(b=>b.ariaLabel)'`.
@@ -25,15 +27,26 @@ until `text` starts with "helm / Search anything".
   shows TOOL APPROVAL.
 
 ## Home shelves
-- **Rules:** the owner calls the shelf of recently finished chats
-  "Settled". The sidebar shows live and Helm-known chats only, on purpose.
-- **Rules (owner, 2026-10-28, idea A):** a Settled chat is one line: the
-  agent logo, the title, and one status (its age, a green dot when not
-  opened yet, "Needs you" or "Failed"). A Running chat has its status dot
-  before the title, so the title gets the whole line; the second line has
-  the agent logo, folder, machine, branch and the clock. A
-  machine shows a word only for news ("2 running", or the age when
-  offline). The top bar shows only the dot while connected. Shelf headers
+- **Rules (owner, 2026-10-30): the sidebar is an inbox.** Top to bottom:
+  slim search and +, Needs you, Finished, Running, Snoozed, then Settled,
+  folded at first. No machines and no brain: machines are on Home and in
+  search; the brain is on Home and in search ("Helm brain").
+- **Finished:** a chat that stopped since you last looked (`isUnread`,
+  synced through the machine's `seenAt`). The chat you open stays in
+  Finished while you read it or prompt it again, and moves to Settled when
+  you open something else or go back. A chat that runs and finishes while
+  open also lands in Finished until you leave it.
+- **Prove Finished (driven 2026-10-30):** two fake chats; go Home; `$V rpc
+  session.input '{"id":"<id>","data":"more\r"}'`: the chat shows under
+  Finished with a green dot. Click it: it stays there. Click another
+  chat: it is under Settled.
+- **Rules:** the sidebar shows live and Helm-known chats only, on purpose.
+- **Rules (owner, 2026-10-28, idea A):** a Finished or Settled chat is one
+  line: the agent logo, the title, and one status (its age, a green dot
+  when not opened yet, "Needs you" or "Failed"). A Running chat has its
+  status dot before the title, so the title gets the whole line; the second
+  line has the agent logo, folder, machine, branch and the clock. The top
+  bar shows only the dot while connected. Shelf headers
   have no divider lines.
 - **Rules (owner, 2026-10-24):** a CLI opened in a terminal with nothing
   said in it is in neither Running nor Settled. It joins at its first
@@ -43,8 +56,8 @@ until `text` starts with "helm / Search anything".
   `HELM_NATIVE_BYPASS`): no row. Send its `UserPromptSubmit` hook with
   `sendHook`: it shows under Running. Send `Stop`: it moves to Settled.
 - **Prove (driven 2026-10-15):** finish one fake chat, then
-  `$V click Back; $V text | head -14`: your chat under "Settled" with its
-  age.
+  `$V click Back; $V text | head -14`: your chat under "Settled" (click
+  "Settled" to unfold it) with its age.
 - **Traps:** with `up --real`, Settled also holds the owner's real Claude
   chats (they arrive through Claude hooks), including the one running this
   check.
@@ -92,7 +105,7 @@ until `text` starts with "helm / Search anything".
 ## Search, palette, machine screen
 - **Prove (driven):** `$V key Control+k; $V text | tail -15; $V key Escape`
   lists actions; `$V key Control+Slash` shows "IN THE NEW-CHAT BOX", "IN A
-  CHAT". `$V click "verify-<you> idle"` opens the machine screen.
+  CHAT". Search for the machine name and pick it to open the machine screen.
 - **Said in chats (driven 2026-10-18):** words typed in the box (two or more
   letters) are looked for inside every online machine's chats once typing
   pauses. Prove: send "the pelican flies at dawn" in a fake chat, wait
@@ -109,8 +122,9 @@ until `text` starts with "helm / Search anything".
   `test/palette`, `machine-kind`, `search-index`.
 
 ## Helm brain
+- **Reach:** the row under the machines on Home, or "Helm brain" in search.
 - **Not yet driven;** starting it with a real account costs money. In the
-  copy its row's tooltip says "verify-<you> · Pick an account".
+  copy its Home row says "verify-<you> · Pick an account".
 - **Traps:** it asks permission for every Helm command, reads included. It
   stays on the VM and never moves to a laptop. Deleting it drops what it
   learned.

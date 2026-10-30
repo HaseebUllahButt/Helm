@@ -8,8 +8,10 @@ home. Return materialization refuses folders outside that home. Never use the
 owner's home or network to bypass this check.
 
 ## Machines and devices
-- **Prove (driven 2026-10-15):** `$V text` on Home shows "verify-<you>" and
-  "idle"; `$V click "verify-<you> idle"` opens its screen. `$V key
+- **Reach (owner, 2026-10-30):** machines left the sidebar. Open one from
+  Home (the logo, on a computer) or from search on any screen.
+- **Prove (driven 2026-10-15):** `$V click "Search anything"; $V type
+  verify-<you>; $V key Enter` opens its screen. `$V key
   Control+Shift+s; $V click "Devices & pairing"; $V text` shows "Linux
   Chrome · this device · online now".
 - **Traps:** never press "Make join command" or remove devices on the real

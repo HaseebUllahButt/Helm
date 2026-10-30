@@ -63,6 +63,8 @@ async function pageFor(t) {
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.route('http://helm-test/**', r => r.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
   await page.goto('http://helm-test/');
+  // Settled starts folded; these tests read its rows, so it starts open here.
+  await page.evaluate(() => localStorage.setItem('helm-fold:sidebar:settled-folded', '1'));
   const boot = async () => { await page.addStyleTag({ content: css }); await page.addScriptTag({ content: script }); };
   await boot();
   t.after(() => assert.deepEqual(errors, []));
@@ -431,7 +433,7 @@ test('resuming on HTTP clears the saved-workspace disconnect notice without wait
   assert.equal(await page.locator('.sidebar .error').count(),0);
   await page.evaluate(()=>{window.failed=false;window.dispatchEvent(new Event('focus'));});
   await page.waitForFunction(()=>!document.querySelector('.sidebar').textContent.includes('Saved workspace · reconnecting'));
-  await page.locator('.sidebar .rt-text').getByText('Recovered machine',{exact:true}).waitFor();
+  await page.getByText('Helm shows saved chats and is reconnecting.',{exact:true}).waitFor({state:'detached'});
 });
 
 test('many chat updates in a row are written to the device once, and a page hide writes at once', async t => {
