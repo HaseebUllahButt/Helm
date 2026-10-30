@@ -1134,6 +1134,26 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
+  // Ctrl/Cmd+Alt+S opens or closes Settled. A folded sidebar unfolds with
+  // Settled open, since the shelf is not on show there.
+  const [settledCommand, setSettledCommand] = useState<{ n: number; to?: boolean }>({ n: 0 });
+  const toggleSettled = useRef<() => void>(() => {});
+  toggleSettled.current = () => {
+    const folded = wide && sidebarCollapsed;
+    if (folded) collapseSidebar(false);
+    setSettledCommand(({ n }) => ({ n: n + 1, to: folded ? true : undefined }));
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyS' || !(event.ctrlKey || event.metaKey) || !event.altKey || event.shiftKey || event.isComposing
+          || document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleSettled.current();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
   // Ctrl/Cmd+Shift+T: pick a device, land in its terminal. Only the Helm app
   // window gets this key; an ordinary browser tab keeps it for "reopen tab".
   const [terminalPicker, setTerminalPicker] = useState(false);
@@ -1419,7 +1439,7 @@ function Shell({ client, conn, onSignOut }: {
           <div className="side-pad side-bottom">
             {settledNow.length > 0 && (
               <Fold
-                shelf title="Settled" count={settledNow.length} remember="sidebar:settled-folded"
+                shelf title="Settled" count={settledNow.length} remember="sidebar:settled-folded" command={settledCommand}
                 note={savedIn(settledNow) ? 'saved' : undefined}
                 peek={settledNow.some(isOpen) ? <div className="rows plain">{settledNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
               >

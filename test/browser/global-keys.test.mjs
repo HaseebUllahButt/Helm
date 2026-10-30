@@ -130,6 +130,26 @@ test('Ctrl+B folds and unfolds the sidebar, and a terminal keeps the key', async
   assert.equal(await sidebar.evaluate(el=>el.classList.contains('collapsed')), false, 'Ctrl+B in a terminal folded the sidebar');
 });
 
+test('Ctrl+Alt+S opens and closes Settled, and unfolds a folded sidebar to show it', async t => {
+  const page = await pageFor(t);
+  const settled = page.locator('aside.sidebar .fold-toggle', {hasText:'Settled'});
+  const expanded = value => page.waitForFunction(v=>[...document.querySelectorAll('aside.sidebar .fold-toggle')]
+    .find(b=>b.textContent.includes('Settled'))?.getAttribute('aria-expanded') === v, value);
+  await expanded('true');
+  await page.keyboard.press('Control+Alt+KeyS');
+  await expanded('false');
+  await page.keyboard.press('Control+Alt+KeyS');
+  await expanded('true');
+  await page.keyboard.press('Control+Alt+KeyS');
+  await expanded('false');
+  await page.keyboard.press('Control+KeyB');
+  await page.waitForFunction(()=>document.querySelector('aside.sidebar').classList.contains('collapsed'));
+  await page.keyboard.press('Control+Alt+KeyS');
+  await page.waitForFunction(()=>!document.querySelector('aside.sidebar').classList.contains('collapsed'));
+  await expanded('true');
+  await settled.waitFor({state:'visible'});
+});
+
 test('the shortcuts list names both keys', async t => {
   const page = await pageFor(t);
   await page.keyboard.press('Control+Slash');
@@ -138,6 +158,7 @@ test('the shortcuts list names both keys', async t => {
   assert.match(text, /Show usage, limits, and cost/);
   assert.match(text, /Open a terminal/);
   assert.match(text, /Show or hide the sidebar/);
+  assert.match(text, /Open or close Settled/);
 });
 
 test('bare keys open nothing: every shortcut needs Ctrl/Cmd', async t => {
