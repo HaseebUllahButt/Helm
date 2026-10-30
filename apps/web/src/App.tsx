@@ -9,6 +9,7 @@ import { NewChat } from './NewChat';
 import type { Account } from './accounts';
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { DrivenSession } from './session/DrivenSession';
+import { MoveChat, canMove } from './session/MoveChat';
 import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
 import { StartingTerminalView } from './session/StartingTerminalView';
@@ -258,6 +259,7 @@ function Shell({ client, conn, onSignOut }: {
   }, [snoozeUndo]);
   /** The chat just archived from Home, for as long as taking it back is one tap. */
   const [archiveUndo, setArchiveUndo] = useState<{ envId: string; s: Session } | null>(null);
+  const [moveChat, setMoveChat] = useState<{ envId: string; s: Session } | null>(null);
   useEffect(() => {
     if (!archiveUndo) return;
     const timer = setTimeout(() => setArchiveUndo(null), 7000);
@@ -638,6 +640,7 @@ function Shell({ client, conn, onSignOut }: {
       // say what happened and leave the way back in reach.
       onArchive: async () => { if (await act('session.archive', { id: s.id, archived: !s.archived }) && !s.archived) setArchiveUndo({ envId: e.id, s }); },
       onDelete: () => act('session.kill', { id: s.id }),
+      onMove: canMove(e, s) ? () => setMoveChat({ envId: e.id, s }) : undefined,
     };
   };
 
@@ -1566,6 +1569,7 @@ function Shell({ client, conn, onSignOut }: {
             onSendTask={view.session.quick || view.session.external || view.session.brain || view.session.engine === 'shell'
               ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             onSendFolder={view.session.quick || !view.session.cwd ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd })}
+            onMove={viewSession && canMove(env, viewSession) ? () => setMoveChat({ envId: env.id, s: viewSession }) : undefined}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
@@ -1618,6 +1622,11 @@ function Shell({ client, conn, onSignOut }: {
           <span className="undo-text">Snoozed <b>{snoozeUndo.title}</b> {snoozeUndo.until === NEVER_SNOOZE ? 'until you restore it' : `until ${when(snoozeUndo.until)}`}</span>
           <button onClick={() => { setSnooze(snoozeUndo.key, null); setSnoozeUndo(null); }}>Undo</button>
         </div>
+      )}
+      {moveChat && envs.some((e) => e.id === moveChat.envId) && (
+        <MoveChat client={client} source={envs.find((e) => e.id === moveChat.envId)!} machines={envs}
+          session={(sessions[moveChat.envId] ?? []).find((s) => s.id === moveChat.s.id) ?? moveChat.s}
+          onClose={() => { loadSessions(moveChat.envId); setMoveChat(null); }} onOpen={openSession} />
       )}
       {archiveUndo && !snoozeUndo && (
         <div className="undo" role="status">

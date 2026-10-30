@@ -109,11 +109,11 @@ export function PagedRows<T extends { s: { id: string } }>({ items, isSelected, 
 }
 
 /**
- * The ⋯ on a thread row: continue, rename, archive, delete. One component, so
+ * The ⋯ on a thread row: continue, rename, move, archive, delete. One component, so
  * the sidebar's rows and the machine screen's rows offer the same things.
  */
-export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete, ending: askedToEnd, setEnding: setAskedToEnd }: {
-  s: Session; onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void;
+export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete, onMove, ending: askedToEnd, setEnding: setAskedToEnd }: {
+  s: Session; onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void;
   /** The delete question, when the row asks it (its Delete key). */
   ending?: boolean; setEnding?: (on: boolean) => void;
 }) {
@@ -139,6 +139,9 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete, en
           )}
           {onRename && !adopted && (
             <button onClick={() => { setMenu(false); setNaming(true); }}>Rename chat</button>
+          )}
+          {onMove && (
+            <button onClick={() => { setMenu(false); onMove(); }}>Move to another machine</button>
           )}
           {onArchive && (
             <button onClick={() => { setMenu(false); onArchive(); }}>
@@ -283,7 +286,7 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
   /** One line: the title, its status and the agent. */
   slim?: boolean;
   /** Rename, archive, delete - the same ⋯ the machine screen's rows have. */
-  actions?: { onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void };
+  actions?: { onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void };
 }) {
   const now = useNow();
   useSeenVersion();

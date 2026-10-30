@@ -282,6 +282,11 @@ export const M = {
   TASK_RETURNED: 'task.returned',
   TASK_STATUS: 'task.status',
   TASK_RETRY_RETURN: 'task.retry-return',
+  // Move a chat with its whole conversation (chat-move.js). The app asks the
+  // source to move; the source asks the target to prepare, then to open.
+  CHAT_MOVE: 'chat.move',          // { moveId, sessionId, targetMachineId, profileId, targetFolder?, includeEnv?, retry? } -> move
+  CHAT_MOVE_STATUS: 'chat.move-status', // { moveId } -> move
+  CHAT_ADOPT: 'chat.adopt',        // machine only: { moveId, step: 'prepare' } -> { stage } | { moveId, step: 'open', ... } -> { sessionId }
 
   SEND_PLAN: 'send.plan',
   SEND_START: 'send.start',

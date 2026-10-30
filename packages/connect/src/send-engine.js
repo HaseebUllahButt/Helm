@@ -50,6 +50,8 @@ export class SendEngine {
       r.lastSave = now;
       saveRecord(this.file(r.job.id), { job: r.job, options: r.options, intent: r.intent, receipt: r.receipt, attempted: r.attempted });
     }
+    // A copy that is one step of a bigger action (a chat move) shows as that action, not as a Send.
+    if (r.job.internal) return;
     const publish = () => {
       r.emitTimer = null; r.lastEmit = Date.now();
       try { this.emit({ job: structuredClone(r.job) }); } catch { /* a disconnected app cannot stop a send */ }
@@ -82,12 +84,12 @@ export class SendEngine {
     const id = randomBytes(12).toString('hex'), now = Date.now();
     const r = { options: { ...params, includeEnv: params.includeEnv !== false }, job: {
       id, createdAt: now, updatedAt: now, finishedAt: null, source: { machineId: net.self, name: net.machines[net.self]?.name, path, kind },
-      target: { machineId: peer.id, name: peer.name, path: destination }, again: !!old && old.job.target.path === destination, phase: 'preparing', bytes: { total: null, sent: 0 }, files: { total: null, sent: 0 }, rate: null, eta: null, changed: null, route: null, error: null, left: [] } };
+      target: { machineId: peer.id, name: peer.name, path: destination }, again: !!old && old.job.target.path === destination, ...(params.internal ? { internal: true } : {}), phase: 'preparing', bytes: { total: null, sent: 0 }, files: { total: null, sent: 0 }, rate: null, eta: null, changed: null, route: null, error: null, left: [] } };
     this.jobs.set(id, r); this.update(r, true); this.launch(r);
     return { job: structuredClone(r.job) };
   }
   status({ jobId }, caller) { this.authorize(caller); return { job: structuredClone(this.get(jobId).job) }; }
-  list({ limit = 50 } = {}, caller) { this.authorize(caller); if (!Number.isInteger(limit) || limit < 1) throw new Error('invalid job limit'); return { jobs: [...this.jobs.values()].map(r => r.job).sort((a,b) => Number(ACTIVE.has(b.phase)) - Number(ACTIVE.has(a.phase)) || b.createdAt - a.createdAt).slice(0, limit).map(j => structuredClone(j)) }; }
+  list({ limit = 50 } = {}, caller) { this.authorize(caller); if (!Number.isInteger(limit) || limit < 1) throw new Error('invalid job limit'); return { jobs: [...this.jobs.values()].map(r => r.job).filter(j => !j.internal).sort((a,b) => Number(ACTIVE.has(b.phase)) - Number(ACTIVE.has(a.phase)) || b.createdAt - a.createdAt).slice(0, limit).map(j => structuredClone(j)) }; }
   acceptReceipt(r, receipt) {
     const n = this.net();
     const intentDigest = createHash('sha256').update(JSON.stringify({ ...r.intent, source: n.self })).digest('hex');

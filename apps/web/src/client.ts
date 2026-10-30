@@ -180,6 +180,12 @@ export interface Session {
   delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string; summary?: string; finishedAt?: number };
   taskTransfer?: TaskReturnState & { handoffId: string; role: 'source' | 'destination'; machineId: string; machineName: string };
   parent?: { machineId: string; sessionId: string };
+  /** Set while Helm moves this chat to another machine with its conversation. */
+  moving?: { moveId: string; machineName: string };
+  /** The chat moved there; this copy takes no new messages. */
+  movedAway?: { machineId: string; machineName: string; sessionId: string; at: number };
+  /** The chat came here from another machine. */
+  movedFrom?: { machineId: string; machineName: string; sessionId: string };
   delegations?: string[];
   /** A helper with no thread to sit under (started from a shell, or orphaned), listed on its own. */
   unhomed?: boolean;
