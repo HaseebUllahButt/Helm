@@ -10,6 +10,7 @@ import { NewChat } from './NewChat';
 import type { Account } from './accounts';
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { DrivenSession as DrivenSessionScreen } from './session/DrivenSession';
+import { MoveChat, canMove } from './session/MoveChat';
 import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
 import { StartingTerminalView } from './session/StartingTerminalView';
@@ -33,13 +34,13 @@ import { saveWorkspace, forgetWorkspace, workspaceScope } from './workspaceCache
 import { sameSession, useWorkspaceData } from './useWorkspaceData';
 import { engineOf } from './engines';
 import { useViewingReport } from './useViewingReport';
-import { ownTerminal, byRecent, ago } from './screens/common';
+import { ownTerminal, byRecent } from './screens/common';
 import { Gear } from './screens/icons';
 import { whereOf, HomeRow, StatusChip, Fold, NeedCard, NEVER_SNOOZE, when, PagedRows, SETTLED_FIRST, SETTLED_STEP } from './screens/ThreadRows';
 import { shareHopTarget, clearShareHop, ShareHop } from './screens/ShareHop';
 import { type Auth, Login } from './screens/Login';
 import { EnvView } from './screens/EnvView';
-import { Home } from './screens/Home';
+import { Home, type HomeBrain } from './screens/Home';
 import { BrainView } from './screens/Brain';
 import { Start } from './screens/Start';
 import { SessionView as SessionViewScreen } from './session/SessionView';
@@ -272,6 +273,7 @@ function Shell({ client, conn, onSignOut }: {
   }, [snoozeUndo]);
   /** The chat just archived from Home, for as long as taking it back is one tap. */
   const [archiveUndo, setArchiveUndo] = useState<{ envId: string; s: Session } | null>(null);
+  const [moveChat, setMoveChat] = useState<{ envId: string; s: Session } | null>(null);
   useEffect(() => {
     if (!archiveUndo) return;
     const timer = setTimeout(() => setArchiveUndo(null), 7000);
@@ -556,6 +558,7 @@ function Shell({ client, conn, onSignOut }: {
           && !thread.archived && !liveThreads.some((liveThread) => liveThread.id === thread.id))
         : [];
       for (const s of [...liveThreads, ...snapshotThreads]) {
+        if (s.brain) continue; // "Helm brain" below opens it the checked way
         items.push({
           id: `t:${e.id}:${s.id}`, group: 'thread', title: s.title, engine: s.engine, at: s.updatedAt,
           sub: `${whereOf(s)} · ${e.name}${attentionOn(e.id, s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status, s.compacting)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
@@ -576,6 +579,7 @@ function Shell({ client, conn, onSignOut }: {
       }
     }
     items.push({ id: 'a:new', group: 'action', title: 'New chat', keywords: 'start create agent session', run: () => setNewChat({}) });
+    if (brainEnv) items.push({ id: 'a:brain', group: 'action', title: 'Helm brain', keywords: 'brain network agent', run: () => void openBrain() });
     // A chat in no folder, on the machine on screen (or asked, when that one is not there).
     items.push({
       id: 'a:quick', group: 'action', title: 'Sketch', sub: 'Ask a short question without a folder.', keywords: 'start new agent question scratch quick chat',
@@ -652,6 +656,7 @@ function Shell({ client, conn, onSignOut }: {
       // say what happened and leave the way back in reach.
       onArchive: async () => { if (await act('session.archive', { id: s.id, archived: !s.archived }) && !s.archived) setArchiveUndo({ envId: e.id, s }); },
       onDelete: () => act('session.kill', { id: s.id }),
+      onMove: canMove(e, s) ? () => setMoveChat({ envId: e.id, s }) : undefined,
     };
   };
 
@@ -765,21 +770,16 @@ function Shell({ client, conn, onSignOut }: {
   // The handlers call today's functions, never the ones the row was made with.
   const rowLatest = useRef({ openSession, threadActions });
   rowLatest.current = { openSession, threadActions };
-  const rowCalls = useRef(new WeakMap<Session, { envId: string; onOpen: () => void; actions: ReturnType<typeof threadActions> }>());
+  const rowCalls = useRef(new WeakMap<Session, { env: Environment; onOpen: () => void; actions: ReturnType<typeof threadActions> }>());
   const rowCallsFor = (e: Environment, s: Session) => {
     const known = rowCalls.current.get(s);
-    if (known?.envId === e.id) return known;
-    const now = () => rowLatest.current.threadActions(e, s);
-    const made = {
-      envId: e.id,
-      onOpen: () => rowLatest.current.openSession(e.id, s),
-      actions: {
-        onContinue: threadActions(e, s).onContinue && (() => now().onContinue?.()),
-        onRename: (title: string) => now().onRename(title),
-        onArchive: () => now().onArchive(),
-        onDelete: () => now().onDelete(),
-      },
-    };
+    // Which actions a row has depends on its machine too (Move needs it online).
+    if (known?.env === e) return known;
+    // Each action the row has now, calling the newest version of itself.
+    type Actions = ReturnType<typeof threadActions>;
+    const actions = Object.fromEntries(Object.entries(threadActions(e, s)).map(([key, act]) => [key, act
+      && ((...args: unknown[]) => (rowLatest.current.threadActions(e, s)[key as keyof Actions] as ((...args: unknown[]) => unknown) | undefined)?.(...args))])) as Actions;
+    const made = { env: e, onOpen: () => rowLatest.current.openSession(e.id, s), actions };
     rowCalls.current.set(s, made);
     return made;
   };
@@ -871,12 +871,6 @@ function Shell({ client, conn, onSignOut }: {
   const workingThreadsOn = (machine: Environment) =>
     machine.online ? agentsOf(machine.id).filter((thread) => !attentionOn(machine.id, thread) && runningThread(thread)) : [];
   const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(s => attentionOn(machine.id, s)).length;
-  /** "3 running · 1 status unavailable": a thread the machine cannot read is not idle. */
-  const activityOn = (machine: Environment, nothing: string) => {
-    const working = workingThreadsOn(machine).length;
-    const unknown = agentsOf(machine.id).filter(unknownThread).length;
-    return [working ? `${working} running` : '', unknown ? `${unknown} status unavailable` : ''].filter(Boolean).join(' · ') || nothing;
-  };
 
   /**
    * Turning a recording into words, on whichever machine can.
@@ -1011,6 +1005,19 @@ function Shell({ client, conn, onSignOut }: {
       navigate([{ kind: 'session', session: r.session }], brainEnv.id);
     } catch (e: any) { setError(errorMessage(e, { fallback: 'Helm cannot open its brain. Try again.' })); }
     finally { setBrainOpening(false); }
+  };
+  /** The brain's row on Home: it left the sidebar, which is only an inbox now. */
+  const brainRow = (): HomeBrain => {
+    if (!brainEnv) return { where: 'Add a VM (a virtual machine) to start it.', disabled: true, onOpen: () => {} };
+    const s = brainOn(brainEnv.id);
+    const news = brainOpening ? 'opening'
+      : s?.status === 'blocked' ? 'needs you'
+      : s && brainEnv.online && runningThread(s) ? busyWord(s.status, s.compacting)
+      : !brainEnv.online ? 'offline' : undefined;
+    return {
+      where: `${brainEnv.name} · ${s ? engineOf(s.engine).label : 'Pick an account'}`,
+      engine: s ? engineOf(s.engine).cls : undefined, news, disabled: brainOpening, onOpen: () => void openBrain(),
+    };
   };
   const rememberBrain = (envId: string, s: Session) => {
     saveBrain(envId, s);
@@ -1167,9 +1174,8 @@ function Shell({ client, conn, onSignOut }: {
     && (machine.online || !liveEnvsSeen.current)
     && settledThread(s)
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
-  const doneIsSaved = doneNow.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));
+  const savedIn = (list: typeof doneNow) => list.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));
   useSeenVersion();
-  const unreadDone = doneNow.filter(({ s }) => isUnread(s)).length;
   const isOpen = ({ env: e, s }: { env: Environment; s: Session }) => selected === e.id && view.kind === 'session' && view.session.id === s.id;
   const homeRow = (x: { env: Environment; s: Session }, slim = false) => {
     const calls = rowCallsFor(x.env, x.s);
@@ -1178,6 +1184,14 @@ function Shell({ client, conn, onSignOut }: {
   // A chat you have open is a chat you have seen, including what it finishes while you watch.
   const openId = view.kind === 'session' ? view.session.id : null;
   const openStamp = everyone.find(({ s }) => s.id === openId)?.s;
+  // The sidebar is an inbox. Finished holds the chats that stopped since you
+  // last looked. The open chat stays there while you read it or prompt it
+  // again; it goes to Settled when you open something else (owner, 2026-10-30).
+  const reviewing = useRef<{ open: string | null; keep: boolean }>({ open: null, keep: false });
+  if (reviewing.current.open !== openId) reviewing.current = { open: openId, keep: false };
+  if (openStamp && (isUnread(openStamp) || !settledThread(openStamp))) reviewing.current.keep = true;
+  const finishedNow = doneNow.filter(({ s }) => isUnread(s) || (s.id === openId && reviewing.current.keep));
+  const settledNow = doneNow.filter((x) => !finishedNow.includes(x));
   // The machine keeps the look too, so the tick clears on every device.
   // Only a finish the machine has not seen yet needs telling: each tell is
   // saved and sent to every screen, and a working chat changes every second.
@@ -1259,20 +1273,23 @@ function Shell({ client, conn, onSignOut }: {
           </span>
         </div>
 
-        {/* Folded, the sidebar keeps what is live: a new chat, then each
-            chat that needs you or is working, as its agent's mark. */}
+        {/* Folded, the sidebar keeps the inbox: a new chat, then each chat
+            that needs you, finished or is working, as its agent's mark. */}
         {wide && sidebarCollapsed && (
           <nav className="side-rail" aria-label="Active chats">
             <button
               type="button" className="iconbtn rail-new" onClick={() => setNewChat({})}
               disabled={!envs.some((e) => e.online)} aria-label="New chat" title="New chat (Ctrl+N)"
             ><Icon name="plus" size={17} /></button>
-            {[...blocked.map((x) => ({ ...x, need: true })), ...runningNow.map((x) => ({ ...x, need: false }))].map(({ env: e, s, need }) => {
+            {[
+              ...blocked.map((x) => ({ ...x, need: true, word: 'needs you', cls: 'rail-need' })),
+              ...finishedNow.map((x) => ({ ...x, need: false, word: 'finished', cls: 'rail-finished' })),
+              ...runningNow.map((x) => ({ ...x, need: false, word: 'working', cls: 'rail-working' })),
+            ].map(({ env: e, s, need, word, cls }) => {
               const open = isOpen({ env: e, s });
-              const word = need ? 'needs you' : 'working';
               return (
                 <button
-                  key={`${e.id}:${s.id}`} type="button" className={`rail-chat ${need ? 'rail-need' : 'rail-working'}${open ? ' active' : ''}`}
+                  key={`${e.id}:${s.id}`} type="button" className={`rail-chat ${cls}${open ? ' active' : ''}`}
                   aria-current={open ? 'page' : undefined} aria-label={`${s.title}, ${e.name}, ${word}`} title={`${s.title}\n${e.name} · ${word}`}
                   onClick={() => openSession(e.id, s, need && s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
                 >
@@ -1315,27 +1332,6 @@ function Shell({ client, conn, onSignOut }: {
             </button>
             </div>
 
-            <div className="rows plain brain-entry">
-                {brainEnv ? (() => {
-                  const s = brainOn(brainEnv.id);
-                  const where = `${brainEnv.name} · ${s ? engineOf(s.engine).label : 'Pick an account'}${!brainEnv.online ? ' · offline' : ''}`;
-                  return <button className="row" disabled={brainOpening} onClick={() => void openBrain()} title={`Open the Helm brain\n${where}`}>
-                    <EngineMark engine={s ? engineOf(s.engine).cls : undefined} />
-                    <span className="grow">
-                      <span className="rt"><span className="rt-text">Helm brain</span>{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
-                    </span>
-                    {brainOpening ? <span className="chip working"><i />opening</span>
-                      // The brain is counted in its machine's "running", so it says so here.
-                      : s && brainEnv.online && !attentionOn(brainEnv.id, s) && runningThread(s) ? <StatusChip status={busyWord(s.status, s.compacting)} at={s.updatedAt} />
-                      : !brainEnv.online ? <span className="rm">offline</span> : null}
-                  </button>;
-                })() : <button className="row" disabled title="Add a VM (a virtual machine) to start the Helm brain.">
-                  <EngineMark />
-                  <span className="grow"><span className="rt">Helm brain</span></span>
-                  <span className="rm">Add a VM</span>
-                </button>}
-            </div>
-
             {blocked.length > 0 && (
               <Fold shelf attention defaultOpen title="Needs you" count={blocked.length} remember="sidebar:needs">
                 {blocked.map(({ env: e, s }) => (
@@ -1347,6 +1343,25 @@ function Shell({ client, conn, onSignOut }: {
                     onDismiss={async () => { await client.rpc(e.id, 'session.dismiss-child-failures', { id: s.id }); }}
                   />
                 ))}
+              </Fold>
+            )}
+
+            {runningNow.length > 0 && (
+              <Fold
+                shelf defaultOpen title="Running" count={runningNow.length} remember="sidebar:working"
+                peek={runningNow.some(isOpen) ? <div className="rows plain">{runningNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
+              >
+                <div className="rows plain">{runningNow.map((x) => homeRow(x))}</div>
+              </Fold>
+            )}
+
+            {finishedNow.length > 0 && (
+              <Fold
+                shelf defaultOpen title="Finished" count={finishedNow.length} remember="sidebar:finished"
+                note={savedIn(finishedNow) ? 'saved' : undefined}
+                peek={finishedNow.some(isOpen) ? <div className="rows plain">{finishedNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
+              >
+                <div className="rows plain">{finishedNow.map((x) => homeRow(x, true))}</div>
               </Fold>
             )}
 
@@ -1364,31 +1379,17 @@ function Shell({ client, conn, onSignOut }: {
               </Fold>
             )}
 
-            {runningNow.length > 0 && (
-              <Fold
-                shelf defaultOpen title="Running" count={runningNow.length} remember="sidebar:working"
-                peek={runningNow.some(isOpen) ? <div className="rows plain">{runningNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
-              >
-                <div className="rows plain">{runningNow.map((x) => homeRow(x))}</div>
-              </Fold>
+            {/* A first open, or every chat gone: say so, and where to start.
+                Only once a machine has answered, so loading never looks like
+                nothing. Machines live on Home and in search, not here. */}
+            {!envs.length && !error && (
+              <div className="rows plain">
+                <div className="empty quiet">
+                  You have no machines yet.
+                  <div className="note">Run <code>helm add pc</code> on a machine in your network.</div>
+                </div>
+              </div>
             )}
-
-            {doneNow.length > 0 && (
-              <Fold
-                shelf defaultOpen title="Settled" count={doneNow.length} remember="sidebar:settled"
-                note={unreadDone ? `${unreadDone} new` : doneIsSaved ? 'saved' : undefined} noteTone={unreadDone ? 'fresh' : undefined}
-                peek={doneNow.some(isOpen) ? <div className="rows plain">{doneNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
-              >
-                <PagedRows
-                  items={doneNow} isSelected={isOpen} row={(x) => homeRow(x, true)}
-                  first={SETTLED_FIRST} step={SETTLED_STEP}
-                />
-              </Fold>
-            )}
-
-            {/* A first open, or every chat gone: say so, and where to start,
-                instead of a Home that is only the machine list. Only once a
-                machine has answered, so loading never looks like nothing. */}
             {everyone.length === 0 && envs.some((e) => e.online && (liveListsSeen.current.has(e.id) || e.id in sessions)) && (
               <div className="rows plain">
                 <div className="empty quiet" role="status">
@@ -1402,46 +1403,26 @@ function Shell({ client, conn, onSignOut }: {
               { kind: 'env' }, { kind: 'transfer', cwd: job.source.path, jobId: job.id },
             ], job.source.machineId)} />
 
-            <Fold shelf title="Machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
-              <div className="rows plain">
-                {envs.map((e) => {
-                  const waiting = waitingCountOn(e);
-                  // One line: the name, and a word only when there is news.
-                  // The full story is in the tooltip and on the machine screen.
-                  const running = workingThreadsOn(e).length;
-                  const said = e.online ? activityOn(e, 'idle') : e.lastSeen ? `seen ${ago(e.lastSeen)}` : 'never connected';
-                  return (
-                    <button
-                      key={e.id}
-                      className={`row machine${e.id === selected && wide ? ' active' : ''}${e.online ? '' : ' offline'}`}
-                      aria-current={e.id === selected && wide ? 'true' : undefined}
-                      onClick={() => openEnv(e.id)}
-                      title={`${e.name} · ${e.online ? 'online' : 'offline'} · ${said}`}
-                    >
-                      <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-                      <span className="grow">
-                        <span className="rt"><span className="rt-text">{e.name}</span></span>
-                      </span>
-                      {e.online ? running > 0 && <span className="rm">{running} running</span>
-                        : <span className="rm">{e.lastSeen ? ago(e.lastSeen) : 'never'}</span>}
-                      {waiting > 0 && <span className="badge">{waiting}</span>}
-                    </button>
-                  );
-                })}
-                {!envs.length && !error && (
-                  <div className="empty quiet">
-                    You have no machines yet.
-                    <div className="note">Run <code>helm add pc</code> on a machine in your network.</div>
-                  </div>
-                )}
-              </div>
-            </Fold>
-
             {/* Setup, spend and pairing are a page of their own now - the
-                gear up top. The home screen is just the machines and what
-                is running on them. */}
+                gear up top. */}
             {error && <div className="error">{error}</div>}
             {envError && <p className="note" role="status">{envs.length ? 'Helm shows saved chats and is reconnecting.' : 'Helm is connecting to your machines.'}</p>}
+          </div>
+          {/* Settled sits at the foot of the sidebar, folded at first: the
+              chats you already looked at (owner, 2026-10-30). */}
+          <div className="side-pad side-bottom">
+            {settledNow.length > 0 && (
+              <Fold
+                shelf title="Settled" count={settledNow.length} remember="sidebar:settled-folded"
+                note={savedIn(settledNow) ? 'saved' : undefined}
+                peek={settledNow.some(isOpen) ? <div className="rows plain">{settledNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
+              >
+                <PagedRows
+                  items={settledNow} isSelected={isOpen} row={(x) => homeRow(x, true)}
+                  first={SETTLED_FIRST} step={SETTLED_STEP}
+                />
+              </Fold>
+            )}
           </div>
         </div>
       </aside>
@@ -1488,6 +1469,7 @@ function Shell({ client, conn, onSignOut }: {
           <Home
             client={client} near={lastMachine.current}
             machines={envs.map((e) => ({ env: e, running: workingThreadsOn(e).length, waiting: e.online ? waitingCountOn(e) : 0 }))}
+            brain={brainRow()}
             onOpenMachine={openEnv}
             onStart={(info, run, message) => {
               const chat = beginChat(client, info, run);
@@ -1609,6 +1591,7 @@ function Shell({ client, conn, onSignOut }: {
             onSendTask={view.session.quick || view.session.external || view.session.brain || view.session.engine === 'shell'
               ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             onSendFolder={view.session.quick || !view.session.cwd ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd })}
+            onMove={viewSession && canMove(env, viewSession) ? () => setMoveChat({ envId: env.id, s: viewSession }) : undefined}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
@@ -1661,6 +1644,11 @@ function Shell({ client, conn, onSignOut }: {
           <span className="undo-text">Snoozed <b>{snoozeUndo.title}</b> {snoozeUndo.until === NEVER_SNOOZE ? 'until you restore it' : `until ${when(snoozeUndo.until)}`}</span>
           <button onClick={() => { setSnooze(snoozeUndo.key, null); setSnoozeUndo(null); }}>Undo</button>
         </div>
+      )}
+      {moveChat && envs.some((e) => e.id === moveChat.envId) && (
+        <MoveChat client={client} source={envs.find((e) => e.id === moveChat.envId)!} machines={envs}
+          session={(sessions[moveChat.envId] ?? []).find((s) => s.id === moveChat.s.id) ?? moveChat.s}
+          onClose={() => { loadSessions(moveChat.envId); setMoveChat(null); }} onOpen={openSession} />
       )}
       {archiveUndo && !snoozeUndo && (
         <div className="undo" role="status">

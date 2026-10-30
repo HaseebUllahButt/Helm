@@ -285,6 +285,7 @@ code, pre, kbd { font-family: var(--mono); }
     border: 2px solid var(--sidebar); background: var(--sky);
   }
   .rail-chat.rail-need .rail-dot { background: var(--need); }
+  .rail-chat.rail-finished .rail-dot { background: var(--ok); }
   @media (prefers-reduced-motion: reduce) { .rail-chat.rail-working .rail-dot { animation: none; } }
   .main { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; }
 }
@@ -440,6 +441,8 @@ code, pre, kbd { font-family: var(--mono); }
 .pad.column { max-width: var(--measure); width: 100%; margin: 0 auto; }
 @media (min-width: 900px) { .pad.column { padding: 22px 24px 40px; } }
 .side-pad { padding: 10px 10px 16px; flex: 1; }
+.side-pad.side-bottom { flex: none; padding-top: 0; padding-bottom: 10px; }
+.side-bottom:empty { display: none; }
 /* Zoomed in, the list's scrollbars came and went many times a second, and
    every row shook sideways: keep the bar's room, never scroll sideways. */
 .sidebar > .scroll { overflow-x: hidden; scrollbar-gutter: stable; }
@@ -2630,10 +2633,10 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
   transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
 }
 .home-search svg { flex: none; color: var(--icon); }
-/* Search and New chat share one line: the search box, then a square plus. */
+/* Search and New chat share one slim line: the search box, then a square plus. */
 .side-actions { display: flex; gap: 6px; margin: 0 0 8px; }
-.side-actions .home-search { margin: 0; height: 38px; }
-.side-actions .home-search.new { flex: none; width: 38px; padding: 0; justify-content: center; }
+.side-actions .home-search { margin: 0; height: 32px; gap: 7px; padding: 0 8px 0 10px; font-size: var(--t-meta); border-radius: 9px; }
+.side-actions .home-search.new { flex: none; width: 32px; padding: 0; justify-content: center; }
 .side-actions .home-search.new svg { color: inherit; }
 .home-search .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-search:hover { border-color: var(--line-2); color: var(--text-dim); }
@@ -3219,13 +3222,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .pipeline-account p { font-size: var(--t-micro); color: var(--mutedfg); margin: 7px 0; }
 
 /* The brain: one quiet line under the search, never a panel of its own. */
-.sidebar .rows.plain.brain-entry { margin-block: 2px 4px; background: none; border-color: transparent; padding: 0; box-shadow: none; }
-.brain-entry .row { min-height: 34px; padding: 6px 10px; }
-.brain-entry .row .rt { font-size: var(--t-body); font-weight: 500; color: var(--text-dim); }
-.brain-entry .row:hover .rt { color: var(--text); }
-.brain-entry .row .rm { flex: none; font-size: var(--t-micro); color: var(--mutedfg); }
-.brain-entry .mark { width: 18px; height: 18px; border-radius: 5px; }
-.brain-entry .mark svg { width: 11px; height: 11px; }
 
 /* ---- live steps (ideas 1/6/8) ---- */
 /* While the agent works, each step is its own line, as it starts. The
@@ -3676,6 +3672,7 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
 }
 .home-send:disabled { opacity: 0.4; }
 .home .rows .row.machine.offline .rt-text { color: var(--mutedfg); }
+.home .rows.home-brain { margin-top: 12px; }
 
 /* New chat asks the empty chat's question, at the top of the box. */
 .newchat-greeting {

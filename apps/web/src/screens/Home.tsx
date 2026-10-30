@@ -11,6 +11,18 @@ import { ChoiceSheet, Controls, trayPrefs, type Kind } from '../session/Controls
 import type { StartInfo } from '../startingChats';
 import { ago } from './common';
 
+/** The Helm brain's row on Home, under the machines. */
+export interface HomeBrain {
+  /** "VM · Codex", or why it cannot start. */
+  where: string;
+  engine?: string;
+  /** "needs you", "working" or "opening": a word only for news. */
+  news?: string;
+  /** No VM to run it on. */
+  disabled?: boolean;
+  onOpen: () => void;
+}
+
 export interface HomeMachine {
   env: Environment;
   running: number;
@@ -28,9 +40,10 @@ type Picks = { model?: string; effort?: string; mode?: string; speed?: string };
  * thinking, permissions. Under it, one row per machine opens that machine.
  * Chats themselves stay in the sidebar.
  */
-export function Home({ client, machines, near, onOpenMachine, onStart }: {
+export function Home({ client, machines, brain, near, onOpenMachine, onStart }: {
   client: Client;
   machines: HomeMachine[];
+  brain: HomeBrain;
   /** The machine open before Home: the box starts there. */
   near: string | null;
   onOpenMachine: (envId: string) => void;
@@ -223,6 +236,18 @@ export function Home({ client, machines, near, onOpenMachine, onStart }: {
           <div className="note">Run <code>helm add pc</code> on a machine in your network.</div>
         </div>
       )}
+
+      <div className="rows plain home-brain">
+        <button type="button" className="row tall" disabled={brain.disabled} onClick={brain.onOpen} title="Open the Helm brain">
+          <EngineMark engine={brain.engine} />
+          <span className="grow">
+            <span className="rt"><span className="rt-text">Helm brain</span></span>
+            <span className="rm">{brain.where}</span>
+          </span>
+          {brain.news && <span className={brain.news === 'needs you' ? 'tag' : 'rm'}>{brain.news}</span>}
+          {!brain.disabled && <span className="chev"><Icon name="forward" size={15} /></span>}
+        </button>
+      </div>
     </div></div>
   );
 }
