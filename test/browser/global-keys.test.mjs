@@ -30,6 +30,7 @@ before(async () => {
             if(window.holdStart) await new Promise(r=>{window.releaseStart=r;});
             return {session:{id:'sh1',title:'Terminal 1',cwd:params.cwd,engine:'shell',profileId:'shell',pty:true,alive:true,status:'shell'},attach:{text:'$ ',pty:true}};
           }
+          if(method==='session.kill'&&window.holdKill) return new Promise(()=>{});
           if(method==='session.title'||method==='session.archive'||method==='session.kill') return {ok:true};
           if(method==='model.list') return {models:[],modes:[]};
           if(method==='fs.list') return {path:'/home/test',entries:[]};
@@ -113,6 +114,18 @@ test('a new terminal is on screen at once, and says why when it cannot open', as
   await page.evaluate(()=>{ window.failStart = false; });
   await page.getByRole('button',{name:'Try again'}).click();
   await page.waitForFunction(()=>history.state?.stack?.at(-1)?.session?.id === 'sh1', null, {timeout:3000});
+});
+
+test('Ctrl+W closes a terminal at once, even when its machine is off and never answers', async t => {
+  const page = await pageFor(t);
+  await page.keyboard.press('Control+Alt+KeyT');
+  await page.locator('.xterm').waitFor({timeout:3000});
+  await page.evaluate(()=>{ window.holdKill = true; });
+  await page.locator('.xterm textarea').focus();
+  await page.keyboard.press('Control+KeyW');
+  await page.waitForFunction(()=>history.state?.stack?.at(-1)?.session?.id !== 'sh1', null, {timeout:3000});
+  assert.equal(await page.locator('.xterm').count(), 0, 'the terminal stayed on screen');
+  assert.ok(await page.evaluate(()=>window.calls.some(c=>c.method==='session.kill'&&c.params.id==='sh1')), 'the machine was not told to close it');
 });
 
 test('Ctrl+B folds and unfolds the sidebar, and a terminal keeps the key', async t => {

@@ -1642,6 +1642,8 @@ function Shell({ client, conn, onSignOut }: {
             onNewTerminal={async () => newTerminal.current(env.id, '~', true)}
             onBack={back}
             onClosed={() => {
+              // A closed terminal leaves the list now, before its machine answers.
+              if (view.session.engine === 'shell') removeSession(env.id, view.session.id);
               loadSessions(env.id);
               // Closing one terminal of several lands on a neighbour, not the machine.
               const next = view.session.engine === 'shell'
