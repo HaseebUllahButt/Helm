@@ -2564,9 +2564,19 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .palette-sub.said { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .pglyph { width: 26px; height: 26px; border-radius: 7px; flex: none; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: var(--icon); font-size: 13px; }
 
-.shortcuts, .shortcuts section { display: grid; gap: 8px; }
-.shortcuts .palette-group { margin: 0; padding: 8px 0 0; }
-.shortcuts div { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: var(--t-body); color: var(--text-dim); }
+/* The key list: the head stays, the list scrolls. A job on the left, its
+   keys on the right, one cap per key. */
+.shortcuts-modal { max-width: 520px; max-height: calc(100dvh - 40px); display: flex; flex-direction: column; padding-bottom: 0; }
+.shortcuts { overflow-y: auto; margin: 0 -18px; padding: 0 18px 18px; }
+.shortcuts section + section { margin-top: 18px; }
+.shortcuts .palette-group { margin: 0 0 2px; padding: 0; }
+.shortcut { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 36px; padding: 6px 0;
+  font-size: var(--t-body); line-height: 1.35; color: var(--text); }
+.shortcut + .shortcut { border-top: 1px solid var(--accent); }
+.shortcut-keys { display: flex; gap: 4px; flex: none; }
+.shortcut-keys kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 7px;
+  font: 500 12px/1 var(--sans); color: var(--text-dim); background: var(--accent); border: 0; border-radius: 6px;
+  box-shadow: inset 0 -1px 0 rgb(0 0 0 / 22%); }
 kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; background: var(--accent); border: 1px solid var(--line-2); color: var(--text); white-space: nowrap; }
 
 
