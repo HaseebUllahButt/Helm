@@ -128,19 +128,25 @@ test('Ctrl+W closes a terminal at once, even when its machine is off and never a
   assert.ok(await page.evaluate(()=>window.calls.some(c=>c.method==='session.kill'&&c.params.id==='sh1')), 'the machine was not told to close it');
 });
 
-test('Ctrl+B folds and unfolds the sidebar, and a terminal keeps the key', async t => {
+test('Ctrl+S folds and unfolds the sidebar, and a terminal keeps the key', async t => {
   const page = await pageFor(t);
   const sidebar = page.locator('aside.sidebar');
-  await page.keyboard.press('Control+KeyB');
+  await page.keyboard.press('Control+KeyS');
   await page.waitForFunction(()=>document.querySelector('aside.sidebar').classList.contains('collapsed'));
   assert.equal(await page.evaluate(()=>localStorage.getItem('helm.sidebar-collapsed')), '1');
-  await page.keyboard.press('Control+KeyB');
+  await page.keyboard.press('Control+KeyS');
   await page.waitForFunction(()=>!document.querySelector('aside.sidebar').classList.contains('collapsed'));
+  // The canvas keeps Ctrl+S to save the file you type in.
+  await page.evaluate(()=>{ const c = document.createElement('div'); c.className = 'canvas'; c.innerHTML = '<textarea id="canvas-text"></textarea>'; document.body.append(c); });
+  await page.locator('#canvas-text').focus();
+  await page.keyboard.press('Control+KeyS');
+  assert.equal(await sidebar.evaluate(el=>el.classList.contains('collapsed')), false, 'Ctrl+S in the canvas folded the sidebar');
+  await page.evaluate(()=>document.querySelector('.canvas').remove());
   await page.keyboard.press('Control+Alt+KeyT');
   await page.locator('.xterm').waitFor({timeout:3000});
   await page.locator('.xterm textarea').focus();
-  await page.keyboard.press('Control+KeyB');
-  assert.equal(await sidebar.evaluate(el=>el.classList.contains('collapsed')), false, 'Ctrl+B in a terminal folded the sidebar');
+  await page.keyboard.press('Control+KeyS');
+  assert.equal(await sidebar.evaluate(el=>el.classList.contains('collapsed')), false, 'Ctrl+S in a terminal folded the sidebar');
 });
 
 test('Ctrl+Alt+S opens and closes Settled, and unfolds a folded sidebar to show it', async t => {
@@ -155,7 +161,7 @@ test('Ctrl+Alt+S opens and closes Settled, and unfolds a folded sidebar to show 
   await expanded('true');
   await page.keyboard.press('Control+Alt+KeyS');
   await expanded('false');
-  await page.keyboard.press('Control+KeyB');
+  await page.keyboard.press('Control+KeyS');
   await page.waitForFunction(()=>document.querySelector('aside.sidebar').classList.contains('collapsed'));
   await page.keyboard.press('Control+Alt+KeyS');
   await page.waitForFunction(()=>!document.querySelector('aside.sidebar').classList.contains('collapsed'));

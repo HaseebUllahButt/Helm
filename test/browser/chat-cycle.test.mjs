@@ -31,7 +31,19 @@ before(async () => {
         vm: [{...base,id:'third',title:'Third',status:'starting',updatedAt:10}],
         offline: [{...base,id:'offline',title:'Offline',updatedAt:100}],
       };
-      if (mode) {
+      if (mode === 'shelves') {
+        // Everything already read, so only chats with seenAt below updatedAt are Finished.
+        localStorage.setItem('helm-seen:v1', JSON.stringify({ since: 0, at: {} }));
+        const now = Date.now(), idle = {...base,status:'idle'};
+        sessions.laptop = [
+          {...base,id:'run',title:'Run',updatedAt:now},
+          {...idle,id:'doneA',title:'Done A',updatedAt:now-1000},
+          {...idle,id:'doneB',title:'Done B',updatedAt:now-2000},
+          {...idle,id:'oldA',title:'Old A',updatedAt:now-3000,seenAt:now},
+          {...idle,id:'oldB',title:'Old B',updatedAt:now-4000,seenAt:now},
+        ];
+        sessions.vm = [];
+      } else if (mode) {
         sessions.laptop = mode === 'one' ? [sessions.laptop[0]] : [];
         sessions.vm = [];
       }
@@ -130,6 +142,29 @@ test('Ctrl+Tab intercepts composer suggestions and terminal input, and uses live
   await page.evaluate(() => window.update('vm', 'third', { status: 'idle', team: { working: 1 } }));
   await page.keyboard.press('Control+Tab');
   await expectChat(page, 'vm', 'Third');
+});
+
+test('Alt+1, Alt+2 and Alt+3 open Finished, Running and Settled, and Ctrl+Tab walks that list', async t => {
+  const page = await pageFor(t, 'shelves');
+  await page.locator('.sidebar').getByText('Done B', { exact: true }).waitFor();
+  await page.keyboard.press('Alt+3');
+  await expectChat(page, 'laptop', 'Old A');
+  await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Old B');
+  await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Old A');
+  await page.keyboard.press('Control+Shift+Tab');
+  await expectChat(page, 'laptop', 'Old B');
+  await page.keyboard.press('Alt+2');
+  await expectChat(page, 'laptop', 'Run');
+  await page.keyboard.press('Alt+1');
+  await expectChat(page, 'laptop', 'Done A');
+  await page.locator('textarea[aria-label^="Message"]').first().focus();
+  await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Done B');
+  // Done A was read, so it left Finished for the top of Settled.
+  await page.keyboard.press('Alt+3');
+  await expectChat(page, 'laptop', 'Done A');
 });
 
 test('reverse entry starts at the last running chat and dialogs keep focus', async t => {

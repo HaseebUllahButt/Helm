@@ -2264,6 +2264,20 @@ export class Sessions extends EventEmitter {
     return { ok: true, session: wire(s) };
   }
 
+  /**
+   * Pinned chats sit above every other chat in the sidebar. Kept on the
+   * machine, not in one browser, so the pin shows on every device.
+   * Pinning does not make a chat newer: updatedAt stays.
+   */
+  pin(id, pinned = true) {
+    if (EXTERNAL.test(id)) throw new Error('Helm cannot pin this chat. Open it in Helm first.');
+    const s = this.get(id);
+    s.pinnedAt = pinned ? Date.now() : null;
+    this.#save();
+    this.emit('session', s);
+    return { ok: true, session: wire(s) };
+  }
+
   // After a daemon restart (session-resume.js)
   adoptTerminals() { return this.#resumer.adoptTerminals(); }
   async resume() {

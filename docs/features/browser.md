@@ -16,8 +16,13 @@ Design: [`docs/browser-use.md`](../browser-use.md).
 - **Traps:** Do not open private test tabs on the owner's screen. Use hidden
   Chromium for tests. On niri, the external window needs the `helm-browser`
   window rule. A machine without a screen cannot show the owner a window.
-- **Tests:** `test/agent-browser`, `browser-window`, `browser-smarts`,
-  `browser-queue`, `test/browser/agent-browser`, and `test/browser/browser-smarts`.
+- **Found by evidence, not names:** Helm uses any Chromium-based browser the
+  owner has, even an unfamiliar one. It finds programs with Chromium resources
+  beside them (not Electron apps) and user-data folders by their "Local State"
+  file, on Linux, macOS and Windows (`chromium-find.js`). No brand-name lists.
+- **Tests:** `test/chromium-find`, `test/agent-browser`, `browser-window`,
+  `browser-smarts`, `browser-queue`, `test/browser/agent-browser`, and
+  `test/browser/browser-smarts`.
 - **Speed checks:** The first native window opens only the requested page,
   with copied logins already present. Reopening a sleeping window reuses
   cached site files. Pointer checks cover clipped controls and frame targets.
@@ -27,4 +32,11 @@ Design: [`docs/browser-use.md`](../browser-use.md).
 - **Reach:** Run `helm browser profiles`, then `helm browser logins "<profile>"`.
   Add `--default` to use those logins for new chats.
 - **Not driven:** Copying real browser logins needs the owner's profiles.
-- **Tests:** `test/browser-logins`, `test/agent-browser`, and `test/browser-smarts`.
+- **Found by evidence:** profiles are every "Local State" folder under the
+  config roots (Linux ~/.config, ~/.var/app, ~/snap; macOS Application Support;
+  Windows %LOCALAPPDATA%), named by their folder. No brand-name lists. Each
+  profile's key holds a hash of its full data-folder path, so a saved default
+  or cached cookies never move to another account when a browser is installed.
+  Keys an older Helm saved ("chrome:Default") map to that one folder or are
+  refused. The system default browser is matched by its app id or name.
+- **Tests:** `test/browser-logins`, `test/browser-starting-logins`, `test/chromium-find`, `test/agent-browser`, and `test/browser-smarts`.

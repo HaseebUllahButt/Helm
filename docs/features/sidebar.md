@@ -28,7 +28,7 @@ until `text` starts with "helm / Search anything".
 
 ## Home shelves
 - **Rules (owner, 2026-10-30): the sidebar is an inbox.** Top to bottom (owner, 2026-10-31: Finished above Running):
-  slim search and +, Needs you, Finished, Running, Snoozed. Settled is
+  slim search and +, Pinned, Needs you, Finished, Running, Snoozed. Settled is
   pinned to the foot of the sidebar, folded at first. No machines and no brain: machines are on Home and in
   search; the brain is on Home and in search ("Helm brain").
 - **Finished:** a chat that stopped since you last looked (`isUnread`,
@@ -40,6 +40,18 @@ until `text` starts with "helm / Search anything".
   session.input '{"id":"<id>","data":"more\r"}'`: the chat shows under
   Finished with a green dot. Click it: it stays there. Click another
   chat: it is under Settled.
+- **Pinned (owner, 2026-10-31):** "Pin chat" in any row's ⋯ or the chat's own
+  ⋯ puts it in Pinned, above every shelf, newest pin on top. A pinned chat
+  leaves the other shelves but keeps its status; the waiting box, the folded
+  rail and Ctrl+Tab still see it. The machine keeps the pin (`pinnedAt`,
+  `session.pin`), so it shows on every device. A found CLI chat or a
+  terminal pane has no Helm record and cannot be pinned.
+- **Shelf keys (owner, 2026-10-31):** Alt+1, Alt+2, Alt+3 open the top chat
+  of Finished, Running, Settled (sidebar order). Ctrl+Tab and Ctrl+Shift+Tab
+  walk the shelf of the open chat, else the shelf last picked, else Running.
+  In Finished each chat you leave goes to Settled, so going back skips it.
+  Alt with a digit has no Ctrl/Cmd: the owner asked for it by name. Test:
+  `test/browser/chat-cycle`.
 - **Rules:** the sidebar shows live and Helm-known chats only, on purpose.
 - **Rules (owner, 2026-10-28, idea A):** a Finished or Settled chat is one
   line: the agent logo, the title, and one status (its age, a green dot
@@ -65,7 +77,7 @@ until `text` starts with "helm / Search anything".
   app holds. Status goes at once; counter-only changes share one update
   per chat per 0.5 s (`session-updates.js`).
 - **Tests:** `test/browser/sidebar`, `sidebar-shelves`, `sidebar-metadata`,
-  `offline-cache`; `test/seen-sync`, `inventory`, `inventory-active`,
+  `offline-cache`; `test/seen-sync`, `pin`, `inventory`, `inventory-active`,
   `session-updates`.
 
 ## Rename, archive, delete
