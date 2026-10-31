@@ -1187,26 +1187,19 @@ test('the browser note rides along only where a browser can start', async () => 
   assert.doesNotMatch(browserNote(), /bowser|--engine/i);
 });
 
-test('the desktop note rides along only where desktop use can start', async () => {
-  const { helmBrief } = await import('../packages/connect/src/delegation.js');
-  const { desktopReady } = await import('../packages/connect/src/desktop-use.js');
-  assert.equal(helmBrief({}).includes('[Helm desktop:'), desktopReady());
-});
-
 // Every chat pays for these notes before it does any work, and every message
 // carries the reminder. Lower the numbers when the text shrinks; raise them
 // only when the owner wants the new text.
 test('the notes every agent gets match the committed size', async () => {
   const { helmBrief } = await import('../packages/connect/src/delegation.js');
   const { browserNote } = await import('../packages/connect/src/browser.js');
-  const { desktopNote } = await import('../packages/connect/src/desktop-use.js');
   const { worktreeNote } = await import('../packages/connect/src/chat-worktree.js');
   const { readFileSync } = await import('node:fs');
   const budget = JSON.parse(readFileSync(new URL('./agent-context-budget.json', import.meta.url), 'utf8'));
   const net = { self: 'a', machines: { a: { id: 'a', name: 'Laptop' }, b: { id: 'b', name: 'VM', kind: 'vm' }, c: { id: 'c', name: 'HomePC', kind: 'pc' } } };
-  // Only machines that can start a browser or use a desktop get those notes; count each once.
-  const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:') && !l.startsWith('[Helm desktop:')).join('\n');
-  const notes = [brief, browserNote(), desktopNote(), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
+  // Only machines that can start a browser get its note; count it once.
+  const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:')).join('\n');
+  const notes = [brief, browserNote(), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
   assert.deepEqual(
     { notesBytes: Buffer.byteLength(notes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
     { notesBytes: budget.notesBytes, reminderBytes: budget.reminderBytes },
