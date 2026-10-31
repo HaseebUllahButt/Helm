@@ -84,7 +84,7 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   const sidebar = page.locator('.sidebar');
   await shelf(page, 'Settled').waitFor();
   // An inbox: what needs you, what runs, what finished; Settled last. No machines.
-  assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Running', 'Finished', 'Settled']);
+  assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Finished', 'Running', 'Settled']);
   // Folded Settled sits at the foot of the sidebar, not under the last shelf.
   const foot = await page.evaluate(() => {
     const scroll = document.querySelector('.sidebar > .scroll').getBoundingClientRect();
