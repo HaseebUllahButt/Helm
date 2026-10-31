@@ -41,6 +41,7 @@ before(async () => {
           {...idle,id:'doneB',title:'Done B',updatedAt:now-2000},
           {...idle,id:'oldA',title:'Old A',updatedAt:now-3000,seenAt:now},
           {...idle,id:'oldB',title:'Old B',updatedAt:now-4000,seenAt:now},
+          {...idle,id:'pin',title:'Pin',updatedAt:now-500,seenAt:now,pinnedAt:now},
         ];
         sessions.vm = [];
       } else if (mode) {
@@ -144,18 +145,24 @@ test('Ctrl+Tab intercepts composer suggestions and terminal input, and uses live
   await expectChat(page, 'vm', 'Third');
 });
 
-test('Alt+1, Alt+2 and Alt+3 open Finished, Running and Settled, and Ctrl+Tab walks that list', async t => {
+test('Alt+1, Alt+2 and Alt+3 open Finished, Running and Settled, and Ctrl+Tab walks pins and that list', async t => {
   const page = await pageFor(t, 'shelves');
   await page.locator('.sidebar').getByText('Done B', { exact: true }).waitFor();
   await page.keyboard.press('Alt+3');
   await expectChat(page, 'laptop', 'Old A');
-  await page.keyboard.press('Control+Tab');
-  await expectChat(page, 'laptop', 'Old B');
-  await page.keyboard.press('Control+Tab');
-  await expectChat(page, 'laptop', 'Old A');
-  await page.keyboard.press('Control+Shift+Tab');
-  await expectChat(page, 'laptop', 'Old B');
+  for (const title of ['Old B', 'Pin', 'Old A']) {
+    await page.keyboard.press('Control+Tab');
+    await expectChat(page, 'laptop', title);
+  }
+  for (const title of ['Pin', 'Old B']) {
+    await page.keyboard.press('Control+Shift+Tab');
+    await expectChat(page, 'laptop', title);
+  }
   await page.keyboard.press('Alt+2');
+  await expectChat(page, 'laptop', 'Run');
+  await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Pin');
+  await page.keyboard.press('Control+Tab');
   await expectChat(page, 'laptop', 'Run');
   await page.keyboard.press('Alt+1');
   await expectChat(page, 'laptop', 'Done A');
@@ -165,6 +172,27 @@ test('Alt+1, Alt+2 and Alt+3 open Finished, Running and Settled, and Ctrl+Tab wa
   // Done A was read, so it left Finished for the top of Settled.
   await page.keyboard.press('Alt+3');
   await expectChat(page, 'laptop', 'Done A');
+});
+
+test('the folded sidebar shows pins and the picked list: Finished with Running, or Settled', async t => {
+  const page = await pageFor(t, 'shelves');
+  await page.locator('.sidebar').getByText('Done B', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+  const rail = page.getByRole('navigation', { name: 'Active chats' });
+  const titles = (expected) => page.waitForFunction(expected => JSON.stringify([...document.querySelectorAll('.side-rail .rail-chat')]
+    .map(b => b.getAttribute('aria-label').split(',')[0])) === JSON.stringify(expected), expected);
+  await rail.waitFor();
+  await titles(['Pin', 'Done A', 'Done B', 'Run']);
+  await page.keyboard.press('Alt+3');
+  await expectChat(page, 'laptop', 'Old A');
+  await titles(['Pin', 'Old A', 'Old B']);
+  await page.keyboard.press('Alt+1');
+  await expectChat(page, 'laptop', 'Done A');
+  await titles(['Pin', 'Done A', 'Done B', 'Run']);
+  await page.keyboard.press('Alt+2');
+  await expectChat(page, 'laptop', 'Run');
+  // Done A was read and left for Settled; Alt+2 still shows Finished with Running.
+  await titles(['Pin', 'Done B', 'Run']);
 });
 
 test('reverse entry starts at the last running chat and dialogs keep focus', async t => {

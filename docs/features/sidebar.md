@@ -42,13 +42,16 @@ until `text` starts with "helm / Search anything".
   chat: it is under Settled.
 - **Pinned (owner, 2026-10-31):** "Pin chat" in any row's ⋯ or the chat's own
   ⋯ puts it in Pinned, above every shelf, newest pin on top. A pinned chat
-  leaves the other shelves but keeps its status; the waiting box, the folded
-  rail and Ctrl+Tab still see it. The machine keeps the pin (`pinnedAt`,
+  leaves the other shelves but keeps its status; the waiting box sees it, and
+  the folded rail and Ctrl+Tab always show it first. The machine keeps the pin (`pinnedAt`,
   `session.pin`), so it shows on every device. A found CLI chat or a
   terminal pane has no Helm record and cannot be pinned.
 - **Shelf keys (owner, 2026-10-31):** Alt+1, Alt+2, Alt+3 open the top chat
   of Finished, Running, Settled (sidebar order). Ctrl+Tab and Ctrl+Shift+Tab
-  walk the shelf of the open chat, else the shelf last picked, else Running.
+  walk the pinned chats, then the shelf of the open chat, else the shelf last
+  picked, else Running. The folded rail shows the pinned chats, then the
+  picked shelf: Alt+1 and Alt+2 both show Needs you, Finished and Running;
+  Alt+3 shows Settled.
   In Finished each chat you leave goes to Settled, so going back skips it.
   Alt with a digit has no Ctrl/Cmd: the owner asked for it by name. Test:
   `test/browser/chat-cycle`.
