@@ -510,6 +510,7 @@ export class Daemon {
     this.agentMessages = new AgentMessages({ sessions: this.sessions, delivery: this.inputDelivery, self: this.id,
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
       emit: payload => this.#emit('agent.message', payload) });
+    this.sessions.sentAgentMessage = (from, to, since) => this.agentMessages.sentSince(from, to, since);
     if (brainHost((loadNetwork() ?? this.net).machines)?.id !== this.id) this.sessions.retireBrains();
     this.gitTours = new GitTours({ sessions: this.sessions, agents: async (id) => {
       const profiles = (await getProfiles()).filter(p => p.id === id);

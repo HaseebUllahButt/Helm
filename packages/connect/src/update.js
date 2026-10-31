@@ -95,7 +95,22 @@ export async function locked(work) {
   } catch {
     return { updated: false, reason: 'an update is already running' };
   }
+  await removeOrphanBackups().catch(() => {});
   try { return await work(); } finally { rmSync(lock, { force: true }); }
+}
+
+// A restart that cuts off an update before it writes its journal (another
+// chat's ship, say) leaves a copy that no record names, and nothing else
+// ever removes it. Only the lock holder makes copies, except the installer;
+// its copy is minutes old when it is named, so only old copies go.
+const ORPHAN_BACKUP_MS = 60 * 60_000;
+async function removeOrphanBackups(now = Date.now()) {
+  const keep = new Set([readUpdateState()?.artifacts?.id, previousRelease()?.artifacts?.id].filter(Boolean));
+  for (const name of readdirSync(HELM_DIR)) {
+    if (!/^update-backup-[0-9a-f-]+$/.test(name) || keep.has(name)) continue;
+    const path = join(HELM_DIR, name);
+    if (now - statSync(path).mtimeMs >= ORPHAN_BACKUP_MS) await rm(path, { recursive: true, force: true });
+  }
 }
 
 function processStart(pid) {

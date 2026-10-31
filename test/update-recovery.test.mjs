@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, watch, symlinkSync, readlinkSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, watch, symlinkSync, readlinkSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -151,6 +151,21 @@ test('a successful retry keeps the new app and one previous release', async t =>
   assert.equal(git(f.installed, 'rev-parse', 'HEAD'), f.target);
   assert.equal(readFileSync(join(f.installed, 'apps/web/dist/index.html'), 'utf8'), 'new app');
   assertOnlyCheckpoint();
+});
+
+test('an update removes old copies that an interrupted update left unnamed', async t => {
+  const f = fixture(t);
+  const old = join(process.env.HELM_DIR, 'update-backup-00000000-0000-4000-8000-000000000001');
+  const fresh = join(process.env.HELM_DIR, 'update-backup-00000000-0000-4000-8000-000000000002');
+  put(old, '0/index.html', 'old app');
+  put(fresh, '0/index.html', 'installer copy');
+  const hours = (Date.now() - 2 * 60 * 60_000) / 1000;
+  utimesSync(old, hours, hours);
+  t.after(() => rmSync(fresh, { recursive: true, force: true }));
+  f.npm(`fs.mkdirSync('apps/web/dist', { recursive: true });\nfs.writeFileSync('apps/web/dist/index.html', 'new app');`);
+  assert.equal((await selfUpdate(f.installed, { restart: false })).updated, true);
+  assert.equal(existsSync(old), false, 'an old unnamed copy goes');
+  assert.equal(existsSync(fresh), true, 'a copy still being named stays');
 });
 
 test('a failed first install removes incomplete files that had no previous copy', async t => {
