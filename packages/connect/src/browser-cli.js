@@ -3,9 +3,9 @@ import { resolve } from 'node:path';
 import { parseAgentArgs } from './agent-args.js';
 
 export async function runBrowserCommand(args, { rpc, self, findSession, env = process.env, print = console.log } = {}) {
-  const { words, options } = parseAgentArgs(args, { values: ['session', 'output', 'budget', 'note'], switches: ['full-page', 'default', 'clear-default'] });
+  const { words, options } = parseAgentArgs(args, { values: ['session', 'output', 'budget', 'note', 'within', 'frame'], switches: ['full-page', 'default', 'clear-default'] });
   const [command = 'tabs', tabId, source] = words;
-  if (['help', '--help'].includes(command)) { print('helm browser open <url> | tabs | look <tab> | act <tab> <JSON> | flows | run <tab> <name> key=value ... | point <tab> <element # or CSS selector> [--note <text>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default [--session <chat-id>]'); return; }
+  if (['help', '--help'].includes(command)) { print('helm browser open <url> | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | point <tab> <element # or CSS selector> [--note <text>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default [--session <chat-id>]'); return; }
   const sessionId = options.session || env.HELM_SESSION_ID || env.HELM_NATIVE_SESSION;
   if (!sessionId) throw new Error('run browser commands in a Helm chat, or pass --session <chat-id>');
   const target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
@@ -30,7 +30,7 @@ export async function runBrowserCommand(args, { rpc, self, findSession, env = pr
   else if (command === 'close') result = await rpc(target.env, 'browser.close', { id, tabId });
   else if (['look', 'act', 'screenshot', 'point'].includes(command)) {
     if (command === 'point' && !source) throw new Error('point needs an element number or CSS selector');
-    let action = command === 'look' ? { kind: 'look', budget: Number(options.budget ?? 6000) } : command === 'screenshot' ? { kind: 'screenshot', fullPage: !!options['full-page'] }
+    let action = command === 'look' ? { kind: 'look', budget: Number(options.budget ?? 6000), ...(options.within ? { within: options.within } : {}), ...(options.frame != null ? { frame: /^\d+$/.test(options.frame) ? Number(options.frame) : options.frame } : {}) } : command === 'screenshot' ? { kind: 'screenshot', fullPage: !!options['full-page'] }
       : command === 'point' ? { kind: 'point', ...(/^\d+$/.test(source) ? { ref: Number(source) } : { selector: source }), ...(options.note ? { note: options.note } : {}) } : JSON.parse(source || '{}');
     // A call may ask for more time than the usual minute.
     result = await rpc(target.env, 'browser.action', { id, tabId, action }, Math.max(60000, (Number(action.timeout) || 0) + 15000));

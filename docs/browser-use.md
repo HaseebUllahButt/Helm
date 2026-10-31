@@ -64,6 +64,13 @@ The owner uses the same browser window. Helm has no browser panel.
   before each action. Drawing it does not repeat the action's scroll and
   stability checks for a control already in view. Clicks and typing still
   scroll clipped controls and frame targets into view.
+- **A read covers every frame, and a number keeps its element.** Frames are
+  read through Playwright's own frame targets, so cross-origin frames are
+  there too; a frame that does not answer in 2 s is named, not waited for.
+  An element keeps the number it first got in its document. A later read
+  never gives that number to another element, so an old number either
+  reaches the same control or is refused. A read lists up to 300 controls
+  and says when it cut the list; `within` or `frame` reads the rest.
 - **Fail fast, and never deliver twice.** A step waits up to 2 s for its
   control, a page load 10 s, a call 30 s; `timeout` raises one. A step's
   time never runs past its call's. A check reads again until it holds or

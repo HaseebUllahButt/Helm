@@ -79,6 +79,8 @@ const pointerTarget = el => {
 // (ms): a control to be ready or a check to hold, a page to load, a call.
 const STEP_MS = 2000, NAV_MS = 10000, CALL_MS = 30000, MAX_MS = 120000;
 const pause = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); });
+/** What a frame inside the page says, or null when it is busy or gone. */
+const frameAnswer = reading => Promise.race([reading.catch(() => null), pause(STEP_MS).then(() => null)]);
 /** A step's own deadline, never past the deadline of its call. */
 const stepTime = (action, op, base) => { const wanted = action.timeout == null ? base : integer(action.timeout, 1, MAX_MS); return Math.max(1, Math.min(wanted, op ? op.deadline - Date.now() : wanted)); };
 /** A check is page text, or all of: text, url (part of the address), dialog (true or part of its message), target (a control) with its value or checked state. */
@@ -109,6 +111,45 @@ const hasText = value => {
   };
   return visit(document);
 };
+// In a frame: its text and visible controls. Each control keeps the number
+// it first got in this document; new ones count on from `next`.
+const readFrame = ({ limit, room, next, within, inView }) => {
+  const visible = el => { const r = el.getBoundingClientRect(), s = el.ownerDocument.defaultView.getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert]'); };
+  const selector = 'a[href],button,input:not([type=hidden]),textarea,select,option,summary,label[for],[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menu],[role=menuitem],[role=option],[role=combobox],[role=switch],[role=textbox],[role=searchbox],[contenteditable=true],[onclick]';
+  let scopes = [document];
+  if (within) { try { scopes = [...document.querySelectorAll(within)]; } catch { return { error: `within: ${JSON.stringify(within)} is not a CSS selector` }; } }
+  const refs = window.__helmRefs ||= { nums: new WeakMap(), els: new Map() };
+  for (const [ref, held] of refs.els) if (!held.deref()?.isConnected) refs.els.delete(ref);
+  const listed = new Set(), roots = [], seen = new Set(); let total = 0;
+  const visit = root => {
+    if (seen.has(root)) return; seen.add(root); roots.push(root);
+    const candidates = new Set(root.querySelectorAll(selector));
+    for (const el of root.querySelectorAll('*')) {
+      if (!listed.has(el) && (candidates.has(el) || typeof el.onclick === 'function') && visible(el)) { total++; if (listed.size < room) listed.add(el); }
+      if (el.shadowRoot && visible(el)) visit(el.shadowRoot);
+    }
+  };
+  for (const scope of scopes) visit(scope);
+  const prose = []; let left = Math.max(0, limit);
+  for (const root of roots) { if (!left) break; const content = (root.body?.innerText || (root.nodeType === 11 ? [...root.childNodes].map(node => node.nodeType === 3 ? node.textContent : node.nodeType === 1 && visible(node) ? node.innerText || '' : '').join('\n') : root.nodeType === 1 ? root.innerText : '') || '').slice(0, left); prose.push(content); left -= content.length; }
+  const elements = [...listed].map(el => {
+    let ref = refs.nums.get(el); if (!ref) { ref = next++; refs.nums.set(el, ref); } refs.els.set(ref, new WeakRef(el));
+    const tag = el.tagName.toLowerCase(), type = tag === 'input' ? el.type : 'text', r = el.getBoundingClientRect(), w = el.ownerDocument.defaultView;
+    const role = el.getAttribute('role') || (tag === 'input' ? ({ checkbox: 'checkbox', radio: 'radio', button: 'button', submit: 'button', reset: 'button', file: 'file', search: 'searchbox' }[type] || 'textbox') : tag === 'a' ? 'link' : tag === 'select' ? 'combobox' : tag === 'textarea' || el.isContentEditable ? 'textbox' : tag);
+    const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => el.getRootNode().getElementById?.(id)?.textContent || '').join(' ').trim();
+    const name = (el.getAttribute('aria-label') || labelled || el.labels?.[0]?.innerText || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (['submit', 'button', 'reset'].includes(type) ? el.value : '') || '').trim().slice(0, 180);
+    const state = {};
+    if (el.disabled || el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') state.disabled = true;
+    if (['checkbox', 'radio', 'switch'].includes(role)) state.checked = el.getAttribute('aria-checked') === 'mixed' ? 'mixed' : el.hasAttribute('aria-checked') ? el.getAttribute('aria-checked') === 'true' : !!el.checked;
+    if (el.hasAttribute('aria-expanded') || tag === 'summary') state.expanded = tag === 'summary' ? !!el.parentElement?.open : el.getAttribute('aria-expanded') === 'true';
+    if (el.hasAttribute('aria-selected')) state.selected = el.getAttribute('aria-selected') === 'true';
+    if (el.hasAttribute('aria-current')) state.current = el.getAttribute('aria-current');
+    if (['input', 'textarea', 'select'].includes(tag) && type !== 'password' && type !== 'file') state.value = String(el.value ?? '').slice(0, 180);
+    return { ref, role, name, ...state, inViewport: inView && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth };
+  });
+  return { title: document.title, url: location.href, text: prose.join('\n'), elements, total, next };
+};
+const describe = e => `[${e.ref}] ${e.role} ${JSON.stringify(e.name)}${e.disabled ? ' disabled' : ''}${e.checked != null ? ` checked=${e.checked}` : ''}${e.expanded != null ? ` expanded=${e.expanded}` : ''}${e.selected != null ? ` selected=${e.selected}` : ''}${e.current ? ` current=${e.current}` : ''}${e.value != null ? ` value=${JSON.stringify(e.value)}` : ''}${!e.inViewport ? ' offscreen' : ''}`;
 // Steps that only read the page. Any other step can change it.
 const READS = ['look', 'console', 'network', 'screenshot', 'point', 'check', 'wait'];
 const changesPage = kind => !READS.includes(kind);
@@ -424,6 +465,7 @@ export class BrowserManager {
     page.on('response', response => cap(tab.network, { url: response.url().slice(0, 2000), method: response.request().method(), status: response.status() }));
     page.on('requestfailed', request => cap(tab.network, { url: request.url().slice(0, 2000), method: request.method(), error: request.failure()?.errorText }));
     page.on('domcontentloaded', () => {
+      tab.refs?.clear(); // A new document: no old number can reach it.
       void page.title().then(title => { tab.title = title; }).catch(() => {});
       // A new page keeps the agent's arrow where it last was, without its label.
       if (tab.window && tab.cursor) void page.evaluate(drawPointer, tab.cursor).catch(() => {});
@@ -584,42 +626,43 @@ export class BrowserManager {
     }).catch(() => {});
     try { return await job; } finally { clearTimeout(timer); }
   }
-  async look(tab, budget = 6000) {
+  /**
+   * The page as text and numbered controls, from every frame a person can
+   * see. A number always means one element: a later read never gives it to
+   * another. A read lists at most 300 controls and says when it cut the
+   * list; `within` (a CSS selector) or `frame` (its number, or part of its
+   * address) reads the rest.
+   */
+  async look(tab, budget = 6000, { within, frame: only } = {}) {
     integer(budget, 0, 20000);
-    const result = await tab.page.evaluate(limit => {
-      const visible = el => { const r = el.getBoundingClientRect(), s = el.ownerDocument.defaultView.getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert]'); };
-      const selector = 'a[href],button,input:not([type=hidden]),textarea,select,option,summary,label[for],[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menu],[role=menuitem],[role=option],[role=combobox],[role=switch],[role=textbox],[role=searchbox],[contenteditable=true],[onclick]';
-      const elements = [], roots = [], seen = new Set();
-      const visit = (root, inView = true) => {
-        if (seen.has(root)) return; seen.add(root); roots.push(root);
-        const candidates = new Set(root.querySelectorAll(selector));
-        for (const el of root.querySelectorAll('*')) {
-          if (elements.length < 300 && (candidates.has(el) || typeof el.onclick === 'function') && visible(el)) elements.push({ el, inView });
-          if (el.shadowRoot && visible(el)) visit(el.shadowRoot, inView);
-          if (el.tagName === 'IFRAME' && visible(el)) { try { if (el.contentDocument) { const r = el.getBoundingClientRect(), w = el.ownerDocument.defaultView; visit(el.contentDocument, inView && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth); } } catch {} }
-        }
-      };
-      visit(document);
-      window.__helmBrowserElements = elements.map(({ el }) => el);
-      const prose = []; let left = limit;
-      for (const root of roots) { if (!left) break; const content = (root.body?.innerText || (root.nodeType === 11 ? [...root.childNodes].map(node => node.nodeType === 3 ? node.textContent : node.nodeType === 1 && visible(node) ? node.innerText || '' : '').join('\n') : '') || '').slice(0, left); prose.push(content); left -= content.length; }
-      return { title: document.title, url: location.href, text: prose.join('\n').slice(0, limit), elements: elements.map(({ el, inView }, i) => {
-        const tag = el.tagName.toLowerCase(), type = tag === 'input' ? el.type : 'text', r = el.getBoundingClientRect(), w = el.ownerDocument.defaultView;
-        const role = el.getAttribute('role') || (tag === 'input' ? ({ checkbox: 'checkbox', radio: 'radio', button: 'button', submit: 'button', reset: 'button', file: 'file', search: 'searchbox' }[type] || 'textbox') : tag === 'a' ? 'link' : tag === 'select' ? 'combobox' : tag === 'textarea' || el.isContentEditable ? 'textbox' : tag);
-        const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => el.getRootNode().getElementById?.(id)?.textContent || '').join(' ').trim();
-        const name = (el.getAttribute('aria-label') || labelled || el.labels?.[0]?.innerText || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (['submit', 'button', 'reset'].includes(type) ? el.value : '') || '').trim().slice(0, 180);
-        const state = {};
-        if (el.disabled || el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') state.disabled = true;
-        if (['checkbox', 'radio', 'switch'].includes(role)) state.checked = el.getAttribute('aria-checked') === 'mixed' ? 'mixed' : el.hasAttribute('aria-checked') ? el.getAttribute('aria-checked') === 'true' : !!el.checked;
-        if (el.hasAttribute('aria-expanded') || tag === 'summary') state.expanded = tag === 'summary' ? !!el.parentElement?.open : el.getAttribute('aria-expanded') === 'true';
-        if (el.hasAttribute('aria-selected')) state.selected = el.getAttribute('aria-selected') === 'true';
-        if (el.hasAttribute('aria-current')) state.current = el.getAttribute('aria-current');
-        if (['input', 'textarea', 'select'].includes(tag) && type !== 'password' && type !== 'file') state.value = String(el.value ?? '').slice(0, 180);
-        return { ref: i + 1, role, name, ...state, inViewport: inView && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth };
-      }) };
-    }, budget);
-    tab.title = result.title;
-    return { text: `${result.title}\n${result.url}\n${result.text}\n\n${result.elements.map(e => `[${e.ref}] ${e.role} ${JSON.stringify(e.name)}${e.disabled ? ' disabled' : ''}${e.checked != null ? ` checked=${e.checked}` : ''}${e.expanded != null ? ` expanded=${e.expanded}` : ''}${e.selected != null ? ` selected=${e.selected}` : ''}${e.current ? ` current=${e.current}` : ''}${e.value != null ? ` value=${JSON.stringify(e.value)}` : ''}${!e.inViewport ? ' offscreen' : ''}`).join('\n')}`, elements: result.elements };
+    if (within != null) text(within, 2000);
+    let frames = (await this.frames(tab)).map((row, number) => ({ ...row, number }));
+    if (only != null) {
+      const chosen = typeof only === 'number' ? frames[only] : frames.find(row => row.number > 0 && row.frame.url().includes(text(only, 2000)));
+      if (!chosen) throw new Error(`frame ${JSON.stringify(only)} is not on the page; look at the page again`);
+      frames = [chosen];
+    }
+    tab.refs ||= new Map(); tab.nextRef ||= 1;
+    for (const [ref, frame] of tab.refs) if (frame.isDetached()) tab.refs.delete(ref);
+    const prose = [], lines = [], elements = [], quiet = []; let total = 0, page;
+    for (const row of frames) {
+      const reading = row.frame.evaluate(readFrame, { limit: budget - prose.join('\n').length, room: 300 - elements.length, next: tab.nextRef, within: within ?? null, inView: row.inView });
+      // A busy frame inside the page does not hold up the whole read.
+      const read = row.number === 0 ? await reading : await frameAnswer(reading);
+      if (!read) { quiet.push(row.number); continue; }
+      if (read.error) throw new Error(read.error);
+      if (row.number === 0) page = read;
+      tab.nextRef = Math.max(tab.nextRef, read.next || 0); total += read.total ?? read.elements.length;
+      if (read.text) prose.push(read.text);
+      if (read.elements.length && (row.number > 0 || only != null)) lines.push(`Frame ${row.number} ${row.frame.url()}:`);
+      for (const element of read.elements) { tab.refs.set(element.ref, row.frame); elements.push(element); lines.push(describe(element)); }
+    }
+    page ||= { title: await tab.page.title().catch(() => tab.title), url: tab.page.url() };
+    tab.title = page.title;
+    if (quiet.length) lines.push(`Frame ${quiet.join(', ')} did not answer and is not listed.`);
+    const cut = total > elements.length ? { shown: elements.length, total } : null;
+    if (cut) lines.push(`Showing ${cut.shown} of ${cut.total} controls. Read the rest with a look that has "within" (a CSS selector) or "frame" (a frame number).`);
+    return { text: `${page.title}\n${page.url}\n${prose.join('\n').slice(0, budget)}\n\n${lines.join('\n')}`, elements, ...(cut ? { cut } : {}) };
   }
   /** A control named in plain words. One that is not there yet gets until `ms` to appear; a tie fails at once. */
   async find(tab, target, purpose, ms) {
@@ -633,9 +676,10 @@ export class BrowserManager {
   /** The tab's frames a person can see, outer first. Cross-origin frames are read through their own targets. */
   async frames(tab) {
     const rows = [{ frame: tab.page.mainFrame(), inView: true }];
-    for (let i = 0; i < rows.length; i++) for (const child of rows[i].frame.childFrames()) {
-      const place = await child.frameElement().then(async handle => { try { return await handle.evaluate(frameBox); } finally { await handle.dispose(); } }).catch(() => null);
-      if (place?.visible) rows.push({ frame: child, inView: rows[i].inView && place.inView });
+    for (let i = 0; i < rows.length; i++) {
+      const children = rows[i].frame.childFrames();
+      const places = await Promise.all(children.map(child => child.frameElement().then(async handle => { try { return await handle.evaluate(frameBox); } finally { await handle.dispose(); } }).catch(() => null)));
+      children.forEach((child, k) => { if (places[k]?.visible) rows.push({ frame: child, inView: rows[i].inView && places[k].inView }); });
     }
     return rows;
   }
@@ -647,7 +691,7 @@ export class BrowserManager {
     if (tab.dialog) throw new Error('a dialog is open; answer it first, or check {"dialog": true}');
     let elements; const controls = async () => elements ||= (await this.look(tab, 0)).elements;
     if (want.text != null) {
-      let seen = false; for (const { frame } of await this.frames(tab)) if (seen = await frame.evaluate(hasText, want.text).catch(() => false)) break;
+      let seen = false; for (const { frame } of await this.frames(tab)) if (seen = !!(await frameAnswer(frame.evaluate(hasText, want.text)))) break;
       if (!seen && !(scoreTargets(want.text, await controls())[0]?.score >= 800)) return false;
     }
     if (want.target != null) {
@@ -659,10 +703,11 @@ export class BrowserManager {
   }
   async target(tab, action) {
     if (action.ref != null) {
-      integer(action.ref, 1, 300); const handle = await tab.page.evaluateHandle(ref => window.__helmBrowserElements?.[ref - 1], action.ref), element = handle.asElement();
-      if (!element) { await handle.dispose(); throw new Error('element reference expired; look at the page again'); }
-      const frame = await element.ownerFrame();
-      if (frame && frame !== tab.page.mainFrame()) { try { return (await frame.evaluateHandle(el => el, element)).asElement(); } finally { await handle.dispose(); } }
+      integer(action.ref, 1, Number.MAX_SAFE_INTEGER);
+      const gone = () => new Error(`element ${action.ref} is not on the page now; look at the page again`);
+      const frame = tab.refs?.get(action.ref); if (!frame || frame.isDetached()) throw gone();
+      const handle = await frame.evaluateHandle(ref => { const el = window.__helmRefs?.els.get(ref)?.deref(); return el?.isConnected ? el : null; }, action.ref), element = handle.asElement();
+      if (!element) { await handle.dispose(); throw gone(); }
       return element;
     }
     if (action.selector) return tab.page.locator(text(action.selector, 2000)).first();
@@ -702,7 +747,7 @@ export class BrowserManager {
   async perform(tab, action, inBatch = false, op = null) {
     action = normalizeAction(action);
     const kind = action.kind;
-    if (kind === 'look') return { tab: this.metadata(tab), ...(await this.look(tab, action.budget ?? 6000)) };
+    if (kind === 'look') return { tab: this.metadata(tab), ...(await this.look(tab, action.budget ?? 6000, action)) };
     if (kind === 'console') return this.readConsole(tab);
     if (kind === 'network') return { entries: tab.network };
     if (kind === 'screenshot') return this.capture(tab, action);
