@@ -8,7 +8,7 @@ import { normalizeAction, readOnlyAction, resolveTarget } from './browser-target
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } from './browser-identity.js';
 import * as browserLogins from './browser-logins.js';
-import { canOpenWindow, systemChromium, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
+import { canOpenWindow, systemChromium, launchTarget, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -97,7 +97,7 @@ export class BrowserManager {
     if (!this.starting) this.starting = (async () => {
       if (this.browser?.isConnected()) return this.browser;
       const launch = this.launch || launchChromium;
-      try { this.browser = await launch(); } catch (error) { throw new Error(`The browser could not start. Install a Chromium-based browser (Chromium, Chrome, Brave, Edge, Vivaldi or Helium), or set HELM_CHROMIUM_PATH. ${error.message}`); }
+      try { this.browser = await launch(); } catch (error) { throw new Error(`The browser could not start. Install any Chromium-based browser, or set HELM_CHROMIUM_PATH. ${error.message}`); }
       const browser = this.browser;
       browser.on('disconnected', () => {
         if (this.browser !== browser) return;
@@ -132,7 +132,7 @@ export class BrowserManager {
       try { storageState = JSON.parse(await readFile(join(this.directory, sessionId, 'storage.json'), 'utf8')); } catch (error) { hasStorage = error.code !== 'ENOENT'; }
       if (!hasStorage) {
         seed = loginSeed;
-        if (!seed) { this.owner(sessionId); const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
+        if (!seed) { this.owner(sessionId); const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey, { saved: true }); }
         if (seed) { if (!seed.cookies.length && seed.failed) throw new Error(seed.warnings?.[0] || 'Could not copy the default browser logins.'); storageState = { cookies: seed.cookies, origins: [] }; }
       }
       // Set the user agent before any popup's first request. Each page also
@@ -176,7 +176,7 @@ export class BrowserManager {
     if (this.shared && !this.shared.helmClosed) return Promise.resolve(this.shared);
     return this.openingShared ||= (async () => {
       const folder = sharedProfile(this.directory), fresh = !existsSync(folder); mkdirSync(folder, { recursive: true, mode: 0o700 });
-      let seed; if (fresh) { const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey).catch(() => null); }
+      let seed; if (fresh) { const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey, { saved: true }).catch(() => null); }
       let context;
       try { context = await this.launchWindow(folder, { name: 'helm-browser' }); }
       catch (error) { throw new Error(`The browser could not open a window. ${String(error.message).split('\n')[0]}`); }
@@ -895,6 +895,12 @@ export class BrowserManager {
 }
 
 /** A machine with no browser to start gets no browser note: it would only steer the agent to a tool that fails. */
-export function browserReady() { return !!(process.env.HELM_WINDOW_CHROMIUM || executable() || hasPlaywrightChromium()); }
+// A browser that starts only through its package launcher (a Flatpak) still
+// counts where the owner's window can open: the window starts it that way.
+export function browserReady({ env = process.env, platform = process.platform, find, playwright = hasPlaywrightChromium, window = () => canOpenWindow(env, platform) } = {}) {
+  if (env.HELM_WINDOW_CHROMIUM || env.HELM_CHROMIUM_PATH || env.HELM_TEST_CHROMIUM) return true;
+  if (systemChromium(env, platform, find) || playwright()) return true;
+  return !!(window() && launchTarget(env, platform, find));
+}
 
 export function browserNote() { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. For an owner step, point with helm browser point; do not click. Never ask for passwords. When a site needs a login, pick the fitting profile from helm browser profiles and run helm browser logins "<profile>". Respect the request on signed-in sites.]`; }

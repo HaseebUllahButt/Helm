@@ -12,7 +12,8 @@ process.env.HELM_NO_SERVICE = '1';
 test.after(() => rm(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
-const { canOpenWindow, windowName, windowProfile, sharedProfile, windowOpen, launchWindow, stopWindow, profilePid, trimProfile, browserPaths, systemChromium, screenEnv } = await import('../packages/connect/src/browser-window.js');
+const { canOpenWindow, windowName, windowProfile, sharedProfile, windowOpen, launchWindow, stopWindow, profilePid, trimProfile, systemChromium, screenEnv } = await import('../packages/connect/src/browser-window.js');
+const { discoverBrowsers } = await import('../packages/connect/src/chromium-find.js');
 const { chromium } = await import('playwright');
 const realChromium = [process.env.HELM_TEST_CHROMIUM, systemChromium(), chromium.executablePath()].find(path => path && existsSync(path));
 // Playwright's own Chromium, else the system one Helm itself falls back to.
@@ -48,16 +49,17 @@ test('a screen is needed for a window: a display on Linux, always on a Mac or Wi
   assert.deepEqual(screenEnv({ DISPLAY: ':0', XAUTHORITY: '/x' }, 'linux', () => assert.fail('own display wins')), { DISPLAY: ':0', XAUTHORITY: '/x' });
 });
 
-test('any installed Chromium-based browser is used, plain Chromium first', { skip: process.platform === 'win32' }, t => {
-  const folder = mkdtempSync(join(tmpdir(), 'helm-browsers-')); t.after(() => rmSync(folder, { recursive: true, force: true }));
-  // Only the test folder counts, so a browser installed on this machine does not change the answer.
-  const first = () => browserPaths({ PATH: folder }, 'linux').find(path => path.startsWith(folder) && existsSync(path));
-  writeFileSync(join(folder, 'brave'), ''); assert.equal(first(), join(folder, 'brave'));
-  writeFileSync(join(folder, 'chromium'), ''); assert.equal(first(), join(folder, 'chromium'));
-  // A service's short PATH still finds browsers in the usual folders.
-  assert.ok(browserPaths({ PATH: '' }, 'linux').includes('/usr/bin/brave'));
-  assert.equal(browserPaths({}, 'darwin')[2], '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser');
-  assert.ok(browserPaths({ ProgramFiles: 'C:/Program Files' }, 'win32').some(path => path.endsWith('msedge.exe')));
+test('any installed Chromium-based browser is used, found by file evidence not by name', { skip: process.platform === 'win32' }, t => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-browsers-')); t.after(() => rmSync(home, { recursive: true, force: true }));
+  const bin = join(home, 'bin'), apps = join(home, 'apps');
+  mkdirSync(bin, { recursive: true }); mkdirSync(apps, { recursive: true });
+  // A browser with no familiar name, found only by its Chromium resources.
+  for (const name of ['resources.pak', 'surf']) writeFileSync(join(bin, name), '');
+  const surf = join(bin, 'surf');
+  writeFileSync(join(apps, 'surf.desktop'), `[Desktop Entry]\nName=Surf\nExec=${surf} %U\n`);
+  const opts = { home, entryDirs: [apps], flatpakDirs: [], pathDirs: [bin], run: () => { throw new Error('no default'); } };
+  assert.equal(systemChromium({}, 'linux', opts), surf);
+  assert.deepEqual(discoverBrowsers({}, 'linux', opts).map(b => b.name), ['Surf']);
 });
 
 test('a native browser starts at the requested page with copied logins already present', { timeout: 60000, skip: noChromium }, async t => {

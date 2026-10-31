@@ -13,7 +13,7 @@ process.env.HELM_NO_SERVICE = '1';
 delete process.env.WAYLAND_DISPLAY; delete process.env.DISPLAY;
 for (const [key, file] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(process.env.HELM_DIR, file);
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-const { BrowserManager } = await import('../packages/connect/src/browser.js');
+const { BrowserManager, browserReady } = await import('../packages/connect/src/browser.js');
 const { systemChromium } = await import('../packages/connect/src/browser-window.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
 const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
@@ -25,25 +25,54 @@ test('Mac Chrome is ready without Linux browsers or a Playwright download', () =
     import assert from 'node:assert/strict';
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
-    const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    const app = '/Applications/Google Chrome.app', chrome = app + '/Contents/MacOS/Google Chrome';
+    // A real Chrome bundle, found by its framework resources, not by its name.
+    const content = {
+      [app + '/Contents/Info.plist']: '<plist><dict><key>CFBundleExecutable</key><string>Google Chrome</string></dict></plist>',
+      [chrome]: '',
+      [app + '/Contents/Frameworks/Google Chrome Framework.framework/Versions/A/Resources/resources.pak']: '',
+    };
     let installed = true;
-    fs.existsSync = path => installed && path === chrome;
-    fs.readdirSync = () => [];
+    const files = () => installed ? new Set(Object.keys(content)) : new Set();
+    const dirs = () => { const d = new Set(); for (const f of files()) { const parts = f.split('/'); for (let i = 1; i < parts.length; i++) d.add(parts.slice(0, i).join('/') || '/'); } return d; };
+    // Only the fake /Applications tree is mocked; every other path (the module
+    // loader reading real files) goes to the real fs.
+    const fake = p => typeof p === 'string' && p.startsWith('/Applications');
+    const real = { existsSync: fs.existsSync, statSync: fs.statSync, readFileSync: fs.readFileSync, realpathSync: fs.realpathSync, readdirSync: fs.readdirSync };
+    fs.existsSync = (p, ...a) => fake(p) ? files().has(p) || dirs().has(p) : real.existsSync(p, ...a);
+    fs.statSync = (p, ...a) => { if (!fake(p)) return real.statSync(p, ...a); if (files().has(p)) return { isFile: () => true, isDirectory: () => false, size: content[p].length }; if (dirs().has(p)) return { isFile: () => false, isDirectory: () => true, size: 0 }; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+    fs.readFileSync = (p, ...a) => { if (!fake(p)) return real.readFileSync(p, ...a); if (files().has(p)) return content[p]; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+    fs.realpathSync = (p, ...a) => fake(p) ? p : real.realpathSync(p, ...a);
+    fs.readdirSync = (p, opts) => { if (!fake(p)) return real.readdirSync(p, opts); const kids = new Map(); for (const f of [...files(), ...dirs()]) { if (f.startsWith(p + '/')) { const name = f.slice(p.length + 1).split('/')[0]; if (name && !kids.has(name)) kids.set(name, { name, isFile: () => files().has(p + '/' + name), isDirectory: () => dirs().has(p + '/' + name) }); } } const list = [...kids.values()]; return opts?.withFileTypes ? list : list.map(e => e.name); };
     syncBuiltinESMExports();
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     for (const key of ['HELM_CHROMIUM_PATH', 'HELM_TEST_CHROMIUM', 'HELM_WINDOW_CHROMIUM']) delete process.env[key];
     process.env.PATH = '';
     const { browserReady } = await import(${JSON.stringify(browser)});
-    const { systemChromium } = await import(${JSON.stringify(window)});
+    const { systemChromium, refreshBrowsers } = await import(${JSON.stringify(window)});
     assert.equal(systemChromium(), chrome);
     assert.equal(browserReady(), true);
-    installed = false;
+    // Discovery is cached for a few seconds; an install change refreshes it.
+    installed = false; refreshBrowsers();
     assert.equal(browserReady(), false);
     process.env.HELM_WINDOW_CHROMIUM = '/custom/window-browser';
     assert.equal(systemChromium(), undefined);
     assert.equal(browserReady(), true);
   `], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('a machine with only a Flatpak browser is ready where the owner window can open', () => {
+  const home = mkdtempSync(join(process.env.HELM_DIR, 'flatpak-only-'));
+  const apps = join(home, 'apps'), bin = join(home, 'bin'), fp = join(home, 'flatpak'), files = join(fp, 'org.x.Wave', 'current', 'active', 'files');
+  for (const dir of [apps, bin, files]) mkdirSync(dir, { recursive: true });
+  for (const name of ['resources.pak', 'wave']) writeFileSync(join(files, name), '');
+  writeFileSync(join(bin, 'flatpak'), '#!/bin/sh\n');
+  writeFileSync(join(apps, 'wave.desktop'), `[Desktop Entry]\nName=Wave\nExec=${join(bin, 'flatpak')} run org.x.Wave %U\n`);
+  const find = { home, entryDirs: [apps], flatpakDirs: [fp], pathDirs: [bin], snapRoot: join(home, 'snap'), run: () => { throw new Error('no default'); } };
+  const ready = window => browserReady({ env: {}, platform: 'linux', find, playwright: () => false, window: () => window });
+  assert.equal(ready(true), true, 'the window can start it through flatpak run');
+  assert.equal(ready(false), false, 'with no screen there is nothing that can start it');
 });
 
 test('tabs from one chat do not block another and all saved tabs survive recovery', async t => {
