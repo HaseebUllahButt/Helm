@@ -43,6 +43,13 @@ import { StatusChip } from '../screens/ThreadRows';
  */
 const Terminal = lazy(() => import('../Terminal').then((m) => ({ default: m.Terminal })));
 
+/**
+ * A terminal chat's model list, per account, for this page. Each chat switch
+ * starts a new screen; without this the model chip flashed a raw name or
+ * nothing until the machine answered (owner, 2026-10-31).
+ */
+const nativeLists = new Map<string, ModelList>();
+
 export function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask, onSendFolder, onOpenNative }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account. */
@@ -90,12 +97,13 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
   const changedPaths = useMemo(() => git.status?.files?.map((f) => f.path) ?? [], [git.status]);
 
-  const [nativeOptions, setNativeOptions] = useState<ModelList | null>(null);
+  const nativeKey = `${env.id}:${session.profileId || session.engine}`;
+  const [nativeOptions, setNativeOptions] = useState<ModelList | null>(() => session.nativeCli ? nativeLists.get(nativeKey) ?? null : null);
   const [nativeCommands, setNativeCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
   const [settingBusy, setSettingBusy] = useState(false);
   const [nativeNotice, setNativeNotice] = useState('');
   useEffect(() => {
-    setNativeOptions(null); setNativeCommands([]);
+    setNativeOptions(session.nativeCli ? nativeLists.get(nativeKey) ?? null : null); setNativeCommands([]);
     if (!session.nativeCli) return;
     let stale = false;
     const catalog = followModelRefresh(
@@ -103,7 +111,10 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       (options) => {
         // The same tray a Helm chat has. `default` and `effort` stay empty:
         // the chips show what Claude itself reports, never an account guess.
-        if (!stale && Array.isArray(options.models)) setNativeOptions({ ...options, default: null, effort: null, speeds: [], speedByModel: {} });
+        if (stale || !Array.isArray(options.models)) return;
+        const list = { ...options, default: null, effort: null, speeds: [], speedByModel: {} };
+        nativeLists.set(nativeKey, list);
+        setNativeOptions(list);
       },
       () => {},
     );
@@ -116,7 +127,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       }
     });
     return () => { stale = true; catalog.stop(); off(); };
-  }, [client, env.id, session.id, session.profileId, session.nativeCli, session.engineModel, session.permissionControl]);
+  }, [client, env.id, session.id, session.profileId, session.nativeCli, session.engineModel, session.permissionControl, nativeKey]);
 
   const nativeCommand = async (command: string) => {
     if (settingBusy || sending) return;

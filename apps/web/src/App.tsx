@@ -1215,19 +1215,43 @@ function Shell({ client, conn, onSignOut }: {
   const settledShelf = settledNow.filter(unpinned);
   const pinnedRow = (x: Row) => homeRow(x, !runningThread(x.s) || attentionOn(x.env.id, x.s));
   // Alt+1, Alt+2 and Alt+3 open the top chat of Finished, Running and
-  // Settled, in sidebar order. Ctrl+Tab and Ctrl+Shift+Tab then walk the
-  // pinned chats and the shelf of the open chat, else the shelf last picked.
-  // The folded rail shows the pinned chats and the picked shelf; Finished
-  // and Running share it, as before (owner, 2026-10-31).
+  // Settled, in sidebar order. The folded rail then shows the pinned chats
+  // and the picked shelf: Finished and Running share it with Needs you.
+  // Ctrl+Tab and Ctrl+Shift+Tab walk exactly what is shown, top to bottom,
+  // pinned chats included as ordinary rows (owner, 2026-10-31).
   const shelves = { finished: finishedShelf, running: runningShelf, settled: settledShelf };
   const [pickedShelf, setPickedShelf] = useState<keyof typeof shelves>('running');
+  type RailRow = Row & { need: boolean; word: string; cls: string };
+  const railRowsFor = (settled: boolean): RailRow[] => [
+    ...pinnedNow.map((x) => blocked.includes(x) ? { ...x, need: true, word: 'needs you', cls: 'rail-need' }
+      : finishedNow.includes(x) ? { ...x, need: false, word: 'finished', cls: 'rail-finished' }
+      : runningNow.includes(x) ? { ...x, need: false, word: 'working', cls: 'rail-working' }
+      : { ...x, need: false, word: 'pinned', cls: 'rail-settled' }),
+    ...(settled ? settledShelf.map((x) => ({ ...x, need: false, word: 'settled', cls: 'rail-settled' })) : [
+      ...needShelf.map((x) => ({ ...x, need: true, word: 'needs you', cls: 'rail-need' })),
+      ...finishedShelf.map((x) => ({ ...x, need: false, word: 'finished', cls: 'rail-finished' })),
+      ...runningShelf.map((x) => ({ ...x, need: false, word: 'working', cls: 'rail-working' })),
+    ]),
+  ];
+  const railRows = railRowsFor(pickedShelf === 'settled');
+  const openRailRow = ({ env: e, s, need }: RailRow) =>
+    openSession(e.id, s, need && s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed));
+  const walk = useRef<{ rows: (settled: boolean) => RailRow[]; open: (row: RailRow) => void }>({ rows: railRowsFor, open: openRailRow });
+  walk.current = { rows: railRowsFor, open: openRailRow };
+  const shelfOf = useRef<(x: Row) => keyof typeof shelves | 'active' | null>(() => null);
+  shelfOf.current = (x) => settledShelf.some((y) => y.s.id === x.s.id && y.env.id === x.env.id) ? 'settled'
+    : [...needShelf, ...finishedShelf, ...runningShelf].some((y) => y.s.id === x.s.id && y.env.id === x.env.id) ? 'active' : null;
+  const tops = useRef(shelves);
+  tops.current = shelves;
+  const picked = useRef(pickedShelf);
+  picked.current = pickedShelf;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.isComposing || document.querySelector('[aria-modal="true"]')) return;
       const jump = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
         ? ({ Digit1: 'finished', Digit2: 'running', Digit3: 'settled' } as const)[event.code as 'Digit1'] : undefined;
-      const walk = event.key === 'Tab' && event.ctrlKey && !event.metaKey && !event.altKey;
-      if (!jump && !walk) return;
+      const step = event.key === 'Tab' && event.ctrlKey && !event.metaKey && !event.altKey;
+      if (!jump && !step) return;
       const current = nav.current.stack.at(-1);
       const isCurrent = ({ env, s }: Row) => env.id === nav.current.selected && current?.kind === 'session' && s.id === current.session.id;
       if (jump) {
@@ -1235,26 +1259,30 @@ function Shell({ client, conn, onSignOut }: {
         event.preventDefault();
         event.stopPropagation();
         setPickedShelf(jump);
-        const top = shelves[jump][0];
-        if (top && !isCurrent(top)) openSession(top.env.id, top.s);
+        const top = tops.current[jump][0];
+        if (top && !isCurrent(top)) walk.current.open({ ...top, need: false, word: '', cls: '' });
         return;
       }
       // In a terminal, Ctrl+Tab walks that machine's terminals (SessionView).
       if (current?.kind === 'session' && current.session.engine === 'shell') return;
-      const name = (['finished', 'running', 'settled'] as const).find((k) => shelves[k].some(isCurrent)) ?? pickedShelf;
-      const list = [...pinnedNow, ...shelves[name]];
+      const open = current?.kind === 'session' && nav.current.selected
+        ? { env: { id: nav.current.selected } as Environment, s: current.session } : null;
+      const where = open && shelfOf.current(open);
+      const settled = where ? where === 'settled' : picked.current === 'settled';
+      if (where === 'settled') setPickedShelf('settled');
+      else if (where === 'active' && picked.current === 'settled') setPickedShelf('running');
+      const list = walk.current.rows(settled);
       if (!list.length) return;
       event.preventDefault();
       event.stopPropagation();
-      setPickedShelf(name);
       const index = list.findIndex(isCurrent);
       const next = index < 0 ? (event.shiftKey ? list.length - 1 : 0)
         : (index + (event.shiftKey ? -1 : 1) + list.length) % list.length;
-      if (index !== next) openSession(list[next].env.id, list[next].s);
+      if (index !== next) walk.current.open(list[next]);
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [finishedShelf, runningShelf, settledShelf, pinnedNow, pickedShelf, openSession]);
+  }, []);
   // The machine keeps the look too, so the tick clears on every device.
   // Only a finish the machine has not seen yet needs telling: each tell is
   // saved and sent to every screen, and a working chat changes every second.
@@ -1345,23 +1373,14 @@ function Shell({ client, conn, onSignOut }: {
               type="button" className="iconbtn rail-new" onClick={() => setNewChat({})}
               disabled={!envs.some((e) => e.online)} aria-label="New chat" title="New chat (Ctrl+N)"
             ><Icon name="plus" size={17} /></button>
-            {[
-              ...pinnedNow.map((x) => blocked.includes(x) ? { ...x, need: true, word: 'needs you', cls: 'rail-need' }
-                : finishedNow.includes(x) ? { ...x, need: false, word: 'finished', cls: 'rail-finished' }
-                : runningNow.includes(x) ? { ...x, need: false, word: 'working', cls: 'rail-working' }
-                : { ...x, need: false, word: 'pinned', cls: 'rail-settled' }),
-              ...(pickedShelf === 'settled' ? settledShelf.map((x) => ({ ...x, need: false, word: 'settled', cls: 'rail-settled' })) : [
-                ...needShelf.map((x) => ({ ...x, need: true, word: 'needs you', cls: 'rail-need' })),
-                ...finishedShelf.map((x) => ({ ...x, need: false, word: 'finished', cls: 'rail-finished' })),
-                ...runningShelf.map((x) => ({ ...x, need: false, word: 'working', cls: 'rail-working' })),
-              ]),
-            ].map(({ env: e, s, need, word, cls }) => {
+            {railRows.map((row) => {
+              const { env: e, s, word, cls } = row;
               const open = isOpen({ env: e, s });
               return (
                 <button
                   key={`${e.id}:${s.id}`} type="button" className={`rail-chat ${cls}${open ? ' active' : ''}`}
                   aria-current={open ? 'page' : undefined} aria-label={`${s.title}, ${e.name}, ${word}`} title={`${s.title}\n${e.name} · ${word}`}
-                  onClick={() => openSession(e.id, s, need && s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
+                  onClick={() => openRailRow(row)}
                 >
                   <EngineMark engine={engineOf(s.engine).cls} />
                   <i className="rail-dot" aria-hidden="true" />

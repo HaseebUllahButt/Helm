@@ -24,7 +24,7 @@ import type { Transcribe } from './voice';
 import { messageDelivery } from '@helm/protocol/message-delivery';
 import { newMessageId, retryableDelivery } from '@helm/protocol/reliable-input';
 import { money, busyStatus, shownTitle } from '../format';
-import { loadModels, saveModels } from '../modelCache';
+import { loadModels, peekModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
 import type { Decision, Item, Turn } from './types';
@@ -180,7 +180,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [rewinding, setRewinding] = useState<{ turn: Turn; allowed: boolean; restore: boolean; reason?: string } | null>(null);
   const [branching, setBranching] = useState<Turn | null>(null);
   useDismiss(menu !== null, useCallback(() => setMenu(null), []));
-  const [options, setOptions] = useState<ModelList | null>(null);
+  const [options, setOptions] = useState<ModelList | null>(() => peekModels(env.id, session.profileId));
   const [commands, setCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
   const engine = ENGINE_LABEL[session.engine] ?? session.engine;
   const status = log.loaded ? log.status : session.status;
@@ -237,7 +237,14 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // The catalogue this device last heard, then the machine's answer behind it.
   // Without the first half the model chip reads "default" and the picker is
   // empty until a CLI has been spawned and a round trip has come back.
-  useEffect(() => { setOptions(null); }, [client, env.id, session.profileId, session.id]);
+  // Each chat has its own screen, so this starts from the list in memory.
+  // It changes only when the chat moves to another account.
+  const optionsFor = useRef(`${env.id}:${session.profileId}`);
+  useEffect(() => {
+    if (optionsFor.current === `${env.id}:${session.profileId}`) return;
+    optionsFor.current = `${env.id}:${session.profileId}`;
+    setOptions(peekModels(env.id, session.profileId));
+  }, [env.id, session.profileId]);
   useEffect(() => {
     let stale = false;
     loadModels(env.id, session.profileId).then((cached) => {
