@@ -72,11 +72,35 @@ function liveCodeBlock(lang: string) {
   return { block, code };
 }
 
+/**
+ * Finished messages, formatted once for the page. Every chat switch builds
+ * the chat's screen again, and formatting each message again (marked, then
+ * DOMPurify) was the largest part of a switch (owner, 2026-11-01). The
+ * oldest go first once the copies hold about 8 million characters.
+ */
+const formatted = new Map<string, string>();
+let formattedSize = 0;
+const FORMATTED_MAX = 8_000_000;
+function formattedHtml(text: string): string {
+  const key = (hasHighlighting() ? 'h:' : 'p:') + text;
+  const hit = formatted.get(key);
+  if (hit !== undefined) { formatted.delete(key); formatted.set(key, hit); return hit; }
+  const html = render(text);
+  formatted.set(key, html);
+  formattedSize += key.length + html.length;
+  for (const [old, value] of formatted) {
+    if (formattedSize <= FORMATTED_MAX || old === key) break;
+    formatted.delete(old);
+    formattedSize -= old.length + value.length;
+  }
+  return html;
+}
+
 export const Markdown = memo(function Markdown({ text, className = '', live = false }: { text: string; className?: string; live?: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const highlighted = useHighlighting();
   // A finished message is one whole parse, written once.
-  const html = useMemo(() => (live ? '' : render(text)), [text, live, highlighted]);
+  const html = useMemo(() => (live ? '' : formattedHtml(text)), [text, live, highlighted]);
   // What the box holds now: a finished message's HTML, or for a live reply
   // the settled text already in it and how many of its nodes that made.
   const shown = useRef<{ html: string } | {

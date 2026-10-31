@@ -56,6 +56,13 @@ until `text` starts with "helm / Search anything".
   chat keeps the last pick. In Finished each chat you leave goes to Settled,
   so going back skips it. Alt with a digit has no Ctrl/Cmd: the owner asked
   for it by name. Test: `test/browser/chat-cycle`.
+- **Instant switch (owner, 2026-11-01):** a chat screen is new on every
+  switch. The last 10 chats stay in memory as shown (`useSessionLog` kept
+  views, `keptMessages` in SessionView), formatted messages are cached
+  (Markdown), and a chat draws its newest 12 turns first, the rest in steps
+  after the paint. Measure a switch with real Helm chats, not `up --real`:
+  there each visit takes over a found chat under a new ID, which hides all of
+  this. Test: `test/browser/offline-cache` (kept view).
 - **Rules:** the sidebar shows live and Helm-known chats only, on purpose.
 - **Rules (owner, 2026-10-28, idea A):** a Finished or Settled chat is one
   line: the agent logo, the title, and one status (its age, a green dot
