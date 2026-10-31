@@ -165,14 +165,18 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
     if (byLabel.length > 1) throw new Error(`Two browser profiles have this name. Use its key from helm browser profiles. ${here()}`);
     // A key an older Helm saved ("chrome:Default") means one data folder only.
     const colon = asked.indexOf(':'), old = colon > 0 && OLD_KEYS[asked.slice(0, colon).trim()];
-    let pinned = null;
     if (old) {
       const path = join(roots[0], old[platform === 'darwin' ? 2 : platform === 'win32' ? 3 : 1]);
-      pinned = choices.filter(p => p.dataDir === path);
+      const pinned = choices.filter(p => p.dataDir === path);
       if (!pinned.length) throw new Error(`${old[0]} has no profiles on this machine. ${here()}`);
       const dirPart = value.slice(value.indexOf(':') + 1).trim();
       const exact = pinned.find(p => p.directory === dirPart) || pinned.find(p => plain(p.directory) === plain(dirPart)) || pinned.find(p => plain(`${old[0]}: ${p.name} (${p.directory})`) === asked);
       if (exact) return exact;
+      // No fuzzy match here: "Profile 1" must never become "Profile 10". A
+      // person may still give one exact profile name or email in this browser.
+      const named = pinned.filter(p => [p.name, p.email].filter(Boolean).some(v => plain(v) === plain(dirPart)));
+      if (named.length === 1) return named[0];
+      throw new Error(`No browser profile matches "${value}". ${here()}`);
     }
     // Every word the found browsers go by (slug, full name and each name word),
     // longest first so "google chrome" wins over "chrome".
@@ -180,8 +184,7 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
     const browserWords = [...byBrowser].flatMap(([slug, name]) => [...new Set([slug, plain(name), ...plain(name).split(' ')])].filter(w => w.length >= 2).map(w => [w, slug]))
       .sort((a, b) => b[0].length - a[0].length);
     let browser = null, rest = asked;
-    if (pinned) rest = asked.slice(colon + 1);
-    else if (colon > 0 && browserWords.some(([word]) => word === asked.slice(0, colon).trim())) { browser = browserWords.find(([word]) => word === asked.slice(0, colon).trim())[1]; rest = asked.slice(colon + 1); }
+    if (colon > 0 && browserWords.some(([word]) => word === asked.slice(0, colon).trim())) { browser = browserWords.find(([word]) => word === asked.slice(0, colon).trim())[1]; rest = asked.slice(colon + 1); }
     else for (const [word, id] of browserWords) {
       const at = asked.startsWith(`${word} `) || asked.startsWith(`${word}/`) || asked === word ? 0 : asked.endsWith(` ${word}`) ? asked.length - word.length : asked.endsWith(`(${word})`) ? asked.length - word.length - 2 : -1;
       if (at < 0) continue;
@@ -191,7 +194,7 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
     // A profile's own name comes first: "Main" is a profile called Main
     // when there is one, else the browser's default profile.
     const tries = [...new Set([rest, rest.replace(/ profile$/, ''), rest.replace(/^(the )?(default|main)( profile)?$/, 'default')])];
-    const pool = pinned || choices.filter(p => !browser || p.browser === browser);
+    const pool = choices.filter(p => !browser || p.browser === browser);
     const names = p => [p.directory, p.name, p.email].filter(Boolean).map(plain);
     const matches = !rest ? pool.filter(p => p.lastUsed)
       : [(v, t) => v === t, (v, t) => v.startsWith(t), (v, t) => v.includes(t)]
@@ -259,7 +262,7 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
       // Check keys against live (unexpired) keyring rows; one damaged row must
       // not reject a good key, so a key is accepted when any row verifies.
       const live = row => !row.has_expires || unixTime(row.expires_utc) > now() / 1000;
-      const samples = rows.filter(r => Buffer.from(r.encrypted_value || []).subarray(0, 3).toString() === secretPrefix && live(r)).slice(0, 50);
+      const samples = rows.filter(r => Buffer.from(r.encrypted_value || []).subarray(0, 3).toString() === secretPrefix && live(r));
       const needsSecret = rows.some(r => Buffer.from(r.encrypted_value || []).subarray(0, 3).toString() === secretPrefix);
       let password = null;
       if (samples.length) {

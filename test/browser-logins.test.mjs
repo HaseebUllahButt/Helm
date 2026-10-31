@@ -242,3 +242,14 @@ test('a damaged or expired first cookie does not stop a good keyring key', async
   assert.deepEqual(r.cookies.map(c => c.value), ['good-value'], 'the good row copies');
   assert.equal(r.failed, 1, 'only the damaged row fails');
 });
+
+test('a good keyring key is found after more than 50 damaged rows', async t => {
+  const home = await config(t), root = join(home, '.config');
+  const f = await fixture(root); t.after(() => f.db.close());
+  await writeFile(join(root, 'chromium-flags.conf'), '--password-store=gnome-libsecret');
+  for (let i = 0; i < 60; i++) f.insert({ name: `damaged-${i}`, bytes: Buffer.concat([Buffer.from('v11'), Buffer.alloc(32, i)]) });
+  f.insert({ name: 'good', bytes: encrypted('good-value', { prefix: 'v11', password: 'fake-key' }) });
+  const r = await linux(home, { run: async () => ({ stdout: 'fake-key\n' }) }).readLogins('Default');
+  assert.deepEqual(r.cookies.map(c => c.value), ['good-value']);
+  assert.equal(r.failed, 60);
+});

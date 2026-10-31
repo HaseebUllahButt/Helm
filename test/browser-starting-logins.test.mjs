@@ -74,3 +74,14 @@ test('the system default browser wins over a newer profile of another browser (n
     assert.equal((await logins.readLogins(profileKey)).cookies[0].value, 'brave-account');
   }
 });
+
+test('an old saved key whose profile folder is gone is refused, never matched to a similar folder', async () => {
+  const home = homeDir(), root = join(home, '.config');
+  await withCookie(root, { browserPath: 'google-chrome', directory: 'Profile 10', name: 'Other' }, 'other-account');
+  const logins = reader(home), manager = managerWith(logins);
+  writeFileSync(join(manager.directory, 'logins.json'), JSON.stringify({ profileKey: 'chrome:Profile 1' }));
+  const { profileKey } = await manager.startingProfile();
+  await assert.rejects(logins.readLogins(profileKey), /No browser profile matches "chrome:Profile 1"/);
+  assert.equal((await logins.readLogins('chrome:Profile 10')).cookies[0].value, 'other-account', 'the exact folder still works');
+  assert.equal((await logins.resolveProfile('chrome:other')).directory, 'Profile 10', 'one exact profile name still works');
+});
