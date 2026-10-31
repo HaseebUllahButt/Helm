@@ -75,8 +75,8 @@ The owner uses the same browser window. Helm has no browser panel.
 - **Fail fast, and never deliver twice.** A step waits up to 2 s for its
   control, a page load 10 s, a call 30 s; `timeout` raises one. One step
   deadline covers finding the control, the pointer and the input, and never
-  runs past its call's. No input goes out once its step or its call is out
-  of time. A check reads again until it holds; each read gets only the time
+  runs past its call's. No input or pointer scroll goes out once its step
+  or its call is out of time; finding frames shares one deadline too. A check reads again until it holds; each read gets only the time
   left, a result seen after the deadline does not count, and a page or
   frame that did not answer (or whose place could not be read) makes it
   "could not be checked", never a pass. Helm never adds a check or a retry of input on its own.

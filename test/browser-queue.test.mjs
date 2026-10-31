@@ -179,3 +179,28 @@ test('a short check whose page cannot answer ends in its time with an unknown re
   const result = await manager.run('chat', 'tab', { check: { target: 'Name', value: 'Ada' }, timeout: 100 });
   assert.equal(result.check.found, null); assert.match(result.text, /did not answer/);
 });
+
+test('in a window, a call that times out while the pointer finds its control does not scroll the page', async t => {
+  const { manager, tab } = stepFixture(t), finding = deferred(), found = deferred(); let scrolls = 0, clicks = 0;
+  manager.aim = BrowserManager.prototype.aim; tab.window = true;
+  Object.assign(tab.page, { viewportSize: () => ({ width: 1280, height: 800 }), evaluate: async () => {} });
+  const box = { x: 10, y: 900, width: 50, height: 20 };
+  manager.target = async () => { finding.resolve(); await found.promise; return { evaluate: async () => ({ name: 'Save', main: true, clipped: false, viewport: { width: 1280, height: 800 }, box }), boundingBox: async () => box, scrollIntoViewIfNeeded: async () => { scrolls++; }, click: async () => { clicks++; } }; };
+  const rejected = assert.rejects(manager.run('chat', 'tab', { click: { selector: '#save' } }), /timed out during the click step/);
+  await finding.promise; t.mock.timers.tick(100); await rejected;
+  found.resolve(); await manager.serial.get('tab')?.catch(() => {});
+  assert.deepEqual([scrolls, clicks], [0, 0]);
+});
+
+test('a short text check spends its own time once on finding frames, however many parents are busy', async () => {
+  const { manager, tab } = fixture();
+  const stuck = { url: () => 'http://z/', isDetached: () => false, childFrames: () => [], frameElement: () => new Promise(() => {}) };
+  const parent = () => ({ url: () => 'http://y/', isDetached: () => false, childFrames: () => [stuck], evaluate: async () => false,
+    frameElement: async () => ({ evaluate: async () => ({ visible: true, inView: true }), dispose: async () => {} }) });
+  const parents = Array.from({ length: 5 }, parent);
+  const main = { url: () => 'http://x/', isDetached: () => false, childFrames: () => parents, evaluate: async () => false };
+  tab.page = { mainFrame: () => main, url: () => 'http://x/', title: async () => 'Page' };
+  const started = Date.now(), found = await manager.holds(tab, { text: 'Secret' }, Date.now() + 100), took = Date.now() - started;
+  assert.equal(found, null);
+  assert.ok(took < 300, `five busy parents took ${took} ms for a 100 ms check`);
+});

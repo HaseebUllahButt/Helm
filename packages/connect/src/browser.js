@@ -694,11 +694,12 @@ export class BrowserManager {
    * `wait` (a busy parent frame) is kept as unknown, without its children.
    */
   async frames(tab, wait = STEP_MS) {
-    const rows = [{ frame: tab.page.mainFrame(), inView: true }];
+    // One deadline for the whole search: frames not reached in time are unknown.
+    const rows = [{ frame: tab.page.mainFrame(), inView: true }], end = Date.now() + wait;
     for (let i = 0; i < rows.length; i++) {
       if (rows[i].unknown) continue;
       const children = rows[i].frame.childFrames();
-      const places = await Promise.all(children.map(child => frameAnswer(child.frameElement().then(async handle => { try { return await handle.evaluate(frameBox); } finally { await handle.dispose(); } }).catch(() => child.isDetached() ? { visible: false } : null), wait)));
+      const places = Date.now() >= end ? children.map(() => null) : await Promise.all(children.map(child => frameAnswer(child.frameElement().then(async handle => { try { return await handle.evaluate(frameBox); } finally { await handle.dispose(); } }).catch(() => child.isDetached() ? { visible: false } : null), Math.max(1, end - Date.now()))));
       children.forEach((child, k) => { if (!places[k]) rows.push({ frame: child, unknown: true }); else if (places[k].visible) rows.push({ frame: child, inView: rows[i].inView && places[k].inView }); });
     }
     return rows;
@@ -822,15 +823,16 @@ export class BrowserManager {
     const budget = stepTime(action, op, ['navigate', 'back', 'forward', 'reload', 'wait'].includes(kind) ? NAV_MS : STEP_MS), stepEnd = Date.now() + budget;
     const left = () => Math.max(1, stepEnd - Date.now());
     // No input goes out once the call timed out or this step used its time.
+    const stop = message => Object.assign(new Error(message), { stopped: true });
     const live = () => {
-      if (op?.expired) throw new Error('The call timed out, so this step sent no input.');
-      if (Date.now() >= stepEnd) throw new Error(`${kind}: the step used its ${budget} ms before this input was sent. Read the page, or give the step a longer "timeout".`);
+      if (op?.expired) throw stop('The call timed out, so this step sent no input.');
+      if (Date.now() >= stepEnd) throw stop(`${kind}: the step used its ${budget} ms before this input was sent. Read the page, or give the step a longer "timeout".`);
     };
     if (typeof action.target === 'string' && !/^\d+$/.test(action.target.trim())
       && action.ref == null && !action.selector && !action.role && !action.name && action.x == null) {
       action = { ...action, ref: (await this.find(tab, text(action.target, 500), kind, left())).ref };
     }
-    await this.aim(tab, action, left);
+    await this.aim(tab, action, left, live);
     if (kind === 'point') return { tab: this.metadata(tab) };
     try {
       live();
@@ -881,7 +883,7 @@ export class BrowserManager {
     return { tab: this.metadata(tab), ...(!inBatch ? await this.look(tab) : {}) };
   }
   /** Where the agent is about to act, drawn on the page in a window. Free in a hidden browser; point always draws. */
-  async aim(tab, action, left = () => STEP_MS) {
+  async aim(tab, action, left = () => STEP_MS, live = () => {}) {
     const kind = action.kind;
     if (POINTER_CLEARS.includes(kind)) { if (tab.pointer) { tab.pointer = null; void tab.page.evaluate(clearPointer).catch(() => {}); } return; }
     if (!Object.hasOwn(POINTER_WORDS, kind) || kind !== 'point' && !tab.window) return;
@@ -901,17 +903,18 @@ export class BrowserManager {
         // Chromium's action still checks that it can click or type there.
         if (!['point', 'upload'].includes(kind) && (!info.main || info.clipped || !found
           || found.x < 0 || found.y < 0 || found.x + found.width > width || found.y + found.height > height)) {
-          await target.scrollIntoViewIfNeeded({ timeout: Math.min(500, left()) });
+          live(); await target.scrollIntoViewIfNeeded({ timeout: Math.min(500, left()) });
           info = await target.evaluate(pointerTarget, undefined, { timeout });
           if (info.main) size = info.viewport;
           found = info.main ? info.box : await target.boundingBox({ timeout });
         }
         if (found) { box = { x: Math.round(found.x), y: Math.round(found.y), width: Math.round(found.width), height: Math.round(found.height) }; x = Math.round(found.x + found.width / 2); y = Math.round(found.y + found.height / 2); name = info.name; }
-      } catch (error) { if (kind === 'point') throw error; } finally { if (target?.dispose) await target.dispose(); }
+      } catch (error) { if (kind === 'point' || error.stopped) throw error; } finally { if (target?.dispose) await target.dispose(); }
     }
     if (kind === 'point') tab.guide = action.x == null ? action : null;
     const { width, height } = await view();
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > width || y > height) { if (kind === 'point') throw new Error('that spot is not on screen; scroll to it first'); return; }
+    live();
     const note = kind === 'point' && action.note != null ? text(action.note, 300).trim() : '';
     const verb = kind === 'click' ? action.button === 'right' ? 'Right-clicking' : action.double ? 'Double-clicking' : 'Clicking' : kind === 'scroll' ? (action.dy ?? 500) < 0 ? 'Scrolling up' : 'Scrolling down' : POINTER_WORDS[kind];
     tab.pointerSeq = (tab.pointerSeq || 0) + 1;
