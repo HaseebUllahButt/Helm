@@ -78,6 +78,7 @@ import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { createDesktopRoutes } from './desktop-use.js';
 import { useDesktopScreen } from './browser-window.js';
 import { useOwnerLogins } from './browser.js';
 import { webBuild } from './web-build.js';
@@ -470,6 +471,7 @@ export class Daemon {
     // Helm's service can start before the desktop; its browser windows find the screen later.
     useDesktopScreen(); useOwnerLogins();
     this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id), appProcessRoots: id => this.sessions.appProcessRoots(id) } });
+    this.desktop = createDesktopRoutes({ sessions: { get: id => this.sessions.get(id) } }); this.desktop.start();
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),
       // Only asked on Windows, where a running program can not be replaced.
@@ -616,6 +618,7 @@ export class Daemon {
     this.sessions.on('session', (session) => {
       this.#updates.push({ session: wire(session) });
       this.browsers.sessionChanged(session);
+      this.desktop.sessionChanged(session);
       if (session.deleted) {
         try { for (const name of removeChatShares(session.id)) console.log(`[helm] [${session.id}] stopped its link ${name}`); }
         catch (error) { console.log(`[helm] [${session.id}] could not stop its links: ${error.message}`); }
@@ -804,6 +807,7 @@ export class Daemon {
     this.inputDelivery?.stop();
     await this.executions.stop();
     await this.browsers?.stop();
+    this.desktop?.stop();
     clearInterval(this.#brainTimer);
     clearTimeout(this.#keeperFirst);
     clearInterval(this.#keeperTimer);
@@ -1697,6 +1701,7 @@ export class Daemon {
 
   async dispatch(method, p, caller) {
     if (method.startsWith('browser.')) return this.browsers.dispatch(method, p);
+    if (method.startsWith('desktop.')) return this.desktop.dispatch(method, p);
     switch (method) {
       case M.EXEC_START:
         if (p.sessionId && ['plan', 'readonly', 'read'].includes(this.sessions.get(p.sessionId).mode)) {
