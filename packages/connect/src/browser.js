@@ -80,7 +80,7 @@ const pointerTarget = el => {
 const STEP_MS = 2000, NAV_MS = 10000, CALL_MS = 30000, MAX_MS = 120000;
 const pause = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); });
 /** What a frame inside the page says, or null when it is busy or gone. */
-const frameAnswer = reading => Promise.race([reading.catch(() => null), pause(STEP_MS).then(() => null)]);
+const frameAnswer = (reading, wait = STEP_MS) => Promise.race([reading.catch(() => null), pause(wait).then(() => null)]);
 /** A step's own deadline, never past the deadline of its call. */
 const stepTime = (action, op, base) => { const wanted = action.timeout == null ? base : integer(action.timeout, 1, MAX_MS); return Math.max(1, Math.min(wanted, op ? op.deadline - Date.now() : wanted)); };
 /** A check is page text, or all of: text, url (part of the address), dialog (true or part of its message), target (a control) with its value or checked state. */
@@ -111,14 +111,14 @@ const hasText = value => {
   };
   return visit(document);
 };
-// In a frame: its text and visible controls. Each control keeps the number
-// it first got in this document; new ones count on from `next`.
-const readFrame = ({ limit, room, next, within, inView }) => {
+// In a frame: its text and visible controls. Each control keeps the local
+// number it first got in this document, which `doc` names.
+const readFrame = ({ limit, room, within, inView }) => {
   const visible = el => { const r = el.getBoundingClientRect(), s = el.ownerDocument.defaultView.getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert]'); };
   const selector = 'a[href],button,input:not([type=hidden]),textarea,select,option,summary,label[for],[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menu],[role=menuitem],[role=option],[role=combobox],[role=switch],[role=textbox],[role=searchbox],[contenteditable=true],[onclick]';
   let scopes = [document];
   if (within) { try { scopes = [...document.querySelectorAll(within)]; } catch { return { error: `within: ${JSON.stringify(within)} is not a CSS selector` }; } }
-  const refs = window.__helmRefs ||= { nums: new WeakMap(), els: new Map() };
+  const refs = window.__helmRefs ||= { doc: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, next: 1, nums: new WeakMap(), els: new Map() };
   for (const [ref, held] of refs.els) if (!held.deref()?.isConnected) refs.els.delete(ref);
   const listed = new Set(), roots = [], seen = new Set(); let total = 0;
   const visit = root => {
@@ -133,7 +133,7 @@ const readFrame = ({ limit, room, next, within, inView }) => {
   const prose = []; let left = Math.max(0, limit);
   for (const root of roots) { if (!left) break; const content = (root.body?.innerText || (root.nodeType === 11 ? [...root.childNodes].map(node => node.nodeType === 3 ? node.textContent : node.nodeType === 1 && visible(node) ? node.innerText || '' : '').join('\n') : root.nodeType === 1 ? root.innerText : '') || '').slice(0, left); prose.push(content); left -= content.length; }
   const elements = [...listed].map(el => {
-    let ref = refs.nums.get(el); if (!ref) { ref = next++; refs.nums.set(el, ref); } refs.els.set(ref, new WeakRef(el));
+    let local = refs.nums.get(el); if (!local) { local = refs.next++; refs.nums.set(el, local); } refs.els.set(local, new WeakRef(el));
     const tag = el.tagName.toLowerCase(), type = tag === 'input' ? el.type : 'text', r = el.getBoundingClientRect(), w = el.ownerDocument.defaultView;
     const role = el.getAttribute('role') || (tag === 'input' ? ({ checkbox: 'checkbox', radio: 'radio', button: 'button', submit: 'button', reset: 'button', file: 'file', search: 'searchbox' }[type] || 'textbox') : tag === 'a' ? 'link' : tag === 'select' ? 'combobox' : tag === 'textarea' || el.isContentEditable ? 'textbox' : tag);
     const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => el.getRootNode().getElementById?.(id)?.textContent || '').join(' ').trim();
@@ -145,9 +145,9 @@ const readFrame = ({ limit, room, next, within, inView }) => {
     if (el.hasAttribute('aria-selected')) state.selected = el.getAttribute('aria-selected') === 'true';
     if (el.hasAttribute('aria-current')) state.current = el.getAttribute('aria-current');
     if (['input', 'textarea', 'select'].includes(tag) && type !== 'password' && type !== 'file') state.value = String(el.value ?? '').slice(0, 180);
-    return { ref, role, name, ...state, inViewport: inView && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth };
+    return { local, role, name, ...state, inViewport: inView && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth };
   });
-  return { title: document.title, url: location.href, text: prose.join('\n'), elements, total, next };
+  return { title: document.title, url: location.href, text: prose.join('\n'), elements, total, doc: refs.doc };
 };
 const describe = e => `[${e.ref}] ${e.role} ${JSON.stringify(e.name)}${e.disabled ? ' disabled' : ''}${e.checked != null ? ` checked=${e.checked}` : ''}${e.expanded != null ? ` expanded=${e.expanded}` : ''}${e.selected != null ? ` selected=${e.selected}` : ''}${e.current ? ` current=${e.current}` : ''}${e.value != null ? ` value=${JSON.stringify(e.value)}` : ''}${!e.inViewport ? ' offscreen' : ''}`;
 // Steps that only read the page. Any other step can change it.
@@ -465,7 +465,7 @@ export class BrowserManager {
     page.on('response', response => cap(tab.network, { url: response.url().slice(0, 2000), method: response.request().method(), status: response.status() }));
     page.on('requestfailed', request => cap(tab.network, { url: request.url().slice(0, 2000), method: request.method(), error: request.failure()?.errorText }));
     page.on('domcontentloaded', () => {
-      tab.refs?.clear(); // A new document: no old number can reach it.
+      tab.refs?.clear(); tab.refKeys?.clear(); // A new document: no old number can reach it.
       void page.title().then(title => { tab.title = title; }).catch(() => {});
       // A new page keeps the agent's arrow where it last was, without its label.
       if (tab.window && tab.cursor) void page.evaluate(drawPointer, tab.cursor).catch(() => {});
@@ -569,10 +569,11 @@ export class BrowserManager {
     await this.recover(sessionId);
     const tab = this.get(sessionId, tabId);
     // A modal dialog blocks the browser action that created it, so answering
-    // it skips that queue.
-    if (action?.kind === 'dialog') {
-      if (['read', 'readonly', 'plan'].includes(this.owner(sessionId).mode)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
-      tab.lastUsed = this.now(); return this.perform(tab, action);
+    // it, or checking it, skips that queue.
+    if (action?.kind === 'dialog' || action?.kind === 'check' && tab.dialog) {
+      if (action.kind === 'dialog' && ['read', 'readonly', 'plan'].includes(this.owner(sessionId).mode)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
+      tab.lastUsed = this.now();
+      try { return await this.perform(tab, action); } catch (error) { if (!error.check) throw error; return { error: error.message, check: error.check, tab: this.metadata(tab), ...(await this.look(tab)) }; }
     }
     const previous = this.serial.get(tab.id) || Promise.resolve();
     // What this call is doing now, so a timeout can say if a step reached the page.
@@ -633,36 +634,46 @@ export class BrowserManager {
    * list; `within` (a CSS selector) or `frame` (its number, or part of its
    * address) reads the rest.
    */
-  async look(tab, budget = 6000, { within, frame: only } = {}) {
+  async look(tab, budget = 6000, { within, frame: only, wait = STEP_MS } = {}) {
     integer(budget, 0, 20000);
     if (within != null) text(within, 2000);
-    let frames = (await this.frames(tab)).map((row, number) => ({ ...row, number }));
+    // A modal dialog stops every page read until it is answered.
+    if (tab.dialog) return { text: `${tab.title}\n${tab.page.url()}\nA dialog is open (${tab.dialog.type()}): ${JSON.stringify(tab.dialog.message().slice(0, 2000))}. Answer it with {"dialog":"accept"} or {"dialog":"dismiss"}, then read the page.`, elements: [] };
+    let frames = (await this.frames(tab, wait)).map((row, number) => ({ ...row, number }));
     if (only != null) {
       const chosen = typeof only === 'number' ? frames[only] : frames.find(row => row.number > 0 && row.frame.url().includes(text(only, 2000)));
       if (!chosen) throw new Error(`frame ${JSON.stringify(only)} is not on the page; look at the page again`);
       frames = [chosen];
     }
-    tab.refs ||= new Map(); tab.nextRef ||= 1;
-    for (const [ref, frame] of tab.refs) if (frame.isDetached()) tab.refs.delete(ref);
+    // A tab number stands for one element of one frame document, so a late or
+    // overlapping read can never give two elements the same number.
+    tab.refs ||= new Map(); tab.refKeys ||= new Map(); tab.nextRef ||= 1;
+    for (const [ref, held] of tab.refs) if (held.frame.isDetached()) { tab.refs.delete(ref); tab.refKeys.delete(`${held.doc}:${held.local}`); }
     const prose = [], lines = [], elements = [], quiet = []; let total = 0, page;
     for (const row of frames) {
-      const reading = row.frame.evaluate(readFrame, { limit: budget - prose.join('\n').length, room: 300 - elements.length, next: tab.nextRef, within: within ?? null, inView: row.inView });
+      if (row.unknown) { quiet.push(row.number); continue; }
+      const reading = row.frame.evaluate(readFrame, { limit: budget - prose.join('\n').length, room: 300 - elements.length, within: within ?? null, inView: row.inView });
       // A busy frame inside the page does not hold up the whole read.
-      const read = row.number === 0 ? await reading : await frameAnswer(reading);
+      const read = row.number === 0 ? await reading : await frameAnswer(reading, wait);
       if (!read) { quiet.push(row.number); continue; }
       if (read.error) throw new Error(read.error);
       if (row.number === 0) page = read;
-      tab.nextRef = Math.max(tab.nextRef, read.next || 0); total += read.total ?? read.elements.length;
+      total += read.total ?? read.elements.length;
       if (read.text) prose.push(read.text);
       if (read.elements.length && (row.number > 0 || only != null)) lines.push(`Frame ${row.number} ${row.frame.url()}:`);
-      for (const element of read.elements) { tab.refs.set(element.ref, row.frame); elements.push(element); lines.push(describe(element)); }
+      for (const { local, ...shown } of read.elements) {
+        const key = `${read.doc}:${local}`; let ref = tab.refKeys.get(key);
+        if (!ref) { ref = tab.nextRef++; tab.refKeys.set(key, ref); }
+        tab.refs.set(ref, { frame: row.frame, doc: read.doc, local });
+        const element = { ref, ...shown }; elements.push(element); lines.push(describe(element));
+      }
     }
     page ||= { title: await tab.page.title().catch(() => tab.title), url: tab.page.url() };
     tab.title = page.title;
     if (quiet.length) lines.push(`Frame ${quiet.join(', ')} did not answer and is not listed.`);
     const cut = total > elements.length ? { shown: elements.length, total } : null;
     if (cut) lines.push(`Showing ${cut.shown} of ${cut.total} controls. Read the rest with a look that has "within" (a CSS selector) or "frame" (a frame number).`);
-    return { text: `${page.title}\n${page.url}\n${prose.join('\n').slice(0, budget)}\n\n${lines.join('\n')}`, elements, ...(cut ? { cut } : {}) };
+    return { text: `${page.title}\n${page.url}\n${prose.join('\n').slice(0, budget)}\n\n${lines.join('\n')}`, elements, ...(cut ? { cut } : {}), ...(quiet.length ? { quiet } : {}) };
   }
   /** A control named in plain words. One that is not there yet gets until `ms` to appear; a tie fails at once. */
   async find(tab, target, purpose, ms) {
@@ -673,30 +684,46 @@ export class BrowserManager {
       await pause(Math.min(100, until - Date.now()));
     }
   }
-  /** The tab's frames a person can see, outer first. Cross-origin frames are read through their own targets. */
-  async frames(tab) {
+  /**
+   * The tab's frames a person can see, outer first. Cross-origin frames are
+   * read through their own targets. A frame whose place cannot be read in
+   * `wait` (a busy parent frame) is kept as unknown, without its children.
+   */
+  async frames(tab, wait = STEP_MS) {
     const rows = [{ frame: tab.page.mainFrame(), inView: true }];
     for (let i = 0; i < rows.length; i++) {
+      if (rows[i].unknown) continue;
       const children = rows[i].frame.childFrames();
-      const places = await Promise.all(children.map(child => child.frameElement().then(async handle => { try { return await handle.evaluate(frameBox); } finally { await handle.dispose(); } }).catch(() => null)));
-      children.forEach((child, k) => { if (places[k]?.visible) rows.push({ frame: child, inView: rows[i].inView && places[k].inView }); });
+      const places = await Promise.all(children.map(child => frameAnswer(child.frameElement().then(async handle => { try { return await handle.evaluate(frameBox); } finally { await handle.dispose(); } }).catch(() => ({ visible: false })), wait)));
+      children.forEach((child, k) => { if (!places[k]) rows.push({ frame: child, unknown: true }); else if (places[k].visible) rows.push({ frame: child, inView: rows[i].inView && places[k].inView }); });
     }
     return rows;
   }
-  /** Does the check hold now? */
-  async holds(tab, want) {
+  /** Does the check hold now? True, false, or null when a frame that could hold the answer did not answer by `until`. */
+  async holds(tab, want, until = Date.now() + STEP_MS) {
     if (want.url != null && !tab.page.url().includes(want.url)) return false;
     if (want.dialog != null && !(tab.dialog && (want.dialog === true || tab.dialog.message().includes(want.dialog)))) return false;
     if (want.text == null && want.target == null) return true;
     if (tab.dialog) throw new Error('a dialog is open; answer it first, or check {"dialog": true}');
-    let elements; const controls = async () => elements ||= (await this.look(tab, 0)).elements;
+    const wait = () => Math.max(1, until - Date.now());
+    let view; const controls = async () => view ||= await this.look(tab, 0, { wait: wait() });
     if (want.text != null) {
-      let seen = false; for (const { frame } of await this.frames(tab)) if (seen = !!(await frameAnswer(frame.evaluate(hasText, want.text)))) break;
-      if (!seen && !(scoreTargets(want.text, await controls())[0]?.score >= 800)) return false;
+      let seen = false, unsure = false;
+      for (const row of await this.frames(tab, wait())) {
+        const has = row.unknown ? null : await frameAnswer(row.frame.evaluate(hasText, want.text), wait());
+        if (has) { seen = true; break; } if (has == null) unsure = true;
+      }
+      if (!seen) { const { elements, quiet } = await controls(); if (!(scoreTargets(want.text, elements)[0]?.score >= 800)) return unsure || quiet ? null : false; }
     }
     if (want.target != null) {
-      let control; try { control = resolveTarget(want.target, await controls()); } catch (error) { if (error.candidates?.[0]?.score) throw error; return false; }
-      if (want.value != null && control.value !== want.value.slice(0, 180)) return false;
+      const { elements, quiet } = await controls();
+      let control; try { control = resolveTarget(want.target, elements); } catch (error) { if (error.candidates?.[0]?.score) throw error; return quiet ? null : false; }
+      if (want.value != null) {
+        // The list shows the first 180 characters; the check reads the whole value.
+        if (control.value === undefined) throw new Error(`check cannot read the value of ${JSON.stringify(want.target)}`);
+        const field = await this.target(tab, { ref: control.ref });
+        try { if (await field.evaluate(el => String(el.value ?? '')) !== want.value) return false; } finally { await field.dispose(); }
+      }
       if (want.checked != null && control.checked !== want.checked) return false;
     }
     return true;
@@ -705,8 +732,8 @@ export class BrowserManager {
     if (action.ref != null) {
       integer(action.ref, 1, Number.MAX_SAFE_INTEGER);
       const gone = () => new Error(`element ${action.ref} is not on the page now; look at the page again`);
-      const frame = tab.refs?.get(action.ref); if (!frame || frame.isDetached()) throw gone();
-      const handle = await frame.evaluateHandle(ref => { const el = window.__helmRefs?.els.get(ref)?.deref(); return el?.isConnected ? el : null; }, action.ref), element = handle.asElement();
+      const held = tab.refs?.get(action.ref); if (!held || held.frame.isDetached()) throw gone();
+      const handle = await held.frame.evaluateHandle(({ doc, local }) => { const refs = window.__helmRefs, el = refs?.doc === doc ? refs.els.get(local)?.deref() : null; return el?.isConnected ? el : null; }, { doc: held.doc, local: held.local }), element = handle.asElement();
       if (!element) { await handle.dispose(); throw gone(); }
       return element;
     }
@@ -767,43 +794,54 @@ export class BrowserManager {
     if (kind === 'check') {
       if (action.expect != null && typeof action.expect !== 'boolean') throw new Error('check expect must be true or false');
       // The page can still be changing: the check reads again until it holds or its time ends.
+      // A condition seen only after the deadline does not count; null means part of the page could not be read.
       const want = checkSpec(action.check), expect = action.expect ?? true, ms = stepTime(action, op, STEP_MS), until = Date.now() + ms;
-      await this.settle(tab);
-      let found = await this.holds(tab, want);
-      while (found !== expect && Date.now() < until && !op?.expired) { await pause(Math.min(100, until - Date.now())); found = await this.holds(tab, want); }
+      let found = null;
+      for (;;) {
+        const seen = await this.holds(tab, want, until);
+        if (Date.now() > until || op?.expired) break;
+        found = seen; if (found === expect || Date.now() >= until) break;
+        await pause(Math.min(100, until - Date.now()));
+      }
       const check = { check: action.check, found, expect, pass: found === expect };
-      if (!check.pass) { const error = new Error(`check failed: ${JSON.stringify(action.check)} ${expect ? 'did not come' : 'did not go away'} in ${ms} ms`); error.check = check; throw error; }
-      return { ...check, ...(!inBatch ? await this.look(tab, 20000) : {}) };
+      if (!check.pass) { const error = new Error(`check failed: ${JSON.stringify(action.check)} ${found === null ? 'could not be checked: part of the page did not answer' : expect ? 'did not come' : 'did not go away'} in ${ms} ms`); error.check = check; throw error; }
+      // While a dialog is open the page cannot be read: the tab says what the dialog shows.
+      return { ...check, ...(!inBatch ? { tab: this.metadata(tab), ...(await this.look(tab, 20000)) } : {}) };
     }
     const page = tab.page;
     // Resolve a plain target once. Both the pointer and the action use the
     // same element, without reading the whole page a second time.
     // An upload may name its field by CSS, like input[type=file]: such fields are often hidden.
     if (kind === 'upload' && typeof action.target === 'string' && /[[\]#=>]/.test(action.target) && !action.selector) action = { ...action, selector: action.target, target: undefined };
+    // One deadline for the whole step: finding the control, the pointer and the input share it.
+    const budget = stepTime(action, op, ['navigate', 'back', 'forward', 'reload', 'wait'].includes(kind) ? NAV_MS : STEP_MS), stepEnd = Date.now() + budget;
+    const left = () => Math.max(1, stepEnd - Date.now());
+    // A call that timed out while this step got ready sends no input.
+    const live = () => { if (op?.expired) throw new Error('The call timed out, so this step sent no input.'); };
     if (typeof action.target === 'string' && !/^\d+$/.test(action.target.trim())
       && action.ref == null && !action.selector && !action.role && !action.name && action.x == null) {
-      action = { ...action, ref: (await this.find(tab, text(action.target, 500), kind, stepTime(action, op, STEP_MS))).ref };
+      action = { ...action, ref: (await this.find(tab, text(action.target, 500), kind, left())).ref };
     }
-    await this.aim(tab, action);
+    await this.aim(tab, action, left);
     if (kind === 'point') return { tab: this.metadata(tab) };
-    const timeout = stepTime(action, op, ['navigate', 'back', 'forward', 'reload', 'wait'].includes(kind) ? NAV_MS : STEP_MS);
     try {
-      if (['navigate', 'back', 'forward', 'reload'].includes(kind)) await this.go(tab, kind, action, timeout);
+      live();
+      if (['navigate', 'back', 'forward', 'reload'].includes(kind)) await this.go(tab, kind, action, left());
       else if (kind === 'stop') { const cdp = await page.context().newCDPSession(page); try { await cdp.send('Page.stopLoading'); } finally { await cdp.detach().catch(() => {}); } }
       else if (kind === 'click' || kind === 'hover') {
-        if (action.x != null) { const { width, height } = await this.viewSize(tab); integer(action.x, 0, width); integer(action.y, 0, height); kind === 'click' ? await page.mouse.click(action.x, action.y, { button: ['left', 'right', 'middle'].includes(action.button) ? action.button : 'left', clickCount: action.double ? 2 : 1 }) : await page.mouse.move(action.x, action.y); }
-        else { const target = await this.target(tab, action); try { kind === 'click' ? await target.click({ button: action.button || 'left', clickCount: action.double ? 2 : 1, timeout }) : await target.hover({ timeout }); } finally { if (target.dispose) await target.dispose(); } }
-      } else if (kind === 'drag') { const { width, height } = await this.viewSize(tab); for (const field of ['fromX', 'toX']) integer(action[field], 0, width); for (const field of ['fromY', 'toY']) integer(action[field], 0, height); await page.mouse.move(action.fromX, action.fromY); await page.mouse.down(); try { await page.mouse.move(action.toX, action.toY, { steps: 6 }); } finally { await page.mouse.up(); } }
-      else if (kind === 'type') { const value = text(action.text); if (action.ref || action.selector || action.name || action.role || action.target != null) { const target = await this.target(tab, action); try { if (action.append) { await target.focus({ timeout }); await page.keyboard.insertText(value); } else await target.fill(value, { timeout }); if (action.enter) await target.press('Enter', { timeout }); } finally { if (target.dispose) await target.dispose(); } } else { if (action.clear) { await page.keyboard.press('ControlOrMeta+a'); await page.keyboard.press('Backspace'); } await page.keyboard.insertText(value); if (action.enter) await page.keyboard.press('Enter'); } }
-      else if (kind === 'key') await page.keyboard.press(text(action.key, 100));
+        if (action.x != null) { const { width, height } = await this.viewSize(tab); integer(action.x, 0, width); integer(action.y, 0, height); live(); kind === 'click' ? await page.mouse.click(action.x, action.y, { button: ['left', 'right', 'middle'].includes(action.button) ? action.button : 'left', clickCount: action.double ? 2 : 1 }) : await page.mouse.move(action.x, action.y); }
+        else { const target = await this.target(tab, action); try { live(); kind === 'click' ? await target.click({ button: action.button || 'left', clickCount: action.double ? 2 : 1, timeout: left() }) : await target.hover({ timeout: left() }); } finally { if (target.dispose) await target.dispose(); } }
+      } else if (kind === 'drag') { const { width, height } = await this.viewSize(tab); for (const field of ['fromX', 'toX']) integer(action[field], 0, width); for (const field of ['fromY', 'toY']) integer(action[field], 0, height); live(); await page.mouse.move(action.fromX, action.fromY); live(); await page.mouse.down(); try { live(); await page.mouse.move(action.toX, action.toY, { steps: 6 }); } finally { await page.mouse.up(); } }
+      else if (kind === 'type') { const value = text(action.text); if (action.ref || action.selector || action.name || action.role || action.target != null) { const target = await this.target(tab, action); try { live(); if (action.append) { await target.focus({ timeout: left() }); live(); await page.keyboard.insertText(value); } else await target.fill(value, { timeout: left() }); if (action.enter) { live(); await target.press('Enter', { timeout: left() }); } } finally { if (target.dispose) await target.dispose(); } } else { live(); if (action.clear) { await page.keyboard.press('ControlOrMeta+a'); live(); await page.keyboard.press('Backspace'); live(); } await page.keyboard.insertText(value); if (action.enter) { live(); await page.keyboard.press('Enter'); } } }
+      else if (kind === 'key') { live(); await page.keyboard.press(text(action.key, 100)); }
       else if (kind === 'clipboard') {
         const origin = new URL(page.url()).origin;
         await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
         try { return { text: await page.evaluate(() => navigator.clipboard.readText()) }; }
         finally { await page.context().clearPermissions(); }
       }
-      else if (kind === 'scroll') await page.mouse.wheel(integer(action.dx ?? 0, -20000, 20000), integer(action.direction ? Math.round((await this.viewSize(tab)).height * (action.pages ?? 1) * (action.direction === 'up' ? -1 : 1)) : action.dy ?? 500, -20000, 20000));
-      else if (kind === 'select') { const target = await this.target(tab, action); try { await target.selectOption(action.option != null ? { label: text(action.option, 1000) } : action.values || text(action.value, 1000), { timeout }); } finally { if (target.dispose) await target.dispose(); } }
+      else if (kind === 'scroll') { const dy = integer(action.direction ? Math.round((await this.viewSize(tab)).height * (action.pages ?? 1) * (action.direction === 'up' ? -1 : 1)) : action.dy ?? 500, -20000, 20000); live(); await page.mouse.wheel(integer(action.dx ?? 0, -20000, 20000), dy); }
+      else if (kind === 'select') { const target = await this.target(tab, action); try { live(); await target.selectOption(action.option != null ? { label: text(action.option, 1000) } : action.values || text(action.value, 1000), { timeout: left() }); } finally { if (target.dispose) await target.dispose(); } }
       else if (kind === 'upload') {
         const files = await this.uploads(tab, action);
         let target;
@@ -811,28 +849,31 @@ export class BrowserManager {
           target = await this.target(tab, action);
           // A file field takes the files. A button that opens the file picker
           // gets them through the picker, so no system dialog opens.
-          if (await target.evaluate(el => el instanceof HTMLInputElement && el.type === 'file').catch(() => false)) await target.setInputFiles(files.paths, { timeout });
-          else { const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout }), target.click({ timeout })]); await chooser.setFiles(files.paths); }
+          const field = await target.evaluate(el => el instanceof HTMLInputElement && el.type === 'file').catch(() => false); live();
+          if (field) await target.setInputFiles(files.paths, { timeout: left() });
+          else { const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: left() }), target.click({ timeout: left() })]); await chooser.setFiles(files.paths); }
         } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
-      } else if (kind === 'evaluate') { const script = text(action.script, 20000), value = await (tab.patched ? page.evaluate(script, undefined, undefined, false) : page.evaluate(script)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
-      else if (kind === 'wait') { if (action.selector) await page.locator(text(action.selector, 2000)).first().waitFor({ state: action.state || 'visible', timeout }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout }); }
-      else if (kind === 'resize') await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) });
+      } else if (kind === 'evaluate') { live(); const script = text(action.script, 20000), value = await (tab.patched ? page.evaluate(script, undefined, undefined, false) : page.evaluate(script)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
+      else if (kind === 'wait') { if (action.selector) await page.locator(text(action.selector, 2000)).first().waitFor({ state: action.state || 'visible', timeout: left() }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: left() }); }
+      else if (kind === 'resize') { live(); await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) }); }
       else if (kind === 'dialog') { if (!tab.dialog) throw new Error('no dialog is open'); const dialog = tab.dialog; tab.dialog = null; action.accept ? await dialog.accept(action.text ?? '') : await dialog.dismiss(); }
       else throw new Error(kind ? `unknown browser action: ${kind}` : `unknown browser action ${JSON.stringify(Object.keys(action))}; use a kind such as goto, click, type, evaluate or wait`);
     } catch (error) {
       // Playwright's own words and call log, in place of what the agent needs to know.
       if (!/Timeout \d+ms exceeded/.test(error.message) || ['navigate', 'back', 'forward', 'reload'].includes(kind)) throw error;
-      throw new Error(kind === 'wait' ? `wait: nothing matched in ${timeout} ms` : `${kind}: the control was not found or not ready in ${timeout} ms. Read the page, or give the step a longer "timeout".`);
+      // The input landed and opened a dialog, which holds the step until it is answered.
+      if (tab.dialog) throw new Error(`${kind}: the page opened a dialog (${tab.dialog.type()}): ${JSON.stringify(tab.dialog.message().slice(0, 2000))}. Answer it with {"dialog":"accept"} or {"dialog":"dismiss"}.`);
+      throw new Error(kind === 'wait' ? `wait: nothing matched in ${budget} ms` : `${kind}: the control was not found or not ready in ${budget} ms. Read the page, or give the step a longer "timeout".`);
     }
     // Pointer moves and scrolling do not need to wait for unrelated adverts
     // or analytics. A read still measures the current DOM and layout.
     if (['navigate', 'back', 'forward', 'reload', 'click', 'type', 'key', 'select', 'drag', 'resize', 'upload', 'dialog', 'wait'].includes(kind)) await this.settle(tab, { navigation: ['navigate', 'back', 'forward', 'reload'].includes(kind) });
     // Only actions that can change the title ask for it; page loads update it as they finish.
-    if (!['hover', 'scroll', 'type', 'resize'].includes(kind)) tab.title = await page.title().catch(() => tab.title);
+    if (!tab.dialog && !['hover', 'scroll', 'type', 'resize'].includes(kind)) tab.title = await page.title().catch(() => tab.title);
     return { tab: this.metadata(tab), ...(!inBatch ? await this.look(tab) : {}) };
   }
   /** Where the agent is about to act, drawn on the page in a window. Free in a hidden browser; point always draws. */
-  async aim(tab, action) {
+  async aim(tab, action, left = () => STEP_MS) {
     const kind = action.kind;
     if (POINTER_CLEARS.includes(kind)) { if (tab.pointer) { tab.pointer = null; void tab.page.evaluate(clearPointer).catch(() => {}); } return; }
     if (!Object.hasOwn(POINTER_WORDS, kind) || kind !== 'point' && !tab.window) return;
@@ -843,7 +884,7 @@ export class BrowserManager {
     else if (x == null && !(kind === 'type' && !(action.ref || action.selector || action.name || action.role || action.target != null))) {
       let target; try {
         target = await this.target(tab, action);
-        const timeout = kind === 'point' ? 5000 : 500;
+        const timeout = Math.min(kind === 'point' ? 5000 : 500, left());
         let info = await target.evaluate(pointerTarget, undefined, { timeout });
         if (info.main) size = info.viewport;
         let found = info.main ? info.box : await target.boundingBox({ timeout });
@@ -852,7 +893,7 @@ export class BrowserManager {
         // Chromium's action still checks that it can click or type there.
         if (!['point', 'upload'].includes(kind) && (!info.main || info.clipped || !found
           || found.x < 0 || found.y < 0 || found.x + found.width > width || found.y + found.height > height)) {
-          await target.scrollIntoViewIfNeeded({ timeout: 500 });
+          await target.scrollIntoViewIfNeeded({ timeout: Math.min(500, left()) });
           info = await target.evaluate(pointerTarget, undefined, { timeout });
           if (info.main) size = info.viewport;
           found = info.main ? info.box : await target.boundingBox({ timeout });

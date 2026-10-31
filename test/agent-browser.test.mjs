@@ -405,7 +405,7 @@ test('a check waits for a late change, ignored input fails once, and a missing c
       + '<button onclick="window.presses = (window.presses || 0) + 1">Ignore</button>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const manager = new BrowserManager({ directory: mkdtempSync(join(tmpdir(), 'helm-checks-')), session: sid => ({ id: sid }), canWindow: false });
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'checks-')), session: sid => ({ id: sid }), canWindow: false });
   t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
   const { tab } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}/` });
@@ -437,7 +437,7 @@ test('a read covers cross-origin frames, says when it cut the list, and an old n
     res.end(`<title>Frames</title><output></output><ul id=list><li><button onclick="document.querySelector('output').textContent='Alpha'">Alpha</button></li><li><button onclick="document.querySelector('output').textContent='Beta'">Beta</button></li></ul><iframe src="${frameUrl}"></iframe>`);
   });
   await new Promise(resolve => outer.listen(0, '127.0.0.1', resolve));
-  const manager = new BrowserManager({ directory: mkdtempSync(join(tmpdir(), 'helm-reads-')), session: sid => ({ id: sid }), canWindow: false });
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'reads-')), session: sid => ({ id: sid }), canWindow: false });
   t.after(async () => { await manager.stop(); for (const server of [inner, outer]) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
   try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
   const base = `http://127.0.0.1:${outer.address().port}`;
@@ -473,4 +473,78 @@ test('a read covers cross-origin frames, says when it cut the list, and an old n
   await manager.run('one', tab.id, { click: rest.elements[19].ref });
   assert.equal(await page.title(), 'Rest 19');
   await assert.rejects(manager.run('one', tab.id, { kind: 'look', within: '[' }), /within: "\[" is not a CSS selector/);
+});
+
+test('a check sees an open dialog without reading the page, and checks the whole value of a field', { timeout: 60000 }, async t => {
+  const long = 'a'.repeat(190);
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(`<title>Dialog</title><label>Note<input id=note value="${long}X"></label><button onclick="alert('Need input')">Alert</button>`); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'dialog-check-')), session: sid => ({ id: sid }), canWindow: false, actionTimeoutMs: 5000 });
+  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
+  const { tab } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}/` });
+  assert.equal((await manager.run('one', tab.id, { check: { target: 'Note', value: `${long}Y` }, timeout: 300 })).check.pass, false, 'the end of the value counts');
+  assert.equal((await manager.run('one', tab.id, { check: { target: 'Note', value: `${long}X` } })).pass, true);
+  const page = manager.tabs.get(tab.id).page, opened = page.waitForEvent('dialog');
+  const blocked = manager.run('one', tab.id, { evaluate: 'alert("Need input"); "answered"' });
+  await opened;
+  const checked = await manager.run('one', tab.id, { check: { dialog: 'Need input' } });
+  assert.equal(checked.pass, true); assert.equal(checked.tab.dialog.message, 'Need input');
+  assert.match(checked.text, /A dialog is open \(alert\): "Need input"/);
+  await manager.run('one', tab.id, { dialog: 'dismiss' }); assert.equal((await blocked).value, 'answered');
+  // A click that opens a dialog is held until it is answered; the batch says so without reading the page.
+  const batch = await manager.run('one', tab.id, { actions: [{ click: 'the Alert button' }, { check: 'Never' }] });
+  assert.equal(batch.failedAt, 0); assert.match(batch.error, /click: the page opened a dialog \(alert\): "Need input"/); assert.match(batch.text, /dialog is open/);
+  await manager.run('one', tab.id, { dialog: 'accept' });
+});
+
+async function busyFrames(t, { nested = true } = {}) {
+  const inner = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(req.url === '/c' ? '<button>C button</button>' : `<p>Inside A</p><button>A button</button>${nested ? '<iframe src="/c"></iframe>' : ''}`); });
+  await new Promise(resolve => inner.listen(0, '127.0.0.1', resolve));
+  const outer = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(req.url === '/b' ? '<button>B button</button>' : `<title>Busy</title><button>Main button</button><iframe id=a src="http://localhost:${inner.address().port}/a"></iframe><iframe id=b src="/b"></iframe>`); });
+  await new Promise(resolve => outer.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'busy-')), session: sid => ({ id: sid }), canWindow: false });
+  t.after(async () => { await manager.stop(); for (const server of [inner, outer]) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+  try { await manager.start(); } catch { t.skip('no Chromium here'); return null; }
+  const { tab } = await manager.open('one', { url: `http://127.0.0.1:${outer.address().port}/` });
+  const page = manager.tabs.get(tab.id).page;
+  await (nested ? page.frameLocator('#a').frameLocator('iframe') : page.frameLocator('#a')).locator('button').waitFor(); await page.frameLocator('#b').locator('button').waitFor();
+  const frameA = page.frames().find(frame => frame.url().endsWith('/a'));
+  // Frame A runs a long script: nothing in it, or under it, can answer.
+  const busy = ms => { const done = frameA.evaluate(ms => { const end = Date.now() + ms; while (Date.now() < end); }, ms).catch(() => {}); return () => done; };
+  const frameB = page.frames().find(frame => frame.url().endsWith('/b'));
+  return { manager, id: tab.id, busy, frameA, frameB };
+}
+
+test('a busy frame does not hold up a read: the main page and other frames still appear', { timeout: 60000 }, async t => {
+  const fixture = await busyFrames(t); if (!fixture) return;
+  const { manager, id, busy } = fixture, ended = busy(8000), started = Date.now();
+  const view = await manager.run('one', id, { kind: 'look' });
+  assert.ok(Date.now() - started < 6000, `the read took ${Date.now() - started} ms`);
+  assert.deepEqual(view.elements.map(e => e.name).sort(), ['B button', 'Main button']);
+  assert.equal(view.quiet.length, 2, 'frame A and the frame inside it are named'); assert.match(view.text, /did not answer and is not listed/);
+  await ended();
+});
+
+test('a frame that answers late never gives its controls the numbers of another frame', { timeout: 60000 }, async t => {
+  const fixture = await busyFrames(t, { nested: false }); if (!fixture) return;
+  const { manager, id, busy, frameA, frameB } = fixture;
+  // New controls in both frames: frame A numbers its own while the read has stopped waiting for it.
+  for (const frame of [frameA, frameB]) await frame.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<button>New button</button>'));
+  const ended = busy(3000);
+  const first = await manager.run('one', id, { kind: 'look' }), b = first.elements.find(e => e.name === 'B button').ref;
+  await ended();
+  const second = await manager.run('one', id, { kind: 'look' }), refs = second.elements.map(e => e.ref);
+  assert.deepEqual(second.elements.map(e => e.name).sort(), ['A button', 'B button', 'Main button', 'New button', 'New button']);
+  assert.equal(new Set(refs).size, refs.length, `numbers repeat: ${second.text}`);
+  assert.equal(second.elements.find(e => e.name === 'B button').ref, b);
+});
+
+test('text in a frame that did not answer is not taken as gone', { timeout: 60000 }, async t => {
+  const fixture = await busyFrames(t); if (!fixture) return;
+  const { manager, id, busy } = fixture, ended = busy(5000);
+  const result = await manager.run('one', id, { check: 'Inside A', expect: false });
+  assert.equal(result.check.pass, false); assert.equal(result.check.found, null);
+  assert.match(result.error, /could not be checked: part of the page did not answer/);
+  await ended();
 });

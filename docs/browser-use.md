@@ -66,18 +66,25 @@ The owner uses the same browser window. Helm has no browser panel.
   scroll clipped controls and frame targets into view.
 - **A read covers every frame, and a number keeps its element.** Frames are
   read through Playwright's own frame targets, so cross-origin frames are
-  there too; a frame that does not answer in 2 s is named, not waited for.
-  An element keeps the number it first got in its document. A later read
-  never gives that number to another element, so an old number either
+  there too. A frame whose place or content does not answer in 2 s (a busy
+  frame) is named, not waited for. Each frame document numbers its own
+  elements; Helm maps each one to a tab number once, so a late or
+  overlapping read never gives one number to two elements. An old number
   reaches the same control or is refused. A read lists up to 300 controls
   and says when it cut the list; `within` or `frame` reads the rest.
 - **Fail fast, and never deliver twice.** A step waits up to 2 s for its
-  control, a page load 10 s, a call 30 s; `timeout` raises one. A step's
-  time never runs past its call's. A check reads again until it holds or
-  its time ends; Helm never adds a check or a retry of input on its own.
+  control, a page load 10 s, a call 30 s; `timeout` raises one. One step
+  deadline covers finding the control, the pointer and the input, and never
+  runs past its call's. No input goes out after its call timed out. A check
+  reads again until it holds; a result seen after its deadline does not
+  count, and a frame that did not answer makes it "could not be checked",
+  never a pass. Helm never adds a check or a retry of input on its own.
   A call that times out delivers no later batch step, and its reply says
   if the step in flight may have landed. Until that step ends, only reads
   run on the tab (an `evaluate` that never returns: close the tab).
+- **A modal dialog stops page reads.** The input that opened it is held
+  until it is answered. Reads and checks then report the dialog without
+  reading the page, and a check of the dialog skips the tab's queue.
 - **Show me** (`helm browser point`) highlights an element and changes
   nothing, so it works in read-only chats. Read-only agents can read,
   navigate, wait and check; a batch holding any change is refused before

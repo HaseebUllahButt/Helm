@@ -109,3 +109,32 @@ test('a timeout says whether the step only read the page or never reached it', a
   const rejected = assert.rejects(reading, { message: 'The browser action timed out during the look step. That step only reads the page. Read the page before you try again.' });
   await started.promise; t.mock.timers.tick(100); await rejected;
 });
+
+function stepFixture(t) {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { manager, tab } = fixture();
+  tab.page = { title: async () => 'Page', url: () => 'http://x/' };
+  manager.look = async () => ({}); manager.metadata = () => ({}); manager.aim = async () => {}; manager.persistSoon = () => {};
+  return { manager, tab };
+}
+
+test('a click whose control was still being found when the call timed out is never sent', async t => {
+  const { manager } = stepFixture(t), finding = deferred(), found = deferred(); let clicks = 0;
+  manager.find = async () => { finding.resolve(); await found.promise; return { ref: 1 }; };
+  manager.target = async () => ({ click: async () => { clicks++; } });
+  const rejected = assert.rejects(manager.run('chat', 'tab', { click: 'the Save button' }), /timed out during the click step/);
+  await finding.promise; t.mock.timers.tick(100); await rejected;
+  found.resolve(); await manager.serial.get('tab')?.catch(() => {});
+  assert.equal(clicks, 0);
+});
+
+test('a step keeps one deadline from finding its control to its input, and a check seen late does not pass', async t => {
+  const { manager } = stepFixture(t), timeouts = []; manager.actionTimeoutMs = 30000;
+  manager.find = async () => { t.mock.timers.tick(1900); return { ref: 1 }; };
+  manager.target = async () => ({ click: async ({ timeout }) => { timeouts.push(timeout); } });
+  await manager.run('chat', 'tab', { click: 'the Save button' });
+  assert.ok(timeouts[0] <= 100, `the click got ${timeouts[0]} ms after 1900 ms of finding`);
+  manager.holds = async () => { t.mock.timers.tick(3000); return true; };
+  const late = await manager.run('chat', 'tab', { check: 'Saved', timeout: 100 });
+  assert.equal(late.check.pass, false); assert.equal(late.check.found, null);
+});
