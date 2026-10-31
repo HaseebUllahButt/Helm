@@ -33,5 +33,7 @@ Design: [`docs/browser-use.md`](../browser-use.md).
 - **Not driven:** Copying real browser logins needs the owner's profiles.
 - **Found by evidence:** profiles are every "Local State" folder under the
   config roots (Linux ~/.config, ~/.var/app, ~/snap; macOS Application Support;
-  Windows %LOCALAPPDATA%), named by their folder. No brand-name lists.
+  Windows %LOCALAPPDATA%), named by their folder. No brand-name lists. Each
+  profile's key comes from its own data-folder path, so a saved default or
+  cached cookies never move to another account when a browser is installed.
 - **Tests:** `test/browser-logins`, `test/chromium-find`, `test/agent-browser`, and `test/browser-smarts`.

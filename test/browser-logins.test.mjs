@@ -94,11 +94,55 @@ test('finds any Chromium browser by its "Local State", in native, Flatpak and Sn
   // A Snap browser, kept below a hidden ".config" folder.
   (await fixture(join(home, 'snap/chromium/common/.config'), { browserPath: 'chromium', name: 'Snap' })).db.close();
   const found = (await linux(home).listProfiles());
-  const byBrowser = Object.fromEntries(found.map(p => [p.browser, p.browserName]));
-  assert.equal(byBrowser.wavebrowser, 'Wavebrowser');
-  assert.equal(byBrowser.helium, 'Helium', 'the app id names the Flatpak browser, not its chromium folder');
-  assert.ok(found.some(p => p.browser === 'chromium'), 'the Snap browser below .config is found');
+  const byName = Object.fromEntries(found.map(p => [p.browserName, p.browser]));
   assert.equal(found.length, 3);
+  assert.equal(byName.Wavebrowser, 'wavebrowser');
+  // The Flatpak app id names the browser ("Helium"), and its key carries the
+  // full path so it never clashes with a plain "chromium" install.
+  assert.equal(byName.Helium, 'helium-chromium', 'the app id names the Flatpak browser, not its chromium folder');
+  assert.equal(byName.Chromium, 'chromium-chromium', 'the Snap browser below .config is found, keyed by its path');
+});
+
+test('a profile key stays the same when another install appears (no account swap)', async t => {
+  const home = await config(t), root = join(home, '.config');
+  // The Snap Chromium exists first; the owner saves it as their default.
+  (await fixture(join(home, 'snap/chromium/common/.config'), { browserPath: 'chromium' })).db.close();
+  const before = await linux(home).listProfiles();
+  assert.equal(before.length, 1);
+  const snapKey = before[0].key;
+  // Later a plain Chromium is installed under ~/.config.
+  (await fixture(root, { browserPath: 'chromium' })).db.close();
+  const after = await linux(home).listProfiles();
+  assert.equal(after.length, 2);
+  assert.ok(after.some(p => p.key === snapKey), 'the Snap profile keeps its key');
+  assert.equal(after.filter(p => p.key === snapKey).length, 1, 'keys stay unique');
+  assert.equal(new Set(after.map(p => p.key)).size, 2);
+});
+
+test('a key tried against a cookie is used even when a fork stores it under a shared name', async t => {
+  const home = await config(t), root = join(home, '.config');
+  // Helium's keyring key lives under "chromium"; Chrome Beta's under "chrome".
+  const helium = await fixture(root, { browserPath: 'net.imput.helium', name: 'Imput' }); t.after(() => helium.db.close());
+  helium.insert({ name: 'h', bytes: encrypted('helium-cookie', { prefix: 'v11', password: 'chromium-key' }) });
+  const beta = await fixture(root, { browserPath: 'google-chrome-beta', name: 'Beta' }); t.after(() => beta.db.close());
+  beta.insert({ name: 'b', bytes: encrypted('beta-cookie', { prefix: 'v11', password: 'chrome-key' }) });
+  await writeFile(join(root, 'chromium-flags.conf'), '--password-store=gnome-libsecret');
+  // The keyring answers only for the shared application names.
+  const keys = { chromium: 'chromium-key', chrome: 'chrome-key' };
+  const reader = linux(home, { run: async (bin, args) => { if (bin !== 'secret-tool') throw new Error('no'); const app = args[2]; return keys[app] ? { stdout: keys[app] + '\n' } : (() => { throw new Error('absent'); })(); } });
+  assert.equal((await reader.readLogins('Helium')).cookies[0].value, 'helium-cookie', 'Helium falls back to the chromium key');
+  assert.equal((await reader.readLogins('Beta')).cookies[0].value, 'beta-cookie', 'Chrome Beta tries the chrome key');
+});
+
+test('one browser’s flags do not change another browser’s store', async t => {
+  const home = await config(t), root = join(home, '.config');
+  (await fixture(root, { browserPath: 'chromium' })).db.close();
+  (await fixture(root, { browserPath: 'google-chrome' })).db.close();
+  // Only Chromium's own launcher sets a basic store.
+  await writeFile(join(root, 'chromium-flags.conf'), '--password-store=basic');
+  const found = await linux(home).listProfiles();
+  assert.equal(found.find(p => p.browser === 'chromium').passwordStore, 'basic');
+  assert.equal(found.find(p => p.browser === 'google-chrome').passwordStore, 'auto', 'Chrome keeps its keyring store');
 });
 
 test('Linux decrypts v10 and v11 with host hashes, live WAL, expiry, sessions and SameSite', async t => {

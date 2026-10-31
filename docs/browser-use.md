@@ -12,7 +12,9 @@ The owner uses the same browser window. Helm has no browser panel.
   (`resources.pak` or `chrome_100_percent.pak`) beside them and rejects
   Electron apps (which carry `resources/app.asar`), from menu entries on
   Linux, app bundles on macOS and the registry on Windows (`chromium-find.js`).
-  The system default browser is preferred, then the rest by name. They all
+  A packaged browser keeps its launcher: a Snap starts through its
+  `/snap/bin` wrapper, a Flatpak through `flatpak run <id>`, so it runs inside
+  its own runtime. The system default browser is preferred, then the rest by name. They all
   speak Chromium's own channel, so the same code drives each one. Helm reads
   pages as text and numbered controls first; screenshots are the last resort. The goal is
   computer use, not one browser: Bowser was removed so the browser path has

@@ -29,14 +29,33 @@ function describeDir(dir, root) {
   const meaningful = rel.filter(seg => !GENERIC.has(seg.toLowerCase()));
   return cleanLabel(meaningful.pop() || rel.pop() || basename(dir));
 }
-// The keyring and flags names to try for a browser, from its own name: the
-// full name and its last word ("Microsoft Edge" -> "Edge"), so an unknown
-// browser is still tried without a built-in brand list.
+// The keyring names to try for a browser, from its own name: the full name,
+// each leading and trailing run of words, each single word, and "Chromium" as
+// a shared fallback (many forks store their key under the base name, e.g.
+// Helium under "chromium", Chrome Beta under "chrome"). So an unknown browser
+// is still tried without a built-in brand list.
 function identityNames(name, slug) {
   const words = name.split(' ').filter(Boolean);
-  const names = [...new Set([name, words.at(-1), words.slice(1).join(' ')].filter(Boolean))];
+  const set = new Set([name]);
+  for (let i = 0; i < words.length; i++) { set.add(words.slice(i).join(' ')); set.add(words.slice(0, i + 1).join(' ')); set.add(words[i]); }
+  set.add('Chromium');
+  const names = [...set].filter(Boolean);
   const slugs = [...new Set([slug, ...names.map(n => plain(n).replace(/\s+/g, '-'))])];
   return { names, slugs };
+}
+// Folder parts that only say where a browser is packaged, not which it is;
+// dropped so a key is derived from the browser-naming parts of its full path.
+const SLUG_SKIP = new Set(['.config', '.var', '.local', 'share', 'app', 'snap', 'common', 'config', 'user data', 'library', 'application support', 'appdata', 'local', 'roaming', 'default']);
+// A key that stays the same for a data folder however many other browsers
+// appear: derived from the folder's own path, not from scan order. So a saved
+// default or cookie cache never moves to another account when an install is
+// added. A reverse-DNS app id keeps its last label.
+function stableSlug(dir, home) {
+  const parts = relative(home, dir).split(sep).filter(Boolean)
+    .filter(s => !SLUG_SKIP.has(s.toLowerCase()))
+    .map(s => /^[\w-]+(\.[\w-]+){2,}$/.test(s) ? s.split('.').pop() : s)
+    .map(s => plain(s).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')).filter(Boolean);
+  return parts.join('-') || plain(basename(dir)).replace(/[^a-z0-9]+/g, '-') || 'browser';
 }
 const systemDefault = async (run, platform) => {
   if (platform !== 'linux') return null;
@@ -69,19 +88,28 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
   // Every Chromium user-data folder (holds a "Local State" file), named by its
   // folder. Slugs are kept unique so two installs never share a key.
   function discover() {
+    const found = [];
+    for (const root of roots) for (const dir of chromiumUserDataDirs([root])) found.push({ dir, root });
+    // Sort by path so the few same-slug collisions resolve the same way every
+    // run, not by disk-listing order.
+    found.sort((a, b) => a.dir.localeCompare(b.dir));
     const seen = new Set(), bySlug = new Map(), out = [];
-    for (const root of roots) for (const dir of chromiumUserDataDirs([root])) {
+    for (const { dir, root } of found) {
       if (seen.has(dir)) continue; seen.add(dir);
-      let { name, slug } = describeDir(dir, root);
-      if (bySlug.has(slug)) { let n = 2; while (bySlug.has(`${slug}-${n}`)) n++; slug = `${slug}-${n}`; name = `${name} (${n})`; }
+      const { name } = describeDir(dir, root);
+      let slug = stableSlug(dir, home);
+      if (bySlug.has(slug)) { let n = 2; while (bySlug.has(`${slug}-${n}`)) n++; slug = `${slug}-${n}`; }
       bySlug.set(slug, dir);
       out.push({ dir, root, slug, name });
     }
     return out;
   }
   async function passwordStore(b) {
-    const { names, slugs } = identityNames(b.name, b.slug);
-    const files = [...new Set([...slugs.flatMap(s => [`${s}-flags.conf`, `${s}-browser-flags.conf`]), 'chromium-flags.conf'])];
+    // Only this browser's own launcher flags, from its slug and name words.
+    // Never a shared chromium-flags.conf (unless this browser IS Chromium),
+    // which would wrongly make another browser's store "basic".
+    const own = new Set([b.slug, ...plain(b.name).split(' ').filter(Boolean)]);
+    const files = [...new Set([...own].flatMap(s => [`${s}-flags.conf`, `${s}-browser-flags.conf`]))];
     for (const file of files) {
       try { const contents = await readFile(await privatePath(b.root, join(b.root, file)), 'utf8'); const match = /(?:^|\s)--password-store=([\w-]+)/m.exec(contents.replace(/^\s*#.*$/gm, '')); if (match) return match[1]; } catch {}
     }
@@ -142,25 +170,27 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
     if (!matches.length) throw new Error(`No browser profile matches "${value}". Profiles here: ${choices.map(label).join('; ') || 'none'}`);
     return matches.find(p => p.readable) ? matches.filter(p => p.readable)[0] : matches[0];
   }
-  async function secret(profile) {
-    // The keyring stores the key under the browser's own branding; try the
-    // browser's names so an unknown Chromium browser is still read.
+  // The keyring stores the key under the browser's own branding. This yields
+  // each candidate key in turn (lazily, so the lookup stops at the first that
+  // works); the caller checks each against a real cookie, so a key that merely
+  // exists but belongs to another browser is not used by mistake.
+  async function* secretKeys(profile) {
     const { names, slugs } = identityNames(profile.browserName, profile.browser);
-    const lookup = async (command, args) => {
-      try { const { stdout } = await run(command, args, { timeout: 2500, maxBuffer: 65536, windowsHide: true }); return stdout.replace(/\r?\n$/, '') || null; } catch { return null; }
+    const seen = new Set();
+    const give = async (command, args) => {
+      try { const { stdout } = await run(command, args, { timeout: 2500, maxBuffer: 65536, windowsHide: true }); const v = stdout.replace(/\r?\n$/, '') || null; return v && !seen.has(v) ? (seen.add(v), v) : null; } catch { return null; }
     };
-    if (platform === 'darwin') { for (const title of names) { const value = await lookup('security', ['find-generic-password', '-w', '-s', `${title} Safe Storage`]); if (value) return value; } return null; }
-    if (profile.passwordStore === 'basic') return null;
+    if (platform === 'darwin') { for (const title of names) { const v = await give('security', ['find-generic-password', '-w', '-s', `${title} Safe Storage`]); if (v) yield v; } return; }
+    if (profile.passwordStore === 'basic') return;
     if (profile.passwordStore === 'auto' || /gnome|libsecret/.test(profile.passwordStore)) {
       // Chromium's v2 schema stores one key per application's branding.
       for (const app of slugs) for (const args of [['application', app, 'xdg:schema', 'chrome_libsecret_os_crypt_password_v2'], ['application', app]]) {
-        const value = await lookup('secret-tool', ['lookup', ...args]); if (value) return value;
+        const v = await give('secret-tool', ['lookup', ...args]); if (v) yield v;
       }
     }
     if (profile.passwordStore === 'auto' || /kwallet/.test(profile.passwordStore)) {
-      for (const title of names) for (const wallet of ['kdewallet', 'default']) { const value = await lookup('kwallet-query', ['-r', `${title} Safe Storage`, '-f', `${title} Keys`, wallet]); if (value) return value; }
+      for (const title of names) for (const wallet of ['kdewallet', 'default']) { const v = await give('kwallet-query', ['-r', `${title} Safe Storage`, '-f', `${title} Keys`, wallet]); if (v) yield v; }
     }
-    return null;
   }
   async function readLogins(wanted, { refresh = false } = {}) {
     const profile = await resolveProfile(wanted);
@@ -192,8 +222,25 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
       const version = Number(copy.prepare("SELECT value FROM meta WHERE key = 'version'").get()?.value || 0);
       const partitioned = copy.prepare('PRAGMA table_info(cookies)').all().some(c => c.name === 'top_frame_site_key');
       const query = copy.prepare(`SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite, has_expires${partitioned ? ', top_frame_site_key' : ''} FROM cookies`); query.setReadBigInts(true); const rows = query.all();
-      const needsSecret = rows.some(r => Buffer.from(r.encrypted_value || []).subarray(0, 3).toString() === (platform === 'darwin' ? 'v10' : 'v11'));
-      const password = needsSecret ? await secret(profile) : null;
+      // Keyring-encrypted cookies: v10 on macOS, v11 on Linux (Linux v10 uses
+      // the fixed "peanuts" key). Pick the keyring key that actually decrypts a
+      // sample cookie, so the wrong browser's key is never used.
+      const secretPrefix = platform === 'darwin' ? 'v10' : 'v11';
+      const sample = rows.find(r => Buffer.from(r.encrypted_value || []).subarray(0, 3).toString() === secretPrefix);
+      const needsSecret = !!sample;
+      let password = null;
+      if (sample) {
+        const decodesWith = pass => {
+          try {
+            const encrypted = Buffer.from(sample.encrypted_value);
+            const decipher = createDecipheriv('aes-128-cbc', key(pass, platform), Buffer.alloc(16, ' '));
+            let plain = Buffer.concat([decipher.update(encrypted.subarray(3)), decipher.final()]);
+            if (version >= 24) { const hash = createHash('sha256').update(sample.host_key).digest(); if (plain.length < 32 || !plain.subarray(0, 32).equals(hash)) return false; plain = plain.subarray(32); }
+            new TextDecoder('utf-8', { fatal: true }).decode(plain); return true;
+          } catch { return false; }
+        };
+        for await (const candidate of secretKeys(profile)) { if (decodesWith(candidate)) { password = candidate; break; } }
+      }
       const cookies = []; let failed = 0;
       for (const row of rows) {
         const expires = row.has_expires ? unixTime(row.expires_utc) : -1;

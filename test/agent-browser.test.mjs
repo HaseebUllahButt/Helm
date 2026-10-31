@@ -49,10 +49,11 @@ test('Mac Chrome is ready without Linux browsers or a Playwright download', () =
     for (const key of ['HELM_CHROMIUM_PATH', 'HELM_TEST_CHROMIUM', 'HELM_WINDOW_CHROMIUM']) delete process.env[key];
     process.env.PATH = '';
     const { browserReady } = await import(${JSON.stringify(browser)});
-    const { systemChromium } = await import(${JSON.stringify(window)});
+    const { systemChromium, refreshBrowsers } = await import(${JSON.stringify(window)});
     assert.equal(systemChromium(), chrome);
     assert.equal(browserReady(), true);
-    installed = false;
+    // Discovery is cached for a few seconds; an install change refreshes it.
+    installed = false; refreshBrowsers();
     assert.equal(browserReady(), false);
     process.env.HELM_WINDOW_CHROMIUM = '/custom/window-browser';
     assert.equal(systemChromium(), undefined);
