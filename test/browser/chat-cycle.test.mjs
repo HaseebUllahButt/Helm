@@ -109,13 +109,19 @@ async function expectChat(page, envId, title) {
     });
 }
 
-test('Ctrl+Tab walks Needs you and Running across machines, as shown, and wraps both ways', async t => {
+test('Ctrl+Tab walks Needs you by default and Running after Alt+2, across machines, both ways', async t => {
   const page = await pageFor(t);
-  for (const [env, title] of [['laptop', 'Blocked'], ['laptop', 'Attention'], ['laptop', 'First'], ['laptop', 'Second'], ['vm', 'Third'], ['laptop', 'Blocked']]) {
+  for (const title of ['Blocked', 'Attention', 'Blocked']) {
+    await page.keyboard.press('Control+Tab');
+    await expectChat(page, 'laptop', title);
+  }
+  await page.keyboard.press('Alt+2');
+  await expectChat(page, 'laptop', 'First');
+  for (const [env, title] of [['laptop', 'Second'], ['vm', 'Third'], ['laptop', 'First']]) {
     await page.keyboard.press('Control+Tab');
     await expectChat(page, env, title);
   }
-  for (const [env, title] of [['vm', 'Third'], ['laptop', 'Second'], ['laptop', 'First'], ['laptop', 'Attention']]) {
+  for (const [env, title] of [['vm', 'Third'], ['laptop', 'Second'], ['laptop', 'First']]) {
     await page.keyboard.press('Control+Shift+Tab');
     await expectChat(page, env, title);
   }
@@ -123,10 +129,8 @@ test('Ctrl+Tab walks Needs you and Running across machines, as shown, and wraps 
 
 test('Ctrl+Tab intercepts composer suggestions and terminal input, and uses live status', async t => {
   const page = await pageFor(t);
-  for (const title of ['Blocked', 'Attention', 'First']) {
-    await page.keyboard.press('Control+Tab');
-    await expectChat(page, 'laptop', title);
-  }
+  await page.keyboard.press('Alt+2');
+  await expectChat(page, 'laptop', 'First');
   const composer = page.locator('textarea[aria-label^="Message"]').first();
   await composer.fill('/');
   await composer.press('Control+Tab');
@@ -160,19 +164,18 @@ test('Alt+1, Alt+2 and Alt+3 open Finished, Running and Settled, and Ctrl+Tab wa
     await page.keyboard.press('Control+Shift+Tab');
     await expectChat(page, 'laptop', title);
   }
-  // Finished and Running show together, so Ctrl+Tab walks them in the shown order.
+  // Running is its own group, with the pins.
   await page.keyboard.press('Alt+2');
   await expectChat(page, 'laptop', 'Run');
   await page.keyboard.press('Control+Tab');
   await expectChat(page, 'laptop', 'Pin');
   await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Run');
+  await page.keyboard.press('Alt+1');
   await expectChat(page, 'laptop', 'Done A');
   await page.locator('textarea[aria-label^="Message"]').first().focus();
   await page.keyboard.press('Control+Tab');
   await expectChat(page, 'laptop', 'Done B');
-  // From a pinned chat or a finished one, the next is the row shown below it.
-  await page.keyboard.press('Control+Tab');
-  await expectChat(page, 'laptop', 'Run');
   await page.keyboard.press('Control+Tab');
   await expectChat(page, 'laptop', 'Pin');
   // Done A was read, so it left Finished for the top of Settled.
@@ -196,8 +199,8 @@ test('switching chats keeps the model name, with no raw name or blank while the 
       if (chips) window.chipsSeen.push(chips.textContent);
     }).observe(document.body, { subtree: true, childList: true, characterData: true });
   });
-  for (const title of ['Pin', 'Done A', 'Done B']) {
-    await page.keyboard.press('Control+Tab');
+  for (const [key, title] of [['Alt+1', 'Done A'], ['Control+Tab', 'Done B'], ['Control+Tab', 'Pin']]) {
+    await page.keyboard.press(key);
     await expectChat(page, 'laptop', title);
     await chip.waitFor();
   }
@@ -206,7 +209,7 @@ test('switching chats keeps the model name, with no raw name or blank while the 
   assert.deepEqual(seen.filter(text => !text.includes('Opus 5.5')), []);
 });
 
-test('the folded sidebar shows pins and the picked list: Finished with Running, or Settled', async t => {
+test('the folded sidebar shows pins and the picked group: Finished, Running or Settled', async t => {
   const page = await pageFor(t, 'shelves');
   await page.locator('.sidebar').getByText('Done B', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Collapse sidebar' }).click();
@@ -214,35 +217,34 @@ test('the folded sidebar shows pins and the picked list: Finished with Running, 
   const titles = (expected) => page.waitForFunction(expected => JSON.stringify([...document.querySelectorAll('.side-rail .rail-chat')]
     .map(b => b.getAttribute('aria-label').split(',')[0])) === JSON.stringify(expected), expected);
   await rail.waitFor();
-  await titles(['Pin', 'Done A', 'Done B', 'Run']);
+  await titles(['Pin', 'Done A', 'Done B']);
   await page.keyboard.press('Alt+3');
   await expectChat(page, 'laptop', 'Old A');
   await titles(['Pin', 'Old A', 'Old B']);
   await page.keyboard.press('Alt+1');
   await expectChat(page, 'laptop', 'Done A');
-  await titles(['Pin', 'Done A', 'Done B', 'Run']);
+  await titles(['Pin', 'Done A', 'Done B']);
   await page.keyboard.press('Alt+2');
   await expectChat(page, 'laptop', 'Run');
-  // Done A was read and left for Settled; Alt+2 still shows Finished with Running.
-  await titles(['Pin', 'Done B', 'Run']);
+  await titles(['Pin', 'Run']);
 });
 
-test('reverse entry starts at the last running chat and dialogs keep focus', async t => {
+test('reverse entry starts at the last shown chat and dialogs keep focus', async t => {
   const page = await pageFor(t);
   await page.keyboard.press('Control+Shift+Tab');
-  await expectChat(page, 'vm', 'Third');
+  await expectChat(page, 'laptop', 'Attention');
   await page.keyboard.press('Control+k');
   const dialog = page.getByRole('dialog', { name: 'Search and actions' });
   await dialog.waitFor();
   await page.keyboard.press('Control+Tab');
-  await expectChat(page, 'vm', 'Third');
+  await expectChat(page, 'laptop', 'Attention');
   assert.equal(await dialog.isVisible(), true);
   assert.equal(await dialog.evaluate(el => el.contains(document.activeElement)), true);
 });
 
 test('one running chat stays selected without adding history, and no running chats do nothing', async t => {
   const page = await pageFor(t, 'one');
-  await page.keyboard.press('Control+Tab');
+  await page.keyboard.press('Alt+2');
   await expectChat(page, 'laptop', 'First');
   const length = await page.evaluate(() => history.length);
   await page.keyboard.press('Control+Tab');
