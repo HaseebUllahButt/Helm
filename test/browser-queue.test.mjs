@@ -138,3 +138,44 @@ test('a step keeps one deadline from finding its control to its input, and a che
   const late = await manager.run('chat', 'tab', { check: 'Saved', timeout: 100 });
   assert.equal(late.check.pass, false); assert.equal(late.check.found, null);
 });
+
+test('files are not given to a file picker that opens after the call timed out', async t => {
+  const { manager } = stepFixture(t), opening = deferred(), opened = deferred(); let given = 0;
+  manager.uploads = async () => ({ paths: ['/tmp/a.txt'], cleanup: async () => {} });
+  manager.target = async () => ({ evaluate: async () => false, click: async () => {} });
+  manager.tabs.get('tab').page.waitForEvent = async () => { opening.resolve(); await opened.promise; return { setFiles: async () => { given++; } }; };
+  const rejected = assert.rejects(manager.run('chat', 'tab', { kind: 'upload', selector: '#pick', files: ['/tmp/a.txt'] }), /timed out during the upload step/);
+  await opening.promise; t.mock.timers.tick(100); await rejected;
+  opened.resolve(); await manager.serial.get('tab')?.catch(() => {});
+  assert.equal(given, 0);
+});
+
+test('a click whose control was found only after its step time is not sent, though the call has time left', async t => {
+  const { manager } = stepFixture(t); let clicks = 0; manager.actionTimeoutMs = 30000;
+  manager.find = async () => { t.mock.timers.tick(3000); return { ref: 1 }; };
+  manager.target = async () => ({ click: async () => { clicks++; } });
+  await assert.rejects(manager.run('chat', 'tab', { click: 'the Save button' }), /click: the step used its 2000 ms before this input was sent/);
+  assert.equal(clicks, 0);
+});
+
+// A page whose main document says nothing, with one child frame.
+function framedPage({ child, mainRead } = {}) {
+  const main = { url: () => 'http://x/', childFrames: () => child ? [child] : [], isDetached: () => false,
+    evaluate: async (fn, arg) => typeof arg === 'string' ? false : mainRead ? mainRead() : { title: 'Page', url: 'http://x/', text: '', elements: [], total: 0, doc: 'main' } };
+  return { mainFrame: () => main, url: () => 'http://x/', title: async () => 'Page' };
+}
+
+test('a frame whose place could not be read is unknown, so text is not taken as gone', async () => {
+  const { manager, tab } = fixture(); manager.actionTimeoutMs = 30000;
+  tab.page = framedPage({ child: { url: () => 'http://y/', childFrames: () => [], isDetached: () => false, frameElement: async () => { throw new Error('Execution context was destroyed'); } } });
+  const result = await manager.run('chat', 'tab', { check: 'Secret', expect: false, timeout: 200 });
+  assert.equal(result.check.pass, false); assert.equal(result.check.found, null);
+  assert.match(result.error, /could not be checked/);
+});
+
+test('a short check whose page cannot answer ends in its time with an unknown result', async () => {
+  const { manager, tab } = fixture(); manager.actionTimeoutMs = 30000;
+  tab.page = framedPage({ mainRead: () => new Promise(() => {}) });
+  const result = await manager.run('chat', 'tab', { check: { target: 'Name', value: 'Ada' }, timeout: 100 });
+  assert.equal(result.check.found, null); assert.match(result.text, /did not answer/);
+});

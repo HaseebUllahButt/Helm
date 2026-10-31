@@ -573,7 +573,7 @@ export class BrowserManager {
     if (action?.kind === 'dialog' || action?.kind === 'check' && tab.dialog) {
       if (action.kind === 'dialog' && ['read', 'readonly', 'plan'].includes(this.owner(sessionId).mode)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
       tab.lastUsed = this.now();
-      try { return await this.perform(tab, action); } catch (error) { if (!error.check) throw error; return { error: error.message, check: error.check, tab: this.metadata(tab), ...(await this.look(tab)) }; }
+      try { return await this.perform(tab, action); } catch (error) { if (!error.check) throw error; return { error: error.message, check: error.check, tab: this.metadata(tab), ...(await this.snapshot(tab)) }; }
     }
     const previous = this.serial.get(tab.id) || Promise.resolve();
     // What this call is doing now, so a timeout can say if a step reached the page.
@@ -606,7 +606,7 @@ export class BrowserManager {
       if (shared) tab.agentActing = true;
       (tab.working ||= new Set()).add(op); op.started = true; op.step = batch ? null : { kind: action.kind };
       try { result = await this.perform(tab, action, false, op); }
-      catch (error) { if (!error.candidates && !error.check) throw error; result = { error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await this.look(tab)) }; }
+      catch (error) { if (!error.candidates && !error.check) throw error; result = { error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await (error.check ? this.snapshot(tab) : this.look(tab))) }; }
       finally { tab.working.delete(op); op.step = null; if (shared) { tab.agentActing = false; tab.agentDoneAt = this.now(); } }
       if (!['look', 'console', 'network', 'screenshot', 'point'].includes(action?.kind)) { if (['navigate', 'back', 'forward', 'reload', 'batch'].includes(action?.kind)) await this.persistTabs(sessionId); else this.persistSoon(sessionId); }
       return result;
@@ -675,6 +675,10 @@ export class BrowserManager {
     if (cut) lines.push(`Showing ${cut.shown} of ${cut.total} controls. Read the rest with a look that has "within" (a CSS selector) or "frame" (a frame number).`);
     return { text: `${page.title}\n${page.url}\n${prose.join('\n').slice(0, budget)}\n\n${lines.join('\n')}`, elements, ...(cut ? { cut } : {}), ...(quiet.length ? { quiet } : {}) };
   }
+  /** The page after a check, with its own time: a page that cannot answer does not hold the check's reply. */
+  async snapshot(tab, budget = 6000) {
+    return await frameAnswer(this.look(tab, budget), STEP_MS) || { text: `${tab.title}\n${tab.page.url()}\nThe page did not answer in ${STEP_MS} ms, so it is not shown.`, elements: [] };
+  }
   /** A control named in plain words. One that is not there yet gets until `ms` to appear; a tie fails at once. */
   async find(tab, target, purpose, ms) {
     const until = Date.now() + ms;
@@ -694,7 +698,7 @@ export class BrowserManager {
     for (let i = 0; i < rows.length; i++) {
       if (rows[i].unknown) continue;
       const children = rows[i].frame.childFrames();
-      const places = await Promise.all(children.map(child => frameAnswer(child.frameElement().then(async handle => { try { return await handle.evaluate(frameBox); } finally { await handle.dispose(); } }).catch(() => ({ visible: false })), wait)));
+      const places = await Promise.all(children.map(child => frameAnswer(child.frameElement().then(async handle => { try { return await handle.evaluate(frameBox); } finally { await handle.dispose(); } }).catch(() => child.isDetached() ? { visible: false } : null), wait)));
       children.forEach((child, k) => { if (!places[k]) rows.push({ frame: child, unknown: true }); else if (places[k].visible) rows.push({ frame: child, inView: rows[i].inView && places[k].inView }); });
     }
     return rows;
@@ -706,23 +710,24 @@ export class BrowserManager {
     if (want.text == null && want.target == null) return true;
     if (tab.dialog) throw new Error('a dialog is open; answer it first, or check {"dialog": true}');
     const wait = () => Math.max(1, until - Date.now());
-    let view; const controls = async () => view ||= await this.look(tab, 0, { wait: wait() });
+    // Every read gets only the time left; a page that cannot answer leaves the check unknown.
+    let view; const controls = async () => view ||= await frameAnswer(this.look(tab, 0, { wait: wait() }), wait());
     if (want.text != null) {
       let seen = false, unsure = false;
       for (const row of await this.frames(tab, wait())) {
         const has = row.unknown ? null : await frameAnswer(row.frame.evaluate(hasText, want.text), wait());
         if (has) { seen = true; break; } if (has == null) unsure = true;
       }
-      if (!seen) { const { elements, quiet } = await controls(); if (!(scoreTargets(want.text, elements)[0]?.score >= 800)) return unsure || quiet ? null : false; }
+      if (!seen) { const read = await controls(); if (!read) return null; if (!(scoreTargets(want.text, read.elements)[0]?.score >= 800)) return unsure || read.quiet ? null : false; }
     }
     if (want.target != null) {
-      const { elements, quiet } = await controls();
-      let control; try { control = resolveTarget(want.target, elements); } catch (error) { if (error.candidates?.[0]?.score) throw error; return quiet ? null : false; }
+      const read = await controls(); if (!read) return null;
+      const { elements, quiet } = read; let control; try { control = resolveTarget(want.target, elements); } catch (error) { if (error.candidates?.[0]?.score) throw error; return quiet ? null : false; }
       if (want.value != null) {
         // The list shows the first 180 characters; the check reads the whole value.
         if (control.value === undefined) throw new Error(`check cannot read the value of ${JSON.stringify(want.target)}`);
-        const field = await this.target(tab, { ref: control.ref });
-        try { if (await field.evaluate(el => String(el.value ?? '')) !== want.value) return false; } finally { await field.dispose(); }
+        const value = await frameAnswer(this.target(tab, { ref: control.ref }).then(async field => { try { return await field.evaluate(el => String(el.value ?? '')); } finally { await field.dispose(); } }), wait());
+        if (value == null) return null; if (value !== want.value) return false;
       }
       if (want.checked != null && control.checked !== want.checked) return false;
     }
@@ -786,7 +791,7 @@ export class BrowserManager {
       for (const [index, raw] of actions.entries()) {
         // The call timed out and its caller has the answer: deliver nothing more.
         if (op?.expired) return { results, stopped: true };
-        try { const step = normalizeAction(raw); if (op) op.step = { index: index + 1, kind: step.kind }; results.push(await this.perform(tab, step, true, op)); if (op) { op.step = null; op.done = index + 1; } } catch (error) { return { results, failedAt: results.length, error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await this.look(tab, action.budget ?? 6000)) }; } }
+        try { const step = normalizeAction(raw); if (op) op.step = { index: index + 1, kind: step.kind }; results.push(await this.perform(tab, step, true, op)); if (op) { op.step = null; op.done = index + 1; } } catch (error) { return { results, failedAt: results.length, error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await (error.check ? this.snapshot(tab, action.budget ?? 6000) : this.look(tab, action.budget ?? 6000))) }; } }
       const result = { results, ...(await this.look(tab, action.budget ?? 6000)) };
       if (action.save_as != null) { try { if (await this.flows.save(action.save_as, action.actions, action.note, result)) result.saved = action.save_as; } catch (error) { result.saveError = `Steps succeeded, but the flow could not be saved: ${error.message}`; } }
       return result;
@@ -806,7 +811,7 @@ export class BrowserManager {
       const check = { check: action.check, found, expect, pass: found === expect };
       if (!check.pass) { const error = new Error(`check failed: ${JSON.stringify(action.check)} ${found === null ? 'could not be checked: part of the page did not answer' : expect ? 'did not come' : 'did not go away'} in ${ms} ms`); error.check = check; throw error; }
       // While a dialog is open the page cannot be read: the tab says what the dialog shows.
-      return { ...check, ...(!inBatch ? { tab: this.metadata(tab), ...(await this.look(tab, 20000)) } : {}) };
+      return { ...check, ...(!inBatch ? { tab: this.metadata(tab), ...(await this.snapshot(tab, 20000)) } : {}) };
     }
     const page = tab.page;
     // Resolve a plain target once. Both the pointer and the action use the
@@ -816,8 +821,11 @@ export class BrowserManager {
     // One deadline for the whole step: finding the control, the pointer and the input share it.
     const budget = stepTime(action, op, ['navigate', 'back', 'forward', 'reload', 'wait'].includes(kind) ? NAV_MS : STEP_MS), stepEnd = Date.now() + budget;
     const left = () => Math.max(1, stepEnd - Date.now());
-    // A call that timed out while this step got ready sends no input.
-    const live = () => { if (op?.expired) throw new Error('The call timed out, so this step sent no input.'); };
+    // No input goes out once the call timed out or this step used its time.
+    const live = () => {
+      if (op?.expired) throw new Error('The call timed out, so this step sent no input.');
+      if (Date.now() >= stepEnd) throw new Error(`${kind}: the step used its ${budget} ms before this input was sent. Read the page, or give the step a longer "timeout".`);
+    };
     if (typeof action.target === 'string' && !/^\d+$/.test(action.target.trim())
       && action.ref == null && !action.selector && !action.role && !action.name && action.x == null) {
       action = { ...action, ref: (await this.find(tab, text(action.target, 500), kind, left())).ref };
@@ -827,7 +835,7 @@ export class BrowserManager {
     try {
       live();
       if (['navigate', 'back', 'forward', 'reload'].includes(kind)) await this.go(tab, kind, action, left());
-      else if (kind === 'stop') { const cdp = await page.context().newCDPSession(page); try { await cdp.send('Page.stopLoading'); } finally { await cdp.detach().catch(() => {}); } }
+      else if (kind === 'stop') { const cdp = await page.context().newCDPSession(page); try { live(); await cdp.send('Page.stopLoading'); } finally { await cdp.detach().catch(() => {}); } }
       else if (kind === 'click' || kind === 'hover') {
         if (action.x != null) { const { width, height } = await this.viewSize(tab); integer(action.x, 0, width); integer(action.y, 0, height); live(); kind === 'click' ? await page.mouse.click(action.x, action.y, { button: ['left', 'right', 'middle'].includes(action.button) ? action.button : 'left', clickCount: action.double ? 2 : 1 }) : await page.mouse.move(action.x, action.y); }
         else { const target = await this.target(tab, action); try { live(); kind === 'click' ? await target.click({ button: action.button || 'left', clickCount: action.double ? 2 : 1, timeout: left() }) : await target.hover({ timeout: left() }); } finally { if (target.dispose) await target.dispose(); } }
@@ -851,7 +859,7 @@ export class BrowserManager {
           // gets them through the picker, so no system dialog opens.
           const field = await target.evaluate(el => el instanceof HTMLInputElement && el.type === 'file').catch(() => false); live();
           if (field) await target.setInputFiles(files.paths, { timeout: left() });
-          else { const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: left() }), target.click({ timeout: left() })]); await chooser.setFiles(files.paths); }
+          else { const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: left() }), target.click({ timeout: left() })]); live(); await chooser.setFiles(files.paths); }
         } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
       } else if (kind === 'evaluate') { live(); const script = text(action.script, 20000), value = await (tab.patched ? page.evaluate(script, undefined, undefined, false) : page.evaluate(script)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
       else if (kind === 'wait') { if (action.selector) await page.locator(text(action.selector, 2000)).first().waitFor({ state: action.state || 'visible', timeout: left() }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: left() }); }
