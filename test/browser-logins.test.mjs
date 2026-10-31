@@ -16,19 +16,23 @@ const { createLoginReader } = await import('../packages/connect/src/browser-logi
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
 const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
-const config = async t => { const root = await mkdtemp(join(directory, 'config-')); t.after(() => rm(root, { recursive: true, force: true })); return root; };
+// A temp home, so the reader never reads the tester's real ~/.config,
+// ~/.var/app (Flatpak) or ~/snap browsers.
+const config = async t => { const home = await mkdtemp(join(directory, 'home-')); t.after(() => rm(home, { recursive: true, force: true })); return home; };
+const linux = (home, extra = {}) => createLoginReader({ home, configHome: join(home, '.config'), platform: 'linux', defaultBrowser: async () => null, ...extra });
 
 test('discovers profiles, finds the one a person names, and rejects symlinks', async t => {
-  const root = await config(t), first = await fixture(root), second = await fixture(root, { browserPath: 'google-chrome', directory: 'Profile 3' }); first.db.close(); second.db.close();
-  const reader = createLoginReader({ configHome: root, platform: 'linux', defaultBrowser: async () => null });
+  const home = await config(t), root = join(home, '.config');
+  const first = await fixture(root), second = await fixture(root, { browserPath: 'google-chrome', directory: 'Profile 3' }); first.db.close(); second.db.close();
+  const reader = linux(home);
   assert.equal((await reader.listProfiles()).length, 2);
-  assert.equal((await reader.resolveProfile('CHROME:personal')).key, 'chrome:Profile 3');
-  assert.equal((await reader.resolveProfile('Profile 3')).key, 'chrome:Profile 3');
+  assert.equal((await reader.resolveProfile('CHROME:personal')).key, 'google-chrome:Profile 3');
+  assert.equal((await reader.resolveProfile('Profile 3')).key, 'google-chrome:Profile 3');
   assert.equal((await reader.resolveProfile('personal in chromium')).key, 'chromium:Default');
-  assert.equal((await reader.resolveProfile('Google Chrome Personal')).key, 'chrome:Profile 3');
-  assert.equal((await reader.resolveProfile('Chrome: Personal (Profile 3)')).key, 'chrome:Profile 3');
-  assert.equal((await reader.resolveProfile('chrome')).key, 'chrome:Profile 3', 'a browser alone is its last used profile');
-  await assert.rejects(reader.resolveProfile('brave'), /Brave has no profiles/);
+  assert.equal((await reader.resolveProfile('Google Chrome Personal')).key, 'google-chrome:Profile 3');
+  assert.equal((await reader.resolveProfile('Google Chrome: Personal (Profile 3)')).key, 'google-chrome:Profile 3', 'a pasted list line resolves');
+  assert.equal((await reader.resolveProfile('chrome')).key, 'google-chrome:Profile 3', 'a browser alone is its last used profile');
+  await assert.rejects(reader.resolveProfile('brave'), /No browser profile matches "brave"/);
   await assert.rejects(reader.resolveProfile('nobody'), /No browser profile matches "nobody".*Chrome: Personal/);
   await assert.rejects(reader.readLogins({ key: 'chromium:../../escape' }), /No browser profile matches/);
   await rm(join(first.profile, 'Network/Cookies')); await symlink(join(second.profile, 'Network/Cookies'), join(first.profile, 'Network/Cookies'));
@@ -38,9 +42,9 @@ test('discovers profiles, finds the one a person names, and rejects symlinks', a
 });
 
 test('"main" is a profile called Main when there is one, else the default profile', async t => {
-  const root = await config(t);
+  const home = await config(t), root = join(home, '.config');
   (await fixture(root)).db.close();
-  const reader = createLoginReader({ configHome: root, platform: 'linux', defaultBrowser: async () => null });
+  const reader = linux(home);
   assert.equal((await reader.resolveProfile('main')).key, 'chromium:Default');
   assert.equal((await reader.resolveProfile('the main profile')).key, 'chromium:Default');
   (await fixture(root, { directory: 'Profile 1', name: 'Main' })).db.close();
@@ -50,18 +54,34 @@ test('"main" is a profile called Main when there is one, else the default profil
 });
 
 test('a name two browsers share means the everyday browser, then the latest used', async t => {
-  const root = await config(t);
+  const home = await config(t), root = join(home, '.config');
   for (const options of [{}, { browserPath: 'google-chrome', info: { active_time: 1700000000 } }, { browserPath: 'net.imput.helium', directory: 'Profile 7', name: 'Work', info: { user_name: 'me@example.test', active_time: 1600000000 } }]) (await fixture(root, options)).db.close();
   await writeFile(join(root, 'helium-browser-flags.conf'), '--password-store=basic');
-  const plain = createLoginReader({ configHome: root, platform: 'linux', defaultBrowser: async () => null });
-  assert.equal((await plain.resolveProfile('personal')).key, 'chrome:Default', 'used most lately');
+  const plain = linux(home);
+  assert.equal((await plain.resolveProfile('personal')).key, 'google-chrome:Default', 'used most lately');
   assert.equal((await plain.resolveProfile('me@example.test')).key, 'helium:Profile 7');
   assert.equal((await plain.resolveProfile('wor')).key, 'helium:Profile 7', 'the start of a name is enough');
   const helium = (await plain.listProfiles()).find(p => p.browser === 'helium');
   assert.equal(helium.browserName, 'Helium'); assert.equal(helium.passwordStore, 'basic');
-  const everyday = createLoginReader({ configHome: root, platform: 'linux', defaultBrowser: async () => 'chromium' });
+  const everyday = linux(home, { defaultBrowser: async () => 'chromium' });
   assert.equal((await everyday.resolveProfile('personal')).key, 'chromium:Default');
-  assert.deepEqual((await everyday.listProfiles()).map(p => p.key), ['chromium:Default', 'chrome:Default', 'helium:Profile 7']);
+  assert.deepEqual((await everyday.listProfiles()).map(p => p.key), ['chromium:Default', 'google-chrome:Default', 'helium:Profile 7']);
+});
+
+test('finds any Chromium browser by its "Local State", in native, Flatpak and Snap roots, named by its folder', async t => {
+  const home = await config(t), config_ = join(home, '.config');
+  // A browser Helm has never heard of, found only by the Local State file.
+  (await fixture(config_, { browserPath: 'wavebrowser', name: 'Surf' })).db.close();
+  // A Flatpak browser, named by its reverse-DNS app id, not the "chromium" folder.
+  (await fixture(join(home, '.var/app/net.imput.helium/config'), { browserPath: 'chromium', directory: 'Profile 2', name: 'Imput' })).db.close();
+  // A Snap browser, kept below a hidden ".config" folder.
+  (await fixture(join(home, 'snap/chromium/common/.config'), { browserPath: 'chromium', name: 'Snap' })).db.close();
+  const found = (await linux(home).listProfiles());
+  const byBrowser = Object.fromEntries(found.map(p => [p.browser, p.browserName]));
+  assert.equal(byBrowser.wavebrowser, 'Wavebrowser');
+  assert.equal(byBrowser.helium, 'Helium', 'the app id names the Flatpak browser, not its chromium folder');
+  assert.ok(found.some(p => p.browser === 'chromium'), 'the Snap browser below .config is found');
+  assert.equal(found.length, 3);
 });
 
 test('Linux decrypts v10 and v11 with host hashes, live WAL, expiry, sessions and SameSite', async t => {

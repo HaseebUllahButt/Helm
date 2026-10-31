@@ -6,11 +6,15 @@ The owner uses the same browser window. Helm has no browser panel.
 
 ## Decisions
 
-- **Any Chromium-based browser.** Helm uses the browser the owner already
-  has: Chromium, Chrome, Brave, Edge, Vivaldi or Helium, in that order
-  (`browserPaths` in browser-window.js). They all speak Chromium's own
-  channel, so the same code drives each one. Helm reads pages as text and
-  numbered controls first; screenshots are the last resort. The goal is
+- **Any Chromium-based browser, found by evidence, not by name.** Helm uses
+  the browser the owner already has, even one it has never heard of. It never
+  matches brand names: it finds programs with Chromium resources
+  (`resources.pak` or `chrome_100_percent.pak`) beside them and rejects
+  Electron apps (which carry `resources/app.asar`), from menu entries on
+  Linux, app bundles on macOS and the registry on Windows (`chromium-find.js`).
+  The system default browser is preferred, then the rest by name. They all
+  speak Chromium's own channel, so the same code drives each one. Helm reads
+  pages as text and numbered controls first; screenshots are the last resort. The goal is
   computer use, not one browser: Bowser was removed so the browser path has
   one engine to grow from.
 - **It runs on the chat's machine.** The agent CLI reaches it through that
@@ -80,12 +84,13 @@ The owner uses the same browser window. Helm has no browser panel.
   }
   ```
 
-- A Chromium-based browser must already be installed (one from the list
-  above, `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at
-  daemon start, and loads no browser driver until a browser is needed. A
-  service has a short PATH, so Linux also searches /usr/local/bin, /usr/bin
-  and /snap/bin.
-- Readiness and launch use the same system browser list. `HELM_WINDOW_CHROMIUM` selects only the visible browser;
+- A Chromium-based browser must already be installed (any one, found by
+  evidence, `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at
+  daemon start, and loads no browser driver until a browser is needed. On
+  Linux it reads menu entries and follows start scripts, Flatpak and Snap to
+  the real program; a service has a short PATH, so it also searches
+  /usr/local/bin, /usr/bin and /snap/bin.
+- Readiness and launch use the same discovery. `HELM_WINDOW_CHROMIUM` selects only the visible browser;
   `HELM_CHROMIUM_PATH` selects the hidden browser.
 - Chats share no tab limit. Keep every saved tab when Helm restarts.
 - Hidden tabs use full Chromium. The headless shell has no native PDF

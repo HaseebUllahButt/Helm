@@ -2,33 +2,46 @@ import { createDecipheriv, createHash, pbkdf2Sync } from 'node:crypto';
 import { execFile as exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir, tmpdir } from 'node:os';
-import { join, relative, sep } from 'node:path';
+import { basename, join, relative, sep } from 'node:path';
 import { readFile, lstat, mkdtemp, chmod, writeFile, rm } from 'node:fs/promises';
+import { chromiumUserDataDirs } from './chromium-find.js';
 
 const execFile = promisify(exec);
-// id, name, Linux folder, macOS folder, Windows folder, keyring name,
-// other names a person may call it, flags files beside the id's own.
-const BROWSERS = [
-  ['helium', 'Helium', 'net.imput.helium', 'net.imput.helium', 'imput/Helium/User Data', 'chromium', ['net.imput.helium'], ['helium-browser-flags.conf']],
-  ['chromium', 'Chromium', 'chromium', 'Chromium', 'Chromium', 'chromium'],
-  ['chrome', 'Chrome', 'google-chrome', 'Google/Chrome', 'Google/Chrome/User Data', 'chrome', ['google chrome', 'google-chrome', 'google-chrome-stable']],
-  ['chrome-beta', 'Chrome Beta', 'google-chrome-beta', 'Google/Chrome Beta', 'Google/Chrome Beta/User Data', 'chrome'],
-  ['chrome-unstable', 'Chrome Dev', 'google-chrome-unstable', 'Google/Chrome Dev', 'Google/Chrome Dev/User Data', 'chrome'],
-  ['brave', 'Brave', 'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser/User Data', 'brave', ['brave browser', 'brave-browser']],
-  ['edge', 'Edge', 'microsoft-edge', 'Microsoft Edge', 'Microsoft/Edge/User Data', 'microsoft-edge', ['microsoft edge', 'microsoft-edge']],
-  ['edge-dev', 'Edge Dev', 'microsoft-edge-dev', 'Microsoft Edge Dev', 'Microsoft/Edge Dev/User Data', 'microsoft-edge'],
-  ['vivaldi', 'Vivaldi', 'vivaldi', 'Vivaldi', 'Vivaldi/User Data', 'vivaldi'],
-];
 const label = p => `${p.browserName}: ${p.name} (${p.directory})`;
 const plain = value => String(value).toLowerCase().replace(/\s+/g, ' ').trim();
-// Every name a browser goes by, longest first so "chrome beta" wins over "chrome".
-const browserWords = BROWSERS.flatMap(([id, name, , , , , aliases = []]) => [id, name, ...aliases].map(word => [plain(word), id])).sort((a, b) => b[0].length - a[0].length);
-// The browser a desktop file opens, e.g. "helium.desktop" or "google-chrome.desktop".
-const desktopBrowser = file => { const name = plain(file).replace(/\.desktop$/, ''); return ['helium', 'chrome-beta', 'chrome-unstable', 'edge-dev'].find(id => name.includes(id.replace('chrome', 'google-chrome').replace('edge', 'microsoft-edge'))) || BROWSERS.find(([id, , linux]) => name === id || name === plain(linux) || name.includes(id))?.[0] || null; };
+// Folder parts that name no browser, so the next part names it.
+const GENERIC = new Set(['user data', 'config', 'common', 'default']);
+// A browser's name and slug from one folder part: a reverse-DNS app id keeps
+// its last label ("net.imput.helium" -> "Helium"); separators become spaces;
+// "Software" and "Browser" drop ("Brave-Browser" -> "Brave").
+function cleanLabel(part) {
+  const seg = /^[\w-]+(\.[\w-]+){2,}$/.test(part) ? part.split('.').pop() : part;
+  const words = seg.replace(/[._-]+/g, ' ').replace(/\b(software|browser)\b/ig, '').trim().replace(/\s+/g, ' ');
+  const name = words.split(' ').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') || seg;
+  return { name, slug: plain(name).replace(/\s+/g, '-') };
+}
+// Name a user-data folder by the browser it belongs to: the reverse-DNS app
+// id of a Flatpak or Snap, else the last folder part that names a browser.
+function describeDir(dir, root) {
+  const rel = relative(root, dir).split(sep).filter(Boolean);
+  const dns = rel.find(seg => /^[\w-]+(\.[\w-]+){2,}$/.test(seg));
+  if (dns) return cleanLabel(dns);
+  const meaningful = rel.filter(seg => !GENERIC.has(seg.toLowerCase()));
+  return cleanLabel(meaningful.pop() || rel.pop() || basename(dir));
+}
+// The keyring and flags names to try for a browser, from its own name: the
+// full name and its last word ("Microsoft Edge" -> "Edge"), so an unknown
+// browser is still tried without a built-in brand list.
+function identityNames(name, slug) {
+  const words = name.split(' ').filter(Boolean);
+  const names = [...new Set([name, words.at(-1), words.slice(1).join(' ')].filter(Boolean))];
+  const slugs = [...new Set([slug, ...names.map(n => plain(n).replace(/\s+/g, '-'))])];
+  return { names, slugs };
+}
 const systemDefault = async (run, platform) => {
   if (platform !== 'linux') return null;
   for (const [command, args] of [['xdg-settings', ['get', 'default-web-browser']], ['xdg-mime', ['query', 'default', 'x-scheme-handler/https']]]) {
-    try { const { stdout } = await run(command, args, { timeout: 1500, maxBuffer: 4096 }); const id = desktopBrowser(stdout.trim()); if (id) return id; } catch { /* not installed */ }
+    try { const { stdout } = await run(command, args, { timeout: 1500, maxBuffer: 4096 }); const raw = stdout.trim().split('\n')[0].trim().replace(/\.desktop$/, ''); if (raw) return cleanLabel(raw).slug; } catch { /* not installed */ }
   }
   return null;
 };
@@ -46,27 +59,45 @@ async function privatePath(root, path) {
 }
 
 export function createLoginReader({ home = homedir(), platform = process.platform, configHome = process.env.XDG_CONFIG_HOME || join(home, '.config'), localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), run = execFile, now = Date.now, defaultBrowser = () => systemDefault(execFile, platform) } = {}) {
-  const root = platform === 'darwin' ? join(home, 'Library', 'Application Support') : platform === 'win32' ? localAppData : configHome;
+  // The config roots to search for user-data folders: a few levels deep, so
+  // native, Flatpak (~/.var/app) and Snap (~/snap) installs are all covered.
+  const roots = platform === 'darwin' ? [join(home, 'Library', 'Application Support')]
+    : platform === 'win32' ? [localAppData]
+    : [...new Set([configHome, join(home, '.var', 'app'), join(home, 'snap')])];
   const cache = new Map();
   let usual; const usualBrowser = () => (usual ??= Promise.resolve().then(defaultBrowser).catch(() => null));
-  const source = p => join(root, BROWSERS.find(b => b[0] === p.browser)[platform === 'darwin' ? 3 : platform === 'win32' ? 4 : 2]);
-  async function passwordStore(browser) {
-    const [, , , , , brand, , flags = []] = BROWSERS.find(b => b[0] === browser);
-    for (const file of [...flags, `${browser}-flags.conf`, `${brand}-flags.conf`]) {
-      try { const contents = await readFile(await privatePath(root, join(root, file)), 'utf8'); const match = /(?:^|\s)--password-store=([\w-]+)/m.exec(contents.replace(/^\s*#.*$/gm, '')); if (match) return match[1]; } catch {}
+  // Every Chromium user-data folder (holds a "Local State" file), named by its
+  // folder. Slugs are kept unique so two installs never share a key.
+  function discover() {
+    const seen = new Set(), bySlug = new Map(), out = [];
+    for (const root of roots) for (const dir of chromiumUserDataDirs([root])) {
+      if (seen.has(dir)) continue; seen.add(dir);
+      let { name, slug } = describeDir(dir, root);
+      if (bySlug.has(slug)) { let n = 2; while (bySlug.has(`${slug}-${n}`)) n++; slug = `${slug}-${n}`; name = `${name} (${n})`; }
+      bySlug.set(slug, dir);
+      out.push({ dir, root, slug, name });
+    }
+    return out;
+  }
+  async function passwordStore(b) {
+    const { names, slugs } = identityNames(b.name, b.slug);
+    const files = [...new Set([...slugs.flatMap(s => [`${s}-flags.conf`, `${s}-browser-flags.conf`]), 'chromium-flags.conf'])];
+    for (const file of files) {
+      try { const contents = await readFile(await privatePath(b.root, join(b.root, file)), 'utf8'); const match = /(?:^|\s)--password-store=([\w-]+)/m.exec(contents.replace(/^\s*#.*$/gm, '')); if (match) return match[1]; } catch {}
     }
     return 'auto';
   }
   async function listProfiles() {
     const profiles = [], usualId = await usualBrowser();
-    for (const [browser, browserName] of BROWSERS) {
+    for (const b of discover()) {
       try {
-        const state = JSON.parse(await readFile(await privatePath(root, join(source({ browser }), 'Local State')), 'utf8')).profile || {};
+        const state = JSON.parse(await readFile(await privatePath(b.dir, join(b.dir, 'Local State')), 'utf8')).profile || {};
+        const store = platform === 'linux' ? await passwordStore(b) : platform === 'darwin' ? 'keychain' : 'app-bound';
         for (const [directory, info] of Object.entries(state.info_cache || {})) {
           if (!validDirectory(directory)) continue;
-          const path = await privatePath(root, join(source({ browser }), directory)); if (!(await lstat(path)).isDirectory()) continue;
+          const path = await privatePath(b.dir, join(b.dir, directory)); if (!(await lstat(path)).isDirectory()) continue;
           const email = typeof info.user_name === 'string' && info.user_name.length <= 320 ? info.user_name : '';
-          profiles.push({ key: `${browser}:${directory}`, browser, browserName, directory, name: String(info.name || directory), ...(email ? { email } : {}), lastUsed: directory === state.last_used, usedAt: Number.isFinite(info.active_time) ? Math.round(info.active_time * 1000) : 0, ...(browser === usualId ? { defaultBrowser: true } : {}), passwordStore: platform === 'linux' ? await passwordStore(browser) : platform === 'darwin' ? 'keychain' : 'app-bound', readable: platform !== 'win32', ...(platform === 'win32' ? { reason: 'Windows browser logins use app-bound encryption and cannot be copied here.' } : {}) });
+          profiles.push({ key: `${b.slug}:${directory}`, browser: b.slug, browserName: b.name, dataDir: b.dir, directory, name: String(info.name || directory), ...(email ? { email } : {}), lastUsed: directory === state.last_used, usedAt: Number.isFinite(info.active_time) ? Math.round(info.active_time * 1000) : 0, ...(b.slug === usualId ? { defaultBrowser: true } : {}), passwordStore: store, readable: platform !== 'win32', ...(platform === 'win32' ? { reason: 'Windows browser logins use app-bound encryption and cannot be copied here.' } : {}) });
         }
       } catch { /* browser absent or unsafe */ }
     }
@@ -85,6 +116,11 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
     const asked = plain(value);
     const exact = choices.find(p => plain(p.key) === asked || plain(label(p)) === asked);
     if (exact) return exact;
+    // Every word the found browsers go by (slug, full name and each name word),
+    // longest first so "google chrome" wins over "chrome".
+    const byBrowser = new Map(choices.map(p => [p.browser, p.browserName]));
+    const browserWords = [...byBrowser].flatMap(([slug, name]) => [...new Set([slug, plain(name), ...plain(name).split(' ')])].filter(w => w.length >= 2).map(w => [w, slug]))
+      .sort((a, b) => b[0].length - a[0].length);
     let browser = null, rest = asked;
     const colon = asked.indexOf(':');
     if (colon > 0 && browserWords.some(([word]) => word === asked.slice(0, colon).trim())) { browser = browserWords.find(([word]) => word === asked.slice(0, colon).trim())[1]; rest = asked.slice(colon + 1); }
@@ -102,26 +138,27 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
     const matches = !rest ? pool.filter(p => p.lastUsed)
       : [(v, t) => v === t, (v, t) => v.startsWith(t), (v, t) => v.includes(t)]
         .flatMap(fits => tries.map(t => pool.filter(p => names(p).some(v => fits(v, t))))).find(found => found.length) || [];
-    if (browser && !pool.length) throw new Error(`${BROWSERS.find(b => b[0] === browser)[1]} has no profiles on this machine. Profiles here: ${choices.map(label).join('; ') || 'none'}`);
+    if (browser && !pool.length) throw new Error(`${byBrowser.get(browser) || browser} has no profiles on this machine. Profiles here: ${choices.map(label).join('; ') || 'none'}`);
     if (!matches.length) throw new Error(`No browser profile matches "${value}". Profiles here: ${choices.map(label).join('; ') || 'none'}`);
     return matches.find(p => p.readable) ? matches.filter(p => p.readable)[0] : matches[0];
   }
   async function secret(profile) {
-    const brand = BROWSERS.find(b => b[0] === profile.browser)[5];
-    const title = { chrome: 'Chrome', chromium: 'Chromium', brave: 'Brave', 'microsoft-edge': 'Microsoft Edge', vivaldi: 'Vivaldi' }[brand];
+    // The keyring stores the key under the browser's own branding; try the
+    // browser's names so an unknown Chromium browser is still read.
+    const { names, slugs } = identityNames(profile.browserName, profile.browser);
     const lookup = async (command, args) => {
       try { const { stdout } = await run(command, args, { timeout: 2500, maxBuffer: 65536, windowsHide: true }); return stdout.replace(/\r?\n$/, '') || null; } catch { return null; }
     };
-    if (platform === 'darwin') return lookup('security', ['find-generic-password', '-w', '-s', `${title} Safe Storage`]);
+    if (platform === 'darwin') { for (const title of names) { const value = await lookup('security', ['find-generic-password', '-w', '-s', `${title} Safe Storage`]); if (value) return value; } return null; }
     if (profile.passwordStore === 'basic') return null;
     if (profile.passwordStore === 'auto' || /gnome|libsecret/.test(profile.passwordStore)) {
       // Chromium's v2 schema stores one key per application's branding.
-      for (const args of [['application', brand, 'xdg:schema', 'chrome_libsecret_os_crypt_password_v2'], ['application', brand]]) {
+      for (const app of slugs) for (const args of [['application', app, 'xdg:schema', 'chrome_libsecret_os_crypt_password_v2'], ['application', app]]) {
         const value = await lookup('secret-tool', ['lookup', ...args]); if (value) return value;
       }
     }
     if (profile.passwordStore === 'auto' || /kwallet/.test(profile.passwordStore)) {
-      for (const wallet of ['kdewallet', 'default']) { const value = await lookup('kwallet-query', ['-r', `${title} Safe Storage`, '-f', `${title} Keys`, wallet]); if (value) return value; }
+      for (const title of names) for (const wallet of ['kdewallet', 'default']) { const value = await lookup('kwallet-query', ['-r', `${title} Safe Storage`, '-f', `${title} Keys`, wallet]); if (value) return value; }
     }
     return null;
   }
@@ -135,11 +172,11 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
     }
     let dbPath;
     for (const file of ['Network/Cookies', 'Cookies']) {
-      try { dbPath = await privatePath(root, join(source(profile), profile.directory, file)); break; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      try { dbPath = await privatePath(profile.dataDir, join(profile.dataDir, profile.directory, file)); break; } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
     if (!dbPath) throw new Error('This profile has no saved cookies yet.');
     // Check auxiliary files too: SQLite can otherwise follow a WAL or journal symlink.
-    for (const suffix of ['-wal', '-shm', '-journal']) { try { await privatePath(root, dbPath + suffix); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+    for (const suffix of ['-wal', '-shm', '-journal']) { try { await privatePath(profile.dataDir, dbPath + suffix); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
     let sqlite; try { sqlite = await import('node:sqlite'); } catch { throw new Error('Copying browser logins needs Node with node:sqlite (Node 22.16 or newer).'); }
     const folder = await mkdtemp(join(tmpdir(), 'helm-logins-')); await chmod(folder, 0o700);
     let original, copy;

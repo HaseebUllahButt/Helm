@@ -25,10 +25,25 @@ test('Mac Chrome is ready without Linux browsers or a Playwright download', () =
     import assert from 'node:assert/strict';
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
-    const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    const app = '/Applications/Google Chrome.app', chrome = app + '/Contents/MacOS/Google Chrome';
+    // A real Chrome bundle, found by its framework resources, not by its name.
+    const content = {
+      [app + '/Contents/Info.plist']: '<plist><dict><key>CFBundleExecutable</key><string>Google Chrome</string></dict></plist>',
+      [chrome]: '',
+      [app + '/Contents/Frameworks/Google Chrome Framework.framework/Versions/A/Resources/resources.pak']: '',
+    };
     let installed = true;
-    fs.existsSync = path => installed && path === chrome;
-    fs.readdirSync = () => [];
+    const files = () => installed ? new Set(Object.keys(content)) : new Set();
+    const dirs = () => { const d = new Set(); for (const f of files()) { const parts = f.split('/'); for (let i = 1; i < parts.length; i++) d.add(parts.slice(0, i).join('/') || '/'); } return d; };
+    // Only the fake /Applications tree is mocked; every other path (the module
+    // loader reading real files) goes to the real fs.
+    const fake = p => typeof p === 'string' && p.startsWith('/Applications');
+    const real = { existsSync: fs.existsSync, statSync: fs.statSync, readFileSync: fs.readFileSync, realpathSync: fs.realpathSync, readdirSync: fs.readdirSync };
+    fs.existsSync = (p, ...a) => fake(p) ? files().has(p) || dirs().has(p) : real.existsSync(p, ...a);
+    fs.statSync = (p, ...a) => { if (!fake(p)) return real.statSync(p, ...a); if (files().has(p)) return { isFile: () => true, isDirectory: () => false, size: content[p].length }; if (dirs().has(p)) return { isFile: () => false, isDirectory: () => true, size: 0 }; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+    fs.readFileSync = (p, ...a) => { if (!fake(p)) return real.readFileSync(p, ...a); if (files().has(p)) return content[p]; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+    fs.realpathSync = (p, ...a) => fake(p) ? p : real.realpathSync(p, ...a);
+    fs.readdirSync = (p, opts) => { if (!fake(p)) return real.readdirSync(p, opts); const kids = new Map(); for (const f of [...files(), ...dirs()]) { if (f.startsWith(p + '/')) { const name = f.slice(p.length + 1).split('/')[0]; if (name && !kids.has(name)) kids.set(name, { name, isFile: () => files().has(p + '/' + name), isDirectory: () => dirs().has(p + '/' + name) }); } } const list = [...kids.values()]; return opts?.withFileTypes ? list : list.map(e => e.name); };
     syncBuiltinESMExports();
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     for (const key of ['HELM_CHROMIUM_PATH', 'HELM_TEST_CHROMIUM', 'HELM_WINDOW_CHROMIUM']) delete process.env[key];

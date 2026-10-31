@@ -97,7 +97,7 @@ export class BrowserManager {
     if (!this.starting) this.starting = (async () => {
       if (this.browser?.isConnected()) return this.browser;
       const launch = this.launch || launchChromium;
-      try { this.browser = await launch(); } catch (error) { throw new Error(`The browser could not start. Install a Chromium-based browser (Chromium, Chrome, Brave, Edge, Vivaldi or Helium), or set HELM_CHROMIUM_PATH. ${error.message}`); }
+      try { this.browser = await launch(); } catch (error) { throw new Error(`The browser could not start. Install any Chromium-based browser, or set HELM_CHROMIUM_PATH. ${error.message}`); }
       const browser = this.browser;
       browser.on('disconnected', () => {
         if (this.browser !== browser) return;
