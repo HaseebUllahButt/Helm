@@ -1372,15 +1372,6 @@ function Shell({ client, conn, onSignOut }: {
               </Fold>
             )}
 
-            {runningNow.length > 0 && (
-              <Fold
-                shelf defaultOpen title="Running" count={runningNow.length} remember="sidebar:working"
-                peek={runningNow.some(isOpen) ? <div className="rows plain">{runningNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
-              >
-                <div className="rows plain">{runningNow.map((x) => homeRow(x))}</div>
-              </Fold>
-            )}
-
             {finishedNow.length > 0 && (
               <Fold
                 shelf defaultOpen title="Finished" count={finishedNow.length} remember="sidebar:finished"
@@ -1388,6 +1379,15 @@ function Shell({ client, conn, onSignOut }: {
                 peek={finishedNow.some(isOpen) ? <div className="rows plain">{finishedNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
               >
                 <div className="rows plain">{finishedNow.map((x) => homeRow(x, true))}</div>
+              </Fold>
+            )}
+
+            {runningNow.length > 0 && (
+              <Fold
+                shelf defaultOpen title="Running" count={runningNow.length} remember="sidebar:working"
+                peek={runningNow.some(isOpen) ? <div className="rows plain">{runningNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
+              >
+                <div className="rows plain">{runningNow.map((x) => homeRow(x))}</div>
               </Fold>
             )}
 
