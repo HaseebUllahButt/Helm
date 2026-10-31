@@ -25,13 +25,31 @@ function mergeEvent(existing: HelmEvent, incoming: HelmEvent): HelmEvent {
 }
 
 /**
+ * The chats left most recently, as they were on screen. Switching back to
+ * one starts from here: no wait for the device's storage and no rebuild of
+ * thousands of events before the first message shows (owner, 2026-11-01).
+ * A screen takes its chat's entry while open, so two never share one.
+ */
+type Kept = { log: LogState; raw: HelmEvent[]; first: number; logFirst: number };
+const kept = new Map<string, Kept>();
+const KEEP_CHATS = 10;
+function keep(key: string, view: Kept) {
+  kept.delete(key);
+  kept.set(key, view);
+  while (kept.size > KEEP_CHATS) kept.delete(kept.keys().next().value!);
+}
+
+/**
  * Open at the latest work, then fetch the rest of the chat behind it, one
  * page at a time. The owner reads whole chats on the phone to learn from
  * them, so the history must not stop at the first screen; the device keeps
  * what it has fetched (logCache), and the next open only adds what is new.
  */
 export function useSessionLog(client: Client, env: string, sessionId: string, { wholeChat = true } = {}) {
-  const [state, setState] = useState<LogState>(emptyLog);
+  const [state, setState] = useState<LogState>(() => {
+    const view = kept.get(`${env}:${sessionId}`);
+    return view ? { ...view.log, pending: [...view.log.pending] } : emptyLog();
+  });
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(true);
   const [earlier, setEarlier] = useState(false);
@@ -40,13 +58,17 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
 
   useEffect(() => {
     let stopped = false, fetching = false, pagingBack = false, renewing = false, refreshAgain = false;
-    let log = emptyLog(), raw: HelmEvent[] = [], first = 0, windowVersion = 0, visibilityVersion = 0;
+    const key = `${env}:${sessionId}`;
+    const view = kept.get(key);
+    kept.delete(key);
+    let log = view?.log ?? emptyLog(), raw: HelmEvent[] = view?.raw ?? [], first = view?.first ?? 0, windowVersion = 0, visibilityVersion = 0;
     let needsPaint = false;
     let dirty = false, retryDelay = 1000, urgentPaint = false;
     let paint: ReturnType<typeof setTimeout> | undefined;
     let writer: ReturnType<typeof setTimeout> | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    let networkRead = false, more = false, filling = false, logFirst = 0, liveVersion = 0;
+    let networkRead = false, filling = false, logFirst = view?.logFirst ?? 0, liveVersion = 0;
+    let more = !!logFirst && !!first && logFirst < first;
     let stale = true, fetchVersion = 0;
     let updateCheck: ReturnType<typeof setTimeout> | undefined;
     let announced: { lastSeq: number; status?: string } | undefined;
@@ -54,7 +76,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
     const buffered = new Map<number, HelmEvent>();
     const watchId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const visible = () => !stopped && !document.hidden;
-    setState(log); setError(''); setSyncing(true); setEarlier(false); setLoadingEarlier(false);
+    setState(view ? { ...log, pending: [...log.pending] } : log); setError(''); setSyncing(true); setEarlier(more); setLoadingEarlier(false);
 
     const publish = () => {
       clearTimeout(paint); paint = undefined; urgentPaint = false;
@@ -269,7 +291,9 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
     client.subscribe(env);
     // Cached text can paint offline. It never controls the network cursor,
     // and a slow cache read cannot replace the fresh tail after it arrives.
-    const cacheRead = loadCached(env, sessionId).then(cached => {
+    // A chat kept in memory has all of it already; reading the saved copy
+    // again would only copy megabytes off the disk for nothing.
+    const cacheRead = (view ? Promise.resolve(null) : loadCached(env, sessionId)).then(cached => {
       if (stopped || !cached?.events.length) return;
       // The network won the race. The saved copy can still supply the part
       // of the chat in front of the fresh window, so it is not fetched again.
@@ -348,6 +372,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
       window.removeEventListener('online', catchUp);
       window.removeEventListener('pagehide', hide);
       persist(); release();
+      if (log.loaded && log.turns.length) keep(key, { log, raw, first, logFirst });
     };
   }, [client, env, sessionId, wholeChat]);
 

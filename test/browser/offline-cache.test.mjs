@@ -43,7 +43,7 @@ before(async () => {
       await cache.saveCached('machine','Another chat',3,events('Other saved response'),1);
       await txn('kv','readonly',s=>s.get('helm.workspace:'+scope));
     };
-    function Probe(){const state=useSessionLog(client,'machine','Cached chat', { wholeChat: window.wholeChat === true });window.state=state;return <pre>{JSON.stringify(state.log)}</pre>}
+    function Probe(){const state=useSessionLog(client,'machine','Cached chat', { wholeChat: window.wholeChat === true });window.state=state;(window.renders??=[]).push(!!state.log.loaded);return <pre>{JSON.stringify(state.log)}</pre>}
     window.mount = (online=false) => root.render(<Shell client={client} conn={{online,reachable:online}} onSignOut={()=>{}}/>);
     window.unmount = () => root.render(null);
     window.probe = () => root.render(<Probe/>);
@@ -70,6 +70,23 @@ async function pageFor(t) {
   t.after(() => assert.deepEqual(errors, []));
   return { page, boot };
 }
+
+test('a chat left a moment ago comes back whole in its first frame, with no wait or replay', async t => {
+  const { page } = await pageFor(t);
+  await page.evaluate(() => {
+    window.reads = async (env, method) => method === 'session.events' ? { events: window.events('Kept reply'), pending: [], last: 3 }
+      : method === 'session.watch' ? { last: 3 } : {};
+    window.probe();
+  });
+  await page.waitForFunction(() => window.state?.log.loaded && JSON.stringify(window.state.log).includes('Kept reply'));
+  // Away and back, with the machine and the device's storage both silent.
+  await page.evaluate(() => { window.unmount(); window.reads = () => new Promise(() => {}); });
+  await page.waitForFunction(() => !document.querySelector('pre'));
+  await page.evaluate(() => { window.renders = []; window.probe(); });
+  await page.waitForFunction(() => window.renders.length > 0);
+  assert.equal(await page.evaluate(() => window.renders[0]), true, 'the first render already has the chat');
+  assert.ok(await page.evaluate(() => JSON.stringify(window.state.log).includes('Kept reply')));
+});
 
 async function openFromSearch(page, title) {
   await page.locator('.sidebar').getByRole('button', { name: 'Search chats, machines, and folders' }).click();

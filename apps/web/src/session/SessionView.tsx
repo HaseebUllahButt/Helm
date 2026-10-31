@@ -2,7 +2,7 @@ import { errorMessage } from '../errors';
 import { useCopySelection } from '../useCopySelection';
 import type { Transcribe } from './voice';
 import { useDismiss } from '../useDismiss';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { recacheWarning, type Recache } from '@helm/usage/recache';
 import { Markdown } from '../Markdown';
@@ -44,6 +44,18 @@ import { StatusChip } from '../screens/ThreadRows';
  */
 const Terminal = lazy(() => import('../Terminal').then((m) => ({ default: m.Terminal })));
 
+/**
+ * The chats left most recently, as they were on screen. Coming back to one
+ * shows it at once: a long chat's saved copy is too big for the storage's
+ * memory and took half a second to read back (owner, 2026-11-01).
+ */
+const keptMessages = new Map<string, Message[]>();
+function keepMessages(key: string, messages: Message[]) {
+  keptMessages.delete(key);
+  keptMessages.set(key, messages);
+  while (keptMessages.size > 10) keptMessages.delete(keptMessages.keys().next().value!);
+}
+
 export function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask, onSendFolder, onOpenNative }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account. */
@@ -61,7 +73,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const isShell = session.engine === 'shell';
   const isExternal = !!session.external;
   const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...(page === undefined ? {} : { page }) }, 60_000), [client, env.id, session.id]);
-  const [messages, setMessages] = useState<Message[] | null>(null);
+  const [messages, setMessages] = useState<Message[] | null>(() => keptMessages.get(`${env.id}:${session.id}`) ?? null);
+  // What is on screen stays in memory for the next visit (see keptMessages).
+  useEffect(() => { if (messages?.length) keepMessages(`${env.id}:${session.id}`, messages); }, [messages, env.id, session.id]);
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
   /** The messages last shown, as text: a read that brings back the same chat changes nothing. */
@@ -203,7 +217,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   }, [client, env.id, session.id, isShell]);
 
   useEffect(() => {
-    if (isShell) return;
+    if (isShell || keptMessages.has(`${env.id}:${session.id}`)) return;
     let stale = false;
     loadMessages<Message>(env.id, session.id).then((cached) => {
       if (!stale && cached?.length) setMessages((now) => now ?? cached);
@@ -629,11 +643,36 @@ function keepSameMessages(was: Message[] | null, next: Message[]): Message[] {
   return next.map((m, i) => was[i] && JSON.stringify(was[i]) === JSON.stringify(m) ? was[i] : m);
 }
 
+/** Messages drawn in a chat's first frame, then how many join per step. */
+const FIRST_MESSAGES = 12;
+const MORE_MESSAGES = 40;
+
 const Chat = memo(function Chat({ messages, status, compacting = false, readVisual, canvas }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader; canvas?: CanvasVisuals }) {
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
   const [unread, setUnread] = useState(false);
+  // The newest messages draw in the first frame, the older ones join in
+  // steps right after, so a chat switch shows at once (owner, 2026-11-01).
+  const [tail, setTail] = useState<number | null>(FIRST_MESSAGES);
+  const count = messages?.length ?? 0;
+  const start = tail === null || count <= tail ? 0 : count - tail;
+  useEffect(() => {
+    if (tail === null) return;
+    if (count <= tail) { if (count) setTail(null); return; }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const frame = requestAnimationFrame(() => { timer = setTimeout(() => setTail((n) => n === null || n + MORE_MESSAGES >= count ? null : n + MORE_MESSAGES), 0); });
+    return () => { cancelAnimationFrame(frame); clearTimeout(timer); };
+  }, [tail, count]);
+  // Older messages arriving above keep the reader where they were.
+  const height = useRef(0);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    if (stuck.current) el.scrollTop = el.scrollHeight;
+    else if (height.current) el.scrollTop += el.scrollHeight - height.current;
+    height.current = el.scrollHeight;
+  }, [start]);
 
   const onScroll = () => {
     const el = box.current;
@@ -665,7 +704,7 @@ const Chat = memo(function Chat({ messages, status, compacting = false, readVisu
                 : 'Send a message to start the chat.'}
             </p>
           )}
-          <Visuals.Provider value={readVisual}><CanvasContext.Provider value={canvas}>{messages?.map((m, i) => <Turn key={m.sourceId ?? i} m={m} />)}</CanvasContext.Provider></Visuals.Provider>
+          <Visuals.Provider value={readVisual}><CanvasContext.Provider value={canvas}>{messages?.slice(start).map((m, i) => <Turn key={m.sourceId ?? start + i} m={m} />)}</CanvasContext.Provider></Visuals.Provider>
           {compacting ? <CompactionLine live />
             : status === 'working' && <div className="working"><span className="shine">Working…</span></div>}
         </div>
