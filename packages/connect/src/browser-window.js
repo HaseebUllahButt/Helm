@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { browserArgs, ignoredBrowserArgs } from './browser-identity.js';
 import { systemChromium, launchTarget } from './chromium-find.js';
-export { systemChromium, refreshBrowsers } from './chromium-find.js';
+export { systemChromium, launchTarget, refreshBrowsers } from './chromium-find.js';
 
 const SCREEN_KEYS = ['WAYLAND_DISPLAY', 'DISPLAY', 'XAUTHORITY'];
 const pickScreen = env => Object.fromEntries(SCREEN_KEYS.filter(key => env[key]).map(key => [key, env[key]]));

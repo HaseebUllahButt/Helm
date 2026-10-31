@@ -29,6 +29,8 @@ function privateReader(home, extra = {}) {
   return { listProfiles, resolveProfile: async wanted => (await listProfiles(), reader.resolveProfile(wanted)), readLogins: async (wanted, options) => (await listProfiles(), reader.readLogins(wanted, options)) };
 }
 const linux = privateReader;
+// A profile by what a person sees: its browser and folder. Keys hold a path hash.
+const who = p => `${p.browserName}/${p.directory}`;
 
 test('a reader reads only its private home; the guard fails on any folder outside it', async t => {
   const home = await config(t), outside = await config(t);
@@ -43,12 +45,12 @@ test('discovers profiles, finds the one a person names, and rejects symlinks', a
   const first = await fixture(root), second = await fixture(root, { browserPath: 'google-chrome', directory: 'Profile 3' }); first.db.close(); second.db.close();
   const reader = linux(home);
   assert.equal((await reader.listProfiles()).length, 2);
-  assert.equal((await reader.resolveProfile('CHROME:personal')).key, 'google-chrome:Profile 3');
-  assert.equal((await reader.resolveProfile('Profile 3')).key, 'google-chrome:Profile 3');
-  assert.equal((await reader.resolveProfile('personal in chromium')).key, 'chromium:Default');
-  assert.equal((await reader.resolveProfile('Google Chrome Personal')).key, 'google-chrome:Profile 3');
-  assert.equal((await reader.resolveProfile('Google Chrome: Personal (Profile 3)')).key, 'google-chrome:Profile 3', 'a pasted list line resolves');
-  assert.equal((await reader.resolveProfile('chrome')).key, 'google-chrome:Profile 3', 'a browser alone is its last used profile');
+  assert.equal(who(await reader.resolveProfile('CHROME:personal')), 'Google Chrome/Profile 3');
+  assert.equal(who(await reader.resolveProfile('Profile 3')), 'Google Chrome/Profile 3');
+  assert.equal(who(await reader.resolveProfile('personal in chromium')), 'Chromium/Default');
+  assert.equal(who(await reader.resolveProfile('Google Chrome Personal')), 'Google Chrome/Profile 3');
+  assert.equal(who(await reader.resolveProfile('Google Chrome: Personal (Profile 3)')), 'Google Chrome/Profile 3', 'a pasted list line resolves');
+  assert.equal(who(await reader.resolveProfile('chrome')), 'Google Chrome/Profile 3', 'a browser alone is its last used profile');
   await assert.rejects(reader.resolveProfile('brave'), /No browser profile matches "brave"/);
   await assert.rejects(reader.resolveProfile('nobody'), /No browser profile matches "nobody".*Chrome: Personal/);
   await assert.rejects(reader.readLogins({ key: 'chromium:../../escape' }), /No browser profile matches/);
@@ -62,12 +64,12 @@ test('"main" is a profile called Main when there is one, else the default profil
   const home = await config(t), root = join(home, '.config');
   (await fixture(root)).db.close();
   const reader = linux(home);
-  assert.equal((await reader.resolveProfile('main')).key, 'chromium:Default');
-  assert.equal((await reader.resolveProfile('the main profile')).key, 'chromium:Default');
+  assert.equal(who(await reader.resolveProfile('main')), 'Chromium/Default');
+  assert.equal(who(await reader.resolveProfile('the main profile')), 'Chromium/Default');
   (await fixture(root, { directory: 'Profile 1', name: 'Main' })).db.close();
-  assert.equal((await reader.resolveProfile('Main')).key, 'chromium:Profile 1');
-  assert.equal((await reader.resolveProfile('main profile')).key, 'chromium:Profile 1');
-  assert.equal((await reader.resolveProfile('default')).key, 'chromium:Default');
+  assert.equal(who(await reader.resolveProfile('Main')), 'Chromium/Profile 1');
+  assert.equal(who(await reader.resolveProfile('main profile')), 'Chromium/Profile 1');
+  assert.equal(who(await reader.resolveProfile('default')), 'Chromium/Default');
 });
 
 test('a name two browsers share means the everyday browser, then the latest used', async t => {
@@ -75,14 +77,14 @@ test('a name two browsers share means the everyday browser, then the latest used
   for (const options of [{}, { browserPath: 'google-chrome', info: { active_time: 1700000000 } }, { browserPath: 'net.imput.helium', directory: 'Profile 7', name: 'Work', info: { user_name: 'me@example.test', active_time: 1600000000 } }]) (await fixture(root, options)).db.close();
   await writeFile(join(root, 'helium-browser-flags.conf'), '--password-store=basic');
   const plain = linux(home);
-  assert.equal((await plain.resolveProfile('personal')).key, 'google-chrome:Default', 'used most lately');
-  assert.equal((await plain.resolveProfile('me@example.test')).key, 'helium:Profile 7');
-  assert.equal((await plain.resolveProfile('wor')).key, 'helium:Profile 7', 'the start of a name is enough');
-  const helium = (await plain.listProfiles()).find(p => p.browser === 'helium');
+  assert.equal(who(await plain.resolveProfile('personal')), 'Google Chrome/Default', 'used most lately');
+  assert.equal(who(await plain.resolveProfile('me@example.test')), 'Helium/Profile 7');
+  assert.equal(who(await plain.resolveProfile('wor')), 'Helium/Profile 7', 'the start of a name is enough');
+  const helium = (await plain.listProfiles()).find(p => p.browserName === 'Helium');
   assert.equal(helium.browserName, 'Helium'); assert.equal(helium.passwordStore, 'basic');
   const everyday = linux(home, { defaultBrowser: async () => 'chromium' });
-  assert.equal((await everyday.resolveProfile('personal')).key, 'chromium:Default');
-  assert.deepEqual((await everyday.listProfiles()).map(p => p.key), ['chromium:Default', 'google-chrome:Default', 'helium:Profile 7']);
+  assert.equal(who(await everyday.resolveProfile('personal')), 'Chromium/Default');
+  assert.deepEqual((await everyday.listProfiles()).map(who), ['Chromium/Default', 'Google Chrome/Default', 'Helium/Profile 7']);
 });
 
 test('finds any Chromium browser by its "Local State", in native, Flatpak and Snap roots, named by its folder', async t => {
@@ -96,11 +98,10 @@ test('finds any Chromium browser by its "Local State", in native, Flatpak and Sn
   const found = (await linux(home).listProfiles());
   const byName = Object.fromEntries(found.map(p => [p.browserName, p.browser]));
   assert.equal(found.length, 3);
-  assert.equal(byName.Wavebrowser, 'wavebrowser');
-  // The Flatpak app id names the browser ("Helium"), and its key carries the
-  // full path so it never clashes with a plain "chromium" install.
-  assert.equal(byName.Helium, 'helium-chromium', 'the app id names the Flatpak browser, not its chromium folder');
-  assert.equal(byName.Chromium, 'chromium-chromium', 'the Snap browser below .config is found, keyed by its path');
+  assert.match(byName.Wavebrowser, /^wavebrowser-[0-9a-f]{8}$/);
+  // The Flatpak app id names the browser ("Helium"), not its chromium folder.
+  assert.match(byName.Helium, /^helium-[0-9a-f]{8}$/, 'the app id names the Flatpak browser, not its chromium folder');
+  assert.match(byName.Chromium, /^chromium-[0-9a-f]{8}$/, 'the Snap browser below .config is found');
 });
 
 test('a profile key stays the same when another install appears (no account swap)', async t => {
@@ -141,8 +142,8 @@ test('one browser’s flags do not change another browser’s store', async t =>
   // Only Chromium's own launcher sets a basic store.
   await writeFile(join(root, 'chromium-flags.conf'), '--password-store=basic');
   const found = await linux(home).listProfiles();
-  assert.equal(found.find(p => p.browser === 'chromium').passwordStore, 'basic');
-  assert.equal(found.find(p => p.browser === 'google-chrome').passwordStore, 'auto', 'Chrome keeps its keyring store');
+  assert.equal(found.find(p => p.browserName === 'Chromium').passwordStore, 'basic');
+  assert.equal(found.find(p => p.browserName === 'Google Chrome').passwordStore, 'auto', 'Chrome keeps its keyring store');
 });
 
 test('Linux decrypts v10 and v11 with host hashes, live WAL, expiry, sessions and SameSite', async t => {
@@ -226,4 +227,18 @@ test('CLI profiles, names with spaces, default and clearing return only RPC meta
   await run(['profiles']); await run(['logins', 'Profile', '3', '--default']); await run(['logins', '--clear-default']);
   assert.deepEqual(calls.map(c => c[0]), ['browser.profiles', 'browser.importLogins', 'browser.loginDefault', 'browser.loginDefault']);
   assert.equal(calls[1][1].profileKey, 'Profile 3'); assert.equal(calls.at(-1)[1].profileKey, null); assert.ok(!outputs.some(s => s.includes('synthetic')));
+});
+
+test('a damaged or expired first cookie does not stop a good keyring key', async t => {
+  const home = await config(t), root = join(home, '.config'), time = Date.now();
+  const f = await fixture(root); t.after(() => f.db.close());
+  await writeFile(join(root, 'chromium-flags.conf'), '--password-store=gnome-libsecret');
+  // First rows: one damaged, one expired and sealed with an old key.
+  f.insert({ name: 'damaged', bytes: Buffer.concat([Buffer.from('v11'), Buffer.alloc(32, 7)]) });
+  f.insert({ name: 'expired', bytes: encrypted('old', { prefix: 'v11', password: 'old-key' }), expires: time / 1000 - 60 });
+  f.insert({ name: 'good', bytes: encrypted('good-value', { prefix: 'v11', password: 'fake-key' }) });
+  const reader = linux(home, { now: () => time, run: async () => ({ stdout: 'fake-key\n' }) });
+  const r = await reader.readLogins('Default');
+  assert.deepEqual(r.cookies.map(c => c.value), ['good-value'], 'the good row copies');
+  assert.equal(r.failed, 1, 'only the damaged row fails');
 });

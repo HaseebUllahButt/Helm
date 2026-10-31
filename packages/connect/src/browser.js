@@ -8,7 +8,7 @@ import { normalizeAction, readOnlyAction, resolveTarget } from './browser-target
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } from './browser-identity.js';
 import * as browserLogins from './browser-logins.js';
-import { canOpenWindow, systemChromium, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
+import { canOpenWindow, systemChromium, launchTarget, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -895,6 +895,12 @@ export class BrowserManager {
 }
 
 /** A machine with no browser to start gets no browser note: it would only steer the agent to a tool that fails. */
-export function browserReady() { return !!(process.env.HELM_WINDOW_CHROMIUM || executable() || hasPlaywrightChromium()); }
+// A browser that starts only through its package launcher (a Flatpak) still
+// counts where the owner's window can open: the window starts it that way.
+export function browserReady({ env = process.env, platform = process.platform, find, playwright = hasPlaywrightChromium, window = () => canOpenWindow(env, platform) } = {}) {
+  if (env.HELM_WINDOW_CHROMIUM || env.HELM_CHROMIUM_PATH || env.HELM_TEST_CHROMIUM) return true;
+  if (systemChromium(env, platform, find) || playwright()) return true;
+  return !!(window() && launchTarget(env, platform, find));
+}
 
 export function browserNote() { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. For an owner step, point with helm browser point; do not click. Never ask for passwords. When a site needs a login, pick the fitting profile from helm browser profiles and run helm browser logins "<profile>". Respect the request on signed-in sites.]`; }

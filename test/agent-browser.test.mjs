@@ -13,7 +13,7 @@ process.env.HELM_NO_SERVICE = '1';
 delete process.env.WAYLAND_DISPLAY; delete process.env.DISPLAY;
 for (const [key, file] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(process.env.HELM_DIR, file);
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-const { BrowserManager } = await import('../packages/connect/src/browser.js');
+const { BrowserManager, browserReady } = await import('../packages/connect/src/browser.js');
 const { systemChromium } = await import('../packages/connect/src/browser-window.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
 const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
@@ -60,6 +60,19 @@ test('Mac Chrome is ready without Linux browsers or a Playwright download', () =
     assert.equal(browserReady(), true);
   `], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('a machine with only a Flatpak browser is ready where the owner window can open', () => {
+  const home = mkdtempSync(join(process.env.HELM_DIR, 'flatpak-only-'));
+  const apps = join(home, 'apps'), bin = join(home, 'bin'), fp = join(home, 'flatpak'), files = join(fp, 'org.x.Wave', 'current', 'active', 'files');
+  for (const dir of [apps, bin, files]) mkdirSync(dir, { recursive: true });
+  for (const name of ['resources.pak', 'wave']) writeFileSync(join(files, name), '');
+  writeFileSync(join(bin, 'flatpak'), '#!/bin/sh\n');
+  writeFileSync(join(apps, 'wave.desktop'), `[Desktop Entry]\nName=Wave\nExec=${join(bin, 'flatpak')} run org.x.Wave %U\n`);
+  const find = { home, entryDirs: [apps], flatpakDirs: [fp], pathDirs: [bin], snapRoot: join(home, 'snap'), run: () => { throw new Error('no default'); } };
+  const ready = window => browserReady({ env: {}, platform: 'linux', find, playwright: () => false, window: () => window });
+  assert.equal(ready(true), true, 'the window can start it through flatpak run');
+  assert.equal(ready(false), false, 'with no screen there is nothing that can start it');
 });
 
 test('tabs from one chat do not block another and all saved tabs survive recovery', async t => {
