@@ -1137,7 +1137,7 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
-  // Ctrl/Cmd+Alt+B opens or closes Settled. A folded sidebar unfolds with
+  // Ctrl/Cmd+Alt+S opens or closes Settled. A folded sidebar unfolds with
   // Settled open, since the shelf is not on show there.
   const [settledCommand, setSettledCommand] = useState<{ n: number; to?: boolean }>({ n: 0 });
   const toggleSettled = useRef<() => void>(() => {});
@@ -1148,7 +1148,7 @@ function Shell({ client, conn, onSignOut }: {
   };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.code !== 'KeyB' || !(event.ctrlKey || event.metaKey) || !event.altKey || event.shiftKey || event.isComposing
+      if (event.code !== 'KeyS' || !(event.ctrlKey || event.metaKey) || !event.altKey || event.shiftKey || event.isComposing
           || document.querySelector('[aria-modal="true"]')) return;
       event.preventDefault();
       event.stopPropagation();
