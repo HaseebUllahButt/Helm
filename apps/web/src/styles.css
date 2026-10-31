@@ -290,7 +290,6 @@ code, pre, kbd { font-family: var(--mono); }
   .rail-chat.rail-need .rail-dot { background: var(--need); }
   .rail-chat.rail-finished .rail-dot { background: var(--ok); }
   .rail-chat.rail-settled .rail-dot { display: none; }
-  .rail-sep { width: 22px; margin: 2px 0; border: 0; border-top: 1px solid var(--line); flex: none; }
   @media (prefers-reduced-motion: reduce) { .rail-chat.rail-working .rail-dot { animation: none; } }
   .main { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; }
 }

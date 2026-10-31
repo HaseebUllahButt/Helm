@@ -909,7 +909,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         shoulder={taskList && <TodoStrip todos={taskList} />}
         banner={pending && <div ref={permissionBox} className="ask-box"><PermissionSheet key={pending.requestId} variant="banner" permission={pending} onAnswer={answer} busy={busy} onHandle={holdQuestion} /></div>}
         danger={mode?.danger} compacting={compacting || undefined}
-        foot={controls.chips} statusLine={account || limits.length > 0 || session.context ? <LimitsLine windows={limits} account={account} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages}
+        foot={controls.chips} statusLine={account || limits.length > 0 || session.context ? <LimitsLine windows={limits} account={account} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages} shrinking={preparingImages > 0}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot receive images in this chat.`)}
         commands={commands}

@@ -1,6 +1,6 @@
 import { errorMessage } from './errors';
 import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice } from './session/voice';
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
 import { useNow } from './useNow';
 import { isUnread, markSeen, seenHere, unseenFinish, useSeenVersion } from './threadStatus';
@@ -1355,19 +1355,18 @@ function Shell({ client, conn, onSignOut }: {
                 ...finishedShelf.map((x) => ({ ...x, need: false, word: 'finished', cls: 'rail-finished' })),
                 ...runningShelf.map((x) => ({ ...x, need: false, word: 'working', cls: 'rail-working' })),
               ]),
-            ].map(({ env: e, s, need, word, cls }, i) => {
+            ].map(({ env: e, s, need, word, cls }) => {
               const open = isOpen({ env: e, s });
-              return (<Fragment key={`${e.id}:${s.id}`}>
-                {i === pinnedNow.length && i > 0 && <hr className="rail-sep" aria-hidden="true" />}
+              return (
                 <button
-                  type="button" className={`rail-chat ${cls}${open ? ' active' : ''}`}
+                  key={`${e.id}:${s.id}`} type="button" className={`rail-chat ${cls}${open ? ' active' : ''}`}
                   aria-current={open ? 'page' : undefined} aria-label={`${s.title}, ${e.name}, ${word}`} title={`${s.title}\n${e.name} · ${word}`}
                   onClick={() => openSession(e.id, s, need && s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
                 >
                   <EngineMark engine={engineOf(s.engine).cls} />
                   <i className="rail-dot" aria-hidden="true" />
                 </button>
-              </Fragment>);
+              );
             })}
           </nav>
         )}
