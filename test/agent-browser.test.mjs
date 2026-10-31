@@ -389,3 +389,33 @@ test('an upload goes through a button that opens the file picker, or a hidden fi
   await manager.run('one', tab.id, { upload: 'input[type=file]', ...file('by-css.jpg') });
   assert.equal(await shown(), 'by-css.jpg');
 });
+
+test('a check waits for a late change, ignored input fails once, and a missing control fails in about two seconds', { timeout: 60000 }, async t => {
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end('<title>Late</title><output></output><label>Name<input id=name></label><label><input type=checkbox id=agree>Agree</label>'
+      + '<button onclick="setTimeout(() => { document.querySelector(\'output\').textContent = \'Saved\'; document.getElementById(\'name\').value = \'Ada\'; document.getElementById(\'agree\').checked = true; location.hash = \'done\'; }, 700)">Save</button>'
+      + '<button onclick="window.presses = (window.presses || 0) + 1">Ignore</button>');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: mkdtempSync(join(tmpdir(), 'helm-checks-')), session: sid => ({ id: sid }), canWindow: false });
+  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
+  const { tab } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}/` });
+  const saved = await manager.run('one', tab.id, { actions: [{ click: 'the Save button' }, { check: 'Saved' }, { check: { target: 'Name', value: 'Ada' } }, { check: { target: 'Agree', checked: true } }, { check: { url: '#done' } }, { check: 'Save button', expect: true }] });
+  assert.equal(saved.failedAt, undefined, saved.error); assert.ok(saved.results.slice(1).every(step => step.pass));
+  const ignored = await manager.run('one', tab.id, { actions: [{ click: 'the Ignore button' }, { check: 'Sent' }] });
+  assert.equal(ignored.failedAt, 1); assert.equal(ignored.check.pass, false); assert.match(ignored.error, /"Sent" did not come in 2000 ms/);
+  assert.equal((await manager.run('one', tab.id, { evaluate: 'window.presses' })).value, 1, 'the click was delivered once');
+  let started = Date.now();
+  await assert.rejects(manager.run('one', tab.id, { click: { selector: '#missing' } }), /click: the control was not found or not ready in 2000 ms/);
+  let took = Date.now() - started; assert.ok(took >= 1900 && took < 4000, `selector took ${took} ms`);
+  started = Date.now();
+  const named = await manager.run('one', tab.id, { click: 'the Publish button' });
+  took = Date.now() - started; assert.match(named.error, /no matching target/); assert.ok(took >= 1900 && took < 4000, `named control took ${took} ms`);
+  started = Date.now();
+  const longer = manager.run('one', tab.id, { click: 'the Publish button', timeout: 5000 });
+  await manager.tabs.get(tab.id).page.evaluate(() => setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<button onclick="document.title=\'Published\'">Publish</button>'), 2500));
+  assert.equal((await longer).error, undefined, 'a longer step timeout waits for a control that comes late');
+  assert.equal(await manager.tabs.get(tab.id).page.title(), 'Published');
+});

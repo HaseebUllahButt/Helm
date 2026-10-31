@@ -64,6 +64,13 @@ The owner uses the same browser window. Helm has no browser panel.
   before each action. Drawing it does not repeat the action's scroll and
   stability checks for a control already in view. Clicks and typing still
   scroll clipped controls and frame targets into view.
+- **Fail fast, and never deliver twice.** A step waits up to 2 s for its
+  control, a page load 10 s, a call 30 s; `timeout` raises one. A step's
+  time never runs past its call's. A check reads again until it holds or
+  its time ends; Helm never adds a check or a retry of input on its own.
+  A call that times out delivers no later batch step, and its reply says
+  if the step in flight may have landed. Until that step ends, only reads
+  run on the tab (an `evaluate` that never returns: close the tab).
 - **Show me** (`helm browser point`) highlights an element and changes
   nothing, so it works in read-only chats. Read-only agents can read,
   navigate, wait and check; a batch holding any change is refused before

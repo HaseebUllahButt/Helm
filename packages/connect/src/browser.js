@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { readFile, writeFile, rm, chmod, stat, rename } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { HELM_DIR } from './paths.js';
-import { normalizeAction, readOnlyAction, resolveTarget } from './browser-targets.js';
+import { normalizeAction, readOnlyAction, resolveTarget, scoreTargets } from './browser-targets.js';
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } from './browser-identity.js';
 import * as browserLogins from './browser-logins.js';
@@ -75,6 +75,40 @@ const pointerTarget = el => {
     box: rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null };
 };
 
+// How long a step may wait, unless the call asks for more with "timeout"
+// (ms): a control to be ready or a check to hold, a page to load, a call.
+const STEP_MS = 2000, NAV_MS = 10000, CALL_MS = 30000, MAX_MS = 120000;
+const pause = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); });
+/** A step's own deadline, never past the deadline of its call. */
+const stepTime = (action, op, base) => { const wanted = action.timeout == null ? base : integer(action.timeout, 1, MAX_MS); return Math.max(1, Math.min(wanted, op ? op.deadline - Date.now() : wanted)); };
+/** A check is page text, or all of: text, url (part of the address), dialog (true or part of its message), target (a control) with its value or checked state. */
+const checkSpec = value => {
+  if (typeof value === 'string') return { text: text(value, 2000) };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('check needs page text, or an object with text, url, dialog or target');
+  const unknown = Object.keys(value).filter(key => !['text', 'url', 'dialog', 'target', 'value', 'checked'].includes(key));
+  if (unknown.length) throw new Error(`check does not know ${unknown.join(', ')}; use text, url, dialog, target, value or checked`);
+  for (const key of ['text', 'url', 'target', 'value']) if (value[key] != null) text(value[key], 2000);
+  if (value.dialog != null && value.dialog !== true) text(value.dialog, 2000);
+  if (value.checked != null && typeof value.checked !== 'boolean') throw new Error('check checked must be true or false');
+  if ((value.value != null || value.checked != null) && value.target == null) throw new Error('check value and checked need a target');
+  if (value.text == null && value.url == null && value.dialog == null && value.target == null) throw new Error('check needs text, url, dialog or target');
+  return value;
+};
+// In a frame: where its frame element is in the parent page.
+const frameBox = el => {
+  const r = el.getBoundingClientRect(), view = el.ownerDocument.defaultView, s = view.getComputedStyle(el);
+  return { visible: r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert]'), inView: r.bottom > 0 && r.right > 0 && r.top < view.innerHeight && r.left < view.innerWidth };
+};
+// In a frame: is this text in its document or its open shadow roots? Child frames are read on their own.
+const hasText = value => {
+  const visible = el => { const r = el.getBoundingClientRect(), s = el.ownerDocument.defaultView.getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert]'); };
+  const visit = root => {
+    if ((root.body?.innerText || (root.nodeType === 11 ? [...root.childNodes].map(node => node.nodeType === 3 ? node.textContent : node.nodeType === 1 && visible(node) ? node.innerText || '' : '').join('\n') : '') || '').includes(value)) return true;
+    for (const el of root.querySelectorAll('*')) if (el.shadowRoot && visible(el) && visit(el.shadowRoot)) return true;
+    return false;
+  };
+  return visit(document);
+};
 // Steps that only read the page. Any other step can change it.
 const READS = ['look', 'console', 'network', 'screenshot', 'point', 'check', 'wait'];
 const changesPage = kind => !READS.includes(kind);
@@ -100,7 +134,7 @@ let ownerLogins = false;
 export const useOwnerLogins = () => { ownerLogins = true; };
 
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = 45000, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500 } = {}) {
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = CALL_MS, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500 } = {}) {
     this.launchWindow = launchWindow; this.windowCheck = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
     this.logins = logins; this.loginImports = new Map(); this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
     this.flows = new BrowserFlows(directory);
@@ -153,7 +187,7 @@ export class BrowserManager {
       // receives matching client hints before an agent opens its address.
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true, ...(browser.helmIdentity ? { userAgent: browser.helmIdentity.userAgent } : {}), ...(storageState ? { storageState } : {}) });
       context.helmPatched = !!browser.helmPatched;
-      context.setDefaultTimeout(10000); context.setDefaultNavigationTimeout(15000);
+      context.setDefaultTimeout(STEP_MS); context.setDefaultNavigationTimeout(NAV_MS);
       context.on('page', page => {
         const tab = this.register(sessionId, page);
         tab.prepared = presentAsChrome(page, browser.helmIdentity).then(cdp => { tab.identityCdp = cdp; });
@@ -194,7 +228,7 @@ export class BrowserManager {
       let context;
       try { context = await this.launchWindow(folder, { name: 'helm-browser' }); }
       catch (error) { throw new Error(`The browser could not open a window. ${String(error.message).split('\n')[0]}`); }
-      context.helmWindow = true; context.helmJoined = new Set(); context.setDefaultTimeout(10000); context.setDefaultNavigationTimeout(15000);
+      context.helmWindow = true; context.helmJoined = new Set(); context.setDefaultTimeout(STEP_MS); context.setDefaultNavigationTimeout(NAV_MS);
       try {
         if (seed?.cookies?.length) await context.addCookies(seed.cookies).catch(() => {});
         await context.exposeBinding('__helmOwnerInput', ({ page }) => this.ownerInput(page));
@@ -500,7 +534,10 @@ export class BrowserManager {
     }
     const previous = this.serial.get(tab.id) || Promise.resolve();
     // What this call is doing now, so a timeout can say if a step reached the page.
-    const batch = action.kind === 'batch', op = { deadline: Date.now() + this.actionTimeoutMs, expired: false, started: false, step: null, done: 0, batch, total: batch && Array.isArray(action.actions) ? action.actions.length : 1 };
+    // A batch's "timeout" is for the whole call; a single step's is for that step.
+    const batch = action.kind === 'batch', asked = action.timeout == null ? null : integer(action.timeout, 1, MAX_MS);
+    const limit = batch ? asked ?? this.actionTimeoutMs : Math.max(this.actionTimeoutMs, asked == null ? 0 : asked + 5000);
+    const op = { deadline: Date.now() + limit, expired: false, started: false, step: null, done: 0, batch, total: batch && Array.isArray(action.actions) ? action.actions.length : 1 };
     const expired = () => new Error('The browser action timed out before it reached the page. Nothing was done.');
     let timer;
     const operation = previous.catch(() => {}).then(async () => {
@@ -531,14 +568,14 @@ export class BrowserManager {
       if (!['look', 'console', 'network', 'screenshot', 'point'].includes(action?.kind)) { if (['navigate', 'back', 'forward', 'reload', 'batch'].includes(action?.kind)) await this.persistTabs(sessionId); else this.persistSoon(sessionId); }
       return result;
     });
-    const job = Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => { op.expired = true; reject(new Error(timedOut(op))); }, this.actionTimeoutMs); timer.unref?.(); })]);
+    const job = Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => { op.expired = true; reject(new Error(timedOut(op))); }, limit); timer.unref?.(); })]);
     // A reply timeout does not stop a browser command already in flight.
     // Give it one more action timeout to finish before allowing recovery
     // commands through: an evaluate call can otherwise block the tab forever.
     // Page changes stay refused while its input step is still running.
     let release;
     const grace = new Promise(resolve => { release = resolve; });
-    const graceTimer = setTimeout(release, 2 * this.actionTimeoutMs); graceTimer.unref?.();
+    const graceTimer = setTimeout(release, 2 * limit); graceTimer.unref?.();
     const serial = Promise.race([operation, grace]);
     this.serial.set(tab.id, serial);
     void serial.finally(() => {
@@ -583,6 +620,42 @@ export class BrowserManager {
     }, budget);
     tab.title = result.title;
     return { text: `${result.title}\n${result.url}\n${result.text}\n\n${result.elements.map(e => `[${e.ref}] ${e.role} ${JSON.stringify(e.name)}${e.disabled ? ' disabled' : ''}${e.checked != null ? ` checked=${e.checked}` : ''}${e.expanded != null ? ` expanded=${e.expanded}` : ''}${e.selected != null ? ` selected=${e.selected}` : ''}${e.current ? ` current=${e.current}` : ''}${e.value != null ? ` value=${JSON.stringify(e.value)}` : ''}${!e.inViewport ? ' offscreen' : ''}`).join('\n')}`, elements: result.elements };
+  }
+  /** A control named in plain words. One that is not there yet gets until `ms` to appear; a tie fails at once. */
+  async find(tab, target, purpose, ms) {
+    const until = Date.now() + ms;
+    for (;;) {
+      const { elements } = await this.look(tab, 0);
+      try { return resolveTarget(target, elements, purpose); } catch (error) { if (error.candidates?.[0]?.score || Date.now() >= until) throw error; }
+      await pause(Math.min(100, until - Date.now()));
+    }
+  }
+  /** The tab's frames a person can see, outer first. Cross-origin frames are read through their own targets. */
+  async frames(tab) {
+    const rows = [{ frame: tab.page.mainFrame(), inView: true }];
+    for (let i = 0; i < rows.length; i++) for (const child of rows[i].frame.childFrames()) {
+      const place = await child.frameElement().then(async handle => { try { return await handle.evaluate(frameBox); } finally { await handle.dispose(); } }).catch(() => null);
+      if (place?.visible) rows.push({ frame: child, inView: rows[i].inView && place.inView });
+    }
+    return rows;
+  }
+  /** Does the check hold now? */
+  async holds(tab, want) {
+    if (want.url != null && !tab.page.url().includes(want.url)) return false;
+    if (want.dialog != null && !(tab.dialog && (want.dialog === true || tab.dialog.message().includes(want.dialog)))) return false;
+    if (want.text == null && want.target == null) return true;
+    if (tab.dialog) throw new Error('a dialog is open; answer it first, or check {"dialog": true}');
+    let elements; const controls = async () => elements ||= (await this.look(tab, 0)).elements;
+    if (want.text != null) {
+      let seen = false; for (const { frame } of await this.frames(tab)) if (seen = await frame.evaluate(hasText, want.text).catch(() => false)) break;
+      if (!seen && !(scoreTargets(want.text, await controls())[0]?.score >= 800)) return false;
+    }
+    if (want.target != null) {
+      let control; try { control = resolveTarget(want.target, await controls()); } catch (error) { if (error.candidates?.[0]?.score) throw error; return false; }
+      if (want.value != null && control.value !== want.value.slice(0, 180)) return false;
+      if (want.checked != null && control.checked !== want.checked) return false;
+    }
+    return true;
   }
   async target(tab, action) {
     if (action.ref != null) {
@@ -648,22 +721,14 @@ export class BrowserManager {
     }
     if (kind === 'check') {
       if (action.expect != null && typeof action.expect !== 'boolean') throw new Error('check expect must be true or false');
-      const wanted = text(action.check, 2000);
+      // The page can still be changing: the check reads again until it holds or its time ends.
+      const want = checkSpec(action.check), expect = action.expect ?? true, ms = stepTime(action, op, STEP_MS), until = Date.now() + ms;
       await this.settle(tab);
-      const view = await this.look(tab, 20000);
-      let found = await tab.page.evaluate(value => {
-        const visible = el => { const r = el.getBoundingClientRect(), s = el.ownerDocument.defaultView.getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert]'); };
-        const visit = root => {
-          if ((root.body?.innerText || (root.nodeType === 11 ? [...root.childNodes].map(node => node.nodeType === 3 ? node.textContent : node.nodeType === 1 && visible(node) ? node.innerText || '' : '').join('\n') : '') || '').includes(value)) return true;
-          for (const el of root.querySelectorAll('*')) { if (el.shadowRoot && visible(el) && visit(el.shadowRoot)) return true; if (el.tagName === 'IFRAME' && visible(el)) { try { if (el.contentDocument && visit(el.contentDocument)) return true; } catch {} } }
-          return false;
-        };
-        return visit(document);
-      }, wanted);
-      if (!found) { try { resolveTarget(wanted, view.elements); found = true; } catch (error) { if (error.candidates?.[0]?.score) throw error; } }
-      const check = { check: wanted, found, expect: action.expect ?? true, pass: found === (action.expect ?? true) };
-      if (!check.pass) { const error = new Error(`check failed: ${JSON.stringify(wanted)} expected ${check.expect}`); error.check = check; throw error; }
-      return { ...check, ...(!inBatch ? view : {}) };
+      let found = await this.holds(tab, want);
+      while (found !== expect && Date.now() < until && !op?.expired) { await pause(Math.min(100, until - Date.now())); found = await this.holds(tab, want); }
+      const check = { check: action.check, found, expect, pass: found === expect };
+      if (!check.pass) { const error = new Error(`check failed: ${JSON.stringify(action.check)} ${expect ? 'did not come' : 'did not go away'} in ${ms} ms`); error.check = check; throw error; }
+      return { ...check, ...(!inBatch ? await this.look(tab, 20000) : {}) };
     }
     const page = tab.page;
     // Resolve a plain target once. Both the pointer and the action use the
@@ -672,42 +737,48 @@ export class BrowserManager {
     if (kind === 'upload' && typeof action.target === 'string' && /[[\]#=>]/.test(action.target) && !action.selector) action = { ...action, selector: action.target, target: undefined };
     if (typeof action.target === 'string' && !/^\d+$/.test(action.target.trim())
       && action.ref == null && !action.selector && !action.role && !action.name && action.x == null) {
-      const { elements } = await this.look(tab, 0);
-      action = { ...action, ref: resolveTarget(text(action.target, 500), elements, kind).ref };
+      action = { ...action, ref: (await this.find(tab, text(action.target, 500), kind, stepTime(action, op, STEP_MS))).ref };
     }
     await this.aim(tab, action);
     if (kind === 'point') return { tab: this.metadata(tab) };
-    if (['navigate', 'back', 'forward', 'reload'].includes(kind)) await this.go(tab, kind, action);
-    else if (kind === 'stop') { const cdp = await page.context().newCDPSession(page); try { await cdp.send('Page.stopLoading'); } finally { await cdp.detach().catch(() => {}); } }
-    else if (kind === 'click' || kind === 'hover') {
-      if (action.x != null) { const { width, height } = await this.viewSize(tab); integer(action.x, 0, width); integer(action.y, 0, height); kind === 'click' ? await page.mouse.click(action.x, action.y, { button: ['left', 'right', 'middle'].includes(action.button) ? action.button : 'left', clickCount: action.double ? 2 : 1 }) : await page.mouse.move(action.x, action.y); }
-      else { const target = await this.target(tab, action); try { kind === 'click' ? await target.click({ button: action.button || 'left', clickCount: action.double ? 2 : 1 }) : await target.hover(); } finally { if (target.dispose) await target.dispose(); } }
-    } else if (kind === 'drag') { const { width, height } = await this.viewSize(tab); for (const field of ['fromX', 'toX']) integer(action[field], 0, width); for (const field of ['fromY', 'toY']) integer(action[field], 0, height); await page.mouse.move(action.fromX, action.fromY); await page.mouse.down(); try { await page.mouse.move(action.toX, action.toY, { steps: 6 }); } finally { await page.mouse.up(); } }
-    else if (kind === 'type') { const value = text(action.text); if (action.ref || action.selector || action.name || action.role || action.target != null) { const target = await this.target(tab, action); try { if (action.append) { await target.focus(); await page.keyboard.insertText(value); } else await target.fill(value); if (action.enter) await target.press('Enter'); } finally { if (target.dispose) await target.dispose(); } } else { if (action.clear) { await page.keyboard.press('ControlOrMeta+a'); await page.keyboard.press('Backspace'); } await page.keyboard.insertText(value); if (action.enter) await page.keyboard.press('Enter'); } }
-    else if (kind === 'key') await page.keyboard.press(text(action.key, 100));
-    else if (kind === 'clipboard') {
-      const origin = new URL(page.url()).origin;
-      await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
-      try { return { text: await page.evaluate(() => navigator.clipboard.readText()) }; }
-      finally { await page.context().clearPermissions(); }
+    const timeout = stepTime(action, op, ['navigate', 'back', 'forward', 'reload', 'wait'].includes(kind) ? NAV_MS : STEP_MS);
+    try {
+      if (['navigate', 'back', 'forward', 'reload'].includes(kind)) await this.go(tab, kind, action, timeout);
+      else if (kind === 'stop') { const cdp = await page.context().newCDPSession(page); try { await cdp.send('Page.stopLoading'); } finally { await cdp.detach().catch(() => {}); } }
+      else if (kind === 'click' || kind === 'hover') {
+        if (action.x != null) { const { width, height } = await this.viewSize(tab); integer(action.x, 0, width); integer(action.y, 0, height); kind === 'click' ? await page.mouse.click(action.x, action.y, { button: ['left', 'right', 'middle'].includes(action.button) ? action.button : 'left', clickCount: action.double ? 2 : 1 }) : await page.mouse.move(action.x, action.y); }
+        else { const target = await this.target(tab, action); try { kind === 'click' ? await target.click({ button: action.button || 'left', clickCount: action.double ? 2 : 1, timeout }) : await target.hover({ timeout }); } finally { if (target.dispose) await target.dispose(); } }
+      } else if (kind === 'drag') { const { width, height } = await this.viewSize(tab); for (const field of ['fromX', 'toX']) integer(action[field], 0, width); for (const field of ['fromY', 'toY']) integer(action[field], 0, height); await page.mouse.move(action.fromX, action.fromY); await page.mouse.down(); try { await page.mouse.move(action.toX, action.toY, { steps: 6 }); } finally { await page.mouse.up(); } }
+      else if (kind === 'type') { const value = text(action.text); if (action.ref || action.selector || action.name || action.role || action.target != null) { const target = await this.target(tab, action); try { if (action.append) { await target.focus({ timeout }); await page.keyboard.insertText(value); } else await target.fill(value, { timeout }); if (action.enter) await target.press('Enter', { timeout }); } finally { if (target.dispose) await target.dispose(); } } else { if (action.clear) { await page.keyboard.press('ControlOrMeta+a'); await page.keyboard.press('Backspace'); } await page.keyboard.insertText(value); if (action.enter) await page.keyboard.press('Enter'); } }
+      else if (kind === 'key') await page.keyboard.press(text(action.key, 100));
+      else if (kind === 'clipboard') {
+        const origin = new URL(page.url()).origin;
+        await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+        try { return { text: await page.evaluate(() => navigator.clipboard.readText()) }; }
+        finally { await page.context().clearPermissions(); }
+      }
+      else if (kind === 'scroll') await page.mouse.wheel(integer(action.dx ?? 0, -20000, 20000), integer(action.direction ? Math.round((await this.viewSize(tab)).height * (action.pages ?? 1) * (action.direction === 'up' ? -1 : 1)) : action.dy ?? 500, -20000, 20000));
+      else if (kind === 'select') { const target = await this.target(tab, action); try { await target.selectOption(action.option != null ? { label: text(action.option, 1000) } : action.values || text(action.value, 1000), { timeout }); } finally { if (target.dispose) await target.dispose(); } }
+      else if (kind === 'upload') {
+        const files = await this.uploads(tab, action);
+        let target;
+        try {
+          target = await this.target(tab, action);
+          // A file field takes the files. A button that opens the file picker
+          // gets them through the picker, so no system dialog opens.
+          if (await target.evaluate(el => el instanceof HTMLInputElement && el.type === 'file').catch(() => false)) await target.setInputFiles(files.paths, { timeout });
+          else { const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout }), target.click({ timeout })]); await chooser.setFiles(files.paths); }
+        } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
+      } else if (kind === 'evaluate') { const script = text(action.script, 20000), value = await (tab.patched ? page.evaluate(script, undefined, undefined, false) : page.evaluate(script)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
+      else if (kind === 'wait') { if (action.selector) await page.locator(text(action.selector, 2000)).first().waitFor({ state: action.state || 'visible', timeout }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout }); }
+      else if (kind === 'resize') await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) });
+      else if (kind === 'dialog') { if (!tab.dialog) throw new Error('no dialog is open'); const dialog = tab.dialog; tab.dialog = null; action.accept ? await dialog.accept(action.text ?? '') : await dialog.dismiss(); }
+      else throw new Error(kind ? `unknown browser action: ${kind}` : `unknown browser action ${JSON.stringify(Object.keys(action))}; use a kind such as goto, click, type, evaluate or wait`);
+    } catch (error) {
+      // Playwright's own words and call log, in place of what the agent needs to know.
+      if (!/Timeout \d+ms exceeded/.test(error.message) || ['navigate', 'back', 'forward', 'reload'].includes(kind)) throw error;
+      throw new Error(kind === 'wait' ? `wait: nothing matched in ${timeout} ms` : `${kind}: the control was not found or not ready in ${timeout} ms. Read the page, or give the step a longer "timeout".`);
     }
-    else if (kind === 'scroll') await page.mouse.wheel(integer(action.dx ?? 0, -20000, 20000), integer(action.direction ? Math.round((await this.viewSize(tab)).height * (action.pages ?? 1) * (action.direction === 'up' ? -1 : 1)) : action.dy ?? 500, -20000, 20000));
-    else if (kind === 'select') { const target = await this.target(tab, action); try { await target.selectOption(action.option != null ? { label: text(action.option, 1000) } : action.values || text(action.value, 1000)); } finally { if (target.dispose) await target.dispose(); } }
-    else if (kind === 'upload') {
-      const files = await this.uploads(tab, action);
-      let target;
-      try {
-        target = await this.target(tab, action);
-        // A file field takes the files. A button that opens the file picker
-        // gets them through the picker, so no system dialog opens.
-        if (await target.evaluate(el => el instanceof HTMLInputElement && el.type === 'file').catch(() => false)) await target.setInputFiles(files.paths);
-        else { const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), target.click()]); await chooser.setFiles(files.paths); }
-      } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
-    } else if (kind === 'evaluate') { const script = text(action.script, 20000), value = await (tab.patched ? page.evaluate(script, undefined, undefined, false) : page.evaluate(script)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
-    else if (kind === 'wait') { integer(action.timeout ?? 10000, 1, 30000); if (action.selector) await page.locator(text(action.selector, 2000)).first().waitFor({ state: action.state || 'visible', timeout: action.timeout ?? 10000 }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: action.timeout ?? 10000 }); }
-    else if (kind === 'resize') await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) });
-    else if (kind === 'dialog') { if (!tab.dialog) throw new Error('no dialog is open'); const dialog = tab.dialog; tab.dialog = null; action.accept ? await dialog.accept(action.text ?? '') : await dialog.dismiss(); }
-    else throw new Error(kind ? `unknown browser action: ${kind}` : `unknown browser action ${JSON.stringify(Object.keys(action))}; use a kind such as goto, click, type, evaluate or wait`);
     // Pointer moves and scrolling do not need to wait for unrelated adverts
     // or analytics. A read still measures the current DOM and layout.
     if (['navigate', 'back', 'forward', 'reload', 'click', 'type', 'key', 'select', 'drag', 'resize', 'upload', 'dialog', 'wait'].includes(kind)) await this.settle(tab, { navigation: ['navigate', 'back', 'forward', 'reload'].includes(kind) });
@@ -801,8 +872,8 @@ export class BrowserManager {
     return { entries: tab.console };
   }
   /** Wait for navigation and report a failed load in plain words. */
-  async go(tab, kind, action) {
-    const page = tab.page, wait = { waitUntil: 'domcontentloaded' }, target = kind === 'navigate' ? httpUrl(action.url) : null;
+  async go(tab, kind, action, timeout = NAV_MS) {
+    const page = tab.page, wait = { waitUntil: 'domcontentloaded', timeout }, target = kind === 'navigate' ? httpUrl(action.url) : null;
     // Keep the requested address until navigation finishes.
     if (target) tab.url = tab.pending = target;
     tab.problem = null;

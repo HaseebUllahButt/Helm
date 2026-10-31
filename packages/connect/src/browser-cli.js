@@ -32,7 +32,8 @@ export async function runBrowserCommand(args, { rpc, self, findSession, env = pr
     if (command === 'point' && !source) throw new Error('point needs an element number or CSS selector');
     let action = command === 'look' ? { kind: 'look', budget: Number(options.budget ?? 6000) } : command === 'screenshot' ? { kind: 'screenshot', fullPage: !!options['full-page'] }
       : command === 'point' ? { kind: 'point', ...(/^\d+$/.test(source) ? { ref: Number(source) } : { selector: source }), ...(options.note ? { note: options.note } : {}) } : JSON.parse(source || '{}');
-    result = await rpc(target.env, 'browser.action', { id, tabId, action }, 60000);
+    // A call may ask for more time than the usual minute.
+    result = await rpc(target.env, 'browser.action', { id, tabId, action }, Math.max(60000, (Number(action.timeout) || 0) + 15000));
     if (command === 'screenshot') {
       if (!options.output) throw new Error('screenshot needs --output <path>');
       const match = /^data:image\/(?:jpeg|png);base64,(.+)$/.exec(result.image || ''); if (!match) throw new Error('browser did not return a screenshot');
