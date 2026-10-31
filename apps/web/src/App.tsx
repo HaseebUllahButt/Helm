@@ -1,6 +1,6 @@
 import { errorMessage } from './errors';
 import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice } from './session/voice';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
 import { useNow } from './useNow';
 import { isUnread, markSeen, seenHere, unseenFinish, useSeenVersion } from './threadStatus';
@@ -1203,7 +1203,7 @@ function Shell({ client, conn, onSignOut }: {
   const settledNow = doneNow.filter((x) => !finishedNow.includes(x));
   // Pinned chats sit above every other shelf, whatever they are doing, and
   // leave the other shelves (owner, 2026-10-31). The newest pin is on top.
-  // The waiting box, the folded rail and Ctrl+Tab still see them as usual.
+  // The waiting box still sees them; the folded rail and Ctrl+Tab put them first.
   type Row = { env: Environment; s: Session };
   const unpinned = (x: Row) => !x.s.pinnedAt;
   const pinnedNow = everyone.filter(({ env: machine, s }) => !!s.pinnedAt && (machine.online || !liveEnvsSeen.current))
@@ -1216,10 +1216,11 @@ function Shell({ client, conn, onSignOut }: {
   const pinnedRow = (x: Row) => homeRow(x, !runningThread(x.s) || attentionOn(x.env.id, x.s));
   // Alt+1, Alt+2 and Alt+3 open the top chat of Finished, Running and
   // Settled, in sidebar order. Ctrl+Tab and Ctrl+Shift+Tab then walk the
-  // shelf of the open chat, else the shelf last picked (owner, 2026-10-31).
-  // Pinned chats stay in the walk of their usual shelf.
-  const shelves = { finished: finishedNow, running: runningNow, settled: settledNow };
-  const pickedShelf = useRef<keyof typeof shelves>('running');
+  // pinned chats and the shelf of the open chat, else the shelf last picked.
+  // The folded rail shows the pinned chats and the picked shelf; Finished
+  // and Running share it, as before (owner, 2026-10-31).
+  const shelves = { finished: finishedShelf, running: runningShelf, settled: settledShelf };
+  const [pickedShelf, setPickedShelf] = useState<keyof typeof shelves>('running');
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.isComposing || document.querySelector('[aria-modal="true"]')) return;
@@ -1233,19 +1234,19 @@ function Shell({ client, conn, onSignOut }: {
         // Capture before a composer or a terminal takes the key.
         event.preventDefault();
         event.stopPropagation();
-        pickedShelf.current = jump;
+        setPickedShelf(jump);
         const top = shelves[jump][0];
         if (top && !isCurrent(top)) openSession(top.env.id, top.s);
         return;
       }
       // In a terminal, Ctrl+Tab walks that machine's terminals (SessionView).
       if (current?.kind === 'session' && current.session.engine === 'shell') return;
-      const name = (['finished', 'running', 'settled'] as const).find((k) => shelves[k].some(isCurrent)) ?? pickedShelf.current;
-      const list = shelves[name];
+      const name = (['finished', 'running', 'settled'] as const).find((k) => shelves[k].some(isCurrent)) ?? pickedShelf;
+      const list = [...pinnedNow, ...shelves[name]];
       if (!list.length) return;
       event.preventDefault();
       event.stopPropagation();
-      pickedShelf.current = name;
+      setPickedShelf(name);
       const index = list.findIndex(isCurrent);
       const next = index < 0 ? (event.shiftKey ? list.length - 1 : 0)
         : (index + (event.shiftKey ? -1 : 1) + list.length) % list.length;
@@ -1253,7 +1254,7 @@ function Shell({ client, conn, onSignOut }: {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [finishedNow, runningNow, settledNow, openSession]);
+  }, [finishedShelf, runningShelf, settledShelf, pinnedNow, pickedShelf, openSession]);
   // The machine keeps the look too, so the tick clears on every device.
   // Only a finish the machine has not seen yet needs telling: each tell is
   // saved and sent to every screen, and a working chat changes every second.
@@ -1335,8 +1336,9 @@ function Shell({ client, conn, onSignOut }: {
           </span>
         </div>
 
-        {/* Folded, the sidebar keeps the inbox: a new chat, then each chat
-            that needs you, finished or is working, as its agent's mark. */}
+        {/* Folded, the sidebar keeps the inbox: a new chat, the pinned chats,
+            then each chat that needs you, finished or is working - or, after
+            Alt+3, each settled chat - as its agent's mark. */}
         {wide && sidebarCollapsed && (
           <nav className="side-rail" aria-label="Active chats">
             <button
@@ -1344,21 +1346,28 @@ function Shell({ client, conn, onSignOut }: {
               disabled={!envs.some((e) => e.online)} aria-label="New chat" title="New chat (Ctrl+N)"
             ><Icon name="plus" size={17} /></button>
             {[
-              ...blocked.map((x) => ({ ...x, need: true, word: 'needs you', cls: 'rail-need' })),
-              ...finishedNow.map((x) => ({ ...x, need: false, word: 'finished', cls: 'rail-finished' })),
-              ...runningNow.map((x) => ({ ...x, need: false, word: 'working', cls: 'rail-working' })),
-            ].map(({ env: e, s, need, word, cls }) => {
+              ...pinnedNow.map((x) => blocked.includes(x) ? { ...x, need: true, word: 'needs you', cls: 'rail-need' }
+                : finishedNow.includes(x) ? { ...x, need: false, word: 'finished', cls: 'rail-finished' }
+                : runningNow.includes(x) ? { ...x, need: false, word: 'working', cls: 'rail-working' }
+                : { ...x, need: false, word: 'pinned', cls: 'rail-settled' }),
+              ...(pickedShelf === 'settled' ? settledShelf.map((x) => ({ ...x, need: false, word: 'settled', cls: 'rail-settled' })) : [
+                ...needShelf.map((x) => ({ ...x, need: true, word: 'needs you', cls: 'rail-need' })),
+                ...finishedShelf.map((x) => ({ ...x, need: false, word: 'finished', cls: 'rail-finished' })),
+                ...runningShelf.map((x) => ({ ...x, need: false, word: 'working', cls: 'rail-working' })),
+              ]),
+            ].map(({ env: e, s, need, word, cls }, i) => {
               const open = isOpen({ env: e, s });
-              return (
+              return (<Fragment key={`${e.id}:${s.id}`}>
+                {i === pinnedNow.length && i > 0 && <hr className="rail-sep" aria-hidden="true" />}
                 <button
-                  key={`${e.id}:${s.id}`} type="button" className={`rail-chat ${cls}${open ? ' active' : ''}`}
+                  type="button" className={`rail-chat ${cls}${open ? ' active' : ''}`}
                   aria-current={open ? 'page' : undefined} aria-label={`${s.title}, ${e.name}, ${word}`} title={`${s.title}\n${e.name} · ${word}`}
                   onClick={() => openSession(e.id, s, need && s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
                 >
                   <EngineMark engine={engineOf(s.engine).cls} />
                   <i className="rail-dot" aria-hidden="true" />
                 </button>
-              );
+              </Fragment>);
             })}
           </nav>
         )}
