@@ -145,6 +145,7 @@ test('CLI resolves explicitly selected remote thread and writes returned screens
 const fakePage = () => {
   const cdp = new EventEmitter(); cdp.detach = async () => {}; cdp.send = async () => {};
   const page = { u: 'http://x/1', url() { return this.u; }, viewportSize: () => ({ width: 1280, height: 800 }), title: async () => 'Title', mouse: { click: async () => {}, move: async () => {} }, goto: async function (u) { this.u = u; }, evaluate: async function () { return { title: 'Title', url: this.u, text: '', elements: [] }; }, context: () => ({ newCDPSession: async () => cdp }) };
+  page.mainFrame = () => ({ evaluate: (...args) => page.evaluate(...args), childFrames: () => [] });
   return { cdp, page };
 };
 const tick = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -297,7 +298,7 @@ test('real browser isolation, batched actions, uploads, answering a dialog, and 
   await manager.run('one', first.tab.id, { kind: 'upload', selector: '#upload', uploads: [{ name: 'note.txt', data: Buffer.from('private upload').toString('base64') }] });
   assert.equal((await manager.run('one', first.tab.id, { kind: 'evaluate', script: 'document.querySelector("#upload").files[0].name' })).value, 'note.txt');
   await assert.rejects(manager.run('one', first.tab.id, { kind: 'upload', selector: '#upload', uploads: [{ name: 'bad', data: 'not base64!' }] }), /upload data/);
-  await assert.rejects(manager.run('one', first.tab.id, { kind: 'upload', ref: 299, uploads: [{ name: 'stale.txt', data: 'c3RhbGU=' }] }), /reference expired/);
+  await assert.rejects(manager.run('one', first.tab.id, { kind: 'upload', ref: 299, uploads: [{ name: 'stale.txt', data: 'c3RhbGU=' }] }), /element 299 is not on the page now; look at the page again/);
   assert.deepEqual(readdirSync(join(directory, 'one', 'uploads')), []);
   const page = manager.tabs.get(first.tab.id).page, observed = page.waitForEvent('dialog');
   const alert = manager.run('one', first.tab.id, { kind: 'evaluate', script: 'alert("Need input"); "dismissed"' });
@@ -317,6 +318,7 @@ test('the agent’s cursor is drawn in a window tab only, and point guides witho
   const box = { x: 100, y: 40, width: 80, height: 20 };
   const locator = { first: () => locator, scrollIntoViewIfNeeded: async () => { scrolled++; }, boundingBox: async () => box, evaluate: async () => ({ name: 'Sign in', main: true, viewport: { width: 1280, height: 800 }, box }), click: async () => { clicks++; } };
   const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => ({ width: 1280, height: 800 }), locator: () => locator, mouse: { click: async () => { clicks++; }, move: async () => {} }, evaluate: async (fn, arg) => { if (arg?.label != null) drawn.push(arg); return { title: 'Example', url: 'http://example.test/', text: '', elements: [] }; } };
+  page.mainFrame = () => ({ evaluate: page.evaluate, childFrames: () => [] });
   const manager = new BrowserManager({ session: sid => ({ id: sid, mode: sid === 'reader' ? 'readonly' : 'default' }), now: () => clock, canWindow: false });
   const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
   manager.persistTabs = async () => {}; manager.persistSoon = () => {};
@@ -350,6 +352,11 @@ test('browser point CLI builds a guide action', async () => {
   await runBrowserCommand(['point', 'tab', 'button.primary'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
   assert.deepEqual(calls.map(c => c[2].action), [{ kind: 'point', ref: 3, note: 'Approve here' }, { kind: 'point', selector: 'button.primary' }]);
   await assert.rejects(runBrowserCommand(['point', 'tab'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} }), /element number or CSS selector/);
+  calls.length = 0;
+  await runBrowserCommand(['look', 'tab', '--within', '#rest', '--frame', '2'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
+  await runBrowserCommand(['act', 'tab', '{"click":"Save","timeout":90000}'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
+  assert.deepEqual(calls[0][2].action, { kind: 'look', budget: 6000, within: '#rest', frame: 2 });
+  assert.equal(calls[1][3], 105000, 'a longer call waits longer for its answer');
 
 });
 
@@ -417,4 +424,156 @@ test('an upload goes through a button that opens the file picker, or a hidden fi
   assert.equal(await shown(), 'by-button.jpg');
   await manager.run('one', tab.id, { upload: 'input[type=file]', ...file('by-css.jpg') });
   assert.equal(await shown(), 'by-css.jpg');
+});
+
+test('a check waits for a late change, ignored input fails once, and a missing control fails in about two seconds', { timeout: 60000 }, async t => {
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end('<title>Late</title><output></output><label>Name<input id=name></label><label><input type=checkbox id=agree>Agree</label>'
+      + '<button onclick="setTimeout(() => { document.querySelector(\'output\').textContent = \'Saved\'; document.getElementById(\'name\').value = \'Ada\'; document.getElementById(\'agree\').checked = true; location.hash = \'done\'; }, 700)">Save</button>'
+      + '<button onclick="window.presses = (window.presses || 0) + 1">Ignore</button>');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'checks-')), session: sid => ({ id: sid }), canWindow: false });
+  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
+  const { tab } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}/` });
+  const saved = await manager.run('one', tab.id, { actions: [{ click: 'the Save button' }, { check: 'Saved' }, { check: { target: 'Name', value: 'Ada' } }, { check: { target: 'Agree', checked: true } }, { check: { url: '#done' } }, { check: 'Save button', expect: true }] });
+  assert.equal(saved.failedAt, undefined, saved.error); assert.ok(saved.results.slice(1).every(step => step.pass));
+  const ignored = await manager.run('one', tab.id, { actions: [{ click: 'the Ignore button' }, { check: 'Sent' }] });
+  assert.equal(ignored.failedAt, 1); assert.equal(ignored.check.pass, false); assert.match(ignored.error, /"Sent" did not come in 2000 ms/);
+  assert.equal((await manager.run('one', tab.id, { evaluate: 'window.presses' })).value, 1, 'the click was delivered once');
+  let started = Date.now();
+  await assert.rejects(manager.run('one', tab.id, { click: { selector: '#missing' } }), /click: the control was not found or not ready in 2000 ms/);
+  let took = Date.now() - started; assert.ok(took >= 1900 && took < 4000, `selector took ${took} ms`);
+  started = Date.now();
+  const named = await manager.run('one', tab.id, { click: 'the Publish button' });
+  took = Date.now() - started; assert.match(named.error, /no matching target/); assert.ok(took >= 1900 && took < 4000, `named control took ${took} ms`);
+  started = Date.now();
+  const longer = manager.run('one', tab.id, { click: 'the Publish button', timeout: 5000 });
+  await manager.tabs.get(tab.id).page.evaluate(() => setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<button onclick="document.title=\'Published\'">Publish</button>'), 2500));
+  assert.equal((await longer).error, undefined, 'a longer step timeout waits for a control that comes late');
+  assert.equal(await manager.tabs.get(tab.id).page.title(), 'Published');
+});
+
+test('a read covers cross-origin frames, says when it cut the list, and an old number never picks another control', { timeout: 60000 }, async t => {
+  const inner = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<button onclick="document.body.insertAdjacentText(\'beforeend\', \'Clicked inside\')">Inner save</button>'); });
+  await new Promise(resolve => inner.listen(0, '127.0.0.1', resolve));
+  const frameUrl = `http://localhost:${inner.address().port}/inner`;
+  const outer = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    if (req.url === '/many') return res.end(`<title>Many</title><div id=first>${Array.from({ length: 300 }, (_, i) => `<button>Item ${i}</button>`).join('')}</div><div id=rest>${Array.from({ length: 20 }, (_, i) => `<button onclick="document.title='Rest ${i}'">Rest ${i}</button>`).join('')}</div>`);
+    res.end(`<title>Frames</title><output></output><ul id=list><li><button onclick="document.querySelector('output').textContent='Alpha'">Alpha</button></li><li><button onclick="document.querySelector('output').textContent='Beta'">Beta</button></li></ul><iframe src="${frameUrl}"></iframe>`);
+  });
+  await new Promise(resolve => outer.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'reads-')), session: sid => ({ id: sid }), canWindow: false });
+  t.after(async () => { await manager.stop(); for (const server of [inner, outer]) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
+  const base = `http://127.0.0.1:${outer.address().port}`;
+  const { tab } = await manager.open('one', { url: base });
+  const page = manager.tabs.get(tab.id).page;
+  await page.frameLocator('iframe').locator('button').waitFor();
+  const first = await manager.run('one', tab.id, { kind: 'look' });
+  assert.ok(page.frames().some(frame => frame.url() === frameUrl));
+  assert.ok(first.text.includes(`Frame 1 ${frameUrl}:`), first.text);
+  const save = first.elements.find(e => e.name === 'Inner save'); assert.ok(save, 'the cross-origin frame’s control is listed');
+  const clicked = await manager.run('one', tab.id, { actions: [{ click: save.ref }, { check: 'Clicked inside' }] });
+  assert.equal(clicked.failedAt, undefined, clicked.error);
+  const scoped = await manager.run('one', tab.id, { kind: 'look', frame: 1 });
+  assert.deepEqual(scoped.elements.map(e => e.name), ['Inner save']);
+  // The list is reordered: each number still means its own control.
+  const alpha = first.elements.find(e => e.name === 'Alpha').ref, beta = first.elements.find(e => e.name === 'Beta').ref;
+  await page.evaluate(() => { const list = document.getElementById('list'); list.prepend(list.lastElementChild); });
+  const second = await manager.run('one', tab.id, { kind: 'look' });
+  assert.deepEqual(second.elements.slice(0, 2).map(e => [e.name, e.ref]), [['Beta', beta], ['Alpha', alpha]]);
+  await manager.run('one', tab.id, { click: alpha });
+  assert.equal(await page.evaluate(() => document.querySelector('output').textContent), 'Alpha');
+  // A new control in the same place gets a new number; the old one is refused.
+  await page.evaluate(() => { document.getElementById('list').innerHTML = '<li><button>Gamma</button></li>'; });
+  await manager.run('one', tab.id, { kind: 'look' });
+  await assert.rejects(manager.run('one', tab.id, { click: alpha }), new RegExp(`element ${alpha} is not on the page now; look at the page again`));
+  assert.equal(await page.evaluate(() => document.querySelector('output').textContent), 'Alpha');
+  // More than 300 controls: the reply says so, and a scoped read gets the rest.
+  const many = await manager.run('one', tab.id, { goto: `${base}/many` });
+  assert.deepEqual(many.cut, { shown: 300, total: 320 });
+  assert.match(many.text, /Showing 300 of 320 controls\. Read the rest with a look that has "within"/);
+  const rest = await manager.run('one', tab.id, { kind: 'look', within: '#rest' });
+  assert.equal(rest.elements.length, 20); assert.equal(rest.cut, undefined);
+  await manager.run('one', tab.id, { click: rest.elements[19].ref });
+  assert.equal(await page.title(), 'Rest 19');
+  await assert.rejects(manager.run('one', tab.id, { kind: 'look', within: '[' }), /within: "\[" is not a CSS selector/);
+});
+
+test('a check sees an open dialog without reading the page, and checks the whole value of a field', { timeout: 60000 }, async t => {
+  const long = 'a'.repeat(190);
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(`<title>Dialog</title><label>Note<input id=note value="${long}X"></label><button onclick="alert('Need input')">Alert</button>`); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'dialog-check-')), session: sid => ({ id: sid }), canWindow: false, actionTimeoutMs: 5000 });
+  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
+  const { tab } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}/` });
+  assert.equal((await manager.run('one', tab.id, { check: { target: 'Note', value: `${long}Y` }, timeout: 300 })).check.pass, false, 'the end of the value counts');
+  assert.equal((await manager.run('one', tab.id, { check: { target: 'Note', value: `${long}X` } })).pass, true);
+  const page = manager.tabs.get(tab.id).page, opened = page.waitForEvent('dialog');
+  const blocked = manager.run('one', tab.id, { evaluate: 'alert("Need input"); "answered"' });
+  await opened;
+  const checked = await manager.run('one', tab.id, { check: { dialog: 'Need input' } });
+  assert.equal(checked.pass, true); assert.equal(checked.tab.dialog.message, 'Need input');
+  assert.match(checked.text, /A dialog is open \(alert\): "Need input"/);
+  await manager.run('one', tab.id, { dialog: 'dismiss' }); assert.equal((await blocked).value, 'answered');
+  // A click that opens a dialog is held until it is answered; the batch says so without reading the page.
+  const batch = await manager.run('one', tab.id, { actions: [{ click: 'the Alert button' }, { check: 'Never' }] });
+  assert.equal(batch.failedAt, 0); assert.match(batch.error, /click: the page opened a dialog \(alert\): "Need input"/); assert.match(batch.text, /dialog is open/);
+  await manager.run('one', tab.id, { dialog: 'accept' });
+});
+
+async function busyFrames(t, { nested = true } = {}) {
+  const inner = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(req.url === '/c' ? '<button>C button</button>' : `<p>Inside A</p><button>A button</button>${nested ? '<iframe src="/c"></iframe>' : ''}`); });
+  await new Promise(resolve => inner.listen(0, '127.0.0.1', resolve));
+  const outer = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(req.url === '/b' ? '<button>B button</button>' : `<title>Busy</title><button>Main button</button><iframe id=a src="http://localhost:${inner.address().port}/a"></iframe><iframe id=b src="/b"></iframe>`); });
+  await new Promise(resolve => outer.listen(0, '127.0.0.1', resolve));
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'busy-')), session: sid => ({ id: sid }), canWindow: false });
+  t.after(async () => { await manager.stop(); for (const server of [inner, outer]) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+  try { await manager.start(); } catch { t.skip('no Chromium here'); return null; }
+  const { tab } = await manager.open('one', { url: `http://127.0.0.1:${outer.address().port}/` });
+  const page = manager.tabs.get(tab.id).page;
+  await (nested ? page.frameLocator('#a').frameLocator('iframe') : page.frameLocator('#a')).locator('button').waitFor(); await page.frameLocator('#b').locator('button').waitFor();
+  const frameA = page.frames().find(frame => frame.url().endsWith('/a'));
+  // Frame A runs a long script: nothing in it, or under it, can answer.
+  const busy = ms => { const done = frameA.evaluate(ms => { const end = Date.now() + ms; while (Date.now() < end); }, ms).catch(() => {}); return () => done; };
+  const frameB = page.frames().find(frame => frame.url().endsWith('/b'));
+  return { manager, id: tab.id, busy, frameA, frameB };
+}
+
+test('a busy frame does not hold up a read: the main page and other frames still appear', { timeout: 60000 }, async t => {
+  const fixture = await busyFrames(t); if (!fixture) return;
+  const { manager, id, busy } = fixture, ended = busy(8000), started = Date.now();
+  const view = await manager.run('one', id, { kind: 'look' });
+  assert.ok(Date.now() - started < 6000, `the read took ${Date.now() - started} ms`);
+  assert.deepEqual(view.elements.map(e => e.name).sort(), ['B button', 'Main button']);
+  assert.equal(view.quiet.length, 2, 'frame A and the frame inside it are named'); assert.match(view.text, /did not answer and is not listed/);
+  await ended();
+});
+
+test('a frame that answers late never gives its controls the numbers of another frame', { timeout: 60000 }, async t => {
+  const fixture = await busyFrames(t, { nested: false }); if (!fixture) return;
+  const { manager, id, busy, frameA, frameB } = fixture;
+  // New controls in both frames: frame A numbers its own while the read has stopped waiting for it.
+  for (const frame of [frameA, frameB]) await frame.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<button>New button</button>'));
+  const ended = busy(3000);
+  const first = await manager.run('one', id, { kind: 'look' }), b = first.elements.find(e => e.name === 'B button').ref;
+  await ended();
+  const second = await manager.run('one', id, { kind: 'look' }), refs = second.elements.map(e => e.ref);
+  assert.deepEqual(second.elements.map(e => e.name).sort(), ['A button', 'B button', 'Main button', 'New button', 'New button']);
+  assert.equal(new Set(refs).size, refs.length, `numbers repeat: ${second.text}`);
+  assert.equal(second.elements.find(e => e.name === 'B button').ref, b);
+});
+
+test('text in a frame that did not answer is not taken as gone', { timeout: 60000 }, async t => {
+  const fixture = await busyFrames(t); if (!fixture) return;
+  const { manager, id, busy } = fixture, ended = busy(5000);
+  const result = await manager.run('one', id, { check: 'Inside A', expect: false });
+  assert.equal(result.check.pass, false); assert.equal(result.check.found, null);
+  assert.match(result.error, /could not be checked: part of the page did not answer/);
+  await ended();
 });

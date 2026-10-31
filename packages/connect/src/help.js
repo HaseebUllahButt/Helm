@@ -334,8 +334,16 @@ const DETAILS = {
   The window does not take keyboard control.
   Your actions wait while the owner uses the window.
     look <tab>        Read page text and numbered elements without a screenshot.
+                      It reads every frame. A number always means one element.
+                      It lists up to 300 controls and says when it cuts the list:
+                      add --within <CSS selector> or --frame <number> for the rest.
     act <tab> <JSON>  Run actions: '{"actions":[{"click":"the Save button"},{"check":"Saved"}]}'
-                      Use exact page text or targets for checks.
+                      A check waits up to 2 s for exact page text or a control.
+                      It also takes {"url":..}, {"dialog":..} or
+                      {"target":..,"value":..} and "checked"; "expect":false waits
+                      for it to go away.
+                      A step waits up to 2 s for its control, a page load 10 s,
+                      a call 30 s. Add "timeout" (ms) to a step or a batch for more.
                       Kinds: click, type, goto, check, key, scroll, hover, select,
                       upload (with files), evaluate (page script), wait (CSS
                       selector), resize, dialog, console, network, back,

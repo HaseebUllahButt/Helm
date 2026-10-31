@@ -21,7 +21,8 @@ Design: [`docs/browser-use.md`](../browser-use.md).
   beside them (not Electron apps) and user-data folders by their "Local State"
   file, on Linux, macOS and Windows (`chromium-find.js`). No brand-name lists.
 - **Tests:** `test/chromium-find`, `test/agent-browser`, `browser-window`,
-  `browser-smarts`, `test/browser/agent-browser`, and `test/browser/browser-smarts`.
+  `browser-smarts`, `browser-queue`, `test/browser/agent-browser`, and
+  `test/browser/browser-smarts`.
 - **Speed checks:** The first native window opens only the requested page,
   with copied logins already present. Reopening a sleeping window reuses
   cached site files. Pointer checks cover clipped controls and frame targets.
