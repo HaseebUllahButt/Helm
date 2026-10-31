@@ -643,6 +643,8 @@ export class BrowserManager {
     const page = tab.page;
     // Resolve a plain target once. Both the pointer and the action use the
     // same element, without reading the whole page a second time.
+    // An upload may name its field by CSS, like input[type=file]: such fields are often hidden.
+    if (kind === 'upload' && typeof action.target === 'string' && /[[\]#=>]/.test(action.target) && !action.selector) action = { ...action, selector: action.target, target: undefined };
     if (typeof action.target === 'string' && !/^\d+$/.test(action.target.trim())
       && action.ref == null && !action.selector && !action.role && !action.name && action.x == null) {
       const { elements } = await this.look(tab, 0);
@@ -668,7 +670,14 @@ export class BrowserManager {
     else if (kind === 'select') { const target = await this.target(tab, action); try { await target.selectOption(action.option != null ? { label: text(action.option, 1000) } : action.values || text(action.value, 1000)); } finally { if (target.dispose) await target.dispose(); } }
     else if (kind === 'upload') {
       const files = await this.uploads(tab, action);
-      let target; try { target = await this.target(tab, action); await target.setInputFiles(files.paths); } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
+      let target;
+      try {
+        target = await this.target(tab, action);
+        // A file field takes the files. A button that opens the file picker
+        // gets them through the picker, so no system dialog opens.
+        if (await target.evaluate(el => el instanceof HTMLInputElement && el.type === 'file').catch(() => false)) await target.setInputFiles(files.paths);
+        else { const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), target.click()]); await chooser.setFiles(files.paths); }
+      } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
     } else if (kind === 'evaluate') { const script = text(action.script, 20000), value = await (tab.patched ? page.evaluate(script, undefined, undefined, false) : page.evaluate(script)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
     else if (kind === 'wait') { integer(action.timeout ?? 10000, 1, 30000); if (action.selector) await page.locator(text(action.selector, 2000)).first().waitFor({ state: action.state || 'visible', timeout: action.timeout ?? 10000 }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: action.timeout ?? 10000 }); }
     else if (kind === 'resize') await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) });

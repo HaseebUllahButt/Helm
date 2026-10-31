@@ -371,3 +371,21 @@ test('browser routes keep CLI commands and reject removed panel controls', async
   ]);
   for (const method of ['browser.show', 'browser.download', 'browser.apps']) await assert.rejects(routes.dispatch(method, { id: 'one' }), /unknown browser method/);
 });
+
+test('an upload goes through a button that opens the file picker, or a hidden field named by CSS', { timeout: 60000 }, async t => {
+  const { chromium } = await import('playwright');
+  const page = '<title>Picker</title><input type="file" id="hidden" style="display:none"><button onclick="document.querySelector(\'#hidden\').click()">Upload a file</button><output></output>'
+    + '<script>document.querySelector("#hidden").onchange = e => { document.querySelector("output").textContent = e.target.files[0].name; };</script>';
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(page); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const launch = async () => { const path = process.env.HELM_TEST_CHROMIUM || systemChromium(); return chromium.launch({ headless: true, ...(path ? { executablePath: path } : {}) }); };
+  const manager = new BrowserManager({ directory: join(process.env.HELM_DIR, 'picker'), session: sid => ({ id: sid }), launch, canWindow: false });
+  t.after(async () => { await manager.stop(); await new Promise(resolve => server.close(resolve)); });
+  const { tab } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}` });
+  const file = name => ({ uploads: [{ name, data: Buffer.from('picture').toString('base64') }] });
+  const shown = async () => (await manager.run('one', tab.id, { kind: 'evaluate', script: 'document.querySelector("output").textContent' })).value;
+  await manager.run('one', tab.id, { upload: 'Upload a file', ...file('by-button.jpg') });
+  assert.equal(await shown(), 'by-button.jpg');
+  await manager.run('one', tab.id, { upload: 'input[type=file]', ...file('by-css.jpg') });
+  assert.equal(await shown(), 'by-css.jpg');
+});

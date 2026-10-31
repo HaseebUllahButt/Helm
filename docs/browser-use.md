@@ -105,6 +105,9 @@ The owner uses the same browser window. Helm has no browser panel.
 - Saved flows are kept only when every step succeeds, in 0600 files at
   `~/.helm/browser/flows/<name>.json`. Use names or selectors in flows, not
   element numbers: numbers change between visits.
+- An upload target can be a file field, a CSS selector (file fields are
+  often hidden) or a button that opens the file picker. Helm catches the
+  picker and gives it the files, so no system dialog opens.
 - Downloads stay on the machine while the tab is open. Closing the tab
   removes them. Each file can hold up to 128 MiB.
 
