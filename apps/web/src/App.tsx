@@ -1045,26 +1045,6 @@ function Shell({ client, conn, onSignOut }: {
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
   const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !attentionOn(machine.id, thread) && runningThread(thread)).sort(byNewest);
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab' || !event.ctrlKey || event.metaKey || event.altKey || event.isComposing
-          || document.querySelector('[aria-modal="true"]') || !runningNow.length) return;
-      const current = nav.current.stack.at(-1);
-      // In a terminal, Ctrl+Tab walks that machine's terminals (SessionView).
-      if (current?.kind === 'session' && current.session.engine === 'shell') return;
-      // Capture before a composer completes a suggestion or xterm sends input.
-      event.preventDefault();
-      event.stopPropagation();
-      const index = runningNow.findIndex(({ env, s }) => env.id === nav.current.selected
-        && current?.kind === 'session' && s.id === current.session.id);
-      const next = index < 0 ? (event.shiftKey ? runningNow.length - 1 : 0)
-        : (index + (event.shiftKey ? -1 : 1) + runningNow.length) % runningNow.length;
-      const { env, s } = runningNow[next];
-      if (index !== next) openSession(env.id, s);
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [runningNow, openSession]);
   // Ctrl/Cmd+Shift+E opens a terminal, next to Shift+B for the browser (T is
   // the browser's own "reopen tab" and cannot be taken). From a chat it is
   // that chat's folder; the same key in a terminal goes back to where you
@@ -1234,6 +1214,46 @@ function Shell({ client, conn, onSignOut }: {
   const snoozedShelf = asleep.filter((x) => unpinned(x) && !runningThread(x.s));
   const settledShelf = settledNow.filter(unpinned);
   const pinnedRow = (x: Row) => homeRow(x, !runningThread(x.s) || attentionOn(x.env.id, x.s));
+  // Alt+1, Alt+2 and Alt+3 open the top chat of Finished, Running and
+  // Settled, in sidebar order. Ctrl+Tab and Ctrl+Shift+Tab then walk the
+  // shelf of the open chat, else the shelf last picked (owner, 2026-10-31).
+  // Pinned chats stay in the walk of their usual shelf.
+  const shelves = { finished: finishedNow, running: runningNow, settled: settledNow };
+  const pickedShelf = useRef<keyof typeof shelves>('running');
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.isComposing || document.querySelector('[aria-modal="true"]')) return;
+      const jump = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+        ? ({ Digit1: 'finished', Digit2: 'running', Digit3: 'settled' } as const)[event.code as 'Digit1'] : undefined;
+      const walk = event.key === 'Tab' && event.ctrlKey && !event.metaKey && !event.altKey;
+      if (!jump && !walk) return;
+      const current = nav.current.stack.at(-1);
+      const isCurrent = ({ env, s }: Row) => env.id === nav.current.selected && current?.kind === 'session' && s.id === current.session.id;
+      if (jump) {
+        // Capture before a composer or a terminal takes the key.
+        event.preventDefault();
+        event.stopPropagation();
+        pickedShelf.current = jump;
+        const top = shelves[jump][0];
+        if (top && !isCurrent(top)) openSession(top.env.id, top.s);
+        return;
+      }
+      // In a terminal, Ctrl+Tab walks that machine's terminals (SessionView).
+      if (current?.kind === 'session' && current.session.engine === 'shell') return;
+      const name = (['finished', 'running', 'settled'] as const).find((k) => shelves[k].some(isCurrent)) ?? pickedShelf.current;
+      const list = shelves[name];
+      if (!list.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      pickedShelf.current = name;
+      const index = list.findIndex(isCurrent);
+      const next = index < 0 ? (event.shiftKey ? list.length - 1 : 0)
+        : (index + (event.shiftKey ? -1 : 1) + list.length) % list.length;
+      if (index !== next) openSession(list[next].env.id, list[next].s);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [finishedNow, runningNow, settledNow, openSession]);
   // The machine keeps the look too, so the tick clears on every device.
   // Only a finish the machine has not seen yet needs telling: each tell is
   // saved and sent to every screen, and a working chat changes every second.
