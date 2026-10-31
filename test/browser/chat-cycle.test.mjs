@@ -70,7 +70,7 @@ before(async () => {
           if(method==='session.attach') return {pty:true,text:'Ready'};
           if(method==='session.messages') return {messages:[]};
           if(method==='session.events') return {events:[],pending:[],last:0};
-          if(method==='model.list') return {default:null,models:[]};
+          if(method==='model.list') return window.holdModels ? new Promise(()=>{}) : window.modelList ?? {default:null,models:[]};
           if(method==='session.commands') return {commands:[{name:'status',description:'Show status'}]};
           if(method==='brain.snapshot') return {snapshot:{machines:{}}};
           return {};
@@ -109,13 +109,13 @@ async function expectChat(page, envId, title) {
     });
 }
 
-test('Ctrl+Tab cycles the running list across machines and wraps both ways', async t => {
+test('Ctrl+Tab walks Needs you and Running across machines, as shown, and wraps both ways', async t => {
   const page = await pageFor(t);
-  for (const [env, title] of [['laptop', 'First'], ['laptop', 'Second'], ['vm', 'Third'], ['laptop', 'First']]) {
+  for (const [env, title] of [['laptop', 'Blocked'], ['laptop', 'Attention'], ['laptop', 'First'], ['laptop', 'Second'], ['vm', 'Third'], ['laptop', 'Blocked']]) {
     await page.keyboard.press('Control+Tab');
     await expectChat(page, env, title);
   }
-  for (const [env, title] of [['vm', 'Third'], ['laptop', 'Second'], ['laptop', 'First']]) {
+  for (const [env, title] of [['vm', 'Third'], ['laptop', 'Second'], ['laptop', 'First'], ['laptop', 'Attention']]) {
     await page.keyboard.press('Control+Shift+Tab');
     await expectChat(page, env, title);
   }
@@ -123,8 +123,10 @@ test('Ctrl+Tab cycles the running list across machines and wraps both ways', asy
 
 test('Ctrl+Tab intercepts composer suggestions and terminal input, and uses live status', async t => {
   const page = await pageFor(t);
-  await page.keyboard.press('Control+Tab');
-  await expectChat(page, 'laptop', 'First');
+  for (const title of ['Blocked', 'Attention', 'First']) {
+    await page.keyboard.press('Control+Tab');
+    await expectChat(page, 'laptop', title);
+  }
   const composer = page.locator('textarea[aria-label^="Message"]').first();
   await composer.fill('/');
   await composer.press('Control+Tab');
@@ -145,7 +147,7 @@ test('Ctrl+Tab intercepts composer suggestions and terminal input, and uses live
   await expectChat(page, 'vm', 'Third');
 });
 
-test('Alt+1, Alt+2 and Alt+3 open Finished, Running and Settled, and Ctrl+Tab walks pins and that list', async t => {
+test('Alt+1, Alt+2 and Alt+3 open Finished, Running and Settled, and Ctrl+Tab walks what the sidebar shows', async t => {
   const page = await pageFor(t, 'shelves');
   await page.locator('.sidebar').getByText('Done B', { exact: true }).waitFor();
   await page.keyboard.press('Alt+3');
@@ -158,20 +160,50 @@ test('Alt+1, Alt+2 and Alt+3 open Finished, Running and Settled, and Ctrl+Tab wa
     await page.keyboard.press('Control+Shift+Tab');
     await expectChat(page, 'laptop', title);
   }
+  // Finished and Running show together, so Ctrl+Tab walks them in the shown order.
   await page.keyboard.press('Alt+2');
   await expectChat(page, 'laptop', 'Run');
   await page.keyboard.press('Control+Tab');
   await expectChat(page, 'laptop', 'Pin');
   await page.keyboard.press('Control+Tab');
-  await expectChat(page, 'laptop', 'Run');
-  await page.keyboard.press('Alt+1');
   await expectChat(page, 'laptop', 'Done A');
   await page.locator('textarea[aria-label^="Message"]').first().focus();
   await page.keyboard.press('Control+Tab');
   await expectChat(page, 'laptop', 'Done B');
+  // From a pinned chat or a finished one, the next is the row shown below it.
+  await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Run');
+  await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Pin');
   // Done A was read, so it left Finished for the top of Settled.
   await page.keyboard.press('Alt+3');
   await expectChat(page, 'laptop', 'Done A');
+});
+
+test('switching chats keeps the model name, with no raw name or blank while the list loads', async t => {
+  const page = await pageFor(t, 'shelves');
+  await page.evaluate(() => { window.modelList = { default: 'claude-opus-5-5', models: ['claude-opus-5-5', 'claude-fable-5-1'], labels: { 'claude-opus-5-5': 'Claude Opus 5.5', 'claude-fable-5-1': 'Claude Fable 5.1' } }; });
+  await page.locator('.sidebar').getByText('Done B', { exact: true }).waitFor();
+  await page.keyboard.press('Alt+2');
+  await expectChat(page, 'laptop', 'Run');
+  const chip = page.getByRole('button', { name: 'model: Opus 5.5' });
+  await chip.waitFor();
+  await page.evaluate(() => {
+    window.holdModels = true;
+    window.chipsSeen = [];
+    new MutationObserver(() => {
+      const chips = document.querySelector('.chips');
+      if (chips) window.chipsSeen.push(chips.textContent);
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  for (const title of ['Pin', 'Done A', 'Done B']) {
+    await page.keyboard.press('Control+Tab');
+    await expectChat(page, 'laptop', title);
+    await chip.waitFor();
+  }
+  const seen = await page.evaluate(() => window.chipsSeen);
+  assert.ok(seen.length > 0);
+  assert.deepEqual(seen.filter(text => !text.includes('Opus 5.5')), []);
 });
 
 test('the folded sidebar shows pins and the picked list: Finished with Running, or Settled', async t => {
