@@ -658,6 +658,8 @@ function Shell({ client, conn, onSignOut }: {
       onContinue: done ? () => setNewChat({ envId: e.id, folder: s.cwd,
         draft: `Continue the work of the chat "${s.title}". Run \`helm pickup ${s.id}\` first.` }) : undefined,
       onRename: (title: string) => act('session.title', { id: s.id, title }),
+      // A chat Helm has no record of (a found CLI chat, a terminal pane) has nothing to pin.
+      onPin: /^(pane:|found:)/.test(s.id) ? undefined : () => act('session.pin', { id: s.id, pinned: !s.pinnedAt }),
       // Archiving is a tap on a small ⋯ menu item and the row just goes:
       // say what happened and leave the way back in reach.
       onArchive: async () => { if (await act('session.archive', { id: s.id, archived: !s.archived }) && !s.archived) setArchiveUndo({ envId: e.id, s }); },
@@ -1218,6 +1220,19 @@ function Shell({ client, conn, onSignOut }: {
   if (openStamp && (isUnread(openStamp) || !settledThread(openStamp))) reviewing.current.keep = true;
   const finishedNow = doneNow.filter(({ s }) => isUnread(s) || (s.id === openId && reviewing.current.keep));
   const settledNow = doneNow.filter((x) => !finishedNow.includes(x));
+  // Pinned chats sit above every other shelf, whatever they are doing, and
+  // leave the other shelves (owner, 2026-10-31). The newest pin is on top.
+  // The waiting box, the folded rail and Ctrl+Tab still see them as usual.
+  type Row = { env: Environment; s: Session };
+  const unpinned = (x: Row) => !x.s.pinnedAt;
+  const pinnedNow = everyone.filter(({ env: machine, s }) => !!s.pinnedAt && (machine.online || !liveEnvsSeen.current))
+    .sort((a, b) => (b.s.pinnedAt ?? 0) - (a.s.pinnedAt ?? 0));
+  const needShelf = blocked.filter(unpinned);
+  const finishedShelf = finishedNow.filter(unpinned);
+  const runningShelf = runningNow.filter(unpinned);
+  const snoozedShelf = asleep.filter((x) => unpinned(x) && !runningThread(x.s));
+  const settledShelf = settledNow.filter(unpinned);
+  const pinnedRow = (x: Row) => homeRow(x, !runningThread(x.s) || attentionOn(x.env.id, x.s));
   // The machine keeps the look too, so the tick clears on every device.
   // Only a finish the machine has not seen yet needs telling: each tell is
   // saved and sent to every screen, and a working chat changes every second.
@@ -1358,9 +1373,19 @@ function Shell({ client, conn, onSignOut }: {
             </button>
             </div>
 
-            {blocked.length > 0 && (
-              <Fold shelf attention defaultOpen title="Needs you" count={blocked.length} remember="sidebar:needs">
-                {blocked.map(({ env: e, s }) => (
+            {pinnedNow.length > 0 && (
+              <Fold
+                shelf defaultOpen title="Pinned" count={pinnedNow.length} remember="sidebar:pinned"
+                note={savedIn(pinnedNow) ? 'saved' : undefined}
+                peek={pinnedNow.some(isOpen) ? <div className="rows plain">{pinnedNow.filter(isOpen).map(pinnedRow)}</div> : undefined}
+              >
+                <div className="rows plain">{pinnedNow.map(pinnedRow)}</div>
+              </Fold>
+            )}
+
+            {needShelf.length > 0 && (
+              <Fold shelf attention defaultOpen title="Needs you" count={needShelf.length} remember="sidebar:needs">
+                {needShelf.map(({ env: e, s }) => (
                   <NeedCard
                     key={s.id} s={s} machine={e.name} selected={isOpen({ env: e, s })}
                     onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
@@ -1372,29 +1397,29 @@ function Shell({ client, conn, onSignOut }: {
               </Fold>
             )}
 
-            {finishedNow.length > 0 && (
+            {finishedShelf.length > 0 && (
               <Fold
-                shelf defaultOpen title="Finished" count={finishedNow.length} remember="sidebar:finished"
-                note={savedIn(finishedNow) ? 'saved' : undefined}
-                peek={finishedNow.some(isOpen) ? <div className="rows plain">{finishedNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
+                shelf defaultOpen title="Finished" count={finishedShelf.length} remember="sidebar:finished"
+                note={savedIn(finishedShelf) ? 'saved' : undefined}
+                peek={finishedShelf.some(isOpen) ? <div className="rows plain">{finishedShelf.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
               >
-                <div className="rows plain">{finishedNow.map((x) => homeRow(x, true))}</div>
+                <div className="rows plain">{finishedShelf.map((x) => homeRow(x, true))}</div>
               </Fold>
             )}
 
-            {runningNow.length > 0 && (
+            {runningShelf.length > 0 && (
               <Fold
-                shelf defaultOpen title="Running" count={runningNow.length} remember="sidebar:working"
-                peek={runningNow.some(isOpen) ? <div className="rows plain">{runningNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
+                shelf defaultOpen title="Running" count={runningShelf.length} remember="sidebar:working"
+                peek={runningShelf.some(isOpen) ? <div className="rows plain">{runningShelf.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
               >
-                <div className="rows plain">{runningNow.map((x) => homeRow(x))}</div>
+                <div className="rows plain">{runningShelf.map((x) => homeRow(x))}</div>
               </Fold>
             )}
 
-            {asleep.some(({ s }) => !runningThread(s)) && (
-              <Fold shelf title="Snoozed" count={asleep.filter(({ s }) => !runningThread(s)).length} remember="sidebar:snoozed">
+            {snoozedShelf.length > 0 && (
+              <Fold shelf title="Snoozed" count={snoozedShelf.length} remember="sidebar:snoozed">
                 <div className="rows plain">
-                  {asleep.filter(({ s }) => !runningThread(s)).map(({ env: e, s }) => (
+                  {snoozedShelf.map(({ env: e, s }) => (
                     <HomeRow
                       key={s.id} s={s} machine={e.name} onOpen={() => { setSnooze(`${e.id}:${s.id}`, null); openSession(e.id, s); }}
                       note={snoozed[`${e.id}:${s.id}`] === NEVER_SNOOZE ? 'Snoozed \u00b7 Never' : `back ${when(snoozed[`${e.id}:${s.id}`])}`}
@@ -1437,14 +1462,14 @@ function Shell({ client, conn, onSignOut }: {
           {/* Settled sits at the foot of the sidebar, folded at first: the
               chats you already looked at (owner, 2026-10-30). */}
           <div className="side-pad side-bottom">
-            {settledNow.length > 0 && (
+            {settledShelf.length > 0 && (
               <Fold
-                shelf title="Settled" count={settledNow.length} remember="sidebar:settled-folded" command={settledCommand}
-                note={savedIn(settledNow) ? 'saved' : undefined}
-                peek={settledNow.some(isOpen) ? <div className="rows plain">{settledNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
+                shelf title="Settled" count={settledShelf.length} remember="sidebar:settled-folded" command={settledCommand}
+                note={savedIn(settledShelf) ? 'saved' : undefined}
+                peek={settledShelf.some(isOpen) ? <div className="rows plain">{settledShelf.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
               >
                 <PagedRows
-                  items={settledNow} isSelected={isOpen} row={(x) => homeRow(x, true)}
+                  items={settledShelf} isSelected={isOpen} row={(x) => homeRow(x, true)}
                   first={SETTLED_FIRST} step={SETTLED_STEP}
                 />
               </Fold>

@@ -296,6 +296,12 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
     } catch (e: any) { setError(errorMessage(e)); }
   };
 
+  const setPinned = async (s: Session) => {
+    setError('');
+    try { await client.rpc(env.id, 'session.pin', { id: s.id, pinned: !s.pinnedAt }, 20_000); reload(); }
+    catch (e: any) { setError(errorMessage(e)); }
+  };
+
   const deleteSession = async (s: Session) => {
     setError('');
     try {
@@ -373,6 +379,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
       key={s.id} s={s} onOpen={() => onOpen(s)} offline={!env.online} attentionSuppressed={isSnoozed(s)}
       selecting={selecting} marked={marked.has(s.id)} onToggle={() => toggle(s.id)}
       onRename={(t) => setTitle(s, t)}
+      onPin={s.id.startsWith('pane:') ? undefined : () => setPinned(s)}
       onArchive={() => setArchived(s, !s.archived)}
       onDelete={() => deleteSession(s)}
     />
@@ -709,12 +716,12 @@ function ProjectActions({ title, online, sendLabel = 'Send', onStart, onSend, on
  * only from inside it. An agent helm did not start is left alone - helm
  * does not own that process and has no business ending it.
  */
-function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting = false, marked = false, onToggle, offline = false, attentionSuppressed = false }: {
+function SessionRow({ s, onOpen, onRename, onPin, onArchive, onDelete, busy, selecting = false, marked = false, onToggle, offline = false, attentionSuppressed = false }: {
   attentionSuppressed?: boolean;
   s: Session; onOpen?: () => void; onRename?: (title: string) => void;
   /** The machine is not answering: a busy status is its last word, not now. */
   offline?: boolean;
-  onArchive?: () => void; onDelete?: () => void;
+  onPin?: () => void; onArchive?: () => void; onDelete?: () => void;
   /** Resuming a past conversation starts a CLI, which takes a moment. */
   busy?: boolean;
   /** Checkboxes instead of menus: the owner is filing, not opening. */
@@ -758,7 +765,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
             : offline && runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? <span className="chip exited">Last status: {busyWord(s.status, s.compacting)}</span>
             : <StatusChip status={runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? busyWord(s.status, s.compacting) : s.status} at={s.updatedAt} />}
         </Main>
-        {!selecting && managed && <ThreadActions s={s} onRename={onRename} onArchive={onArchive} onDelete={onDelete} />}
+        {!selecting && managed && <ThreadActions s={s} onRename={onRename} onPin={onPin} onArchive={onArchive} onDelete={onDelete} />}
       </div>
     </>
   );

@@ -629,6 +629,13 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     setMenu(null);
     await call(async () => { await client.rpc(env.id, 'session.archive', { id: session.id, archived: !session.archived }); onArchived(); });
   };
+  const pin = async () => {
+    setMenu(null);
+    await call(async () => {
+      const r = await client.rpc<{ session: Session }>(env.id, 'session.pin', { id: session.id, pinned: !session.pinnedAt });
+      onSession(r.session);
+    });
+  };
 
   // The name a session gave itself is a good guess from two prompts; this is
   // how a guess gets corrected. What is typed here is never overwritten.
@@ -852,6 +859,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
               {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
             </button>
             {parentThread && onOpenSession && <button onClick={openParent}>Open main chat</button>}
+            {!session.brain && !session.delegation && <button onClick={pin}>{session.pinnedAt ? 'Unpin chat' : 'Pin chat'}</button>}
             <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
             <button className="destructive" onClick={kill}>{session.nativeCodex ? 'Remove from Helm' : 'Delete chat'}</button>
             <p className="menu-facts">{where}</p>
