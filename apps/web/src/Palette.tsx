@@ -191,7 +191,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['Ctrl/⌘ ]', 'Forward'],
     ['Ctrl/⌘ Shift S', 'Settings'],
     ['Ctrl/⌘ Shift 4', 'Show usage, limits, and cost (the $ key)'],
-    ['Ctrl/⌘ Shift E', 'Open a terminal in the chat folder. Press again to go back.'],
+    ['Ctrl/⌘ Shift E', 'Open a terminal in the chat folder, or go back'],
     ['Ctrl/⌘ Shift T', 'Pick a machine for a terminal'],
     ['Ctrl/⌘ Alt T', 'Open a terminal on the selected machine'],
     ['Ctrl/⌘ /', 'Show keyboard shortcuts'],
@@ -222,11 +222,20 @@ const SHORTCUTS: [string, [string, string][]][] = [
   ]],
 ];
 
+/** One key cap per key, named the way this keyboard prints them. */
+function keyCaps(keys: string): string[] {
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+  const names: Record<string, string> = mac
+    ? { 'Ctrl/⌘': '⌘', Ctrl: '⌃', Shift: '⇧', Alt: '⌥', Enter: '↩' }
+    : { 'Ctrl/⌘': 'Ctrl' };
+  return keys.split(' ').map((key) => names[key] ?? key);
+}
+
 export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   const dialog = useDialog(onClose);
   return (
     <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" ref={dialog} tabIndex={-1}>
+      <div className="modal shortcuts-modal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" ref={dialog} tabIndex={-1}>
         <div className="modal-head">
           <div className="modal-title">Keyboard shortcuts</div>
           <button className="iconbtn" onClick={onClose} aria-label="Close keyboard shortcuts" title="Close"><Icon name="close" size={16} /></button>
@@ -235,7 +244,12 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
           {SHORTCUTS.map(([group, keys]) => (
             <section key={group} aria-label={group}>
               <h3 className="palette-group">{group}</h3>
-              {keys.map(([key, what]) => <div key={key}><kbd>{key}</kbd><span>{what}</span></div>)}
+              {keys.map(([key, what]) => (
+                <div className="shortcut" key={key}>
+                  <span>{what}</span>
+                  <span className="shortcut-keys">{keyCaps(key).map((cap, i) => <kbd key={i}>{cap}</kbd>)}</span>
+                </div>
+              ))}
             </section>
           ))}
         </div>
