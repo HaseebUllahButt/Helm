@@ -50,7 +50,7 @@ until `text` starts with "helm / Search anything".
   of Finished, Running, Settled (sidebar order). Ctrl+Tab and Ctrl+Shift+Tab
   walk the pinned chats, then the shelf of the open chat, else the shelf last
   picked, else Running. The folded rail shows the pinned chats, then the
-  picked shelf: Alt+1 and Alt+2 both show Needs you, Finished and Running;
+  picked shelf, in one column with no gap (pins are ordinary chats there): Alt+1 and Alt+2 both show Needs you, Finished and Running;
   Alt+3 shows Settled.
   In Finished each chat you leave goes to Settled, so going back skips it.
   Alt with a digit has no Ctrl/Cmd: the owner asked for it by name. Test:

@@ -54,7 +54,7 @@ function CompactingBar({ since }: { since?: number }) {
   );
 }
 
-function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop, stopping, waiting, working, engine, keys: withKeys = true, danger, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After this response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop, stopping, waiting, working, engine, keys: withKeys = true, danger, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, shrinking = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After this response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   /** The agent's pending question or approval, as the top of the card. */
   banner?: React.ReactNode;
@@ -76,8 +76,13 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   onRemoveAttachment?: (i: number) => void;
   /** False when the running model cannot see images; other files still go. */
   canAttach?: boolean;
-  /** True while picked files are being compressed or read in the browser. */
+  /** True while the send button must wait: files being read, saved or sent. */
   preparing?: boolean;
+  /**
+   * True only while pictures are made smaller. Loading a chat's saved draft
+   * pictures, as every chat switch does, is not shown (owner, 2026-10-31).
+   */
+  shrinking?: boolean;
   /** Called when images arrive but this agent cannot see them. */
   onAttachUnsupported?: () => void;
   /** What `/` offers here: helm's own actions plus the owner's own commands. */
@@ -426,7 +431,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   const dropArea = dragging && onAttach ? slabRef.current?.closest('.main') : null;
 
   return (
-    <div className="composer-wrap">
+    <div className="composer-wrap" data-preparing={preparing || undefined}>
       {dropArea && createPortal(
         <div className="drop-cover" aria-hidden="true">
           <div className="drop-card">
@@ -645,7 +650,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
               <button className="attach-status bad" onClick={dictation.clearError} title="Dismiss">{dictation.error}</button>
             )}
             {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>keys</button>}
-            {preparing && <span className="attach-status">Making images smaller…</span>}
+            {shrinking && <span className="attach-status">Making images smaller…</span>}
             {/* The pickers share the row the buttons are on: a second row of
                 chips under the box cost a line of screen on every visit to
                 say what never changes between messages. */}

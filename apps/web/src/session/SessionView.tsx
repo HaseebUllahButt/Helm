@@ -428,7 +428,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       draft={draft} setDraft={setDraft} onSend={send} onKey={key}
       // The phone key row is for typing into a plain terminal; an agent chat
       // has its own controls. A terminal Pi stops on Esc (sessions.interrupt).
-      keys={isShell} preparing={sending || preparingImages || loadingImages || savingImages}
+      keys={isShell} preparing={sending || preparingImages || loadingImages || savingImages} shrinking={preparingImages}
       commands={session.nativeCli ? nativeCommands : undefined}
       foot={session.nativeCli ? nativeControls.chips : undefined}
       statusLine={nativeProfile || limits.length || session.context ? <LimitsLine windows={limits} account={nativeProfile || undefined} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined}
