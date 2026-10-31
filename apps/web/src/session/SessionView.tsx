@@ -31,6 +31,7 @@ import type { Decision } from './types';
 import { BackIcon, Icon, toolKind } from '../Icon';
 import { Client, chatFolder, type Environment, type Session, type Message, type ModelList, type NativeControl, type NativeAgent } from '../client';
 import { followModelRefresh } from '../modelRefresh';
+import { peekModels, saveModels } from '../modelCache';
 import { loadMessages, saveMessages } from './logCache';
 import { engineOf } from '../engines';
 import { useLiveInterval } from '../useLiveInterval';
@@ -42,13 +43,6 @@ import { StatusChip } from '../screens/ThreadRows';
  * hidden behind the round trip that opens the pty anyway.
  */
 const Terminal = lazy(() => import('../Terminal').then((m) => ({ default: m.Terminal })));
-
-/**
- * A terminal chat's model list, per account, for this page. Each chat switch
- * starts a new screen; without this the model chip flashed a raw name or
- * nothing until the machine answered (owner, 2026-10-31).
- */
-const nativeLists = new Map<string, ModelList>();
 
 export function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask, onSendFolder, onOpenNative }: {
   client: Client; env: Environment; session: Session;
@@ -97,13 +91,16 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
   const changedPaths = useMemo(() => git.status?.files?.map((f) => f.path) ?? [], [git.status]);
 
-  const nativeKey = `${env.id}:${session.profileId || session.engine}`;
-  const [nativeOptions, setNativeOptions] = useState<ModelList | null>(() => session.nativeCli ? nativeLists.get(nativeKey) ?? null : null);
+  // A terminal chat's list, kept per account like a Helm chat's: each chat
+  // switch starts a new screen, and without it the model chip flashed a raw
+  // name or nothing until the machine answered (owner, 2026-10-31).
+  const nativeKey = `native:${session.profileId || session.engine}`;
+  const [nativeOptions, setNativeOptions] = useState<ModelList | null>(() => session.nativeCli ? peekModels(env.id, nativeKey) : null);
   const [nativeCommands, setNativeCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
   const [settingBusy, setSettingBusy] = useState(false);
   const [nativeNotice, setNativeNotice] = useState('');
   useEffect(() => {
-    setNativeOptions(session.nativeCli ? nativeLists.get(nativeKey) ?? null : null); setNativeCommands([]);
+    setNativeOptions(session.nativeCli ? peekModels(env.id, nativeKey) : null); setNativeCommands([]);
     if (!session.nativeCli) return;
     let stale = false;
     const catalog = followModelRefresh(
@@ -113,7 +110,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         // the chips show what Claude itself reports, never an account guess.
         if (stale || !Array.isArray(options.models)) return;
         const list = { ...options, default: null, effort: null, speeds: [], speedByModel: {} };
-        nativeLists.set(nativeKey, list);
+        void saveModels(env.id, nativeKey, list);
         setNativeOptions(list);
       },
       () => {},

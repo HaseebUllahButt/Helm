@@ -36,6 +36,22 @@ export function peekModels(env: string, profileId: string, all?: boolean): Model
   return memory.get(key(env, profileId, all)) ?? null;
 }
 
+/**
+ * Fill the memory from the device's storage once, when the app opens, so
+ * the first visit to a chat also has its list at once. Never throws.
+ */
+export async function warmModels(): Promise<void> {
+  try {
+    const range = IDBKeyRange.bound('models:', 'models:\uffff');
+    const keys = await txn<IDBValidKey[]>('kv', 'readonly', (s) => s.getAllKeys(range));
+    const recs = await txn<Stored[]>('kv', 'readonly', (s) => s.getAll(range));
+    keys.forEach((k, i) => {
+      const rec = recs[i];
+      if (typeof k === 'string' && rec?.list && Date.now() - rec.at <= KEEP_MS && !memory.has(k)) memory.set(k, rec.list);
+    });
+  } catch { /* the machine still answers */ }
+}
+
 /** What this device last heard, or null. Never throws. */
 export async function loadModels(
   env: string, profileId: string, all?: boolean,
