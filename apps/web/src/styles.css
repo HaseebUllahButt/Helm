@@ -259,8 +259,11 @@ code, pre, kbd { font-family: var(--mono); }
   .sidebar {
     width: var(--sidebar-w); flex: none; height: 100%;
     border-right: 1px solid var(--line); background: var(--sidebar);
-    display: flex; flex-direction: column; transition: width 0.18s var(--ease);
+    display: flex; flex-direction: column;
   }
+  /* Folding is instant, as in VS Code. A width animation squeezed the
+     sidebar's contents and re-wrapped the chat (and resized a terminal's
+     program) on every frame. */
   .sidebar.collapsed { width: 52px; }
   .sidebar.collapsed .brand, .sidebar.collapsed .conn,
   .sidebar.collapsed .scroll { display: none; }
@@ -299,7 +302,6 @@ code, pre, kbd { font-family: var(--mono); }
   .main { display: none; }
   .main.showing { display: flex; flex-direction: column; height: 100%; width: 100%; }
 }
-@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
 
 /* ------------------------------------------------------------------- bars */
 
