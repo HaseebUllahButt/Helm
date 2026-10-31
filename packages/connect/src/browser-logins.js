@@ -225,8 +225,24 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
       for (const title of names) for (const wallet of ['kdewallet', 'default']) { const v = await give('kwallet-query', ['-r', `${title} Safe Storage`, '-f', `${title} Keys`, wallet]); if (v) yield v; }
     }
   }
-  async function readLogins(wanted, { refresh = false } = {}) {
-    const profile = await resolveProfile(wanted);
+  /**
+   * A saved key (logins.json, startingProfile) names folders, not display
+   * names: only the exact key, or an older key's exact data folder and exact
+   * profile folder, is accepted. A missing folder is refused; no name lookup.
+   */
+  async function resolveSaved(value) {
+    const choices = await listProfiles(), key = typeof value === 'object' ? value?.key : value;
+    if (typeof key !== 'string' || key.length > 400) throw new Error('choose a browser profile');
+    const byKey = choices.find(p => p.key === key); if (byKey) return byKey;
+    const colon = key.indexOf(':'), old = colon > 0 && OLD_KEYS[key.slice(0, colon).toLowerCase()];
+    if (old) {
+      const path = join(roots[0], old[platform === 'darwin' ? 2 : platform === 'win32' ? 3 : 1]);
+      const hit = choices.find(p => p.dataDir === path && p.directory === key.slice(colon + 1)); if (hit) return hit;
+    }
+    throw new Error(`The saved browser profile "${key}" is no longer on this machine. Profiles here: ${choices.map(label).join('; ') || 'none'}`);
+  }
+  async function readLogins(wanted, { refresh = false, saved = false } = {}) {
+    const profile = saved ? await resolveSaved(wanted) : await resolveProfile(wanted);
     if (!profile.readable) throw new Error(profile.reason);
     const previous = cache.get(profile.key);
     if (!refresh && previous && now() - previous.at < 10 * 60000) {

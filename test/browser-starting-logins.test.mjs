@@ -37,8 +37,8 @@ test('a key an older Helm saved keeps its account, through startingProfile and c
     writeFileSync(join(manager.directory, 'logins.json'), JSON.stringify({ profileKey: saved }));
     const { profileKey } = await manager.startingProfile();
     assert.equal(profileKey, saved);
-    assert.equal((await logins.readLogins(profileKey)).cookies[0].value, account, `${saved} reads its own account`);
-    assert.equal((await logins.readLogins(profileKey)).cookies[0].value, account, `${saved} cached read keeps the account`);
+    assert.equal((await logins.readLogins(profileKey, { saved: true })).cookies[0].value, account, `${saved} reads its own account`);
+    assert.equal((await logins.readLogins(profileKey, { saved: true })).cookies[0].value, account, `${saved} cached read keeps the account`);
   }
   // The old Chrome key never falls back to another browser's account.
   const betaOnly = homeDir();
@@ -51,12 +51,12 @@ test('a saved key stays on its account when a browser with the same name is inst
   await withCookie(root, { browserPath: 'org.z.Browse', info: { active_time: 1000 } }, 'z-account');
   const logins = reader(home), manager = managerWith(logins);
   const { profileKey } = await manager.loginDefault('one', 'Browse');
-  assert.equal((await logins.readLogins(profileKey)).cookies[0].value, 'z-account');
+  assert.equal((await logins.readLogins(profileKey, { saved: true })).cookies[0].value, 'z-account');
   // A new install whose name is also "Browse", sorted before it and used more lately.
   await withCookie(root, { browserPath: 'com.a.Browse', info: { active_time: 9000 } }, 'a-account');
   assert.equal((await manager.startingProfile()).profileKey, profileKey, 'the saved key is unchanged');
-  assert.equal((await logins.readLogins(profileKey)).cookies[0].value, 'z-account', 'the cached read keeps the account');
-  assert.equal((await logins.readLogins(profileKey, { refresh: true })).cookies[0].value, 'z-account', 'a fresh read keeps the account');
+  assert.equal((await logins.readLogins(profileKey, { saved: true })).cookies[0].value, 'z-account', 'the cached read keeps the account');
+  assert.equal((await logins.readLogins(profileKey, { refresh: true, saved: true })).cookies[0].value, 'z-account', 'a fresh read keeps the account');
   await assert.rejects(logins.resolveProfile('Browse: Personal (Default)'), /Two browser profiles have this name/);
 });
 
@@ -71,17 +71,20 @@ test('the system default browser wins over a newer profile of another browser (n
     const { profileKey } = await manager.startingProfile();
     const chosen = await logins.resolveProfile(profileKey);
     assert.equal(chosen.browserName, 'Brave', `${defaultId}: the default browser's profile starts the window`);
-    assert.equal((await logins.readLogins(profileKey)).cookies[0].value, 'brave-account');
+    assert.equal((await logins.readLogins(profileKey, { saved: true })).cookies[0].value, 'brave-account');
   }
 });
 
 test('an old saved key whose profile folder is gone is refused, never matched to a similar folder', async () => {
   const home = homeDir(), root = join(home, '.config');
   await withCookie(root, { browserPath: 'google-chrome', directory: 'Profile 10', name: 'Other' }, 'other-account');
+  // Its display name even equals the missing folder's name.
+  await withCookie(root, { browserPath: 'google-chrome', directory: 'Profile 11', name: 'Profile 1' }, 'look-alike-account');
   const logins = reader(home), manager = managerWith(logins);
   writeFileSync(join(manager.directory, 'logins.json'), JSON.stringify({ profileKey: 'chrome:Profile 1' }));
   const { profileKey } = await manager.startingProfile();
-  await assert.rejects(logins.readLogins(profileKey), /No browser profile matches "chrome:Profile 1"/);
-  assert.equal((await logins.readLogins('chrome:Profile 10')).cookies[0].value, 'other-account', 'the exact folder still works');
-  assert.equal((await logins.resolveProfile('chrome:other')).directory, 'Profile 10', 'one exact profile name still works');
+  await assert.rejects(logins.readLogins(profileKey, { saved: true }), /saved browser profile "chrome:Profile 1" is no longer on this machine/);
+  assert.equal((await logins.readLogins('chrome:Profile 10', { saved: true })).cookies[0].value, 'other-account', 'the exact folder still works');
+  // Typed input keeps the name lookup.
+  assert.equal((await logins.resolveProfile('chrome:other')).directory, 'Profile 10', 'one exact profile name still works when typed');
 });

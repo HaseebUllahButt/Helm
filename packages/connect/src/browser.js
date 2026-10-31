@@ -132,7 +132,7 @@ export class BrowserManager {
       try { storageState = JSON.parse(await readFile(join(this.directory, sessionId, 'storage.json'), 'utf8')); } catch (error) { hasStorage = error.code !== 'ENOENT'; }
       if (!hasStorage) {
         seed = loginSeed;
-        if (!seed) { this.owner(sessionId); const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
+        if (!seed) { this.owner(sessionId); const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey, { saved: true }); }
         if (seed) { if (!seed.cookies.length && seed.failed) throw new Error(seed.warnings?.[0] || 'Could not copy the default browser logins.'); storageState = { cookies: seed.cookies, origins: [] }; }
       }
       // Set the user agent before any popup's first request. Each page also
@@ -176,7 +176,7 @@ export class BrowserManager {
     if (this.shared && !this.shared.helmClosed) return Promise.resolve(this.shared);
     return this.openingShared ||= (async () => {
       const folder = sharedProfile(this.directory), fresh = !existsSync(folder); mkdirSync(folder, { recursive: true, mode: 0o700 });
-      let seed; if (fresh) { const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey).catch(() => null); }
+      let seed; if (fresh) { const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey, { saved: true }).catch(() => null); }
       let context;
       try { context = await this.launchWindow(folder, { name: 'helm-browser' }); }
       catch (error) { throw new Error(`The browser could not open a window. ${String(error.message).split('\n')[0]}`); }

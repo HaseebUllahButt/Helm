@@ -212,7 +212,7 @@ test('default seeds only new contexts, imports refresh open or unopened contexts
   await assert.rejects(routes.dispatch('browser.profiles', { id: 'missing' }), /not found/);
   await routes.dispatch('browser.loginDefault', { id: 'one', profileKey: 'Personal' });
   assert.deepEqual(JSON.parse(await readFile(join(root, 'logins.json'), 'utf8')), { profileKey: profile.key });
-  const contexts = await Promise.all([manager.context('one'), manager.context('one')]); assert.equal(contexts[0], contexts[1]); assert.equal(reads.length, 1);
+  const contexts = await Promise.all([manager.context('one'), manager.context('one')]); assert.equal(contexts[0], contexts[1]); assert.equal(reads.length, 1); assert.equal(reads[0].saved, true, 'a new window reads the saved key strictly');
   assert.equal((await stat(join(root, 'one/storage.json'))).mode & 0o777, 0o600); assert.equal((await stat(join(root, 'logins.json'))).mode & 0o777, 0o600);
   await mkdir(join(root, 'two')); await writeFile(join(root, 'two/storage.json'), JSON.stringify({ cookies: [], origins: [] })); await manager.context('two'); assert.equal(reads.length, 1);
   assert.deepEqual(await routes.dispatch('browser.importLogins', { id: 'two', profileKey: 'Personal' }), { cookies: 1, sites: 1, failed: 0, profile: 'Personal' });
