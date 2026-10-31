@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { fixture, encrypted } from './fixtures/browser-logins.mjs';
 
@@ -19,7 +19,24 @@ const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.
 // A temp home, so the reader never reads the tester's real ~/.config,
 // ~/.var/app (Flatpak) or ~/snap browsers.
 const config = async t => { const home = await mkdtemp(join(directory, 'home-')); t.after(() => rm(home, { recursive: true, force: true })); return home; };
-const linux = (home, extra = {}) => createLoginReader({ home, configHome: join(home, '.config'), platform: 'linux', defaultBrowser: async () => null, ...extra });
+// Every reader in this file comes from here: a private home, a fake default
+// browser, and a guard that fails the test when any browser folder it finds
+// lies outside that home (so a real profile is never read).
+function privateReader(home, extra = {}) {
+  const reader = createLoginReader({ home, configHome: join(home, '.config'), localAppData: join(home, 'AppData', 'Local'), platform: 'linux', defaultBrowser: async () => null, ...extra });
+  const inside = path => path === home || path.startsWith(home + sep);
+  const listProfiles = async () => { const found = await reader.listProfiles(); for (const p of found) assert.ok(inside(p.dataDir), `read outside the private home: ${p.dataDir}`); return found; };
+  return { listProfiles, resolveProfile: async wanted => (await listProfiles(), reader.resolveProfile(wanted)), readLogins: async (wanted, options) => (await listProfiles(), reader.readLogins(wanted, options)) };
+}
+const linux = privateReader;
+
+test('a reader reads only its private home; the guard fails on any folder outside it', async t => {
+  const home = await config(t), outside = await config(t);
+  (await fixture(join(outside, '.config'))).db.close();
+  assert.deepEqual(await linux(home).listProfiles(), [], 'a browser outside the private home is not found');
+  // A reader whose config folder is outside its home must fail the test.
+  await assert.rejects(linux(home, { configHome: join(outside, '.config') }).listProfiles(), /read outside the private home/);
+});
 
 test('discovers profiles, finds the one a person names, and rejects symlinks', async t => {
   const home = await config(t), root = join(home, '.config');
@@ -85,10 +102,10 @@ test('finds any Chromium browser by its "Local State", in native, Flatpak and Sn
 });
 
 test('Linux decrypts v10 and v11 with host hashes, live WAL, expiry, sessions and SameSite', async t => {
-  const root = await config(t), f = await fixture(root, { wal: true }); t.after(() => f.db.close());
+  const home = await config(t), root = join(home, '.config'), f = await fixture(root, { wal: true }); t.after(() => f.db.close());
   let time = Date.now(); const calls = [];
   await writeFile(join(root, 'chromium-flags.conf'), '--password-store=gnome-libsecret');
-  const reader = createLoginReader({ configHome: root, platform: 'linux', now: () => time, run: async (bin, args) => { calls.push({ bin, args }); return { stdout: 'fake-key\n' }; } });
+  const reader = privateReader(home, { now: () => time, run: async (bin, args) => { calls.push({ bin, args }); return { stdout: 'fake-key\n' }; } });
   f.insert({ name: 'session', bytes: encrypted('session-value'), sameSite: 2 });
   f.insert({ name: 'persistent', bytes: encrypted('keyring-value', { prefix: 'v11', password: 'fake-key' }), expires: time / 1000 + 3600, sameSite: 0, partitionKey: 'https://top.test' });
   f.insert({ name: 'plain', value: 'plain-value', bytes: Buffer.alloc(0), secure: false, httpOnly: false, sameSite: -1 });
@@ -109,13 +126,13 @@ test('Linux decrypts v10 and v11 with host hashes, live WAL, expiry, sessions an
 });
 
 test('legacy database, missing keyring, and KWallet use the selected store without leaking errors', async t => {
-  const root = await config(t), f = await fixture(root, { version: 23, network: false }); t.after(() => f.db.close());
+  const home = await config(t), root = join(home, '.config'), f = await fixture(root, { version: 23, network: false }); t.after(() => f.db.close());
   f.insert({ bytes: encrypted('legacy', { version: 23 }) }); f.insert({ name: 'v11', bytes: encrypted('wallet', { version: 23, prefix: 'v11', password: 'fake-wallet' }) });
   await writeFile(join(root, 'chromium-flags.conf'), '--password-store=kwallet6');
-  const calls = [], reader = createLoginReader({ configHome: root, platform: 'linux', run: async (bin, args) => { calls.push([bin, args]); return { stdout: 'fake-wallet\n' }; } });
+  const calls = [], reader = privateReader(home, { run: async (bin, args) => { calls.push([bin, args]); return { stdout: 'fake-wallet\n' }; } });
   assert.equal((await reader.readLogins('Default')).cookies.length, 2); assert.equal(calls[0][0], 'kwallet-query');
   assert.deepEqual(calls[0][1], ['-r', 'Chromium Safe Storage', '-f', 'Chromium Keys', 'kdewallet']);
-  const locked = createLoginReader({ configHome: root, platform: 'linux', run: async () => { throw new Error('sensitive command output'); } });
+  const locked = privateReader(home, { run: async () => { throw new Error('sensitive command output'); } });
   const r = await locked.readLogins('Default'); assert.equal(r.cookies.length, 1); assert.equal(r.failed, 1); assert.match(r.warnings[0], /kwallet6 key unavailable/); assert.ok(!JSON.stringify(r.warnings).includes('sensitive'));
 });
 
@@ -123,10 +140,10 @@ test('macOS keychain decryption and Windows clearly unreadable profile listing',
   const home = await config(t), root = join(home, 'Library/Application Support');
   const mac = await fixture(root, { browserPath: 'Google/Chrome' }); t.after(() => mac.db.close());
   mac.insert({ bytes: encrypted('mac-value', { platform: 'darwin', password: 'mac-key' }) });
-  const reader = createLoginReader({ home, platform: 'darwin', run: async () => ({ stdout: 'mac-key\n' }) });
+  const reader = privateReader(home, { platform: 'darwin', run: async () => ({ stdout: 'mac-key\n' }) });
   assert.equal((await reader.readLogins('chrome:Default')).cookies[0].value, 'mac-value');
   const win = await fixture(join(home, 'win'), { browserPath: 'Google/Chrome/User Data' }); win.db.close();
-  const windows = createLoginReader({ localAppData: join(home, 'win'), platform: 'win32' });
+  const windows = privateReader(home, { localAppData: join(home, 'win'), platform: 'win32' });
   assert.equal((await windows.listProfiles())[0].readable, false); await assert.rejects(windows.readLogins('Default'), /app-bound/);
 });
 
