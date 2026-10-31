@@ -71,3 +71,41 @@ test('a browser operation that never settles cannot block recovery forever', asy
   manager.perform = async () => ({ recovered: true });
   assert.deepEqual(await manager.run('chat', 'tab', { kind: 'look' }), { recovered: true });
 });
+
+test('a timed out batch stops its later steps, and no page change starts while its step is still running', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { manager } = fixture(), started = deferred(), finished = deferred(), calls = [];
+  manager.look = async () => ({ text: 'Page' }); manager.persistTabs = async () => {}; manager.persistSoon = () => {};
+  const batch = manager.perform.bind(manager);
+  manager.perform = async (tab, action, inBatch, op) => {
+    if (action.kind === 'batch') return batch(tab, action, inBatch, op);
+    calls.push(action.target ?? action.kind);
+    if (action.target === 'Save') { started.resolve(); await finished.promise; }
+    return {};
+  };
+  const first = manager.run('chat', 'tab', { actions: [{ click: 'Name' }, { click: 'Save' }, { click: 'Send' }, { click: 'Close' }] });
+  const rejected = assert.rejects(first, error => {
+    assert.equal(error.message, 'The browser action timed out during step 2 (click). That step may have landed. 1 of 4 steps finished. Steps 3–4 were not run. Read the page before you try again.');
+    return true;
+  });
+  await started.promise;
+  t.mock.timers.tick(100); await rejected;
+  // The grace time ends while the Save click is still in flight.
+  t.mock.timers.tick(100); await new Promise(setImmediate);
+  assert.equal(manager.serial.size, 0);
+  await assert.rejects(manager.run('chat', 'tab', { click: 'Delete' }), /earlier click step is still running in the page, so this action was not run/);
+  assert.deepEqual(await manager.run('chat', 'tab', { kind: 'look' }), {}, 'a read still works');
+  finished.resolve(); await new Promise(setImmediate); await new Promise(setImmediate);
+  assert.deepEqual(calls, ['Name', 'Save', 'look'], 'no later batch step and no other page change ran');
+  await manager.run('chat', 'tab', { click: 'Delete' });
+  assert.deepEqual(calls.at(-1), 'Delete', 'once the step ends, page changes run again');
+});
+
+test('a timeout says whether the step only read the page or never reached it', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { manager } = fixture(), started = deferred();
+  manager.perform = () => { started.resolve(); return new Promise(() => {}); };
+  const reading = manager.run('chat', 'tab', { kind: 'look' });
+  const rejected = assert.rejects(reading, { message: 'The browser action timed out during the look step. That step only reads the page. Read the page before you try again.' });
+  await started.promise; t.mock.timers.tick(100); await rejected;
+});

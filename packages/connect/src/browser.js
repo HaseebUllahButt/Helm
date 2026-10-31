@@ -75,6 +75,20 @@ const pointerTarget = el => {
     box: rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null };
 };
 
+// Steps that only read the page. Any other step can change it.
+const READS = ['look', 'console', 'network', 'screenshot', 'point', 'check', 'wait'];
+const changesPage = kind => !READS.includes(kind);
+const readsOnly = action => { action = normalizeAction(action); return action.kind === 'batch' ? Array.isArray(action.actions) && action.actions.every(readsOnly) : !changesPage(action.kind); };
+/** A timed-out call in plain words: did a step reach the page, and what was not run. */
+const timedOut = op => {
+  if (!op.started) return 'The browser action timed out before it reached the page. Nothing was done.';
+  const { batch, step } = op;
+  const where = step ? (batch ? `during step ${step.index} (${step.kind})` : `during the ${step.kind} step`) : op.done < op.total ? `before step ${op.done + 1}` : 'while it read the page after the last step';
+  const landed = !step ? '' : changesPage(step.kind) ? ' That step may have landed.' : ' That step only reads the page.';
+  const next = op.done + (step ? 2 : 1), skipped = !batch || next > op.total ? '' : next === op.total ? ` Step ${next} was not run.` : ` Steps ${next}–${op.total} were not run.`;
+  return `The browser action timed out ${where}.${landed}${batch ? ` ${op.done} of ${op.total} steps finished.` : ''}${skipped} Read the page before you try again.`;
+};
+
 /**
  * A thread's browser. On a machine with a screen it is a real Chromium
  * window, one per thread, that never takes the owner's keyboard: the agent
@@ -485,14 +499,20 @@ export class BrowserManager {
       tab.lastUsed = this.now(); return this.perform(tab, action);
     }
     const previous = this.serial.get(tab.id) || Promise.resolve();
-    const deadline = Date.now() + this.actionTimeoutMs;
+    // What this call is doing now, so a timeout can say if a step reached the page.
+    const batch = action.kind === 'batch', op = { deadline: Date.now() + this.actionTimeoutMs, expired: false, started: false, step: null, done: 0, batch, total: batch && Array.isArray(action.actions) ? action.actions.length : 1 };
+    const expired = () => new Error('The browser action timed out before it reached the page. Nothing was done.');
     let timer;
     const operation = previous.catch(() => {}).then(async () => {
-      if (Date.now() >= deadline) throw new Error('Browser action expired before delivery.');
+      if (op.expired || Date.now() >= op.deadline) throw expired();
       const owner = this.owner(sessionId);
       if (['read', 'readonly', 'plan'].includes(owner.mode)) {
         if (!readOnlyAction(action)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
       }
+      // A step from a call that timed out can still land. Until it ends,
+      // only reads may run, so two inputs never reach the page together.
+      const stuck = [...(tab.working || [])].find(other => other.step && changesPage(other.step.kind));
+      if (stuck && !readsOnly(action)) throw new Error(`An earlier ${stuck.step.kind} step is still running in the page, so this action was not run. Read the page, wait, or close the tab.`);
       tab.lastUsed = tab.actedAt = this.now();
       // Wait for a restored page before the agent uses it.
       if (tab.ready) { await tab.ready; tab.ready = null; }
@@ -501,19 +521,21 @@ export class BrowserManager {
       // lets them finish rather than typing over them.
       const shared = tab.window;
       if (shared && !readOnlyAction(action)) await this.ownerQuiet(tab);
-      if (Date.now() >= deadline) throw new Error('Browser action expired before delivery.');
+      if (op.expired || Date.now() >= op.deadline) throw expired();
       let result;
       if (shared) tab.agentActing = true;
-      try { result = await this.perform(tab, action); }
+      (tab.working ||= new Set()).add(op); op.started = true; op.step = batch ? null : { kind: action.kind };
+      try { result = await this.perform(tab, action, false, op); }
       catch (error) { if (!error.candidates && !error.check) throw error; result = { error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await this.look(tab)) }; }
-      finally { if (shared) { tab.agentActing = false; tab.agentDoneAt = this.now(); } }
+      finally { tab.working.delete(op); op.step = null; if (shared) { tab.agentActing = false; tab.agentDoneAt = this.now(); } }
       if (!['look', 'console', 'network', 'screenshot', 'point'].includes(action?.kind)) { if (['navigate', 'back', 'forward', 'reload', 'batch'].includes(action?.kind)) await this.persistTabs(sessionId); else this.persistSoon(sessionId); }
       return result;
     });
-    const job = Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Browser action timed out; inspect the page before retrying.')), this.actionTimeoutMs); timer.unref?.(); })]);
+    const job = Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => { op.expired = true; reject(new Error(timedOut(op))); }, this.actionTimeoutMs); timer.unref?.(); })]);
     // A reply timeout does not stop a browser command already in flight.
     // Give it one more action timeout to finish before allowing recovery
     // commands through: an evaluate call can otherwise block the tab forever.
+    // Page changes stay refused while its input step is still running.
     let release;
     const grace = new Promise(resolve => { release = resolve; });
     const graceTimer = setTimeout(release, 2 * this.actionTimeoutMs); graceTimer.unref?.();
@@ -604,7 +626,7 @@ export class BrowserManager {
   }
   async listFlows(sessionId) { this.owner(sessionId); return this.flows.list(); }
   async runFlow(sessionId, tabId, name, values) { this.owner(sessionId); const flow = await this.flows.load(name); return this.run(sessionId, tabId, { actions: flow.actions, with: values }); }
-  async perform(tab, action, inBatch = false) {
+  async perform(tab, action, inBatch = false, op = null) {
     action = normalizeAction(action);
     const kind = action.kind;
     if (kind === 'look') return { tab: this.metadata(tab), ...(await this.look(tab, action.budget ?? 6000)) };
@@ -616,7 +638,10 @@ export class BrowserManager {
       integer(action.budget ?? 6000, 0, 20000);
       if (action.save_as != null) validateFlow(action.actions, action.save_as, action.note);
       const actions = fillParams(action.actions, action.with ?? {}), results = [];
-      for (const raw of actions) { try { const step = normalizeAction(raw); results.push(await this.perform(tab, step, true)); } catch (error) { return { results, failedAt: results.length, error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await this.look(tab, action.budget ?? 6000)) }; } }
+      for (const [index, raw] of actions.entries()) {
+        // The call timed out and its caller has the answer: deliver nothing more.
+        if (op?.expired) return { results, stopped: true };
+        try { const step = normalizeAction(raw); if (op) op.step = { index: index + 1, kind: step.kind }; results.push(await this.perform(tab, step, true, op)); if (op) { op.step = null; op.done = index + 1; } } catch (error) { return { results, failedAt: results.length, error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await this.look(tab, action.budget ?? 6000)) }; } }
       const result = { results, ...(await this.look(tab, action.budget ?? 6000)) };
       if (action.save_as != null) { try { if (await this.flows.save(action.save_as, action.actions, action.note, result)) result.saved = action.save_as; } catch (error) { result.saveError = `Steps succeeded, but the flow could not be saved: ${error.message}`; } }
       return result;
