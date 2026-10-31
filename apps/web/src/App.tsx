@@ -1216,31 +1216,34 @@ function Shell({ client, conn, onSignOut }: {
   const pinnedRow = (x: Row) => homeRow(x, !runningThread(x.s) || attentionOn(x.env.id, x.s));
   // Alt+1, Alt+2 and Alt+3 open the top chat of Finished, Running and
   // Settled, in sidebar order. The folded rail then shows the pinned chats
-  // and the picked shelf: Finished and Running share it with Needs you.
-  // Ctrl+Tab and Ctrl+Shift+Tab walk exactly what is shown, top to bottom,
-  // pinned chats included as ordinary rows (owner, 2026-10-31).
+  // and the picked group: Needs you with Finished (the default), Running on
+  // its own, or Settled. Ctrl+Tab and Ctrl+Shift+Tab walk exactly what is
+  // shown, top to bottom, pinned chats as ordinary rows (owner, 2026-11-01).
   const shelves = { finished: finishedShelf, running: runningShelf, settled: settledShelf };
-  const [pickedShelf, setPickedShelf] = useState<keyof typeof shelves>('running');
+  type Group = keyof typeof shelves;
+  const [pickedShelf, setPickedShelf] = useState<Group>('finished');
   type RailRow = Row & { need: boolean; word: string; cls: string };
-  const railRowsFor = (settled: boolean): RailRow[] => [
+  const railRowsFor = (group: Group): RailRow[] => [
     ...pinnedNow.map((x) => blocked.includes(x) ? { ...x, need: true, word: 'needs you', cls: 'rail-need' }
       : finishedNow.includes(x) ? { ...x, need: false, word: 'finished', cls: 'rail-finished' }
       : runningNow.includes(x) ? { ...x, need: false, word: 'working', cls: 'rail-working' }
       : { ...x, need: false, word: 'pinned', cls: 'rail-settled' }),
-    ...(settled ? settledShelf.map((x) => ({ ...x, need: false, word: 'settled', cls: 'rail-settled' })) : [
-      ...needShelf.map((x) => ({ ...x, need: true, word: 'needs you', cls: 'rail-need' })),
-      ...finishedShelf.map((x) => ({ ...x, need: false, word: 'finished', cls: 'rail-finished' })),
-      ...runningShelf.map((x) => ({ ...x, need: false, word: 'working', cls: 'rail-working' })),
-    ]),
+    ...(group === 'settled' ? settledShelf.map((x) => ({ ...x, need: false, word: 'settled', cls: 'rail-settled' }))
+      : group === 'running' ? runningShelf.map((x) => ({ ...x, need: false, word: 'working', cls: 'rail-working' })) : [
+        ...needShelf.map((x) => ({ ...x, need: true, word: 'needs you', cls: 'rail-need' })),
+        ...finishedShelf.map((x) => ({ ...x, need: false, word: 'finished', cls: 'rail-finished' })),
+      ]),
   ];
-  const railRows = railRowsFor(pickedShelf === 'settled');
+  const railRows = railRowsFor(pickedShelf);
   const openRailRow = ({ env: e, s, need }: RailRow) =>
     openSession(e.id, s, need && s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed));
-  const walk = useRef<{ rows: (settled: boolean) => RailRow[]; open: (row: RailRow) => void }>({ rows: railRowsFor, open: openRailRow });
+  const walk = useRef<{ rows: (group: Group) => RailRow[]; open: (row: RailRow) => void }>({ rows: railRowsFor, open: openRailRow });
   walk.current = { rows: railRowsFor, open: openRailRow };
-  const shelfOf = useRef<(x: Row) => keyof typeof shelves | 'active' | null>(() => null);
-  shelfOf.current = (x) => settledShelf.some((y) => y.s.id === x.s.id && y.env.id === x.env.id) ? 'settled'
-    : [...needShelf, ...finishedShelf, ...runningShelf].some((y) => y.s.id === x.s.id && y.env.id === x.env.id) ? 'active' : null;
+  const shelfOf = useRef<(x: Row) => Group | null>(() => null);
+  shelfOf.current = (x) => {
+    const has = (list: Row[]) => list.some((y) => y.s.id === x.s.id && y.env.id === x.env.id);
+    return has(settledShelf) ? 'settled' : has(runningShelf) ? 'running' : has(needShelf) || has(finishedShelf) ? 'finished' : null;
+  };
   const tops = useRef(shelves);
   tops.current = shelves;
   const picked = useRef(pickedShelf);
@@ -1267,11 +1270,10 @@ function Shell({ client, conn, onSignOut }: {
       if (current?.kind === 'session' && current.session.engine === 'shell') return;
       const open = current?.kind === 'session' && nav.current.selected
         ? { env: { id: nav.current.selected } as Environment, s: current.session } : null;
-      const where = open && shelfOf.current(open);
-      const settled = where ? where === 'settled' : picked.current === 'settled';
-      if (where === 'settled') setPickedShelf('settled');
-      else if (where === 'active' && picked.current === 'settled') setPickedShelf('running');
-      const list = walk.current.rows(settled);
+      // The group of the open chat; a pinned chat keeps the last pick.
+      const group = (open && shelfOf.current(open)) || picked.current;
+      if (group !== picked.current) setPickedShelf(group);
+      const list = walk.current.rows(group);
       if (!list.length) return;
       event.preventDefault();
       event.stopPropagation();
@@ -1365,8 +1367,8 @@ function Shell({ client, conn, onSignOut }: {
         </div>
 
         {/* Folded, the sidebar keeps the inbox: a new chat, the pinned chats,
-            then each chat that needs you, finished or is working - or, after
-            Alt+3, each settled chat - as its agent's mark. */}
+            then each chat that needs you or finished - or, after Alt+2, each
+            working chat; after Alt+3, each settled chat - as its agent's mark. */}
         {wide && sidebarCollapsed && (
           <nav className="side-rail" aria-label="Active chats">
             <button

@@ -48,8 +48,9 @@ until `text` starts with "helm / Search anything".
   terminal pane has no Helm record and cannot be pinned.
 - **Shelf keys (owner, 2026-10-31):** Alt+1, Alt+2, Alt+3 open the top chat
   of Finished, Running, Settled (sidebar order). The folded rail shows the
-  pinned chats, then the picked shelf, in one even column: Alt+1 and Alt+2
-  both show Needs you, Finished and Running; Alt+3 shows Settled. Ctrl+Tab
+  pinned chats, then the picked group, in one even column: Needs you and
+  Finished (the default and Alt+1), Running alone (Alt+2, owner 2026-11-01),
+  or Settled (Alt+3). The open sidebar keeps every shelf. Ctrl+Tab
   and Ctrl+Shift+Tab walk exactly those rows, top to bottom, pins included
   as ordinary rows. The shelf of the open chat decides which rows; a pinned
   chat keeps the last pick. In Finished each chat you leave goes to Settled,
