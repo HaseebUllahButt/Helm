@@ -46,6 +46,12 @@ until `text` starts with "helm / Search anything".
   rail and Ctrl+Tab still see it. The machine keeps the pin (`pinnedAt`,
   `session.pin`), so it shows on every device. A found CLI chat or a
   terminal pane has no Helm record and cannot be pinned.
+- **Shelf keys (owner, 2026-10-31):** Alt+1, Alt+2, Alt+3 open the top chat
+  of Finished, Running, Settled (sidebar order). Ctrl+Tab and Ctrl+Shift+Tab
+  walk the shelf of the open chat, else the shelf last picked, else Running.
+  In Finished each chat you leave goes to Settled, so going back skips it.
+  Alt with a digit has no Ctrl/Cmd: the owner asked for it by name. Test:
+  `test/browser/chat-cycle`.
 - **Rules:** the sidebar shows live and Helm-known chats only, on purpose.
 - **Rules (owner, 2026-10-28, idea A):** a Finished or Settled chat is one
   line: the agent logo, the title, and one status (its age, a green dot
