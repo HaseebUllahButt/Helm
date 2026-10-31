@@ -361,6 +361,13 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try { await client.rpc(env.id, 'session.archive', { id: session.id, archived: !session.archived }); onArchived(); }
     catch (e: any) { setError(errorMessage(e)); }
   };
+  // A chat Helm has no record of (a found CLI chat, a terminal pane) has nothing to pin.
+  const pinnable = !/^(pane:|found:)/.test(session.id);
+  const pin = async () => {
+    setMenu(false);
+    try { onSession((await client.rpc<{ session: Session }>(env.id, 'session.pin', { id: session.id, pinned: !session.pinnedAt })).session); }
+    catch (e: any) { setError(errorMessage(e)); }
+  };
 
   // Terminals are named by the machine ("Terminal 3") and agents by their
   // first prompts; both are guesses worth correcting.
@@ -503,6 +510,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
             </>}
             {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
             {!isExternal && onSendTask && <button disabled={!env.online} onClick={onSendTask}>Send task to another machine</button>}
+            {pinnable && <button onClick={pin}>{session.pinnedAt ? 'Unpin chat' : 'Pin chat'}</button>}
             <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
             <button className="destructive" onClick={() => setKilling(true)}>{session.nativeCli ? 'Stop chat' : 'Delete chat'}</button>
             <p className="menu-facts">{where}</p>
