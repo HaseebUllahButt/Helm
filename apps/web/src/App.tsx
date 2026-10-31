@@ -530,9 +530,10 @@ function Shell({ client, conn, onSignOut }: {
       const ctrlN = !e.shiftKey && (e.key === 'n' || e.key === 'N') && !el?.closest?.('.xterm');
       // A new chat from the start: machine first. "In this folder" is Ctrl+Shift+N.
       if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
-      // Fold or unfold the sidebar, as in VS Code. A terminal keeps Ctrl+B:
-      // it is "back one letter" to a shell and tmux's prefix key.
-      if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyB' && !el?.closest?.('.xterm')) { e.preventDefault(); collapseSidebar((was) => !was); return; }
+      // Fold or unfold the sidebar (the owner's choice of key). A terminal
+      // keeps Ctrl+S: it pauses output there. The canvas keeps it to save
+      // the file you type in.
+      if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyS' && !el?.closest?.('.xterm, .canvas')) { e.preventDefault(); collapseSidebar((was) => !was); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       // Settings and usage from anywhere. Letters with Ctrl/Cmd+Shift that
@@ -1134,7 +1135,7 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
-  // Ctrl/Cmd+Alt+S opens or closes Settled. A folded sidebar unfolds with
+  // Ctrl/Cmd+Alt+B opens or closes Settled. A folded sidebar unfolds with
   // Settled open, since the shelf is not on show there.
   const [settledCommand, setSettledCommand] = useState<{ n: number; to?: boolean }>({ n: 0 });
   const toggleSettled = useRef<() => void>(() => {});
@@ -1145,7 +1146,7 @@ function Shell({ client, conn, onSignOut }: {
   };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.code !== 'KeyS' || !(event.ctrlKey || event.metaKey) || !event.altKey || event.shiftKey || event.isComposing
+      if (event.code !== 'KeyB' || !(event.ctrlKey || event.metaKey) || !event.altKey || event.shiftKey || event.isComposing
           || document.querySelector('[aria-modal="true"]')) return;
       event.preventDefault();
       event.stopPropagation();
@@ -1292,8 +1293,8 @@ function Shell({ client, conn, onSignOut }: {
             ><Gear /></button>
             <button
               className="iconbtn collapse-toggle"
-              title={sidebarCollapsed ? 'Expand sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)'}
-              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-keyshortcuts="Control+B Meta+B"
+              title={sidebarCollapsed ? 'Expand sidebar (Ctrl+S)' : 'Collapse sidebar (Ctrl+S)'}
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-keyshortcuts="Control+S Meta+S"
               onClick={() => collapseSidebar(!sidebarCollapsed)}
             ><Icon name="sidebar" size={17} /></button>
           </span>
