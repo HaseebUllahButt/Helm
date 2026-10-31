@@ -2392,11 +2392,6 @@ try {
       await deleteChat();
       break;
 
-    case 'desktop': {
-      const { runDesktopCommand } = await import('../src/desktop-use-cli.js');
-      await runDesktopCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession });
-      break;
-    }
     case 'browser': {
       const { runBrowserCommand } = await import('../src/browser-cli.js');
       await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession });

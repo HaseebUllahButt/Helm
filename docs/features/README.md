@@ -16,7 +16,6 @@ mark.
 | Machines, devices, sending work, `exec` and `copy` | [machines.md](machines.md) |
 | Terminal | [terminal.md](terminal.md) |
 | Browser for chats | [browser.md](browser.md) |
-| Desktop apps for chats: `helm desktop` | [desktop.md](desktop.md) |
 | Spins: `helm share` public links | [spins.md](spins.md) |
 | Settings, usage, limits, updates, connectors | [settings.md](settings.md) |
 | Rewind: Edit / Branch from here | [rewind.md](rewind.md) |

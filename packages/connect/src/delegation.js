@@ -8,7 +8,6 @@ import { fold } from './brain.js';
 import { activeTurnFromEvents } from './events.js';
 import { createHash } from 'node:crypto';
 import { browserNote, browserReady } from './browser.js';
-import { desktopNote, desktopReady } from './desktop-use.js';
 import { loadOwner } from '../../protocol/owner.js';
 import { resolve } from 'node:path';
 import { createReadStream } from 'node:fs';
@@ -177,7 +176,7 @@ export function helperNote(parentId) {
 }
 
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId) => [parentId && helperNote(parentId), delegationNote(), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), desktopReady() && desktopNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const toolNotes = (parentId) => [parentId && helperNote(parentId), delegationNote(), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null } = {}) {
   const machines = Object.values(net?.machines ?? {});

@@ -35,7 +35,6 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm devices                      controllers that can drive this network
   helm browser open <url>            browse with your agent in a Chromium-based browser
   helm browser tabs | look <id>      list tabs or read text and numbered controls
-  helm desktop apps | look <app>     see desktop apps and their buttons and fields
   helm machines                     machines in this network
   helm redesignate [machine] <kind> what a machine is for: pc or vm
   helm spin <port> [options]         same as helm share; make a public link
@@ -209,7 +208,6 @@ Chats and agents
 
 Pages and links
   browser          Use browser tabs that the owner also sees
-  desktop          See and use desktop apps on this machine
   share, spin      Make a public link (a Spin) to a port here
   preview          Take a screenshot of an HTML file; report script errors
   render           Save a picture or HTML page in this chat
@@ -349,25 +347,6 @@ const DETAILS = {
     point <tab> <el>  show the owner where to click, without clicking
     screenshot        only when visuals matter; close <tab> releases it
     profiles / logins copy the owner's browser logins into these tabs`,
-
-  desktop: `
-  See and use desktop apps on this machine through their buttons and fields.
-  It does not move the owner's mouse or type on their keyboard.
-  Helm uses Vercel's agent-desktop program, at one fixed version.
-    guide [platform]  Read how to use it. Read it before the first use.
-    apps              List the apps that show their controls. Apps that you opened are marked.
-    open <app> [args] Start an app so that it shows its controls.
-    look <app>        Read the app's buttons and fields, each with a ref like @s8f3k2p9:e8.
-    click <ref>       Use any agent-desktop command: click, type, set-value,
-                      select, toggle, scroll, press, wait, screenshot and more.
-                      Take a new look after each change.
-    close <app>       Close an app that this chat opened.
-    restart <app>     Close an open app and start it again so that it shows its
-                      controls. Ask the owner first.
-    switch [on|off]   Linux: turn on the screen-reader switch for apps that need it.
-                      Helm turns it off after 10 minutes without desktop use.
-  Helm closes the apps that a chat opened when the chat is deleted.
-  Use helm browser for web pages.`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.
