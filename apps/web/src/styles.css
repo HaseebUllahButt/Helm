@@ -1164,11 +1164,17 @@ pre.snippet {
 .turn-images:not(:last-child) { margin-bottom: 8px; }
 .turn-image { width: 100%; aspect-ratio: 4 / 3; height: auto; object-fit: cover; border-radius: 10px; display: block; border: 1px solid var(--line); background: var(--panel); }
 .turn-images > .turn-image:only-child { aspect-ratio: auto; max-height: 200px; }
+/* A deleted picture: a small dashed tag on one line, so it reads as an
+   empty slot and not as a second message inside the bubble. */
 .turn-image-gone {
-  display: inline-block; padding: 6px 10px; border-radius: 8px;
-  background: color-mix(in srgb, var(--raised) 70%, transparent);
-  color: var(--mutedfg); font-size: var(--t-meta);
+  display: inline-flex; align-items: center; gap: 5px; justify-self: start;
+  padding: 2px 9px; border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--mutedfg) 45%, transparent);
+  color: var(--mutedfg); font-size: var(--t-meta); line-height: 1.6; white-space: nowrap;
 }
+.turn-image-gone svg { flex: none; }
+/* Alone, the tag sets the width, not the 260px a lone picture gets. */
+.turn-images:has(> .turn-image-gone:only-child) { grid-template-columns: max-content; }
 .ctl {
   height: 28px; padding: 0 10px; border-radius: 8px; font-size: var(--t-meta); color: var(--mutedfg);
 }
@@ -2807,8 +2813,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
    on each would be noise. */
 .modal .row.active { background: transparent; }
 .modal .row.active::after { display: none; }
-.turn-image-gone { align-items: center; gap: 6px; }
-.turn-image-gone svg { vertical-align: -2px; margin-right: 4px; }
 .attach-preview button { display: inline-flex; align-items: center; justify-content: center; }
 .done-mark svg, .readiness-mark svg { display: block; margin: auto; }
 .readiness-mark { display: inline-flex; align-items: center; justify-content: center; height: 20px; }

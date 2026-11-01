@@ -13,7 +13,7 @@ import { LimitsLine } from './LimitsLine';
 import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { nativeConversation } from './nativeView';
-import { CompactionLine } from './Transcript';
+import { CompactionLine, GoneImage } from './Transcript';
 import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
 import { useChatKeys, useDeleteKey } from './chatKeys';
 import { Canvas, chatPages, useCanvas } from './Canvas';
@@ -722,7 +722,7 @@ const Turn = memo(function Turn({ m }: { m: Message }) {
       <div className="turn user">
         <div className="bubble">{!!display.attachments?.length && <div className="turn-images">{display.attachments.map((a, i) => a.data
           ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={`Image #${i + 1}${a.filename ? ` · ${a.filename}` : ''}`} loading="lazy" decoding="async" />
-          : <span key={i} className="turn-image-gone"><Icon name="image" size={14} /> {a.filename} — Helm no longer stores this image.</span>
+          : <GoneImage key={i} filename={a.filename} />
         )}</div>}{display.text}</div>
       </div>
     );
