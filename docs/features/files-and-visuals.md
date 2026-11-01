@@ -130,7 +130,7 @@
   `say-file: <path>`; use it for any Markdown.
 - **Prove a diagram (driven 2026-11-01):** write a reply file with a
   ```` ```mermaid ```` flowchart, send `say-file: <file>` to **fake**.
-  Proof: the finished reply shows boxes and arrows in Helm's colours, with
+  Proof: the finished reply shows grey boxes and arrows, with
   Code and Copy in the block's head; Code shows the source; a tap opens it
   full size. Changing the theme draws it again in the new colours.
 - **Tests:** `test/browser/markdown-loading`, `diagrams`, `inline-diff`,

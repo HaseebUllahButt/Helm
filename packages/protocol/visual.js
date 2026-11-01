@@ -59,6 +59,24 @@ function bootVisual(config) {
 }
 
 /**
+ * Chart colours from the dataviz skill's reference palette (2026-11-02): eight
+ * series colours in a fixed order that colour-blind readers can still tell
+ * apart next to each other, each stepped for the dark or light surface.
+ * Checked with its validate_palette.js on Helm's dark, navy and light
+ * backgrounds. In light mode slots 2-5 sit below 3:1, so charts label them.
+ * Status colours are kept apart from series colours.
+ */
+const CHART_DARK = '--chart-1:#3987e5;--chart-2:#d95926;--chart-3:#199e70;--chart-4:#c98500;--chart-5:#d55181;--chart-6:#008300;--chart-7:#9085e9;--chart-8:#e66767;' +
+  '--grid:#2c2c2a;--axis:#383835;--good:#0ca30c;--warning:#fab219;--serious:#ec835a;--critical:#d03b3b;';
+const CHART_LIGHT = '--chart-1:#2a78d6;--chart-2:#eb6834;--chart-3:#1baf7a;--chart-4:#eda100;--chart-5:#e87ba4;--chart-6:#008300;--chart-7:#6250d6;--chart-8:#e34948;' +
+  '--grid:#e1e0d9;--axis:#c3c2b7;--good:#0ca30c;--warning:#fab219;--serious:#ec835a;--critical:#d03b3b;';
+/** The series colours, for diagrams drawn outside a page. */
+export const CHART_COLOURS = {
+  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
+  light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'],
+};
+
+/**
  * What every saved page starts from, as T3 Code does: Helm's colours, font
  * and text size, so a page looks like part of the reply before it adds a
  * line of its own CSS. The theme style after it fills in the live values.
@@ -68,8 +86,9 @@ function bootVisual(config) {
  */
 export const VISUAL_BASE_CSS = ':root{color-scheme:dark;--bg:#0a0a0a;--card:#131313;--raised:#1c1c1c;--mutedfg:#9ba2b1;--primary-q:#a693ff;--amber:#e8b23f;--amber-text:#e8b23f;--sky:#8ec6e8;--emerald:#9bc9b6;--red:#e88a8a;--text:#ededed;--text-dim:#c0c0c0;--line:#2a2a2a;--primary:#7c5cff;' +
   '--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;--font-mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;--radius:9px;' +
-  '--chart-1:var(--primary-q);--chart-2:var(--sky);--chart-3:var(--amber);--chart-4:var(--emerald);--chart-5:var(--red);--chart-6:#d08ae8;' +
-  '--background:var(--bg);--foreground:var(--text);--muted:var(--card);--muted-foreground:var(--mutedfg);--card-foreground:var(--text);--border:var(--line);--accent:var(--primary-q);--success:var(--emerald);--warning:var(--amber);--destructive:var(--red)}' +
+  CHART_DARK +
+  '--background:var(--bg);--foreground:var(--text);--muted:var(--card);--muted-foreground:var(--mutedfg);--card-foreground:var(--text);--border:var(--line);--accent:var(--chart-1);--success:var(--good);--destructive:var(--critical)}' +
+  `:root[data-theme="light"]{${CHART_LIGHT}}` +
   'html{background:var(--bg);color:var(--text);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}' +
   'body{margin:0}code,kbd,pre,samp{font-family:var(--font-mono)}img,svg,canvas,video{max-width:100%}' +
   ':where(:focus-visible){outline:2px solid var(--primary-q);outline-offset:-2px}' +
