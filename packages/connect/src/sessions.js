@@ -2352,6 +2352,7 @@ export class Sessions extends EventEmitter {
     this.terminals.detach?.();
     this.nativeTerminals.detach?.();
     this.procs.detach?.();
+    this.events.flushDeltas?.();
     // Stopping settles turns and drivers, which change the index again.
     this.flush();
   }

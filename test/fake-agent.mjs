@@ -12,7 +12,9 @@
 //                         with FAKE_ASK - holds the turn on a permission
 //                         request until it is answered, and only then
 //                         resolves the prompt with stopReason end_turn;
-//                         a prompt "run: <command>" asks for that command
+//                         a prompt "run: <command>" asks for that command;
+//                         a prompt "stream: <n>" first streams n words, one
+//                         chunk each, 5 ms apart, as a real CLI does
 //   stdin ending          exits, like a real CLI
 if (process.argv.includes('--version')) {
   console.log('devin 3000.10.21');
@@ -68,6 +70,11 @@ async function onMessage(m) {
         return reply({ stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5 } });
       }
       out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working on it ' } } } });
+      const words = Number(/(?:^|\n)stream: (\d+)/.exec((m.params.prompt ?? []).map((part) => part.text ?? '').join(''))?.[1] ?? 0);
+      for (let n = 1; n <= words; n++) {
+        out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `w${n} ` } } } });
+        await sleep(5);
+      }
       await sleep(delay);
       if (ask) {
         const rid = `perm-${m.id}`;
