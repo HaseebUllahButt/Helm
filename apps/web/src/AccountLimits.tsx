@@ -9,7 +9,10 @@ export interface LimitAccount {
   /** Who the provider bills, fingerprinted the same on every machine. Absent from older daemons. */
   identity?: string;
   windows: (LimitWindow & { at: number })[];
+  /** Codex resets the account has banked; `endsAt` (Unix seconds) when Codex sent the details. */
+  resetCredits?: BankedResets;
 }
+interface BankedResets { available: number; endsAt?: number[]; at: number }
 interface LimitsReport { accounts: LimitAccount[]; unsupported: number }
 
 export interface AccountLimitsState {
@@ -59,6 +62,7 @@ interface Row {
   /** Every machine's report this row stands for: one account, read in several places. */
   members: LimitAccount[];
   machines: { env: Environment; at: number }[]; windows: Reading[]; spends: (PlanSpend & { alone?: boolean })[]; shared?: string[];
+  resets?: BankedResets;
 }
 
 const PLAN_KEY = 'helm.plans.v1';
@@ -124,9 +128,10 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
       const merged = new Map(twin.windows.map(w => [w.label, w]));
       for (const w of account.windows) if ((merged.get(w.label)?.at ?? -1) < w.at) merged.set(w.label, w);
       twin.windows = [...merged.values()].sort((a, b) => windowOrder(a.label) - windowOrder(b.label));
+      if ((account.resetCredits?.at ?? 0) > (twin.resets?.at ?? 0)) twin.resets = account.resetCredits;
       continue;
     }
-    rows.push({ key: `${env.id}:${account.account}`, account, members: [account], machines: [{ env, at: newest(account.windows) }], windows: account.windows, spends: [] });
+    rows.push({ key: `${env.id}:${account.account}`, account, members: [account], machines: [{ env, at: newest(account.windows) }], windows: account.windows, spends: [], resets: account.resetCredits });
   }
   // Accounts with a live allowance first; stale and silent ones sink.
   const fresh = (r: Row) => Number(r.windows.some(w => !w.resetsAt || w.resetsAt * 1000 > now)) * 2 + Number(!!r.windows.length);
@@ -167,9 +172,10 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
       // drawn. An account with nothing live and nothing spent is one line.
       const live = row.windows.filter(w => !w.resetsAt || w.resetsAt * 1000 > now);
       const spends = row.spends.filter(s => s.costUsd > 0 || plans[s.key]);
+      const banked = row.resets && bankedLine(row.resets, now);
       const at = Math.max(0, ...row.machines.map(m => m.at));
       const where = row.machines.map(({ env: m, at }) => `${m.name}${failed[m.id] ? ' (unavailable)' : ''}${at ? ` ${age(at, now)} ago` : ''}`).join(' · ');
-      return <div className={`usage-account${!row.shared && !live.length && !spends.length ? ' idle' : ''}`} key={row.key}>
+      return <div className={`usage-account${!row.shared && !live.length && !spends.length && !banked ? ' idle' : ''}`} key={row.key}>
         <div className="usage-account-name">
           <EngineMark engine={a.engine} className="usage-share-mark" />
           <b>{a.engine} <span>{nameOf(a)}</span></b>
@@ -205,6 +211,7 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
             </div>;
           })}
         </div>}
+        {banked && <p className="usage-resets" title="A banked reset sets your Codex limits back to full at once.">{banked}</p>}
         {spends.map(s => {
           const weekly = perWeek === null ? null : s.costUsd * perWeek;
           const week = live.find(w => w.label === '7d' && w.resetsAt);
@@ -236,6 +243,17 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
     {silent.length > 0 && <p className="usage-limits-note">Helm has no limit reports from {silent.join(', ')}.</p>}
     {!all.length && targets.every(e => reports[e.id]) && <p className="usage-limits-note">No Claude or Codex accounts are set up.</p>}
   </section>;
+}
+
+/** "2 banked resets · the next one ends Nov 30", without the ones already ended. */
+function bankedLine(resets: BankedResets, now: number) {
+  const ended = resets.endsAt?.filter(at => at * 1000 <= now).length ?? 0;
+  const count = Math.max(0, resets.available - ended);
+  if (!count) return <>No banked resets</>;
+  const next = resets.endsAt?.find(at => at * 1000 > now);
+  const ends = next && (next * 1000 - now < 2 * 86_400_000 ? whenPhrase(next * 1000, now)
+    : new Date(next * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }));
+  return <><b>{count}</b> banked {count === 1 ? 'reset' : 'resets'}{ends && <> · the next one ends {ends}</>}</>;
 }
 
 function age(at: number, now: number) {

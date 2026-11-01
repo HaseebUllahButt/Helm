@@ -20,7 +20,14 @@ export class LimitRecovery {
     await this.#sessions.limitsSeed;
     const nativeProfiles = new Set([...this.#core.index.values()]
       .filter(s => s.nativeCli && s.engine === 'claude' && this.#sessions.nativeTerminals.has(s.id)).map(s => s.profileId));
-    await this.#sessions.limits.refreshClaude(profiles.filter(p => nativeProfiles.has(p.id)));
+    // Only Codex accounts that have chats here: a read starts a Codex process.
+    const codexProfiles = new Set([...this.#core.index.values()].filter(s => s.engine === 'codex').map(s => s.profileId));
+    const codex = this.#sessions.limits.refreshCodex(profiles.filter(p => codexProfiles.has(p.id)));
+    // A slow Codex start does not hold the page; its reading shows on the next poll.
+    await Promise.all([
+      this.#sessions.limits.refreshClaude(profiles.filter(p => nativeProfiles.has(p.id))),
+      Promise.race([codex, new Promise(resolve => setTimeout(resolve, 4000).unref?.())]),
+    ]);
     return this.#sessions.limits.report(profiles);
   }
 

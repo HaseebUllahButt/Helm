@@ -117,3 +117,40 @@ test('native Claude uses a fresh local quota cache and skips API-key accounts', 
   },spec:p=>({env:p.env}),now});
   assert.equal(store.report([tokenProfile]).accounts[0].windows[0].used,75);
 });
+
+test('Codex banked resets come from a private read, survive restart and are asked at most every 15 minutes', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-limits-resets-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'limits.json');
+  const store = new AccountLimits({ file });
+  const key = accountKey(profile);
+  const asked = [];
+  const read = async (cmd, env) => {
+    asked.push([cmd, env.CODEX_HOME]);
+    return {
+      rateLimits: { limitId: 'codex', primary: window(67, 10080) },
+      rateLimitResetCredits: { availableCount: 2, credits: [
+        { id: 'b', status: 'available', grantedAt: 1, expiresAt: 3000 },
+        { id: 'a', status: 'available', grantedAt: 1, expiresAt: 2000 },
+        { id: 'c', status: 'redeemed', grantedAt: 1, expiresAt: 1000 },
+      ] },
+    };
+  };
+  const spec = p => ({ cmd: p.cmd, env: p.env });
+  await Promise.all([store.refreshCodex([profile, { ...profile, id: 'fast' }], { read, spec, now: 1_000_000 }),
+    store.refreshCodex([profile], { read, spec, now: 1_000_000 })]);
+  assert.deepEqual(asked, [['codex', '/accounts/.codex-personal']]);
+  const report = new AccountLimits({ file }).report([profile]);
+  assert.equal(report.accounts[0].resetCredits.available, 2);
+  assert.deepEqual(report.accounts[0].resetCredits.endsAt, [2000, 3000]);
+  assert.deepEqual(report.accounts[0].windows.map(w => [w.label, w.used]), [['7d', 67]]);
+  // A chat's rolling update carries no resets and leaves the banked count alone.
+  store.record(key, { codex: { primary: window(70, 10080) } });
+  assert.equal(store.report([profile]).accounts[0].resetCredits.available, 2);
+  // A malformed count is no reading.
+  store.record(key, { codexResets: { availableCount: -1 } });
+  assert.equal(store.report([profile]).accounts[0].resetCredits.available, 2);
+  // A failed read keeps the last count and is not retried at once.
+  await store.refreshCodex([profile], { read: async () => null, spec, now: 1_000_000 + 16 * 60_000 });
+  assert.equal(store.report([profile]).accounts[0].resetCredits.available, 2);
+});
