@@ -148,7 +148,9 @@ export function useSessionLog(client: Client, env: string, sessionId: string, { 
         for (let page = 0; page < CATCH_UP_PAGES; page++) {
           const since = events.at(-1)?.seq ?? after;
           const r = await client.rpc<History>(env, 'session.events', { id: sessionId, since, limit: CATCH_UP }, 20_000);
-          const joins = r.last === since ? !r.events.length : r.events[0]?.seq === since + 1;
+          // A joined row stands for the numbers from its `from` to its own.
+          const joins = r.last === since ? !r.events.length
+            : !!r.events.length && Math.min(...r.events.map(event => event.from ?? event.seq)) <= since + 1;
           if (!joins || r.events.some(event => event.type === 'history.reset')) break;
           events.push(...r.events);
           if (!r.hasMore && (events.at(-1)?.seq ?? after) === r.last) return { ...r, events, firstSeq: after + 1 };
