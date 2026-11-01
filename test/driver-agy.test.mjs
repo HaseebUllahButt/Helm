@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
@@ -303,4 +303,21 @@ test('agy: work it starts by itself is its own turn, open through a quiet gap un
   assert.equal(driver.status, 'idle');
   const texts = log.of('item.start').filter((e) => e.kind === 'text').map((e) => e.turnId);
   assert.deepEqual(texts, [first.turnId, wake.turnId, wake.turnId]);
+});
+
+test('agy: a picture goes as a file the agent is told to read; the chat keeps the words typed', async (t) => {
+  const imageDir = mkdtempSync(join(tmpdir(), 'helm-agy-images-'));
+  const { driver, log, fake } = make('plain', { imageDir });
+  t.after(async () => { await driver.kill(); rmSync(imageDir, { recursive: true, force: true }); });
+  const png = 'iVBORw0KGgo=';
+  await driver.sendWithAttachments('say helm-agy-ok', [{ filename: 'shot.png', mime: 'image/png', data: png }]);
+  await log.until((e) => e.type === 'turn.done');
+  // The bubble's echo is what the owner typed, so it settles their message.
+  assert.equal(log.of('turn.start')[0].text, 'say helm-agy-ok');
+  const [sent] = fake.stdinLines();
+  const path = JSON.parse(/^\[Image #1\]: (".+")$/m.exec(sent.message.content)[1]);
+  assert.match(sent.message.content, /^say helm-agy-ok\n\nRead the attached image files before answering:\n\[Image #1\]: /);
+  assert.ok(path.startsWith(imageDir) && path.endsWith('image-1.png'));
+  assert.equal(readFileSync(path).toString('base64'), png);
+  await assert.rejects(driver.sendWithAttachments('x', [{ filename: 'a.heic', mime: 'image/heic', data: png }]), /JPEG, PNG, WebP or GIF/);
 });
