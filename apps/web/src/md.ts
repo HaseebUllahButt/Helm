@@ -23,6 +23,12 @@ const codeBlock = ({ text, lang }: { text: string; lang?: string }) => {
   const language = (lang || '').split(/\s+/)[0].toLowerCase();
   const colored = text.length <= 40_000 ? highlighting?.highlight(text, language) : null;
   const body = colored ?? escapeHtml(text);
+  // A mermaid block is drawn as a diagram once its reply ends (diagrams.ts).
+  if (language === 'mermaid') {
+    return `<div class="codeblock diagram"><div class="codehead"><span>diagram</span>` +
+      `<button type="button" class="copy" data-copy>Copy</button></div>` +
+      `<pre><code class="hljs">${escapeHtml(text)}</code></pre></div>`;
+  }
   return `<div class="codeblock"><div class="codehead"><span>${escapeHtml(language || 'text')}</span>` +
     `<button type="button" class="copy" data-copy>Copy</button></div>` +
     `<pre><code class="hljs${colored != null ? ` language-${language}` : ''}">${body}</code></pre></div>`;
@@ -41,7 +47,7 @@ marked.use({ gfm: true, breaks: true, renderer: {
 const keepCodeClasses = (_node: Element, data: { attrName: string; attrValue: string }) => {
   if (data.attrName === 'class') {
     data.attrValue = data.attrValue.split(/\s+/).filter((name) =>
-      /^(?:codeblock|codehead|copy|hljs|hljs-[\w-]+|language-[\w-]+)$/.test(name),
+      /^(?:codeblock|codehead|diagram|copy|hljs|hljs-[\w-]+|language-[\w-]+)$/.test(name),
     ).join(' ');
   }
 };

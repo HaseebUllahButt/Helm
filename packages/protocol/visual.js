@@ -18,10 +18,15 @@ export function visualHostDocument() {
 
 /** Runs inside the opaque iframe; keep it independent of this module. */
 function bootVisual(config) {
+  // The theme goes into Helm's own style element, not inline on <html>, so a
+  // page's own :root rules still win where the page sets them.
+  const sheet = document.getElementById('helm-theme');
   const apply = theme => {
+    let rule = '';
     for (const [key, value] of Object.entries(theme)) {
-      if (/^--[a-z0-9-]+$/.test(key)) document.documentElement.style.setProperty(key, value);
+      if (/^--[a-z0-9-]+$/.test(key) && value) rule += `${key}:${String(value).replace(/[;{}<>]/g, '')};`;
     }
+    if (sheet) sheet.textContent = `:root{${rule}}`;
     document.documentElement.style.colorScheme = theme.scheme === 'light' ? 'light' : 'dark';
     document.documentElement.dataset.theme = theme.scheme || 'dark';
   };
@@ -53,10 +58,27 @@ function bootVisual(config) {
   }, true);
 }
 
+/**
+ * What every saved page starts from, as T3 Code does: Helm's colours, font
+ * and text size, so a page looks like part of the reply before it adds a
+ * line of its own CSS. The theme style after it fills in the live values.
+ * The --chart-* colours are one set of series colours for every chart.
+ * The common shadcn names (--background, --foreground, --border …) point at
+ * Helm's colours, so a page written for them looks right too.
+ */
+export const VISUAL_BASE_CSS = ':root{color-scheme:dark;--bg:#0a0a0a;--card:#131313;--raised:#1c1c1c;--mutedfg:#9ba2b1;--primary-q:#a693ff;--amber:#e8b23f;--amber-text:#e8b23f;--sky:#8ec6e8;--emerald:#9bc9b6;--red:#e88a8a;--text:#ededed;--text-dim:#c0c0c0;--line:#2a2a2a;--primary:#7c5cff;' +
+  '--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;--font-mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;--radius:9px;' +
+  '--chart-1:var(--primary-q);--chart-2:var(--sky);--chart-3:var(--amber);--chart-4:var(--emerald);--chart-5:var(--red);--chart-6:#d08ae8;' +
+  '--background:var(--bg);--foreground:var(--text);--muted:var(--card);--muted-foreground:var(--mutedfg);--card-foreground:var(--text);--border:var(--line);--accent:var(--primary-q);--success:var(--emerald);--warning:var(--amber);--destructive:var(--red)}' +
+  'html{background:var(--bg);color:var(--text);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}' +
+  'body{margin:0}code,kbd,pre,samp{font-family:var(--font-mono)}img,svg,canvas,video{max-width:100%}' +
+  ':where(:focus-visible){outline:2px solid var(--primary-q);outline-offset:-2px}' +
+  'body>img:only-child{display:block;max-height:var(--helm-picture-max,900px);width:auto;margin:0 auto}';
+
 /** The same isolated document is used by the chat and the screenshot preview. */
 export function visualDocument(html, { token = '', theme = {}, expanded = false } = {}) {
   const values = JSON.stringify({ token, theme, expanded }).replace(/</g, '\\u003c');
-  const boot = `<meta http-equiv="Content-Security-Policy" content="${VISUAL_POLICY}"><meta name="referrer" content="no-referrer"><style>:root{color-scheme:dark;--bg:#14161b;--card:#1b1e24;--raised:#242831;--mutedfg:#9ba2b1;--primary-q:#8590ff;--amber:#e8b23f;--amber-text:#e8b23f;--sky:#8ec6e8;--emerald:#9bc9b6;--red:#e88a8a;--text:#e8eaef;--text-dim:#b9bfcb;--line:#353943;--primary:#8590ff}html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif}img,svg,canvas{max-width:100%}body>img:only-child{display:block;max-height:var(--helm-picture-max,900px);width:auto;margin:0 auto}</style><script>(${bootVisual.toString()})(${values})</script>`;
+  const boot = `<meta http-equiv="Content-Security-Policy" content="${VISUAL_POLICY}"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${VISUAL_BASE_CSS}</style><style id="helm-theme"></style><script>(${bootVisual.toString()})(${values})</script>`;
   // Stored pages have been parsed and serialized on the machine first: the
   // first head here is the document head, never text inside an agent script.
   return html.replace(/<head>/i, `<head>${boot}`);

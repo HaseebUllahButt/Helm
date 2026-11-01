@@ -2,7 +2,10 @@
 @import './session/side-dock.css';
 
 /* Saved visual replies: controls belong to Helm; the page stays isolated. */
-.visual-reply { position: relative; margin: 12px 0; border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; background: var(--bg); }
+/* A saved page has no frame of its own, as in T3 Code: it sits on the chat's
+   background and lines up with the reply text. Only cards keep a border. */
+.visual-reply { position: relative; margin: 12px 0; }
+.visual-link, .visual-folded, .visual-placeholder { border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; }
 .visual-corner { position: absolute; top: 6px; right: 6px; z-index: 1; display: flex; gap: 4px; }
 .visual-open {
   display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
@@ -32,7 +35,7 @@
 .visual-actions button:hover:not(:disabled) { color: var(--text); background: var(--hover); }
 .visual-actions button:disabled { opacity: .4; cursor: default; }
 .visual-actions button:focus-visible { outline: 2px solid var(--primary-q); outline-offset: -2px; }
-.visual-frame { display: block; width: 100%; border: 0; background: var(--bg); }
+.visual-frame { display: block; width: 100%; border: 0; background: transparent; color-scheme: normal; }
 .visual-placeholder { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; padding: 24px; color: var(--mutedfg); font-size: 13px; text-align: center; }
 .visual-dialog { display: flex; flex-direction: column; width: min(1280px, 96vw); height: 92dvh; min-height: 0; background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; box-shadow: 0 20px 80px #0005; }
 .visual-dialog .visual-bar { flex-shrink: 0; }
@@ -1262,6 +1265,25 @@ pre.snippet {
 .codehead .copy { font: var(--t-micro) var(--mono); color: var(--mutedfg); padding: 3px 8px; border-radius: 6px; }
 .codehead .copy:hover { color: var(--text); background: var(--accent); }
 .codeblock pre { margin: 0; background: none; border: 0; padding: 6px 12px 10px; }
+/* A mermaid block drawn as a diagram (diagrams.ts). It sits on the chat's
+   own background; Code shows the source in the same block. */
+.codeblock.diagram-shown { background: transparent; }
+.codeblock.diagram-shown > pre, .codeblock.diagram:not(.diagram-shown) > .diagram-view { display: none; }
+.codeblock.diagram-drawing > pre { opacity: .55; }
+.diagram-view {
+  display: flex; justify-content: center; width: 100%; padding: 8px 12px 14px; overflow-x: auto;
+  background: none; border: 0; border-radius: 0; cursor: zoom-in; color: inherit;
+}
+.diagram-view svg { height: auto; max-width: 100%; }
+.codehead .diagram-toggle { margin-left: auto; margin-right: -6px; }
+.diagram-view:focus-visible { outline: 2px solid var(--primary-q); outline-offset: -2px; }
+.diagram-error { padding: 6px 12px 0; font-size: var(--t-meta); color: var(--amber-text, var(--amber)); }
+.diagram-error .copy { font: var(--t-micro) var(--mono); color: var(--text-dim); padding: 3px 8px; border-radius: 6px; }
+.diagram-full { display: flex; flex-direction: column; width: min(1280px, 96vw); max-height: 92dvh; background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; box-shadow: 0 20px 80px #0005; }
+.diagram-full:focus { outline: none; }
+.diagram-full-body { flex: 1; min-height: 0; overflow: auto; padding: 20px; display: flex; justify-content: center; align-items: flex-start; }
+.diagram-full-body svg { max-width: none !important; width: auto; height: auto; min-width: min(100%, 900px); }
+@media (max-width: 480px) { .diagram-back { padding: 0; } .diagram-full { width: 100%; max-height: 100dvh; height: 100dvh; border: 0; border-radius: 0; } }
 .hljs { color: var(--text-80); }
 .hljs-comment, .hljs-quote { color: var(--hl-comment); font-style: italic; }
 .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-name { color: var(--hl-keyword); }

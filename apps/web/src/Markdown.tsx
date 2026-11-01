@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { render, renderNodes, loadHighlighting, hasHighlighting } from './md';
+import { drawDiagrams } from './diagrams';
 
 /**
  * Agent prose as prose. The transcript is markdown - headings, lists, fenced
@@ -123,6 +124,8 @@ export const Markdown = memo(function Markdown({ text, className = '', live = fa
     const was = shown.current;
     if (!live) {
       if (!was || !('html' in was) || was.html !== html) { el.innerHTML = html; shown.current = { html }; }
+      // Diagrams wait for the whole reply, as in T3 Code: a half-written one would flicker and fail.
+      drawDiagrams(el);
       return;
     }
     const { end: cut, open } = settledEnd(text);

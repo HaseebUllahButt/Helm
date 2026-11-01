@@ -34,10 +34,30 @@ chromium` or `HELM_CHROMIUM_PATH`); render does not.
   `srcset`, SVG images, posters, CSS `url()`) are copied in; each must
   really be a PNG, JPEG, GIF, WebP, AVIF or SVG up to 2 MiB (the extension
   is not trusted). Assets loaded later by JavaScript are not embedded.
+- Look (borrowed from T3 Code, 2026-11-01): a page has no frame, border or
+  card of its own in the chat. It sits on the chat background and lines up
+  with the reply text. Every page starts from `VISUAL_BASE_CSS`
+  (protocol/visual.js): Helm's font, 14 px text and colours. The live theme
+  goes into a style element at the top of the head, never inline on
+  `<html>`, so a page's own `:root` rules still win. `helm render --help`
+  holds the layout rules agents get; most of the look comes from them.
 - Theme variables: `--bg`, `--card`, `--raised`, `--text`, `--text-dim`,
   `--mutedfg`, `--line`, `--primary`, `--primary-q`, `--amber`, `--sky`,
-  `--emerald`, `--red`. They update on theme change without resetting the
-  page.
+  `--emerald`, `--red`, `--chart-1` to `--chart-6`, `--radius`,
+  `--font-sans`, `--font-mono`, plus shadcn names (`--background`,
+  `--foreground`, `--border` …) that point at them. They update on theme
+  change without resetting the page.
+
+## Diagrams in replies
+
+A ```` ```mermaid ```` block in a finished reply is drawn as a diagram
+(apps/web/src/diagrams.ts), as in T3 Code. Agents are told to use it
+instead of boxes made of text characters. While the reply streams it stays
+code: a half-written diagram would flicker and fail. Mermaid (about 1 MB)
+loads only when a diagram is on screen. It runs in strict mode with HTML
+labels off; a diagram cannot change the theme, the font or those settings.
+Its SVG is cleaned again: no links, pictures, scripts or remote CSS. A
+diagram with an error stays as code with the reason.
 
 ## Security decisions
 
