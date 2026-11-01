@@ -100,3 +100,15 @@ test('a diagram cannot run script, link out or change its look', async t => {
   await page.keyboard.press('Escape');
   assert.equal(await page.evaluate(() => window.hit), undefined);
 });
+
+test('a diagram uses grey boxes and the tested series colours, not the accent', async t => {
+  const { page, errors } = await pageFor(t);
+  await page.evaluate(() => window.showMarkdown('```mermaid\nflowchart LR\n  A[One] --> B[Two]\n```\n\n```mermaid\npie title Replies\n  "Claude" : 60\n  "Codex" : 25\n  "Gemini" : 15\n```'));
+  await page.locator('.diagram-view svg').nth(1).waitFor();
+  const node = await page.locator('.diagram-view svg .node rect').first().evaluate(el => getComputedStyle(el).stroke);
+  assert.equal(node, 'rgb(56, 56, 53)');
+  const slices = await page.locator('.diagram-view svg .pieCircle').evaluateAll(els => els.map(el => getComputedStyle(el).fill));
+  assert.deepEqual(slices, ['rgb(57, 135, 229)', 'rgb(217, 89, 38)', 'rgb(25, 158, 112)']);
+  if (process.env.HELM_TEST_ARTIFACT_DIR) await page.screenshot({ path: `${process.env.HELM_TEST_ARTIFACT_DIR}/diagram-pie.png`, fullPage: true });
+  assert.deepEqual(errors, []);
+});

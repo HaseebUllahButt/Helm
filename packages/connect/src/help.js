@@ -333,8 +333,20 @@ const DETAILS = {
   - SVG text gets smaller with the drawing. Keep labels 12 px or larger at
     phone width.
   Colours follow the owner's theme: --bg --card --raised --text --text-dim
-  --mutedfg --line --primary-q --amber --sky --emerald --red. For chart
-  series use --chart-1 to --chart-6. Also: --radius --font-sans --font-mono.
+  --mutedfg --line, and --radius --font-sans --font-mono.
+
+  Charts and data:
+  - Give series --chart-1 to --chart-8 in that order. Keep a colour on its
+    item when a filter hides others. Put more than 8 items in "Other".
+  - One number is a big number, not a chart. Use one y axis only.
+  - Bars 24 px wide or less, 4 px round ends, 2 px gaps. Lines 2 px.
+    Dots 8 px or more. Grid and axes: 1 px solid --grid and --axis.
+  - Two or more series need a legend. Label only the end, the peak or the
+    item that matters. Text uses text colours, never series colours.
+  - Show the value when the reader points at or taps a mark.
+  - In light mode series 2 to 5 are pale: label them or add a table.
+  - --good --warning --serious --critical are only for state, always with
+    a word or icon.
 
   Check it first with helm preview (--width 390 for a phone), fix any
   reported JavaScript errors, then helm render saves it in this chat.

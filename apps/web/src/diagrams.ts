@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify';
 import type { Mermaid } from 'mermaid';
+import { CHART_COLOURS } from '@helm/protocol/visual';
 
 /**
  * A ```mermaid block in a finished reply is drawn as a diagram, as T3 Code
@@ -71,7 +72,12 @@ const light = (color: string) => {
   return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255 > 0.5;
 };
 
-/** Helm's current theme as Mermaid's base theme, so a diagram looks like the chat. */
+/**
+ * Helm's current theme as Mermaid's base theme, so a diagram looks like the
+ * chat: grey boxes with hairline edges and quiet lines, not the accent
+ * colour. Where Mermaid colours parts (pie slices, timelines, mind maps,
+ * charts) it takes the same tested series colours as saved pages.
+ */
 function diagramTheme() {
   const style = getComputedStyle(document.documentElement);
   const read = (name: string) => style.getPropertyValue(name).trim();
@@ -81,19 +87,31 @@ function diagramTheme() {
   const dim = hex(read('--text-dim'), dark ? '#c0c0c0' : '#3d4350');
   const raised = hex(read('--raised'), dark ? '#1c1c1c' : '#ffffff');
   const card = hex(read('--card'), dark ? '#131313' : '#ffffff');
-  const accent = hex(read('--primary-q'), dark ? '#a693ff' : '#5b3fd6');
+  const edge = dark ? '#383835' : '#c3c2b7';
+  const line = '#898781';
+  const series = CHART_COLOURS[dark ? 'dark' : 'light'];
   const font = getComputedStyle(document.body).fontFamily || 'system-ui, sans-serif';
+  const numbered = (name: string, values: string[]) => Object.fromEntries(values.map((value, i) => [`${name}${i}`, value]));
   return {
     font,
     variables: {
       darkMode: dark, background: bg, fontFamily: font, fontSize: '14px',
-      primaryColor: raised, primaryTextColor: text, primaryBorderColor: accent,
-      secondaryColor: card, secondaryTextColor: text, secondaryBorderColor: dim,
-      tertiaryColor: card, tertiaryTextColor: text, tertiaryBorderColor: dim,
-      lineColor: dim, textColor: text, mainBkg: raised, nodeBorder: accent,
-      clusterBkg: card, clusterBorder: dim, titleColor: text, edgeLabelBackground: bg,
-      noteBkgColor: card, noteTextColor: text, noteBorderColor: dim,
-      actorBkg: raised, actorBorder: accent, actorTextColor: text, signalColor: dim, signalTextColor: text,
+      primaryColor: raised, primaryTextColor: text, primaryBorderColor: edge,
+      secondaryColor: card, secondaryTextColor: text, secondaryBorderColor: edge,
+      tertiaryColor: card, tertiaryTextColor: text, tertiaryBorderColor: edge,
+      lineColor: line, textColor: text, mainBkg: raised, nodeBorder: edge,
+      clusterBkg: card, clusterBorder: edge, titleColor: text, edgeLabelBackground: bg,
+      noteBkgColor: card, noteTextColor: dim, noteBorderColor: edge,
+      actorBkg: raised, actorBorder: edge, actorTextColor: text, actorLineColor: line,
+      signalColor: line, signalTextColor: text, labelBoxBkgColor: card, labelBoxBorderColor: edge,
+      activationBkgColor: card, activationBorderColor: edge, sequenceNumberColor: dark ? '#0b0b0b' : '#ffffff',
+      // Pie slices, mind map branches, timeline sections, quadrant and journey colours.
+      ...Object.fromEntries(series.map((colour, i) => [`pie${i + 1}`, colour])),
+      pieStrokeColor: bg, pieStrokeWidth: '2px', pieOpacity: '1', pieOuterStrokeWidth: '0px', pieTitleTextColor: text, pieSectionTextColor: '#ffffff', pieLegendTextColor: dim,
+      ...numbered('cScale', series),
+      ...numbered('cScaleLabel', series.map(() => '#ffffff')),
+      ...numbered('git', series),
+      xyChart: { backgroundColor: bg, titleColor: text, xAxisLabelColor: dim, yAxisLabelColor: dim, xAxisTitleColor: dim, yAxisTitleColor: dim, xAxisLineColor: edge, yAxisLineColor: edge, xAxisTickColor: edge, yAxisTickColor: edge, plotColorPalette: series.join(',') },
     },
   };
 }

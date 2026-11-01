@@ -43,10 +43,17 @@ chromium` or `HELM_CHROMIUM_PATH`); render does not.
   holds the layout rules agents get; most of the look comes from them.
 - Theme variables: `--bg`, `--card`, `--raised`, `--text`, `--text-dim`,
   `--mutedfg`, `--line`, `--primary`, `--primary-q`, `--amber`, `--sky`,
-  `--emerald`, `--red`, `--chart-1` to `--chart-6`, `--radius`,
-  `--font-sans`, `--font-mono`, plus shadcn names (`--background`,
-  `--foreground`, `--border` …) that point at them. They update on theme
-  change without resetting the page.
+  `--emerald`, `--red`, `--radius`, `--font-sans`, `--font-mono`, plus
+  shadcn names (`--background`, `--foreground`, `--border` …) that point
+  at them. They update on theme change without resetting the page.
+- Chart colours come from the dataviz skill's reference palette (owner,
+  2026-11-02): `--chart-1` to `--chart-8` in a fixed order, `--grid`,
+  `--axis`, and status `--good`/`--warning`/`--serious`/`--critical`. Each
+  has a dark and a light step (`CHART_DARK`/`CHART_LIGHT`), checked with
+  the skill's `validate_palette.js` on Helm's dark, navy and light
+  backgrounds. Do not swap one colour by eye: the order is what keeps
+  neighbours apart for colour-blind readers. The chart rules agents get
+  are in `helm render --help`.
 
 ## Diagrams in replies
 
@@ -56,6 +63,8 @@ instead of boxes made of text characters. While the reply streams it stays
 code: a half-written diagram would flicker and fail. Mermaid (about 1 MB)
 loads only when a diagram is on screen. It runs in strict mode with HTML
 labels off; a diagram cannot change the theme, the font or those settings.
+Boxes are grey with hairline edges, never the accent colour; pie slices,
+timelines and other coloured parts take the chart colours above.
 Its SVG is cleaned again: no links, pictures, scripts or remote CSS. A
 diagram with an error stays as code with the reason.
 
