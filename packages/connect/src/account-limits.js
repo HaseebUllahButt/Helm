@@ -7,6 +7,7 @@ import { limitWindows } from '@helm/protocol/limits';
 import { HELM_DIR } from './paths.js';
 import { accountKey } from './settings.js';
 import { materialize } from './profiles.js';
+import { readCodexLimits, resetCredits } from './codex-limits.js';
 
 const expand = (p) => p.replace(/^~(?=\/|$)/, homedir());
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
@@ -48,31 +49,42 @@ export function accountIdentity(profile) {
 export class AccountLimits {
   constructor({ file = join(HELM_DIR, 'account-limits.json') } = {}) {
     this.file = file;
+    // Banked resets live beside the windows, so older daemons still read the windows file.
+    this.resetsFile = file.replace(/\.json$/, '') + '-resets.json';
     this.refreshes = new Map();
     try { this.rows = new Map(Object.entries(JSON.parse(readFileSync(file, 'utf8')))); }
     catch { this.rows = new Map(); }
+    const resets = readJson(this.resetsFile);
+    this.resets = new Map(resets && typeof resets === 'object' && !Array.isArray(resets) ? Object.entries(resets) : []);
   }
 
   record(account, event, at = Date.now(), persist = true) {
     if (!Number.isFinite(at) || at <= 0) return;
-    const windows = limitWindows(event);
-    if (!windows.length) return;
-    const merged = new Map((this.rows.get(account) ?? []).map(w => [w.label, w]));
     let changed = false;
-    for (const w of windows) {
-      if ((merged.get(w.label)?.at ?? 0) >= at) continue;
-      merged.set(w.label, { ...w, at });
+    const windows = limitWindows(event);
+    if (windows.length) {
+      const merged = new Map((this.rows.get(account) ?? []).map(w => [w.label, w]));
+      for (const w of windows) {
+        if ((merged.get(w.label)?.at ?? 0) >= at) continue;
+        merged.set(w.label, { ...w, at });
+        changed = true;
+      }
+      if (changed) this.rows.set(account, [...merged.values()]);
+    }
+    const resets = resetCredits(event?.codexResets);
+    if (resets && (this.resets.get(account)?.at ?? 0) < at) {
+      this.resets.set(account, { ...resets, at });
       changed = true;
     }
-    if (!changed) return;
-    this.rows.set(account, [...merged.values()]);
-    if (persist) this.save();
+    if (changed && persist) this.save();
   }
 
   save() {
     mkdirSync(dirname(this.file), { recursive: true });
-    writeFileSync(`${this.file}.tmp`, JSON.stringify(Object.fromEntries(this.rows)), { mode: 0o600 });
-    renameSync(`${this.file}.tmp`, this.file);
+    for (const [file, rows] of [[this.file, this.rows], [this.resetsFile, this.resets]]) {
+      writeFileSync(`${file}.tmp`, JSON.stringify(Object.fromEntries(rows)), { mode: 0o600 });
+      renameSync(`${file}.tmp`, file);
+    }
   }
 
   /** One migration of recent retained events, without loading chat attachments. */
@@ -132,6 +144,32 @@ export class AccountLimits {
     }));
   }
 
+  /**
+   * Codex says how many resets an account has banked only when asked. Ask
+   * a private app-server, at most every 15 minutes per account. The same
+   * read brings fresh windows for an account with no chat open.
+   */
+  async refreshCodex(profiles, { read = readCodexLimits, spec = materialize, now = Date.now() } = {}) {
+    const unique = new Map(profiles.filter(p => p.engine === 'codex' && !p.disabled && !p.wraps).map(p => [accountKey(p), p]));
+    await Promise.all([...unique].map(async ([key, profile]) => {
+      const pending = this.refreshes.get(key);
+      if (pending && now - pending.at < 15 * 60_000) return pending.work;
+      if (now - (this.resets.get(key)?.at ?? 0) < 15 * 60_000) return;
+      const work = (async () => {
+        const { cmd, env } = spec(profile);
+        const live = await read(cmd || 'codex', env);
+        if (!live) return;
+        const byId = live.rateLimitsByLimitId && typeof live.rateLimitsByLimitId === 'object' ? Object.values(live.rateLimitsByLimitId) : [];
+        const at = Date.now();
+        for (const snapshot of byId.length ? byId : [live.rateLimits]) if (snapshot) this.record(key, { codex: snapshot }, at, false);
+        this.record(key, { codexResets: live.rateLimitResetCredits }, at, false);
+        this.save();
+      })().catch(() => {}); // Credentials and provider errors never leave this machine.
+      this.refreshes.set(key, { at: now, work });
+      await work;
+    }));
+  }
+
   report(profiles) {
     const accounts = new Map();
     let unsupported = 0;
@@ -145,6 +183,7 @@ export class AccountLimits {
       accounts.set(key, { account: key, engine: p.engine,
         label: suffix || (p.wraps ? p.id : 'default'), aliases: [p.id],
         ...(identity ? { identity } : {}),
+        ...(this.resets.has(key) ? { resetCredits: this.resets.get(key) } : {}),
         windows: this.rows.get(key) ?? [] });
     }
     const supported = [...accounts.values()].filter(a => {

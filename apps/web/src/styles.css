@@ -3170,6 +3170,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .usage-allowance small em { font-style: normal; color: var(--red); font-weight: 550; }
 .usage-allowance.dry .usage-meter span { background: var(--red); }
 .usage-account.idle { padding-block: 10px; }
+.usage-resets { margin: 12px 0 0; font-size: var(--t-meta); color: var(--mutedfg); }
+.usage-resets b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .usage-account.idle .usage-account-name b { font-weight: 500; color: var(--text-dim); }
 .usage-value {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
