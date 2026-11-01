@@ -24,6 +24,15 @@ const Busy = createContext(false);
 export const isCompaction = (it: Item) => it.kind === 'tool' && (it.name === 'compact' || it.name === 'contextCompaction');
 
 /** The line a compaction draws across the conversation, live while it runs. */
+/** A sent picture Helm has since deleted: one quiet line, not a box of text. */
+export function GoneImage({ filename }: { filename?: string }) {
+  return (
+    <span className="turn-image-gone" title={`${filename ? `${filename}: ` : ''}Helm deleted this image to save space.`}>
+      <Icon name="image" size={13} />Image removed
+    </span>
+  );
+}
+
 export function CompactionLine({ live, item }: { live: boolean; item?: Item }) {
   const took = item?.doneAt && item.startedAt ? item.doneAt - item.startedAt : 0;
   const label = live ? 'Summarizing chat…'
@@ -801,7 +810,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
             // A blob the log has swept past still has its name, and saying
             // so beats a browser's broken-image glyph.
             ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={`Image #${i + 1}${a.filename ? ` · ${a.filename}` : ''}`} loading="lazy" decoding="async" />
-            : <span key={i} className="turn-image-gone" title={a.filename}><Icon name="image" size={14} /> {a.filename || 'image'} — Helm no longer stores this image.</span>
+            : <GoneImage key={i} filename={a.filename} />
           ))}</div>}
           {said.text}
           <span className="bubble-meta">
