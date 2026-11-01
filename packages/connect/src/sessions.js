@@ -131,6 +131,11 @@ export class Sessions extends EventEmitter {
   // Apply the same helper visibility rule as list() to every published update.
   emit(kind, ...args) {
     if (kind === 'session' && args[0]?.delegations) args[0] = { ...args[0], delegations: this.#delegation.visibleDelegations(args[0]) };
+    // The log keeps a picture as a reference to its file. A live event sent
+    // that way showed the owner's picture as removed on every open screen.
+    if (kind === 'event' && this.events?.hydrate && args[0]?.event?.attachments?.some((a) => a?.ref && !a.data)) {
+      args[0] = { ...args[0], event: this.events.hydrate(args[0].id, args[0].event) };
+    }
     return super.emit(kind, ...args);
   }
   #index = new Map();

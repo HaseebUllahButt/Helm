@@ -341,6 +341,8 @@ export class EventLog {
    * A blob that has been swept leaves `data` unset rather than a broken
    * one - the app draws a "no longer stored" tile for that.
    */
+  hydrate(id, event) { return this.#hydrate(id, event); }
+
   #hydrate(id, event) {
     if (!Array.isArray(event.attachments) || !event.attachments.length) return event;
     const attachments = event.attachments.map((a) => {

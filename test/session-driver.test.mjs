@@ -1020,7 +1020,12 @@ test('images ride the driver when it implements the verb, else a placeholder', a
   });
   const s2 = await rich.start({ cwd: '/tmp', profileId: 'claudea' });
   const atts = Array.from({ length: 12 }, (_, i) => ({ filename: `b-${i}.png`, mime: 'image/png', data: 'iVBORw0KGgo=' }));
+  // Open screens get the picture itself, not the log's reference to its file.
+  const live = [];
+  rich.on('event', ({ event }) => { if (event.type === 'turn.start' && event.attachments?.length) live.push(event); });
   await rich.input(s2.id, 'look', { attachments: atts });
+  assert.equal(live.length, 1);
+  assert.deepEqual(live[0].attachments.map((a) => a.data), atts.map((a) => a.data));
   const d2 = ImageDriver.made.at(-1);
   assert.equal(d2.gotAttachments.text, 'look');
   assert.deepEqual(d2.gotAttachments.attachments, atts);

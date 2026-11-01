@@ -728,7 +728,7 @@ export class ExternalSessions {
       if (rebuild) { buffered.push({ ...event, at: Date.now() }); return; }
       const saved = this.#sessions.events.append(s.id, event);
       s.lastSeq = saved.seq;
-      this.#sessions.emit('event', { id: s.id, event: saved.attachments?.length ? this.#sessions.events.since(s.id, saved.seq - 1)[0] : saved });
+      this.#sessions.emit('event', { id: s.id, event: saved });
     };
     // Existing imports already consumed these messages before image blocks
     // were supported. Recover only retained user bubbles, with append-only
