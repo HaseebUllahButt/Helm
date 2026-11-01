@@ -126,6 +126,12 @@
   [`docs/visual-replies.md`](../visual-replies.md).
 
 ## Markdown, code and diffs in replies
-- **Not yet driven;** the fake agent replies in plain text.
-- **Tests:** `test/browser/markdown-loading`, `inline-diff`,
+- **Reach:** the fake agent replies with a file's text when the prompt is
+  `say-file: <path>`; use it for any Markdown.
+- **Prove a diagram (driven 2026-11-01):** write a reply file with a
+  ```` ```mermaid ```` flowchart, send `say-file: <file>` to **fake**.
+  Proof: the finished reply shows boxes and arrows in Helm's colours, with
+  Code and Copy in the block's head; Code shows the source; a tap opens it
+  full size. Changing the theme draws it again in the new colours.
+- **Tests:** `test/browser/markdown-loading`, `diagrams`, `inline-diff`,
   `copy-selection`.

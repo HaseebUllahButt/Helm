@@ -318,10 +318,27 @@ const DETAILS = {
   Otherwise write one self-contained HTML file: inline CSS/JS, SVG or canvas.
   It runs in an isolated frame: no app state, network fetch, external
   scripts or forms. Local images (img/srcset, SVG, CSS url()) are embedded:
-  each a real image up to 2 MiB, the whole page up to 4 MiB. For theme-aware
-  colours use --bg --card --text --text-dim --line --primary-q.
+  each a real image up to 2 MiB, the whole page up to 4 MiB.
+
+  Make the page look like part of the chat:
+  - The page sits on the chat background, as wide as the reply text:
+    about 360 px on a phone, up to 1000 px on a computer.
+  - Helm gives the page its font, text size and colours. Do not set a page
+    background, a font or your own light/dark colours.
+  - Start with the content. Do not add an outer card, border or title
+    banner: the chat shows the title.
+  - Give a box its own background only if it must stand apart. Then give it
+    16 px padding and var(--radius) corners.
+  - Use a fluid width. Give each chart a fixed height in px. Do not use 100vh.
+  - SVG text gets smaller with the drawing. Keep labels 12 px or larger at
+    phone width.
+  Colours follow the owner's theme: --bg --card --raised --text --text-dim
+  --mutedfg --line --primary-q --amber --sky --emerald --red. For chart
+  series use --chart-1 to --chart-6. Also: --radius --font-sans --font-mono.
+
   Check it first with helm preview (--width 390 for a phone), fix any
   reported JavaScript errors, then helm render saves it in this chat.
+  The owner sees the page above your reply: do not describe it again.
   Use helm canvas instead to open the visual beside the conversation.`,
 
   browser: `
