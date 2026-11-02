@@ -1621,13 +1621,14 @@ export class Sessions extends EventEmitter {
   renderVisual(id, params) {
     const s = this.get(id);
     if (!this.#index.has(id) || s.engine === 'shell') throw new Error('visual replies need a saved agent chat');
-    const { html, pages, total, kind, title, height, renderId, placement, url } = validateVisual(params);
+    const { html, pages, total, file, kind, title, height, renderId, placement, url } = validateVisual(params);
     const itemId = `visual-${renderId}`;
     // A PDF keeps each page picture on its own, and a short list of them as
     // its saved copy, so a device loads only the pages it shows.
     const parts = pages?.map(page => ({ ...this.events.putAttachment(id, { filename: `${renderId}.jpg`, mime: page.mime, data: page.data }), mime: page.mime, width: page.width, height: page.height }));
+    const whole = parts && file ? this.events.putAttachment(id, { filename: `${renderId}.pdf`, mime: 'application/pdf', data: file }) : undefined;
     const data = parts
-      ? Buffer.from(JSON.stringify({ total, pages: parts.map(({ ref, mime, width, height }) => ({ ref, mime, width, height })) })).toString('base64')
+      ? Buffer.from(JSON.stringify({ total, pages: parts.map(({ ref, mime, width, height }) => ({ ref, mime, width, height })), ...(whole ? { file: whole.ref } : {}) })).toString('base64')
       : Buffer.from(html).toString('base64');
     const ref = createHash('sha256').update(Buffer.from(data, 'base64')).digest('hex').slice(0, 32);
     const prior = this.events.tail(id, 0).find(e => e.type === 'item.start' && e.id === itemId);
@@ -1656,7 +1657,10 @@ export class Sessions extends EventEmitter {
     return { visual };
   }
 
-  /** A saved page, or for a PDF its page list, or one page picture by number. */
+  /**
+   * A saved page, or for a PDF its page list, one page picture by number, or
+   * with 'file' the PDF itself. An older PDF kept only its pictures.
+   */
   readVisual(id, ref, page) {
     this.get(id);
     if (!this.#index.has(id)) throw new Error('no such saved agent chat');
@@ -1667,7 +1671,12 @@ export class Sessions extends EventEmitter {
     const text = Buffer.from(data, 'base64').toString('utf8');
     if (found.visual.kind !== 'pdf') return { html: text };
     const list = JSON.parse(text);
-    if (page === undefined) return { total: list.total, pages: list.pages.map(({ width, height }) => ({ width, height })) };
+    if (page === undefined) return { total: list.total, pages: list.pages.map(({ width, height }) => ({ width, height })), ...(list.file ? { download: true } : {}) };
+    if (page === 'file') {
+      const whole = list.file && this.events.attachment(id, list.file);
+      if (!whole) throw new Error('this PDF has no saved file to download');
+      return { file: whole };
+    }
     const part = Number.isInteger(page) ? list.pages[page] : undefined;
     if (!part) throw new Error('no such page in this PDF');
     const picture = this.events.attachment(id, part.ref);

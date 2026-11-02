@@ -6,8 +6,12 @@ import { Icon } from '../Icon';
 import type { Visual } from './types';
 
 /** A saved page comes back as HTML. A PDF gives its page list, then one page picture per call. */
-export interface PdfPages { total: number; pages: { width: number; height: number }[] }
-export type VisualReader = (ref: string, page?: number) => Promise<{ html?: string; image?: string } & Partial<PdfPages>>;
+/** `download`: the machine kept the PDF itself, so Download can save it. */
+export interface PdfPages { total: number; pages: { width: number; height: number }[]; download?: boolean }
+/** Reads a saved page, a PDF's page list, one page picture, or with 'file' the PDF itself. */
+export type VisualReader = (ref: string, page?: number | 'file') => Promise<{ html?: string; image?: string; file?: string } & Partial<PdfPages>>;
+/** The `session.visual` options for one read. */
+export const visualPart = (page?: number | 'file') => page === 'file' ? { file: true } : page === undefined ? {} : { page };
 export const Visuals = createContext<VisualReader | undefined>(undefined);
 /** The chat's canvas, when it has one: which page it shows, and how to show another. */
 export interface CanvasVisuals { shown?: string; show: (visual: Visual) => void }
@@ -95,7 +99,7 @@ export function usePdfPages(read: VisualReader | undefined, ref: string) {
     read(ref).then(result => {
       if (stale) return;
       if (!Array.isArray(result.pages)) { setError('Update Helm on this machine to show PDFs.'); return; }
-      setList({ total: result.total ?? result.pages.length, pages: result.pages });
+      setList({ total: result.total ?? result.pages.length, pages: result.pages, download: result.download === true });
     }).catch(err => { if (!stale) setError(errorMessage(err, { fallback: 'Helm cannot load this PDF.' })); });
     return () => { stale = true; };
   }, [read, ref, retry]);
@@ -103,9 +107,14 @@ export function usePdfPages(read: VisualReader | undefined, ref: string) {
 }
 
 export function saveVisual(html: string, title: string) {
-  const url = URL.createObjectURL(new Blob([visualDocument(html, { theme: currentTheme(), expanded: true })], { type: 'text/html;charset=utf-8' }));
+  saveBlob(new Blob([visualDocument(html, { theme: currentTheme(), expanded: true })], { type: 'text/html;charset=utf-8' }), title, 'html');
+}
+
+/** Saves a file to the device's downloads, named after the page. */
+export function saveBlob(blob: Blob, title: string, extension: string) {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = url; link.download = `${title.replace(/[^\p{L}\p{N} _.-]/gu, '').slice(0, 80) || 'visual'}.html`;
+  link.href = url; link.download = `${title.replace(/[^\p{L}\p{N} _.-]/gu, '').slice(0, 80) || 'visual'}.${extension}`;
   link.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
