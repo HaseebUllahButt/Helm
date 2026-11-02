@@ -1,12 +1,12 @@
 import { errorMessage } from '../errors';
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, createContext, lazy, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Client, Environment, Session } from '../client';
 import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
 import { ago } from '../screens/common';
 import { FileView } from './CodeView';
-import { SideDock, readLocal, writeLocal } from './SideDock';
-import { liveUrl, saveVisual, usePdfPages, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
+import { SideDock, readLocal, useWide, writeLocal } from './SideDock';
+import { liveUrl, saveBlob, saveVisual, usePdfPages, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
 import type { Visual } from './types';
 
 // The page editor is large; it loads the first time a note is edited.
@@ -177,7 +177,9 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
   }, [path, tree]);
   useEffect(() => { if (shown && shown !== path) onPath(shown); }, [shown, path, onPath]);
 
-  return <SideDock label="Canvas" widthKey={WIDTH_KEY} className="canvas" share={0.5} escapeCloses onClose={onClose}>
+  const full = useFullscreen();
+  return <SideDock label="Canvas" widthKey={WIDTH_KEY} className={`canvas${full.on ? ' dock-full' : ''}`} share={0.5} escapeCloses onClose={onClose}>
+    <Fullscreen.Provider value={full}>
     {visual ? <CanvasPage key={visual.ref} visual={visual} read={read} onBack={() => onVisual?.(null)} onClose={onClose} />
       : shown === undefined
       ? <div className="canvas-pad"><CanvasHead title="Not in this project" sub={path ?? ''} onBack={() => onPath(null)} onClose={onClose} /><div className="git-state">The canvas cannot open files outside this chat’s project.</div></div>
@@ -185,7 +187,55 @@ export function Canvas({ client, env, cwd, changed, path, onPath, visual, onVisu
         ? <CanvasFile key={shown} client={client} env={env} cwd={cwd} path={shown} hidden={!!tree?.secret.includes(shown)} onBack={() => { onPath(null); setReload((n) => n + 1); }} onClose={onClose} />
         : <CanvasPicker env={env} cwd={cwd} tree={tree} error={error} changed={changed} client={client} pages={pages} onPage={(v) => onVisual?.(v)}
             onOpen={onPath} onCreated={(p) => { setReload((n) => n + 1); onPath(p); }} onClose={onClose} />}
+    </Fullscreen.Provider>
   </SideDock>;
+}
+
+type FullscreenState = { on: boolean; can: boolean; toggle: (from: HTMLElement) => void; leave: () => void };
+const Fullscreen = createContext<FullscreenState>({ on: false, can: false, toggle: () => {}, leave: () => {} });
+
+/**
+ * The canvas fills the whole screen. Where the browser allows it, the screen
+ * itself goes full (no tabs, no bar); elsewhere, as on an iPhone, the canvas
+ * covers the window. Escape or the button brings it back beside the chat.
+ */
+function useFullscreen(): FullscreenState {
+  const wide = useWide();
+  const [on, setOn] = useState(false);
+  const dock = useRef<HTMLElement | null>(null);
+  const native = typeof document !== 'undefined' && !!document.fullscreenEnabled;
+  const leave = useCallback(() => {
+    setOn(false);
+    if (document.fullscreenElement && dock.current?.contains(document.fullscreenElement)) document.exitFullscreen().catch(() => {});
+  }, []);
+  // Closing the canvas while full also leaves full screen.
+  useEffect(() => leave, [leave]);
+  useEffect(() => {
+    if (!on) return;
+    const onChange = () => { if (!document.fullscreenElement) setOn(false); };
+    // Before every other Escape handler, so Escape leaves full screen and keeps the canvas open.
+    const onKey = (e: KeyboardEvent) => { if (e.key !== 'Escape' || e.isComposing || document.querySelector('[aria-modal="true"]:not(.side-dock)')) return; e.preventDefault(); e.stopPropagation(); leave(); };
+    document.addEventListener('fullscreenchange', onChange);
+    window.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('fullscreenchange', onChange); window.removeEventListener('keydown', onKey, true); };
+  }, [on, leave]);
+  const toggle = useCallback((from: HTMLElement) => {
+    if (on) { leave(); return; }
+    dock.current = from.closest('.side-dock');
+    setOn(true);
+    if (native) dock.current?.requestFullscreen?.().catch(() => {});
+  }, [on, leave, native]);
+  // A phone's canvas already covers the window: the button helps only where the browser can go full screen.
+  return { on, can: native || wide, toggle, leave };
+}
+
+function FullscreenButton() {
+  const full = useContext(Fullscreen);
+  if (!full.can) return null;
+  const name = full.on ? 'Exit fullscreen' : 'Fullscreen';
+  return <button className="iconbtn" aria-label={name} title={full.on ? 'Exit fullscreen (Esc)' : name} aria-pressed={full.on} onClick={(e) => full.toggle(e.currentTarget)}>
+    <Icon name={full.on ? 'shrink' : 'expand'} size={17} />
+  </button>;
 }
 
 /**
@@ -199,17 +249,18 @@ function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: 
   // Live apps need their own storage and module origin, never Helm's origin.
   const separateOrigin = url && new URL(url).origin !== location.origin;
   const { html, error, retry } = useVisualHtml(read, visual.ref, !live);
+  const full = useContext(Fullscreen);
   return <div className="canvas-file canvas-page">
     <div className="canvas-pad canvas-top">
       <CanvasHead title={visual.title} sub={live ? url ?? visual.url ?? '' : 'Page from the agent'} onBack={onBack} onClose={onClose}>
         {url && <a className="files-chip" href={url} target="_blank" rel="noopener noreferrer">Open in new tab</a>}
-        {html && <button className="files-chip" onClick={() => saveVisual(html, visual.title)}>Save</button>}
+        {html && <button className="files-chip" onClick={() => saveVisual(html, visual.title)}>Download</button>}
       </CanvasHead>
     </div>
     {live
       ? url && separateOrigin ? <iframe key={url} className="visual-frame canvas-live" title={visual.title} src={url} sandbox="allow-scripts allow-forms allow-popups allow-same-origin" referrerPolicy="no-referrer" />
         : <div className="git-state bad" role="alert">{url ? 'Open this Helm address in a new tab.' : 'This page address is not allowed.'}</div>
-      : html ? <VisualFrame html={html} title={visual.title} expanded onEscape={onClose} />
+      : html ? <VisualFrame html={html} title={visual.title} expanded onEscape={full.on ? full.leave : onClose} />
       : <div className={`git-state${error ? ' bad' : ''}`} role={error ? 'alert' : 'status'}>
         {error ? <>{error} <button className="files-chip" onClick={retry}>Retry</button></> : 'Loading visual…'}
       </div>}
@@ -223,16 +274,28 @@ function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: 
  */
 function CanvasPdf({ visual, read, onBack, onClose }: { visual: Visual; read?: VisualReader; onBack: () => void; onClose: () => void }) {
   const { list, error, retry } = usePdfPages(read, visual.ref);
-  // The app turns off pinch zoom, so small text on a phone needs this.
-  const [zoom, setZoom] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const download = async () => {
+    if (!read || saving) return;
+    setSaving(true); setSaveError('');
+    try {
+      const { file } = await read(visual.ref, 'file');
+      if (typeof file !== 'string') throw new Error('Update Helm on this machine to download PDFs.');
+      const bytes = Uint8Array.from(atob(file), (c) => c.charCodeAt(0));
+      saveBlob(new Blob([bytes], { type: 'application/pdf' }), visual.title, 'pdf');
+    } catch (err) { setSaveError(errorMessage(err, { fallback: 'Helm cannot download this PDF.' })); }
+    finally { setSaving(false); }
+  };
   const count = list ? list.pages.length === list.total ? `${list.total} ${list.total === 1 ? 'page' : 'pages'}` : `First ${list.pages.length} of ${list.total} pages` : 'PDF';
   return <div className="canvas-file canvas-page">
     <div className="canvas-pad canvas-top">
       <CanvasHead title={visual.title} sub={count} onBack={onBack} onClose={onClose}>
-        {list && <button className="files-chip" aria-pressed={zoom} onClick={() => setZoom(!zoom)}>{zoom ? 'Fit width' : 'Zoom'}</button>}
+        {list?.download && <button className="files-chip" disabled={saving} onClick={download}>{saving ? 'Downloading…' : 'Download'}</button>}
       </CanvasHead>
+      {saveError && <div className="git-state bad" role="alert">{saveError}</div>}
     </div>
-    {list ? <div className={`canvas-body canvas-pdf${zoom ? ' zoomed' : ''}`} role="document" aria-label={visual.title}>
+    {list ? <div className="canvas-body canvas-pdf" role="document" aria-label={visual.title}>
         {list.pages.map((page, i) => <PdfPage key={i} read={read!} visualRef={visual.ref} index={i} width={page.width} height={page.height} />)}
       </div>
       : <div className={`git-state${error ? ' bad' : ''}`} role={error ? 'alert' : 'status'}>
@@ -273,6 +336,7 @@ function CanvasHead({ title, sub, onBack, onClose, children }: { title: string; 
     {onBack && <button className="iconbtn" aria-label="Back to the canvas list" title="Back" onClick={onBack}><Icon name="back" size={17} /></button>}
     <div className="canvas-titles"><b>{title}</b><small>{sub}</small></div>
     {children}
+    <FullscreenButton />
     <button className="iconbtn" aria-label="Close canvas" title="Close canvas (Ctrl/⌘ Shift D)" onClick={onClose}><Icon name="close" size={17} /></button>
   </div>;
 }

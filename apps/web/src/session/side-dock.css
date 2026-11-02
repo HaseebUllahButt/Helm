@@ -8,3 +8,5 @@
 .side-dock-handle:hover::after,.side-dock-handle:focus-visible::after,.side-dock-dragging .side-dock-handle::after{background:var(--primary-q)}
 .side-dock-handle:focus-visible{outline:none}
 .side-dock-dragging{cursor:col-resize;user-select:none}
+.side-dock.dock-full{position:fixed;inset:0;width:auto;z-index:65;border-left:0;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+.dock-full .side-dock-handle{display:none}

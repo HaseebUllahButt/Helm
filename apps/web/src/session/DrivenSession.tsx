@@ -42,7 +42,7 @@ import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { useChatKeys, useDeleteKey } from './chatKeys';
 import { Canvas, chatPages, useCanvas } from './Canvas';
-import { CanvasContext, type VisualReader } from './VisualReply';
+import { CanvasContext, type VisualReader, visualPart } from './VisualReply';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
 import { MovedNotice } from './MoveChat';
 
@@ -108,7 +108,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [cameUpEmpty] = useState(() => startedEmpty(session.id));
   useEffect(() => { if (log.loaded) loadedChat(session.id); }, [log.loaded, session.id]);
   const loaded = log.loaded || cameUpEmpty;
-  const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...(page === undefined ? {} : { page }) }, 60_000), [client, env.id, session.id]);
+  const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...visualPart(page) }, 60_000), [client, env.id, session.id]);
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
   // Typing must not redraw the conversation, so the words live outside this
