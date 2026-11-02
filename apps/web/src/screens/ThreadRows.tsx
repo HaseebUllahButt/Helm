@@ -1,6 +1,6 @@
 import { errorMessage } from '../errors';
 import { useDismiss } from '../useDismiss';
-import { memo, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { useNow, waitingSince } from '../useNow';
 import { ThreadStatus, moodOf, isUnread, useSeenVersion } from '../threadStatus';
@@ -24,8 +24,10 @@ import { waitingLine } from '../WaitingIsland';
  * not you remember archiving it - and it stays open afterwards if you closed
  * it yourself, which is the one case where guessing would be rude.
  */
-export function Fold({ title, count, note, noteTone, hint, kind, shelf = false, peek, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, children }: {
+export function Fold({ title, count, note, noteTone, hint, kind, shelf = false, peek, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, command, children }: {
   title: string; count: number; openWhen?: boolean; children: ReactNode;
+  /** A key pressed elsewhere: each new `n` opens (`to`), closes, or flips the fold. */
+  command?: { n: number; to?: boolean };
   /** The sidebar's way: sentence case, quiet, and the count only once it is folded away. */
   shelf?: boolean;
   /** What stays on show when a shelf is folded - the chat you are in. */
@@ -64,6 +66,13 @@ export function Fold({ title, count, note, noteTone, hint, kind, shelf = false, 
     });
   }, [remember]);
   useEffect(() => { if (openWhen) setOpen(true); }, [openWhen, setOpen]);
+  // A fold that mounts again (Settled empties, then fills) skips old presses.
+  const handled = useRef(command?.n ?? 0);
+  useEffect(() => {
+    if (!command || command.n === handled.current) return;
+    handled.current = command.n;
+    setOpen((v) => command.to ?? !v);
+  }, [command, setOpen]);
   if (!count && !showEmpty) return null;
   return (
     <div className={`foldwrap${kind ? ` ${kind}` : ''}`}>
@@ -109,11 +118,11 @@ export function PagedRows<T extends { s: { id: string } }>({ items, isSelected, 
 }
 
 /**
- * The ⋯ on a thread row: continue, rename, move, archive, delete. One component, so
+ * The ⋯ on a thread row: continue, rename, pin, move, archive, delete. One component, so
  * the sidebar's rows and the machine screen's rows offer the same things.
  */
-export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete, onMove, ending: askedToEnd, setEnding: setAskedToEnd }: {
-  s: Session; onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void;
+export function ThreadActions({ s, onContinue, onRename, onPin, onArchive, onDelete, onMove, ending: askedToEnd, setEnding: setAskedToEnd }: {
+  s: Session; onContinue?: () => void; onRename?: (title: string) => void; onPin?: () => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void;
   /** The delete question, when the row asks it (its Delete key). */
   ending?: boolean; setEnding?: (on: boolean) => void;
 }) {
@@ -139,6 +148,9 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete, on
           )}
           {onRename && !adopted && (
             <button onClick={() => { setMenu(false); setNaming(true); }}>Rename chat</button>
+          )}
+          {onPin && (
+            <button onClick={() => { setMenu(false); onPin(); }}>{s.pinnedAt ? 'Unpin chat' : 'Pin chat'}</button>
           )}
           {onMove && (
             <button onClick={() => { setMenu(false); onMove(); }}>Move to another machine</button>
@@ -286,7 +298,7 @@ export const HomeRow = memo(function HomeRow({ s, machine, onOpen, note, selecte
   /** One line: the title, its status and the agent. */
   slim?: boolean;
   /** Rename, archive, delete - the same ⋯ the machine screen's rows have. */
-  actions?: { onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void };
+  actions?: { onContinue?: () => void; onRename?: (title: string) => void; onPin?: () => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void };
 }) {
   useSeenVersion();
   const eng = engineOf(s.engine);

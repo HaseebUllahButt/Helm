@@ -7,7 +7,7 @@ export function scoreTargets(target, elements, purpose) {
   const wanted = words(target), hints = [];
   while (wanted.length > 1 && kinds[wanted.at(-1)]) hints.push(...kinds[wanted.pop()]);
   while (wanted.length > 1 && kinds[wanted[0]]) hints.push(...kinds[wanted.shift()]);
-  const allowed = purpose === 'type' ? fields : purpose === 'select' ? ['combobox', 'select'] : purpose === 'upload' ? ['file'] : null;
+  const allowed = purpose === 'type' ? fields : purpose === 'select' ? ['combobox', 'select'] : purpose === 'upload' ? ['file', 'button', 'link'] : null;
   return elements.filter(e => (!hints.length || hints.includes(e.role)) && (!allowed || allowed.includes(e.role))).map(e => {
     const name = words(e.name), matched = wanted.filter(word => name.includes(word)).length;
     const match = !wanted.length || !matched ? 0 : name.join(' ') === wanted.join(' ') ? 1000 : matched === wanted.length ? 800 : matched > wanted.length / 2 ? 600 * matched / wanted.length : 0;

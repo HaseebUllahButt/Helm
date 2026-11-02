@@ -8,6 +8,7 @@ import { applyAppearance, watchSystemTheme } from './appearance';
 import { clearRefreshMarker } from './reload';
 import { blockBrowserKeys } from './browserKeys';
 import { addWindowClose } from './windowClose';
+import { warmModels } from './modelCache';
 
 clearRefreshMarker();
 
@@ -16,6 +17,7 @@ applyAppearance();
 watchSystemTheme();
 blockBrowserKeys();
 addWindowClose();
+void warmModels();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode><AppErrorBoundary><App /><AppUpdate /></AppErrorBoundary></StrictMode>

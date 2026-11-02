@@ -294,6 +294,14 @@ export class SessionDelegation {
     return { ok: true };
   }
 
+  #unansweredParent(child, parent, start) {
+    // The header AgentMessages.receive puts on every agent message.
+    const sender = /^\[Helm agent message [a-f0-9]{32}\]\nFrom [^\n]*\([^/\s()]+\/([^)\s]+)\)\./.exec(start.text ?? '');
+    if (sender?.[1] !== parent.id) return false;
+    try { return !this.#sessions.sentAgentMessage?.(child.id, parent.id, start.at ?? 0); }
+    catch { return true; }
+  }
+
   async notifyParent(child, event) {
     if (child.delegation?.notifyParent !== true || String(event.turnId).startsWith('local-') || this.#sessions.hasActiveDelegations(child.id)
       || (child.delegation.consumedSeq ?? 0) >= event.seq) return;
@@ -305,9 +313,11 @@ export class SessionDelegation {
     const tail = this.#sessions.events.tail(child.id, 2000);
     const turnId = event.turnId || tail.findLast((e) => e.type === 'turn.start' && !String(e.turnId).startsWith('local-'))?.turnId || null;
     // Direct agent exchanges have their own reply address. A second automatic
-    // parent report would spend another turn for the same exchange.
+    // parent report would spend another turn for the same exchange. A
+    // follow-up from the parent itself is more of the task: a helper that
+    // ends it without writing back still reports, or the parent waits forever.
     const start = tail.findLast(e => e.type === 'turn.start' && e.turnId === turnId);
-    if (start?.source === 'agent') return;
+    if (start?.source === 'agent' && !this.#unansweredParent(child, parent, start)) return;
     const told = child.delegation.notifiedTurns ?? [];
     // Woken by its own background work (a watcher timing out) after the
     // parent has its result: never another parent turn. Those were nearly

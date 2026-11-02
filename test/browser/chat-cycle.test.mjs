@@ -31,7 +31,20 @@ before(async () => {
         vm: [{...base,id:'third',title:'Third',status:'starting',updatedAt:10}],
         offline: [{...base,id:'offline',title:'Offline',updatedAt:100}],
       };
-      if (mode) {
+      if (mode === 'shelves') {
+        // Everything already read, so only chats with seenAt below updatedAt are Finished.
+        localStorage.setItem('helm-seen:v1', JSON.stringify({ since: 0, at: {} }));
+        const now = Date.now(), idle = {...base,status:'idle'};
+        sessions.laptop = [
+          {...base,id:'run',title:'Run',updatedAt:now},
+          {...idle,id:'doneA',title:'Done A',updatedAt:now-1000},
+          {...idle,id:'doneB',title:'Done B',updatedAt:now-2000},
+          {...idle,id:'oldA',title:'Old A',updatedAt:now-3000,seenAt:now},
+          {...idle,id:'oldB',title:'Old B',updatedAt:now-4000,seenAt:now},
+          {...idle,id:'pin',title:'Pin',updatedAt:now-500,seenAt:now,pinnedAt:now},
+        ];
+        sessions.vm = [];
+      } else if (mode) {
         sessions.laptop = mode === 'one' ? [sessions.laptop[0]] : [];
         sessions.vm = [];
       }
@@ -57,7 +70,7 @@ before(async () => {
           if(method==='session.attach') return {pty:true,text:'Ready'};
           if(method==='session.messages') return {messages:[]};
           if(method==='session.events') return {events:[],pending:[],last:0};
-          if(method==='model.list') return {default:null,models:[]};
+          if(method==='model.list') return window.holdModels ? new Promise(()=>{}) : window.modelList ?? {default:null,models:[]};
           if(method==='session.commands') return {commands:[{name:'status',description:'Show status'}]};
           if(method==='brain.snapshot') return {snapshot:{machines:{}}};
           return {};
@@ -96,9 +109,15 @@ async function expectChat(page, envId, title) {
     });
 }
 
-test('Ctrl+Tab cycles the running list across machines and wraps both ways', async t => {
+test('Ctrl+Tab walks Needs you by default and Running after Alt+2, across machines, both ways', async t => {
   const page = await pageFor(t);
-  for (const [env, title] of [['laptop', 'First'], ['laptop', 'Second'], ['vm', 'Third'], ['laptop', 'First']]) {
+  for (const title of ['Blocked', 'Attention', 'Blocked']) {
+    await page.keyboard.press('Control+Tab');
+    await expectChat(page, 'laptop', title);
+  }
+  await page.keyboard.press('Alt+2');
+  await expectChat(page, 'laptop', 'First');
+  for (const [env, title] of [['laptop', 'Second'], ['vm', 'Third'], ['laptop', 'First']]) {
     await page.keyboard.press('Control+Tab');
     await expectChat(page, env, title);
   }
@@ -110,7 +129,7 @@ test('Ctrl+Tab cycles the running list across machines and wraps both ways', asy
 
 test('Ctrl+Tab intercepts composer suggestions and terminal input, and uses live status', async t => {
   const page = await pageFor(t);
-  await page.keyboard.press('Control+Tab');
+  await page.keyboard.press('Alt+2');
   await expectChat(page, 'laptop', 'First');
   const composer = page.locator('textarea[aria-label^="Message"]').first();
   await composer.fill('/');
@@ -132,22 +151,100 @@ test('Ctrl+Tab intercepts composer suggestions and terminal input, and uses live
   await expectChat(page, 'vm', 'Third');
 });
 
-test('reverse entry starts at the last running chat and dialogs keep focus', async t => {
+test('Alt+1, Alt+2 and Alt+3 open Finished, Running and Settled, and Ctrl+Tab walks what the sidebar shows', async t => {
+  const page = await pageFor(t, 'shelves');
+  await page.locator('.sidebar').getByText('Done B', { exact: true }).waitFor();
+  await page.keyboard.press('Alt+3');
+  await expectChat(page, 'laptop', 'Old A');
+  for (const title of ['Old B', 'Pin', 'Old A']) {
+    await page.keyboard.press('Control+Tab');
+    await expectChat(page, 'laptop', title);
+  }
+  for (const title of ['Pin', 'Old B']) {
+    await page.keyboard.press('Control+Shift+Tab');
+    await expectChat(page, 'laptop', title);
+  }
+  // Running is its own group, with the pins.
+  await page.keyboard.press('Alt+2');
+  await expectChat(page, 'laptop', 'Run');
+  await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Pin');
+  await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Run');
+  await page.keyboard.press('Alt+1');
+  await expectChat(page, 'laptop', 'Done A');
+  await page.locator('textarea[aria-label^="Message"]').first().focus();
+  await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Done B');
+  await page.keyboard.press('Control+Tab');
+  await expectChat(page, 'laptop', 'Pin');
+  // Done A was read, so it left Finished for the top of Settled.
+  await page.keyboard.press('Alt+3');
+  await expectChat(page, 'laptop', 'Done A');
+});
+
+test('switching chats keeps the model name, with no raw name or blank while the list loads', async t => {
+  const page = await pageFor(t, 'shelves');
+  await page.evaluate(() => { window.modelList = { default: 'claude-opus-5-5', models: ['claude-opus-5-5', 'claude-fable-5-1'], labels: { 'claude-opus-5-5': 'Claude Opus 5.5', 'claude-fable-5-1': 'Claude Fable 5.1' } }; });
+  await page.locator('.sidebar').getByText('Done B', { exact: true }).waitFor();
+  await page.keyboard.press('Alt+2');
+  await expectChat(page, 'laptop', 'Run');
+  const chip = page.getByRole('button', { name: 'model: Opus 5.5' });
+  await chip.waitFor();
+  await page.evaluate(() => {
+    window.holdModels = true;
+    window.chipsSeen = [];
+    new MutationObserver(() => {
+      const chips = document.querySelector('.chips');
+      if (chips) window.chipsSeen.push(chips.textContent);
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  for (const [key, title] of [['Alt+1', 'Done A'], ['Control+Tab', 'Done B'], ['Control+Tab', 'Pin']]) {
+    await page.keyboard.press(key);
+    await expectChat(page, 'laptop', title);
+    await chip.waitFor();
+  }
+  const seen = await page.evaluate(() => window.chipsSeen);
+  assert.ok(seen.length > 0);
+  assert.deepEqual(seen.filter(text => !text.includes('Opus 5.5')), []);
+});
+
+test('the folded sidebar shows pins and the picked group: Finished, Running or Settled', async t => {
+  const page = await pageFor(t, 'shelves');
+  await page.locator('.sidebar').getByText('Done B', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+  const rail = page.getByRole('navigation', { name: 'Active chats' });
+  const titles = (expected) => page.waitForFunction(expected => JSON.stringify([...document.querySelectorAll('.side-rail .rail-chat')]
+    .map(b => b.getAttribute('aria-label').split(',')[0])) === JSON.stringify(expected), expected);
+  await rail.waitFor();
+  await titles(['Pin', 'Done A', 'Done B']);
+  await page.keyboard.press('Alt+3');
+  await expectChat(page, 'laptop', 'Old A');
+  await titles(['Pin', 'Old A', 'Old B']);
+  await page.keyboard.press('Alt+1');
+  await expectChat(page, 'laptop', 'Done A');
+  await titles(['Pin', 'Done A', 'Done B']);
+  await page.keyboard.press('Alt+2');
+  await expectChat(page, 'laptop', 'Run');
+  await titles(['Pin', 'Run']);
+});
+
+test('reverse entry starts at the last shown chat and dialogs keep focus', async t => {
   const page = await pageFor(t);
   await page.keyboard.press('Control+Shift+Tab');
-  await expectChat(page, 'vm', 'Third');
+  await expectChat(page, 'laptop', 'Attention');
   await page.keyboard.press('Control+k');
   const dialog = page.getByRole('dialog', { name: 'Search and actions' });
   await dialog.waitFor();
   await page.keyboard.press('Control+Tab');
-  await expectChat(page, 'vm', 'Third');
+  await expectChat(page, 'laptop', 'Attention');
   assert.equal(await dialog.isVisible(), true);
   assert.equal(await dialog.evaluate(el => el.contains(document.activeElement)), true);
 });
 
 test('one running chat stays selected without adding history, and no running chats do nothing', async t => {
   const page = await pageFor(t, 'one');
-  await page.keyboard.press('Control+Tab');
+  await page.keyboard.press('Alt+2');
   await expectChat(page, 'laptop', 'First');
   const length = await page.evaluate(() => history.length);
   await page.keyboard.press('Control+Tab');

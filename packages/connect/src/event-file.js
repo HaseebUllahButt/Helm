@@ -9,9 +9,25 @@ const lowerBound = (values, value) => {
   return lo;
 };
 
+const SEQ_HEAD = Buffer.from('{"seq":');
+const FROM_KEY = Buffer.from(',"from":');
+/** The `from` of a joined row, read from its first bytes: compaction writes it second. */
+function joinedFrom(bytes, start, end) {
+  if (end - start < 20 || bytes.compare(SEQ_HEAD, 0, SEQ_HEAD.length, start, start + SEQ_HEAD.length) !== 0) return null;
+  let at = start + SEQ_HEAD.length;
+  while (at < end && bytes[at] >= 48 && bytes[at] <= 57) at++;
+  if (at + FROM_KEY.length > end || bytes.compare(FROM_KEY, 0, FROM_KEY.length, at, at + FROM_KEY.length) !== 0) return null;
+  at += FROM_KEY.length;
+  let n = 0, digits = 0;
+  while (at < end && bytes[at] >= 48 && bytes[at] <= 57) { n = n * 10 + bytes[at] - 48; at++; digits++; }
+  return digits ? n : null;
+}
+
 /** Byte positions, not historic payloads. One scan serves subsequent history pages. */
 export class EventFile {
   starts = []; ends = []; seqs = []; contexts = []; summaries = []; turns = [];
+  /** index -> the first seq a joined row stands for (see compactEvents). */
+  froms = new Map();
   complete = 0; stamp = null;
   #snapshot = null;
   #recent = null;
@@ -26,6 +42,7 @@ export class EventFile {
 
   record(event, start, end) {
     const index = this.#position(event.seq, start, end);
+    if (typeof event.from === 'number' && event.from < event.seq) this.froms.set(index, event.from);
     if (this.#recent) this.#recent[index % this.#recent.length] = event;
     if (contextType(event.type)) { this.contexts.push(index); this.summaries.push(this.summarize(event)); }
     if (event.type === 'turn.start') this.turns.push(index);
@@ -40,6 +57,7 @@ export class EventFile {
     // Only append() below proves an append. A larger file can also be an
     // in-place rewrite, so an unexpected change rebuilds the positions.
     this.starts = []; this.ends = []; this.seqs = []; this.contexts = []; this.summaries = []; this.turns = [];
+    this.froms = new Map();
     this.complete = 0;
     this.stamp = st ?? null;
     if (!st) { visit?.(this); return this; }
@@ -53,7 +71,11 @@ export class EventFile {
       if (positions) {
         for (let n = 0; n < positions.length; n += 4) {
           const start = positions[n], end = positions[n + 1], seq = positions[n + 2], kind = positions[n + 3];
-          if (kind === 0) this.#position(seq, start, end);
+          if (kind === 0) {
+            const index = this.#position(seq, start, end);
+            const from = joinedFrom(bytes, start, end);
+            if (from != null && from < seq) this.froms.set(index, from);
+          }
           else {
             try {
               const event = JSON.parse(bytes.toString('utf8', start, end));
@@ -143,10 +165,19 @@ export class EventFile {
 
   get(seq) { const index = lowerBound(this.seqs, seq); return this.seqs[index] === seq ? this.event(index) : null; }
 
+  /**
+   * Where the unbroken end of the file starts. A joined row stands for the
+   * numbers from its `from` to its own, so the gap it left is not a break.
+   */
   get first() {
     let index = this.seqs.length - 1;
-    while (index > 0 && this.seqs[index - 1] === this.seqs[index] - 1) index--;
-    return this.seqs[index] ?? 0;
+    if (index < 0) return 0;
+    let low = this.froms.get(index) ?? this.seqs[index];
+    while (index > 0 && this.seqs[index - 1] >= low - 1) {
+      index--;
+      low = Math.min(low, this.froms.get(index) ?? this.seqs[index]);
+    }
+    return low;
   }
 
   view({ since = 0, before = 0 } = {}) {

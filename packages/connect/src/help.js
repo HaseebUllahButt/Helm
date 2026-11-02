@@ -318,10 +318,39 @@ const DETAILS = {
   Otherwise write one self-contained HTML file: inline CSS/JS, SVG or canvas.
   It runs in an isolated frame: no app state, network fetch, external
   scripts or forms. Local images (img/srcset, SVG, CSS url()) are embedded:
-  each a real image up to 2 MiB, the whole page up to 4 MiB. For theme-aware
-  colours use --bg --card --text --text-dim --line --primary-q.
+  each a real image up to 2 MiB, the whole page up to 4 MiB.
+
+  Make the page look like part of the chat:
+  - The page sits on the chat background, as wide as the reply text:
+    about 360 px on a phone, up to 1000 px on a computer.
+  - Helm gives the page its font, text size and colours. Do not set a page
+    background, a font or your own light/dark colours.
+  - Start with the content. Do not add an outer card, border or title
+    banner: the chat shows the title.
+  - Give a box its own background only if it must stand apart. Then give it
+    16 px padding and var(--radius) corners.
+  - Use a fluid width. Give each chart a fixed height in px. Do not use 100vh.
+  - SVG text gets smaller with the drawing. Keep labels 12 px or larger at
+    phone width.
+  Colours follow the owner's theme: --bg --card --raised --text --text-dim
+  --mutedfg --line, and --radius --font-sans --font-mono.
+
+  Charts and data:
+  - Give series --chart-1 to --chart-8 in that order. Keep a colour on its
+    item when a filter hides others. Put more than 8 items in "Other".
+  - One number is a big number, not a chart. Use one y axis only.
+  - Bars 24 px wide or less, 4 px round ends, 2 px gaps. Lines 2 px.
+    Dots 8 px or more. Grid and axes: 1 px solid --grid and --axis.
+  - Two or more series need a legend. Label only the end, the peak or the
+    item that matters. Text uses text colours, never series colours.
+  - Show the value when the reader points at or taps a mark.
+  - In light mode series 2 to 5 are pale: label them or add a table.
+  - --good --warning --serious --critical are only for state, always with
+    a word or icon.
+
   Check it first with helm preview (--width 390 for a phone), fix any
   reported JavaScript errors, then helm render saves it in this chat.
+  The owner sees the page above your reply: do not describe it again.
   Use helm canvas instead to open the visual beside the conversation.`,
 
   browser: `
@@ -334,8 +363,16 @@ const DETAILS = {
   The window does not take keyboard control.
   Your actions wait while the owner uses the window.
     look <tab>        Read page text and numbered elements without a screenshot.
+                      It reads every frame. A number always means one element.
+                      It lists up to 300 controls and says when it cuts the list:
+                      add --within <CSS selector> or --frame <number> for the rest.
     act <tab> <JSON>  Run actions: '{"actions":[{"click":"the Save button"},{"check":"Saved"}]}'
-                      Use exact page text or targets for checks.
+                      A check waits up to 2 s for exact page text or a control.
+                      It also takes {"url":..}, {"dialog":..} or
+                      {"target":..,"value":..} and "checked"; "expect":false waits
+                      for it to go away.
+                      A step waits up to 2 s for its control, a page load 10 s,
+                      a call 30 s. Add "timeout" (ms) to a step or a batch for more.
                       Kinds: click, type, goto, check, key, scroll, hover, select,
                       upload (with files), evaluate (page script), wait (CSS
                       selector), resize, dialog, console, network, back,

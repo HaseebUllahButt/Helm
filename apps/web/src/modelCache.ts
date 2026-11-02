@@ -24,6 +24,34 @@ const key = (env: string, profileId: string, all?: boolean) =>
 
 interface Stored { at: number; list: ModelList }
 
+/**
+ * The same lists, held in memory for this page. A chat screen starts fresh
+ * on every chat switch; reading the device's storage takes a moment, and in
+ * that moment the model chip showed a raw name or nothing (owner, 2026-10-31).
+ */
+const memory = new Map<string, ModelList>();
+
+/** What this page last heard, at once; null on the first look. */
+export function peekModels(env: string, profileId: string, all?: boolean): ModelList | null {
+  return memory.get(key(env, profileId, all)) ?? null;
+}
+
+/**
+ * Fill the memory from the device's storage once, when the app opens, so
+ * the first visit to a chat also has its list at once. Never throws.
+ */
+export async function warmModels(): Promise<void> {
+  try {
+    const range = IDBKeyRange.bound('models:', 'models:\uffff');
+    const keys = await txn<IDBValidKey[]>('kv', 'readonly', (s) => s.getAllKeys(range));
+    const recs = await txn<Stored[]>('kv', 'readonly', (s) => s.getAll(range));
+    keys.forEach((k, i) => {
+      const rec = recs[i];
+      if (typeof k === 'string' && rec?.list && Date.now() - rec.at <= KEEP_MS && !memory.has(k)) memory.set(k, rec.list);
+    });
+  } catch { /* the machine still answers */ }
+}
+
 /** What this device last heard, or null. Never throws. */
 export async function loadModels(
   env: string, profileId: string, all?: boolean,
@@ -31,6 +59,7 @@ export async function loadModels(
   try {
     const rec = await txn<Stored | undefined>('kv', 'readonly', (s) => s.get(key(env, profileId, all)));
     if (!rec?.list || Date.now() - rec.at > KEEP_MS) return null;
+    if (!memory.has(key(env, profileId, all))) memory.set(key(env, profileId, all), rec.list);
     return rec.list;
   } catch { return null; }
 }
@@ -39,6 +68,7 @@ export async function loadModels(
 export async function saveModels(
   env: string, profileId: string, list: ModelList, all?: boolean,
 ): Promise<void> {
+  memory.set(key(env, profileId, all), list);
   try {
     const k = key(env, profileId, all);
     await txn('kv', 'readwrite', (s) => s.put({ at: Date.now(), list } satisfies Stored, k));

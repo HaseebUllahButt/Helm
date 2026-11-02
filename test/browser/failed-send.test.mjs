@@ -141,7 +141,7 @@ test('retry keeps original attachments and leaves a newer draft in place', async
   await p.goto('http://helm.test/'); await p.addScriptTag({ content: script });
   const box = p.locator('textarea');
   await box.waitFor();
-  await p.waitForFunction(() => !document.querySelector('.attach-status'));
+  await p.waitForFunction(() => !document.querySelector('[data-preparing]'));
   await p.evaluate(() => {
     const dt = new DataTransfer();
     dt.items.add(new File(['original document'], 'original.txt', { type: 'text/plain' }));
@@ -173,7 +173,7 @@ test('retry keeps a replacement file and its caption in the draft', async t => {
   await p.goto('http://helm.test/'); await p.addScriptTag({ content: script });
   const box = p.locator('textarea');
   await box.waitFor();
-  await p.waitForFunction(() => !document.querySelector('.attach-status'));
+  await p.waitForFunction(() => !document.querySelector('[data-preparing]'));
   const pasteFile = data => p.evaluate(data => {
     const dt = new DataTransfer();
     dt.items.add(new File([data], 'same.txt', { type: 'text/plain' }));
@@ -255,7 +255,7 @@ test('a late attached-message confirmation keeps newer writing and removes the s
   await p.route('http://helm.test/**', r => r.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
   await p.goto('http://helm.test/'); await p.addScriptTag({ content: script });
   const box = p.locator('textarea'); await box.waitFor();
-  await p.waitForFunction(() => !document.querySelector('.attach-status'));
+  await p.waitForFunction(() => !document.querySelector('[data-preparing]'));
   await p.evaluate(async () => {
     const canvas = document.createElement('canvas'); canvas.width = canvas.height = 32;
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));

@@ -287,9 +287,12 @@ function Shell({ client, conn, onSignOut }: {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem('helm.sidebar-collapsed') === '1'; } catch { return false; }
   });
-  const collapseSidebar = (collapsed: boolean) => {
-    setSidebarCollapsed(collapsed);
-    try { localStorage.setItem('helm.sidebar-collapsed', collapsed ? '1' : '0'); } catch { /* full */ }
+  const collapseSidebar = (collapsed: boolean | ((was: boolean) => boolean)) => {
+    setSidebarCollapsed((was) => {
+      const next = typeof collapsed === 'function' ? collapsed(was) : collapsed;
+      try { localStorage.setItem('helm.sidebar-collapsed', next ? '1' : '0'); } catch { /* full */ }
+      return next;
+    });
   };
 
   /**
@@ -527,6 +530,10 @@ function Shell({ client, conn, onSignOut }: {
       const ctrlN = !e.shiftKey && (e.key === 'n' || e.key === 'N') && !el?.closest?.('.xterm');
       // A new chat from the start: machine first. "In this folder" is Ctrl+Shift+N.
       if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
+      // Fold or unfold the sidebar (the owner's choice of key). A terminal
+      // keeps Ctrl+S: it pauses output there. The canvas keeps it to save
+      // the file you type in.
+      if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyS' && !el?.closest?.('.xterm, .canvas')) { e.preventDefault(); collapseSidebar((was) => !was); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       // Settings and usage from anywhere. Letters with Ctrl/Cmd+Shift that
@@ -652,6 +659,8 @@ function Shell({ client, conn, onSignOut }: {
       onContinue: done ? () => setNewChat({ envId: e.id, folder: s.cwd,
         draft: `Continue the work of the chat "${s.title}". Run \`helm pickup ${s.id}\` first.` }) : undefined,
       onRename: (title: string) => act('session.title', { id: s.id, title }),
+      // A chat Helm has no record of (a found CLI chat, a terminal pane) has nothing to pin.
+      onPin: /^(pane:|found:)/.test(s.id) ? undefined : () => act('session.pin', { id: s.id, pinned: !s.pinnedAt }),
       // Archiving is a tap on a small ⋯ menu item and the row just goes:
       // say what happened and leave the way back in reach.
       onArchive: async () => { if (await act('session.archive', { id: s.id, archived: !s.archived }) && !s.archived) setArchiveUndo({ envId: e.id, s }); },
@@ -1036,26 +1045,6 @@ function Shell({ client, conn, onSignOut }: {
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
   const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !attentionOn(machine.id, thread) && runningThread(thread)).sort(byNewest);
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab' || !event.ctrlKey || event.metaKey || event.altKey || event.isComposing
-          || document.querySelector('[aria-modal="true"]') || !runningNow.length) return;
-      const current = nav.current.stack.at(-1);
-      // In a terminal, Ctrl+Tab walks that machine's terminals (SessionView).
-      if (current?.kind === 'session' && current.session.engine === 'shell') return;
-      // Capture before a composer completes a suggestion or xterm sends input.
-      event.preventDefault();
-      event.stopPropagation();
-      const index = runningNow.findIndex(({ env, s }) => env.id === nav.current.selected
-        && current?.kind === 'session' && s.id === current.session.id);
-      const next = index < 0 ? (event.shiftKey ? runningNow.length - 1 : 0)
-        : (index + (event.shiftKey ? -1 : 1) + runningNow.length) % runningNow.length;
-      const { env, s } = runningNow[next];
-      if (index !== next) openSession(env.id, s);
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [runningNow, openSession]);
   // Ctrl/Cmd+Shift+E opens a terminal, next to Shift+B for the browser (T is
   // the browser's own "reopen tab" and cannot be taken). From a chat it is
   // that chat's folder; the same key in a terminal goes back to where you
@@ -1128,6 +1117,26 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
+  // Ctrl/Cmd+Alt+S opens or closes Settled. A folded sidebar unfolds with
+  // Settled open, since the shelf is not on show there.
+  const [settledCommand, setSettledCommand] = useState<{ n: number; to?: boolean }>({ n: 0 });
+  const toggleSettled = useRef<() => void>(() => {});
+  toggleSettled.current = () => {
+    const folded = wide && sidebarCollapsed;
+    if (folded) collapseSidebar(false);
+    setSettledCommand(({ n }) => ({ n: n + 1, to: folded ? true : undefined }));
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyS' || !(event.ctrlKey || event.metaKey) || !event.altKey || event.shiftKey || event.isComposing
+          || document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleSettled.current();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
   // Ctrl/Cmd+Shift+T: pick a device, land in its terminal. Only the Helm app
   // window gets this key; an ordinary browser tab keeps it for "reopen tab".
   const [terminalPicker, setTerminalPicker] = useState(false);
@@ -1192,6 +1201,90 @@ function Shell({ client, conn, onSignOut }: {
   if (openStamp && (isUnread(openStamp) || !settledThread(openStamp))) reviewing.current.keep = true;
   const finishedNow = doneNow.filter(({ s }) => isUnread(s) || (s.id === openId && reviewing.current.keep));
   const settledNow = doneNow.filter((x) => !finishedNow.includes(x));
+  // Pinned chats sit above every other shelf, whatever they are doing, and
+  // leave the other shelves (owner, 2026-10-31). The newest pin is on top.
+  // The waiting box still sees them; the folded rail and Ctrl+Tab put them first.
+  type Row = { env: Environment; s: Session };
+  const unpinned = (x: Row) => !x.s.pinnedAt;
+  const pinnedNow = everyone.filter(({ env: machine, s }) => !!s.pinnedAt && (machine.online || !liveEnvsSeen.current))
+    .sort((a, b) => (b.s.pinnedAt ?? 0) - (a.s.pinnedAt ?? 0));
+  const needShelf = blocked.filter(unpinned);
+  const finishedShelf = finishedNow.filter(unpinned);
+  const runningShelf = runningNow.filter(unpinned);
+  const snoozedShelf = asleep.filter((x) => unpinned(x) && !runningThread(x.s));
+  const settledShelf = settledNow.filter(unpinned);
+  const pinnedRow = (x: Row) => homeRow(x, !runningThread(x.s) || attentionOn(x.env.id, x.s));
+  // Alt+1, Alt+2 and Alt+3 open the top chat of Finished, Running and
+  // Settled, in sidebar order. The folded rail then shows the pinned chats
+  // and the picked group: Needs you with Finished (the default), Running on
+  // its own, or Settled. Ctrl+Tab and Ctrl+Shift+Tab walk exactly what is
+  // shown, top to bottom, pinned chats as ordinary rows (owner, 2026-11-01).
+  const shelves = { finished: finishedShelf, running: runningShelf, settled: settledShelf };
+  type Group = keyof typeof shelves;
+  const [pickedShelf, setPickedShelf] = useState<Group>('finished');
+  type RailRow = Row & { need: boolean; word: string; cls: string };
+  const railRowsFor = (group: Group): RailRow[] => [
+    ...pinnedNow.map((x) => blocked.includes(x) ? { ...x, need: true, word: 'needs you', cls: 'rail-need' }
+      : finishedNow.includes(x) ? { ...x, need: false, word: 'finished', cls: 'rail-finished' }
+      : runningNow.includes(x) ? { ...x, need: false, word: 'working', cls: 'rail-working' }
+      : { ...x, need: false, word: 'pinned', cls: 'rail-settled' }),
+    ...(group === 'settled' ? settledShelf.map((x) => ({ ...x, need: false, word: 'settled', cls: 'rail-settled' }))
+      : group === 'running' ? runningShelf.map((x) => ({ ...x, need: false, word: 'working', cls: 'rail-working' })) : [
+        ...needShelf.map((x) => ({ ...x, need: true, word: 'needs you', cls: 'rail-need' })),
+        ...finishedShelf.map((x) => ({ ...x, need: false, word: 'finished', cls: 'rail-finished' })),
+      ]),
+  ];
+  const railRows = railRowsFor(pickedShelf);
+  const openRailRow = ({ env: e, s, need }: RailRow) =>
+    openSession(e.id, s, need && s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed));
+  const walk = useRef<{ rows: (group: Group) => RailRow[]; open: (row: RailRow) => void }>({ rows: railRowsFor, open: openRailRow });
+  walk.current = { rows: railRowsFor, open: openRailRow };
+  const shelfOf = useRef<(x: Row) => Group | null>(() => null);
+  shelfOf.current = (x) => {
+    const has = (list: Row[]) => list.some((y) => y.s.id === x.s.id && y.env.id === x.env.id);
+    return has(settledShelf) ? 'settled' : has(runningShelf) ? 'running' : has(needShelf) || has(finishedShelf) ? 'finished' : null;
+  };
+  const tops = useRef(shelves);
+  tops.current = shelves;
+  const picked = useRef(pickedShelf);
+  picked.current = pickedShelf;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.isComposing || document.querySelector('[aria-modal="true"]')) return;
+      const jump = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+        ? ({ Digit1: 'finished', Digit2: 'running', Digit3: 'settled' } as const)[event.code as 'Digit1'] : undefined;
+      const step = event.key === 'Tab' && event.ctrlKey && !event.metaKey && !event.altKey;
+      if (!jump && !step) return;
+      const current = nav.current.stack.at(-1);
+      const isCurrent = ({ env, s }: Row) => env.id === nav.current.selected && current?.kind === 'session' && s.id === current.session.id;
+      if (jump) {
+        // Capture before a composer or a terminal takes the key.
+        event.preventDefault();
+        event.stopPropagation();
+        setPickedShelf(jump);
+        const top = tops.current[jump][0];
+        if (top && !isCurrent(top)) walk.current.open({ ...top, need: false, word: '', cls: '' });
+        return;
+      }
+      // In a terminal, Ctrl+Tab walks that machine's terminals (SessionView).
+      if (current?.kind === 'session' && current.session.engine === 'shell') return;
+      const open = current?.kind === 'session' && nav.current.selected
+        ? { env: { id: nav.current.selected } as Environment, s: current.session } : null;
+      // The group of the open chat; a pinned chat keeps the last pick.
+      const group = (open && shelfOf.current(open)) || picked.current;
+      if (group !== picked.current) setPickedShelf(group);
+      const list = walk.current.rows(group);
+      if (!list.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const index = list.findIndex(isCurrent);
+      const next = index < 0 ? (event.shiftKey ? list.length - 1 : 0)
+        : (index + (event.shiftKey ? -1 : 1) + list.length) % list.length;
+      if (index !== next) walk.current.open(list[next]);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
   // The machine keeps the look too, so the tick clears on every device.
   // Only a finish the machine has not seen yet needs telling: each tell is
   // saved and sent to every screen, and a working chat changes every second.
@@ -1266,32 +1359,30 @@ function Shell({ client, conn, onSignOut }: {
             ><Gear /></button>
             <button
               className="iconbtn collapse-toggle"
-              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              title={sidebarCollapsed ? 'Expand sidebar (Ctrl+S)' : 'Collapse sidebar (Ctrl+S)'}
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-keyshortcuts="Control+S Meta+S"
               onClick={() => collapseSidebar(!sidebarCollapsed)}
             ><Icon name="sidebar" size={17} /></button>
           </span>
         </div>
 
-        {/* Folded, the sidebar keeps the inbox: a new chat, then each chat
-            that needs you, finished or is working, as its agent's mark. */}
+        {/* Folded, the sidebar keeps the inbox: a new chat, the pinned chats,
+            then each chat that needs you or finished - or, after Alt+2, each
+            working chat; after Alt+3, each settled chat - as its agent's mark. */}
         {wide && sidebarCollapsed && (
           <nav className="side-rail" aria-label="Active chats">
             <button
               type="button" className="iconbtn rail-new" onClick={() => setNewChat({})}
               disabled={!envs.some((e) => e.online)} aria-label="New chat" title="New chat (Ctrl+N)"
             ><Icon name="plus" size={17} /></button>
-            {[
-              ...blocked.map((x) => ({ ...x, need: true, word: 'needs you', cls: 'rail-need' })),
-              ...finishedNow.map((x) => ({ ...x, need: false, word: 'finished', cls: 'rail-finished' })),
-              ...runningNow.map((x) => ({ ...x, need: false, word: 'working', cls: 'rail-working' })),
-            ].map(({ env: e, s, need, word, cls }) => {
+            {railRows.map((row) => {
+              const { env: e, s, word, cls } = row;
               const open = isOpen({ env: e, s });
               return (
                 <button
                   key={`${e.id}:${s.id}`} type="button" className={`rail-chat ${cls}${open ? ' active' : ''}`}
                   aria-current={open ? 'page' : undefined} aria-label={`${s.title}, ${e.name}, ${word}`} title={`${s.title}\n${e.name} · ${word}`}
-                  onClick={() => openSession(e.id, s, need && s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
+                  onClick={() => openRailRow(row)}
                 >
                   <EngineMark engine={engineOf(s.engine).cls} />
                   <i className="rail-dot" aria-hidden="true" />
@@ -1332,9 +1423,31 @@ function Shell({ client, conn, onSignOut }: {
             </button>
             </div>
 
-            {blocked.length > 0 && (
-              <Fold shelf attention defaultOpen title="Needs you" count={blocked.length} remember="sidebar:needs">
-                {blocked.map(({ env: e, s }) => (
+            {!wide && envs.length > 0 && <div className="phone-machines">
+              <div className="section">Machines</div>
+              <div className="rows plain">
+                {envs.map((e) => <button key={e.id} type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
+                  <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+                  <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
+                  <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
+                  <span className="chev"><Icon name="forward" size={15} /></span>
+                </button>)}
+              </div>
+            </div>}
+
+            {pinnedNow.length > 0 && (
+              <Fold
+                shelf defaultOpen title="Pinned" count={pinnedNow.length} remember="sidebar:pinned"
+                note={savedIn(pinnedNow) ? 'saved' : undefined}
+                peek={pinnedNow.some(isOpen) ? <div className="rows plain">{pinnedNow.filter(isOpen).map(pinnedRow)}</div> : undefined}
+              >
+                <div className="rows plain">{pinnedNow.map(pinnedRow)}</div>
+              </Fold>
+            )}
+
+            {needShelf.length > 0 && (
+              <Fold shelf attention defaultOpen title="Needs you" count={needShelf.length} remember="sidebar:needs">
+                {needShelf.map(({ env: e, s }) => (
                   <NeedCard
                     key={s.id} s={s} machine={e.name} selected={isOpen({ env: e, s })}
                     onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
@@ -1346,29 +1459,29 @@ function Shell({ client, conn, onSignOut }: {
               </Fold>
             )}
 
-            {runningNow.length > 0 && (
+            {finishedShelf.length > 0 && (
               <Fold
-                shelf defaultOpen title="Running" count={runningNow.length} remember="sidebar:working"
-                peek={runningNow.some(isOpen) ? <div className="rows plain">{runningNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
+                shelf defaultOpen title="Finished" count={finishedShelf.length} remember="sidebar:finished"
+                note={savedIn(finishedShelf) ? 'saved' : undefined}
+                peek={finishedShelf.some(isOpen) ? <div className="rows plain">{finishedShelf.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
               >
-                <div className="rows plain">{runningNow.map((x) => homeRow(x))}</div>
+                <div className="rows plain">{finishedShelf.map((x) => homeRow(x, true))}</div>
               </Fold>
             )}
 
-            {finishedNow.length > 0 && (
+            {runningShelf.length > 0 && (
               <Fold
-                shelf defaultOpen title="Finished" count={finishedNow.length} remember="sidebar:finished"
-                note={savedIn(finishedNow) ? 'saved' : undefined}
-                peek={finishedNow.some(isOpen) ? <div className="rows plain">{finishedNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
+                shelf defaultOpen title="Running" count={runningShelf.length} remember="sidebar:working"
+                peek={runningShelf.some(isOpen) ? <div className="rows plain">{runningShelf.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
               >
-                <div className="rows plain">{finishedNow.map((x) => homeRow(x, true))}</div>
+                <div className="rows plain">{runningShelf.map((x) => homeRow(x))}</div>
               </Fold>
             )}
 
-            {asleep.some(({ s }) => !runningThread(s)) && (
-              <Fold shelf title="Snoozed" count={asleep.filter(({ s }) => !runningThread(s)).length} remember="sidebar:snoozed">
+            {snoozedShelf.length > 0 && (
+              <Fold shelf title="Snoozed" count={snoozedShelf.length} remember="sidebar:snoozed">
                 <div className="rows plain">
-                  {asleep.filter(({ s }) => !runningThread(s)).map(({ env: e, s }) => (
+                  {snoozedShelf.map(({ env: e, s }) => (
                     <HomeRow
                       key={s.id} s={s} machine={e.name} onOpen={() => { setSnooze(`${e.id}:${s.id}`, null); openSession(e.id, s); }}
                       note={snoozed[`${e.id}:${s.id}`] === NEVER_SNOOZE ? 'Snoozed \u00b7 Never' : `back ${when(snoozed[`${e.id}:${s.id}`])}`}
@@ -1411,14 +1524,14 @@ function Shell({ client, conn, onSignOut }: {
           {/* Settled sits at the foot of the sidebar, folded at first: the
               chats you already looked at (owner, 2026-10-30). */}
           <div className="side-pad side-bottom">
-            {settledNow.length > 0 && (
+            {settledShelf.length > 0 && (
               <Fold
-                shelf title="Settled" count={settledNow.length} remember="sidebar:settled-folded"
-                note={savedIn(settledNow) ? 'saved' : undefined}
-                peek={settledNow.some(isOpen) ? <div className="rows plain">{settledNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
+                shelf title="Settled" count={settledShelf.length} remember="sidebar:settled-folded" command={settledCommand}
+                note={savedIn(settledShelf) ? 'saved' : undefined}
+                peek={settledShelf.some(isOpen) ? <div className="rows plain">{settledShelf.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
               >
                 <PagedRows
-                  items={settledNow} isSelected={isOpen} row={(x) => homeRow(x, true)}
+                  items={settledShelf} isSelected={isOpen} row={(x) => homeRow(x, true)}
                   first={SETTLED_FIRST} step={SETTLED_STEP}
                 />
               </Fold>
@@ -1616,6 +1729,8 @@ function Shell({ client, conn, onSignOut }: {
             onNewTerminal={async () => newTerminal.current(env.id, '~', true)}
             onBack={back}
             onClosed={() => {
+              // A closed terminal leaves the list now, before its machine answers.
+              if (view.session.engine === 'shell') removeSession(env.id, view.session.id);
               loadSessions(env.id);
               // Closing one terminal of several lands on a neighbour, not the machine.
               const next = view.session.engine === 'shell'

@@ -102,7 +102,7 @@ for (const width of [390, 1280]) test(`Edit from here confirms a refused file re
   const composer = page.getByRole('textbox', { name: 'Message Codex', exact: true });
   await composer.fill('Keep this draft until confirmation');
   await page.getByText('Discarded reply', { exact: true }).waitFor();
-  await page.waitForFunction(() => !document.querySelector('.attach-status'));
+  await page.waitForFunction(() => !document.querySelector('[data-preparing]'));
   const edit = page.getByRole('button', { name: 'Edit from here', exact: true });
   const dialog = page.getByRole('dialog', { name: 'Edit from here', exact: true });
   const mutations = () => page.evaluate(() => window.calls.filter(call => ['session.rewind','session.input'].includes(call.method)));

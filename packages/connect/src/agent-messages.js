@@ -90,6 +90,20 @@ export class AgentMessages {
     return { messages, next: more ? key(messages.at(-1)) : null };
   }
 
+  /** Whether chat `from` wrote to chat `to` at or after `since` (ms). */
+  sentSince(from, to, since) {
+    const folder = this.#folder(from);
+    if (!existsSync(folder)) return false;
+    return readdirSync(folder).some(name => {
+      const match = /^(\d{16})-[a-f0-9]{32}\.json$/.exec(name);
+      if (!match || Number(match[1]) < since) return false;
+      try {
+        const record = JSON.parse(readFileSync(join(folder, name), 'utf8'));
+        return record.from.env === this.self && record.from.id === from && record.to.id === to;
+      } catch { return false; }
+    });
+  }
+
   /** Return all unread helper replies with the result, not as extra turns. */
   async collectResult({ id, parentId, consume, callerThreadId }) {
     if (!consume || !parentId) return [];

@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { HELM_DIR } from '../paths.js';
 import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
 import { modeFor } from '../modes.js';
 
@@ -17,8 +20,9 @@ import { modeFor } from '../modes.js';
  * Verified against agy 1.2.12 and the published headless docs:
  *  - No `-p` flag: in stream mode it is ignored, and worse it swallows the
  *    next argument as its prompt value.
- *  - Only `text` content blocks exist; images are a session-ending error, so
- *    this driver deliberately has no attachment verbs.
+ *  - Only `text` content blocks exist (still so in agy 1.4.12); an image block
+ *    is a session-ending error. So pictures are saved as files and the prompt
+ *    asks the agent to open them, which its read_file tool does.
  *  - Slash commands handled by the CLI itself (/model, /usage) also end the
  *    session, so spawn passes --disable-slash-commands: typed "/x" reaches
  *    the model as text instead of killing the process.
@@ -38,6 +42,7 @@ import { modeFor } from '../modes.js';
  */
 
 const AGY_MIN_VERSION = '1.2.0';
+const IMAGE_EXTENSIONS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
 /** A turn this driver opened - a prompt, or work the agent began itself - as opposed to one of helm's own queue tickets. */
 const isDriverTurn = (turnId) => /^(turn|wake)-/.test(String(turnId));
 const MAX_OUTPUT = 32_000;
@@ -86,6 +91,8 @@ export class AgyDriver extends Driver {
 
   constructor(opts) {
     super({ engine: 'agy', ...opts });
+    /** Where pictures are saved for the agent to read; tests pass their own. */
+    this.imageDir = opts?.imageDir ?? null;
   }
 
   get args() {
@@ -298,7 +305,27 @@ export class AgyDriver extends Driver {
 
   // ----------------------------------------------------------------- verbs
 
-  async send(text) {
+  /**
+   * Pictures go to the agent as files it is told to read, in the words the
+   * app already hides from the owner's bubble (userMessage). The chat shows
+   * what the owner wrote; only the agent sees the note.
+   */
+  async sendWithAttachments(text, attachments) {
+    const images = (attachments ?? []).filter((a) => a?.data && String(a.mime ?? '').toLowerCase().startsWith('image/'));
+    if (!images.length) return this.send(text);
+    if (images.some((a) => !IMAGE_EXTENSIONS[String(a.mime).toLowerCase()])) throw new Error('Antigravity needs JPEG, PNG, WebP or GIF images.');
+    const dir = join(this.imageDir ?? join(HELM_DIR, 'native-images'), randomBytes(12).toString('hex'));
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const refs = images.map((image, index) => {
+      const path = join(dir, `image-${index + 1}.${IMAGE_EXTENSIONS[String(image.mime).toLowerCase()]}`);
+      writeFileSync(path, Buffer.from(image.data, 'base64'), { mode: 0o600 });
+      return `[Image #${index + 1}]: ${JSON.stringify(path)}`;
+    });
+    const body = String(text ?? '').trim();
+    return this.send(text, `${body}${body ? '\n\n' : ''}Read the attached image files before answering:\n${refs.join('\n')}`);
+  }
+
+  async send(text, prompt = text) {
     // Starting agy is part of answering: working from the spawn on, and
     // back to idle if it never comes up.
     if (this.#dead || this.#spawning) this.push('status', { status: 'working' });
@@ -312,7 +339,7 @@ export class AgyDriver extends Driver {
     // prompt belongs on the fresh one, not the one being torn down.
     if (this.#restartJob) await this.#restartJob;
     const turnId = `turn-${randomUUID().slice(0, 8)}`;
-    this.#outbox.push({ turnId, text });
+    this.#outbox.push({ turnId, text: prompt });
     this.push('turn.start', { turnId, text });
     this.push('status', { status: 'working' });
     await this.#pump();

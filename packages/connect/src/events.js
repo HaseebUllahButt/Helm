@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, renameSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
@@ -45,6 +45,15 @@ export const EVENT_KEEP = KEEP;
  * the same newest KEEP events, plus at most this many older ones in between.
  */
 const TRIM_EVERY = 200;
+/**
+ * Streamed text is joined for this long before it is saved and sent. A CLI
+ * streams a reply as many small pieces; saved one line each, the labels
+ * around them weighed twice the words (owner's logs, 2026-11-01), and every
+ * piece was its own message to a phone on a slow link. T3 Code does the same.
+ */
+const DELTA_MS = 100;
+/** A joined piece is saved early once it holds this much text. */
+const DELTA_MAX = 16_000;
 /** How many of a chat's visuals outlive the KEEP tail (see retain). */
 const KEEP_VISUALS = 100;
 
@@ -111,6 +120,42 @@ export function forWire(event) {
     out.input = input;
   }
   return out;
+}
+
+/**
+ * Join the streamed pieces of each finished item into one row, as T3 Code
+ * does. The row keeps the number of the last piece, says in `from` where the
+ * first one was, and says `replace`: a phone that saved part of the item
+ * sets the text instead of adding it twice. Rows of unfinished items, and
+ * every other row, stay exactly as they are.
+ */
+export function compactEvents(events) {
+  const open = new Map(), finished = [];
+  events.forEach((e, i) => {
+    if (e.type === 'history.reset') { open.clear(); return; }
+    if (!e.id || !e.type?.startsWith('item.')) return;
+    if (e.type === 'item.start') open.set(e.id, []);
+    else if (e.type === 'item.delta') open.get(e.id)?.push(i);
+    else if (e.type === 'item.done') {
+      const pieces = open.get(e.id);
+      open.delete(e.id);
+      if (pieces?.length > 1) finished.push(pieces);
+    }
+  });
+  if (!finished.length) return { events, removed: 0 };
+  const drop = new Set(), joined = new Map();
+  for (const pieces of finished) {
+    const first = events[pieces[0]], last = events[pieces.at(-1)];
+    const { seq: _seq, from, at: _at, text: _text, replace: _replace, ...rest } = first;
+    joined.set(pieces.at(-1), {
+      seq: last.seq, from: Math.min(from ?? first.seq, first.seq), at: last.at, ...rest, replace: true,
+      text: pieces.map(i => events[i].text ?? '').join(''),
+    });
+    for (const i of pieces.slice(0, -1)) drop.add(i);
+  }
+  const out = [];
+  events.forEach((e, i) => { if (!drop.has(i)) out.push(joined.get(i) ?? e); });
+  return { events: out, removed: drop.size };
 }
 
 /**
@@ -341,6 +386,8 @@ export class EventLog {
    * A blob that has been swept leaves `data` unset rather than a broken
    * one - the app draws a "no longer stored" tile for that.
    */
+  hydrate(id, event) { return this.#hydrate(id, event); }
+
   #hydrate(id, event) {
     if (!Array.isArray(event.attachments) || !event.attachments.length) return event;
     const attachments = event.attachments.map((a) => {
@@ -351,8 +398,44 @@ export class EventLog {
     return { ...event, attachments };
   }
 
+  /** sessionId -> streamed text not yet saved: { key, event, text, done, timer } */
+  #deltas = new Map();
+
+  /**
+   * Save a piece of streamed text, joined with the pieces that follow it for
+   * DELTA_MS. `done` gets the saved event, to send it on. Any other event for
+   * the chat saves the waiting text first, so the order never changes.
+   */
+  appendDelta(id, event, done) {
+    const { text = '', ...rest } = event;
+    const key = JSON.stringify(rest);
+    const open = this.#deltas.get(id);
+    if (open && open.key === key && open.text.length + String(text).length <= DELTA_MAX) {
+      open.text += text; open.done = done;
+      return;
+    }
+    this.flushDelta(id);
+    const timer = setTimeout(() => this.flushDelta(id), DELTA_MS);
+    timer.unref?.();
+    this.#deltas.set(id, { key, event: rest, text: String(text), done, timer });
+  }
+
+  /** Save the chat's waiting streamed text now. */
+  flushDelta(id) {
+    const open = this.#deltas.get(id);
+    if (!open) return;
+    this.#deltas.delete(id);
+    clearTimeout(open.timer);
+    const saved = this.append(id, { ...open.event, text: open.text });
+    open.done?.(saved);
+  }
+
+  /** Save every chat's waiting streamed text: the daemon is stopping. */
+  flushDeltas() { for (const id of [...this.#deltas.keys()]) this.flushDelta(id); }
+
   /** Append one event; returns it with `seq` and `at` filled in. */
   append(id, event) {
+    if (this.#deltas.has(id)) this.flushDelta(id);
     const log = this.#open(id);
     const indexed = this.#files.get(id)?.refresh();
     const full = { seq: ++log.seq, at: Date.now(), ...event };
@@ -376,6 +459,7 @@ export class EventLog {
 
   /** Events with a sequence number greater than `since`. */
   since(id, since = 0) {
+    this.flushDelta(id);
     return this.#open(id).events
       .filter((e) => e.seq > since)
       .map((e) => this.#hydrate(id, e));
@@ -405,6 +489,7 @@ export class EventLog {
    * it are different things.
    */
   window(id, { since = 0, tail = 0, before = 0, maxBytes = MAX_PAGE } = {}) {
+    this.flushDelta(id);
     const log = this.#open(id);
     // Memory holds the newest part. Paging back, or catching up from further
     // back than that, reads the file, which holds all of it.
@@ -545,6 +630,7 @@ export class EventLog {
    * made a digest of a busy machine expensive.
    */
   tail(id, n = 400) {
+    this.flushDelta(id);
     const events = this.#open(id).events;
     return n > 0 && events.length > n ? events.slice(-n) : events;
   }
@@ -657,8 +743,51 @@ export class EventLog {
 
   last(id) { return this.#logs.get(id)?.seq ?? this.glance(id).seq; }
 
+  /**
+   * Rewrite one chat's file with its finished items joined (compactEvents).
+   * Returns how many rows went. A file with a row it cannot read is left
+   * alone. Synchronous, so no append can land between the read and the rename.
+   */
+  compact(id, { minRemoved = 50 } = {}) {
+    this.flushDelta(id);
+    const file = this.#file(id);
+    let text;
+    try { text = readFileSync(file, 'utf8'); } catch { return 0; }
+    const events = [];
+    for (const line of text.split('\n')) {
+      if (!line) continue;
+      try { events.push(JSON.parse(line)); } catch { return 0; }
+    }
+    const { events: kept, removed } = compactEvents(events);
+    if (removed < minRemoved) return 0;
+    writeFileSync(`${file}.compact`, kept.map(e => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
+    renameSync(`${file}.compact`, file);
+    this.#logs.delete(id); this.#files.delete(id); this.#pending.delete(id); this.#derived.delete(id); this.#glanced.delete(id);
+    return removed;
+  }
+
+  /**
+   * Compact every chat nobody wrote to in the last `idleMs`, one file per
+   * turn of the event loop so live chats never wait behind it.
+   */
+  async compactAll({ idleMs = 10 * 60_000, stopped = () => false } = {}) {
+    let names = [];
+    try { names = readdirSync(this.dir); } catch { /* no chats yet */ }
+    let removed = 0, chats = 0;
+    for (const name of names) {
+      if (stopped()) break;
+      if (!name.endsWith('.jsonl')) continue;
+      try { if (Date.now() - statSync(join(this.dir, name)).mtimeMs < idleMs) continue; } catch { continue; }
+      const n = this.compact(name.slice(0, -'.jsonl'.length));
+      if (n) { removed += n; chats++; }
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    return { removed, chats };
+  }
+
   /** Publish a new history in one rename; attachments remain for recovery. */
   replace(id, events) {
+    this.#dropDelta(id);
     mkdirSync(this.dir, { recursive: true });
     const file = this.#file(id);
     writeFileSync(`${file}.rewind`, events.map(e => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
@@ -668,6 +797,7 @@ export class EventLog {
   }
 
   rewind(id, history) {
+    this.flushDelta(id);
     // The gap also forces older clients that do not know history.reset to
     // reload a fresh window rather than retain discarded cached messages.
     let seq = this.last(id) + 1;
@@ -751,7 +881,13 @@ export class EventLog {
     log.first = log.diskFirst = seq + 1;
   }
 
+  #dropDelta(id) {
+    clearTimeout(this.#deltas.get(id)?.timer);
+    this.#deltas.delete(id);
+  }
+
   remove(id) {
+    this.#dropDelta(id);
     this.#logs.delete(id);
     this.#files.delete(id);
     this.#derived.delete(id);

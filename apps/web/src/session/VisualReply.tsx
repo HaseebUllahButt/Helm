@@ -25,7 +25,11 @@ export function liveUrl(visual: Visual) {
 export function currentTheme() {
   const style = getComputedStyle(document.documentElement);
   const theme: Record<string, string> = { scheme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark' };
-  for (const key of ['--bg', '--card', '--raised', '--text', '--text-dim', '--mutedfg', '--line', '--primary', '--primary-q', '--amber', '--amber-text', '--sky', '--emerald', '--red']) theme[key] = style.getPropertyValue(key).trim();
+  for (const key of ['--bg', '--card', '--raised', '--text', '--text-dim', '--mutedfg', '--line', '--primary', '--primary-q', '--amber', '--amber-text', '--sky', '--emerald', '--red', '--radius']) theme[key] = style.getPropertyValue(key).trim();
+  // The page writes in the chat's own font; a see-through divider gets a faint one so tables and cards still show edges.
+  theme['--font-sans'] = getComputedStyle(document.body).fontFamily;
+  theme['--font-mono'] = style.getPropertyValue('--mono').trim();
+  if (!theme['--line'] || theme['--line'] === 'transparent') theme['--line'] = theme.scheme === 'light' ? 'rgb(26 29 36 / 12%)' : 'rgb(255 255 255 / 10%)';
   return theme;
 }
 

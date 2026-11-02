@@ -99,6 +99,9 @@ const KEEPER_CHECK_MS = 60 * 60_000;
 const KEEPER_FIRST_MS = 10 * 60_000;
 /** How often the brain's picture of the network is refreshed, while one exists. */
 const BRAIN_REFRESH_MS = 45_000;
+/** Chat history compaction: first pass after start, then the gap between passes. */
+const COMPACT_FIRST_MS = 2 * 60_000;
+const COMPACT_EVERY_MS = 6 * 60 * 60_000;
 const HEARTBEAT_MS = 20_000;
 /** Cache warm-ups wait this long, so they never compete with coming online. */
 const WARM_DELAY_MS = 2_000;
@@ -422,6 +425,7 @@ export class Daemon {
   #offlineSince = null;
   #tunnels = new Map();
   #brainTimer = null;
+  #compactTimer = null;
   #keeperFirst = null;
   #keeperTimer = null;
   #brainOpening = null;
@@ -510,6 +514,7 @@ export class Daemon {
     this.agentMessages = new AgentMessages({ sessions: this.sessions, delivery: this.inputDelivery, self: this.id,
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
       emit: payload => this.#emit('agent.message', payload) });
+    this.sessions.sentAgentMessage = (from, to, since) => this.agentMessages.sentSince(from, to, since);
     if (brainHost((loadNetwork() ?? this.net).machines)?.id !== this.id) this.sessions.retireBrains();
     this.gitTours = new GitTours({ sessions: this.sessions, agents: async (id) => {
       const profiles = (await getProfiles()).filter(p => p.id === id);
@@ -664,6 +669,19 @@ export class Daemon {
     // brain thread pays nothing for this; one with a brain gets a digest
     // that is current when the owner opens it rather than when they send
     // their second message.
+    // Like T3 Code: soon after start, then every 6 hours, join the streamed
+    // pieces of finished replies in chats that are quiet. Chats stay whole.
+    const compact = (next) => {
+      this.#compactTimer = setTimeout(async () => {
+        try {
+          const done = await this.sessions.events.compactAll({ stopped: () => this.#stopped });
+          if (done.removed) console.log(`[helm] chat history: joined ${done.removed} rows in ${done.chats} chats`);
+        } catch (err) { console.error('[helm] chat history:', err?.message || err); }
+        if (!this.#stopped) compact(COMPACT_EVERY_MS);
+      }, next);
+      this.#compactTimer.unref?.();
+    };
+    compact(COMPACT_FIRST_MS);
     this.#brainTimer = setInterval(() => {
       if (this.sessions?.brainSession()) this.refreshSnapshot().catch(() => {});
     }, BRAIN_REFRESH_MS);
@@ -805,6 +823,7 @@ export class Daemon {
     await this.executions.stop();
     await this.browsers?.stop();
     clearInterval(this.#brainTimer);
+    clearTimeout(this.#compactTimer);
     clearTimeout(this.#keeperFirst);
     clearInterval(this.#keeperTimer);
     clearInterval(this.#reconcile);
@@ -2155,6 +2174,7 @@ export class Daemon {
       case M.SESSION_DISCARD_EMPTY: return this.sessions.discardEmpty(p.id);
       case M.SESSION_TITLE:   return this.sessions.rename(p.id, p.title);
       case M.SESSION_ARCHIVE: return this.sessions.archive(p.id, p.archived !== false);
+      case M.SESSION_PIN:     return this.sessions.pin(p.id, p.pinned !== false);
       case M.SESSION_DISMISS_CHILD_FAILURES: return this.sessions.dismissChildFailures(p.id);
       case M.SESSION_SEEN:    return this.sessions.markSeen(p.id);
       case M.SESSION_FORK: return { session: await this.sessions.fork(p.id, p.turnId) };
