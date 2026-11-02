@@ -332,8 +332,8 @@ test('Running counts only working threads and excludes idle native sessions', as
   const sidebar = page.locator('.sidebar');
   const runningSection = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Running$/ }) });
   await runningSection.getByText('Busy', { exact: true }).waitFor();
-  // Machines live on Home and in search; the sidebar is only an inbox.
-  assert.equal(await sidebar.locator('.row.machine').count(), 0);
+  // Phone Home gives each machine a direct entry, including offline ones.
+  assert.equal(await sidebar.locator('.phone-machines .row.machine').count(), 3);
   assert.equal(await runningSection.getByText('Idle alive', { exact: true }).count(), 0);
   assert.equal(await runningSection.getByText('External idle', { exact: true }).count(), 0);
   assert.equal(await runningSection.getByText('Shared idle', { exact: true }).count(), 0);
@@ -368,11 +368,13 @@ test('the logo opens Home: a quick chat box with chips, and a row per machine', 
   await page.evaluate(() => {
     const session = (id, title, status) => ({ id, title, cwd: '/project', engine: 'codex', profileId: 'codex', driver: 'codex', turns: 1, status, alive: true, updatedAt: Date.now() });
     window.started = [];
+    window.sent = [];
     window.mount(window.makeClient([
       { id: 'laptop', name: 'Laptop', online: true, info: {} },
       { id: 'vm', name: 'VM', online: false, lastSeen: Date.now() - 2 * 3600_000, info: {} },
     ], { laptop: [session('one', 'Build the API', 'working')] }, 'http://helm-test', {
       'profile.list': { profiles: [{ id: 'codex', engine: 'codex' }] },
+      'session.input': () => { window.sent.push(true); return {}; },
       'session.start': () => {
         window.started.push(true);
         return { session: { id: 'quick', title: 'Sketch', quick: true, cwd: '/tmp/q', engine: 'codex', profileId: 'codex', driver: 'codex', turns: 0, status: 'idle', alive: true, updatedAt: Date.now() } };
@@ -391,7 +393,7 @@ test('the logo opens Home: a quick chat box with chips, and a row per machine', 
   await page.getByRole('button', { name: 'Agent: Codex' }).waitFor();
   await page.getByRole('textbox', { name: 'Ask anything' }).fill('Add a health check');
   await page.keyboard.press('Enter');
-  await page.locator('.main').getByText('Add a health check').first().waitFor();
+  await page.waitForFunction(() => window.sent.length === 1);
   assert.equal((await page.evaluate(() => window.started)).length, 1, 'a quick chat starts with no folder step');
   await page.getByRole('button', { name: 'Home' }).click();
   await rows.filter({ hasText: 'Laptop' }).click();
