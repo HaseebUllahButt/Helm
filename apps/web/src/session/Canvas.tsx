@@ -337,7 +337,8 @@ function CanvasHead({ title, sub, onBack, onClose, children }: { title: string; 
     <div className="canvas-titles"><b>{title}</b><small>{sub}</small></div>
     {children}
     <FullscreenButton />
-    <button className="iconbtn" aria-label="Close canvas" title="Close canvas (Ctrl/⌘ Shift D)" onClick={onClose}><Icon name="close" size={17} /></button>
+    {/* The desktop app window has its own cross in this corner: there the canvas shows its panel icon instead. */}
+    <button className="iconbtn canvas-close" aria-label="Close canvas" title="Close canvas (Ctrl/⌘ Shift D)" onClick={onClose}><Icon name="close" size={17} className="when-page" /><Icon name="canvas" size={17} className="when-window" /></button>
   </div>;
 }
 
