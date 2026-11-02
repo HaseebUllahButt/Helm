@@ -3921,6 +3921,8 @@ details.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
   .bar button, .bar a, .bar input, .bar select, .bar textarea, .bar [role="button"],
   .main > .banner button, .main > .send-notice button { app-region: no-drag; -webkit-app-region: no-drag; }
   .canvas .canvas-head { margin-right: calc(var(--overlay-right) - 6px); }
+  :root .canvas-close .when-page { display: none; }
+  :root .canvas-close .when-window { display: block; }
 }
 
 /* The bare Helm window on a desktop that draws no title bar (windowClose.ts):
@@ -3930,9 +3932,14 @@ details.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
 .app-window .bar { padding-right: calc(10px + var(--overlay-right)); }
 .app-window .main > .banner, .app-window .main > .send-notice { padding-right: calc(12px + var(--overlay-right)); }
 /* The canvas reaches the window's top right corner too: its buttons keep clear. */
+.canvas-close .when-window { display: none; }
 .app-window .canvas .canvas-head { margin-right: calc(var(--overlay-right) - 6px); }
+.app-window .canvas-close .when-page { display: none; }
+.app-window .canvas-close .when-window { display: block; }
 /* In full screen the window's buttons are hidden, so the canvas uses the corner. */
 .canvas:fullscreen .canvas-head { margin-right: -6px; }
+.canvas:fullscreen .canvas-close .when-page { display: block; }
+.canvas:fullscreen .canvas-close .when-window { display: none; }
 @media (min-width: 900px) { .app-window .sidebar .bar.side { padding-right: 10px; } }
 .window-close { position: fixed; top: 10px; right: 8px; z-index: 1000; }
 .window-close:hover:not(:disabled) { color: #fff; background: var(--red); }
