@@ -235,13 +235,13 @@ test('argv: headless flags, the account home, and a session id to resume later',
   assert.ok(r.args.includes('manual')); // the CLI's name for the default mode
 });
 
-test('user chats use an interactive client entrypoint while delegated tasks stay hidden SDK sessions', () => {
+test('user chats and helpers both use an interactive client entrypoint, never an SDK one', () => {
   for (const engineSessionId of [null, 'existing-conversation']) {
     const env = { CLAUDE_CONFIG_DIR: '/account', CLAUDE_CODE_ENTRYPOINT: 'sdk-py' };
     const user = new ClaudeDriver({ cmd: 'claude', env, cwd: '/project', engineSessionId });
     const child = new ClaudeDriver({ cmd: 'claude', env, cwd: '/project', engineSessionId, delegated: true });
     assert.equal(user.env.CLAUDE_CODE_ENTRYPOINT, 'claude-vscode');
-    assert.equal(child.env.CLAUDE_CODE_ENTRYPOINT, 'sdk-cli');
+    assert.equal(child.env.CLAUDE_CODE_ENTRYPOINT, 'claude-vscode');
     assert.equal(user.env.CLAUDE_CONFIG_DIR, '/account');
     assert.equal(user.cwd, '/project');
     assert.equal(env.CLAUDE_CODE_ENTRYPOINT, 'sdk-py', 'do not change the shared account environment');
