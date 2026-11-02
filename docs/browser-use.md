@@ -6,11 +6,17 @@ The owner uses the same browser window. Helm has no browser panel.
 
 ## Decisions
 
-- **Any Chromium-based browser.** Helm uses the browser the owner already
-  has: Chromium, Chrome, Brave, Edge, Vivaldi or Helium, in that order
-  (`browserPaths` in browser-window.js). They all speak Chromium's own
-  channel, so the same code drives each one. Helm reads pages as text and
-  numbered controls first; screenshots are the last resort. The goal is
+- **Any Chromium-based browser, found by evidence, not by name.** Helm uses
+  the browser the owner already has, even one it has never heard of. It never
+  matches brand names: it finds programs with Chromium resources
+  (`resources.pak` or `chrome_100_percent.pak`) beside them and rejects
+  Electron apps (which carry `resources/app.asar`), from menu entries on
+  Linux, app bundles on macOS and the registry on Windows (`chromium-find.js`).
+  A packaged browser keeps its launcher: a Snap starts through its
+  `/snap/bin` wrapper, a Flatpak through `flatpak run <id>`, so it runs inside
+  its own runtime. The system default browser is preferred, then the rest by name. They all
+  speak Chromium's own channel, so the same code drives each one. Helm reads
+  pages as text and numbered controls first; screenshots are the last resort. The goal is
   computer use, not one browser: Bowser was removed so the browser path has
   one engine to grow from.
 - **It runs on the chat's machine.** The agent CLI reaches it through that
@@ -64,6 +70,28 @@ The owner uses the same browser window. Helm has no browser panel.
   before each action. Drawing it does not repeat the action's scroll and
   stability checks for a control already in view. Clicks and typing still
   scroll clipped controls and frame targets into view.
+- **A read covers every frame, and a number keeps its element.** Frames are
+  read through Playwright's own frame targets, so cross-origin frames are
+  there too. A frame whose place or content does not answer in 2 s (a busy
+  frame) is named, not waited for. Each frame document numbers its own
+  elements; Helm maps each one to a tab number once, so a late or
+  overlapping read never gives one number to two elements. An old number
+  reaches the same control or is refused. A read lists up to 300 controls
+  and says when it cut the list; `within` or `frame` reads the rest.
+- **Fail fast, and never deliver twice.** A step waits up to 2 s for its
+  control, a page load 10 s, a call 30 s; `timeout` raises one. One step
+  deadline covers finding the control, the pointer and the input, and never
+  runs past its call's. No input or pointer scroll goes out once its step
+  or its call is out of time; finding frames shares one deadline too. A check reads again until it holds; each read gets only the time
+  left, a result seen after the deadline does not count, and a page or
+  frame that did not answer (or whose place could not be read) makes it
+  "could not be checked", never a pass. Helm never adds a check or a retry of input on its own.
+  A call that times out delivers no later batch step, and its reply says
+  if the step in flight may have landed. Until that step ends, only reads
+  run on the tab (an `evaluate` that never returns: close the tab).
+- **A modal dialog stops page reads.** The input that opened it is held
+  until it is answered. Reads and checks then report the dialog without
+  reading the page, and a check of the dialog skips the tab's queue.
 - **Show me** (`helm browser point`) highlights an element and changes
   nothing, so it works in read-only chats. Read-only agents can read,
   navigate, wait and check; a batch holding any change is refused before
@@ -80,12 +108,13 @@ The owner uses the same browser window. Helm has no browser panel.
   }
   ```
 
-- A Chromium-based browser must already be installed (one from the list
-  above, `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at
-  daemon start, and loads no browser driver until a browser is needed. A
-  service has a short PATH, so Linux also searches /usr/local/bin, /usr/bin
-  and /snap/bin.
-- Readiness and launch use the same system browser list. `HELM_WINDOW_CHROMIUM` selects only the visible browser;
+- A Chromium-based browser must already be installed (any one, found by
+  evidence, `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at
+  daemon start, and loads no browser driver until a browser is needed. On
+  Linux it reads menu entries and follows start scripts, Flatpak and Snap to
+  the real program; a service has a short PATH, so it also searches
+  /usr/local/bin, /usr/bin and /snap/bin.
+- Readiness and launch use the same discovery. `HELM_WINDOW_CHROMIUM` selects only the visible browser;
   `HELM_CHROMIUM_PATH` selects the hidden browser.
 - Chats share no tab limit. Keep every saved tab when Helm restarts.
 - Hidden tabs use full Chromium. The headless shell has no native PDF
@@ -105,6 +134,9 @@ The owner uses the same browser window. Helm has no browser panel.
 - Saved flows are kept only when every step succeeds, in 0600 files at
   `~/.helm/browser/flows/<name>.json`. Use names or selectors in flows, not
   element numbers: numbers change between visits.
+- An upload target can be a file field, a CSS selector (file fields are
+  often hidden) or a button that opens the file picker. Helm catches the
+  picker and gives it the files, so no system dialog opens.
 - Downloads stay on the machine while the tab is open. Closing the tab
   removes them. Each file can hold up to 128 MiB.
 

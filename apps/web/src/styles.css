@@ -2,7 +2,10 @@
 @import './session/side-dock.css';
 
 /* Saved visual replies: controls belong to Helm; the page stays isolated. */
-.visual-reply { position: relative; margin: 12px 0; border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; background: var(--bg); }
+/* A saved page has no frame of its own, as in T3 Code: it sits on the chat's
+   background and lines up with the reply text. Only cards keep a border. */
+.visual-reply { position: relative; margin: 12px 0; }
+.visual-link, .visual-folded, .visual-placeholder { border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; }
 .visual-corner { position: absolute; top: 6px; right: 6px; z-index: 1; display: flex; gap: 4px; }
 .visual-open {
   display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
@@ -32,7 +35,7 @@
 .visual-actions button:hover:not(:disabled) { color: var(--text); background: var(--hover); }
 .visual-actions button:disabled { opacity: .4; cursor: default; }
 .visual-actions button:focus-visible { outline: 2px solid var(--primary-q); outline-offset: -2px; }
-.visual-frame { display: block; width: 100%; border: 0; background: var(--bg); }
+.visual-frame { display: block; width: 100%; border: 0; background: transparent; color-scheme: normal; }
 .visual-placeholder { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; padding: 24px; color: var(--mutedfg); font-size: 13px; text-align: center; }
 .visual-dialog { display: flex; flex-direction: column; width: min(1280px, 96vw); height: 92dvh; min-height: 0; background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; box-shadow: 0 20px 80px #0005; }
 .visual-dialog .visual-bar { flex-shrink: 0; }
@@ -259,8 +262,11 @@ code, pre, kbd { font-family: var(--mono); }
   .sidebar {
     width: var(--sidebar-w); flex: none; height: 100%;
     border-right: 1px solid var(--line); background: var(--sidebar);
-    display: flex; flex-direction: column; transition: width 0.18s var(--ease);
+    display: flex; flex-direction: column;
   }
+  /* Folding is instant, as in VS Code. A width animation squeezed the
+     sidebar's contents and re-wrapped the chat (and resized a terminal's
+     program) on every frame. */
   .sidebar.collapsed { width: 52px; }
   .sidebar.collapsed .brand, .sidebar.collapsed .conn,
   .sidebar.collapsed .scroll { display: none; }
@@ -286,6 +292,7 @@ code, pre, kbd { font-family: var(--mono); }
   }
   .rail-chat.rail-need .rail-dot { background: var(--need); }
   .rail-chat.rail-finished .rail-dot { background: var(--ok); }
+  .rail-chat.rail-settled .rail-dot { display: none; }
   @media (prefers-reduced-motion: reduce) { .rail-chat.rail-working .rail-dot { animation: none; } }
   .main { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; }
 }
@@ -299,7 +306,6 @@ code, pre, kbd { font-family: var(--mono); }
   .main { display: none; }
   .main.showing { display: flex; flex-direction: column; height: 100%; width: 100%; }
 }
-@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
 
 /* ------------------------------------------------------------------- bars */
 
@@ -1161,11 +1167,17 @@ pre.snippet {
 .turn-images:not(:last-child) { margin-bottom: 8px; }
 .turn-image { width: 100%; aspect-ratio: 4 / 3; height: auto; object-fit: cover; border-radius: 10px; display: block; border: 1px solid var(--line); background: var(--panel); }
 .turn-images > .turn-image:only-child { aspect-ratio: auto; max-height: 200px; }
+/* A deleted picture: a small dashed tag on one line, so it reads as an
+   empty slot and not as a second message inside the bubble. */
 .turn-image-gone {
-  display: inline-block; padding: 6px 10px; border-radius: 8px;
-  background: color-mix(in srgb, var(--raised) 70%, transparent);
-  color: var(--mutedfg); font-size: var(--t-meta);
+  display: inline-flex; align-items: center; gap: 5px; justify-self: start;
+  padding: 2px 9px; border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--mutedfg) 45%, transparent);
+  color: var(--mutedfg); font-size: var(--t-meta); line-height: 1.6; white-space: nowrap;
 }
+.turn-image-gone svg { flex: none; }
+/* Alone, the tag sets the width, not the 260px a lone picture gets. */
+.turn-images:has(> .turn-image-gone:only-child) { grid-template-columns: max-content; }
 .ctl {
   height: 28px; padding: 0 10px; border-radius: 8px; font-size: var(--t-meta); color: var(--mutedfg);
 }
@@ -1253,6 +1265,25 @@ pre.snippet {
 .codehead .copy { font: var(--t-micro) var(--mono); color: var(--mutedfg); padding: 3px 8px; border-radius: 6px; }
 .codehead .copy:hover { color: var(--text); background: var(--accent); }
 .codeblock pre { margin: 0; background: none; border: 0; padding: 6px 12px 10px; }
+/* A mermaid block drawn as a diagram (diagrams.ts). It sits on the chat's
+   own background; Code shows the source in the same block. */
+.codeblock.diagram-shown { background: transparent; }
+.codeblock.diagram-shown > pre, .codeblock.diagram:not(.diagram-shown) > .diagram-view { display: none; }
+.codeblock.diagram-drawing > pre { opacity: .55; }
+.diagram-view {
+  display: flex; justify-content: center; width: 100%; padding: 8px 12px 14px; overflow-x: auto;
+  background: none; border: 0; border-radius: 0; cursor: zoom-in; color: inherit;
+}
+.diagram-view svg { height: auto; max-width: 100%; }
+.codehead .diagram-toggle { margin-left: auto; margin-right: -6px; }
+.diagram-view:focus-visible { outline: 2px solid var(--primary-q); outline-offset: -2px; }
+.diagram-error { padding: 6px 12px 0; font-size: var(--t-meta); color: var(--amber-text, var(--amber)); }
+.diagram-error .copy { font: var(--t-micro) var(--mono); color: var(--text-dim); padding: 3px 8px; border-radius: 6px; }
+.diagram-full { display: flex; flex-direction: column; width: min(1280px, 96vw); max-height: 92dvh; background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; box-shadow: 0 20px 80px #0005; }
+.diagram-full:focus { outline: none; }
+.diagram-full-body { flex: 1; min-height: 0; overflow: auto; padding: 20px; display: flex; justify-content: center; align-items: flex-start; }
+.diagram-full-body svg { max-width: none !important; width: auto; height: auto; min-width: min(100%, 900px); }
+@media (max-width: 480px) { .diagram-back { padding: 0; } .diagram-full { width: 100%; max-height: 100dvh; height: 100dvh; border: 0; border-radius: 0; } }
 .hljs { color: var(--text-80); }
 .hljs-comment, .hljs-quote { color: var(--hl-comment); font-style: italic; }
 .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-name { color: var(--hl-keyword); }
@@ -2562,9 +2593,19 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .palette-sub.said { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .pglyph { width: 26px; height: 26px; border-radius: 7px; flex: none; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: var(--icon); font-size: 13px; }
 
-.shortcuts, .shortcuts section { display: grid; gap: 8px; }
-.shortcuts .palette-group { margin: 0; padding: 8px 0 0; }
-.shortcuts div { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: var(--t-body); color: var(--text-dim); }
+/* The key list: the head stays, the list scrolls. A job on the left, its
+   keys on the right, one cap per key. */
+.shortcuts-modal { max-width: 520px; max-height: calc(100dvh - 40px); display: flex; flex-direction: column; padding-bottom: 0; }
+.shortcuts { overflow-y: auto; margin: 0 -18px; padding: 0 18px 18px; }
+.shortcuts section + section { margin-top: 18px; }
+.shortcuts .palette-group { margin: 0 0 2px; padding: 0; }
+.shortcut { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 36px; padding: 6px 0;
+  font-size: var(--t-body); line-height: 1.35; color: var(--text); }
+.shortcut + .shortcut { border-top: 1px solid var(--accent); }
+.shortcut-keys { display: flex; gap: 4px; flex: none; }
+.shortcut-keys kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 7px;
+  font: 500 12px/1 var(--sans); color: var(--text-dim); background: var(--accent); border: 0; border-radius: 6px;
+  box-shadow: inset 0 -1px 0 rgb(0 0 0 / 22%); }
 kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; background: var(--accent); border: 1px solid var(--line-2); color: var(--text); white-space: nowrap; }
 
 
@@ -2635,6 +2676,11 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .home-search svg { flex: none; color: var(--icon); }
 /* Search and New chat share one slim line: the search box, then a square plus. */
 .side-actions { display: flex; gap: 6px; margin: 0 0 8px; }
+.phone-machines { display: none; }
+@media (max-width: 899px) {
+  .phone-machines { display: block; margin-bottom: 12px; }
+  .sidebar .phone-machines .row.machine { min-height: 44px; }
+}
 .side-actions .home-search { margin: 0; height: 32px; gap: 7px; padding: 0 8px 0 10px; font-size: var(--t-meta); border-radius: 9px; }
 .side-actions .home-search.new { flex: none; width: 32px; padding: 0; justify-content: center; }
 .side-actions .home-search.new svg { color: inherit; }
@@ -2794,8 +2840,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
    on each would be noise. */
 .modal .row.active { background: transparent; }
 .modal .row.active::after { display: none; }
-.turn-image-gone { align-items: center; gap: 6px; }
-.turn-image-gone svg { vertical-align: -2px; margin-right: 4px; }
 .attach-preview button { display: inline-flex; align-items: center; justify-content: center; }
 .done-mark svg, .readiness-mark svg { display: block; margin: auto; }
 .readiness-mark { display: inline-flex; align-items: center; justify-content: center; height: 20px; }
@@ -3153,6 +3197,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .usage-allowance small em { font-style: normal; color: var(--red); font-weight: 550; }
 .usage-allowance.dry .usage-meter span { background: var(--red); }
 .usage-account.idle { padding-block: 10px; }
+.usage-resets { margin: 12px 0 0; font-size: var(--t-meta); color: var(--mutedfg); }
+.usage-resets b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .usage-account.idle .usage-account-name b { font-weight: 500; color: var(--text-dim); }
 .usage-value {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;

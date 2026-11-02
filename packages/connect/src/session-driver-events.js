@@ -43,6 +43,8 @@ export class DriverEvents {
   onDriverEvent(s, d, e) {
     const current = this.#core.drivers.get(s.id);
     if (current !== d && (current || e.type !== 'status')) return;
+    // Everything below may read the log: give it the streamed text first.
+    if (e.type !== 'item.delta') this.#sessions.events.flushDelta(s.id);
     // Codex reports the same usage again and again. On 2026-10-19, 82% of
     // the limits rows in the owner's logs only repeated the row before, and
     // some chats held nothing else. Account limits still record every report.
@@ -300,6 +302,13 @@ export class DriverEvents {
     if (!staleClaudeConversation && d.engineSessionId && d.engineSessionId !== s.engineSessionId) {
       s.engineSessionId = d.engineSessionId;
       this.#core.save();
+    }
+    if (forwarded.type === 'item.delta') {
+      this.#sessions.events.appendDelta(s.id, forwarded, (event) => {
+        s.lastSeq = event.seq;
+        this.#sessions.emit('event', { id: s.id, event });
+      });
+      return;
     }
     const event = this.#sessions.events.append(s.id, forwarded);
     s.lastSeq = event.seq;

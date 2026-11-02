@@ -24,7 +24,7 @@ import type { Transcribe } from './voice';
 import { messageDelivery } from '@helm/protocol/message-delivery';
 import { newMessageId, retryableDelivery } from '@helm/protocol/reliable-input';
 import { money, busyStatus, shownTitle } from '../format';
-import { loadModels, saveModels } from '../modelCache';
+import { loadModels, peekModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
 import type { Decision, Item, Turn } from './types';
@@ -180,7 +180,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [rewinding, setRewinding] = useState<{ turn: Turn; allowed: boolean; restore: boolean; reason?: string } | null>(null);
   const [branching, setBranching] = useState<Turn | null>(null);
   useDismiss(menu !== null, useCallback(() => setMenu(null), []));
-  const [options, setOptions] = useState<ModelList | null>(null);
+  const [options, setOptions] = useState<ModelList | null>(() => peekModels(env.id, session.profileId));
   const [commands, setCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
   const engine = ENGINE_LABEL[session.engine] ?? session.engine;
   const status = log.loaded ? log.status : session.status;
@@ -237,7 +237,14 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // The catalogue this device last heard, then the machine's answer behind it.
   // Without the first half the model chip reads "default" and the picker is
   // empty until a CLI has been spawned and a round trip has come back.
-  useEffect(() => { setOptions(null); }, [client, env.id, session.profileId, session.id]);
+  // Each chat has its own screen, so this starts from the list in memory.
+  // It changes only when the chat moves to another account.
+  const optionsFor = useRef(`${env.id}:${session.profileId}`);
+  useEffect(() => {
+    if (optionsFor.current === `${env.id}:${session.profileId}`) return;
+    optionsFor.current = `${env.id}:${session.profileId}`;
+    setOptions(peekModels(env.id, session.profileId));
+  }, [env.id, session.profileId]);
   useEffect(() => {
     let stale = false;
     loadModels(env.id, session.profileId).then((cached) => {
@@ -629,6 +636,13 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     setMenu(null);
     await call(async () => { await client.rpc(env.id, 'session.archive', { id: session.id, archived: !session.archived }); onArchived(); });
   };
+  const pin = async () => {
+    setMenu(null);
+    await call(async () => {
+      const r = await client.rpc<{ session: Session }>(env.id, 'session.pin', { id: session.id, pinned: !session.pinnedAt });
+      onSession(r.session);
+    });
+  };
 
   // The name a session gave itself is a good guess from two prompts; this is
   // how a guess gets corrected. What is typed here is never overwritten.
@@ -852,6 +866,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
               {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
             </button>
             {parentThread && onOpenSession && <button onClick={openParent}>Open main chat</button>}
+            {!session.brain && !session.delegation && <button onClick={pin}>{session.pinnedAt ? 'Unpin chat' : 'Pin chat'}</button>}
             <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
             <button className="destructive" onClick={kill}>{session.nativeCodex ? 'Remove from Helm' : 'Delete chat'}</button>
             <p className="menu-facts">{where}</p>
@@ -901,7 +916,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         shoulder={taskList && <TodoStrip todos={taskList} />}
         banner={pending && <div ref={permissionBox} className="ask-box"><PermissionSheet key={pending.requestId} variant="banner" permission={pending} onAnswer={answer} busy={busy} onHandle={holdQuestion} /></div>}
         danger={mode?.danger} compacting={compacting || undefined}
-        foot={controls.chips} statusLine={account || limits.length > 0 || session.context ? <LimitsLine windows={limits} account={account} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages}
+        foot={controls.chips} statusLine={account || limits.length > 0 || session.context ? <LimitsLine windows={limits} account={account} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages} shrinking={preparingImages > 0}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot receive images in this chat.`)}
         commands={commands}

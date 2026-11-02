@@ -366,8 +366,10 @@ export function apply(state: LogState, e: HelmEvent): void {
     case 'item.delta': {
       const it = findItem(state.turns, e.id, e.seq);
       if (!it) return;
-      if (it.kind === 'tool' || it.kind === 'subagent') it.inputJson = (it.inputJson ?? '') + e.text;
-      else it.text += e.text;
+      // A joined row (`replace`) holds the item's whole text. A device that
+      // saved some of its pieces already sets the text, not adds it twice.
+      if (it.kind === 'tool' || it.kind === 'subagent') it.inputJson = (e.replace ? '' : it.inputJson ?? '') + e.text;
+      else it.text = (e.replace ? '' : it.text) + e.text;
       return;
     }
     case 'item.update': {

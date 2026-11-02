@@ -105,7 +105,7 @@ export function Controls({ options, session, busy, pending, onPick, onFavs, onDe
           const value = kind === 'model' ? session.model || session.engineModel : kind === 'effort' ? session.effort || session.engineEffort : session.mode;
           if (!value) return null;
           const title = kind === 'effort' ? 'thinking' : kind === 'mode' ? 'permissions' : kind;
-          const label = kind === 'model' ? shortModel(value, options?.labels, session.engine) : value;
+          const label = kind === 'model' ? shortModel(value, { [value]: prettyName(value), ...options?.labels }, session.engine) : value;
           return <span key={`reported:${kind}`} className="chip-pick" title={`${title}: ${value} (from the agent program)`}><span className="chip-label">{label}</span></span>;
         })}
         {session.permissionControl === 'none' && <span className="chip-pick" title="This agent program uses extensions (added tools) to ask for approval."><i className="cg mode"><Icon name="shield" size={13} /></i><span className="chip-label">extensions</span></span>}
@@ -113,7 +113,7 @@ export function Controls({ options, session, busy, pending, onPick, onFavs, onDe
           const title = kind === 'effort' ? 'thinking' : kind === 'mode' ? 'permissions' : kind;
           const glyph: IconName = kind === 'model' ? 'model' : kind === 'effort' ? 'effort' : kind === 'mode' ? 'shield' : kind === 'speed' ? 'bolt' : 'terminal';
           const value = kind === 'model' ? session.engineModel : kind === 'effort' ? session.engineEffort : kind === 'mode' ? session.mode : null;
-          const label = kind === 'model' && value ? shortModel(value, options?.labels, session.engine) : value || title;
+          const label = kind === 'model' && value ? shortModel(value, { [value]: prettyName(value), ...options?.labels }, session.engine) : value || title;
           return <button type="button" key={`native:${kind}`} className="chip-pick" disabled={busy}
             title={`Open ${title} in the agent program`} aria-label={`Open ${title} in the agent program${value ? `: ${label}` : ''}`}
             onClick={() => onNativeControl?.(kind)}><i className={`cg ${kind}`}><Icon name={glyph} size={13} /></i><span className="chip-label">{label}</span></button>;

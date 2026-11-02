@@ -1109,8 +1109,9 @@ export function agyModelsFromOutput(root, stdout) {
   let def = null;
   if (defLabel) def = Object.keys(labels).find((id) => labels[id] === defLabel) ?? null;
   if (def && !models.includes(def)) models.unshift(def);
-  // --effort takes low|medium|high|max; stream-json input is text-only.
-  return { default: def, models, labels, effort: null, efforts: ['low', 'medium', 'high', 'max'], images: false };
+  // --effort takes low|medium|high|max. Stream input is text only, so the
+  // driver saves pictures as files and asks the agent to open them.
+  return { default: def, models, labels, effort: null, efforts: ['low', 'medium', 'high', 'max'], images: true };
 }
 
 /** `kimi provider list --json` lists the configured providers' models. */

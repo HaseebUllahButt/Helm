@@ -2,7 +2,7 @@ import { errorMessage } from '../errors';
 import { useCopySelection } from '../useCopySelection';
 import type { Transcribe } from './voice';
 import { useDismiss } from '../useDismiss';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { recacheWarning, type Recache } from '@helm/usage/recache';
 import { Markdown } from '../Markdown';
@@ -13,7 +13,7 @@ import { LimitsLine } from './LimitsLine';
 import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { nativeConversation } from './nativeView';
-import { CompactionLine } from './Transcript';
+import { CompactionLine, GoneImage } from './Transcript';
 import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
 import { useChatKeys, useDeleteKey } from './chatKeys';
 import { Canvas, chatPages, useCanvas } from './Canvas';
@@ -31,6 +31,7 @@ import type { Decision } from './types';
 import { BackIcon, Icon, toolKind } from '../Icon';
 import { Client, chatFolder, type Environment, type Session, type Message, type ModelList, type NativeControl, type NativeAgent } from '../client';
 import { followModelRefresh } from '../modelRefresh';
+import { peekModels, saveModels } from '../modelCache';
 import { loadMessages, saveMessages } from './logCache';
 import { engineOf } from '../engines';
 import { useLiveInterval } from '../useLiveInterval';
@@ -42,6 +43,18 @@ import { StatusChip } from '../screens/ThreadRows';
  * hidden behind the round trip that opens the pty anyway.
  */
 const Terminal = lazy(() => import('../Terminal').then((m) => ({ default: m.Terminal })));
+
+/**
+ * The chats left most recently, as they were on screen. Coming back to one
+ * shows it at once: a long chat's saved copy is too big for the storage's
+ * memory and took half a second to read back (owner, 2026-11-01).
+ */
+const keptMessages = new Map<string, Message[]>();
+function keepMessages(key: string, messages: Message[]) {
+  keptMessages.delete(key);
+  keptMessages.set(key, messages);
+  while (keptMessages.size > 10) keptMessages.delete(keptMessages.keys().next().value!);
+}
 
 export function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask, onSendFolder, onOpenNative }: {
   client: Client; env: Environment; session: Session;
@@ -60,7 +73,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const isShell = session.engine === 'shell';
   const isExternal = !!session.external;
   const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...(page === undefined ? {} : { page }) }, 60_000), [client, env.id, session.id]);
-  const [messages, setMessages] = useState<Message[] | null>(null);
+  const [messages, setMessages] = useState<Message[] | null>(() => keptMessages.get(`${env.id}:${session.id}`) ?? null);
+  // What is on screen stays in memory for the next visit (see keptMessages).
+  useEffect(() => { if (messages?.length) keepMessages(`${env.id}:${session.id}`, messages); }, [messages, env.id, session.id]);
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
   /** The messages last shown, as text: a read that brings back the same chat changes nothing. */
@@ -90,12 +105,16 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
   const changedPaths = useMemo(() => git.status?.files?.map((f) => f.path) ?? [], [git.status]);
 
-  const [nativeOptions, setNativeOptions] = useState<ModelList | null>(null);
+  // A terminal chat's list, kept per account like a Helm chat's: each chat
+  // switch starts a new screen, and without it the model chip flashed a raw
+  // name or nothing until the machine answered (owner, 2026-10-31).
+  const nativeKey = `native:${session.profileId || session.engine}`;
+  const [nativeOptions, setNativeOptions] = useState<ModelList | null>(() => session.nativeCli ? peekModels(env.id, nativeKey) : null);
   const [nativeCommands, setNativeCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
   const [settingBusy, setSettingBusy] = useState(false);
   const [nativeNotice, setNativeNotice] = useState('');
   useEffect(() => {
-    setNativeOptions(null); setNativeCommands([]);
+    setNativeOptions(session.nativeCli ? peekModels(env.id, nativeKey) : null); setNativeCommands([]);
     if (!session.nativeCli) return;
     let stale = false;
     const catalog = followModelRefresh(
@@ -103,7 +122,10 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       (options) => {
         // The same tray a Helm chat has. `default` and `effort` stay empty:
         // the chips show what Claude itself reports, never an account guess.
-        if (!stale && Array.isArray(options.models)) setNativeOptions({ ...options, default: null, effort: null, speeds: [], speedByModel: {} });
+        if (stale || !Array.isArray(options.models)) return;
+        const list = { ...options, default: null, effort: null, speeds: [], speedByModel: {} };
+        void saveModels(env.id, nativeKey, list);
+        setNativeOptions(list);
       },
       () => {},
     );
@@ -116,7 +138,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       }
     });
     return () => { stale = true; catalog.stop(); off(); };
-  }, [client, env.id, session.id, session.profileId, session.nativeCli, session.engineModel, session.permissionControl]);
+  }, [client, env.id, session.id, session.profileId, session.nativeCli, session.engineModel, session.permissionControl, nativeKey]);
 
   const nativeCommand = async (command: string) => {
     if (settingBusy || sending) return;
@@ -195,7 +217,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   }, [client, env.id, session.id, isShell]);
 
   useEffect(() => {
-    if (isShell) return;
+    if (isShell || keptMessages.has(`${env.id}:${session.id}`)) return;
     let stale = false;
     loadMessages<Message>(env.id, session.id).then((cached) => {
       if (!stale && cached?.length) setMessages((now) => now ?? cached);
@@ -312,6 +334,14 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const closeOnce = useCallback(() => { if (closed.current) return; closed.current = true; onClosed(); }, [onClosed]);
   useEffect(() => { if (session.deleted) closeOnce(); }, [session.deleted, closeOnce]);
   const kill = async () => {
+    // A terminal closes at once, like a terminal app's tab. Its machine may
+    // be off (a shutdown ends the shell anyway) and then never answers, or
+    // answers only after a long wait.
+    if (isShell) {
+      client.rpc(env.id, 'session.kill', { id: session.id }).catch(() => {});
+      closeOnce();
+      return;
+    }
     try { await client.rpc(env.id, 'session.kill', { id: session.id }); closeOnce(); }
     catch (e: any) { setError(errorMessage(e)); }
   };
@@ -351,6 +381,13 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const archive = async () => {
     setMenu(false);
     try { await client.rpc(env.id, 'session.archive', { id: session.id, archived: !session.archived }); onArchived(); }
+    catch (e: any) { setError(errorMessage(e)); }
+  };
+  // A chat Helm has no record of (a found CLI chat, a terminal pane) has nothing to pin.
+  const pinnable = !/^(pane:|found:)/.test(session.id);
+  const pin = async () => {
+    setMenu(false);
+    try { onSession((await client.rpc<{ session: Session }>(env.id, 'session.pin', { id: session.id, pinned: !session.pinnedAt })).session); }
     catch (e: any) { setError(errorMessage(e)); }
   };
 
@@ -413,7 +450,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
       draft={draft} setDraft={setDraft} onSend={send} onKey={key}
       // The phone key row is for typing into a plain terminal; an agent chat
       // has its own controls. A terminal Pi stops on Esc (sessions.interrupt).
-      keys={isShell} preparing={sending || preparingImages || loadingImages || savingImages}
+      keys={isShell} preparing={sending || preparingImages || loadingImages || savingImages} shrinking={preparingImages}
       commands={session.nativeCli ? nativeCommands : undefined}
       foot={session.nativeCli ? nativeControls.chips : undefined}
       statusLine={nativeProfile || limits.length || session.context ? <LimitsLine windows={limits} account={nativeProfile || undefined} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined}
@@ -495,6 +532,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
             </>}
             {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
             {!isExternal && onSendTask && <button disabled={!env.online} onClick={onSendTask}>Send task to another machine</button>}
+            {pinnable && <button onClick={pin}>{session.pinnedAt ? 'Unpin chat' : 'Pin chat'}</button>}
             <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
             <button className="destructive" onClick={() => setKilling(true)}>{session.nativeCli ? 'Stop chat' : 'Delete chat'}</button>
             <p className="menu-facts">{where}</p>
@@ -605,11 +643,36 @@ function keepSameMessages(was: Message[] | null, next: Message[]): Message[] {
   return next.map((m, i) => was[i] && JSON.stringify(was[i]) === JSON.stringify(m) ? was[i] : m);
 }
 
+/** Messages drawn in a chat's first frame, then how many join per step. */
+const FIRST_MESSAGES = 12;
+const MORE_MESSAGES = 40;
+
 const Chat = memo(function Chat({ messages, status, compacting = false, readVisual, canvas }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader; canvas?: CanvasVisuals }) {
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
   const [unread, setUnread] = useState(false);
+  // The newest messages draw in the first frame, the older ones join in
+  // steps right after, so a chat switch shows at once (owner, 2026-11-01).
+  const [tail, setTail] = useState<number | null>(FIRST_MESSAGES);
+  const count = messages?.length ?? 0;
+  const start = tail === null || count <= tail ? 0 : count - tail;
+  useEffect(() => {
+    if (tail === null) return;
+    if (count <= tail) { if (count) setTail(null); return; }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const frame = requestAnimationFrame(() => { timer = setTimeout(() => setTail((n) => n === null || n + MORE_MESSAGES >= count ? null : n + MORE_MESSAGES), 0); });
+    return () => { cancelAnimationFrame(frame); clearTimeout(timer); };
+  }, [tail, count]);
+  // Older messages arriving above keep the reader where they were.
+  const height = useRef(0);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    if (stuck.current) el.scrollTop = el.scrollHeight;
+    else if (height.current) el.scrollTop += el.scrollHeight - height.current;
+    height.current = el.scrollHeight;
+  }, [start]);
 
   const onScroll = () => {
     const el = box.current;
@@ -641,7 +704,7 @@ const Chat = memo(function Chat({ messages, status, compacting = false, readVisu
                 : 'Send a message to start the chat.'}
             </p>
           )}
-          <Visuals.Provider value={readVisual}><CanvasContext.Provider value={canvas}>{messages?.map((m, i) => <Turn key={m.sourceId ?? i} m={m} />)}</CanvasContext.Provider></Visuals.Provider>
+          <Visuals.Provider value={readVisual}><CanvasContext.Provider value={canvas}>{messages?.slice(start).map((m, i) => <Turn key={m.sourceId ?? start + i} m={m} />)}</CanvasContext.Provider></Visuals.Provider>
           {compacting ? <CompactionLine live />
             : status === 'working' && <div className="working"><span className="shine">Working…</span></div>}
         </div>
@@ -659,7 +722,7 @@ const Turn = memo(function Turn({ m }: { m: Message }) {
       <div className="turn user">
         <div className="bubble">{!!display.attachments?.length && <div className="turn-images">{display.attachments.map((a, i) => a.data
           ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={`Image #${i + 1}${a.filename ? ` · ${a.filename}` : ''}`} loading="lazy" decoding="async" />
-          : <span key={i} className="turn-image-gone"><Icon name="image" size={14} /> {a.filename} — Helm no longer stores this image.</span>
+          : <GoneImage key={i} filename={a.filename} />
         )}</div>}{display.text}</div>
       </div>
     );

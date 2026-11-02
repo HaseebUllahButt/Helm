@@ -161,6 +161,8 @@ export interface Session {
   adopted?: boolean;
   /** Archived threads stay on the machine but are hidden from active groups. */
   archived?: boolean;
+  /** When the owner pinned it above every other chat; null or absent when not pinned. */
+  pinnedAt?: number | null;
   /** The network's single agent, hosted on its VM. */
   brain?: boolean;
   /** What the whole thread has cost and how many turns it took, so far. */

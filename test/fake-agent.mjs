@@ -12,13 +12,18 @@
 //                         with FAKE_ASK - holds the turn on a permission
 //                         request until it is answered, and only then
 //                         resolves the prompt with stopReason end_turn;
-//                         a prompt "run: <command>" asks for that command
+//                         a prompt "run: <command>" asks for that command;
+//                         a prompt "stream: <n>" first streams n words, one
+//                         chunk each, 5 ms apart, as a real CLI does;
+//                         a prompt "say-file: <path>" replies with that
+//                         file's text (Markdown, diagrams) before "done."
 //   stdin ending          exits, like a real CLI
 if (process.argv.includes('--version')) {
   console.log('devin 3000.10.21');
   process.exit(0);
 }
 
+import { readFileSync } from 'node:fs';
 const delay = Number(process.env.FAKE_TURN_MS ?? 600);
 const ask = process.env.FAKE_ASK === '1';
 const out = (m) => process.stdout.write(JSON.stringify(m) + '\n');
@@ -68,6 +73,13 @@ async function onMessage(m) {
         return reply({ stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5 } });
       }
       out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working on it ' } } } });
+      const words = Number(/(?:^|\n)stream: (\d+)/.exec((m.params.prompt ?? []).map((part) => part.text ?? '').join(''))?.[1] ?? 0);
+      for (let n = 1; n <= words; n++) {
+        out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `w${n} ` } } } });
+        await sleep(5);
+      }
+      const sayFile = /(?:^|\n)say-file: ([^\n]+)/.exec(prompt)?.[1].trim();
+      if (sayFile) out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `\n\n${readFileSync(sayFile, 'utf8')}\n\n` } } } });
       await sleep(delay);
       if (ask) {
         const rid = `perm-${m.id}`;

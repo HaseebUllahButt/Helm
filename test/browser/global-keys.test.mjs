@@ -30,6 +30,7 @@ before(async () => {
             if(window.holdStart) await new Promise(r=>{window.releaseStart=r;});
             return {session:{id:'sh1',title:'Terminal 1',cwd:params.cwd,engine:'shell',profileId:'shell',pty:true,alive:true,status:'shell'},attach:{text:'$ ',pty:true}};
           }
+          if(method==='session.kill'&&window.holdKill) return new Promise(()=>{});
           if(method==='session.title'||method==='session.archive'||method==='session.kill') return {ok:true};
           if(method==='model.list') return {models:[],modes:[]};
           if(method==='fs.list') return {path:'/home/test',entries:[]};
@@ -115,6 +116,59 @@ test('a new terminal is on screen at once, and says why when it cannot open', as
   await page.waitForFunction(()=>history.state?.stack?.at(-1)?.session?.id === 'sh1', null, {timeout:3000});
 });
 
+test('Ctrl+W closes a terminal at once, even when its machine is off and never answers', async t => {
+  const page = await pageFor(t);
+  await page.keyboard.press('Control+Alt+KeyT');
+  await page.locator('.xterm').waitFor({timeout:3000});
+  await page.evaluate(()=>{ window.holdKill = true; });
+  await page.locator('.xterm textarea').focus();
+  await page.keyboard.press('Control+KeyW');
+  await page.waitForFunction(()=>history.state?.stack?.at(-1)?.session?.id !== 'sh1', null, {timeout:3000});
+  assert.equal(await page.locator('.xterm').count(), 0, 'the terminal stayed on screen');
+  assert.ok(await page.evaluate(()=>window.calls.some(c=>c.method==='session.kill'&&c.params.id==='sh1')), 'the machine was not told to close it');
+});
+
+test('Ctrl+S folds and unfolds the sidebar, and a terminal keeps the key', async t => {
+  const page = await pageFor(t);
+  const sidebar = page.locator('aside.sidebar');
+  await page.keyboard.press('Control+KeyS');
+  await page.waitForFunction(()=>document.querySelector('aside.sidebar').classList.contains('collapsed'));
+  assert.equal(await page.evaluate(()=>localStorage.getItem('helm.sidebar-collapsed')), '1');
+  await page.keyboard.press('Control+KeyS');
+  await page.waitForFunction(()=>!document.querySelector('aside.sidebar').classList.contains('collapsed'));
+  // The canvas keeps Ctrl+S to save the file you type in.
+  await page.evaluate(()=>{ const c = document.createElement('div'); c.className = 'canvas'; c.innerHTML = '<textarea id="canvas-text"></textarea>'; document.body.append(c); });
+  await page.locator('#canvas-text').focus();
+  await page.keyboard.press('Control+KeyS');
+  assert.equal(await sidebar.evaluate(el=>el.classList.contains('collapsed')), false, 'Ctrl+S in the canvas folded the sidebar');
+  await page.evaluate(()=>document.querySelector('.canvas').remove());
+  await page.keyboard.press('Control+Alt+KeyT');
+  await page.locator('.xterm').waitFor({timeout:3000});
+  await page.locator('.xterm textarea').focus();
+  await page.keyboard.press('Control+KeyS');
+  assert.equal(await sidebar.evaluate(el=>el.classList.contains('collapsed')), false, 'Ctrl+S in a terminal folded the sidebar');
+});
+
+test('Ctrl+Alt+S opens and closes Settled, and unfolds a folded sidebar to show it', async t => {
+  const page = await pageFor(t);
+  const settled = page.locator('aside.sidebar .fold-toggle', {hasText:'Settled'});
+  const expanded = value => page.waitForFunction(v=>[...document.querySelectorAll('aside.sidebar .fold-toggle')]
+    .find(b=>b.textContent.includes('Settled'))?.getAttribute('aria-expanded') === v, value);
+  await expanded('true');
+  await page.keyboard.press('Control+Alt+KeyS');
+  await expanded('false');
+  await page.keyboard.press('Control+Alt+KeyS');
+  await expanded('true');
+  await page.keyboard.press('Control+Alt+KeyS');
+  await expanded('false');
+  await page.keyboard.press('Control+KeyS');
+  await page.waitForFunction(()=>document.querySelector('aside.sidebar').classList.contains('collapsed'));
+  await page.keyboard.press('Control+Alt+KeyS');
+  await page.waitForFunction(()=>!document.querySelector('aside.sidebar').classList.contains('collapsed'));
+  await expanded('true');
+  await settled.waitFor({state:'visible'});
+});
+
 test('the shortcuts list names both keys', async t => {
   const page = await pageFor(t);
   await page.keyboard.press('Control+Slash');
@@ -122,6 +176,8 @@ test('the shortcuts list names both keys', async t => {
   assert.match(text, /Settings/);
   assert.match(text, /Show usage, limits, and cost/);
   assert.match(text, /Open a terminal/);
+  assert.match(text, /Show or hide the sidebar/);
+  assert.match(text, /Open or close Settled/);
 });
 
 test('bare keys open nothing: every shortcut needs Ctrl/Cmd', async t => {

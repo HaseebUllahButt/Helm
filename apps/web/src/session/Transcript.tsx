@@ -24,6 +24,15 @@ const Busy = createContext(false);
 export const isCompaction = (it: Item) => it.kind === 'tool' && (it.name === 'compact' || it.name === 'contextCompaction');
 
 /** The line a compaction draws across the conversation, live while it runs. */
+/** A sent picture Helm has since deleted: one quiet line, not a box of text. */
+export function GoneImage({ filename }: { filename?: string }) {
+  return (
+    <span className="turn-image-gone" title={`${filename ? `${filename}: ` : ''}Helm deleted this image to save space.`}>
+      <Icon name="image" size={13} />Image removed
+    </span>
+  );
+}
+
 export function CompactionLine({ live, item }: { live: boolean; item?: Item }) {
   const took = item?.doneAt && item.startedAt ? item.doneAt - item.startedAt : 0;
   const label = live ? 'Summarizing chat…'
@@ -801,7 +810,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
             // A blob the log has swept past still has its name, and saying
             // so beats a browser's broken-image glyph.
             ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={`Image #${i + 1}${a.filename ? ` · ${a.filename}` : ''}`} loading="lazy" decoding="async" />
-            : <span key={i} className="turn-image-gone" title={a.filename}><Icon name="image" size={14} /> {a.filename || 'image'} — Helm no longer stores this image.</span>
+            : <GoneImage key={i} filename={a.filename} />
           ))}</div>}
           {said.text}
           <span className="bubble-meta">
@@ -894,6 +903,10 @@ function placeOf(el: HTMLElement) {
   return { anchors, offset };
 }
 
+/** Turns drawn in a chat's first frame, then how many join per step. */
+const FIRST_TURNS = 12;
+const MORE_TURNS = 40;
+
 export function Transcript({ place, turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, onRewind, pending = [], onReviewRequest, focusItem, readVisual, openAgent }: {
   /** Names this chat: leaving and coming back keeps the reader where they were. */
   place?: string;
@@ -947,8 +960,25 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
   // inside the current turn's fold. Its turn.start may already be present
   // as a sparse anchor, so comparing only the first turn misses this case.
   const historyRead = useRef<{ turns: Set<string>; items: Map<string, { text: string; command?: string; input?: Item['input'] }> } | undefined>(undefined);
+  // A chat opens on its newest turns in the first frame, and the older ones
+  // join in steps right after, so a chat switch shows at once even in a long
+  // chat (owner, 2026-11-01). Coming back to a place, or to a step someone
+  // asked for, needs every turn at once.
+  const [tail, setTail] = useState<number | null>(() => cameBack.current || focusItem ? null : FIRST_TURNS);
+  const shown = tail === null || turns.length <= tail ? turns : turns.slice(-tail);
+  useEffect(() => {
+    if (tail === null) return;
+    // A chat that fits is done; an empty one waits for its turns to arrive.
+    if (turns.length <= tail) { if (turns.length) setTail(null); return; }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // After the paint, not before it: the new chat is on screen first.
+    const frame = requestAnimationFrame(() => { timer = setTimeout(() => setTail((n) => n === null || n + MORE_TURNS >= turns.length ? null : n + MORE_TURNS), 0); });
+    return () => { cancelAnimationFrame(frame); clearTimeout(timer); };
+  }, [tail, turns.length, loaded]);
+  useEffect(() => { if (revealed) setTail(null); }, [revealed]);
   const readEarlier = () => {
     if (loadingEarlier || !onEarlier) return;
+    setTail(null);
     historyRead.current = {
       turns: new Set(turns.map(turn => turn.id)),
       items: new Map(turns.flatMap(turn => turn.items.map(item => [item.id, { text: item.text, command: item.command, input: item.input }] as const))),
@@ -1011,7 +1041,7 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
     const el = box.current;
     if (!el) return;
     const h = el.scrollHeight;
-    const first = turns[0]?.id;
+    const first = shown[0]?.id;
     const prev = seen.current;
     seen.current = { h, first };
     const read = historyRead.current;
@@ -1055,7 +1085,7 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
     } else if (prev.first !== undefined && first !== prev.first) el.scrollTop += moved = h - prev.h;
     // Growth the correction does not explain happened below: new work.
     if (h - prev.h > Math.max(0, moved) + 1) setUnread(true);
-  }, [turns, revision, status, loaded, earlier, loadingEarlier]);
+  }, [turns, revision, status, loaded, earlier, loadingEarlier, shown.length]);
   // After any move above, the reader's place is wherever they now are. The
   // correction above put the held step back where it was, so while it is
   // still there it is still the place: no need to measure every step above
@@ -1064,7 +1094,7 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
     const el = box.current;
     if (el && !stuck.current && hold.current && el.querySelector(hold.current.sel)) return;
     markHold();
-  }, [turns, revision, status, loaded, earlier, loadingEarlier]);
+  }, [turns, revision, status, loaded, earlier, loadingEarlier, shown.length]);
   useEffect(() => () => cancelAnimationFrame(holdFrame.current), []);
 
   /** Jump to the previous or next thing you asked - the landmarks of a long thread. */
@@ -1095,10 +1125,10 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
   // the rest below - the running turn's output flows under the answer instead
   // of piling up over it. One whose host is not on screen just sits where it
   // was appended.
-  const turnIds = new Set(turns.map((t) => t.id));
+  const turnIds = new Set(shown.map((t) => t.id));
   const insideByHost = new Map<string, Turn[]>();
   const hostedIds = new Set<string>();
-  for (const t of turns) {
+  for (const t of shown) {
     if (!t.insideOf || !turnIds.has(t.insideOf)) continue;
     insideByHost.set(t.insideOf, [...(insideByHost.get(t.insideOf) ?? []), t]);
     hostedIds.add(t.id);
@@ -1128,7 +1158,7 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
     return part;
   };
   const flow: ReactNode[] = [];
-  for (const t of turns) {
+  for (const t of shown) {
     if (hostedIds.has(t.id)) continue;
     const hosted = insideByHost.get(t.id)?.sort((a, b) => (a.insideAt ?? 0) - (b.insideAt ?? 0));
     if (!hosted?.length) { flow.push(view(t)); continue; }
@@ -1156,7 +1186,7 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
         }}>
           {/* A chat opens on its last screenful, because that is what you came
               for; the rest of it is a tap away rather than a wait. */}
-          {loaded && earlier && (
+          {loaded && earlier && shown === turns && (
             <button className="earlier" onClick={readEarlier} disabled={loadingEarlier}>
               {loadingEarlier ? 'Loading…' : 'Earlier in this chat'}
             </button>

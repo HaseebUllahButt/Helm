@@ -15,6 +15,7 @@ import { modeFor } from '../modes.js';
 import { HELM_DIR, expand } from '../paths.js';
 import { codexSessionState } from '../transcript.js';
 import { formatReset, planName, quotaBar, windowLabel } from '../quota.js';
+import { resetCredits } from '../codex-limits.js';
 import { codexHelperHistory } from '../delegation.js';
 import { parse as parseToml } from 'smol-toml';
 
@@ -154,6 +155,11 @@ export function formatRateLimits(result, { now = Date.now() } = {}) {
     if (!lines.length) continue;
     const name = snap.limitName || snap.limitId || snap.limit_name || snap.limit_id;
     sections.push(many && name ? `*${mdEscape(name)}*  \n${lines.join('  \n')}` : lines.join('  \n'));
+  }
+  const banked = resetCredits(result.rateLimitResetCredits);
+  if (banked) {
+    const next = banked.endsAt?.find((at) => at * 1000 > now);
+    sections.push(`**Banked resets:** ${banked.available || 'none'}${banked.available && next ? ` · the next one ends ${formatReset(next, now)}` : ''}`);
   }
   return sections.length ? `### Limits\n\n${sections.join('\n\n')}` : '';
 }
@@ -1313,7 +1319,7 @@ export class CodexDriver extends Driver {
         // the rollout's snapshot is the fallback either way.
         const account = await this.#call('account/read', {}).catch(() => null);
         const live = await this.#call('account/rateLimits/read', null).catch(() => null);
-        if (live) this.#rateLimits = live;
+        if (live) { this.#rateLimits = live; this.#tookLimits(live); }
         else if (!this.#rateLimits && this.#rolloutState.rateLimits) {
           this.#rateLimits = { rateLimits: this.#rolloutState.rateLimits };
         }
@@ -1413,6 +1419,7 @@ export class CodexDriver extends Driver {
           this.#call('account/usage/read', {}),
           this.#call('account/rateLimits/read', null).catch(() => null),
         ]);
+        if (rateLimits) this.#tookLimits(rateLimits);
         return formatAccountUsage(activity, view, rateLimits);
       }
       case 'diff': {
@@ -1829,6 +1836,13 @@ export class CodexDriver extends Driver {
       options: [{ id: 'deny', role: 'deny', label: 'Keep denied' }, { id: 'allow', role: 'allow', label: 'Allow anyway' }],
       defaultTo: 'deny', allowEdit: false,
       codex: { method: 'thread/approveGuardianDeniedAction', params } });
+  }
+
+  /** A full read also names the banked resets, which the Usage screen keeps. */
+  #tookLimits(live) {
+    if (live.rateLimits || live.rateLimitResetCredits) {
+      this.push('limits', { ...(live.rateLimits ? { codex: live.rateLimits } : {}), ...(live.rateLimitResetCredits ? { codexResets: live.rateLimitResetCredits } : {}) });
+    }
   }
 
   onRateLimits(rateLimits) {

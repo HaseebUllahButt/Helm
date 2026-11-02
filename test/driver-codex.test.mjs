@@ -507,7 +507,14 @@ test('/usage views format the account activity API as Markdown', () => {
     'gpt': { limitId: 'gpt', primary: { usedPercent: 2 } },
   } }, { now });
   assert.match(two, /\*co\\\*dex\*/);
-  assert.match(two, /\*gpt\*/);
+  assert.match(two, /\*gpt\*/);  // Banked resets close the card, with the soonest end still ahead.
+  const banked = formatRateLimits({ rateLimits: { primary: { usedPercent: 5, windowDurationMins: 300 } },
+    rateLimitResetCredits: { availableCount: 2, credits: [
+      { status: 'available', expiresAt: now / 1000 - 60 },
+      { status: 'available', expiresAt: now / 1000 + 3 * 3600 },
+    ] } }, { now });
+  assert.match(banked, /\*\*Banked resets:\*\* 2 · the next one ends in [23]h \d+m/);
+  assert.match(formatRateLimits({ rateLimitResetCredits: { availableCount: 0, credits: [] } }, { now }), /\*\*Banked resets:\*\* none/);
 });
 
 test('/pwd is handled locally as a completed command turn', async () => {

@@ -43,6 +43,11 @@
 - **Not yet driven;** the fake agent reports tiny usage and no limits. The
   "Compact at" setting applies to every chat on the account, on every
   machine.
+- **Codex banked resets:** only `account/rateLimits/read` names them, so
+  `usage.limits` asks a private `codex app-server` at most every 15 minutes,
+  and only for Codex accounts with chats. To drive it, add a codex profile
+  whose `cmd` answers that read, start a chat on it, and open Usage
+  (Ctrl+Shift+4): the account shows "2 banked resets · the next one ends …".
 - **Traps:** Claude's live limit check returns 403 on the laptop; values
   can come from saved reports.
 - **Tests:** `test/browser/chat-limits`, `context-meter`, `compaction`;

@@ -131,6 +131,11 @@ export class Sessions extends EventEmitter {
   // Apply the same helper visibility rule as list() to every published update.
   emit(kind, ...args) {
     if (kind === 'session' && args[0]?.delegations) args[0] = { ...args[0], delegations: this.#delegation.visibleDelegations(args[0]) };
+    // The log keeps a picture as a reference to its file. A live event sent
+    // that way showed the owner's picture as removed on every open screen.
+    if (kind === 'event' && this.events?.hydrate && args[0]?.event?.attachments?.some((a) => a?.ref && !a.data)) {
+      args[0] = { ...args[0], event: this.events.hydrate(args[0].id, args[0].event) };
+    }
     return super.emit(kind, ...args);
   }
   #index = new Map();
@@ -2264,6 +2269,20 @@ export class Sessions extends EventEmitter {
     return { ok: true, session: wire(s) };
   }
 
+  /**
+   * Pinned chats sit above every other chat in the sidebar. Kept on the
+   * machine, not in one browser, so the pin shows on every device.
+   * Pinning does not make a chat newer: updatedAt stays.
+   */
+  pin(id, pinned = true) {
+    if (EXTERNAL.test(id)) throw new Error('Helm cannot pin this chat. Open it in Helm first.');
+    const s = this.get(id);
+    s.pinnedAt = pinned ? Date.now() : null;
+    this.#save();
+    this.emit('session', s);
+    return { ok: true, session: wire(s) };
+  }
+
   // After a daemon restart (session-resume.js)
   adoptTerminals() { return this.#resumer.adoptTerminals(); }
   async resume() {
@@ -2333,6 +2352,7 @@ export class Sessions extends EventEmitter {
     this.terminals.detach?.();
     this.nativeTerminals.detach?.();
     this.procs.detach?.();
+    this.events.flushDeltas?.();
     // Stopping settles turns and drivers, which change the index again.
     this.flush();
   }

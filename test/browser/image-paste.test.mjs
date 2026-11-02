@@ -47,10 +47,10 @@ async function pageFor(t){
   const p=await browser.newPage();t.after(()=>p.close()); p.on("pageerror", e=>t.diagnostic(e.message));
   await p.route('http://helm.test/**',r=>r.fulfill({contentType:'text/html',body:'<div id="root"></div>'}));
   await p.goto('http://helm.test/');await p.addScriptTag({content:script});await p.locator('textarea').waitFor();
-  await p.waitForFunction(()=>!document.querySelector('.attach-status'));return p;
+  await p.waitForFunction(()=>!document.querySelector('[data-preparing]'));return p;
 }
 async function paste(p, count=1){
-  await p.waitForFunction(()=>!document.querySelector('.attach-status'));
+  await p.waitForFunction(()=>!document.querySelector('[data-preparing]'));
   await p.evaluate(async count=>{
   const c=document.createElement('canvas');c.width=32;c.height=24;c.getContext('2d').fillRect(0,0,32,24);
   const blob=await new Promise(resolve=>c.toBlob(resolve,'image/png'));
@@ -65,7 +65,7 @@ async function reload(p,mode){
   await p.reload();await p.addScriptTag({content:script});
   if(mode==='Driven')await p.evaluate(()=>window.showDriven());
   await p.locator('textarea').waitFor();
-  await p.waitForFunction(()=>!document.querySelector('.attach-status'));
+  await p.waitForFunction(()=>!document.querySelector('[data-preparing]'));
 }
 for(const mode of ['Native','Driven']){
   test(`${mode} draft images survive reload, removals and failed sends; successful sends clear them`,async t=>{
@@ -126,11 +126,14 @@ for(const mode of ['Native','Driven']){
     const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
     await paste(p);
     await p.waitForFunction(()=>document.querySelector('textarea').value.includes('[Image #1]'));
+    // A chat switch loads saved draft pictures; that is not "making images smaller".
+    await p.evaluate(()=>{window.sawShrink=false;new MutationObserver(()=>{if(document.body.innerText.includes('Making images smaller'))window.sawShrink=true;}).observe(document.body,{subtree:true,childList:true,characterData:true});});
     for(const [env,id] of [['other-machine',mode==='Driven'?'driven-image-test':'native-image-test'],['laptop','other-chat']]){
       await p.evaluate(({mode,env,id})=>window[`show${mode}`](env,id),{mode,env,id});
-      await p.waitForFunction(()=>!document.querySelector('.attach-preview')&&!document.querySelector('.attach-status'));
+      await p.waitForFunction(()=>!document.querySelector('.attach-preview')&&!document.querySelector('[data-preparing]'));
       assert.equal(await p.locator('textarea').inputValue(),'');
     }
+    assert.equal(await p.evaluate(()=>window.sawShrink),false);
     await p.evaluate(mode=>window[`show${mode}`](),mode);
     await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===1);
   });

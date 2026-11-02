@@ -36,6 +36,31 @@ Use plain text for reviews and progress reports. Create or publish a visual
 only when the owner asks. Skills must follow the owner's chosen format.
 Report supported findings without a fixed count.
 
+## Hit every surface
+
+The most common defect: a change works on the path you tested and is
+missing everywhere else. Before you call work done, go through this list
+and say which items applied:
+
+- **Ways in.** A feature in the chat is often also in Settings, the
+  palette, a Ctrl/Cmd shortcut, the sidebar menu and the `helm` command.
+- **Screens.** Phone and computer widths; dark, navy and light themes;
+  the desktop app window.
+- **Chat kinds.** Chats Helm runs, native chats the owner started in a
+  terminal, helpers, and quick chats with no folder.
+- **AI tools.** Each CLI needs a decision, even "not supported here". See
+  [docs/engines.md](docs/engines.md).
+- **Agents.** What the owner can do, an agent usually needs through a
+  `helm` command, and the notes in `delegation.js` must stay true.
+- **Machines.** This machine, another machine through the hub, a machine
+  that is offline, and a machine that still runs the older Helm.
+- **Restart.** Every update restarts Helm. State, open chats and
+  half-finished steps must come back.
+- **Way back.** If you add a way in, add the way out and a way to see it:
+  close needs reopen, hide needs show.
+- **Words and docs.** New text a person sees follows the writing rules.
+  Check that `docs/` and `helm <command> --help` are still true.
+
 ## Testing
 
 - While you work, run the test files you touch by name:
@@ -89,6 +114,7 @@ Report supported findings without a fixed count.
 
 Docs hold only decisions, cross-component rules and hidden traps; the code and
 `git log` hold the rest. Rewrite or delete old text, never append.
+[docs/README.md](docs/README.md) lists every doc and the full rules.
 
 ## Words the owner uses
 

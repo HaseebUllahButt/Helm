@@ -1320,6 +1320,38 @@ test('a direct agent exchange does not also wake the parent with a duplicate res
   assert.ok(sessions.history(child.id).events.some(e => e.type === 'turn.start' && e.source === 'agent' && e.inputId));
 });
 
+test('a helper that ends its parent\'s follow-up without a reply still reports to the parent', async t => {
+  const { AgentMessages } = await import('../packages/connect/src/agent-messages.js');
+  const { InputDelivery } = await import('../packages/connect/src/input-delivery.js');
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Fix B1' });
+  const delivery = new InputDelivery(sessions, { dir: join(process.env.HELM_DIR, `receipts-${parent.id}`) });
+  const messages = new AgentMessages({ sessions, delivery, self: 'local', dir: join(process.env.HELM_DIR, `messages-${parent.id}`), rpc: () => assert.fail('local only') });
+  sessions.sentAgentMessage = (from, to, since) => messages.sentSince(from, to, since);
+  drivers.get(child.id).finish();
+  await new Promise(resolve => setImmediate(resolve));
+  await sessions.delegationResult(child.id, { consume: true, parentId: parent.id });
+  const notices = () => sessions.history(parent.id).events.filter(e => e.type === 'turn.start' && /A delegated task finished/.test(e.text ?? '')).length;
+  const before = notices();
+  const d = drivers.get(child.id);
+  // The parent sends review findings; the helper fixes them and only writes its own chat.
+  d.engineSessionId = randomUUID();
+  await messages.send({ id: parent.id, to: { env: 'local', id: child.id }, text: 'Fix B2 too', messageId: 'a'.repeat(32) });
+  assert.ok(sessions.history(child.id).events.some(e => e.type === 'turn.start' && e.source === 'agent'));
+  d.finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(notices(), before + 1, 'the parent hears that the follow-up is done');
+  // The same follow-up answered with helm reply needs no second report.
+  await sessions.delegationResult(child.id, { consume: true, parentId: parent.id });
+  d.engineSessionId = randomUUID();
+  await messages.send({ id: parent.id, to: { env: 'local', id: child.id }, text: 'Fix B3 too', messageId: 'b'.repeat(32) });
+  await messages.send({ id: child.id, text: 'B3 fixed', messageId: 'c'.repeat(32), replyTo: 'b'.repeat(32) });
+  d.finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(notices(), before + 1);
+});
+
 test('reading five helper replies removes their real parent queue tickets without requeuing on retry',async t=>{
   const {AgentMessages}=await import('../packages/connect/src/agent-messages.js');
   const {InputDelivery}=await import('../packages/connect/src/input-delivery.js');

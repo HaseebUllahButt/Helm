@@ -8,6 +8,8 @@ import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { browserArgs, ignoredBrowserArgs } from './browser-identity.js';
+import { systemChromium, launchTarget } from './chromium-find.js';
+export { systemChromium, launchTarget, refreshBrowsers } from './chromium-find.js';
 
 const SCREEN_KEYS = ['WAYLAND_DISPLAY', 'DISPLAY', 'XAUTHORITY'];
 const pickScreen = env => Object.fromEntries(SCREEN_KEYS.filter(key => env[key]).map(key => [key, env[key]]));
@@ -44,23 +46,9 @@ export const canOpenWindow = (env = process.env, platform = process.platform, de
 };
 
 // Any Chromium-based browser the owner has installed works: Helm drives it
-// through Chromium's own channel. Plain Chromium and Chrome come first, then
-// the others. Playwright's build is the fallback when none is installed or it
-// will not start.
-const LINUX_BROWSERS = ['chromium', 'chromium-browser', 'google-chrome-stable', 'google-chrome', 'brave', 'brave-browser',
-  'microsoft-edge-stable', 'microsoft-edge', 'vivaldi-stable', 'vivaldi', 'helium-browser', 'helium'];
-const MAC_BROWSERS = ['Chromium', 'Google Chrome', 'Brave Browser', 'Microsoft Edge', 'Vivaldi', 'Helium'];
-const WINDOWS_BROWSERS = ['Chromium/Application/chrome.exe', 'Google/Chrome/Application/chrome.exe', 'BraveSoftware/Brave-Browser/Application/brave.exe',
-  'Microsoft/Edge/Application/msedge.exe', 'Vivaldi/Application/vivaldi.exe'];
-/** Where each browser may be installed, in order of preference. */
-export const browserPaths = (env = process.env, platform = process.platform) => {
-  if (platform === 'darwin') return MAC_BROWSERS.map(name => `/Applications/${name}.app/Contents/MacOS/${name}`);
-  if (platform === 'win32') return WINDOWS_BROWSERS.flatMap(path => [env.LOCALAPPDATA, env.ProgramFiles, env['ProgramFiles(x86)']].filter(Boolean).map(root => join(root, path)));
-  // A service has a short PATH, so the usual folders are always searched too.
-  const folders = [...new Set([...(env.PATH || '').split(':').filter(Boolean), '/usr/local/bin', '/usr/bin', '/snap/bin'])];
-  return LINUX_BROWSERS.flatMap(name => folders.map(folder => join(folder, name)));
-};
-export const systemChromium = (env = process.env, platform = process.platform) => browserPaths(env, platform).find(existsSync);
+// through Chromium's own channel. `systemChromium` (chromium-find.js) finds
+// them by file evidence, not by a name list. Playwright's build is the
+// fallback when none is installed or it will not start.
 
 /**
  * One Chromium per thread, with its own profile folder, so its tabs are tabs
@@ -76,14 +64,20 @@ export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
   if (process.platform === 'linux') args.push('--ozone-platform-hint=auto');
   const running = await attachWindow(chromium, profileDir);
   if (running) return running;
-  const system = process.env.HELM_WINDOW_CHROMIUM || systemChromium();
-  if (system) { try { return await startWindow(chromium, system, profileDir, args, { ...process.env, ...screenEnv() }); } catch { /* Playwright's way below */ } }
+  // A set path has no launcher prefix; otherwise the best browser keeps its
+  // package launcher (Flatpak starts through `flatpak run <id>`).
+  const target = process.env.HELM_WINDOW_CHROMIUM ? { command: process.env.HELM_WINDOW_CHROMIUM, args: [] } : launchTarget();
+  const system = target?.command;
+  if (target) { try { return await startWindow(chromium, target.command, profileDir, args, { ...process.env, ...screenEnv() }, target.args); } catch { /* Playwright's way below */ } }
   // No "controlled by automated test software" bar: it is the owner's window.
   // Chromium's own sandbox stays on, so no "--no-sandbox" warning bar either;
   // only a machine where the sandbox cannot start goes without it. A window
   // started this way closes when Helm does.
   const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ignoredBrowserArgs, args, timeout: 15000, env: { ...process.env, ...screenEnv() } };
-  const attempts = [...(system ? [{ executablePath: system }, { executablePath: system, chromiumSandbox: false }] : []), {}, { chromiumSandbox: false }];
+  // Playwright takes a plain executable only; a launcher prefix (Flatpak) has
+  // no path to pass, so fall back to Playwright's own Chromium there.
+  const plain = system && !target.args?.length ? system : null;
+  const attempts = [...(plain ? [{ executablePath: plain }, { executablePath: plain, chromiumSandbox: false }] : []), {}, { chromiumSandbox: false }];
   let failure;
   for (const extra of attempts) {
     try { const context = await chromium.launchPersistentContext(profileDir, { ...options, ...extra }); context.helmPatched = true; return context; } catch (error) { failure = error; }
@@ -167,12 +161,13 @@ async function attachWindow(chromium, profileDir) {
  * systemd scope), so restarting Helm never closes the window. Helm talks to
  * it on a port only this machine can reach, written in the profile folder.
  */
-async function startWindow(chromium, executable, profileDir, args, env = process.env) {
+async function startWindow(chromium, executable, profileDir, args, env = process.env, prefix = []) {
   rmSync(join(profileDir, PORT_FILE), { force: true });
   // Open the first window at the requested page, after its logins and input
   // hooks are ready. An unused New Tab page also makes the driver set up a
-  // second page before it can start the one the owner asked for.
-  const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--no-startup-window', ...args];
+  // second page before it can start the one the owner asked for. A launcher
+  // prefix (Flatpak's `run <id>`) comes before Chromium's own flags.
+  const argv = [...prefix, `--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--no-startup-window', ...args];
   const scoped = process.platform === 'linux' && !process.env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
   for (const [command, list] of [...(scoped ? [[scoped, ['--user', '--scope', '--collect', '--quiet', executable, ...argv]]] : []), [executable, argv]]) {
     const child = spawn(command, list, { detached: true, stdio: 'ignore', env });
