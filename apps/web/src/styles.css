@@ -2676,6 +2676,11 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .home-search svg { flex: none; color: var(--icon); }
 /* Search and New chat share one slim line: the search box, then a square plus. */
 .side-actions { display: flex; gap: 6px; margin: 0 0 8px; }
+.phone-machines { display: none; }
+@media (max-width: 899px) {
+  .phone-machines { display: block; margin-bottom: 12px; }
+  .sidebar .phone-machines .row.machine { min-height: 44px; }
+}
 .side-actions .home-search { margin: 0; height: 32px; gap: 7px; padding: 0 8px 0 10px; font-size: var(--t-meta); border-radius: 9px; }
 .side-actions .home-search.new { flex: none; width: 32px; padding: 0; justify-content: center; }
 .side-actions .home-search.new svg { color: inherit; }

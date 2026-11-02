@@ -194,10 +194,12 @@ export class ClaudeDriver extends Driver {
     this.instructions = opts.instructions || null;
     this.delegated = !!opts.delegated;
     // Helm is an interactive chat client using Claude's stream protocol.
-    // Print mode otherwise labels it sdk-cli, which Claude's native resume
-    // picker deliberately hides. Use the supported interactive-client path;
-    // child tasks remain SDK sessions rather than cluttering that picker.
-    this.env = { ...this.env, CLAUDE_CODE_ENTRYPOINT: this.delegated ? 'sdk-cli' : 'claude-vscode' };
+    // Print mode otherwise labels it sdk-cli. Claude sends that label with
+    // every request, and Anthropic counts sdk-labelled use against the
+    // 5-hour limit faster than its own apps (Oct 2026). Helpers get the same
+    // client label: they may then show in Claude's own resume list, while
+    // Helm still hides them by conversation id (isDelegatedConversation).
+    this.env = { ...this.env, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' };
     // Claude keeps a chat's saved context for an hour on a subscription but
     // only five minutes for the helpers its own Agent tool starts, so a
     // helper that pauses for a build re-reads everything at full price.

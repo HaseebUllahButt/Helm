@@ -1423,6 +1423,18 @@ function Shell({ client, conn, onSignOut }: {
             </button>
             </div>
 
+            {!wide && envs.length > 0 && <div className="phone-machines">
+              <div className="section">Machines</div>
+              <div className="rows plain">
+                {envs.map((e) => <button key={e.id} type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
+                  <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+                  <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
+                  <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
+                  <span className="chev"><Icon name="forward" size={15} /></span>
+                </button>)}
+              </div>
+            </div>}
+
             {pinnedNow.length > 0 && (
               <Fold
                 shelf defaultOpen title="Pinned" count={pinnedNow.length} remember="sidebar:pinned"
