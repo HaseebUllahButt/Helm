@@ -28,7 +28,7 @@ export const failedThread = (s: Thread) =>
 
 export function moodOf(s: Thread, unread: boolean): ThreadMood {
   if (s.status === 'blocked') return 'needs';
-  // A thread still working with a snoozed alert on a helper is, here, working.
+  // A thread still working while a helper waits on you is, here, working.
   if (runningThread(s)) return 'working';
   if (failedThread(s)) return 'failed';
   if (needsAttention(s)) return 'needs';

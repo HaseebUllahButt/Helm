@@ -19,8 +19,6 @@ These are proposals, not claims about measured time savings.
    The existing “Continue in a new chat” action already covers finished sidebar chats.
 3. Save unfinished project sends. Reopen their status after leaving the screen.
    Keep the same send identity when a reply is lost. First prove duplicate prevention across a restart.
-4. Keep snoozed requests consistent across devices.
-   A request hidden on the laptop should stay hidden on the phone until its snooze ends.
 
 ## Build the local assistant in stages
 
