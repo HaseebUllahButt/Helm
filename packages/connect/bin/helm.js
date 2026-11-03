@@ -1639,7 +1639,9 @@ async function shareCmd() {
     const machines = Object.values(net.machines).filter((m) => !net.revoked?.[m.id]);
     const rows = await Promise.all(machines.map(async (m) => {
       try {
-        const { shares } = m.id === net.self ? { shares: local.listShares().map(local.publicShare) }
+        // The webhook Spin lives only in the running Helm, not in shares.json.
+        const { shares } = m.id === net.self ? { shares: [...local.listShares().map(local.publicShare),
+          ...(await hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 3000, budget: 3000 }).catch(() => ({ shares: [] }))).shares.filter((x) => x.automation)] }
           : await hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 5000, budget: 6000 });
         return shares.map((x) => ({ ...x, machine: m.name }));
       } catch { return []; }
@@ -1648,7 +1650,8 @@ async function shareCmd() {
     if (!all.length) { console.log('\n  No Spins are open. Run helm share <port> [--name <name>] [--password <pw>].\n'); return; }
     console.log('');
     for (const x of all) {
-      const left = x.expiresAt ? `  ends in ${Math.max(1, Math.round((x.expiresAt - Date.now()) / 60_000))} min` : '  kept';
+      const left = x.automation ? '  webhooks for scheduled tasks; stop pauses them'
+        : x.expiresAt ? `  ends in ${Math.max(1, Math.round((x.expiresAt - Date.now()) / 60_000))} min` : '  kept';
       console.log(`  ${link(x.name)}  ->  ${x.machine}:${x.port}${x.private ? '  (private)' : x.password ? '  (password)' : ''}${left}`);
     }
     console.log('');
@@ -1658,8 +1661,21 @@ async function shareCmd() {
   if (verb === 'stop' || verb === 'rm' || verb === 'remove') {
     const name = args[0];
     if (!name) die('usage: helm share stop <name> [--on <machine>]');
-    const { removed } = await call(M.SHARE_REMOVE, { name });
-    console.log(removed ? `\n  Stopped ${link(name)}.\n` : `\n  ${where} is not sharing "${name}"\n`);
+    let { removed, paused } = await call(M.SHARE_REMOVE, { name });
+    // The webhook Spin is not in shares.json; only the running Helm can stop it.
+    if (!removed && target === net.self && /^helm-hooks-/.test(name)) {
+      ({ removed, paused } = await hubRpc(net, net.self, M.SHARE_REMOVE, { name }, { timeout: 10_000 })
+        .catch((error) => die(`Helm could not stop ${name}: ${error.message}`)));
+    }
+    if (!removed) { console.log(`\n  ${where} is not sharing "${name}"\n`); return; }
+    console.log(`\n  Stopped ${link(name)}.`);
+    if (paused?.length) {
+      console.log(paused.length === 1 ? '  Helm paused this webhook task. It keeps its link, but takes no posts:'
+        : `  Helm paused these ${paused.length} webhook tasks. They keep their links, but take no posts:`);
+      for (const task of paused) console.log(`    ${task.id.slice(0, 8)}  ${task.name}`);
+      console.log(`  Start one again with: helm schedule resume <id>${on ? ` --on ${on}` : ''}`);
+    }
+    console.log('');
     return;
   }
 

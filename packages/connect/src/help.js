@@ -302,7 +302,9 @@ const DETAILS = {
     --link           With show: print the full webhook link. It holds a password.
   pause keeps the task and its webhook link. resume starts it again.
   remove deletes the task for good, and its webhook link stops for good.
-  A restart of Helm does not pause a task.`,
+  A restart of Helm does not pause a task.
+  Webhook tasks share one Spin per machine (helm-hooks-...).
+  Stop on that Spin pauses every webhook task there.`,
 
   spin: `
   This command runs helm share.

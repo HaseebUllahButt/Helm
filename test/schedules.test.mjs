@@ -257,3 +257,23 @@ test('a send cut off by a Helm restart does not turn the task off', async t => {
   const saved = new Schedules(f).list().schedules[0];
   assert.equal(saved.enabled, true); assert.ok(saved.dispatching);
 });
+
+test('Stop on the webhook Spin pauses only webhook tasks, and resume opens it again', async t => {
+  const { Daemon } = await import('../packages/connect/src/agent.js');
+  const f = setup(t), scheduler = new Schedules({ ...f, shareName: 'helm-hooks-stop' });
+  t.after(() => scheduler.stop());
+  const timer = scheduler.save({ sessionId: 'thread', prompt: 'Timer', intervalMinutes: 5 }).schedule;
+  const hook = scheduler.save({ sessionId: 'thread', name: 'PR hook', prompt: '{{body}}', type: 'webhook' }).schedule;
+  await scheduler.listen();
+  const dispatch = (method, params) => Daemon.prototype.dispatch.call({ schedules: scheduler }, method, params);
+  assert.equal(scheduler.share().name, 'helm-hooks-stop');
+  assert.deepEqual(await dispatch('share.remove', { name: 'HELM-HOOKS-STOP' }), { removed: true, paused: [{ id: hook.id, name: 'PR hook' }] });
+  assert.equal(scheduler.share(), null);
+  const saved = new Schedules(f).list().schedules;
+  assert.equal(saved.find(s => s.id === hook.id).enabled, false);
+  assert.equal(saved.find(s => s.id === timer.id).enabled, true);
+  assert.deepEqual(await dispatch('share.remove', { name: 'helm-hooks-stop' }), { removed: false, paused: [] });
+  assert.deepEqual(await dispatch('share.remove', { name: 'some-other-link' }), { removed: false });
+  await dispatch('schedule.save', { id: hook.id, enabled: true });
+  assert.equal(scheduler.share().name, 'helm-hooks-stop');
+});

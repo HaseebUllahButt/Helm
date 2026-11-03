@@ -202,8 +202,16 @@ export class Schedules {
       }
     } finally { this.ticking = false; }
   }
+  // The webhook Spin is open while a webhook task is on. Stop on it pauses
+  // them all; `helm schedule resume` opens it again.
   share() {
-    return this.port && this.records.some(r => r.type === 'webhook') ? { name: this.shareName, port: this.port, automation: true, createdAt: 0 } : null;
+    return this.port && this.records.some(r => r.type === 'webhook' && r.enabled) ? { name: this.shareName, port: this.port, automation: true, createdAt: 0 } : null;
+  }
+  closeWebhooks() {
+    const paused = this.records.filter(r => r.type === 'webhook' && r.enabled);
+    for (const record of paused) record.enabled = false;
+    if (paused.length) this.persist();
+    return paused.map(({ id, name }) => ({ id, name }));
   }
   async listen() {
     if (this.server || !this.shareName) return;

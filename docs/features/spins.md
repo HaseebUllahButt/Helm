@@ -26,6 +26,17 @@ for websites that cannot run inside a frame.
   `share-flow`, `share-recovery`, `share-input`, `tunnel-flow`, `tunnel-ports`, `caddy`, `proxy`;
   `test/browser/private-links`.
 
+## The webhook Spin
+- **Rules:** webhook schedules on a machine share one Spin,
+  `helm-hooks-<id>`. It is not in `shares.json`: the running Helm lists it
+  while a webhook task is on. Stop (app or `helm share stop`) pauses every
+  webhook task there; `helm schedule resume` opens it again. An older
+  machine cannot stop it; the app says so.
+- **Prove:** `$V rpc schedule.save` a `"type":"webhook"` task on a chat.
+  Spins shows "Stop pauses its webhook tasks". Press Stop: the row goes and
+  a note names `helm schedule resume`.
+- **Tests:** `test/schedules`, `share-cli`.
+
 ## Private links
 - **Prove:** `test/browser/private-spin-e2e` runs the real sign-in, share
   gate, daemon tunnels and plain Vite behind a private TLS gateway. It

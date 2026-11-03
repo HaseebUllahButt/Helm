@@ -95,6 +95,7 @@ without an owner request.
   unless `--link`.
 - **Rules:** pause needs no checks, so it works for an archived or deleted
   chat. Resume checks the chat. A Helm restart during a run keeps the task
-  on and its saved turn, so the next Helm sends it once.
+  on and its saved turn, so the next Helm sends it once. Stop on the
+  webhook Spin pauses webhook tasks (see spins.md).
 - **Tests:** `test/schedules`, `schedule-cli`, `usage-recovery`,
   `shell-task-alarm`.

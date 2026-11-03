@@ -1865,6 +1865,11 @@ export class Daemon {
         return { share: this.#shareView(addShare(p)) };
       }
       case M.SHARE_REMOVE:
+        // The webhook Spin is not in shares.json: stopping it pauses its tasks.
+        if (this.schedules?.shareName && String(p.name ?? '').toLowerCase() === this.schedules.shareName) {
+          const paused = this.schedules.closeWebhooks();
+          return { removed: paused.length > 0, paused };
+        }
         return { removed: removeShare(p.name) };
 
       case M.FORWARD_LIST:
