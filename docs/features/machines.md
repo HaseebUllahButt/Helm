@@ -71,9 +71,14 @@ owner's home or network to bypass this check.
   status**, not another send. A stopped send's **Retry** uses its original
   destination. Git history travels with current Send; dependencies and caches
   stay behind. It does not use GitHub; a new agent rebuilds dependencies.
+  Task sends save their request number and content before sending. Reopening
+  Send keeps that request until its confirmed result is dismissed. Source
+  machines resume saved copies and queued delivery after restart. A known
+  target refusal waits for an explicit retry. Unconfirmed delivery must never
+  become a new task number.
 - **Tests:** `test/transfers`, `task-transfer`, `transfer-cli`,
   `transfer-check`, `transfer-activity`, `code-transfer`, `handoffs`,
-  `send-engine`, `send-recovery`; `test/browser/transfers`, `send-v2`.
+  `send-engine`, `send-recovery`, `task-send`; `test/browser/transfers`, `send-v2`.
 
 ## Move a chat to another machine
 - **Reach:** ⋯ on a sidebar row or in the chat → **Move to another machine**.

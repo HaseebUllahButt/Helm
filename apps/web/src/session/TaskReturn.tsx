@@ -12,6 +12,7 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
   const source = transfer.role === 'source';
   const returned = transfer.status === 'returned';
   const conflict = transfer.status === 'conflict';
+  const sending = ['sending', 'copying', 'queued', 'failed'].includes(transfer.status);
   const openOriginal = async () => {
     if (!original || !onOpenSession) return;
     setBusy(true); setError('');
@@ -31,11 +32,16 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
   };
   return <div className="banner" role="status">
     <strong>{source
-      ? returned ? 'Task returned here' : conflict ? 'Returned changes need review' : `Task sent to ${transfer.machineName}`
+      ? transfer.status === 'failed' ? 'Task send failed'
+        : transfer.status === 'queued' ? `Task waiting to reach ${transfer.machineName}`
+        : sending ? `Sending task to ${transfer.machineName}`
+        : returned ? 'Task returned here' : conflict ? 'Returned changes need review' : `Task sent to ${transfer.machineName}`
       : returned ? `Task returned to ${transfer.machineName}` : conflict ? `Changes need review on ${transfer.machineName}`
         : `Finished changes return to ${transfer.machineName}`}</strong>
     <p className="note">{source
-      ? returned ? 'Your project is updated. Continue in this chat.'
+      ? transfer.status === 'failed' ? 'Open Send to check the task and retry.'
+        : sending ? 'The task has not started there. Helm keeps the saved send.'
+        : returned ? 'Your project is updated. Continue in this chat.'
         : conflict ? `Your edits stay. Find the returned project at ${transfer.folder}.`
           : 'Changes come back here when the task finishes.'
       : returned || conflict || transfer.status === 'returning' ? 'Continue from the original machine.'
@@ -49,7 +55,7 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
     </>}
     {!source && (returned || conflict) && original && onOpenSession &&
       <button className="linkish" disabled={busy} onClick={openOriginal}>Continue on original machine</button>}
-    {transfer.error && <p className="note">Return pending. {errorMessage(transfer.error)} Helm will try again.</p>}
+    {transfer.error && <p className="note">{sending ? errorMessage(transfer.error) : <>Return pending. {errorMessage(transfer.error)} Helm will try again.</>}</p>}
     {error && <p className="error">{error}</p>}
   </div>;
 }
