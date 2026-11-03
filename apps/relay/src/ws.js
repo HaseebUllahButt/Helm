@@ -235,7 +235,7 @@ export function createWsLayer() {
   function deliverPending(targetId) {
     const sock = online.get(targetId);
     if (!sock) return;
-    for (const row of q.handoffPending.all(targetId)) {
+    for (const row of q.handoffPending.iterate(targetId)) {
       let params;
       try { params = JSON.parse(row.payload); } catch { continue; }
       send(sock, T.HANDOFF_JOB, {
@@ -255,7 +255,7 @@ export function createWsLayer() {
   function deliverCompletions(sourceId) {
     const sock = online.get(sourceId);
     if (!sock) return;
-    for (const row of q.handoffCompletions.all(sourceId)) {
+    for (const row of q.handoffCompletions.iterate(sourceId)) {
       let params; let receipt;
       try {
         params = JSON.parse(row.payload);

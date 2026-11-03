@@ -261,7 +261,7 @@ export const q = {
   handoffPending: db.prepare(
     `SELECT * FROM handoff_queue
      WHERE target_id = ? AND status IN ('queued', 'delivered')
-     ORDER BY created_at LIMIT 100`
+     ORDER BY created_at`
   ),
   handoffDelivered: db.prepare(
     `UPDATE handoff_queue SET status = 'delivered', attempts = attempts + 1, updated_at = ?
@@ -271,7 +271,7 @@ export const q = {
   // first, so reconnecting can be told where its children landed.
   handoffCompletions: db.prepare(
     `SELECT * FROM handoff_queue WHERE source_id = ? AND status = 'running'
-     ORDER BY updated_at DESC LIMIT 100`
+     ORDER BY updated_at DESC`
   ),
   handoffRunning: db.prepare(
     `UPDATE handoff_queue SET status = 'running', result = ?, error = NULL, updated_at = ?

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 const root = mkdtempSync(join(tmpdir(), 'helm-relay-ws-'));
 Object.assign(process.env, { HELM_DIR: root, HELM_DB: join(root, 'hub.sqlite') });
 const { createWsLayer } = await import('../apps/relay/src/ws.js');
+const { db, q } = await import('../apps/relay/src/db.js');
 const { hasActiveTransfers } = await import('../packages/protocol/transfer-activity.js');
 test.after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -117,6 +118,37 @@ async function hubFixture(t) {
   };
   return { layer, open };
 }
+
+test('a reconnecting machine receives every waiting job', async t => {
+  const { open } = await hubFixture(t);
+  const ids = [];
+  t.after(() => { for (const id of ids) db.prepare('DELETE FROM handoff_queue WHERE id = ?').run(id); });
+  const base = Date.now();
+  for (let i = 0; i < 105; i++) {
+    const id = i.toString(16).padStart(24, '0'); ids.push(id);
+    const payload = JSON.stringify({ parent: { sessionId: 'parent' }, title: `task ${i}` });
+    q.handoffInsert.run(id, 'm2', 'm1', 'a'.repeat(64), payload, base + i, base + i);
+    if (i < 100) q.handoffDelivered.run(base + i, id);
+  }
+  const target = await open('env=m1');
+  await target.settled();
+  assert.deepEqual(new Set(target.frames.filter(f => f.t === 'handoff.job').map(f => f.handoffId)), new Set(ids));
+});
+
+test('a reconnecting source receives every saved receipt', async t => {
+  const { open } = await hubFixture(t);
+  const ids = [];
+  t.after(() => { for (const id of ids) db.prepare('DELETE FROM handoff_queue WHERE id = ?').run(id); });
+  const base = Date.now();
+  for (let i = 0; i < 105; i++) {
+    const id = i.toString(16).padStart(24, '0'); ids.push(id);
+    q.handoffInsert.run(id, 'm2', 'm1', 'a'.repeat(64), JSON.stringify({ parent: { sessionId: 'parent' } }), base + i, base + i);
+    q.handoffRunning.run(JSON.stringify({ sessionId: `child-${i}`, folder: '/work', digest: 'b'.repeat(64) }), base + i, id);
+  }
+  const source = await open('env=m2');
+  await source.settled();
+  assert.deepEqual(new Set(source.frames.filter(f => f.t === 'handoff.complete').map(f => f.handoffId)), new Set(ids));
+});
 
 const joinPieces = pieces => JSON.parse(pieces.map(piece => piece.data).join(''));
 
