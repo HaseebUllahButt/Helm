@@ -37,7 +37,7 @@ setInterval(() => {}, 1000);
 const { loadPty } = await import('../packages/connect/src/pty.js');
 const { TerminalHost, NATIVE_SOCKET_PATH } = await import('../packages/connect/src/terminals.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
-const { resumeCommand } = await import('../packages/connect/src/takeover.js');
+const { resumeCommand, safePoint } = await import('../packages/connect/src/takeover.js');
 const { sharedConversation } = await import('../packages/connect/src/native-cli.js');
 const pty = await loadPty();
 
@@ -83,6 +83,30 @@ test('claude -c or --resume in the old window joins the shared terminal instead 
   assert.equal(sharedConversation(open, 'claude', '/h', ['--resume', 'abc'], '/w',
     [{ id: 'native-a', engine: 'claude', engineSessionId: 'cleared' }]), null,
     'a later SessionStart replaces stale host metadata after clear');
+});
+
+test('a result already in the transcript is not a new safe point', async () => {
+  const path = join(root, 'old-result.jsonl');
+  const result = JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'done' }] } });
+  writeFileSync(path, result + '\n');
+  const cancel = new AbortController();
+  let checked;
+  const checkedAgain = new Promise(resolve => { checked = resolve; });
+  let calls = 0, finished = false;
+  const waiting = safePoint({ transcript: path, pid: process.pid, signal: cancel.signal, status: () => {
+    if (++calls === 2) setImmediate(checked);
+    return 'working';
+  } }).then(value => { finished = true; return value; });
+  try {
+    appendFileSync(path, '\n');
+    await checkedAgain;
+    assert.equal(finished, false, 'the prior step must not stop the current step');
+    appendFileSync(path, result + '\n');
+    assert.deepEqual(await waiting, { wasWorking: true });
+  } finally {
+    cancel.abort();
+    await waiting.catch(() => {});
+  }
 });
 
 test('take over waits for the running step, then moves the same CLI into a shared terminal and carries on', { skip: !pty && 'no pty' }, async (t) => {
