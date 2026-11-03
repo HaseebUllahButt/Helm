@@ -180,6 +180,22 @@ test('early reads and ticket ids cannot strand or swap identical waiting message
   assert.deepEqual(events().filter((event) => event.type === 'turn.accept').slice(1).map((event) => event.turnId), [identical[1].inputId, identical[0].inputId]);
 });
 
+test('a failed Stop does not send a handed message a second time', async t => {
+  const { sessions, session, driver, ticket } = await setup(t, 'claude');
+  driver.dropsHandedOnInterrupt = true;
+  driver.push('item.start', { id: 'tool', kind: 'tool', turnId: driver.turnId });
+  await sessions.input(session.id, 'Handed once');
+  await tick();
+  assert.equal(driver.steered.length, 1);
+  driver.onInterrupt = () => { throw new Error('stop failed'); };
+  await assert.rejects(sessions.interrupt(session.id), /stop failed/);
+  driver.push('input.consumed', { text: 'Handed once', inputId: ticket('Handed once') });
+  driver.finish();
+  await tick();
+  assert.deepEqual(driver.sent, ['Original task']);
+  assert.equal(driver.steered.length, 1);
+});
+
 test('a message being handed over cannot be withdrawn, and one the CLI refuses goes back to wait', async (t) => {
   const { sessions, session, driver, ticket } = await setup(t, 'codex');
   const held = deferred();

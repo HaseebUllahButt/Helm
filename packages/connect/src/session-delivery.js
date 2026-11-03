@@ -729,11 +729,11 @@ export class SessionDelivery {
     // Held so no handover or pump can take the line while the reply stops.
     this.#core.deliveryState.setSending(id);
     try {
-      this.#core.deliveryState.clearSteered(id);
-      const back = handed.map((entry) => entry.item).filter(Boolean);
+      // Keep the handed messages with the CLI until it confirms the stop.
+      // A failed or timed-out stop does not prove that it dropped them.
+      await this.#interruptReply(s, d);
+      const back = handed.map((entry) => this.#core.deliveryState.removeSteered(id, entry.turnId)?.item).filter(Boolean);
       if (back.length) this.#core.deliveryState.restoreQueue(id, [...back, ...(this.#core.deliveryState.queue(id) ?? [])]);
-      try { await this.#interruptReply(s, d); }
-      catch (err) { this.#sessions.log(`[${id}] stop for the next message: ${err.message}`); }
       return { ok: true, next: true };
     } finally {
       this.#releaseSending(s);
