@@ -87,8 +87,10 @@ export class SessionResume {
     const waiting = new Set((this.#core.deliveryState.queue(id) ?? []).map((item) => item.turnId));
     for (const e of tail) {
       if (e.type !== 'turn.start' || closed.has(e.turnId) || waiting.has(e.turnId)) continue;
-      closed.add(e.turnId);
       const attempt = delivered.get(e.turnId);
+      // An exit can arrive before resume has rebuilt the in-memory queue.
+      if (e.queued === true && (!attempt || attempt.requeued)) continue;
+      closed.add(e.turnId);
       const uncertain = attempt && !attempt.requeued;
       this.#sessions.events.append(id, { type: 'turn.done', turnId: e.turnId, status: uncertain ? 'error' : 'interrupted',
         error: uncertain ? 'Helm could not confirm delivery. Check the agent\'s work before sending this again.' : 'agent exited' });

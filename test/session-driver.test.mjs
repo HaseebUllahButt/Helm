@@ -1910,6 +1910,28 @@ test('a detached Codex account process exit settles its own chats before rebind'
   await resuming;
 });
 
+test('an exit before restart recovery keeps an unsent message waiting', async t => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-exit-before-recovery');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const host = () => Object.assign(new EventEmitter(), { hasProc: () => false });
+  const original = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, nativeDiscovery: false, procHost: host() });
+  const session = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  await original.input(session.id, 'Active work');
+  await original.input(session.id, 'Still waiting', { delivery: 'queue' });
+  const ticket = original.history(session.id).events.find(e => e.type === 'turn.start' && e.text === 'Still waiting').turnId;
+  await original.stop();
+  const procHost = host();
+  const restarted = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, nativeDiscovery: false, procHost });
+  t.after(() => restarted.stop());
+  procHost.emit('proc.exit', { id: session.id });
+  assert.equal(restarted.history(session.id).events.some(e => e.type === 'turn.done' && e.turnId === ticket), false);
+  await restarted.resume();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(FakeDriver.made.findLast(d => d.procId === session.id).sent, ['Still waiting']);
+});
+
 test('a message sent while a restart is still rebinding shares the one connection', async (t) => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
