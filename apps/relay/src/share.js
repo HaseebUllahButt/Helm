@@ -154,7 +154,7 @@ export function createShareRoute({ online, callEnv, openTcp }) {
     let shares = [];
     try {
       const answer = await callEnv(env, 'share.list', { forHub: true, members: true }, { timeout: 4000 });
-      if (Array.isArray(answer?.shares)) shares = answer.shares;
+      if (Array.isArray(answer?.shares)) shares = answer.shares.filter(s => s && typeof s === 'object' && !Array.isArray(s));
     } catch { /* no current access decision: refuse until the source answers */ }
     const source = { env, shares, at, order };
     if (apply) { acceptSource(source); rebuild(); }
@@ -495,6 +495,14 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     catch { refuse(502, 'Bad Gateway'); return true; }
     // The visitor can leave while the machine is still opening its port.
     if (socket.destroyed) { stream.destroy(); return true; }
+    const sameShare = current => !!current && !current.conflict && current.env === share.env
+      && current.port === share.port && current.createdAt === share.createdAt
+      && current.expiresAt === share.expiresAt && current.private === share.private
+      && current.preserveHost === share.preserveHost && JSON.stringify(current.lock) === JSON.stringify(share.lock);
+    // The port open can itself take longer than the access cache.
+    const current = await lookup(name);
+    if (socket.destroyed) { stream.destroy(); return true; }
+    if (!sameShare(current) || !unlocked(req, current, base)) { stream.destroy(); refuse(404, 'Not Found'); return true; }
     const headers = upstreamHeaders(req, share);
     headers.Connection = 'Upgrade';
     headers.Upgrade = req.headers.upgrade || 'websocket';
@@ -503,9 +511,32 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     if (head?.length) stream.write(head);
     stream.pipe(socket);
     socket.pipe(stream);
-    const end = () => { socket.destroy(); stream.destroy(); };
+    let checkTimer, expiryTimer;
+    const end = () => { clearTimeout(checkTimer); clearTimeout(expiryTimer); socket.destroy(); stream.destroy(); };
     socket.on('error', end); socket.on('close', end);
     stream.on('error', end); stream.on('close', end);
+    // Existing connections need fresh access decisions too. One source
+    // refresh is shared by simultaneous connections to the same machine.
+    const check = async () => {
+      if (socket.destroyed) return;
+      if (!online.has(share.env)) { end(); return; }
+      try { await refreshSource(share.env); } catch { end(); return; }
+      if (socket.destroyed) return;
+      try {
+        const next = cache.map.get(name);
+        if (!sameShare(next) || !unlocked(req, next, base)) { end(); return; }
+      } catch { end(); return; }
+      checkTimer = setTimeout(check, CACHE_MS); checkTimer.unref?.();
+    };
+    checkTimer = setTimeout(check, CACHE_MS); checkTimer.unref?.();
+    if (share.expiresAt != null) {
+      const expire = () => {
+        const left = share.expiresAt - Date.now();
+        if (left <= 0) { end(); return; }
+        expiryTimer = setTimeout(expire, Math.min(left, 2 ** 31 - 1)); expiryTimer.unref?.();
+      };
+      expire();
+    }
     return true;
   }
 

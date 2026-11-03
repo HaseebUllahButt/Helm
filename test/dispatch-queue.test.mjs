@@ -25,7 +25,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const N = await import('@helm/protocol/network');
 const { T, M } = await import('@helm/protocol');
-const { mintToken, ROLE } = await import('@helm/protocol/identity');
 const net = N.createNetwork({ name: 'source-pc', port: PORT });
 
 // Two more machines in the same network: the dispatch target, and a second
@@ -36,6 +35,7 @@ const PHONE = 'de71ce0001';
 for (const [id, name] of [[TARGET, 'target-vm'], [OTHER, 'other-pc']]) {
   net.machines[id] = {
     id, name, endpoints: [], addedAt: Date.now(), updatedAt: Date.now(),
+    codeSignPubkey: net.machines[net.self].codeSignPubkey,
   };
 }
 net.devices[PHONE] = { id: PHONE, label: 'phone', addedAt: Date.now(), updatedAt: Date.now() };
@@ -51,8 +51,8 @@ const hub = await startRelay({
 });
 test.after(() => { hub.stop(); rmSync(root, { recursive: true, force: true }); });
 
-const machineToken = (sub) => mintToken(net.key, { net: net.id, sub, role: ROLE.MACHINE });
-const deviceToken = (sub) => mintToken(net.key, { net: net.id, sub, role: ROLE.DEVICE });
+const machineToken = (sub) => N.machineToken({ ...net, self: sub });
+const deviceToken = (sub) => N.deviceToken(net, sub);
 
 const openWs = (token, query = 'role=client', port = PORT) =>
   new Promise((resolve, reject) => {

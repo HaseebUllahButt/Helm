@@ -1,111 +1,162 @@
 import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, readdirSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute } from 'node:path';
-import { startWork, WORK_TIMEOUT_MS } from './work-command.js';
+import { isAbsolute, join } from 'node:path';
+import { HELM_DIR } from './paths.js';
+import { startDurableWork, WORK_TIMEOUT_MS } from './work-command.js';
+import { readExecution, writeExecution } from './execution-store.js';
 
-const OUTPUT_BYTES = 256 * 1024;
 const PAGE_BYTES = 64 * 1024;
-// Long enough to read a result back after a laptop sleeps through it.
 const RETAIN_MS = 60 * 60_000;
-// Finished results kept beyond this are dropped oldest first. Running
-// commands never count against it: no command is ever refused for being
-// one too many (the owner's rule - no hidden limits on agents).
-const KEEP_FINISHED = 64;
+const ID = /^[a-f0-9]{32}$/;
+const MISSING = 'command not found; it may have expired. Do not automatically rerun it.';
 
-/** Commands use the existing authenticated machine RPC, without SSH or a login shell. */
+function alive(pid, directory) {
+  if (!Number.isSafeInteger(pid) || pid < 1) return false;
+  try {
+    process.kill(pid, 0);
+    // On Linux, a reused process id or a zombie is not our supervisor.
+    if (process.platform === 'linux') {
+      const cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+      return cmd.includes(directory) && cmd.some(part => part.endsWith('/helm-work.js'));
+    }
+    return true;
+  } catch (error) { return error.code === 'EPERM'; }
+}
+
+/** The detached supervisor owns each command and its saved output. */
 export class ExecutionJobs {
-  #jobs = new Map();
   #closed = false;
-  constructor({ launch = startWork, retainMs = RETAIN_MS } = {}) { this.launch = launch; this.retainMs = retainMs; }
+  #waiters = new Set();
+  constructor({ launch = startDurableWork, directory = join(HELM_DIR, 'execution-jobs'), retainMs = RETAIN_MS } = {}) {
+    Object.assign(this, { launch, directory, retainMs });
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    this.sweep = setInterval(() => this.#sweep(), Math.max(1, Math.min(retainMs, 60_000)));
+    this.sweep.unref?.();
+    this.#sweep();
+  }
 
-  #forget(id) { clearTimeout(this.#jobs.get(id)?.expiry); this.#jobs.delete(id); }
-  #expire(job) {
-    job.expiry = setTimeout(() => this.#forget(job.id), this.retainMs);
-    job.expiry.unref?.();
+  #dir(id) { if (!ID.test(id ?? '')) throw new Error('invalid command id'); return join(this.directory, id); }
+  #expire(dir, job) {
+    if (job.finishedAt && Date.now() - job.finishedAt >= this.retainMs && !job.expired) {
+      // Keep the identity, so an old id can never start the command again.
+      job = { id: job.id, owner: job.owner, fingerprint: job.fingerprint, status: 'exited',
+        finishedAt: job.finishedAt, expired: true };
+      writeExecution(dir, job);
+    }
+    return job;
+  }
+  #sweep() {
+    try {
+      for (const id of readdirSync(this.directory)) {
+        if (!ID.test(id)) continue;
+        const dir = this.#dir(id);
+        try { this.#expire(dir, readExecution(dir)); } catch { /* Leave an incomplete record in place. */ }
+      }
+    } catch { /* The next read or sweep can try again. */ }
+  }
+  #load(id, owner) {
+    const dir = this.#dir(id);
+    let job;
+    try { job = readExecution(dir); } catch { throw new Error(MISSING); }
+    if (job.owner !== owner) throw new Error(MISSING);
+    job = this.#expire(dir, job);
+    if (job.expired) throw new Error(MISSING);
+    return job;
+  }
+  #status(id, job) {
+    if (job.status === 'exited') return job;
+    const dir = this.#dir(id);
+    let pid;
+    try { pid = Number(readFileSync(join(dir, 'supervisor.pid'), 'utf8')); } catch { /* Worker may still be starting. */ }
+    if (pid && !alive(pid, dir)) {
+      // Re-read after the process exits, in case it saved its result meanwhile.
+      try { const latest = readExecution(dir); if (latest.status === 'exited') return latest; } catch {}
+      return { ...job, status: 'exited', exitCode: 1, error: 'Command status is unknown. Do not rerun it.' };
+    }
+    if (!pid && Date.now() - job.createdAt > 10_000) {
+      return { ...job, status: 'exited', exitCode: 1, error: 'Command status is unknown. Do not rerun it.' };
+    }
+    return job;
   }
 
   start(params, owner) {
     if (this.#closed) throw new Error('Helm is stopping; no command was started.');
     const { id, argv, heavy = false, timeout = WORK_TIMEOUT_MS, env = {} } = params;
-    const cwd = params.cwd ?? homedir();
-    if (!/^[a-f0-9]{32}$/.test(id ?? '')) throw new Error('invalid command id');
+    const dir = this.#dir(id), cwd = params.cwd ?? homedir();
     if (!Array.isArray(argv) || !argv.length || argv.length > 256 || argv.some(a => typeof a !== 'string' || a.includes('\0')) || !argv[0] || argv.join('').length > 64 * 1024) throw new Error('invalid command arguments');
     if (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd.includes('\0')) throw new Error('command cwd must be an absolute path');
     if (typeof heavy !== 'boolean' || !Number.isInteger(timeout) || timeout < 1 || timeout > 24 * 60 * 60_000) throw new Error('invalid command timeout or heavy flag');
     if (!env || typeof env !== 'object' || Array.isArray(env) || Object.entries(env).length > 128 || Object.entries(env).some(([k,v]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || typeof v !== 'string' || v.includes('\0')) || JSON.stringify(env).length > 64 * 1024) throw new Error('invalid command environment');
     const spec = { argv, cwd, heavy, timeout, env };
     const fingerprint = createHash('sha256').update(JSON.stringify(spec)).digest('hex');
-    const existing = this.#jobs.get(id);
-    if (existing) {
+    try { mkdirSync(dir, { mode: 0o700 }); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      let existing;
+      try { existing = readExecution(dir); } catch { throw new Error('command record is incomplete; do not rerun it'); }
       if (existing.owner !== owner || existing.fingerprint !== fingerprint) throw new Error('command id already belongs to another request');
-      return { id, status: existing.status };
+      if (existing.expired || (existing.finishedAt && Date.now() - existing.finishedAt >= this.retainMs)) throw new Error(MISSING);
+      return { id, status: this.#status(id, existing).status };
     }
-    for (const [key, job] of this.#jobs) if (job.finishedAt && Date.now() - job.finishedAt > this.retainMs) this.#forget(key);
-    const finished = [...this.#jobs.values()].filter(job => job.finishedAt);
-    for (const job of finished.slice(0, Math.max(0, finished.length - KEEP_FINISHED + 1))) this.#forget(job.id);
-    const job = { id, owner, fingerprint, status: 'starting', seq: 0, chunks: [], bytes: 0, waiters: new Set(), exitCode: null };
-    this.#jobs.set(id, job);
-    const wake = () => { for (const waiter of job.waiters) waiter(); job.waiters.clear(); };
+    const job = { id, owner, fingerprint, status: 'starting', createdAt: Date.now(), seq: 0, chunks: [], bytes: 0, exitCode: null };
+    writeExecution(dir, job);
+    const specFile = join(dir, 'spec.json');
+    const failed = error => {
+      try { rmSync(specFile, { force: true }); } catch {}
+      try { writeExecution(dir, { ...job, status: 'exited', error: error.message, exitCode: 1, finishedAt: Date.now() }); } catch {}
+    };
+    try { writeFileSync(specFile, JSON.stringify(spec), { mode: 0o600, flag: 'wx' }); }
+    catch (error) { failed(error); throw error; }
+    let child;
     try {
-      const child = this.launch(spec); job.child = child;
-      child.stdout.on('data', data => this.#append(job, 'stdout', data, wake));
-      child.stderr.on('data', data => this.#append(job, 'stderr', data, wake));
-      child.on('message', message => { Object.assign(job, { ...(message.status ? { status: message.status, reason: message.reason } : {}), ...(message.error ? { error: message.error } : {}), ...(message.signal ? { signal: message.signal } : {}) }); wake(); });
-      child.on('error', error => { job.error = error.message; wake(); });
-      job.done = new Promise(resolve => child.on('close', code => {
-        job.status = 'exited'; job.exitCode = code ?? 1; job.finishedAt = Date.now(); this.#expire(job); wake(); resolve();
-      }));
-      // Remote commands are noninteractive. A shell can be explicitly passed
-      // as argv for pipelines; no terminal or shell startup is implicit.
-      child.stdin.end();
-    } catch (error) { job.status = 'exited'; job.error = error.message; job.exitCode = 1; job.finishedAt = Date.now(); this.#expire(job); }
-    return { id, status: job.status };
-  }
-
-  #append(job, stream, data, wake) {
-    for (let offset = 0; offset < data.length; offset += 16 * 1024) {
-      const chunk = data.subarray(offset, offset + 16 * 1024);
-      job.chunks.push({ seq: ++job.seq, stream, data: chunk.toString('base64'), bytes: chunk.length });
-      job.bytes += chunk.length;
-      while (job.bytes > OUTPUT_BYTES) job.bytes -= job.chunks.shift().bytes;
-    }
-    wake();
-  }
-
-  #get(id, owner) {
-    const job = this.#jobs.get(id);
-    if (!job || job.owner !== owner) throw new Error('command not found; it may have expired or Helm restarted. Do not automatically rerun it.');
-    return job;
+      child = this.launch(spec, { directory: dir });
+      child.on('error', failed);
+    } catch (error) { failed(error); }
+    // The worker may already be running. A failed pid write must not remove
+    // its command file or claim that it did not start; the worker writes it too.
+    if (child?.pid) try { writeFileSync(join(dir, 'supervisor.pid'), String(child.pid), { mode: 0o600 }); } catch {}
+    return { id, status: 'starting' };
   }
 
   async read({ id, since = 0, wait = 0 }, owner) {
     if (!Number.isInteger(since) || since < 0 || !Number.isInteger(wait) || wait < 0 || wait > 10_000) throw new Error('invalid command cursor or wait');
-    const job = this.#get(id, owner);
-    if (wait && job.seq <= since && job.status !== 'exited') await new Promise(resolve => {
-      const done = () => { clearTimeout(timer); job.waiters.delete(done); resolve(); };
-      const timer = setTimeout(done, wait); job.waiters.add(done);
-    });
+    let job = this.#status(id, this.#load(id, owner));
+    if (wait && job.seq <= since && job.status !== 'exited' && !this.#closed) {
+      await new Promise(resolve => {
+        let watcher, timer;
+        const done = () => { clearTimeout(timer); watcher?.close(); this.#waiters.delete(done); resolve(); };
+        this.#waiters.add(done);
+        try { watcher = watch(this.#dir(id), (_event, file) => { if (!file || String(file) === 'state.json') done(); }); }
+        catch { /* The timeout still returns the current state. */ }
+        timer = setTimeout(done, wait);
+        try {
+          const current = this.#status(id, this.#load(id, owner));
+          if (current.seq > since || current.status === 'exited' || this.#closed) done();
+        } catch { done(); }
+      });
+      job = this.#status(id, this.#load(id, owner));
+    }
     const chunks = []; let bytes = 0;
-    for (const chunk of job.chunks) {
+    for (const chunk of job.chunks ?? []) {
       if (chunk.seq <= since) continue;
       if (bytes + chunk.bytes > PAGE_BYTES) break;
       bytes += chunk.bytes; chunks.push({ seq: chunk.seq, stream: chunk.stream, data: chunk.data });
     }
     const last = chunks.at(-1)?.seq ?? since;
     return { id, status: job.status, reason: job.reason, exitCode: job.exitCode, signal: job.signal, error: job.error,
-      chunks, last, more: job.seq > last, truncated: since < (job.chunks[0]?.seq ?? 1) - 1 };
+      chunks, last, more: job.seq > last, truncated: since < (job.chunks?.[0]?.seq ?? 1) - 1 };
   }
 
   cancel({ id }, owner) {
-    const job = this.#get(id, owner);
-    if (job.status !== 'exited' && job.child?.connected) job.child.send({ cancel: true });
+    const job = this.#status(id, this.#load(id, owner));
+    if (job.status !== 'exited') writeFileSync(join(this.#dir(id), 'cancel'), '', { mode: 0o600 });
     return { id, status: job.status };
   }
 
   async stop() {
     this.#closed = true;
-    for (const job of this.#jobs.values()) this.cancel({ id: job.id }, job.owner);
-    await Promise.all([...this.#jobs.values()].map(job => job.done));
-    for (const id of this.#jobs.keys()) this.#forget(id);
+    clearInterval(this.sweep);
+    for (const done of [...this.#waiters]) done();
   }
 }
