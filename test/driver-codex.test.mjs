@@ -1104,3 +1104,28 @@ test('a child review keeps its card under the helper and grants only that child 
   assert.equal(writes.at(-1).params.threadId, 'child-thread');
   assert.equal(writes.at(-1).params.event.id, 'review-1');
 });
+
+
+test('native Codex setup survives the discovery timeout while reads still time out', async t => {
+  let receive;
+  const pipe = { onData(fn) { receive = fn; }, onExit() {}, write() {}, end() {}, kill() {} };
+  const server = new CodexServer('unused', {}, () => {},
+    { hasProc: () => true, procPipe: () => pipe }, '/unused', true);
+  await server.ensure();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const method of ['thread/start', 'thread/resume', 'thread/fork']) {
+    let settled = false;
+    const setup = server.call(method, {}).then(r => { settled = true; return r; });
+    t.mock.timers.tick(5001);
+    await Promise.resolve();
+    assert.equal(settled, false, `${method} must outlive discovery reads`);
+    receive(JSON.stringify({ id: method === 'thread/start' ? 1 : method === 'thread/resume' ? 2 : 3, result: { thread: { id: 'ready' } } }) + '\n');
+    assert.equal((await setup).result.thread.id, 'ready');
+  }
+  const read = server.call('thread/loaded/list', {});
+  t.mock.timers.tick(5001);
+  assert.match((await read).error.message, /timed out/);
+  const hung = server.call('thread/start', {});
+  t.mock.timers.tick(90_001);
+  assert.match((await hung).error.message, /timed out/);
+});
