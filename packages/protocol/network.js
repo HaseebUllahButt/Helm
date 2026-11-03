@@ -244,6 +244,9 @@ const signedToken = (net, claims) => {
   signed.signature = sign(null, credentialBody(signed), machineSigningInfo().privateKey).toString('base64url');
   return mintToken(net.key, signed);
 };
+// Helm from before 2026-11-04 refuses a browser credential without a
+// seven-day expiry, so new credentials still carry one. Newer Helm ignores
+// it: a browser stays signed in until the owner removes it.
 const DEVICE_TTL = 7 * 24 * 60 * 60_000;
 
 /** Public keys and addresses a signed-in browser may contact. */
@@ -498,7 +501,7 @@ export async function hubCredential(net, base, { timeout = 15_000, signal, machi
 }
 
 /**
- * A browser credential lasts seven days. Revocation also ends it.
+ * A browser credential lasts until the owner removes the device.
  *
  * The label is whatever the browser called itself in the login body, so it is
  * cleaned on the way in for the same reason a machine name is: it goes into
@@ -550,9 +553,10 @@ export function authenticate(net, token) {
   try {
     if (!verify(null, credentialBody(claims), createPublicKey({ key: Buffer.from(key, 'base64url'), type: 'spki', format: 'der' }), Buffer.from(claims.signature, 'base64url'))) return null;
   } catch { return null; }
-  if (claims.role === ROLE.DEVICE && !(claims.exp > Date.now() && claims.exp <= Date.now() + DEVICE_TTL)) return null;
+  // A browser stays signed in until it is removed. Its expiry is only for
+  // older Helm; removal (`revoked` above, roster membership below) ends it.
   if (claims.role === ROLE.DEVICE && !Object.hasOwn(net.devices ?? {}, claims.sub)) return null;
-  if (claims.exp !== undefined && !(claims.exp > Date.now())) return null;
+  if (claims.role !== ROLE.DEVICE && claims.exp !== undefined && !(claims.exp > Date.now())) return null;
   // A credential that names a hub is good at that hub only. A machine that
   // has updated always names one, so a credential of its without a name was
   // signed for someone else's hello.
@@ -575,7 +579,10 @@ export function checkDeviceRequest(net, claims, encoded, method, path) {
   try {
     const p = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
     if (p.aud !== net.self || p.sub !== claims.sub || p.method !== method || p.path !== path
-        || !(p.exp > Date.now()) || p.exp > Date.now() + 60_000 || typeof p.signature !== 'string') return false;
+        // The one-use challenge from this hub limits a proof to one minute.
+        // The browser's own expiry follows the phone's clock, which can be
+        // wrong, so it must not sign the owner out.
+        || typeof p.exp !== 'number' || typeof p.signature !== 'string') return false;
     const key = createPublicKey({ key: Buffer.from(claims.proofKey, 'base64url'), type: 'spki', format: 'der' });
     return verify(null, deviceProofBody(net.id, p), key, Buffer.from(p.signature, 'base64url')) && spendChallenge(p.ch);
   } catch { return false; }
