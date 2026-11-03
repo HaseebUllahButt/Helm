@@ -547,7 +547,10 @@ export class CodexServer {
     this.#child.stdin.write(JSON.stringify(obj) + '\n');
   }
 
-  call(method, params, timeout = this.nativeSocket ? 5000 : null) {
+  // Opening a chat can load tools and plugins. Keep quick discovery reads
+  // short, but give chat setup time to finish before the UI's 120 s wait.
+  call(method, params, timeout = this.nativeSocket
+    ? (/^thread\/(start|resume|fork)$/.test(method) ? 90_000 : 5000) : null) {
     const id = ++this.#seq;
     return new Promise((resolve) => {
       let timer;

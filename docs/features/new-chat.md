@@ -33,7 +33,10 @@
   folder, clone, or terminal setup can leave no saved chat. Keep the queued
   words and stop with a recovery error; do not repeat uncertain setup.
   A refusal before setup can retry under the same start number after its
-  cause is fixed. Never treat a crash or partial setup as a safe refusal.
+  cause is fixed. A fresh driver failure can also retry after full cleanup,
+  with no clone, worktree or resumed chat setup. Never repeat partial setup.
+  Codex chat setup through its native daemon gets 90 seconds; discovery
+  reads keep their shorter wait. The old five-second start timeout can retry.
 - **Tests:** `test/start-receipts`, `test/startingChats`; `test/browser/new-chat`, `chat-home`, `onboarding`;
   `test/quick-chat`, `picker-prefs`, `onboarding`.
 

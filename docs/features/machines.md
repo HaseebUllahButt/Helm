@@ -15,7 +15,9 @@ owner's home or network to bypass this check.
   Control+Shift+s; $V click "Devices & pairing"; $V text` shows "Linux
   Chrome · this device · online now".
 - **Transport:** remote access requires HTTPS. HTTP works only on loopback.
-  LAN discovery stays off. Browsers must sign in again after seven days.
+  LAN discovery stays off. A browser stays signed in until it is removed.
+  Its credential still carries a seven-day expiry, because older Helm refuses
+  one without it; newer Helm ignores the expiry.
   Old credentials stop working after the security update. A browser pairs
   with a private device key. Remote requests prove that key for one machine,
   challenge and request. Direct offers prove it for the target and connection.

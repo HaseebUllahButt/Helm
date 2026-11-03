@@ -850,8 +850,8 @@ export class Sessions extends EventEmitter {
       if (options.reservedSessionId) this.#saveStart(session.id);
       return session;
     } catch (error) {
-      // Only failures before chat setup can safely repeat under this number.
-      error.startRetrySafe = !setupStarted;
+      // Repeat only before setup, or after the driver confirms full cleanup.
+      error.startRetrySafe = !setupStarted || error.startRetrySafe === true;
       throw error;
     } finally { this.flush(); }
   }
@@ -932,7 +932,7 @@ export class Sessions extends EventEmitter {
     // worktree (session-worktrees.js); made once the chat has its id.
     const own = await this.#worktrees.plan({ cwd, quick, brain, clone, delegation });
     onStartSetup();
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning, own, reservedSessionId, chatWorktree: helperWorktree });
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning, own, startRetrySafe: !clone && !own, reservedSessionId, chatWorktree: helperWorktree });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -1079,7 +1079,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ reservedSessionId, cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null, cloning = null, own = null, chatWorktree = null }) {
+  async #startDriven({ reservedSessionId, cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null, cloning = null, own = null, startRetrySafe = false, chatWorktree = null }) {
     this.#rewinder.assertRewindUnlocked(null, cwd ? expand(cwd) : null);
     const id = reservedSessionId ?? randomBytes(6).toString('hex');
     // The chat's own worktree, before its agent starts there. When it
@@ -1200,10 +1200,14 @@ export class Sessions extends EventEmitter {
       this.#forgetSession(session.id);
       this.#deliveryState.clear(session.id);
       driver?.removeAllListeners?.('event');
-      await Promise.resolve(driver?.kill?.()).catch(() => {});
+      let stopped = true;
+      await Promise.resolve(driver?.kill?.()).catch(() => { stopped = false; });
       this.#dropQuickDir(session);
       await this.#worktrees.dropped(session);
       this.#save();
+      // No prompt has run. Plain fresh starts can repeat after full cleanup.
+      // Clone, worktree and resumed starts keep their setup reservations.
+      if (stopped && startRetrySafe && !engineSessionId && !forkFrom) err.startRetrySafe = true;
       throw err;
     }
   }

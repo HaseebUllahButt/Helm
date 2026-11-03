@@ -154,8 +154,9 @@ export async function startRelay({
     } catch { ws.close(1008); return; }
     const timer = setInterval(() => {
       const current = loadNetwork();
-      if (!current || current.revoked?.[initial.sub] || current.revoked?.[initial.issuer]
-          || (initial.role === ROLE.DEVICE && initial.exp <= Date.now())) ws.close(1008, 'Sign in again.');
+      // A browser stays connected until it is removed: its expiry is only
+      // for older Helm (see authenticate).
+      if (!current || current.revoked?.[initial.sub] || current.revoked?.[initial.issuer]) ws.close(1008, 'Sign in again.');
     }, 1000);
     timer.unref();
     ws.once('close', () => clearInterval(timer));

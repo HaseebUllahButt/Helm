@@ -281,8 +281,7 @@ function report({
   }
 
   if (offerLink) {
-    console.log('\n  Browser access lasts seven days. Sign in again when it ends.');
-    console.log('  Remove a device to end its access immediately.');
+    console.log('\n  The device stays signed in until you remove it.');
   }
   console.log(`\n  Serving ${daemon.name}. Leave this running; ctrl-c to stop.\n`);
 }

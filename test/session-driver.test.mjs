@@ -2025,3 +2025,22 @@ test('opening a chat whose folder was removed does not start its agent there', a
   assert.equal(later.history(session.id).events.filter((e) => e.type === 'error').length, 0, 'nothing red is added to the chat');
   await later.stop();
 });
+
+
+test('a cleaned startup failure retries one reserved chat after restart', async t => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { StartReceipts } = await import('../packages/connect/src/start-receipts.js');
+  const { mkdirSync } = await import('node:fs');
+  const dir = join(process.env.HELM_DIR, 'retry-receipts');
+  mkdirSync(dir, { recursive: true });
+  let fail = true;
+  const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) =>
+    fail ? new FailingDriver(opts) : new FakeDriver(opts) });
+  t.after(() => sessions.stop());
+  const params = { startId: 'f'.repeat(32), quick: true, profileId: 'claudea' };
+  await assert.rejects(new StartReceipts(sessions, dir).start(params), /initialize failed/);
+  fail = false;
+  const recovered = await new StartReceipts(sessions, dir).start(params);
+  assert.ok(recovered.engineSessionId);
+  assert.equal((await new StartReceipts(sessions, dir).start(params)).id, recovered.id);
+});
