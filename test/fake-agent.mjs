@@ -16,7 +16,8 @@
 //                         a prompt "stream: <n>" first streams n words, one
 //                         chunk each, 5 ms apart, as a real CLI does;
 //                         a prompt "say-file: <path>" replies with that
-//                         file's text (Markdown, diagrams) before "done."
+//                         file's text (Markdown, diagrams) before "done.";
+//                         a prompt "fail: <text>" ends the turn with that error
 //   stdin ending          exits, like a real CLI
 if (process.argv.includes('--version')) {
   console.log('devin 3000.10.21');
@@ -81,6 +82,8 @@ async function onMessage(m) {
       const sayFile = /(?:^|\n)say-file: ([^\n]+)/.exec(prompt)?.[1].trim();
       if (sayFile) out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `\n\n${readFileSync(sayFile, 'utf8')}\n\n` } } } });
       await sleep(delay);
+      const fail = /(?:^|\n)fail: ([^\n]+)/.exec(prompt)?.[1].trim();
+      if (fail) return out({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: fail } });
       if (ask) {
         const rid = `perm-${m.id}`;
         const said = (m.params.prompt ?? []).map((part) => part.text ?? '').join('');
