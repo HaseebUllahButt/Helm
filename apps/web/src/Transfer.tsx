@@ -317,7 +317,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
               </span>
             </div>
             {taskResult.receipt && <p className="note" title={taskResult.route === 'direct' ? 'Sent directly' : 'Sent through home'}>{bulk ? `${bulk.files ?? ''} files and history · ${bytes(bulk.bytes)}` : `${taskResult.receipt.files} files · ${bytes(taskResult.receipt.bytes)}`}<br />{taskResult.receipt.folder}</p>}
-            <p className="note">Open the new chat there to see progress and questions.</p>
+            {taskResult.status !== 'failed' && <p className="note">Open the new chat there to see progress and questions.</p>}
             {!bulk && <TaskReturn client={client} envId={source.id} transfer={{ ...returnState,
               status: returnState.status === 'waiting' ? taskResult.status ?? 'waiting' : returnState.status, handoffId, role: 'source',
               error: taskResult.status === 'failed' ? taskResult.error : returnState.error,

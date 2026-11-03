@@ -82,5 +82,6 @@ test('a restored failed send shows its failure and keeps the original retry requ
   const tree = view.type(view.props);
   assert.equal(find(tree, 'h1').props.children, 'Task send failed');
   assert.equal(find(tree, 'return-card').props.transfer.error, 'Login required.');
+  assert.equal(JSON.stringify(tree).includes('Open the new chat there'), false);
   assert.equal(saved.readTaskSend(key).request.handoffId, request.handoffId);
 });

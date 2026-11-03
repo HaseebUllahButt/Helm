@@ -57,7 +57,7 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
     </>}
     {!source && (returned || conflict) && original && onOpenSession &&
       <button className="linkish" disabled={busy} onClick={openOriginal}>Continue on original machine</button>}
-    {transfer.error && <p className="note">{sending ? errorMessage(transfer.error) : <>Return pending. {errorMessage(transfer.error)} Helm will try again.</>}</p>}
+    {transfer.error && <p className="note">{sending ? errorMessage(transfer.error, { machine: transfer.machineName }) : <>Return pending. {errorMessage(transfer.error)} Helm will try again.</>}</p>}
     {error && <p className="error">{error}</p>}
   </div>;
 }
