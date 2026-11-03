@@ -140,7 +140,10 @@ export class Schedules {
       if (delivery) { delivery.status = 'sent'; delivery.sessionId = session.id; delete delivery.prompt; }
       this.persist(); return { ok: true, sessionId: session.id, turnId };
     } catch (error) {
-      record.lastError = error.message; record.enabled = false;
+      // A Helm restart is not a task failure. Keep the task on and keep its
+      // dispatch identity, so the next Helm resumes the same turn once.
+      if (generation !== this.generation) error.interrupted = true;
+      else { record.lastError = error.message; record.enabled = false; }
       // Retain the durable dispatch identity: resuming after uncertain delivery
       // must reuse the same turn/thread rather than duplicate the work.
       if (delivery) delivery.status = 'error';
@@ -190,7 +193,7 @@ export class Schedules {
           record.nextRunAt = nextScheduledRun(record, this.now()); this.persist(); continue;
         }
         try { await this.run(record.id, false, delivery); }
-        catch (error) { record.lastError = error.message; record.enabled = false; this.persist(); }
+        catch (error) { if (!error.interrupted) { record.lastError = error.message; record.enabled = false; this.persist(); } }
       }
     } finally { this.ticking = false; }
   }

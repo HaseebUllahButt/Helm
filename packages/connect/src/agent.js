@@ -818,6 +818,9 @@ export class Daemon {
   async stop() {
     if (this.#stopped) return;
     this.#stopped = true;
+    // Stop schedules first: a tick during the awaits below would send work
+    // into parts that are already stopping.
+    this.schedules?.stop();
     this.#eventStream.stop();
     this.#updates.stop();
     this.inputDelivery?.stop();
@@ -834,7 +837,6 @@ export class Daemon {
     this.taskTransfers?.stop();
     await this.forwards?.stop();
     await this.sendEngine?.stop();
-    this.schedules?.stop();
     this.search?.close();
     this.github?.stop();
     this.#stopWatch?.();

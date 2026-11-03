@@ -227,3 +227,33 @@ test('a known pre-delivery failure can retry with a new ticket after explicit re
   scheduler.save({ id: schedule.id, enabled: true }); failed = false; await scheduler.run(schedule.id);
   assert.equal(f.sends.length, 1);
 });
+
+test('a Helm restart during a dispatch keeps the task on and resumes the same turn once', async t => {
+  const f = setup(t), children = new Map(); let release;
+  f.sessions.findAutomationSession = id => children.get(id);
+  f.sessions.start = async options => {
+    const child = { id: 'fresh', ...options }; children.set(options.originAutomationId, child);
+    await new Promise(resolve => { release = resolve; }); return child;
+  };
+  const scheduler = new Schedules(f), { schedule } = scheduler.save({ sessionId: 'thread', prompt: 'Fresh', intervalMinutes: 5, freshThread: true });
+  f.advance(600000);
+  const ticking = scheduler.tick();
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  scheduler.stop(); release(); await ticking;
+  let saved = new Schedules(f).list().schedules[0];
+  assert.equal(saved.enabled, true); assert.equal(saved.lastError, undefined); assert.ok(saved.dispatching);
+  f.sessions.start = async () => { throw new Error('a second fresh chat must not start'); };
+  const recovered = new Schedules(f); await recovered.tick();
+  assert.equal(f.sends.length, 1); assert.equal(f.sends[0].id, 'fresh'); assert.equal(f.sends[0].options.turnId, saved.dispatching);
+  saved = recovered.list().schedules[0];
+  assert.equal(saved.enabled, true); assert.equal(saved.dispatching, undefined);
+});
+
+test('a send cut off by a Helm restart does not turn the task off', async t => {
+  const f = setup(t), scheduler = new Schedules(f);
+  const { schedule } = scheduler.save({ sessionId: 'thread', prompt: 'Review', intervalMinutes: 5 });
+  f.sessions.input = async () => { scheduler.stop(); throw new Error('Helm is stopping'); };
+  await assert.rejects(scheduler.run(schedule.id), /stopping/);
+  const saved = new Schedules(f).list().schedules[0];
+  assert.equal(saved.enabled, true); assert.ok(saved.dispatching);
+});
