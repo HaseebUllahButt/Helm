@@ -53,6 +53,9 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm forward <machine> <port>   Open another machine's port on this machine's localhost
   helm forward list | stop <id|port|all>
                                   List or stop forwards (a stop removes both sides)
+  helm schedule list | show <id>  List scheduled tasks on every machine, or show one
+  helm schedule pause | resume | remove <id>
+                                  Stop a task for a while, start it again, or delete it
   helm remove <id>                  Remove a device or machine permanently
   helm leave                        Remove this machine from its network
 
@@ -289,6 +292,17 @@ const DETAILS = {
   When the app is not running, the link shows a "not reachable" page.
   It ends after 3 hours. Use --for <hours>, or --keep only when the owner asks.
   Stop it with helm forward stop <id>. This removes both sides.`,
+
+  schedule: `
+  Scheduled tasks send a saved message to a chat at set times,
+  or when their webhook link gets a POST. The app no longer shows them.
+  Use this command to find and control the ones that still exist.
+    --on <machine>   Look only on that machine.
+    --json           Print the result as JSON.
+    --link           With show: print the full webhook link. It holds a password.
+  pause keeps the task and its webhook link. resume starts it again.
+  remove deletes the task for good, and its webhook link stops for good.
+  A restart of Helm does not pause a task.`,
 
   spin: `
   This command runs helm share.

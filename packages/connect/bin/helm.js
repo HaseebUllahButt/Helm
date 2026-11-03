@@ -2028,6 +2028,17 @@ try {
       await forwardCmd();
       break;
 
+    case 'schedule':
+    case 'schedules': {
+      const { runScheduleCommand } = await import('../src/schedule-cli.js');
+      const net = requireNetwork();
+      try {
+        process.exitCode = await runScheduleCommand(rest, { net, machineId,
+          rpc: (env, method, params, timeout) => hubRpc(net, env, method, params, { timeout, budget: timeout }) });
+      } catch (error) { die(error.message); }
+      break;
+    }
+
     case 'remove':
     case 'revoke':
       remove();

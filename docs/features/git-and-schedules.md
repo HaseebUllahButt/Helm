@@ -87,5 +87,14 @@ edited files in; with none, the Git sheet says so.
 
 ## Schedules
 Removed from the app 2026-10-17 (the owner found them unnecessary). The
-machine side (`schedule.*`, webhooks) still runs existing automations.
-Tests: `test/schedules`, `usage-recovery`, `shell-task-alarm`.
+machine side (`schedule.*`, webhooks) still runs existing automations on
+purpose; `docs/agenda.md` plans to reuse it. Do not restore the screen
+without an owner request.
+- **Reach:** `helm schedule list | show | pause | resume | remove`. It asks
+  every machine; `--on` picks one. `show` hides the webhook link's password
+  unless `--link`.
+- **Rules:** pause needs no checks, so it works for an archived or deleted
+  chat. Resume checks the chat. A Helm restart during a run keeps the task
+  on and its saved turn, so the next Helm sends it once.
+- **Tests:** `test/schedules`, `schedule-cli`, `usage-recovery`,
+  `shell-task-alarm`.

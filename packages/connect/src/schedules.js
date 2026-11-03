@@ -66,6 +66,11 @@ export class Schedules {
   save(input) {
     const current = input.id ? this.records.find(r => r.id === input.id) : null;
     if (input.id && !current) throw new Error('schedule not found');
+    // Pausing needs no checks: it must work while a run is sending, and for a
+    // chat that is archived or deleted.
+    if (current && input.enabled === false && Object.keys(input).every(key => key === 'id' || key === 'enabled')) {
+      current.enabled = false; this.persist(); return { schedule: this.view(current) };
+    }
     if (!current && this.records.length >= MAX_TASKS) throw new Error('too many scheduled tasks');
     if (current && this.running.has(current.id)) throw new Error('wait for the current dispatch to finish');
     const next = { ...current, ...input };
