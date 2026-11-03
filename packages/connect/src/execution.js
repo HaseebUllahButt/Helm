@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, watch, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { HELM_DIR } from './paths.js';
@@ -101,16 +101,21 @@ export class ExecutionJobs {
     }
     const job = { id, owner, fingerprint, status: 'starting', createdAt: Date.now(), seq: 0, chunks: [], bytes: 0, exitCode: null };
     writeExecution(dir, job);
-    writeFileSync(join(dir, 'spec.json'), JSON.stringify(spec), { mode: 0o600, flag: 'wx' });
+    const specFile = join(dir, 'spec.json');
+    const failed = error => {
+      try { rmSync(specFile, { force: true }); } catch {}
+      try { writeExecution(dir, { ...job, status: 'exited', error: error.message, exitCode: 1, finishedAt: Date.now() }); } catch {}
+    };
+    try { writeFileSync(specFile, JSON.stringify(spec), { mode: 0o600, flag: 'wx' }); }
+    catch (error) { failed(error); throw error; }
+    let child;
     try {
-      const child = this.launch(spec, { directory: dir });
-      if (child.pid) writeFileSync(join(dir, 'supervisor.pid'), String(child.pid), { mode: 0o600 });
-      child.on('error', error => {
-        try { writeExecution(dir, { ...job, status: 'exited', error: error.message, exitCode: 1, finishedAt: Date.now() }); } catch {}
-      });
-    } catch (error) {
-      writeExecution(dir, { ...job, status: 'exited', error: error.message, exitCode: 1, finishedAt: Date.now() });
-    }
+      child = this.launch(spec, { directory: dir });
+      child.on('error', failed);
+    } catch (error) { failed(error); }
+    // The worker may already be running. A failed pid write must not remove
+    // its command file or claim that it did not start; the worker writes it too.
+    if (child?.pid) try { writeFileSync(join(dir, 'supervisor.pid'), String(child.pid), { mode: 0o600 }); } catch {}
     return { id, status: 'starting' };
   }
 

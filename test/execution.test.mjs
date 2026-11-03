@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once, EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { startWork } from '../packages/connect/src/work-command.js';
+import { startWork, startDurableWork } from '../packages/connect/src/work-command.js';
 import { ExecutionJobs } from '../packages/connect/src/execution.js';
 import { parseWorkArgs, runRemoteWork, runLocalWork, readRemoteWork, cancelRemoteWork, parseCommandRef } from '../packages/connect/src/execution-cli.js';
 import { M } from '@helm/protocol';
@@ -127,6 +127,109 @@ test('an unknown supervisor never causes the same command to start again', async
   assert.match(unknown.error, /unknown.*Do not rerun/);
   assert.equal(after.start(request, 'owner').status, 'exited');
   assert.equal(launches, 1);
+});
+
+test('a failed initial record leaves no temporary file and never starts work', async t => {
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const directory = join(root, 'full-initial');
+  const jobDir = join(directory, id(34));
+  let launches = 0;
+  const jobs = new ExecutionJobs({ directory, launch: () => { launches++; return new EventEmitter(); } });
+  t.after(() => jobs.stop());
+  const request = { id: id(34), ...spec('console.log("never")') };
+  const rename = fs.renameSync;
+  try {
+    fs.renameSync = (from, to) => {
+      if (to === join(jobDir, 'state.json')) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      return rename(from, to);
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => jobs.start(request, 'owner'), /disk full/);
+  } finally { fs.renameSync = rename; syncBuiltinESMExports(); }
+  assert.deepEqual(readdirSync(jobDir), []);
+  assert.throws(() => jobs.start(request, 'owner'), /incomplete.*do not rerun/);
+  assert.equal(launches, 0);
+});
+
+test('a failed command file write removes partial arguments and does not start work', async t => {
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const directory = join(root, 'full-spec');
+  const jobDir = join(directory, id(36));
+  let launches = 0;
+  const jobs = new ExecutionJobs({ directory, launch: () => { launches++; return new EventEmitter(); } });
+  t.after(() => jobs.stop());
+  const request = { id: id(36), ...spec('console.log("never")') };
+  const write = fs.writeFileSync;
+  try {
+    fs.writeFileSync = (file, ...args) => {
+      if (file === join(jobDir, 'spec.json')) {
+        write(file, 'partial');
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      }
+      return write(file, ...args);
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => jobs.start(request, 'owner'), /disk full/);
+  } finally { fs.writeFileSync = write; syncBuiltinESMExports(); }
+  assert.deepEqual(readdirSync(jobDir), ['state.json']);
+  jobs.start(request, 'owner');
+  assert.equal(launches, 0);
+});
+
+test('a failed parent pid write does not discard a launched command', async t => {
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const directory = join(root, 'full-pid');
+  const pidFile = join(directory, id(37), 'supervisor.pid');
+  const count = join(root, 'full-pid-count');
+  const request = { id: id(37), ...spec(`require('node:fs').appendFileSync(${JSON.stringify(count)},'once\\n')`) };
+  const jobs = new ExecutionJobs({ directory });
+  t.after(async () => {
+    try { jobs.cancel({ id: request.id }, 'owner'); await result(jobs, request.id); } catch {}
+    await jobs.stop();
+  });
+  const write = fs.writeFileSync;
+  try {
+    fs.writeFileSync = (file, ...args) => {
+      if (file === pidFile) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      return write(file, ...args);
+    };
+    syncBuiltinESMExports();
+    jobs.start(request, 'owner');
+  } finally { fs.writeFileSync = write; syncBuiltinESMExports(); }
+  assert.equal((await result(jobs, request.id)).exitCode, 0);
+  assert.equal(jobs.start(request, 'owner').status, 'exited');
+  assert.equal(readFileSync(count, 'utf8'), 'once\n');
+});
+
+test('a failed final record reports an unknown outcome without replay', async t => {
+  const directory = join(root, 'full-final');
+  const jobDir = join(directory, id(35));
+  const gate = join(root, 'full-final-gate');
+  const count = join(root, 'full-final-count');
+  const code = `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(count)},'once\\n');const w=fs.watch(${JSON.stringify(root)},()=>{if(fs.existsSync(${JSON.stringify(gate)}))w.close()});console.log('ready')`;
+  const request = { id: id(35), ...spec(code, { timeout: 12000 }) };
+  let supervisor;
+  const jobs = new ExecutionJobs({ directory, launch: (s, o) => (supervisor = startDurableWork(s, o)) });
+  t.after(async () => { chmodSync(jobDir, 0o700); await jobs.stop(); });
+  jobs.start(request, 'owner');
+  let cursor = 0, seen = '';
+  while (!seen.includes('ready')) {
+    const read = await jobs.read({ id: request.id, since: cursor, wait: 1000 }, 'owner');
+    for (const chunk of read.chunks) seen += Buffer.from(chunk.data, 'base64').toString();
+    cursor = read.last;
+  }
+  const exited = once(supervisor, 'exit');
+  chmodSync(jobDir, 0o500);
+  writeFileSync(gate, 'release');
+  await exited;
+  const unknown = await jobs.read({ id: request.id }, 'owner');
+  assert.equal(unknown.status, 'exited');
+  assert.match(unknown.error, /unknown.*Do not rerun/);
+  assert.equal(jobs.start(request, 'owner').status, 'exited');
+  assert.equal(readFileSync(count, 'utf8'), 'once\n');
 });
 
 test('a supervisor keeps output after its daemon is killed', { timeout: 15000 }, async t => {
