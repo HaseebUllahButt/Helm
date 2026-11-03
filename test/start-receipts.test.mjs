@@ -79,3 +79,16 @@ test('a partial setup failure stays blocked even after its cause is fixed', asyn
   await assert.rejects(f.make().start(params,'owner'),/creating a folder/);
   assert.equal(attempts,1);
 });
+
+
+test('the old native Codex start timeout can retry but clone setup stays held', async t => {
+  for (const clone of [undefined, { repo: 'owner/repo' }]) {
+    const f = fixture(t);
+    f.sessions.start = async () => { throw new Error('codex start failed: Codex native thread/start timed out'); };
+    const request = { ...params, clone };
+    await assert.rejects(f.make().start(request), /timed out/);
+    f.sessions.start = async p => ({ id: p.reservedSessionId });
+    if (clone) await assert.rejects(f.make().start(request), /timed out/);
+    else assert.ok((await f.make().start(request)).id);
+  }
+});

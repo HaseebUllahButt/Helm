@@ -24,6 +24,11 @@ export class StartReceipts {
     if (held && held.digest !== digest) throw fail('This start number belongs to another chat.', 'start_conflict');
     if (this.active.has(key)) return this.active.get(key);
     if (held) {
+      // Older Helm saved this setup timeout after removing the fresh chat
+      // and its driver. Let the existing retry button recover that start.
+      if (held.error?.code === 'start_failed'
+        && held.error.message === 'codex start failed: Codex native thread/start timed out'
+        && !request.clone) held.retrySafe = true;
       if (held.error && held.retrySafe !== true) throw fail(held.error.message, held.error.code);
       // A saved result also prevents a deleted chat from being created again.
       if (held.result) return held.result;
