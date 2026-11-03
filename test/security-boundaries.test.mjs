@@ -56,12 +56,10 @@ const wsHello = (token, viaSubprotocol = false) => new Promise((resolve, reject)
 test('authenticate admits real members and refuses everything else', () => {
   const current = () => N.loadNetwork();
 
-  assert.ok(N.authenticate(current(), mintToken(net.key, {
+  assert.equal(N.authenticate(current(), mintToken(net.key, {
     net: net.id, sub: 'eeff00112233', role: ROLE.MACHINE,
-  })), 'unknown machine id still authenticates');
-  assert.ok(N.authenticate(current(), mintToken(net.key, {
-    net: net.id, sub: phone.id, role: ROLE.DEVICE,
-  })), 'a rostered device authenticates');
+  })), null, 'unknown machine id cannot authenticate');
+  assert.ok(N.authenticate(current(), phone.token), 'a signed rostered device authenticates');
 
   assert.equal(N.authenticate(current(), signed({ net: net.id, sub: net.self, role: 'root' })), null);
   assert.equal(N.authenticate(current(), mintToken(net.key, {
@@ -97,7 +95,7 @@ test('a device credential never becomes an environment, whatever its subject', a
   };
   N.saveNetwork(holder);
   try {
-    const impostor = mintToken(net.key, { net: net.id, sub: ghostId, role: ROLE.DEVICE });
+    const impostor = N.deviceToken(holder, ghostId);
     const hello = await wsHello(impostor);
     assert.equal(hello.role, 'client', 'device credential attaches as a client');
     assert.equal(hello.envId, undefined);

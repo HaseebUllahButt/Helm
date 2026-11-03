@@ -115,6 +115,7 @@ test('a machine cannot use a hub introduction to impersonate another machine', {
   const net = N.loadNetwork();
   const attacker = 'aabbcc112233', victim = 'ddeeff445566';
   for (const id of [attacker, victim]) net.machines[id] = { id, name: id, endpoints: [] };
+  net.machines[attacker].codeSignPubkey = codeSigningInfo().codeSignPubkey;
   N.saveNetwork(net);
   const hub = await startRelay({ port: 0, host: '127.0.0.1', dbFile: process.env.HELM_DB, openLogin: false });
   const url = `http://127.0.0.1:${hub.server.address().port}`;

@@ -156,11 +156,11 @@ test('heard addresses expire, and turning it off or a VPN carrying the LAN stops
   a.lan.stop();
 });
 
-test('on unless config says no; test runs stay quiet unless asked', () => {
-  assert.equal(lanDiscoveryEnabled({}, {}), true);
+test('plain HTTP discovery stays off even when old settings enable it', () => {
+  assert.equal(lanDiscoveryEnabled({}, {}), false);
   assert.equal(lanDiscoveryEnabled({ lanDiscovery: false }, {}), false);
   assert.equal(lanDiscoveryEnabled({}, { HELM_NO_SERVICE: '1' }), false);
-  assert.equal(lanDiscoveryEnabled({}, { HELM_NO_SERVICE: '1', HELM_LAN_DISCOVERY: '1' }), true);
+  assert.equal(lanDiscoveryEnabled({}, { HELM_NO_SERVICE: '1', HELM_LAN_DISCOVERY: '1' }), false);
   assert.equal(lanDiscoveryEnabled({ lanDiscovery: false }, { HELM_LAN_DISCOVERY: '1' }), false);
 });
 

@@ -1,3 +1,4 @@
+import { loadNetwork } from '@helm/protocol/network';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -113,6 +114,11 @@ export async function startRelay({
   };
 
   const server = createServer((req, res) => {
+    if ((!loopback(req) && !req.socket.encrypted) || req.headers['x-forwarded-proto'] === 'http') {
+      res.writeHead(426, { 'content-type': 'text/plain' });
+      res.end('Use HTTPS to connect to Helm.');
+      return;
+    }
     // A share's host is never helm: everything on it belongs to the shared
     // app. Caddy's certificate check is answered to Caddy alone.
     const handled = shares.owns(req) ? shares.route(req, res)
@@ -138,7 +144,28 @@ export async function startRelay({
       .map((p) => p.trim())
       .find((p) => p.startsWith('helm1.')) || null;
 
+  wss.on('connection', (ws, req) => {
+    const credential = tokenFromProtocols(req.headers['sec-websocket-protocol'])
+      || clientTokenFrom(req.headers.authorization);
+    // Recheck durable credentials without spending a one-use challenge twice.
+    let initial;
+    try {
+      initial = JSON.parse(Buffer.from(credential.split('.')[1], 'base64url').toString());
+    } catch { ws.close(1008); return; }
+    const timer = setInterval(() => {
+      const current = loadNetwork();
+      if (!current || current.revoked?.[initial.sub] || current.revoked?.[initial.issuer]
+          || (initial.role === ROLE.DEVICE && initial.exp <= Date.now())) ws.close(1008, 'Sign in again.');
+    }, 1000);
+    timer.unref();
+    ws.once('close', () => clearInterval(timer));
+  });
+
   server.on('upgrade', (req, socket, head) => {
+    if ((!loopback(req) && !req.socket.encrypted) || req.headers['x-forwarded-proto'] === 'http') {
+      socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n');
+      return;
+    }
     if (shares.owns(req)) {
       shares.upgrade(req, socket, head).catch(() => socket.destroy());
       return;
@@ -174,15 +201,8 @@ export async function startRelay({
     if (!who) return reject();
     const { net, claims } = who;
 
-    // Membership is proved by the signature, not by whether we happen to have
-    // heard of this machine yet. A machine that joined via another hub will
-    // reach us before any gossip does, and turning it away - or quietly
-    // demoting it to a client, which is what a roster lookup used to do -
-    // would leave it permanently invisible as somewhere you can run agents.
-    const machine = claims.role === ROLE.MACHINE
-      ? net.machines[claims.sub]
-        ?? { id: claims.sub, name: url.searchParams.get('name') || claims.sub.slice(0, 8) }
-      : null;
+    // Authentication requires a pinned machine signing key and roster entry.
+    const machine = claims.role === ROLE.MACHINE ? net.machines[claims.sub] : null;
 
     // A machine attaches to exactly one hub as *itself*: its own, over
     // loopback, which is what lets a phone reach this machine through the hub

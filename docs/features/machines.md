@@ -14,6 +14,9 @@ owner's home or network to bypass this check.
   verify-<you>; $V key Enter` opens its screen. `$V key
   Control+Shift+s; $V click "Devices & pairing"; $V text` shows "Linux
   Chrome · this device · online now".
+- **Transport:** remote access requires HTTPS. HTTP works only on loopback.
+  LAN discovery stays off. Browsers must sign in again after seven days.
+  Old credentials stop working after the security update.
 - **Traps:** never press "Make join command" or remove devices on the real
   network to test. Removing a device signs it out everywhere. Join links
   expire in minutes. Public machines need inbound UDP 44301–44332 in both
@@ -23,7 +26,7 @@ owner's home or network to bypass this check.
   firewall rules and never change the owner's network.
 - **Tests:** `test/machine-kind`, `device-presence`, `roster-watch`,
   `gossip`, `lan-discovery`, `direct-mesh`, `auth`, `local-login`,
-  `hub-authz`, `roster-trust`.
+  `hub-authz`, `roster-trust`, `security-transport`.
 
 ## Check installation and connections
 - Open Settings and select **Check connection**. Each answering machine reports
