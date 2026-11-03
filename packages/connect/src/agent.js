@@ -82,6 +82,7 @@ import { useOwnerLogins } from './browser.js';
 import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
 import { ActionDelivery } from './action-delivery.js';
+import { NativeMessageDelivery } from './session-subagents.js';
 import { InputDelivery } from './input-delivery.js';
 import { ChatEventStream } from './event-stream.js';
 import { SessionUpdates } from './session-updates.js';
@@ -818,6 +819,9 @@ export class Daemon {
   async stop() {
     if (this.#stopped) return;
     this.#stopped = true;
+    // Stop schedules first: a tick during the awaits below would send work
+    // into parts that are already stopping.
+    this.schedules?.stop();
     this.#eventStream.stop();
     this.#updates.stop();
     this.inputDelivery?.stop();
@@ -834,7 +838,6 @@ export class Daemon {
     this.taskTransfers?.stop();
     await this.forwards?.stop();
     await this.sendEngine?.stop();
-    this.schedules?.stop();
     this.search?.close();
     this.github?.stop();
     this.#stopWatch?.();
@@ -1863,6 +1866,11 @@ export class Daemon {
         return { share: this.#shareView(addShare(p)) };
       }
       case M.SHARE_REMOVE:
+        // The webhook Spin is not in shares.json: stopping it pauses its tasks.
+        if (this.schedules?.shareName && String(p.name ?? '').toLowerCase() === this.schedules.shareName) {
+          const paused = this.schedules.closeWebhooks();
+          return { removed: paused.length > 0, paused };
+        }
         return { removed: removeShare(p.name) };
 
       case M.FORWARD_LIST:
@@ -2155,12 +2163,20 @@ export class Daemon {
           this.inputDelivery ??= new InputDelivery(this.sessions);
           return this.inputDelivery.status(p.actionId, caller);
         }
+        if (p.kind === 'native') {
+          this.nativeMessageDelivery ??= new NativeMessageDelivery(this.sessions);
+          return this.nativeMessageDelivery.status(p.actionId, caller);
+        }
         this.actionDelivery ??= new ActionDelivery(this.sessions);
         return this.actionDelivery.status(p.actionId, caller);
       case 'session.answer-deliver':
         await this.sessionRecovery;
         this.actionDelivery ??= new ActionDelivery(this.sessions);
         return this.actionDelivery.deliver(p, caller);
+      case 'session.native-message-deliver':
+        await this.sessionRecovery;
+        this.nativeMessageDelivery ??= new NativeMessageDelivery(this.sessions);
+        return this.nativeMessageDelivery.deliver(p, caller);
       case M.SESSION_DELIVER:
         await this.sessionRecovery;
         this.inputDelivery ??= new InputDelivery(this.sessions);

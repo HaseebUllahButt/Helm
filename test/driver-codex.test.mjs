@@ -251,6 +251,18 @@ for (const [name, status, turns, expected] of [
   }
 });
 
+test('Codex preserves a saved steering identity and reports unmatched message identities', async t => {
+  const { driver, log, writes } = adoptedCodex(t, {
+    thread: { status: { type: 'active', activeFlags: [] }, turns: [{ id: 'actual-live-turn', status: 'inProgress' }] },
+  });
+  await driver.start();
+  await driver.steer('Check this', [], { inputId: 'ticket', clientId: 'saved-provider-id' });
+  assert.equal(writes.findLast(w => w.method === 'turn/steer').params.clientUserMessageId, 'saved-provider-id');
+  driver.onNotification('item/started', { threadId: 'recovered-thread', turnId: 'actual-live-turn',
+    item: { type: 'userMessage', id: 'other', clientUserMessageId: 'unmatched-provider-id', content: [{ type: 'text', text: 'Earlier' }] } });
+  assert.ok(log.of('input.observed').some(e => e.clientId === 'unmatched-provider-id'));
+});
+
 test('adopted Codex loads an unloaded thread when a message finds it missing', async (t) => {
   let loaded = false;
   const { driver, log, writes } = adoptedCodex(t, {
@@ -374,8 +386,23 @@ function scriptedCodex(t, { openTurn = null, transcript, reply }) {
     cwd: fake.dir, mode: 'ask', engineSessionId: 'scripted-thread', transcript,
     procHost: host, openTurn: () => openTurn });
   t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
-  return { driver, log: collect(driver), writes, notify };
+  return { driver, log: collect(driver), writes, notify, emit };
 }
+
+test('answering one Codex approval keeps the next request blocked', async t => {
+  const { driver, emit } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  for (const id of ['first', 'second']) emit({ id, method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'scripted-thread', turnId: 'turn', itemId: id, command: 'echo hi', cwd: '/tmp' } });
+  assert.equal(driver.pending.size, 2);
+  await driver.answer([...driver.pending.keys()][0], { option: 'allow' });
+  assert.equal(driver.pending.size, 1);
+  assert.equal(driver.status, 'blocked');
+  await driver.answer([...driver.pending.keys()][0], { option: 'deny' });
+  assert.equal(driver.status, 'working');
+});
 
 test('a late completion of an older turn does not mark the newer turn idle', async (t) => {
   const { driver, log, notify, writes } = scriptedCodex(t, {
@@ -623,17 +650,18 @@ test('Helm-managed Codex threads keep native multi-agent on start and resume', a
   }
 });
 
-test('each thread names its own session; the shared app-server names none', async () => {
+test('each thread names its own session; the shared app-server names none', async t => {
   // One app-server serves every thread on an account. Its environment once
   // carried the first thread's HELM_SESSION_ID, so `helm delegate` from any
   // other chat filed its subagents under that first chat.
   const fake = fakeCli('codex', 'plain');
   const envFile = join(fake.dir, 'server-env');
   const wrapper = join(fake.dir, 'codex-wrapped');
-  writeFileSync(wrapper, `#!/bin/sh\nenv > ${JSON.stringify(envFile)}\nexec ${JSON.stringify(fake.cmd)} "$@"\n`);
+  writeFileSync(wrapper, `#!/bin/sh\nif [ "$1" = app-server ]; then env > ${JSON.stringify(envFile)}; fi\nexec ${JSON.stringify(fake.cmd)} "$@"\n`);
   chmodSync(wrapper, 0o755);
   const ids = { HELM_SESSION_ID: 'sess-a', HELM_PROFILE_ID: 'codex', HELM_ENGINE: 'codex', HELM_CWD: fake.dir };
   const driver = new CodexDriver({ cmd: wrapper, env: { CODEX_HOME: join(fake.dir, 'home'), ...ids }, args: [], cwd: fake.dir, mode: 'ask' });
+  t.after(() => driver.kill());
   const log = collect(driver);
   await driver.send('Reply with exactly the words: hello from helm');
   await log.until((e) => e.type === 'turn.done');

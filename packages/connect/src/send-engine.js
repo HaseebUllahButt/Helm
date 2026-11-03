@@ -99,18 +99,21 @@ export class SendEngine {
   }
   async cancel({ jobId }, caller) {
     this.authorize(caller); const r = this.get(jobId); if (r.job.phase === 'done') return { job: structuredClone(r.job) };
-    const running = this.running.get(jobId);
-    if (running) { running.cancelled = true; running.abort.abort(); running.child?.kill('SIGTERM'); await running.work; }
-    if (r.attempted && r.intent && !r.receipt) {
-      try { const response = await this.rpc(r.job.target.machineId, M.SEND_RECEIPT, { jobId }, { timeout: 3000, budget: 3000 }); if (response.receipt) this.acceptReceipt(r, response.receipt); } catch {}
-    }
-    if (r.receipt) { r.job.phase = 'done'; r.job.error = null; r.job.finishedAt = r.receipt.at; r.job.bytes.sent = r.job.bytes.total ?? r.job.bytes.sent; r.job.files.sent = r.job.files.total ?? r.job.files.sent; this.update(r, true); }
-    if (r.job.phase !== 'done') { r.job.phase = 'cancelled'; r.job.rate = null; r.job.eta = null; r.job.finishedAt = Date.now(); r.job.error = null; this.update(r, true); }
-    return { job: structuredClone(r.job) };
+    if (!r.cancelPromise) r.cancelPromise = (async () => {
+      const running = this.running.get(jobId);
+      if (running) { running.cancelled = true; running.abort.abort(); running.child?.kill('SIGTERM'); await running.work; }
+      if (r.attempted && r.intent && !r.receipt) {
+        try { const response = await this.rpc(r.job.target.machineId, M.SEND_RECEIPT, { jobId }, { timeout: 3000, budget: 3000 }); if (response.receipt) this.acceptReceipt(r, response.receipt); } catch {}
+      }
+      if (r.receipt) { r.job.phase = 'done'; r.job.error = null; r.job.finishedAt = r.receipt.at; r.job.bytes.sent = r.job.bytes.total ?? r.job.bytes.sent; r.job.files.sent = r.job.files.total ?? r.job.files.sent; this.update(r, true); }
+      if (r.job.phase !== 'done') { r.job.phase = 'cancelled'; r.job.rate = null; r.job.eta = null; r.job.finishedAt = Date.now(); r.job.error = null; this.update(r, true); }
+      return { job: structuredClone(r.job) };
+    })().finally(() => { r.cancelPromise = null; });
+    return r.cancelPromise;
   }
   retry({ jobId }, caller) {
     this.authorize(caller); const r = this.get(jobId);
-    if (!['failed','cancelled','interrupted'].includes(r.job.phase)) throw new Error('only a stopped send can be retried');
+    if (r.cancelPromise || !['failed','cancelled','interrupted'].includes(r.job.phase)) throw new Error('only a stopped send can be retried');
     r.job.phase = 'preparing'; r.job.error = null; r.job.finishedAt = null;
     r.job.rate = null; r.job.eta = null; r.job.route = null; r.job.changed = null; r.tail = '';
     this.update(r, true); this.launch(r); return { job: structuredClone(r.job) };
@@ -119,12 +122,13 @@ export class SendEngine {
     const run = { abort: new AbortController(), child: null, cancelled: false };
     this.running.set(r.job.id, run);
     run.work = Promise.resolve().then(() => this.perform(r, run)).catch(e => {
-      r.job.phase = run.cancelled ? 'cancelled' : this.stopping ? 'interrupted' : 'failed'; this.capabilities.delete(r.job.target.machineId);
+      if (run.cancelled) return; // Cancel checks the receiver before it publishes a final state.
+      r.job.phase = this.stopping ? 'interrupted' : 'failed'; this.capabilities.delete(r.job.target.machineId);
       r.job.rate = null; r.job.eta = null;
-      r.job.error = run.cancelled ? null : String(e.message).slice(0, 500); r.job.finishedAt = Date.now(); this.update(r, true);
+      r.job.error = String(e.message).slice(0, 500); r.job.finishedAt = Date.now(); this.update(r, true);
     }).finally(() => this.running.delete(r.job.id));
   }
-  async wait(id) { await this.running.get(id)?.work; return structuredClone(this.get(id).job); }
+  async wait(id) { await this.running.get(id)?.work; const r = this.get(id); await r.cancelPromise; return structuredClone(r.job); }
   async ensureServer() {
     if (this.serverReady) return this.serverReady;
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });
@@ -278,6 +282,7 @@ export class SendEngine {
     this.stopping = true;
     for (const run of this.running.values()) { run.abort.abort(); run.child?.kill('SIGTERM'); }
     await Promise.all([...this.running.values()].map(r => r.work));
+    await Promise.all([...this.jobs.values()].map(r => r.cancelPromise));
     this.connections.close(); for (const socket of this.bridgeSockets) socket.destroy(); await new Promise(resolve => this.server ? this.server.close(resolve) : resolve()); rmSync(this.socket, { force: true });
   }
 }

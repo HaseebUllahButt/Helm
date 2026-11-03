@@ -137,6 +137,41 @@ test('cancel stops both ends; persisted interrupted jobs resume the same stage a
   } finally { await f.close(); }
 });
 
+test('cancel finishes its receipt check before a retry can start', async () => {
+  const f = await fixture();
+  let receiptStarted, releaseReceipt, retryStarted, finishRetry;
+  const checking = new Promise(resolve => { receiptStarted = resolve; });
+  const receipt = new Promise(resolve => { releaseReceipt = resolve; });
+  const retried = new Promise(resolve => { retryStarted = resolve; });
+  const finish = new Promise(resolve => { finishRetry = resolve; });
+  let attempt = 0;
+  f.engine.rpc = async () => { receiptStarted(); return receipt; };
+  f.engine.perform = async (r, run) => {
+    if (++attempt === 1) {
+      r.attempted = true; r.intent = {};
+      await new Promise(resolve => run.abort.signal.addEventListener('abort', resolve, { once: true }));
+      throw new Error('cancelled');
+    }
+    retryStarted(); await finish;
+    r.job.phase = 'done';
+  };
+  try {
+    const { job } = f.engine.start({ path: f.dir, targetMachineId: 'bb22' }, 'phone');
+    await Promise.resolve();
+    const cancelling = f.engine.cancel({ jobId: job.id }, 'phone');
+    await checking;
+    assert.notEqual(f.engine.status({ jobId: job.id }, 'phone').job.phase, 'cancelled');
+    assert.throws(() => f.engine.retry({ jobId: job.id }, 'phone'), /stopped send/);
+    releaseReceipt({ receipt: null });
+    assert.equal((await cancelling).job.phase, 'cancelled');
+    f.engine.retry({ jobId: job.id }, 'phone');
+    await retried;
+    assert.equal(f.engine.status({ jobId: job.id }, 'phone').job.phase, 'preparing');
+    finishRetry();
+    assert.equal((await f.engine.wait(job.id)).phase, 'done');
+  } finally { releaseReceipt?.({ receipt: null }); finishRetry?.(); await f.close(); }
+});
+
 test('older target uses uncapped copy with a visible compatibility message; permissions checked',async()=> {
   const f=await fixture({old:true}); try {
     const source=join(f.dir,'old'); mkdirSync(source); writeFileSync(join(source,'data'),'data');
@@ -280,15 +315,16 @@ test('planning uses cached presence and a remembered target without hashing file
 });
 
 test('daemon send planning follows a live hub connection without a brain snapshot, including disconnects', async () => {
-  const { createNetwork, describeSelf, machineToken } = await import('@helm/protocol/network');
+  const { createNetwork, describeSelf, machineToken, saveNetwork } = await import('@helm/protocol/network');
   const { startRelay } = await import('@helm/relay');
   const { Daemon } = await import('../packages/connect/src/agent.js');
   const dir = join(root, 'presence-daemon'); mkdirSync(dir); writeFileSync(join(dir, 'hello'), 'synthetic');
   rmSync(join(process.env.HELM_DIR, 'snapshot.json'), { force: true });
   const net = createNetwork({ name: 'Laptop' });
   const target = 'bbbbbbbbbbbb';
-  net.machines[target] = { id: target, name: 'VM', addedAt: Date.now(), updatedAt: Date.now(), endpoints: [] };
+  net.machines[target] = { id: target, name: 'VM', addedAt: Date.now(), updatedAt: Date.now(), endpoints: [], codeSignPubkey: net.machines[net.self].codeSignPubkey };
   describeSelf(net, { endpoints: ['http://127.0.0.1:1'] });
+  saveNetwork(net);
   const hub = await startRelay({ port: 0, host: '127.0.0.1', dbFile: join(dir, 'hub.sqlite') });
   const daemon = new Daemon({ advertiseLan: false }); daemon.attachHub(hub);
   const engine = new SendEngine({ network: net, directory: join(dir, 'jobs'), presence: () => daemon.sendPresence() });

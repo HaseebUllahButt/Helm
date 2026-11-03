@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
 import { readFile } from 'node:fs/promises';
+import { createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
 
 /**
  * The browser half of a private link: the Helm app gets a pass from its hub
@@ -18,13 +19,17 @@ const bundle = await build({ stdin: { contents: `
   import { App, ShareHop, shareHopTarget } from './apps/web/src/App';
   import { PublicLinks } from './apps/web/src/PublicLinks';
   import { Client } from './apps/web/src/client';
+  import { browserProofKey } from './apps/web/src/hubAuth';
   const root = createRoot(document.getElementById('root'));
   window.showApp = () => {
     Client.prototype.connect = async () => {};
     root.render(<App />);
   };
-  window.showHop = () => {
-    const client = new Client([location.origin], 'helm1.device-token');
+  window.makeAuth = async () => ({ token: 'helm1.' + btoa(JSON.stringify({ net: 'test-network', sub: 'phone', proofKey: await browserProofKey() })) + '.fixture',
+    endpoints: ['https://home.test'] });
+  window.showHop = async () => {
+    const auth = await window.makeAuth();
+    const client = new Client([location.origin], auth.token);
     root.render(<ShareHop client={client} target={shareHopTarget()} onDone={() => { window.done = true; }} />);
   };
   window.showLinks = () => {
@@ -57,6 +62,8 @@ const script = bundle.outputFiles[0].text;
 const css = (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '');
 
 async function setup(t) {
+  const hub = generateKeyPairSync('ed25519');
+  const hubKey = hub.publicKey.export({ format: 'der', type: 'spki' }).toString('base64url');
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
   t.after(() => browser.close());
@@ -67,8 +74,27 @@ async function setup(t) {
     const req = route.request();
     const url = new URL(req.url());
     if (url.pathname === '/api/health') return route.fulfill({ json: { ok: true } });
-    if (url.pathname === '/api/auth/login') return route.fulfill({ json: { token: 'helm1.device-token', deviceId: 'phone', endpoints: ['https://home.test'] } });
+    if (url.pathname === '/api/auth/login') {
+      const { proofKey } = JSON.parse(req.postData());
+      const claims = { net: 'test-network', sub: 'phone', proofKey };
+      return route.fulfill({ json: { token: `helm1.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`, deviceId: 'phone', endpoints: ['https://home.test'] } });
+    }
+    if (url.pathname === '/api/hub/identity') {
+      const proof = { network: 'test-network', issuer: 'hub', key: hubKey,
+        nonce: JSON.parse(req.postData()).nonce, challenge: 'private-link-check', exp: Date.now() + 60_000 };
+      const payload = ['helm-proof-v3', proof.network, 'hub-identity', Object.entries(proof).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)];
+      return route.fulfill({ json: { ...proof, signature: sign(null, Buffer.from(JSON.stringify(payload)), hub.privateKey).toString('base64url') } });
+    }
     if (url.pathname === '/api/share/grant') {
+      const claims = JSON.parse(Buffer.from(req.headers().authorization.split('.')[1], 'base64url'));
+      const proof = JSON.parse(Buffer.from(req.headers()['x-helm-proof'], 'base64url'));
+      assert.equal(proof.aud, 'hub');
+      assert.equal(proof.sub, 'phone');
+      assert.equal(proof.path, '/api/share/grant');
+      assert.equal(verify(null, Buffer.from(JSON.stringify(['helm-device-request-v1', claims.net,
+        proof.aud, proof.sub, proof.ch, proof.method, proof.path, proof.exp])),
+        createPublicKey({ key: Buffer.from(claims.proofKey, 'base64url'), format: 'der', type: 'spki' }),
+        Buffer.from(proof.signature, 'base64url')), true);
       grants.push({ auth: req.headers().authorization, body: JSON.parse(req.postData() || '{}') });
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
         action: 'https://secret.home.test/.helm-share/enter', grant: 'PASS-1', next: JSON.parse(req.postData() || '{}').next,
@@ -93,7 +119,7 @@ test('signed in, the app turns a private link\'s visit into a pass posted back t
   await page.getByText('inside the shared app').waitFor();
 
   assert.equal(grants.length, 1);
-  assert.equal(grants[0].auth, 'Bearer helm1.device-token');
+  assert.equal(JSON.parse(Buffer.from(grants[0].auth.split('.')[1], 'base64url')).sub, 'phone');
   assert.deepEqual(grants[0].body, { name: 'secret', host: 'home.test', next: '/inside' });
   assert.equal(entered.length, 1);
   assert.equal(entered[0].method, 'POST', 'the pass travels in a form body, not the address');
@@ -127,8 +153,8 @@ test('a spin fragment arriving in an open signed-in Helm tab opens immediately',
   const { context, grants } = await setup(t);
   const page = await context.newPage();
   await page.goto('https://home.test/');
-  await page.evaluate(() => {
-    localStorage.setItem('helm.auth', JSON.stringify({ token: 'helm1.device-token', endpoints: ['https://home.test'] }));
+  await page.evaluate(async () => {
+    localStorage.setItem('helm.auth', JSON.stringify(await window.makeAuth()));
     window.showApp();
   });
   await page.waitForTimeout(100);

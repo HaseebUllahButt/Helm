@@ -68,17 +68,32 @@ export class SessionResume {
    * unanswerable now - close them the way `resume` does for a dead process.
    */
   procGone(id) {
-    const s = this.#core.index.get(id);
-    if (!s?.driver || this.#core.drivers.has(id)) return;
+    const profiles = loadProfiles()?.profiles ?? [];
+    for (const s of this.#core.index.values()) {
+      if (!s.driver || s.nativeSocket || this.#core.drivers.has(s.id)) continue;
+      const profile = s.driver === 'codex' ? profiles.find(p => p.id === s.profileId) : null;
+      const procId = hostedProcId(s, profile ? materialize(profile) : null);
+      if (procId === id) this.#settleGone(s);
+    }
+  }
+
+  #settleGone(s) {
+    const id = s.id;
     const tail = this.#sessions.events.tail(id, 0);
-    const closed = new Set(tail.filter((e) => ['turn.done', 'turn.remove'].includes(e.type)).map((e) => e.turnId));
+    const closed = new Set(tail.filter((e) => ['turn.done', 'turn.remove', 'turn.accept'].includes(e.type)).map((e) => e.turnId));
+    const delivered = new Map(tail.filter(e => e.type === 'turn.deliver').map(e => [e.turnId, e]));
     // A message still waiting in the queue never reached the dead process:
     // it stays queued, and goes to the next one.
     const waiting = new Set((this.#core.deliveryState.queue(id) ?? []).map((item) => item.turnId));
     for (const e of tail) {
       if (e.type !== 'turn.start' || closed.has(e.turnId) || waiting.has(e.turnId)) continue;
+      const attempt = delivered.get(e.turnId);
+      // An exit can arrive before resume has rebuilt the in-memory queue.
+      if (e.queued === true && (!attempt || attempt.requeued)) continue;
       closed.add(e.turnId);
-      this.#sessions.events.append(id, { type: 'turn.done', turnId: e.turnId, status: 'interrupted', error: 'agent exited' });
+      const uncertain = attempt && !attempt.requeued;
+      this.#sessions.events.append(id, { type: 'turn.done', turnId: e.turnId, status: uncertain ? 'error' : 'interrupted',
+        error: uncertain ? 'Helm could not confirm delivery. Check the agent\'s work before sending this again.' : 'agent exited' });
     }
     for (const p of this.#sessions.events.pending(id)) {
       this.#sessions.events.append(id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
@@ -121,7 +136,7 @@ export class SessionResume {
     const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
     const removed = new Set(tail.filter((e) => e.type === 'turn.remove').map((e) => e.turnId));
     const accepted = new Set(tail.filter((e) => e.type === 'turn.accept').map((e) => e.turnId));
-    const delivered = new Set(tail.filter((e) => e.type === 'turn.deliver').map((e) => e.turnId));
+    const delivered = new Map(tail.filter((e) => e.type === 'turn.deliver').map((e) => [e.turnId, e]));
     const echoes = tail.filter((e) => e.type === 'turn.start'
       && !e.wake && !String(e.turnId).startsWith('local-') && e.queued !== true);
     const open = tail.filter((e) => e.type === 'turn.start'
@@ -133,7 +148,7 @@ export class SessionResume {
     // The provider moved past any of its turns older than its newest one;
     // those finished with the run that followed, whatever became of it.
     const latest = echoes.findLast((e) => !e.local);
-    const revive = [];
+    const revive = [], unconfirmed = [];
     // A delegated task finishes with its newest work, not with whichever
     // old card happens to be tidied first - and not at all while its live
     // turn is being kept.
@@ -152,24 +167,25 @@ export class SessionResume {
       if (e.local === true) { settle(e.turnId, 'ok', null, { ends: false }); continue; }
       // A queued ticket under a caller-chosen id is still a ticket.
       const local = String(e.turnId).startsWith('local-') || e.queued === true;
+      const attempt = delivered.get(e.turnId);
       const mine = (e.text ?? '').trim();
       const echoIndex = local ? echoes.findIndex((x) => x.seq > e.seq && (x.inputId != null
         ? x.inputId === e.turnId
+        : attempt && !attempt.requeued ? !!attempt.clientId && x.turnId === attempt.clientId
         : (x.text ?? '').trim() === mine || (mine && (x.text ?? '').trim().startsWith(mine + '\n'))
       )) : -1;
       const echoed = echoIndex >= 0;
       if (echoed) echoes.splice(echoIndex, 1);
 
-      if (local && (accepted.has(e.turnId) || delivered.has(e.turnId))) {
-        // `turn.accept` records a successful steer into a live turn; never
-        // send that ticket again if the daemon restarted before its echo.
-        // A ticket handed over but not yet used went to the CLI all the same.
-        if (!accepted.has(e.turnId)) {
-          const event = this.#sessions.events.append(s.id, { type: 'turn.accept', turnId: e.turnId });
-          s.lastSeq = event.seq;
-          this.#sessions.emit('event', { id: s.id, event });
-        }
+      if (local && (accepted.has(e.turnId) || attempt && !attempt.requeued && echoed)) {
         settle(e.turnId, 'ok', null, { ends: false });
+        continue;
+      }
+      if (local && attempt && !attempt.requeued) {
+        // The CLI may have received it, but a send attempt is not a receipt.
+        // Keep a live agent's ticket open; a dead one needs an honest result.
+        if (!processAlive) settle(e.turnId, 'error', 'Helm could not confirm delivery. Check the agent\'s work before sending this again.', { ends: false });
+        else unconfirmed.push({ turnId: e.turnId, clientId: attempt.clientId });
         continue;
       }
       if (local && e.queued === true && !echoed) {
@@ -205,6 +221,7 @@ export class SessionResume {
           referenceContext: e.referenceContext,
           introduce: e.introduce === true,
           stopGeneration: s.stopGeneration ?? 0,
+          queued: true,
         });
         continue;
       }
@@ -220,6 +237,7 @@ export class SessionResume {
       s.delegation.status = finished === 'ok' ? 'done' : finished;
     }
 
+    this.#core.delivery.restoreUnconfirmed(s, unconfirmed);
     if (revive.length) {
       const order = new Map((s.queueOrder ?? []).map((turnId, index) => [turnId, index]));
       revive.sort((left, right) => (order.get(left.turnId) ?? Infinity) - (order.get(right.turnId) ?? Infinity));
@@ -305,7 +323,15 @@ export class SessionResume {
       // A terminal lives in the host process, which outlives us - so its
       // record stays until `adoptTerminals()` has asked what really survived.
       if (s.pty) continue;
-      if (s.external) { await this.#core.external.refreshExternalActivity(s); continue; }
+      if (s.external) {
+        // The old daemon owned the wait and its cancellation handle.
+        if (s.takeover) {
+          s.takeover = null;
+          this.#sessions.emit('session', s);
+        }
+        await this.#core.external.refreshExternalActivity(s);
+        continue;
+      }
       if (!s.driver) { this.#sessions.runtime.watch(this.#core.handle(s)); continue; }
       // An agent process the host kept is still running whatever it was
       // running: its active turn and questions are still answerable. Any

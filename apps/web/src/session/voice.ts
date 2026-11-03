@@ -129,6 +129,10 @@ export function useDictation({ transcribe, onText }: {
   const chunks = useRef<Blob[]>([]);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioCtx = useRef<AudioContext | null>(null);
+  const mounted = useRef(true);
+  const generation = useRef(0);
+  // React state updates do not block a second click in the same frame.
+  const busy = useRef(false);
   /** Loudest window seen while recording, as RMS - see SILENCE_RMS. */
   const loudest = useRef(0);
   /**
@@ -160,12 +164,18 @@ export function useDictation({ transcribe, onText }: {
   }, []);
 
   const start = useCallback(async () => {
+    if (!mounted.current || busy.current) return;
+    busy.current = true;
+    const attempt = ++generation.current;
+    const current = () => mounted.current && generation.current === attempt;
     setError('');
-    if (!canRecord()) { setState('unsupported'); return; }
+    if (!canRecord()) { busy.current = false; setState('unsupported'); return; }
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     } catch (e: any) {
+      if (!current()) return;
+      busy.current = false;
       // A refused microphone is a decision, not a fault, and it cannot be
       // re-asked from inside the page - so say which of the two it was.
       setError(e?.name === 'NotAllowedError'
@@ -173,13 +183,14 @@ export function useDictation({ transcribe, onText }: {
         : e?.name === 'NotFoundError' ? 'This device has no microphone.' : errorMessage(e, { fallback: 'Helm cannot use the microphone.' }));
       return;
     }
+    if (!current()) { stream.getTracks().forEach((t) => t.stop()); return; }
     const mime = pickFormat();
     let r: MediaRecorder;
     // Speech, not music: the browser's default is about 128 kbps, which made
     // a short note hundreds of kilobytes to push up a phone link before Groq
     // even saw it. Whisper hears 16 kHz; 32 kbps loses nothing it uses.
     try { r = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), audioBitsPerSecond: 32_000 }); }
-    catch { stream.getTracks().forEach((t) => t.stop()); setError('This browser cannot record sound.'); return; }
+    catch { stream.getTracks().forEach((t) => t.stop()); busy.current = false; setError('This browser cannot record sound.'); return; }
 
     // Watch the loudness of the stream as it records. An AudioContext that
     // cannot be created (an old browser, an autoplay policy) simply leaves
@@ -211,6 +222,7 @@ export function useDictation({ transcribe, onText }: {
     rec.current = r;
     r.ondataavailable = (e) => { if (e.data.size) chunks.current.push(e.data); };
     r.onstop = async () => {
+      if (!current()) return;
       const type = r.mimeType || mime || 'audio/webm';
       const blob = new Blob(chunks.current, { type });
       const heard = loudest.current;
@@ -230,13 +242,14 @@ export function useDictation({ transcribe, onText }: {
         setState('working');
         try {
           const text = (await transcribe(blob, type)).trim();
-          if (text) onText(text); else setError('Helm heard no speech.');
+          if (current()) { if (text) onText(text); else setError('Helm heard no speech.'); }
         } catch (e: any) {
-          setError(errorMessage(e, { fallback: 'Helm cannot convert the speech to text.' }));
-        } finally { setState('idle'); }
-      } finally { stopTiming?.(); }
+          if (current()) setError(errorMessage(e, { fallback: 'Helm cannot convert the speech to text.' }));
+        } finally { if (current()) setState('idle'); }
+      } finally { if (current()) busy.current = false; stopTiming?.(); }
     };
-    r.start();
+    try { r.start(); }
+    catch { release(); busy.current = false; setError('This browser cannot record sound.'); return; }
     cool.current?.(); cool.current = transcribe.warm?.() ?? null;
     setState('recording');
     setSeconds(0);
@@ -253,7 +266,17 @@ export function useDictation({ transcribe, onText }: {
   const toggle = useCallback(() => { if (state === 'recording') stop(); else if (state === 'idle') start(); }, [state, start, stop]);
 
   // A view that goes away mid-recording must not leave the microphone on.
-  useEffect(() => () => { try { rec.current?.stop(); } catch { /* already stopped */ } release(); }, [release]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      generation.current += 1;
+      busy.current = false;
+      if (rec.current) rec.current.onstop = null;
+      try { rec.current?.stop(); } catch { /* already stopped */ }
+      release();
+    };
+  }, [release]);
 
   return { state, error, seconds, meter, start, stop, toggle, clearError: () => setError('') };
 }

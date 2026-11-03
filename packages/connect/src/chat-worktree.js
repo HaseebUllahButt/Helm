@@ -292,7 +292,12 @@ export async function dropMergedBranch(record) {
   const repo = expand(record.repo);
   const tip = await git(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${record.branch}`]).catch(() => null);
   if (!tip) return true;
-  const base = await git(repo, ['rev-parse', '--verify', '--quiet', `${record.base}^{commit}`]).catch(() => null);
+  // A base branch deleted since (a helper's parent, merged) gives way to what
+  // the repo has checked out now, as restoreChatWorktree does. A tip that
+  // branch holds loses nothing when its own branch goes.
+  const now = await baseOf(repo).catch(() => null);
+  const base = await git(repo, ['rev-parse', '--verify', '--quiet', `${record.base}^{commit}`]).catch(() => null)
+    ?? (now && now !== record.branch ? await git(repo, ['rev-parse', '--verify', '--quiet', `${now}^{commit}`]).catch(() => null) : null);
   if (!base || !await exec('git', ['-C', repo, 'merge-base', '--is-ancestor', tip, base]).then(() => true, () => false)) return false;
   await git(repo, ['branch', '-D', record.branch]);
   return true;

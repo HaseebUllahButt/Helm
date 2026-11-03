@@ -23,7 +23,7 @@ const TARGET = 'bb22', OTHER = 'cc33';
 test.after(() => rmSync(root, { recursive: true, force: true }));
 
 /** A private hub answers real CLI requests as three controlled machines. */
-async function fixture(t, { modern = true, collision = false, listError = false, addError = false } = {}) {
+async function fixture(t, { modern = true, collision = false, listError = false, addError = false, hooks = false } = {}) {
   const net = N.createNetwork({ name: 'Source' });
   net.machines[TARGET] = { id: TARGET, name: 'Target', endpoints: [], addedAt: 1, updatedAt: 1 };
   net.machines[OTHER] = { id: OTHER, name: 'Other', endpoints: [], addedAt: 1, updatedAt: 1 };
@@ -42,7 +42,12 @@ async function fixture(t, { modern = true, collision = false, listError = false,
     if (frame.t !== T.RPC) return;
     calls.push({ env: frame.env, method: frame.method });
     let result, error;
-    if (frame.method === M.SHARE_LIST) {
+    if (hooks && frame.env === N.loadNetwork().self) {
+      // The running Helm's webhook Spin, which shares.json does not hold.
+      if (frame.method === M.SHARE_LIST) result = { shares: [{ name: 'helm-hooks-test', port: 4000, automation: true, createdAt: 0, password: false }] };
+      else if (frame.method === M.SHARE_REMOVE && frame.params.name === 'helm-hooks-test') result = { removed: true, paused: [{ id: '0123456789abcdef', name: 'PR hook' }] };
+      else error = 'Unexpected request in the private fixture.';
+    } else if (frame.method === M.SHARE_LIST) {
       if (frame.env === TARGET && listError) error = 'The target refused the name check.';
       else result = {
         shares: frame.env === OTHER && collision ? [{ name: 'demo', port: 9000 }] : [],
@@ -65,9 +70,9 @@ async function fixture(t, { modern = true, collision = false, listError = false,
     server.closeAllConnections();
     await Promise.all([new Promise(resolve => sockets.close(resolve)), new Promise(resolve => server.close(resolve))]);
   });
-  const run = () => new Promise((resolve, reject) => {
+  const run = (args = ['share', '3000', '--on', 'Target', '--name', 'demo']) => new Promise((resolve, reject) => {
     const env = { ...process.env }; delete env.INVOCATION_ID;
-    const child = spawn(process.execPath, [BIN, 'share', '3000', '--on', 'Target', '--name', 'demo'],
+    const child = spawn(process.execPath, [BIN, ...args],
       { env, stdio: ['ignore', 'pipe', 'pipe'] });
     t.after(() => { if (child.exitCode == null) child.kill(); });
     let stdout = '', stderr = '';
@@ -126,4 +131,15 @@ test('a new target can refuse creation without a retry or a success message', { 
   assert.doesNotMatch(result.stdout, /Target, port 3000/);
   assert.deepEqual(f.calls, [{ env: TARGET, method: M.SHARE_LIST }, { env: TARGET, method: M.SHARE_ADD }]);
   assert.deepEqual(f.created, []);
+});
+
+test('helm share list and stop reach the webhook Spin that only the running Helm holds', { timeout: 10000 }, async t => {
+  const f = await fixture(t, { hooks: true });
+  const listed = await f.run(['share', 'list']);
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.match(listed.stdout, /helm-hooks-test.*:4000 {2}webhooks for scheduled tasks; stop pauses them/);
+  const stopped = await f.run(['share', 'stop', 'helm-hooks-test']);
+  assert.equal(stopped.code, 0, stopped.stderr);
+  assert.match(stopped.stdout, /Stopped .*helm-hooks-test\)?\.\n {2}Helm paused this webhook task\. It keeps its link, but takes no posts:\n {4}01234567 {2}PR hook\n {2}Start one again with: helm schedule resume <id>/);
+  assert.deepEqual(f.calls.filter(call => call.method === M.SHARE_REMOVE).map(call => call.env), [f.self]);
 });

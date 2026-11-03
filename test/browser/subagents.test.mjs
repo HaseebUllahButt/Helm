@@ -688,7 +688,7 @@ test('a CLI\'s subagent opens as a chat of its whole conversation', async () => 
         { seq:10, type:'turn.done', turnId:'native-1', status:'ok' });
       return out;
     };
-    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],nativeMessageActions:()=>[],resumeNativeMessage:async()=>({}),ackNativeMessage:()=>{},input:(env,params)=>client.rpc(env,'session.input',params),
       on: () => () => {},
       rpc: async (envId, method, params) => {
         (window.calls ??= []).push({ method, params });
@@ -744,7 +744,7 @@ test('a subagent whose parent can pass messages on takes one from its chat', asy
       startedAt:1, updatedAt:2, branch:null, toolUseId:'spawn1', last:'Saves twice.', canMessage:true };
     const parent = { id:'parent', title:'Fix intake', cwd:'/project', engine:'codex', status:'idle', driver:'codex', nativeCards:[card] };
     let sent = '';
-    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],nativeMessageActions:()=>[],resumeNativeMessage:async()=>({}),ackNativeMessage:()=>{},input:(env,params)=>client.rpc(env,'session.input',params),
       on: () => () => {},
       rpc: async (envId, method, params) => {
         (window.calls ??= []).push({ method, params });

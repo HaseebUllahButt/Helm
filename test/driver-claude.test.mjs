@@ -109,6 +109,19 @@ async function modelControl(t, version = '2.1.302') {
       response: { ...response, request_id: writes.findLast(w => w.type === 'control_request').request_id } }) + '\n') };
 }
 
+test('answering one Claude approval keeps the next question blocked', async t => {
+  const { driver } = await modelControl(t);
+  driver.push('permission.request', { requestId: 'permission', kind: 'permission', raw: { input: {} } });
+  driver.push('permission.request', { requestId: 'question', kind: 'question', raw: { input: {} } });
+  driver.push('status', { status: 'blocked' });
+  await driver.setMode('bypassPermissions');
+  assert.equal(driver.pending.size, 1);
+  assert.ok(driver.pending.has('question'));
+  assert.equal(driver.status, 'blocked');
+  await driver.answer('question', { option: 'allow', answers: { Continue: 'Yes' } });
+  assert.equal(driver.status, 'working');
+});
+
 test('Claude releases control timers after replies and exit', async t => {
   const { driver, reply, exit } = await modelControl(t);
   const timers = new Set();

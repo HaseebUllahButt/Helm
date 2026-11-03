@@ -448,9 +448,9 @@ export class Sessions extends EventEmitter {
         // Whatever was compacting before the daemon stopped has said nothing since.
         delete s.compacting;
         // A clone (or the agent's start after it) the restart cut off: the
-        // chat says so and offers to go again.
+        // chat says so, and resume() starts it again.
         if (s.clone && !['done', 'failed'].includes(s.clone.state)) {
-          s.clone = { ...s.clone, state: 'failed', error: 'Helm restarted before the repo was in.' };
+          s.clone = { ...s.clone, state: 'failed', error: 'Helm restarted before the repo was in.', restarted: true };
           if (s.status === 'starting') s.status = 'idle';
         }
         // Its setup command died with the daemon: it runs again from the
@@ -514,7 +514,7 @@ export class Sessions extends EventEmitter {
 
   /** Write a waiting index change now. Nothing waiting, nothing written. */
   flush() {
-    if (!this.#saveTimer) return;
+    if (!this.#saveTimer) return true;
     clearTimeout(this.#saveTimer);
     this.#saveTimer = null;
     pendingSaves.delete(this.#flushSave);
@@ -533,10 +533,12 @@ export class Sessions extends EventEmitter {
         { mode: 0o600 }
       );
       renameSync(`${INDEX_FILE}.tmp`, INDEX_FILE);
+      return true;
     } catch (error) {
       // Off the caller's stack now, so a full disk must not end the daemon.
       // The next change tries again.
       this.log(`could not save the session list: ${error.message}`);
+      return false;
     }
   }
 
@@ -1711,11 +1713,13 @@ export class Sessions extends EventEmitter {
   detach(id, watcher) { return this.#viewers.detach(id, watcher); }
 
   async answer(id, requestId, decision) {
-    const s = this.get(id);
+    let s;
+    try { s = this.get(id); }
+    catch (error) { error.deliveryNotSent = true; throw error; }
     const ask = this.#natives.hookAsks.get(requestId);
     const asked = this.events.pending(id).find((request) => request.requestId === requestId);
     if (s.nativeCli) {
-      if (!ask || ask.id !== id) throw new Error('that question was already answered on the terminal');
+      if (!ask || ask.id !== id) throw Object.assign(new Error('This question was already answered in the terminal.'), { deliveryNotSent: true });
       // The same answer `claude -p` takes, printed by the waiting hook.
       let response;
       if (decision?.option === 'deny') response = { behavior: 'deny', message: decision.message || 'The owner declined this from Helm.' };
@@ -1730,7 +1734,7 @@ export class Sessions extends EventEmitter {
       return { ok: true, ...await this.#approvalNote(s, requestId, decision, asked?.title, decision?.option === 'deny') };
     }
     const d = this.#drivers.get(id);
-    if (!d) throw new Error('the agent is not running; that prompt is gone');
+    if (!d) throw Object.assign(new Error('The agent stopped. This request is no longer open.'), { deliveryNotSent: true });
     await d.answer(requestId, decision);
     // Only Claude's decline takes the owner's words with the answer.
     const carried = decision?.option === 'deny' && DRIVERS[s.driver] === DRIVERS.claude;
@@ -2306,6 +2310,19 @@ export class Sessions extends EventEmitter {
       if (s.chatWorktree?.setup !== 'running') continue;
       this.emit('session', s);
       this.#setUp(s, this.#worktrees.setupCommand(s));
+    }
+    // So does a clone. The old git died with the daemon and took its half
+    // folder; a part it left is this chat's own, and the retry clears it.
+    for (const s of this.#index.values()) {
+      if (!s.clone?.restarted || s.clone.state !== 'failed' || !this.cloner) continue;
+      delete s.clone.restarted;
+      void this.retryClone(s.id).catch((err) => {
+        if (this.#index.get(s.id) !== s) return;
+        s.clone = { ...s.clone, state: 'failed', error: `Helm could not start the clone again: ${err.message}` };
+        s.status = 'idle';
+        this.#save();
+        this.emit('session', s);
+      });
     }
   }
 

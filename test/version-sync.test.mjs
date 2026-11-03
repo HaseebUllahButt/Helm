@@ -51,6 +51,59 @@ test('diverged installs expose the peer name and preserve the local version', as
   assert.deepEqual((await synchronizeVersion(opts)).note, { diverged: true, with: 'Peer' });
 });
 
+test('a newer divergent peer does not hide a compatible update', async () => {
+  const tried = [];
+  const { opts } = fixture({
+    net: { machines: { self: {}, wrong: {}, good: {} } },
+    rpc: async (_, id, method) => method === 'env.info'
+      ? { name: id, version: { full: id, time: id === 'wrong' ? 3 : 2 } }
+      : { bundle: id },
+    syncFromBundle: async bundle => { tried.push(bundle); return bundle === 'wrong' ? { diverged: true } : { updated: true }; },
+  });
+  assert.equal((await synchronizeVersion(opts)).updated, true);
+  assert.deepEqual(tried, ['wrong', 'good']);
+});
+
+test('a peer that goes offline or has no bundle does not hide the next peer', async () => {
+  const tried = [];
+  const { opts } = fixture({
+    net: { machines: { self: {}, offline: {}, empty: {}, good: {} } },
+    rpc: async (_, id, method) => {
+      if (method === 'env.info') return { name: id, version: { full: id, time: { offline: 4, empty: 3, good: 2 }[id] } };
+      tried.push(id);
+      if (id === 'offline') throw new Error('offline');
+      return { bundle: id === 'empty' ? null : id };
+    },
+    syncFromBundle: async bundle => ({ updated: bundle === 'good' }),
+  });
+  assert.equal((await synchronizeVersion(opts)).updated, true);
+  assert.deepEqual(tried, ['offline', 'empty', 'good']);
+});
+
+test('the first divergence is reported if no peer can update this machine', async () => {
+  const { opts } = fixture({
+    net: { machines: { self: {}, first: {}, second: {} } },
+    rpc: async (_, id, method) => method === 'env.info'
+      ? { name: id, version: { full: id, time: id === 'first' ? 3 : 2 } }
+      : { bundle: id },
+    syncFromBundle: async () => ({ updated: false, diverged: true }),
+  });
+  assert.deepEqual((await synchronizeVersion(opts)).note, { diverged: true, with: 'first' });
+});
+
+test('a local update error stops the search for another bundle', async () => {
+  const tried = [];
+  const { opts } = fixture({
+    net: { machines: { self: {}, first: {}, second: {} } },
+    rpc: async (_, id, method) => method === 'env.info'
+      ? { name: id, version: { full: id, time: id === 'first' ? 3 : 2 } }
+      : (tried.push(id), { bundle: id }),
+    syncFromBundle: async () => { throw new Error('build failed'); },
+  });
+  await assert.rejects(() => synchronizeVersion(opts), /build failed/);
+  assert.deepEqual(tried, ['first']);
+});
+
 test('a machine that runs its checkout also repairs an app built from another commit', async () => {
   const stale = [];
   const { opts } = fixture({ running: 'new', currentVersion: async () => ({ full: 'new', time: 3 }),

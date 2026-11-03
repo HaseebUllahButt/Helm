@@ -44,7 +44,11 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   $V click Approve; $V wait "TOOL APPROVAL"   # "second" was delivered and asks again
   ```
 - **Traps:** each CLI reads a mid-reply message at a different moment
-  (Codex after its next step, Claude after its current tools).
+  (Codex after its next step, Claude after its current tools). Save the send
+  boundary before calling a CLI. A lost reply does not prove delivery or
+  refusal, so do not send that message again. Hold later messages until a
+  receipt or the owner resolves the uncertainty. A confirmed Stop can put
+  back only messages the CLI says it drops; save that return before retrying.
 - **Tests:** `test/dispatch-queue`, `input-delivery`, `peer-input`,
   `upgrade-input`; `test/browser/composer-card`.
 

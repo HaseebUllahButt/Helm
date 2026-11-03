@@ -12,8 +12,25 @@ import { SendView } from './send/SendView';
 import type { SendJob } from './client';
 import type { TaskReturnState } from './client';
 import { followModelRefresh } from './modelRefresh';
+import { taskSendKey, readTaskSend, prepareTaskSend, finishTaskSend, forgetTaskSend } from './taskSend';
+import { Confirm } from './Modal';
 
 const leaf = (p: string) => p.replace(/\/+$/, '').split('/').pop() || p;
+
+function ForgetSavedSend({ savedKey, onDone }: { savedKey: string; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState('');
+  return <>
+    <button className="linkish" onClick={() => setOpen(true)}>Forget saved send</button>
+    {error && <p className="error">{error}</p>}
+    {open && <Confirm title="Forget this send on this device?"
+      body="This removes the saved screen. The earlier task may still run. Check the target before sending another task."
+      confirmLabel="Forget saved send" onCancel={() => setOpen(false)} onConfirm={() => {
+        try { forgetTaskSend(savedKey); onDone(); }
+        catch { setError('Cannot clear this saved send. Check browser storage and try again.'); setOpen(false); }
+      }} />}
+  </>;
+}
 
 function readinessTone(status?: string) {
   if (status === 'pass') return 'pass';
@@ -48,31 +65,39 @@ type TransferProps = {
 };
 export function TransferView(props: TransferProps) {
   const [taskIntent, setTaskIntent] = useState<{ targetMachineId: string; includeEnv: boolean } | null>(null);
-  return props.session || taskIntent ? <TaskTransferView {...props} initialTask
+  const saved = useMemo(() => {
+    try { return { record: readTaskSend(taskSendKey(props.client.token, props.source.id, props.folder, props.session?.id)), error: '' }; }
+    catch (error) { return { record: null, error: errorMessage(error) }; }
+  }, [props.client, props.source.id, props.folder, props.session?.id]);
+  if (saved.error) return <><button className="linkish" onClick={props.onBack}>Back</button><p className="error">{saved.error}</p>
+    <ForgetSavedSend savedKey={taskSendKey(props.client.token, props.source.id, props.folder, props.session?.id)} onDone={props.onBack} /></>;
+  return props.session || taskIntent || saved.record ? <TaskTransferView {...props} initialTask
     initialTargetId={taskIntent?.targetMachineId} initialIncludeEnv={taskIntent?.includeEnv} />
     : <SendView {...props} onTask={setTaskIntent} />;
 }
 
 /** Task continuation still uses task.send; its folder copy is owned by the v2 engine. */
 export function TaskTransferView({ client, source, envs, folder, session, onBack, onOpenSession, onJob, onAgain, onOpenFolder, onStartChat, initialTask, initialTargetId, initialIncludeEnv }: TransferProps) {
-  const [targetId, setTargetId] = useState(initialTargetId ?? '');
-  const [locked, setLocked] = useState(false);
+  const savedKey = taskSendKey(client.token, source.id, folder, session?.id);
+  const [saved] = useState(() => readTaskSend(savedKey));
+  const [targetId, setTargetId] = useState(saved?.request.targetMachineId ?? initialTargetId ?? '');
+  const [locked, setLocked] = useState(!!saved);
   const targets = useMemo(
     () => envs.filter((e) => e.id !== source.id && (e.online || (locked && e.id === targetId))),
     [envs, source.id, locked, targetId],
   );
-  const [includeEnv, setIncludeEnv] = useState(initialIncludeEnv ?? !!session);
+  const [includeEnv, setIncludeEnv] = useState(saved?.request.includeEnv ?? initialIncludeEnv ?? !!session);
   const [task, setTask] = useState(!!session || !!initialTask);
-  const [prompt, setPrompt] = useState('');
+  const [prompt, setPrompt] = useState(saved?.request.prompt ?? '');
   const [agents, setAgents] = useState<{ id: string; label: string; available: boolean; models?: string[]; defaultModel?: string | null }[]>([]);
-  const [profileId, setProfileId] = useState('');
-  const [model, setModel] = useState('');
+  const [profileId, setProfileId] = useState(saved?.request.profileId ?? '');
+  const [model, setModel] = useState(saved?.request.model ?? '');
   const [agentsLoading, setAgentsLoading] = useState(false);
-  const [taskResult, setTaskResult] = useState<TaskTransferResult | null>(null);
+  const [taskResult, setTaskResult] = useState<TaskTransferResult | null>(saved?.result ?? null);
   const [returnState, setReturnState] = useState<TaskReturnState>({ status: 'waiting' });
-  const [handoffId] = useState(() => Array.from(crypto.getRandomValues(new Uint8Array(12)),
+  const [handoffId] = useState(() => saved?.request.handoffId ?? Array.from(crypto.getRandomValues(new Uint8Array(12)),
     (value) => value.toString(16).padStart(2, '0')).join(''));
-  const [targetFolder, setTargetFolder] = useState('');
+  const [targetFolder, setTargetFolder] = useState(saved?.request.targetFolder ?? '');
   const [preview, setPreview] = useState<TransferPreview | null>(null);
   const [previewing, setPreviewing] = useState(true);
   const [ack, setAck] = useState(false);
@@ -96,12 +121,19 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
     const refresh = () => {
       if (asking || done || document.hidden) return;
       asking = true;
-      client.rpc<{ return: TaskReturnState }>(source.id, 'task.status', { handoffId })
+      client.rpc<{ return: TaskReturnState; send?: TaskTransferResult }>(source.id, 'task.status', { handoffId })
         .then((reply) => {
           if (!live) return;
-          const text = JSON.stringify(reply.return);
-          if (text !== shown) { shown = text; setReturnState(reply.return); }
-          if (reply.return?.status === 'returned') { done = true; clearInterval(timer); }
+          const text = JSON.stringify([reply.return, reply.send]);
+          if (text !== shown) {
+            shown = text; setReturnState(reply.return);
+            if (reply.send) {
+              if (JSON.stringify(reply.send) !== JSON.stringify(taskResult)) setTaskResult(reply.send);
+              try { finishTaskSend(savedKey, reply.send); }
+              catch { setError('Cannot save the latest task status. Keep this screen open.'); }
+            }
+          }
+          if (reply.return?.status === 'returned' || reply.send?.status === 'failed') { done = true; clearInterval(timer); }
         }).catch(() => {})
         .finally(() => { asking = false; });
     };
@@ -176,13 +208,13 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
     setBusy(true); setError(''); setResult(null); setRecheck(null);
     try {
       if (task) {
-        setLocked(true);
-        setStep(session ? `Helm is pausing this task. Helm will send it to ${target.name}.` : `Helm is sending the task to ${target.name}.`);
-        const request = {
+        const request = prepareTaskSend(savedKey, {
           handoffId, folder, sessionId: session?.id, targetMachineId: target.id,
           targetFolder: targetFolder.trim() || undefined, profileId, model: model || undefined,
           prompt, includeEnv, allowSkipped: true,
-        };
+        }).request;
+        setLocked(true);
+        setStep(session ? `Helm is pausing this task. Helm will send it to ${target.name}.` : `Helm is sending the task to ${target.name}.`);
         let sent = await client.rpc<TaskTransferResult>(source.id, 'task.send', request, 360_000);
         // A big project copies in the background; the same request, asked
         // again, says how far it got and finally returns the running task.
@@ -197,6 +229,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
           sent = await client.rpc<TaskTransferResult>(source.id, 'task.send', request, 360_000);
         }
         if (!sent.sent && sent.requiresAcknowledgement) {
+          forgetTaskSend(savedKey);
           setLocked(false);
           setPreview((now) => now ? { ...now, preflight: sent.preflight } : now);
           setAck(false);
@@ -204,6 +237,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
           return;
         }
         setTaskResult(sent);
+        finishTaskSend(savedKey, sent);
         return;
       }
     } catch (e: any) {
@@ -265,7 +299,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
-          <h1>{taskResult ? 'Task sent' : task ? 'Send task' : receipt ? 'Project sent' : 'Send a project'}</h1>
+          <h1>{taskResult?.status === 'failed' ? 'Task send failed' : taskResult ? 'Task sent' : task ? 'Send task' : receipt ? 'Project sent' : 'Send a project'}</h1>
           <span className="sub"><Route machine={source.name} folder={folder} /></span>
         </div>
       </div>
@@ -273,25 +307,31 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
       <div className="scroll"><div className="pad column">
         {taskResult ? (
           <>
-            <div className="transfer-done">
-              <span className="done-mark"><Icon name="check" size={18} /></span>
+            <div className={taskResult.status === 'failed' ? 'banner transfer-warning' : 'transfer-done'}>
+              <span className={taskResult.status === 'failed' ? 'warn-mark' : 'done-mark'}><Icon name={taskResult.status === 'failed' ? 'alert' : 'check'} size={18} /></span>
               <span className="grow">
-                <span className="done-title">{taskResult.status === 'running' ? 'Running' : 'Queued'} on {taskResult.targetName}</span>
-                <span className="done-sub">{taskResult.status === 'running'
+                <span className="done-title">{taskResult.status === 'failed' ? 'Task send failed' : taskResult.status === 'running' ? 'Running' : 'Queued'} on {taskResult.targetName}</span>
+                <span className="done-sub">{taskResult.status === 'failed' ? 'Check the task and retry with the saved request.' : taskResult.status === 'running'
                   ? 'The other machine has the task. You can close this laptop.'
                   : 'Helm will send the task when the other machine reconnects.'}</span>
               </span>
             </div>
             {taskResult.receipt && <p className="note" title={taskResult.route === 'direct' ? 'Sent directly' : 'Sent through home'}>{bulk ? `${bulk.files ?? ''} files and history · ${bytes(bulk.bytes)}` : `${taskResult.receipt.files} files · ${bytes(taskResult.receipt.bytes)}`}<br />{taskResult.receipt.folder}</p>}
-            <p className="note">Open the new chat there to see progress and questions.</p>
-            {!bulk && <TaskReturn client={client} envId={source.id} transfer={{ ...returnState, handoffId, role: 'source',
+            {taskResult.status !== 'failed' && <p className="note">Open the new chat there to see progress and questions.</p>}
+            {!bulk && <TaskReturn client={client} envId={source.id} transfer={{ ...returnState,
+              status: returnState.status === 'waiting' ? taskResult.status ?? 'waiting' : returnState.status, handoffId, role: 'source',
+              error: taskResult.status === 'failed' ? taskResult.error : returnState.error,
               machineId: taskResult.targetMachineId!, machineName: taskResult.targetName! }} />}
             {taskResult.warning && <div className="banner">{taskResult.warning}</div>}
             {error && <div className="error">{error}</div>}
             <div className="transfer-actions">
               {taskResult.receipt && <button className="primary big" disabled={busy} onClick={openTask}>Open task there</button>}
-              {taskResult.status === 'queued' && <button className="primary big" disabled={busy} onClick={send}>Check or retry delivery</button>}
-              <button className="linkish" onClick={onBack}>Done</button>
+              {(taskResult.status === 'queued' || taskResult.status === 'failed') && <button className="primary big" disabled={busy} onClick={send}>Check or retry delivery</button>}
+              <button className="linkish" onClick={() => {
+                try { if (taskResult.status === 'running') forgetTaskSend(savedKey); }
+                catch { setError('Cannot clear this saved send. Check browser storage and try again.'); return; }
+                onBack();
+              }}>Done</button>
             </div>
           </>
         ) : receipt ? (
@@ -499,6 +539,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             {task && locked && error && <p className="note" title={handoffId}>Retry continues the same send. Check whether the chat has paused.</p>}
           </>
         )}
+        {locked && !busy && taskResult?.status !== 'running' && <ForgetSavedSend savedKey={savedKey} onDone={onBack} />}
       </div></div>
 
       {!receipt && !taskResult && preview && (

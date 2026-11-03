@@ -49,6 +49,24 @@ test('damaged saved records fail closed', async () => {
   await assert.rejects(delivery.deliver(request, 'phone'));
 });
 
+test('a refused approval has a final failure only when the agent was not contacted', async () => {
+  for (const notSent of [true, false]) {
+    let calls = 0;
+    const dir = join(root, `refused-${notSent}`);
+    const sessions = { answer: async () => {
+      calls++;
+      throw Object.assign(new Error('The agent stopped.'), { deliveryNotSent: notSent });
+    } };
+    const delivery = new ActionDelivery(sessions, { dir });
+    const result = await delivery.deliver(request, 'phone');
+    assert.equal(result.state, notSent ? 'done' : 'checking');
+    if (notSent) assert.deepEqual(result.error, { message: 'The agent stopped.', code: 'delivery_failed' });
+    const restarted = new ActionDelivery(sessions, { dir });
+    assert.deepEqual(await restarted.deliver(request, 'phone'), result);
+    assert.equal(calls, 1, 'neither final nor uncertain failures replay the answer');
+  }
+});
+
 
 for (const phase of ['acceptance', 'result']) test(`a full disk during ${phase} leaves no temporary file or repeatable approval`, async t => {
   const dir = join(root, 'full-' + phase);

@@ -4,7 +4,7 @@ import type { Client, Environment } from './client';
 import { Icon } from './Icon';
 import { openPrivateLink } from './privateLink';
 
-interface Share { name: string; port: number; password: boolean; private?: boolean; url: string | null; createdAt: number; expiresAt?: number }
+interface Share { name: string; port: number; password: boolean; private?: boolean; automation?: boolean; url: string | null; createdAt: number; expiresAt?: number }
 
 /** "ends in 2h 10m", or "kept" for a link that stays until stopped. */
 const endsIn = (s: Share) => {
@@ -32,6 +32,7 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
   const [canPrivate, setCanPrivate] = useState(false);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState('');
+  const [notice, setNotice] = useState('');
 
   const load = useCallback(() => {
     client.rpc<{ shares: Share[]; features?: string[] }>(env.id, 'share.list')
@@ -54,8 +55,17 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
     finally { setBusy(false); }
   };
   const stop = async (s: Share) => {
-    setBusy(true); setError('');
-    try { await client.rpc(env.id, 'share.remove', { name: s.name }); load(); }
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const { removed } = await client.rpc<{ removed?: boolean }>(env.id, 'share.remove', { name: s.name });
+      // The webhook Spin belongs to scheduled tasks. Stop pauses them; an
+      // older Helm cannot, and says nothing, so say it here.
+      if (s.automation) {
+        if (removed) setNotice('Helm paused the webhook tasks. Their links take no posts. To start one again, run helm schedule list, then helm schedule resume <id>.');
+        else setError('This machine runs an older Helm that cannot stop this Spin. Update Helm on it.');
+      }
+      load();
+    }
     catch (err: any) { setError(errorMessage(err)); }
     finally { setBusy(false); }
   };
@@ -92,7 +102,7 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
             <div key={s.name} className="row tall link-row">
               <span className="grow">
                 <span className="rt">{s.url ? s.url.replace(/^https:\/\//, '') : s.name}</span>
-                <span className="rm">port {s.port}{s.private ? ' · only your Helm devices' : s.password ? ' · password' : ' · open to anyone with the link'} · {endsIn(s)}</span>
+                <span className="rm">port {s.port}{s.automation ? ' · Stop pauses its webhook tasks' : `${s.private ? ' · only your Helm devices' : s.password ? ' · password' : ' · open to anyone with the link'} · ${endsIn(s)}`}</span>
               </span>
               {s.url && <button className="ghost" onClick={() => copy(s.url!)}>{copied === s.url ? 'Copied' : 'Copy'}</button>}
               {s.url && s.private && <button className="iconbtn" onClick={() => void openPrivate(s)} aria-label={`Open ${s.name}`}><Icon name="forward" size={15} /></button>}
@@ -124,6 +134,7 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
         <button className="ghost link-add" onClick={() => setAdding(true)}><Icon name="plus" size={14} /> Create a Spin</button>
       )}
       {shares?.some((s) => !s.url) && <p className="note">No machine has a public address. These Spins do not open outside your network.</p>}
+      {notice && <p className="note">{notice}</p>}
       {error && <div className="error">{error}</div>}
     </div>
   );
