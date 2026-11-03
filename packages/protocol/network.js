@@ -1,4 +1,4 @@
-import { proofBody, setProofSigner } from './proof.js';
+import { proofBody, setProofSigner, signNetworkProof, checkNetworkProof } from './proof.js';
 export { signNetworkProof, checkNetworkProof } from './proof.js';
 /**
  * The network this machine belongs to.
@@ -236,6 +236,8 @@ export function checkMachineRecord(net, record, key = record?.codeSignPubkey) {
 const credentialBody = (claims) => Buffer.from('helm-credential-v2:' + JSON.stringify([
   claims.net, claims.sub, claims.role, claims.issuer, claims.ch ?? null, claims.exp ?? null,
   ...(claims.proofKey ? [claims.proofKey] : []),
+  // An object, so it can never read as a proofKey.
+  ...(claims.aud !== undefined ? [{ aud: claims.aud }] : []),
 ]));
 const signedToken = (net, claims) => {
   const signed = { ...claims, issuer: net.self };
@@ -279,7 +281,7 @@ export function createNetwork({ name = hostname(), port = 8787 } = {}) {
     port,
     machines: {
       [id]: {
-        id, name: cleanName(name, hostname()), kind: 'vm', endpoints: [],
+        id, name: cleanName(name, hostname()), kind: 'vm', endpoints: [], signedHub: true,
         updatedAt: Date.now(), addedAt: Date.now(), codeSignPubkey: machineSigningInfo().codeSignPubkey,
       },
     },
@@ -288,8 +290,16 @@ export function createNetwork({ name = hostname(), port = 8787 } = {}) {
   });
 }
 
+/**
+ * The inviter's receipt for a new machine. Other machines accept a machine
+ * they have not seen only with this receipt, signed by a member they know.
+ */
+export const admitMachine = (net, machine, key) =>
+  signNetworkProof(net, MACHINE_ADMISSION, { machine, key, at: Date.now() });
+const MACHINE_ADMISSION = 'machine-admission';
+
 /** Join a network we have been handed the key to. */
-export function joinNetwork({ id, key, name = hostname(), port = 8787, machines = {}, devices = {}, revoked = {}, self = newDeviceId() }) {
+export function joinNetwork({ id, key, name = hostname(), port = 8787, machines = {}, devices = {}, revoked = {}, self = newDeviceId(), admission }) {
   // What the inviter handed us is a roster from the network, which is exactly
   // the thing `mergeRoster` refuses to take on trust; hold it to the same bar.
   const given = sanitizeRoster({ id, machines, devices, revoked });
@@ -298,8 +308,9 @@ export function joinNetwork({ id, key, name = hostname(), port = 8787, machines 
     machines: {
       ...given.machines,
       [self]: {
-        id: self, name: cleanName(name, hostname()), endpoints: [],
+        id: self, name: cleanName(name, hostname()), endpoints: [], signedHub: true,
         updatedAt: Date.now(), addedAt: Date.now(), codeSignPubkey: machineSigningInfo().codeSignPubkey,
+        ...(admissionOf(admission) ? { admission: admissionOf(admission) } : {}),
       },
     },
     devices: given.devices,
@@ -337,10 +348,53 @@ export const hubProof = (net, nonce) => proofOf(net.key, HUB_PROOF, `${net.id}:$
 export const checkHubProof = (net, nonce, mac) =>
   checkProof(net.key, HUB_PROOF, `${net.id}:${nonce}`, mac);
 
-/** A machine token spendable once, against the challenge the hub issued. */
-export const oneTimeToken = (net, challenge) => signedToken(net, {
+/**
+ * The whole hello answer. The shared-key proof shows network membership,
+ * and any member can make it for any nonce. The signed part names this
+ * machine, so a dialler can check that the machine which owns the address it
+ * dialled answered, and not a member it was relayed to.
+ */
+export function hubHelloAnswer(net, nonce) {
+  const challenge = issueChallenge();
+  return {
+    net: net.id, proof: hubProof(net, nonce), challenge,
+    signed: signNetworkProof(net, HUB_HELLO, { nonce, challenge, network: net.id }),
+  };
+}
+const HUB_HELLO = 'hub-hello';
+
+/**
+ * A machine token spendable once, against the challenge the hub issued.
+ * `aud` names the hub it is for. A hub that has not signed its hello yet
+ * (older Helm) gets no `aud`: its credential check would not know the field.
+ */
+export const oneTimeToken = (net, challenge, aud) => signedToken(net, {
   net: net.id, sub: net.self, role: ROLE.MACHINE, ch: challenge, exp: Date.now() + CREDENTIAL_TTL_MS,
+  ...(aud !== undefined ? { aud } : {}),
 });
+
+/**
+ * The machines that own the address `base`. Loopback on this machine's port
+ * is its own hub. `machine` adds an address heard on the LAN for that machine.
+ */
+export function addressOwners(net, base, machine) {
+  const clean = String(base ?? '').replace(/\/+$/, '');
+  let url;
+  try { url = new URL(clean); } catch { return []; }
+  const owners = new Set();
+  // Loopback is this machine's hub only on its own port: another program
+  // can listen on any other one.
+  if (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && net.machines?.[net.self]
+      && Number(url.port || 80) === Number(net.port ?? 8787)) owners.add(net.self);
+  for (const [id, m] of Object.entries(net.machines ?? {})) {
+    if (net.revoked?.[id]) continue;
+    if ((m.endpoints ?? []).some((e) => e.replace(/\/+$/, '') === clean)) owners.add(id);
+  }
+  const boot = bootstrapAddress(net);
+  if (boot && boot.url.replace(/\/+$/, '') === clean) owners.add(boot.machine);
+  if (machine && net.machines?.[machine] && !net.revoked?.[machine]) owners.add(machine);
+  return [...owners];
+}
 
 /**
  * Handshake with the hub at `base` (http/https) and return a credential for
@@ -400,8 +454,14 @@ function postJson(url, body, { timeout, signal }) {
 /** The sign-in request, kept on an object so a test can stand in for it. */
 export const hubHello = { post: postJson };
 
-export async function hubCredential(net, base, { timeout = 15_000, signal } = {}) {
+export async function hubCredential(net, base, { timeout = 15_000, signal, machine } = {}) {
   if (!secureHubAddress(base)) throw new Error('Use HTTPS to connect to another machine.');
+  const owners = addressOwners(net, base, machine);
+  if (!owners.length) {
+    const err = new Error('that address belongs to no machine in this network - nothing was sent to it');
+    err.untrusted = true;
+    throw err;
+  }
   const nonce = randomBytes(24).toString('base64url');
   const res = await hubHello.post(`${base.replace(/\/+$/, '')}${HELLO_PATH}`, { nonce }, { timeout, signal });
   if (res.status === 404) {
@@ -411,13 +471,30 @@ export async function hubCredential(net, base, { timeout = 15_000, signal } = {}
   }
   if (res.status < 200 || res.status >= 300) throw new Error(`hub hello answered ${res.status}`);
   const body = res.body;
-  if (!body || body.net !== net.id || typeof body.challenge !== 'string'
-      || !checkHubProof(net, nonce, body.proof)) {
+  const impostor = () => {
     const err = new Error('that address answered, but not as a hub of this network - nothing was sent to it');
     err.untrusted = true;
-    throw err;
+    return err;
+  };
+  if (!body || body.net !== net.id || typeof body.challenge !== 'string'
+      || !checkHubProof(net, nonce, body.proof)) throw impostor();
+  // The machine that owns this address must have answered. Any other
+  // member's signature means the hello was relayed.
+  const signed = body.signed;
+  if (signed && signed.nonce === nonce && signed.challenge === body.challenge && signed.network === net.id
+      && owners.includes(signed.issuer) && checkNetworkProof(net, HUB_HELLO, signed)) {
+    return oneTimeToken(net, body.challenge, signed.issuer);
   }
-  return oneTimeToken(net, body.challenge);
+  // Otherwise allowed only while an owner of this address still runs an
+  // older Helm, as before. Its own signed record says when it has updated,
+  // and from then on an answer without its signature is a downgrade. A
+  // signature this side cannot check changes nothing: a relay could drop it.
+  if (!owners.some((id) => !net.machines[id]?.signedHub)) throw impostor();
+  // A hub that signed is new enough to read a hub name, and an updated hub
+  // wants one. Naming the owner it claims to be only narrows where the
+  // credential works.
+  const claimed = signed && owners.includes(signed.issuer) ? signed.issuer : undefined;
+  return oneTimeToken(net, body.challenge, claimed);
 }
 
 /**
@@ -476,6 +553,12 @@ export function authenticate(net, token) {
   if (claims.role === ROLE.DEVICE && !(claims.exp > Date.now() && claims.exp <= Date.now() + DEVICE_TTL)) return null;
   if (claims.role === ROLE.DEVICE && !Object.hasOwn(net.devices ?? {}, claims.sub)) return null;
   if (claims.exp !== undefined && !(claims.exp > Date.now())) return null;
+  // A credential that names a hub is good at that hub only. A machine that
+  // has updated always names one, so a credential of its without a name was
+  // signed for someone else's hello.
+  if (claims.aud !== undefined && claims.aud !== net.self) return null;
+  if (claims.role === ROLE.MACHINE && claims.ch !== undefined && claims.aud === undefined
+      && net.machines[claims.sub]?.signedHub) return null;
   // A handshake credential is good once, and only here: the challenge it
   // answers must be one this process issued and nobody has spent.
   if (claims.ch !== undefined && !spendChallenge(claims.ch)) return null;
@@ -733,6 +816,9 @@ function machineRecord(id, their, ceiling) {
   keep(out, 'codeSignPubkey', codePubkeyOf(their.codeSignPubkey));
   keep(out, 'machineSignature', text(their.machineSignature, 128));
   keep(out, 'sendV2', typeof their.sendV2 === 'boolean' ? their.sendV2 : null);
+  // This machine's hub signs its hello (see hubCredential).
+  keep(out, 'signedHub', their.signedHub === true ? true : null);
+  keep(out, 'admission', admissionOf(their.admission, id, ceiling));
   keep(out, 'sshUser', text(their.sshUser, 32) && sshUsers.test(their.sshUser) ? their.sshUser : null);
   keep(out, 'sshPort', Number.isInteger(their.sshPort) && their.sshPort > 0 && their.sshPort < 65536
     ? their.sshPort : null);
@@ -744,6 +830,16 @@ function machineRecord(id, their, ceiling) {
   }
   out.endpoints = endpoints;
   return out;
+}
+
+/** An admission receipt of exactly the shape admitMachine makes, or null. */
+function admissionOf(v, machine = v?.machine, ceiling = Date.now() + MAX_CLOCK_SKEW_MS) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const keys = Object.keys(v).sort().join();
+  if (keys !== 'at,issuer,key,machine,signature') return null;
+  if (typeof v.issuer !== 'string' || !ids.test(v.issuer) || v.machine !== machine || !ids.test(String(machine))
+      || !codePubkeyOf(v.key) || stampOf(v.at, ceiling) === null || !text(v.signature, 128)) return null;
+  return { machine: v.machine, key: v.key, at: v.at, issuer: v.issuer, signature: v.signature };
 }
 
 function deviceRecord(id, their, ceiling) {
@@ -805,30 +901,18 @@ export function mergeRoster(net, unchecked) {
   const incoming = sanitizeRoster(unchecked);
   let changed = false;
 
-  for (const [id, their] of Object.entries(incoming.machines ?? {})) {
-    if (net.revoked[id]) continue;
-    // A machine is the only writer of its own record. Without this, someone
-    // else's view of us - a hub that had never heard of us writing an empty
-    // placeholder, stamped with its own clock - wins on last-writer-wins and
-    // we overwrite our own address list with nothing. We then advertise no
-    // way to reach us, and nothing can dial us until a restart.
-    if (id === net.self) continue;
-    const current = net.machines[id];
-    if (current && !current.codeSignPubkey) continue;
-    // Existing unsigned records stay fixed until their owner signs an update.
-    if (!checkMachineRecord(net, their, current?.codeSignPubkey ?? their.codeSignPubkey)) continue;
-    // A code key once learned is pinned to the machine it was learned for
-    // (TOFU): it is what code handoffs are encrypted to, so a forged newer
-    // record - or one that simply omits the field - must never swap or
-    // remove it. The signing key is pinned the same way, and independently:
-    // a record learned before the second key existed keeps the one it has
-    // while still being able to learn the other. Every other field still
-    // merges last-writer-wins.
-    if (current?.codePubkey && current.codePubkey !== their.codePubkey) continue;
-    if (current?.codeSignPubkey && current.codeSignPubkey !== their.codeSignPubkey) continue;
-    const candidate = their;
-    const won = newer(current, candidate);
-    if (won !== current) { net.machines[id] = won; changed = true; }
+  // A machine this side has not seen needs an admission receipt from a member
+  // it knows. That member can arrive in the same roster, so repeat until no
+  // more records join.
+  const pending = new Map(Object.entries(incoming.machines ?? {}));
+  for (let progress = true; progress && pending.size;) {
+    progress = false;
+    for (const [id, their] of pending) {
+      if (!net.machines[id] && !admitted(net, id, their)) continue;
+      pending.delete(id);
+      progress = true;
+      if (mergeMachine(net, id, their)) changed = true;
+    }
   }
   for (const [id, their] of Object.entries(incoming.devices ?? {})) {
     if (net.revoked[id]) continue;
@@ -844,9 +928,49 @@ export function mergeRoster(net, unchecked) {
     delete net.machines[id];
     changed = true;
   }
+  if (net.bootstrap && !bootstrapAddress(net)) { delete net.bootstrap; changed = true; }
 
   if (changed) write(net);
   return changed;
+}
+
+/**
+ * Whether a machine this side has not seen may join its roster: the record
+ * must carry an admission receipt for this id and signing key, signed by a
+ * current member this side already knows.
+ */
+function admitted(net, id, their) {
+  const a = their.admission;
+  return !!a && a.machine === id && a.key === their.codeSignPubkey && a.issuer !== id
+    && !!net.machines[a.issuer] && checkNetworkProof(net, MACHINE_ADMISSION, a);
+}
+
+/** Fold one signed machine record in. Returns whether it changed. */
+function mergeMachine(net, id, their) {
+  if (net.revoked[id]) return false;
+  // A machine is the only writer of its own record. Without this, someone
+  // else's view of us - a hub that had never heard of us writing an empty
+  // placeholder, stamped with its own clock - wins on last-writer-wins and
+  // we overwrite our own address list with nothing. We then advertise no
+  // way to reach us, and nothing can dial us until a restart.
+  if (id === net.self) return false;
+  const current = net.machines[id];
+  if (current && !current.codeSignPubkey) return false;
+  // Existing unsigned records stay fixed until their owner signs an update.
+  if (!checkMachineRecord(net, their, current?.codeSignPubkey ?? their.codeSignPubkey)) return false;
+  // A code key once learned is pinned to the machine it was learned for
+  // (TOFU): it is what code handoffs are encrypted to, so a forged newer
+  // record - or one that simply omits the field - must never swap or
+  // remove it. The signing key is pinned the same way, and independently:
+  // a record learned before the second key existed keeps the one it has
+  // while still being able to learn the other. Every other field still
+  // merges last-writer-wins.
+  if (current?.codePubkey && current.codePubkey !== their.codePubkey) return false;
+  if (current?.codeSignPubkey && current.codeSignPubkey !== their.codeSignPubkey) return false;
+  const won = newer(current, their);
+  if (won === current) return false;
+  net.machines[id] = won;
+  return true;
 }
 
 /**
@@ -889,10 +1013,26 @@ export function allEndpoints(net) {
   for (const e of (net.revoked?.[net.self] ? [] : net.machines[net.self]?.endpoints ?? [])) {
     if (!out.includes(e)) out.push(e);
   }
-  if (net.bootstrap?.machine !== net.self && net.machines?.[net.bootstrap?.machine]
-      && !net.revoked?.[net.bootstrap.machine] && secureHubAddress(net.bootstrap.url)
-      && !out.includes(net.bootstrap.url)) out.push(net.bootstrap.url);
+  const boot = bootstrapAddress(net);
+  if (boot && !out.includes(boot.url)) out.push(boot.url);
   return out;
+}
+
+/** How long the invitation address is used while its owner advertises nothing. */
+export const BOOTSTRAP_TTL_MS = 24 * 60 * 60_000;
+
+/**
+ * The address this machine joined through, while it still stands in for the
+ * inviter: until the inviter advertises any address of its own, and for one
+ * day at most. An old address can change owner, so it must not live on.
+ */
+export function bootstrapAddress(net, now = Date.now()) {
+  const b = net?.bootstrap;
+  if (!b || typeof b.url !== 'string' || b.machine === net.self || net.revoked?.[b.machine]) return null;
+  const owner = net.machines?.[b.machine];
+  if (!owner || (owner.endpoints ?? []).length || !secureHubAddress(b.url)) return null;
+  if (!(b.at > now - BOOTSTRAP_TTL_MS && b.at <= now + MAX_CLOCK_SKEW_MS)) return null;
+  return { machine: b.machine, url: b.url };
 }
 
 // ------------------------------------------------------------------ publish

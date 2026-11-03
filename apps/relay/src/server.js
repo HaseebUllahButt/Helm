@@ -29,7 +29,7 @@ export async function startRelay({
 
   const http = await import('./http.js');
   const {
-    makeHttpHandler, clientTokenFrom, identify, rotatePassword, ROLE, SECURITY_HEADERS,
+    makeHttpHandler, clientTokenFrom, identify, rotatePassword, ROLE, SECURITY_HEADERS, forwarded,
   } = http;
   const { createStaticHandler } = await import('./static.js');
   const { createWsLayer } = await import('./ws.js');
@@ -104,7 +104,7 @@ export async function startRelay({
 
   // The Close button of the Helm window on this desktop (app-window.js): only
   // a page this machine serves to itself may ask, so no other site can.
-  const windowPage = (req) => loopback(req) && !req.headers['x-forwarded-for']
+  const windowPage = (req) => loopback(req) && !forwarded(req)
     && LOCAL_HOST.test(String(req.headers.host || '')) && req.headers.origin === `http://${req.headers.host}`;
   const closeWindow = (res) => {
     const closed = closeAppWindow();
@@ -122,7 +122,7 @@ export async function startRelay({
     // A share's host is never helm: everything on it belongs to the shared
     // app. Caddy's certificate check is answered to Caddy alone.
     const handled = shares.owns(req) ? shares.route(req, res)
-      : req.url.startsWith('/api/share/ask?') && loopback(req) && !req.headers['x-forwarded-for'] ? shares.ask(req, res).then(() => true)
+      : req.url.startsWith('/api/share/ask?') && loopback(req) && !forwarded(req) ? shares.ask(req, res).then(() => true)
       : req.url === '/api/window/close' && req.method === 'POST' && windowPage(req) ? closeWindow(res)
       : null;
     Promise.resolve(handled ?? (helmPath(req), routeHelm(req, res))).catch((err) => {
@@ -234,7 +234,7 @@ export async function startRelay({
           // The app served by this machine to a browser on this machine.
           // Caddy also comes over loopback, but with the public host and
           // X-Forwarded-For.
-          local: loopback(req) && LOCAL_HOST.test(String(req.headers.host || '')) && !req.headers['x-forwarded-for'],
+          local: loopback(req) && LOCAL_HOST.test(String(req.headers.host || '')) && !forwarded(req),
         })
       );
 

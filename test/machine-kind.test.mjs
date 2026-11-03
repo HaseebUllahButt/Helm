@@ -77,14 +77,17 @@ test('a new network designates its founder the home', () => {
   assert.equal(net.role, 'vm');
 });
 
+/** This machine's receipt for a record signed with its own key, as the tests make them. */
+const admit = (net, id) => N.admitMachine(net, id, N.machineSigningInfo().codeSignPubkey);
+
 test('a merge carries a peer\u2019s kind but not a made-up one', () => {
   N.forgetNetwork();
   const net = N.createNetwork({ name: 'self', port: 8787 });
   const incoming = {
     id: net.id,
     machines: {
-      aa11bb22cc33: N.signMachineRecord(net, machine({ kind: 'nas' })),
-      ff00ee11dd22: N.signMachineRecord(net, machine({ id: 'ff00ee11dd22', kind: 'fridge' })),
+      aa11bb22cc33: N.signMachineRecord(net, machine({ kind: 'nas', admission: admit(net, 'aa11bb22cc33') })),
+      ff00ee11dd22: N.signMachineRecord(net, machine({ id: 'ff00ee11dd22', kind: 'fridge', admission: admit(net, 'ff00ee11dd22') })),
     },
     devices: {},
     revoked: {},
@@ -101,7 +104,7 @@ test('signed record updates keep both code keys pinned', () => {
   const net = N.createNetwork({ name: 'self' });
   const id = 'aa11bb22cc33';
   const keyA = 'A'.repeat(43), keyB = 'B'.repeat(43);
-  const first = N.signMachineRecord(net, machine({ codePubkey: keyA }));
+  const first = N.signMachineRecord(net, machine({ codePubkey: keyA, admission: admit(net, id) }));
   assert.equal(N.mergeRoster(net, { id: net.id, machines: { [id]: first } }), true);
   const signA = net.machines[id].codeSignPubkey;
   const forged = { ...first, name: 'forged', updatedAt: Date.now() + 1000 };

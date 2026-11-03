@@ -316,7 +316,9 @@ export class Link {
     try {
       info = await this.daemon.describe();
       if (!current()) return;
-      credential = await hubCredential(loadNetwork() ?? this.daemon.net, this.url, { signal: opening.signal });
+      const net = loadNetwork() ?? this.daemon.net;
+      // Our own hub can run on another port than the saved one.
+      credential = await hubCredential(net, this.url, { signal: opening.signal, machine: isSelf ? net.self : this.hintFor });
     } catch (err) {
       if (!current()) return;
       if (err.untrusted && !this.warned) {
@@ -999,6 +1001,7 @@ export class Daemon {
       codePubkey: code.codePubkey,
       codeSignPubkey: signing.codeSignPubkey,
       sendV2: true,
+      signedHub: true,
     });
   }
 

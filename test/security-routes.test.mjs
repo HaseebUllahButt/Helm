@@ -211,3 +211,142 @@ for (const mode of ['expiry', 'signer removal']) test(`a live direct browser con
   assert.equal(calls, 0);
   assert.equal(receiver.count, 0);
 });
+
+// ----------------------------------------------------- review of c88228a
+
+const spki = (pair) => pair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+const proofFrom = (net, purpose, claims, pair, issuer) => {
+  const value = { ...claims, issuer };
+  value.signature = sign(null, proofBody(net.id, purpose, value), pair.privateKey).toString('base64url');
+  return value;
+};
+/** A second member: its own key, admitted by this machine, at `endpoint`. */
+function member(net, id, endpoint, over = {}) {
+  const pair = generateKeyPairSync('ed25519');
+  const admission = N.admitMachine(net, id, spki(pair));
+  net.machines[id] = signedRecord(net, { id, name: `m-${id.slice(0, 4)}`, endpoints: endpoint ? [endpoint] : [], admission, updatedAt: Date.now(), ...over }, pair);
+  N.saveNetwork(net);
+  return pair;
+}
+
+test('a fake hub that relays a hello to another member gets no credential', async t => {
+  const { net, base } = await hubFor(t);
+  const original = N.hubHello.post;
+  t.after(() => { N.hubHello.post = original; });
+  const asked = [];
+  let strip = false;
+  // Whatever the dialler asks of a remote address goes to this hub instead:
+  // the relay needs no secret, and this hub signs as itself.
+  N.hubHello.post = async (url, body, opts) => {
+    asked.push(url);
+    const answer = await original(`${base}${N.HELLO_PATH}`, body, opts);
+    if (strip) delete answer.body.signed;
+    return answer;
+  };
+  member(net, 'aabbccdd0001', 'https://x.example', { signedHub: true });
+  member(net, 'aabbccdd0002', 'https://legacy.example');
+  const dialler = N.loadNetwork();
+
+  await assert.rejects(N.hubCredential(dialler, 'https://x.example'), (err) => err.untrusted);
+  strip = true;
+  await assert.rejects(N.hubCredential(dialler, 'https://x.example'), (err) => err.untrusted, 'an updated owner cannot be downgraded');
+  // An owner that still runs an older Helm is dialled as before, with no hub name.
+  const legacy = await N.hubCredential(dialler, 'https://legacy.example');
+  assert.equal(verifyToken(net.key, legacy).aud, undefined);
+  asked.length = 0;
+  await assert.rejects(N.hubCredential(dialler, 'https://nobody.example'), /belongs to no machine/);
+  assert.deepEqual(asked, [], 'nothing went to an address no member owns');
+
+  // The honest path: the owner itself answers, and the credential names it.
+  strip = false;
+  N.hubHello.post = original;
+  const credential = await N.hubCredential(dialler, base);
+  assert.equal(verifyToken(net.key, credential).aud, net.self);
+  const ask = (token) => fetch(`${base}/api/network`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal((await ask(credential)).status, 200);
+  const hello = async () => (await (await fetch(`${base}${N.HELLO_PATH}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ nonce: 'n'.repeat(24) }) })).json()).challenge;
+  assert.equal((await ask(N.oneTimeToken(dialler, await hello(), 'aabbccdd0001'))).status, 401, 'a credential for another hub');
+  assert.equal((await ask(N.oneTimeToken(dialler, await hello()))).status, 401, 'an updated machine always names the hub');
+});
+
+test('gossip admits a new machine only with a receipt from a known member', () => {
+  const net = N.createNetwork();
+  const attacker = generateKeyPairSync('ed25519');
+  const evil = signedRecord(net, { id: 'deadbeef0001', name: 'evil', endpoints: ['https://evil.example'], pubkey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEVIL', updatedAt: Date.now() }, attacker);
+  assert.equal(N.mergeRoster(net, { id: net.id, machines: { [evil.id]: evil } }), false);
+  assert.equal(N.loadNetwork().machines[evil.id], undefined);
+  assert.equal(N.hubTrust(N.loadNetwork()).machines[evil.id], undefined);
+
+  // A receipt it wrote for itself, or one for another key, is not enough.
+  const self = proofFrom(net, 'machine-admission', { machine: evil.id, key: spki(attacker), at: Date.now() }, attacker, evil.id);
+  const own = signedRecord(net, { ...evil, admission: self }, attacker);
+  assert.equal(N.mergeRoster(net, { id: net.id, machines: { [evil.id]: own } }), false);
+  const other = generateKeyPairSync('ed25519');
+  const wrongKey = signedRecord(net, { ...evil, admission: N.admitMachine(net, evil.id, spki(other)) }, attacker);
+  assert.equal(N.mergeRoster(net, { id: net.id, machines: { [evil.id]: wrongKey } }), false);
+
+  // A receipt from this machine admits it. A chain works within one roster.
+  const fresh = N.loadNetwork();
+  const a = generateKeyPairSync('ed25519'), b = generateKeyPairSync('ed25519');
+  const ra = signedRecord(fresh, { id: 'aaaa00000001', name: 'a', endpoints: [], admission: N.admitMachine(fresh, 'aaaa00000001', spki(a)), updatedAt: Date.now() }, a);
+  const rb = signedRecord(fresh, { id: 'bbbb00000001', name: 'b', endpoints: [], admission: proofFrom(fresh, 'machine-admission', { machine: 'bbbb00000001', key: spki(b), at: Date.now() }, a, 'aaaa00000001'), updatedAt: Date.now() }, b);
+  assert.equal(N.mergeRoster(fresh, { id: fresh.id, machines: { [rb.id]: rb, [ra.id]: ra } }), true);
+  const after = N.loadNetwork();
+  assert.ok(after.machines.aaaa00000001 && after.machines.bbbb00000001);
+});
+
+test('a machine that joins carries the inviter receipt in its own record', async t => {
+  const { net, base } = await hubFor(t);
+  const credential = await N.hubCredential(net, base);
+  const { code } = await (await fetch(`${base}/api/invite`, { method: 'POST', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: '{}' })).json();
+  const joiner = generateKeyPairSync('ed25519');
+  const res = await fetch(`${base}/api/join`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code, self: 'cccc00000001', name: 'joiner', codeSignPubkey: spki(joiner) }) });
+  const body = await res.json();
+  assert.equal(body.admission.issuer, net.self);
+  assert.equal(body.admission.key, spki(joiner));
+  // Another member that never saw the join accepts the joiner's own signed record.
+  const record = signedRecord(net, { id: 'cccc00000001', name: 'joiner', endpoints: [], admission: body.admission, updatedAt: Date.now() + 1 }, joiner);
+  const elsewhere = N.loadNetwork();
+  delete elsewhere.machines.cccc00000001;
+  N.saveNetwork(elsewhere);
+  assert.equal(N.mergeRoster(elsewhere, { id: net.id, machines: { [record.id]: record } }), true);
+});
+
+test('desktop sign-in refuses forwarded traffic and odd browser keys', async t => {
+  const { net, base } = await hubFor(t);
+  N.advertise(N.loadNetwork(), ['https://current.example']);
+  const plain = { 'content-type': 'application/json', origin: 'https://current.example' };
+  const post = (headers, body = { network: net.id }) => fetch(`${base}/api/auth/desktop`, { method: 'POST', headers, body: JSON.stringify(body) });
+  for (const extra of [{ 'x-forwarded-for': '192.0.2.10' }, { forwarded: 'for=192.0.2.10' }, { 'x-forwarded-host': 'current.example' }]) {
+    assert.equal((await post({ ...plain, ...extra })).status, 403, JSON.stringify(extra));
+  }
+  assert.equal((await post(plain, { network: net.id, proofKey: 'x'.repeat(600) })).status, 400);
+  assert.equal((await post(plain)).status, 200);
+});
+
+test('the invitation address ends when the inviter advertises or after a day', () => {
+  const net = N.createNetwork();
+  const owner = member(net, '0123456789ab', null);
+  const fresh = N.loadNetwork();
+  fresh.bootstrap = { machine: '0123456789ab', url: 'https://old-invite.example', at: Date.now() };
+  N.saveNetwork(fresh);
+  assert.ok(N.allEndpoints(N.loadNetwork()).includes('https://old-invite.example'));
+  assert.deepEqual(N.addressOwners(N.loadNetwork(), 'https://old-invite.example'), ['0123456789ab']);
+  assert.equal(N.bootstrapAddress({ ...fresh, bootstrap: { ...fresh.bootstrap, at: Date.now() - N.BOOTSTRAP_TTL_MS - 1 } }), null);
+  assert.equal(N.bootstrapAddress({ ...fresh, bootstrap: { machine: '0123456789ab', url: 'https://old-invite.example' } }), null, 'an older note with no time is not used');
+  const moved = signedRecord(fresh, { ...fresh.machines['0123456789ab'], endpoints: ['https://new-home.example'], updatedAt: Date.now() + 1 }, owner);
+  assert.equal(N.mergeRoster(fresh, { id: fresh.id, machines: { [moved.id]: moved } }), true);
+  const after = N.loadNetwork();
+  assert.equal(after.bootstrap, undefined);
+  assert.equal(N.allEndpoints(after).includes('https://old-invite.example'), false);
+});
+
+test('forwarded requests are never local for the window, certificates or sockets', async t => {
+  const { net, base } = await hubFor(t);
+  const host = `127.0.0.1:${net.port}`;
+  const close = await fetch(`${base}/api/window/close`, { method: 'POST', headers: { origin: `http://${host}`, forwarded: 'for=192.0.2.10' } });
+  assert.notEqual(close.status, 204);
+  const ask = await fetch(`${base}/api/share/ask?domain=x.example`, { headers: { 'x-forwarded-host': 'x.example' } });
+  assert.notEqual(await ask.text(), 'ok');
+});

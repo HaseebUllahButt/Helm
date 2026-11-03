@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { hubCredential } from '../packages/protocol/network.js';
 
+// A network in which this address is this machine's own hub, so it is asked.
+const own = (base) => ({ self: 'aa', port: Number(new URL(base).port), machines: { aa: { id: 'aa' } }, revoked: {} });
+
 // A hub that answers with an error and keeps streaming its page.
 async function hub(t, status) {
   let closed;
@@ -19,7 +22,7 @@ async function hub(t, status) {
 
 for (const status of [404, 503]) test(`a failed handshake releases its unread response after status ${status}`, async t => {
   const { base, gone } = await hub(t, status);
-  await assert.rejects(hubCredential({}, base), status === 404 ? /older helm/ : /503/);
+  await assert.rejects(hubCredential(own(base), base), status === 404 ? /older helm/ : /503/);
   await gone;
 });
 
@@ -33,10 +36,10 @@ test('giving up on an address that never answers closes the connection at once',
     t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
     return { base: `http://127.0.0.1:${server.address().port}`, gone };
   })();
-  await assert.rejects(hubCredential({}, base, { timeout: 100 }), (err) => err.name === 'TimeoutError');
+  await assert.rejects(hubCredential(own(base), base, { timeout: 100 }), (err) => err.name === 'TimeoutError');
   await gone;
   const controller = new AbortController();
-  const asked = hubCredential({}, base, { signal: controller.signal });
+  const asked = hubCredential(own(base), base, { signal: controller.signal });
   controller.abort(new Error('cancelled by the caller'));
   await assert.rejects(asked, /cancelled by the caller/);
 });
@@ -46,5 +49,5 @@ test('an address with nothing on it fails the way fetch did, so callers try the 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
   await new Promise(resolve => server.close(resolve));
-  await assert.rejects(hubCredential({}, `http://127.0.0.1:${port}`), (err) => err.message === 'fetch failed' && err.cause?.code === 'ECONNREFUSED');
+  await assert.rejects(hubCredential(own(`http://127.0.0.1:${port}`), `http://127.0.0.1:${port}`), (err) => err.message === 'fetch failed' && err.cause?.code === 'ECONNREFUSED');
 });

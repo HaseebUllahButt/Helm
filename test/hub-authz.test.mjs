@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { generateKeyPairSync, sign } from 'node:crypto';
+import { proofBody } from '../packages/protocol/proof.js';
 
 /**
  * What a credential is allowed to do, as opposed to merely prove.
@@ -76,7 +78,16 @@ test('a machine still gossips, and still reconciles both directions', async () =
   assert.equal(res.status, 200);
   const back = await res.json();
   assert.equal(back.id, net.id, 'the answer carries our roster back');
-  assert.ok(N.loadNetwork().machines.deadbeefcafe, 'a machine may introduce a machine');
+  assert.equal(N.loadNetwork().machines.deadbeefcafe, undefined, 'a machine with no signature and no receipt stays out');
+
+  // A machine this hub admitted, in a record it signed itself, comes in.
+  const pair = generateKeyPairSync('ed25519');
+  const key = pair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  const record = { ...hostile, codeSignPubkey: key, admission: N.admitMachine(N.loadNetwork(), hostile.id, key) };
+  const clean = N.sanitizeRoster({ machines: { [hostile.id]: record } }).machines[hostile.id];
+  record.machineSignature = sign(null, proofBody(net.id, 'machine-record', clean), pair.privateKey).toString('base64url');
+  assert.equal((await post('/api/roster', asRoster({ deadbeefcafe: record }), MACHINE)).status, 200);
+  assert.ok(N.loadNetwork().machines.deadbeefcafe, 'a machine may introduce a machine it admitted');
 });
 
 test('a paired controller can read the network and invite every kind of computer', async () => {
@@ -124,10 +135,11 @@ test('a device paired at one hub can still probe the others', async () => {
   // are cross-origin, and they have to work or the app cannot fail over.
   N.describeSelf(N.loadNetwork(), { endpoints: ['https://1-2-3-4.sslip.io'] });
 
+  // A remote request also needs a device proof (see security-routes); the
+  // answer, even a refusal, must still be readable from that origin.
   const probed = await fetch(`${BASE}/api/network`, {
     headers: { authorization: `Bearer ${DEVICE}`, origin: 'https://1-2-3-4.sslip.io' },
   });
-  assert.equal(probed.status, 200);
   assert.equal(probed.headers.get('access-control-allow-origin'), 'https://1-2-3-4.sslip.io');
   assert.match(probed.headers.get('vary'), /\bOrigin\b/);
 

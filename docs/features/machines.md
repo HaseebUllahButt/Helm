@@ -20,6 +20,10 @@ owner's home or network to bypass this check.
   with a private device key. Remote requests prove that key for one machine,
   challenge and request. Direct offers prove it for the target and connection.
   Removing the credential's signer also closes existing direct connections.
+  A machine connects only to a hub that signs as the owner of the address
+  it dialled. A machine that joined through an older Helm has no inviter
+  receipt. Machines that have not seen it yet refuse it: make a new join
+  command.
 - **Traps:** never press "Make join command" or remove devices on the real
   network to test. Removing a device signs it out everywhere. Join links
   expire in minutes. Public machines need inbound UDP 44301–44332 in both
