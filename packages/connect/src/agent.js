@@ -82,6 +82,7 @@ import { useOwnerLogins } from './browser.js';
 import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
 import { ActionDelivery } from './action-delivery.js';
+import { NativeMessageDelivery } from './session-subagents.js';
 import { InputDelivery } from './input-delivery.js';
 import { ChatEventStream } from './event-stream.js';
 import { SessionUpdates } from './session-updates.js';
@@ -2155,12 +2156,20 @@ export class Daemon {
           this.inputDelivery ??= new InputDelivery(this.sessions);
           return this.inputDelivery.status(p.actionId, caller);
         }
+        if (p.kind === 'native') {
+          this.nativeMessageDelivery ??= new NativeMessageDelivery(this.sessions);
+          return this.nativeMessageDelivery.status(p.actionId, caller);
+        }
         this.actionDelivery ??= new ActionDelivery(this.sessions);
         return this.actionDelivery.status(p.actionId, caller);
       case 'session.answer-deliver':
         await this.sessionRecovery;
         this.actionDelivery ??= new ActionDelivery(this.sessions);
         return this.actionDelivery.deliver(p, caller);
+      case 'session.native-message-deliver':
+        await this.sessionRecovery;
+        this.nativeMessageDelivery ??= new NativeMessageDelivery(this.sessions);
+        return this.nativeMessageDelivery.deliver(p, caller);
       case M.SESSION_DELIVER:
         await this.sessionRecovery;
         this.inputDelivery ??= new InputDelivery(this.sessions);

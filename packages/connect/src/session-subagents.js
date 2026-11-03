@@ -4,6 +4,57 @@ import { findSubagentsDir, nativeAgentFile, nativeSubagent, nativeSubagents, sub
 import { codexSubagents, codexChildMessages, cursorMessages, cursorSubagents, eventSubagents, opencodeSubagents, relayToSubagent, unwrapCoordinator, SUBAGENT_ENGINES } from './cli-subagents.js';
 import { ENGINES } from './engines.js';
 import { transcriptEvents } from './session-transcript-events.js';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { HELM_DIR } from './paths.js';
+
+const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const invalid = (message, code = 'invalid_argument') => Object.assign(new Error(message), { code });
+
+/** A native CLI may have accepted a message even when its reply was lost. */
+export class NativeMessageDelivery {
+  active = new Map();
+  constructor(sessions, { dir = join(HELM_DIR, 'native-message-delivery') } = {}) { this.sessions = sessions; this.dir = dir; }
+  path(actionId, caller) {
+    if (!/^[a-f0-9]{32}$/.test(actionId ?? '')) throw invalid('Choose a valid message number.');
+    return join(this.dir, `${digest([caller ?? 'local', actionId])}.json`);
+  }
+  read(path) { return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null; }
+  save(path, record) {
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    const temp = `${path}.${randomBytes(8).toString('hex')}.tmp`;
+    try { writeFileSync(temp, JSON.stringify(record), { mode: 0o600, flag: 'wx' }); renameSync(temp, path); }
+    finally { rmSync(temp, { force: true }); }
+  }
+  status(actionId, caller) {
+    const record = this.read(this.path(actionId, caller));
+    return record ? { state: record.state, result: record.result, error: record.error } : { state: 'missing' };
+  }
+  async deliver({ actionId, id, agentId, data }, caller) {
+    if (typeof id !== 'string' || !id || typeof agentId !== 'string' || !agentId
+      || typeof data !== 'string' || !data.trim() || data.length > 32_000) throw invalid('Choose a valid helper message.');
+    const path = this.path(actionId, caller);
+    const stamp = digest({ id, agentId, data });
+    const held = this.read(path);
+    if (held && held.digest !== stamp) throw invalid('This message number belongs to another message.', 'delivery_conflict');
+    if (this.active.has(path)) return this.active.get(path);
+    if (held) return this.status(actionId, caller);
+    // A saved checking record never grants permission to repeat the send.
+    this.save(path, { digest: stamp, state: 'checking' });
+    const running = Promise.resolve().then(async () => {
+      try {
+        const result = await this.sessions.messageNative(id, agentId, data);
+        this.save(path, { digest: stamp, state: 'done', result });
+      } catch (error) {
+        this.save(path, { digest: stamp, state: 'checking', error: String(error.message ?? error) });
+      }
+      return this.status(actionId, caller);
+    }).finally(() => this.active.delete(path));
+    this.active.set(path, running);
+    return running;
+  }
+}
 
 // How often one Claude session's own subagent folder is re-listed at most.
 const NATIVE_POLL_MS = 2_000;
