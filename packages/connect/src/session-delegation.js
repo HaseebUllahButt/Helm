@@ -248,13 +248,20 @@ export class SessionDelegation {
     // A parent still waiting reads again and takes the result itself.
     if (owner && !result.complete) this.#waiters.set(id, Date.now());
     if (owner && result.complete) {
-      this.#waiters.delete(id);
       const completed = events.findLast(e => e.type === 'turn.done' && !String(e.turnId).startsWith('local-'));
       if (completed) {
+        const previous = session.delegation.consumedSeq;
         session.delegation.consumedSeq = Math.max(session.delegation.consumedSeq ?? 0, completed.seq);
         // Persist before removing tickets: a restart in between still knows
         // not to revive or deliver a result that the parent already read.
         this.#core.save();
+        if (!this.#core.flush()) {
+          if (previous === undefined) delete session.delegation.consumedSeq;
+          else session.delegation.consumedSeq = previous;
+          this.#core.save();
+          throw new Error('Could not save the result receipt. Read the result again.');
+        }
+        this.#waiters.delete(id);
         for (const item of [...(this.#core.deliveryState.queue(parent.id) ?? [])]) {
           if (this.#consumedResult(parent, item.turnId)) this.#sessions.dequeue(parent.id, item.turnId);
         }

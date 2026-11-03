@@ -181,15 +181,24 @@ const TURN_CONTEXT = new Set(['turn.start', 'turn.edit', 'turn.images', 'turn.de
 
 function pendingTickets(events) {
   const pending = new Map();
+  const uncertain = new Set();
   for (const event of events) {
-    if (event.type === 'turn.start' && String(event.turnId).startsWith('local-') && event.queued) pending.set(event.turnId, event.text ?? '');
+    if (event.type === 'turn.start' && event.queued) pending.set(event.turnId, event.text ?? '');
     else if (event.type === 'turn.edit' && pending.has(event.turnId)) pending.set(event.turnId, event.text ?? '');
-    else if (['turn.deliver', 'turn.accept', 'turn.done', 'turn.remove'].includes(event.type)) pending.delete(event.turnId);
+    // A delivery attempt alone is not proof that the agent read the ticket.
+    else if (event.type === 'turn.deliver') {
+      if (event.requeued) uncertain.delete(event.turnId);
+      else uncertain.add(event.turnId);
+    }
+    else if (['turn.accept', 'turn.done', 'turn.remove'].includes(event.type)) {
+      pending.delete(event.turnId); uncertain.delete(event.turnId);
+    }
     else if (event.type === 'turn.start' && !event.wake && !String(event.turnId).startsWith('local-')) {
       // An echo that names its ticket settles exactly that one.
-      if (event.inputId != null) { pending.delete(event.inputId); continue; }
+      if (event.inputId != null) { pending.delete(event.inputId); uncertain.delete(event.inputId); continue; }
       const echo = (event.text ?? '').trim();
       for (const [turnId, text] of pending) {
+        if (uncertain.has(turnId)) continue;
         const prefix = text.trim();
         if (echo === prefix || (prefix && echo.startsWith(`${prefix}\n`))) { pending.delete(turnId); break; }
       }
@@ -203,6 +212,8 @@ function anchor(event) {
   const { seq, at, type, id, turnId, inputId, requestId, kind, parentId, name, queued, local, status, reason, checkpoint } = event;
   const result = { seq, at, type, id, turnId, inputId, requestId, kind, parentId, name, queued, local, status, reason, checkpoint };
   if (type === 'turn.recover') result.providerTurnId = event.providerTurnId;
+  if (type === 'turn.deliver' && event.requeued) result.requeued = true;
+  if (type === 'turn.deliver' && event.clientId) result.clientId = event.clientId;
   if (kind === 'visual' && event.visual) result.visual = event.visual;
   if (type === 'turn.start' || type === 'turn.edit' || type === 'turn.images') {
     if (event.messageId) result.messageId = event.messageId;
@@ -613,8 +624,9 @@ export class EventLog {
     if (!file) this.#files.set(id, file = new EventFile(this.#file(id), event => {
       // Exact text is needed to settle queued messages against provider echoes.
       if (isTurn(event)) {
-        const { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId, messageId } = event;
-        return { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId, ...(messageId ? { messageId } : {}) };
+        const { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId, messageId, requeued, clientId } = event;
+        return { seq, at, type, turnId, inputId, local, wake, cause, queued, text, providerTurnId, ...(messageId ? { messageId } : {}),
+          ...(requeued ? { requeued } : {}), ...(clientId ? { clientId } : {}) };
       }
       return anchor(event);
     }));

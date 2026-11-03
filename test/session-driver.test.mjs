@@ -1889,6 +1889,59 @@ test('an agent process that dies before rebind stops its turn but keeps queued m
   assert.deepEqual(FakeDriver.made.findLast((d) => d.procId === s.id).sent, ['next task'], 'and it is sent once the agent is free');
 });
 
+test('a detached Codex account process exit settles its own chats before rebind', async t => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const { codexProcId } = await import('../packages/connect/src/hosted-process.js');
+  const profilesPath = join(process.env.HELM_DIR, 'profiles.json');
+  const previousProfiles = readFileSync(profilesPath, 'utf8');
+  const profiles = JSON.parse(previousProfiles);
+  profiles.profiles.push({ id: 'codex', engine: 'codex', cmd: 'codex', env: { CODEX_HOME: '/tmp/helm-test-account' }, source: 'alias' });
+  writeFileSync(profilesPath, JSON.stringify(profiles));
+  t.after(() => writeFileSync(profilesPath, previousProfiles));
+  const dir = join(process.env.HELM_DIR, 'events-codex-account-exit');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const original = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, nativeDiscovery: false,
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => false }) });
+  const first = await original.start({ cwd: '/tmp', profileId: 'codex' });
+  const second = await original.start({ cwd: '/tmp', profileId: 'codex' });
+  const other = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  for (const s of [first, second, other]) await original.input(s.id, `Work ${s.id}`);
+  await original.stop();
+  const host = Object.assign(new EventEmitter(), { hasProc: () => true });
+  const restarted = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, nativeDiscovery: false, procHost: host });
+  t.after(() => restarted.stop());
+  const resuming = restarted.resume();
+  host.emit('proc.exit', { id: codexProcId('codex', { CODEX_HOME: '/tmp/helm-test-account' }) });
+  for (const s of [first, second]) {
+    assert.ok(restarted.history(s.id).events.some(e => e.type === 'turn.done' && e.turnId === 't1' && e.status === 'interrupted'));
+  }
+  assert.equal(restarted.history(other.id).events.some(e => e.type === 'turn.done' && e.turnId === 't1'), false);
+  await resuming;
+});
+
+test('an exit before restart recovery keeps an unsent message waiting', async t => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-exit-before-recovery');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const host = () => Object.assign(new EventEmitter(), { hasProc: () => false });
+  const original = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, nativeDiscovery: false, procHost: host() });
+  const session = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  await original.input(session.id, 'Active work');
+  await original.input(session.id, 'Still waiting', { delivery: 'queue' });
+  const ticket = original.history(session.id).events.find(e => e.type === 'turn.start' && e.text === 'Still waiting').turnId;
+  await original.stop();
+  const procHost = host();
+  const restarted = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, nativeDiscovery: false, procHost });
+  t.after(() => restarted.stop());
+  procHost.emit('proc.exit', { id: session.id });
+  assert.equal(restarted.history(session.id).events.some(e => e.type === 'turn.done' && e.turnId === ticket), false);
+  await restarted.resume();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(FakeDriver.made.findLast(d => d.procId === session.id).sent, ['Still waiting']);
+});
+
 test('a message sent while a restart is still rebinding shares the one connection', async (t) => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
