@@ -165,6 +165,17 @@ export class SessionWorktrees {
     const path = s.chatWorktree.path;
     let removed = null;
     try {
+      if (s.chatWorktree.parking) {
+        // A crash can land on either side of the folder removal. Recover
+        // from the disk before deciding whether its branch can go.
+        const missing = !existsSync(expand(path));
+        for (const o of this.#sharing(s)) {
+          delete o.chatWorktree.parking;
+          if (missing) o.chatWorktree.parked = true;
+        }
+        this.#core.save();
+        this.#sessions.flush();
+      }
       if (s.chatWorktree.parked) {
         // A message now waits, then rebuilds the folder from base if the branch went.
         this.#removing.set(path, new Promise((resolve) => { removed = resolve; }));
@@ -182,9 +193,17 @@ export class SessionWorktrees {
       for (const o of this.#sharing(s)) await this.#sessions.release(o.id);
       if (this.#core.index.get(s.id) !== s || !idle() || await verdict() !== action) return false;
       const park = action === 'park';
+      if (park) {
+        for (const o of this.#sharing(s)) o.chatWorktree.parking = true;
+        this.#core.save();
+        this.#sessions.flush();
+      }
       await removeChatWorktree(s.chatWorktree, { keepBranch: park });
       if (park) {
-        for (const o of this.#sharing(s)) o.chatWorktree = { ...o.chatWorktree, parked: true };
+        for (const o of this.#sharing(s)) {
+          o.chatWorktree = { ...o.chatWorktree, parked: true };
+          delete o.chatWorktree.parking;
+        }
         this.#core.save();
       }
       this.#sessions.log(`[${s.id}] removed ${park ? 'parked' : merged ? 'merged' : 'unused'} worktree ${s.chatWorktree.path} (${s.chatWorktree.branch}${park ? ' kept' : ''})`);

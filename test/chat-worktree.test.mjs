@@ -339,6 +339,22 @@ test('deleting a parked chat removes its branch once the work is merged, and kee
   await s.stop();
 });
 
+test('a crash after removing a parked folder retains its branch cleanup step', async () => {
+  const dir = repo();
+  const { sessions: s } = sessions();
+  const { chat, later, branch } = await parkedChat(s, dir);
+  const info = s.get(chat.id).chatWorktree;
+  delete info.parked;
+  info.parking = true;
+  assert.equal(await s.worktreeTidy(chat.id, later()), false, 'unmerged work remains');
+  assert.equal(info.parking, undefined);
+  assert.equal(info.parked, true, 'recovery records that the folder removal completed');
+  git(dir, 'merge', '-q', '--no-edit', branch);
+  assert.equal(await s.worktreeTidy(chat.id, later()), true);
+  assert.ok(!hasBranch(dir, branch));
+  await s.stop();
+});
+
 test('a parked branch whose base branch went is removed once the current branch holds it', async () => {
   const dir = repo();
   git(dir, 'checkout', '-q', '-b', 'helm/parent');
