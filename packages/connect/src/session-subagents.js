@@ -47,7 +47,9 @@ export class NativeMessageDelivery {
         const result = await this.sessions.messageNative(id, agentId, data);
         this.save(path, { digest: stamp, state: 'done', result });
       } catch (error) {
-        this.save(path, { digest: stamp, state: 'checking', error: String(error.message ?? error) });
+        if (error?.deliveryNotSent === true) {
+          this.save(path, { digest: stamp, state: 'done', error: { message: String(error.message ?? error), code: error.code ?? 'delivery_failed' } });
+        } else this.save(path, { digest: stamp, state: 'checking', error: String(error.message ?? error) });
       }
       return this.status(actionId, caller);
     }).finally(() => this.active.delete(path));
@@ -312,24 +314,33 @@ export class SessionSubagents {
    * shows the reply.
    */
   async messageNative(id, agentId, text) {
-    const s = this.#sessions.get(id);
-    const body = String(text ?? '').replace(/\r\n?/g, '\n').trim();
-    if (!body) throw new Error('write a message first');
-    if (body.length > 32_000) throw new Error('that message is too long');
-    await this.refreshNative(s, { force: true });
-    const card = s.nativeCards?.find((a) => a.id === agentId);
-    if (!card) throw new Error('no such subagent');
-    if (!card.canMessage) throw new Error(s.driver || s.nativeChat
-      ? `${ENGINES[s.engine]?.label ?? s.engine} cannot pass messages to its helpers.`
-      : 'Open the main chat in Helm to message its helpers.');
+    let s, body, card, d;
+    try {
+      s = this.#sessions.get(id);
+      body = String(text ?? '').replace(/\r\n?/g, '\n').trim();
+      if (!body) throw new Error('write a message first');
+      if (body.length > 32_000) throw new Error('that message is too long');
+      await this.refreshNative(s, { force: true });
+      card = s.nativeCards?.find((a) => a.id === agentId);
+      if (!card) throw new Error('no such subagent');
+      if (!card.canMessage) throw new Error(s.driver || s.nativeChat
+        ? `${ENGINES[s.engine]?.label ?? s.engine} cannot pass messages to its helpers.`
+        : 'Open the main chat in Helm to message its helpers.');
+      if (s.engine === 'codex') {
+        d = this.#core.drivers.get(id);
+        if (!d && s.external) throw new Error('Continue this chat in Helm first, then message its helpers.');
+        if (!d) { await this.#sessions.connect(id); d = this.#core.drivers.get(id); }
+        if (typeof d?.messageSubagent !== 'function') throw new Error('This chat cannot reach its helpers right now.');
+      }
+    } catch (failure) {
+      const error = failure instanceof Error ? failure : new Error(String(failure));
+      error.deliveryNotSent = true;
+      throw error;
+    }
     // Codex takes it straight on the helper's own thread, no model in the
     // way; the rest are asked to pass it on.
     let result = {};
     if (s.engine === 'codex') {
-      let d = this.#core.drivers.get(id);
-      if (!d && s.external) throw new Error('Continue this chat in Helm first, then message its helpers.');
-      if (!d) { await this.#sessions.connect(id); d = this.#core.drivers.get(id); }
-      if (typeof d?.messageSubagent !== 'function') throw new Error('This chat cannot reach its helpers right now.');
       await d.messageSubagent(card.id, body);
       void this.refreshNative(s, { force: true });
     } else result = await this.#sessions.input(id, relayToSubagent(s.engine, card, body));
