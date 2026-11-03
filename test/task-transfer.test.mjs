@@ -237,6 +237,40 @@ test('transport failure queues the frozen encrypted request and retry reuses it 
   assert.equal(readFileSync(join(result.receipt.folder, 'app.js'), 'utf8'), 'finished-before-pause');
 });
 
+test('queued task delivery resumes from its saved request without an open screen', async () => {
+  const { options, params, source, accepted } = fixture();
+  const rpc = options.rpc;
+  let offline = true;
+  options.rpc = (...args) => {
+    if (args[1] === M.HANDOFF_ACCEPT && offline) throw new Error('socket closed');
+    return rpc(...args);
+  };
+  const first = await new TaskTransfers(options).send(params, 'phone');
+  assert.equal(first.status, 'queued');
+  assert.equal(source.taskTransfer.status, 'queued');
+  assert.equal(JSON.parse(readFileSync(join(options.directory, `${params.handoffId}.json`))).result.status, 'queued');
+  offline = false;
+  await new TaskTransfers(options).reconcile();
+  assert.equal(accepted.length, 1);
+  assert.equal(source.taskTransfer.status, 'running');
+  await new TaskTransfers(options).reconcile();
+  assert.equal(accepted.length, 1, 'a running task is not dispatched again');
+});
+
+test('a refused task reports failure on its source and waits for an explicit retry', async () => {
+  const { options, params, source } = fixture();
+  const rpc = options.rpc;
+  let accepts = 0;
+  options.rpc = (...args) => {
+    if (args[1] === M.HANDOFF_ACCEPT) { accepts++; throw Object.assign(new Error('The account needs a login.'), { rpc: true }); }
+    return rpc(...args);
+  };
+  await assert.rejects(new TaskTransfers(options).send(params, 'phone'), /needs a login/);
+  assert.equal(source.taskTransfer.status, 'failed');
+  await new TaskTransfers(options).reconcile();
+  assert.equal(accepts, 1);
+});
+
 test('peer callers, unavailable accounts and target execution failures never become successful sends', async () => {
   const { options, params } = fixture();
   const sender = new TaskTransfers(options);

@@ -99,7 +99,7 @@ export class TaskTransfers {
         throw new Error('task retry does not match its original request');
       }
     }
-    if (record?.result?.status === 'running' || record?.result?.status === 'queued') return record.result;
+    if (record?.result?.status === 'running') return record.result;
     if (record?.bulk && !record.request) return this.#startBulk(net, target, params, intent, fingerprint, record);
     if (!record) {
       if (!target.codePubkey) throw new Error('the target needs a code-transfer key; restart Helm there');
@@ -166,7 +166,7 @@ export class TaskTransfers {
       request.prompt = 'Continue the encrypted task using its transferred project.';
       request.requestDigest = handoffRequestDigest(request);
       request.sourceSignature = signHandoffDigest(request.requestDigest);
-      record = { fingerprint, request, preflight,
+      record = { fingerprint, intent, request, preflight, resumeSend: true,
         sourceFolder: resolve(expand(intent.folder)), baseline: snapshotBaseline(snapshot),
         checkpoint: intent.returnToSource ? taskCheckpoint(join(this.directory, `${params.handoffId}.git-checkpoints`), snapshot) : null,
         baselineEnvelope: intent.returnToSource ? sealCodeSnapshot(snapshot, codeKeyInfo().codePubkey, params.handoffId) : null };
@@ -177,9 +177,13 @@ export class TaskTransfers {
 
   async #deliver(target, params, record) {
     const sourceSession = record.request.parent?.sessionId;
-    if (sourceSession && record.request.returnToSource) this.sessions.setTaskTransfer?.(sourceSession, {
-      handoffId: params.handoffId, role: 'source', status: 'running', machineId: target.id, machineName: target.name,
-    });
+    const report = (status, error) => {
+      if (sourceSession && record.request.returnToSource) this.sessions.setTaskTransfer?.(sourceSession, {
+        handoffId: params.handoffId, role: 'source', status, machineId: target.id, machineName: target.name,
+        ...(error ? { error } : {}),
+      });
+    };
+    report('sending');
     let receipt;
     let route = 'relay';
     try {
@@ -187,10 +191,20 @@ export class TaskTransfers {
         timeout: 240_000, direct: true, onRoute: (value) => { route = value; },
       });
     } catch (error) {
-      if (error.rpc || !networkFailure(error)) throw error;
+      if (error.rpc || !networkFailure(error)) {
+        record.resumeSend = false;
+        record.sendError = String(error.message).slice(0, 500);
+        this.#save(params.handoffId, record);
+        report('failed', record.sendError);
+        throw error;
+      }
       await this.enqueue(target.id, record.request);
-      return { sent: true, status: 'queued', handoffId: params.handoffId,
+      record.result = { sent: true, status: 'queued', handoffId: params.handoffId,
         targetMachineId: target.id, targetName: target.name, preflight: record.preflight };
+      record.resumeSend = true;
+      this.#save(params.handoffId, record);
+      report('queued');
+      return record.result;
     }
     const result = {
       sent: true, status: 'running', handoffId: params.handoffId, route,
@@ -205,7 +219,10 @@ export class TaskTransfers {
       } catch (error) { result.warning = `The task is running, but its source link could not be saved: ${error.message}`; }
     }
     record.result = result;
+    record.resumeSend = false;
+    delete record.sendError;
     this.#save(params.handoffId, record);
+    report('running');
     return result;
   }
 
@@ -221,7 +238,7 @@ export class TaskTransfers {
     let { account, source, mode } = found;
     if (!record && this.sendEngine) {
       const history = source ? await this.sessions.history(source.id, { tail: 500, limit: 500 }) : null;
-      record = { fingerprint, bulk: { phase: 'copying', folder: intent.targetFolder || null,
+      record = { fingerprint, intent, resumeSend: true, bulk: { phase: 'copying', folder: intent.targetFolder || null,
         account: { engine: account.engine }, mode, sourceId: source?.id ?? null, rootName: basename(resolve(expand(intent.folder))), engine: true },
         context: history ? readThread(history.events, { limit: 80 }).join('\n').slice(-24_000) : '',
         preflight: { files: null, bytes: null, envFiles: [], skipped: 0, skippedEntries: [], omittedEntries: 0, requiresAcknowledgement: false, warnings: [] } };
@@ -249,7 +266,7 @@ export class TaskTransfers {
       }
       const history = source ? await this.sessions.history(source.id, { tail: 500, limit: 500 }) : null;
       record = {
-        fingerprint,
+        fingerprint, intent, resumeSend: true,
         bulk: { folder, phase: 'copying', files: plan.files, bytes: plan.bytes, git: plan.git,
           account: { engine: account.engine }, mode, sourceId: source?.id ?? null, rootName: plan.rootName },
         context: history ? readThread(history.events, { limit: 80 }).join('\n').slice(-24_000) : '',
@@ -259,6 +276,10 @@ export class TaskTransfers {
       };
       this.#save(params.handoffId, record);
     }
+    record.intent ??= intent;
+    record.resumeSend = true;
+    delete record.bulk.error;
+    this.#save(params.handoffId, record);
     const job = { fingerprint, preflight: record.preflight, error: null,
       progress: { phase: 'copying', folder: record.bulk.folder, bytes: 0, total: record.bulk.bytes, percent: 0 } };
     this.copying.set(params.handoffId, job);
@@ -270,6 +291,7 @@ export class TaskTransfers {
         job.preflight = null;
         setTimeout(() => { if (this.copying.get(params.handoffId) === job) this.copying.delete(params.handoffId); }, this.failedKeepMs).unref?.();
         record.bulk.error = String(error.message).slice(0, 500);
+        record.resumeSend = this.stopped || this.sendEngine?.stopping === true || networkFailure(error);
         try { this.#save(params.handoffId, record); }
         catch (saveError) { console.error(`[helm] Could not save task transfer status: ${saveError.message}`); }
       })
@@ -425,13 +447,16 @@ export class TaskTransfers {
     this.scanning = true;
     try {
       const files = existsSync(this.directory) ? readdirSync(this.directory) : [];
-      for (const file of files) {
-        if (this.stopped) break;
-        if (!/^[a-f0-9]{24}\.json$/.test(file)) continue;
+      await Promise.allSettled(files.filter(file => /^[a-f0-9]{24}\.json$/.test(file)).map(async file => {
+        if (this.stopped) return;
         const id = file.slice(0, -5);
-        if (this.inflight.has(id)) continue;
-        await this.collect(id).catch(() => {});
-      }
+        if (this.inflight.has(id)) return;
+        const record = JSON.parse(readFileSync(join(this.directory, file), 'utf8'));
+        if (record.intent && record.resumeSend !== false && record.result?.status !== 'running') {
+          await this.send({ ...record.intent, handoffId: id, allowSkipped: true }, this.network().self);
+        }
+        await this.collect(id);
+      }));
     } catch {} finally { this.scanning = false; }
   }
 
