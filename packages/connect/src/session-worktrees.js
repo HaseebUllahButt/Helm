@@ -204,12 +204,17 @@ export class SessionWorktrees {
     return [s, ...[...this.#core.index.values()].filter((o) => o !== s && o.chatWorktree?.path === s.chatWorktree?.path)];
   }
 
-  /** A deleted chat takes its worktree along when nothing in it would be lost. */
+  /**
+   * A deleted chat takes its worktree along when nothing in it would be lost.
+   * A parked one has only its branch: it goes if merged, because no chat is
+   * left to check it later. Unmerged work stays.
+   */
   async dropped(s) {
-    if (!s.chatWorktree || !existsSync(expand(s.chatWorktree.path))) return;
+    if (!s.chatWorktree) return;
     if ([...this.#core.index.values()].some((o) => o !== s && o.chatWorktree?.path === s.chatWorktree.path)) return;
     try {
-      if (!await keepReason(s.chatWorktree, { merged: false })) await removeChatWorktree(s.chatWorktree);
+      if (!existsSync(expand(s.chatWorktree.path))) await dropMergedBranch(s.chatWorktree);
+      else if (!await keepReason(s.chatWorktree, { merged: false })) await removeChatWorktree(s.chatWorktree);
     } catch (err) { this.#sessions.log(`[${s.id}] could not remove its worktree: ${err.message}`); }
   }
 }

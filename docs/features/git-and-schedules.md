@@ -60,7 +60,9 @@ edited files in; with none, the Git sheet says so.
   merged. After an hour of quiet with commits not merged and nothing else in
   the folder (ignored files count, built output does not), the folder goes
   and the branch stays ("parked") until it is merged. A message rebuilds
-  the folder, from the current branch if the base is gone. A helper made
+  the folder, from the current branch if the base is gone. With the base
+  gone, "merged" also means "in the current branch". Deleting a parked
+  chat removes its branch only if merged: no chat is left to check later. A helper made
   with `helm delegate --worktree` gets the same record; agents never remove
   these copies by hand, because a helper whose folder was gone failed on
   every message.
