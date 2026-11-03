@@ -514,7 +514,7 @@ export class Sessions extends EventEmitter {
 
   /** Write a waiting index change now. Nothing waiting, nothing written. */
   flush() {
-    if (!this.#saveTimer) return;
+    if (!this.#saveTimer) return true;
     clearTimeout(this.#saveTimer);
     this.#saveTimer = null;
     pendingSaves.delete(this.#flushSave);
@@ -533,10 +533,12 @@ export class Sessions extends EventEmitter {
         { mode: 0o600 }
       );
       renameSync(`${INDEX_FILE}.tmp`, INDEX_FILE);
+      return true;
     } catch (error) {
       // Off the caller's stack now, so a full disk must not end the daemon.
       // The next change tries again.
       this.log(`could not save the session list: ${error.message}`);
+      return false;
     }
   }
 

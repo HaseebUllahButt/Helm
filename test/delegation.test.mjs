@@ -488,6 +488,26 @@ test('collecting a completed result removes its queued notice and survives resta
   assert.equal(drivers.get(parent.id).sent, 'Implement and ship', 'finishing the parent does not deliver the result again');
 });
 
+test('a result is not acknowledged when its receipt cannot be saved', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Work');
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  drivers.get(child.id).finish();
+  await new Promise(resolve => setImmediate(resolve));
+  const ticket = sessions.history(parent.id).events.find(e => String(e.turnId).startsWith(`local-result-${child.id}-`));
+  sessions.flush();
+  const blocked = join(process.env.HELM_DIR, 'sessions.json.tmp');
+  mkdirSync(blocked);
+  t.after(() => rmSync(blocked, { recursive: true, force: true }));
+  assert.throws(() => sessions.delegationResult(child.id, { consume: true, parentId: parent.id, callerThreadId: parent.engineSessionId }), /save/i);
+  assert.equal(sessions.turnState(parent.id, ticket.turnId), 'open');
+  assert.equal(sessions.get(child.id).delegation.consumedSeq ?? 0, 0);
+  rmSync(blocked, { recursive: true, force: true });
+  assert.equal(sessions.delegationResult(child.id, { consume: true, parentId: parent.id, callerThreadId: parent.engineSessionId }).complete, true);
+  assert.equal(sessions.turnState(parent.id, ticket.turnId), 'removed');
+});
+
 test('a completion notice uses its outcome before idle arrives after a steering ticket', async t => {
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
