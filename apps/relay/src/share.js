@@ -154,7 +154,7 @@ export function createShareRoute({ online, callEnv, openTcp }) {
     let shares = [];
     try {
       const answer = await callEnv(env, 'share.list', { forHub: true, members: true }, { timeout: 4000 });
-      if (Array.isArray(answer?.shares)) shares = answer.shares;
+      if (Array.isArray(answer?.shares)) shares = answer.shares.filter(s => s && typeof s === 'object' && !Array.isArray(s));
     } catch { /* no current access decision: refuse until the source answers */ }
     const source = { env, shares, at, order };
     if (apply) { acceptSource(source); rebuild(); }
@@ -520,10 +520,12 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     const check = async () => {
       if (socket.destroyed) return;
       if (!online.has(share.env)) { end(); return; }
-      await refreshSource(share.env);
+      try { await refreshSource(share.env); } catch { end(); return; }
       if (socket.destroyed) return;
-      const next = cache.map.get(name);
-      if (!sameShare(next) || !unlocked(req, next, base)) { end(); return; }
+      try {
+        const next = cache.map.get(name);
+        if (!sameShare(next) || !unlocked(req, next, base)) { end(); return; }
+      } catch { end(); return; }
       checkTimer = setTimeout(check, CACHE_MS); checkTimer.unref?.();
     };
     checkTimer = setTimeout(check, CACHE_MS); checkTimer.unref?.();

@@ -83,7 +83,8 @@ async function liveShare(t, expiresAt) {
   await once(client, 'open');
   const echo = once(client, 'message'); client.send('before');
   assert.equal(String((await echo)[0]), 'before');
-  return { client, stop: () => { shares = []; } };
+  return { client, stop: () => { shares = []; }, breakSource: () => { shares = [null]; },
+    failRefresh: () => { shares = [{ get expiresAt() { throw new Error('bad source'); } }]; } };
 }
 
 test('an open Spin websocket closes after Stop', { timeout: 8000 }, async t => {
@@ -96,6 +97,20 @@ test('an open Spin websocket closes after Stop', { timeout: 8000 }, async t => {
 test('an open Spin websocket closes at expiry', { timeout: 3000 }, async t => {
   const { client } = await liveShare(t, Date.now() + 300);
   await once(client, 'close');
+});
+
+test('a failed Spin access refresh closes the websocket', { timeout: 8000 }, async t => {
+  const { client, breakSource } = await liveShare(t);
+  const closed = once(client, 'close');
+  breakSource();
+  await closed;
+});
+
+test('an unexpected Spin refresh error closes the websocket', { timeout: 8000 }, async t => {
+  const { client, failRefresh } = await liveShare(t);
+  const closed = once(client, 'close');
+  failRefresh();
+  await closed;
 });
 
 async function proxy(t, openTcp, port) {
