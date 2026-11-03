@@ -1493,7 +1493,7 @@ export class CodexDriver extends Driver {
    * turn/start takes; there is deliberately no status or turn event here -
    * the running turn's stream covers what the message becomes.
    */
-  async steer(text, attachments = [], { inputId } = {}) {
+  async steer(text, attachments = [], { inputId, clientId } = {}) {
     await this.start();
     if (!this.#turnId) throw new Error('codex has no active turn to steer');
     const input = text ? [{ type: 'text', text, text_elements: [] }] : [];
@@ -1507,7 +1507,7 @@ export class CodexDriver extends Driver {
     if (!input.length) input.push({ type: 'text', text: '(empty message)', text_elements: [] });
     // Recorded before the call: Codex can report using it before it answers.
     const entry = {
-      clientId: randomUUID(), inputId, turnId: this.#turnId,
+      clientId: clientId ?? randomUUID(), inputId, turnId: this.#turnId,
       text: input.filter((b) => b.type === 'text').map((b) => b.text).join('\n'),
     };
     this.#steers.push(entry);
@@ -1932,6 +1932,7 @@ export class CodexDriver extends Driver {
           ? entry.clientId === clientId
           : entry.text === text && (!turnId || entry.turnId === turnId));
         if (i < 0) {
+          if (clientId != null) this.push('input.observed', { clientId });
           if (this.nativeSocket && !this.helperFork && base.turnId && !this.#nativeTurnStarts.has(base.turnId)) {
             this.#nativeTurnStarts.add(base.turnId);
             this.push('turn.start', { turnId: base.turnId, text });

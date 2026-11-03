@@ -251,6 +251,18 @@ for (const [name, status, turns, expected] of [
   }
 });
 
+test('Codex preserves a saved steering identity and reports unmatched message identities', async t => {
+  const { driver, log, writes } = adoptedCodex(t, {
+    thread: { status: { type: 'active', activeFlags: [] }, turns: [{ id: 'actual-live-turn', status: 'inProgress' }] },
+  });
+  await driver.start();
+  await driver.steer('Check this', [], { inputId: 'ticket', clientId: 'saved-provider-id' });
+  assert.equal(writes.findLast(w => w.method === 'turn/steer').params.clientUserMessageId, 'saved-provider-id');
+  driver.onNotification('item/started', { threadId: 'recovered-thread', turnId: 'actual-live-turn',
+    item: { type: 'userMessage', id: 'other', clientUserMessageId: 'unmatched-provider-id', content: [{ type: 'text', text: 'Earlier' }] } });
+  assert.ok(log.of('input.observed').some(e => e.clientId === 'unmatched-provider-id'));
+});
+
 test('adopted Codex loads an unloaded thread when a message finds it missing', async (t) => {
   let loaded = false;
   const { driver, log, writes } = adoptedCodex(t, {

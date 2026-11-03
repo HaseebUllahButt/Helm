@@ -456,7 +456,7 @@ export class ClaudeDriver extends Driver {
    * steps, so this lands when the step in flight ends - what typing while
    * the CLI works does. The replay says when it was used.
    */
-  async steer(text, attachments = [], { inputId } = {}) {
+  async steer(text, attachments = [], { inputId, clientId } = {}) {
     if (!this.#pipe || !this.#inTurn) throw new Error('claude has no active turn to steer');
     const content = [];
     if (text) content.push({ type: 'text', text });
@@ -470,7 +470,7 @@ export class ClaudeDriver extends Driver {
     if (!content.length) content.push({ type: 'text', text: '(empty message)' });
     // The replay names this uuid, which is how its read is matched to the
     // right waiting message even when two say the same thing.
-    const uuid = randomUUID();
+    const uuid = clientId ?? randomUUID();
     this.#inputs.set(uuid, { text: resultText(content), inputId });
     try {
       this.#write({
@@ -844,6 +844,7 @@ export class ClaudeDriver extends Driver {
       if (this.#inTurn) {
         if (input) this.push('input.consumed', input);
         else if (!m.uuid) this.push('input.consumed', { text });
+        else this.push('input.observed', { clientId: m.uuid });
         return;
       }
       // The CLI accepted our message; this uuid is the turn. A steer that

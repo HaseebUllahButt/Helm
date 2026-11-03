@@ -1,7 +1,7 @@
 import { usageResetAt, isUsageLimit } from './usage-recovery.js';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { HELM_DIR } from './paths.js';
 import { getProfiles, materialize } from './profiles.js';
 import { sessionSnapshot } from './transcript.js';
@@ -23,6 +23,7 @@ import { acceptAttachments, acceptImages, driverTakesImages, saveUploads } from 
 export class SessionDelivery {
   #sessions;
   #core;
+  #unconfirmed = new Map();
   constructor(sessions, core) {
     this.#sessions = sessions;
     this.#core = core;
@@ -246,7 +247,7 @@ export class SessionDelivery {
       let busy = !sideband && (s.queuePaused || this.#core.deliveryState.isSending(s.id) || this.#core.deliveryState.hasSettling(s.id) || s.status === 'working' || s.status === 'blocked' || this.#core.preparing(s));
       const commandText = compact != null ? `/compact${compact ? ` ${compact}` : ''}` : clean;
       if (s.stoppedAt || stopGeneration !== (s.stopGeneration ?? 0) || !this.#core.index.has(id)) throw new Error('message cancelled because the thread was stopped');
-      const item = { turnId, text: commandText, images, compact, delivery, references, referenceContext, stopGeneration, introduce, source };
+      const item = { turnId, text: commandText, images, compact, delivery, references, referenceContext, stopGeneration, introduce, source, queued: busy };
       // This event is both the optimistic chat bubble and the durable queue
       // ticket. Persist it before starting/resuming a driver, so a daemon
       // restart can recover a message accepted during that await.
@@ -293,6 +294,7 @@ export class SessionDelivery {
       // Run them beside the active turn so checking status or usage neither
       // queues behind it nor clears its working state and Stop control.
       if (sideband) {
+        item.queued = false;
         await this.#deliver(s, item, d);
         return { ok: true };
       }
@@ -367,7 +369,7 @@ export class SessionDelivery {
     this.#core.rewinder.assertRewindUnlocked(s.id);
     if (this.#core.delegation.discardConsumedResult(s, item.turnId)) return;
     if (this.#core.retiring.has(s.id)) d = null;
-    let echo = null;
+    let echo = null, sending = false;
     try {
       // A queued message can reach this point after the owner reopened the
       // same chat in O2. Recheck this chat before sending to its ACP copy.
@@ -411,6 +413,9 @@ export class SessionDelivery {
       const prompt = returnedContext
         ? `This task ran on another machine and its finished changes have returned to this project. Here is the result for context:\n${returnedContext}\n\nCurrent user request:\n${request}`
         : request;
+      // A crash after the CLI call starts cannot prove that it did not read
+      // this ticket. Record that boundary before either send method runs.
+      if (item.queued) { this.#markDelivery(s, item.turnId); sending = true; }
       if (item.images.length && driverTakesImages(d)) {
         echo = this.#expectEcho(s, d, item, prompt);
         await d.sendWithAttachments(prompt, item.images);
@@ -435,8 +440,14 @@ export class SessionDelivery {
       }
       if (s.unsent) { delete s.unsent; this.#core.save(); }
     } catch (err) {
-      if (echo) this.#core.deliveryState.removeAwaitingEcho(s.id, echo.turnId, echo.driver);
+      const echoed = echo && !this.#core.deliveryState.awaitingEcho(s.id).some(e => e.turnId === echo.turnId && e.driver === echo.driver);
+      if (echo && (!sending || err?.deliveryNotSent || echoed)) this.#core.deliveryState.removeAwaitingEcho(s.id, echo.turnId, echo.driver);
       if (!this.#core.index.has(s.id)) throw err;
+      if (sending && !err?.deliveryNotSent) {
+        if (echoed) return;
+        this.#unknownDelivery(s, item.turnId, err);
+        throw err;
+      }
       if (s.delegation) {
         s.delegation.status = 'error';
         this.#core.delegation.updateTeam(s);
@@ -494,9 +505,7 @@ export class SessionDelivery {
           try {
             await this.#deliver(s, next);
           } catch {
-            // The turn already failed loudly, with a resend waiting on it.
-            // The queue moves on - a dead agent fails each send on its own
-            // merits rather than eating the rest of the queue silently.
+            // The ticket records either a failure or an unknown delivery.
           }
         }
       } finally {
@@ -548,6 +557,74 @@ export class SessionDelivery {
     if (s.status === 'working') void this.handOver(s);
   }
 
+  #markDelivery(s, turnId, requeued = false, clientId = null) {
+    const event = this.#sessions.events.append(s.id, { type: 'turn.deliver', turnId,
+      ...(requeued ? { requeued: true } : {}), ...(clientId ? { clientId } : {}) });
+    s.lastSeq = event.seq;
+    this.#sessions.emit('event', { id: s.id, event });
+  }
+
+  #unknownDelivery(s, turnId, err) {
+    this.#sessions.log(`[${s.id}] message delivery is unknown: ${err.message}`);
+    s.queuePaused = true;
+    s.recovery = { kind: 'error', message: 'The agent may have received this message. Check its work before sending again.', at: Date.now(), deliveryTurnId: turnId };
+    this.#core.save();
+    this.#sessions.emit('session', s);
+  }
+
+  confirmed(s, turnId) {
+    if (s.recovery?.deliveryTurnId !== turnId) return;
+    delete s.recovery;
+    s.queuePaused = false;
+    this.#core.save();
+    this.#sessions.emit('session', s);
+    setImmediate(() => {
+      if (this.#core.index.get(s.id) !== s) return;
+      this.pump(s);
+      if (s.status === 'working') void this.handOver(s);
+    });
+  }
+
+  restoreUnconfirmed(s, items) {
+    if (!items.length) return;
+    this.#unconfirmed.set(s.id, items);
+    s.queuePaused = true;
+    s.recovery = { kind: 'error', message: 'The agent may have received this message. Check its work before sending again.',
+      at: Date.now(), deliveryPending: true };
+    this.#sessions.emit('session', s);
+  }
+
+  matchUnconfirmed(s, inputId, clientId) {
+    const pending = this.#unconfirmed.get(s.id) ?? [];
+    if (inputId != null) return pending.find(item => item.turnId === inputId)?.turnId;
+    if (clientId != null) return pending.find(item => item.clientId === clientId)?.turnId;
+    return undefined;
+  }
+
+  confirmUnconfirmed(s, turnId, echoed = false, error = null) {
+    const pending = this.#unconfirmed.get(s.id) ?? [];
+    const left = pending.filter(item => item.turnId !== turnId);
+    if (left.length === pending.length) return;
+    if (left.length) this.#unconfirmed.set(s.id, left);
+    else this.#unconfirmed.delete(s.id);
+    const event = this.#sessions.events.append(s.id, error
+      ? { type: 'turn.done', turnId, status: 'error', error: String(error) }
+      : echoed ? { type: 'turn.done', turnId, status: 'ok' } : { type: 'turn.accept', turnId });
+    s.lastSeq = event.seq;
+    this.#sessions.emit('event', { id: s.id, event });
+    if (!left.length && s.recovery?.deliveryPending) {
+      delete s.recovery;
+      s.queuePaused = false;
+      this.#core.save();
+      this.#sessions.emit('session', s);
+      setImmediate(() => {
+        if (this.#core.index.get(s.id) !== s) return;
+        this.pump(s);
+        if (s.status === 'working') void this.handOver(s);
+      });
+    }
+  }
+
   /**
    * Take back a message still waiting in the queue.
    *
@@ -593,7 +670,7 @@ export class SessionDelivery {
     if (held(this.#core.deliveryState.awaitingEcho(id)) && this.#sessions.get(id)?.status === 'working') return false;
     const tail = this.#sessions.events.tail(id, 0);
     return tail.some((e) => e.type === 'turn.start' && e.turnId === turnId && e.queued)
-      && !tail.some((e) => e.turnId === turnId && ['turn.done', 'turn.remove', 'turn.accept', 'turn.deliver'].includes(e.type));
+      && !tail.some((e) => e.turnId === turnId && ['turn.done', 'turn.remove', 'turn.accept'].includes(e.type));
   }
 
   /** `attachments`, when given, replaces the message's images: added, kept or removed. */
@@ -732,7 +809,13 @@ export class SessionDelivery {
       // Keep the handed messages with the CLI until it confirms the stop.
       // A failed or timed-out stop does not prove that it dropped them.
       await this.#interruptReply(s, d);
-      const back = handed.map((entry) => this.#core.deliveryState.removeSteered(id, entry.turnId)?.item).filter(Boolean);
+      const back = [];
+      for (const entry of handed) {
+        if (!this.#core.deliveryState.steeredTicket(id, entry.turnId)) continue;
+        this.#markDelivery(s, entry.turnId, true);
+        const item = this.#core.deliveryState.removeSteered(id, entry.turnId)?.item;
+        if (item) back.push(item);
+      }
       if (back.length) this.#core.deliveryState.restoreQueue(id, [...back, ...(this.#core.deliveryState.queue(id) ?? [])]);
       return { ok: true, next: true };
     } finally {
@@ -835,35 +918,35 @@ export class SessionDelivery {
     if (index < 0) return;
     const before = new Set(q.slice(0, index).map((entry) => entry.turnId));
     const after = new Set(q.slice(index + 1).map((entry) => entry.turnId));
+    const prompt = this.#promptOf(s, d, item);
+    const clientId = randomUUID();
+    this.#markDelivery(s, item.turnId, false, clientId);
     const ticket = this.#core.deliveryState.removeTicket(s.id, item.turnId);
     if (!ticket) return;
-    const prompt = this.#promptOf(s, d, item);
     // The ticket rides along so a Stop can put it back in line.
     const entry = { turnId: item.turnId, text: prompt, item: ticket };
     this.#core.deliveryState.addSteered(s.id, entry);
     try {
-      await d.steer(prompt, item.images, { inputId: item.turnId });
+      await d.steer(prompt, item.images, { inputId: item.turnId, clientId });
     } catch (err) {
-      const currentTicket = this.#core.deliveryState.removeSteered(s.id, item.turnId);
+      const currentTicket = err?.deliveryNotSent ? this.#core.deliveryState.steeredTicket(s.id, item.turnId) : null;
       // A Stop while the call was out has already removed the ticket.
       const current = !s.stoppedAt && this.#core.index.has(s.id)
         && (item.stopGeneration == null || item.stopGeneration === (s.stopGeneration ?? 0));
       if (currentTicket && current) {
+        this.#markDelivery(s, item.turnId, true);
+        this.#core.deliveryState.removeSteered(s.id, item.turnId);
         const rest = this.#core.deliveryState.queue(s.id) ?? [];
         const next = rest.findIndex((ticket) => after.has(ticket.turnId));
         const previous = rest.findLastIndex((ticket) => before.has(ticket.turnId));
         currentTicket.item.nativeRejected = true;
         rest.splice(next >= 0 ? next : previous + 1, 0, currentTicket.item);
         this.#core.deliveryState.restoreQueue(s.id, rest);
+      } else if (!err?.deliveryNotSent && current && this.#core.deliveryState.steeredTicket(s.id, item.turnId)) {
+        this.#unknownDelivery(s, item.turnId, err);
       }
       throw err;
     }
-    // Already used (a CLI can say so before its call returns), or stopped.
-    if (!this.#core.deliveryState.steeredTicket(s.id, entry.turnId) || s.stoppedAt || !this.#core.index.has(s.id)
-      || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0))) return;
-    const event = this.#sessions.events.append(s.id, { type: 'turn.deliver', turnId: item.turnId });
-    s.lastSeq = event.seq;
-    this.#sessions.emit('event', { id: s.id, event });
   }
 
   /**
@@ -875,16 +958,25 @@ export class SessionDelivery {
    */
   consumed(s, text, inputId, error = null) {
     const steered = this.#core.deliveryState.steered(s.id);
-    if (!steered.length) return this.#absorbed(s, text);
+    if (!steered.length) {
+      const recovered = this.matchUnconfirmed(s, inputId);
+      if (recovered) return this.confirmUnconfirmed(s, recovered, false, error);
+      return this.#absorbed(s, text);
+    }
     const want = String(text ?? '').trim();
     const i = steered.findIndex((x) => inputId != null ? x.turnId === inputId : x.text.trim() === want);
-    if (i < 0) return;
+    if (i < 0) {
+      const recovered = this.matchUnconfirmed(s, inputId);
+      if (recovered) this.confirmUnconfirmed(s, recovered, false, error);
+      return;
+    }
     const { turnId } = this.#core.deliveryState.removeSteered(s.id, steered[i].turnId);
     const event = this.#sessions.events.append(s.id, error
       ? { type: 'turn.done', turnId, status: 'error', error: String(error) }
       : { type: 'turn.accept', turnId });
     s.lastSeq = event.seq;
     this.#sessions.emit('event', { id: s.id, event });
+    this.confirmed(s, turnId);
   }
 
   /**
@@ -908,6 +1000,7 @@ export class SessionDelivery {
     const event = this.#sessions.events.append(s.id, { type: 'turn.accept', turnId: sent.turnId });
     s.lastSeq = event.seq;
     this.#sessions.emit('event', { id: s.id, event });
+    this.confirmed(s, sent.turnId);
   }
 
   /** A turn helm itself speaks: appended and pushed like any driver event. */

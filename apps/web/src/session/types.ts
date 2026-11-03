@@ -404,7 +404,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       return;
     case 'turn.deliver': {
       const turn = state.turns.find((t) => t.id === e.turnId);
-      if (turn) { turn.delivered = true; turn.revision = e.seq; }
+      if (turn) { turn.delivered = e.requeued !== true; turn.revision = e.seq; }
       return;
     }
     case 'turn.edit': {

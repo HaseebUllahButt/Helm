@@ -121,7 +121,7 @@ export class SessionResume {
     const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
     const removed = new Set(tail.filter((e) => e.type === 'turn.remove').map((e) => e.turnId));
     const accepted = new Set(tail.filter((e) => e.type === 'turn.accept').map((e) => e.turnId));
-    const delivered = new Set(tail.filter((e) => e.type === 'turn.deliver').map((e) => e.turnId));
+    const delivered = new Map(tail.filter((e) => e.type === 'turn.deliver').map((e) => [e.turnId, e]));
     const echoes = tail.filter((e) => e.type === 'turn.start'
       && !e.wake && !String(e.turnId).startsWith('local-') && e.queued !== true);
     const open = tail.filter((e) => e.type === 'turn.start'
@@ -133,7 +133,7 @@ export class SessionResume {
     // The provider moved past any of its turns older than its newest one;
     // those finished with the run that followed, whatever became of it.
     const latest = echoes.findLast((e) => !e.local);
-    const revive = [];
+    const revive = [], unconfirmed = [];
     // A delegated task finishes with its newest work, not with whichever
     // old card happens to be tidied first - and not at all while its live
     // turn is being kept.
@@ -152,24 +152,25 @@ export class SessionResume {
       if (e.local === true) { settle(e.turnId, 'ok', null, { ends: false }); continue; }
       // A queued ticket under a caller-chosen id is still a ticket.
       const local = String(e.turnId).startsWith('local-') || e.queued === true;
+      const attempt = delivered.get(e.turnId);
       const mine = (e.text ?? '').trim();
       const echoIndex = local ? echoes.findIndex((x) => x.seq > e.seq && (x.inputId != null
         ? x.inputId === e.turnId
+        : attempt && !attempt.requeued ? !!attempt.clientId && x.turnId === attempt.clientId
         : (x.text ?? '').trim() === mine || (mine && (x.text ?? '').trim().startsWith(mine + '\n'))
       )) : -1;
       const echoed = echoIndex >= 0;
       if (echoed) echoes.splice(echoIndex, 1);
 
-      if (local && (accepted.has(e.turnId) || delivered.has(e.turnId))) {
-        // `turn.accept` records a successful steer into a live turn; never
-        // send that ticket again if the daemon restarted before its echo.
-        // A ticket handed over but not yet used went to the CLI all the same.
-        if (!accepted.has(e.turnId)) {
-          const event = this.#sessions.events.append(s.id, { type: 'turn.accept', turnId: e.turnId });
-          s.lastSeq = event.seq;
-          this.#sessions.emit('event', { id: s.id, event });
-        }
+      if (local && (accepted.has(e.turnId) || attempt && !attempt.requeued && echoed)) {
         settle(e.turnId, 'ok', null, { ends: false });
+        continue;
+      }
+      if (local && attempt && !attempt.requeued) {
+        // The CLI may have received it, but a send attempt is not a receipt.
+        // Keep a live agent's ticket open; a dead one needs an honest result.
+        if (!processAlive) settle(e.turnId, 'error', 'Helm could not confirm delivery. Check the agent\'s work before sending this again.', { ends: false });
+        else unconfirmed.push({ turnId: e.turnId, clientId: attempt.clientId });
         continue;
       }
       if (local && e.queued === true && !echoed) {
@@ -205,6 +206,7 @@ export class SessionResume {
           referenceContext: e.referenceContext,
           introduce: e.introduce === true,
           stopGeneration: s.stopGeneration ?? 0,
+          queued: true,
         });
         continue;
       }
@@ -220,6 +222,7 @@ export class SessionResume {
       s.delegation.status = finished === 'ok' ? 'done' : finished;
     }
 
+    this.#core.delivery.restoreUnconfirmed(s, unconfirmed);
     if (revive.length) {
       const order = new Map((s.queueOrder ?? []).map((turnId, index) => [turnId, index]));
       revive.sort((left, right) => (order.get(left.turnId) ?? Infinity) - (order.get(right.turnId) ?? Infinity));
