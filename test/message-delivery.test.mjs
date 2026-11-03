@@ -260,6 +260,10 @@ for (const mode of ['turn.start', 'input.consumed', 'input.observed']) test(`a s
   rebound.push('turn.done', { turnId: 'native-1', status: 'ok' });
   rebound.push('status', { status: 'idle' });
   assert.match(saved.recovery?.message ?? '', /may have received/, 'the old turn ending does not prove delivery');
+  rebound.push('input.consumed', { inputId: 'unrelated', text: 'Confirm after restart' });
+  rebound.push('input.consumed', { text: 'Confirm after restart' });
+  assert.equal(restarted.history(session.id).events.some(e => e.type === 'turn.accept' && e.turnId === id), false,
+    'the same words do not prove which message arrived');
   rebound.push(mode, { turnId: 'late-provider-turn', ...(mode === 'input.observed' ? { clientId } : { inputId: id }), text: 'Confirm after restart' });
   await tick();
   const events = restarted.history(session.id).events;
@@ -561,6 +565,21 @@ test('a long log retains an uncertain ticket and its return to the queue', () =>
   assert.equal(retained.findLast(e => e.type === 'turn.deliver' && e.turnId === 'named-ticket')?.requeued, true);
 });
 
+test('an unrelated echo cannot erase an uncertain ticket from a long log', () => {
+  const log = new EventLog(join(process.env.HELM_DIR, 'events-uncertain-retention'));
+  const id = 'retained-uncertain';
+  log.append(id, { type: 'turn.start', turnId: 'local-uncertain', text: 'Same words', queued: true });
+  log.append(id, { type: 'turn.deliver', turnId: 'local-uncertain', clientId: 'saved-id' });
+  log.append(id, { type: 'turn.start', turnId: 'unrelated', text: 'Same words' });
+  log.append(id, { type: 'turn.done', turnId: 'unrelated', status: 'ok' });
+  log.append(id, { type: 'turn.start', turnId: 'host', text: 'Other work' });
+  log.append(id, { type: 'item.start', id: 'reply', turnId: 'host', kind: 'text' });
+  for (let i = 0; i < 2400; i++) log.append(id, { type: 'item.delta', id: 'reply', text: '.' });
+  const retained = new EventLog(log.dir).tail(id, 0);
+  assert.ok(retained.some(e => e.type === 'turn.start' && e.turnId === 'local-uncertain'));
+  assert.ok(retained.some(e => e.type === 'turn.deliver' && e.turnId === 'local-uncertain' && e.clientId === 'saved-id'));
+});
+
 test('the app returns a message to its waiting controls after a confirmed Stop', async () => {
   const { apply, emptyLog } = await import('../apps/web/src/session/types.ts');
   const state = emptyLog();
@@ -572,6 +591,18 @@ test('the app returns a message to its waiting controls after a confirmed Stop',
   ev({ type: 'turn.deliver', turnId: 'local-waiting', requeued: true });
   assert.equal(state.turns[0].queued, true);
   assert.equal(state.turns[0].delivered, false);
+});
+
+test('the app does not match an uncertain send to an unrelated echo with the same words', async () => {
+  const { apply, emptyLog } = await import('../apps/web/src/session/types.ts');
+  const state = emptyLog();
+  let seq = 0;
+  const ev = event => apply(state, { seq: ++seq, at: seq, ...event });
+  ev({ type: 'turn.start', turnId: 'local-unknown', text: 'Same words', queued: true });
+  ev({ type: 'turn.deliver', turnId: 'local-unknown' });
+  ev({ type: 'turn.start', turnId: 'other-turn', text: 'Same words' });
+  assert.deepEqual(state.turns.map(turn => turn.id), ['local-unknown', 'other-turn']);
+  assert.equal(state.turns[0].delivered, true);
 });
 
 test('the app adopts the named message for an echo and shows a refused one as failed', async () => {

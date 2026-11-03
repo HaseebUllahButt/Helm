@@ -961,6 +961,7 @@ export class SessionDelivery {
     if (!steered.length) {
       const recovered = this.matchUnconfirmed(s, inputId);
       if (recovered) return this.confirmUnconfirmed(s, recovered, false, error);
+      if (inputId != null) return;
       return this.#absorbed(s, text);
     }
     const want = String(text ?? '').trim();
@@ -990,12 +991,13 @@ export class SessionDelivery {
     const tail = this.#sessions.events.tail(s.id, 0);
     const settled = new Set(tail.filter((e) => ['turn.done', 'turn.remove', 'turn.accept'].includes(e.type)).map((e) => e.turnId));
     const waiting = new Set((this.#core.deliveryState.queue(s.id) ?? []).map((item) => item.turnId));
+    const unconfirmed = new Set((this.#unconfirmed.get(s.id) ?? []).map(item => item.turnId));
     const said = (e) => String(e.text ?? '').trim();
     // An echo after it means the CLI ran it as a turn of its own.
     const echoed = (e) => tail.some((x) => x.type === 'turn.start' && x.seq > e.seq
       && !String(x.turnId).startsWith('local-') && said(x) === said(e));
     const sent = tail.find((e) => e.type === 'turn.start' && String(e.turnId).startsWith('local-') && !e.local
-      && said(e) === want && !settled.has(e.turnId) && !waiting.has(e.turnId) && !echoed(e));
+      && said(e) === want && !settled.has(e.turnId) && !waiting.has(e.turnId) && !unconfirmed.has(e.turnId) && !echoed(e));
     if (!sent) return;
     const event = this.#sessions.events.append(s.id, { type: 'turn.accept', turnId: sent.turnId });
     s.lastSeq = event.seq;

@@ -181,16 +181,24 @@ const TURN_CONTEXT = new Set(['turn.start', 'turn.edit', 'turn.images', 'turn.de
 
 function pendingTickets(events) {
   const pending = new Map();
+  const uncertain = new Set();
   for (const event of events) {
     if (event.type === 'turn.start' && event.queued) pending.set(event.turnId, event.text ?? '');
     else if (event.type === 'turn.edit' && pending.has(event.turnId)) pending.set(event.turnId, event.text ?? '');
     // A delivery attempt alone is not proof that the agent read the ticket.
-    else if (['turn.accept', 'turn.done', 'turn.remove'].includes(event.type)) pending.delete(event.turnId);
+    else if (event.type === 'turn.deliver') {
+      if (event.requeued) uncertain.delete(event.turnId);
+      else uncertain.add(event.turnId);
+    }
+    else if (['turn.accept', 'turn.done', 'turn.remove'].includes(event.type)) {
+      pending.delete(event.turnId); uncertain.delete(event.turnId);
+    }
     else if (event.type === 'turn.start' && !event.wake && !String(event.turnId).startsWith('local-')) {
       // An echo that names its ticket settles exactly that one.
-      if (event.inputId != null) { pending.delete(event.inputId); continue; }
+      if (event.inputId != null) { pending.delete(event.inputId); uncertain.delete(event.inputId); continue; }
       const echo = (event.text ?? '').trim();
       for (const [turnId, text] of pending) {
+        if (uncertain.has(turnId)) continue;
         const prefix = text.trim();
         if (echo === prefix || (prefix && echo.startsWith(`${prefix}\n`))) { pending.delete(turnId); break; }
       }
