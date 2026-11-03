@@ -204,7 +204,7 @@ function Shell({ client, conn, onSignOut }: {
   const sessionsNow = useRef(sessions);
   sessionsNow.current = sessions;
   const [savedSend] = useState(() => history.state?.helm && history.state.stack?.at(-1)?.kind === 'transfer'
-    && history.state.stack.at(-1).jobId ? history.state : null);
+    ? history.state : null);
   const [selected, setSelected] = useState<string | null>(savedSend?.selected ?? cached.view?.envId ?? null);
   const [stack, setStack] = useState<MainView[]>(() => savedSend ? supportedViews(savedSend.stack) : (cached.view
     ? [{ kind: 'env' }, { kind: 'session', session: cached.view.session }] : [{ kind: 'env' }]));
