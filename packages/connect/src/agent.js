@@ -501,7 +501,7 @@ export class Daemon {
         // ones it forwards: against who the hub introduced, never who the
         // request says it is from. Machine offers first prove that identity
         // with their pinned signing key in onFrame below.
-        authorize: (device, frame) => directCaller(loadNetwork() ?? this.net, device, frame.sub, loadSettings()?.directRoutes !== false),
+        authorize: (device, frame, credential) => directCaller(loadNetwork() ?? this.net, device, frame.sub, loadSettings()?.directRoutes !== false, credential),
         // Machines open channels to ask questions; they hear events through
         // their hubs. Only phones and browsers want them sent direct.
         events: (device) => !Object.hasOwn((loadNetwork() ?? this.net).machines ?? {}, device),
@@ -1601,7 +1601,7 @@ export class Daemon {
       // Ports forwarded on purpose to another machine with `helm forward`.
       ...forwardedPorts(),
       ...(Array.isArray(extra) ? extra.map(Number) : []),
-    ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
+    ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536 && p !== this.port);
   }
 
   #directTunnel(link, frame, caller) {
@@ -1855,6 +1855,7 @@ export class Daemon {
         const shareNetwork = loadNetwork() ?? this.net;
         await assertShareNameAvailable(p.name, shareNetwork, env =>
           hubRpc(shareNetwork, env, M.SHARE_LIST, {}, { timeout: 4000, budget: 5000 }), this.sendPresence());
+        if (Number(p.port) === this.port) throw new Error('Do not share the Helm port. Share the app port instead.');
         await checkSharePort(Number(p.port));
         return { share: this.#shareView(addShare(p)) };
       }

@@ -1,3 +1,4 @@
+import { authenticate } from '@helm/protocol/network';
 import { createPublicKey, sign, verify } from 'node:crypto';
 import { codeSigningInfo } from './code-transfer.js';
 
@@ -19,7 +20,16 @@ export function signDirectOffer(net, target, payload) {
 
 export function allowDirectSignal(net, device, payload, enabled = true) {
   if (!net || !device || net.revoked?.[device] || net.revoked?.[net.self]) return false;
-  if (!Object.hasOwn(net.machines ?? {}, device)) return Object.hasOwn(net.devices ?? {}, device);
+  if (!Object.hasOwn(net.machines ?? {}, device)) {
+    if (!Object.hasOwn(net.devices ?? {}, device)) return false;
+    if (payload?.type !== 'offer') return true;
+    const claims = authenticate(net, payload.credential);
+    if (claims?.role !== 'device' || claims.sub !== device || !claims.proofKey || typeof payload.deviceProof !== 'string') return false;
+    try {
+      return verify(null, Buffer.from(JSON.stringify(['helm-device-offer-v1', net.id, device, net.self, payload.negotiation, payload.sdp])),
+        createPublicKey({ key: Buffer.from(claims.proofKey, 'base64url'), type: 'spki', format: 'der' }), Buffer.from(payload.deviceProof, 'base64url'));
+    } catch { return false; }
+  }
   if (!enabled) return false;
   if (payload?.type !== 'offer') return true;
   const auth = payload.machineAuth;

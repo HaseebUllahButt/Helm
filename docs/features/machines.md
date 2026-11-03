@@ -16,7 +16,10 @@ owner's home or network to bypass this check.
   Chrome · this device · online now".
 - **Transport:** remote access requires HTTPS. HTTP works only on loopback.
   LAN discovery stays off. Browsers must sign in again after seven days.
-  Old credentials stop working after the security update.
+  Old credentials stop working after the security update. A browser pairs
+  with a private device key. Remote requests prove that key for one machine,
+  challenge and request. Direct offers prove it for the target and connection.
+  Removing the credential's signer also closes existing direct connections.
 - **Traps:** never press "Make join command" or remove devices on the real
   network to test. Removing a device signs it out everywhere. Join links
   expire in minutes. Public machines need inbound UDP 44301–44332 in both
@@ -26,7 +29,7 @@ owner's home or network to bypass this check.
   firewall rules and never change the owner's network.
 - **Tests:** `test/machine-kind`, `device-presence`, `roster-watch`,
   `gossip`, `lan-discovery`, `direct-mesh`, `auth`, `local-login`,
-  `hub-authz`, `roster-trust`, `security-transport`.
+  `hub-authz`, `roster-trust`, `security-transport`, `security-routes`; `test/browser/hub-auth`.
 
 ## Check installation and connections
 - Open Settings and select **Check connection**. Each answering machine reports

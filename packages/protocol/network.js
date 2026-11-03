@@ -1,3 +1,5 @@
+import { proofBody, setProofSigner } from './proof.js';
+export { signNetworkProof, checkNetworkProof } from './proof.js';
 /**
  * The network this machine belongs to.
  *
@@ -52,6 +54,11 @@ export const assertWritableDirectory = () => {
 
 const write = (net, { joining = false } = {}) => {
   assertWritableDirectory();
+  if (net.machines?.[net.self]) {
+    const me = net.machines[net.self];
+    if (!checkMachineRecord(net, me)) me.updatedAt = Math.max(Date.now(), (me.updatedAt ?? 0) + 1);
+    signMachineRecord(net, me);
+  }
   if (isProductionDirectory()) {
     const existing = loadNetwork();
     const provisionalJoin = joining && existing?.provisional
@@ -208,8 +215,27 @@ export function machineSigningInfo() {
   return { privateKey, publicKey, codeSignPubkey };
 }
 
+function recordBody(net, record) {
+  const clean = machineRecord(record.id, record, Infinity);
+  if (!clean) throw new Error('Cannot sign this machine record.');
+  delete clean.machineSignature;
+  return proofBody(net.id, 'machine-record', clean);
+}
+export function signMachineRecord(net, record) {
+  const pair = machineSigningInfo();
+  record.codeSignPubkey = pair.codeSignPubkey;
+  record.machineSignature = sign(null, recordBody(net, record), pair.privateKey).toString('base64url');
+  return record;
+}
+export function checkMachineRecord(net, record, key = record?.codeSignPubkey) {
+  try { return !!key && typeof record?.machineSignature === 'string' && verify(null,
+    recordBody(net, record), createPublicKey({ key: Buffer.from(key, 'base64url'), type: 'spki', format: 'der' }), Buffer.from(record.machineSignature, 'base64url')); }
+  catch { return false; }
+}
+
 const credentialBody = (claims) => Buffer.from('helm-credential-v2:' + JSON.stringify([
   claims.net, claims.sub, claims.role, claims.issuer, claims.ch ?? null, claims.exp ?? null,
+  ...(claims.proofKey ? [claims.proofKey] : []),
 ]));
 const signedToken = (net, claims) => {
   const signed = { ...claims, issuer: net.self };
@@ -217,6 +243,13 @@ const signedToken = (net, claims) => {
   return mintToken(net.key, signed);
 };
 const DEVICE_TTL = 7 * 24 * 60 * 60_000;
+
+/** Public keys and addresses a signed-in browser may contact. */
+export function hubTrust(net) {
+  return { network: net.id, revoked: Object.keys(net.revoked ?? {}), machines: Object.fromEntries(Object.values(net.machines ?? {})
+    .filter(m => !net.revoked?.[m.id] && m.codeSignPubkey)
+    .map(m => [m.id, { key: m.codeSignPubkey, endpoints: m.endpoints ?? [] }])) };
+}
 
 /** Remote connections must use TLS. Loopback stays available for local tools. */
 export function secureHubAddress(base) {
@@ -395,14 +428,14 @@ export async function hubCredential(net, base, { timeout = 15_000, signal } = {}
  * the roster, and a record this machine authors must be one every other
  * machine will accept back unchanged.
  */
-export function issueDevice(net, label = 'device') {
+export function issueDevice(net, label = 'device', proofKey) {
   const id = newDeviceId();
   net.devices[id] = {
     id, label: cleanName(label, 'device').slice(0, 60),
     addedAt: Date.now(), updatedAt: Date.now(),
   };
   write(net);
-  return { id, token: signedToken(net, { net: net.id, sub: id, role: ROLE.DEVICE, exp: Date.now() + DEVICE_TTL }) };
+  return { id, token: signedToken(net, { net: net.id, sub: id, role: ROLE.DEVICE, ...(proofKey ? { proofKey } : {}), exp: Date.now() + DEVICE_TTL }) };
 }
 
 /**
@@ -414,9 +447,9 @@ export function issueDevice(net, label = 'device') {
  * member behind. Returns null if that id is no longer anyone, so a caller
  * cannot revive something the owner removed.
  */
-export function deviceToken(net, id) {
+export function deviceToken(net, id, proofKey) {
   if (!net.devices[id] || net.revoked[id]) return null;
-  return signedToken(net, { net: net.id, sub: id, role: ROLE.DEVICE, exp: Date.now() + DEVICE_TTL });
+  return signedToken(net, { net: net.id, sub: id, role: ROLE.DEVICE, ...(proofKey ? { proofKey } : {}), exp: Date.now() + DEVICE_TTL });
 }
 
 /**
@@ -447,6 +480,22 @@ export function authenticate(net, token) {
   // answers must be one this process issued and nobody has spent.
   if (claims.ch !== undefined && !spendChallenge(claims.ch)) return null;
   return claims;
+}
+
+/** A browser signs each remote request for one hub and one challenge. */
+export const deviceProofBody = (network, p) => Buffer.from(JSON.stringify([
+  'helm-device-request-v1', network, p.aud, p.sub, p.ch, p.method, p.path, p.exp,
+]));
+export function checkDeviceRequest(net, claims, encoded, method, path) {
+  if (claims?.role !== ROLE.DEVICE) return true;
+  if (!claims.proofKey || typeof encoded !== 'string' || encoded.length > 4096) return false;
+  try {
+    const p = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    if (p.aud !== net.self || p.sub !== claims.sub || p.method !== method || p.path !== path
+        || !(p.exp > Date.now()) || p.exp > Date.now() + 60_000 || typeof p.signature !== 'string') return false;
+    const key = createPublicKey({ key: Buffer.from(claims.proofKey, 'base64url'), type: 'spki', format: 'der' });
+    return verify(null, deviceProofBody(net.id, p), key, Buffer.from(p.signature, 'base64url')) && spendChallenge(p.ch);
+  } catch { return false; }
 }
 
 /** Challenges this hub has handed out: value -> expiry. */
@@ -682,6 +731,7 @@ function machineRecord(id, their, ceiling) {
   // Ed25519 half of the same identity - same shape, same checks, pinned the
   // same way in mergeRoster.
   keep(out, 'codeSignPubkey', codePubkeyOf(their.codeSignPubkey));
+  keep(out, 'machineSignature', text(their.machineSignature, 128));
   keep(out, 'sendV2', typeof their.sendV2 === 'boolean' ? their.sendV2 : null);
   keep(out, 'sshUser', text(their.sshUser, 32) && sshUsers.test(their.sshUser) ? their.sshUser : null);
   keep(out, 'sshPort', Number.isInteger(their.sshPort) && their.sshPort > 0 && their.sshPort < 65536
@@ -764,6 +814,9 @@ export function mergeRoster(net, unchecked) {
     // way to reach us, and nothing can dial us until a restart.
     if (id === net.self) continue;
     const current = net.machines[id];
+    if (current && !current.codeSignPubkey) continue;
+    // Existing unsigned records stay fixed until their owner signs an update.
+    if (!checkMachineRecord(net, their, current?.codeSignPubkey ?? their.codeSignPubkey)) continue;
     // A code key once learned is pinned to the machine it was learned for
     // (TOFU): it is what code handoffs are encrypted to, so a forged newer
     // record - or one that simply omits the field - must never swap or
@@ -771,11 +824,9 @@ export function mergeRoster(net, unchecked) {
     // a record learned before the second key existed keeps the one it has
     // while still being able to learn the other. Every other field still
     // merges last-writer-wins.
-    const candidate = {
-      ...their,
-      ...(current?.codePubkey ? { codePubkey: current.codePubkey } : {}),
-      ...(current?.codeSignPubkey ? { codeSignPubkey: current.codeSignPubkey } : {}),
-    };
+    if (current?.codePubkey && current.codePubkey !== their.codePubkey) continue;
+    if (current?.codeSignPubkey && current.codeSignPubkey !== their.codeSignPubkey) continue;
+    const candidate = their;
     const won = newer(current, candidate);
     if (won !== current) { net.machines[id] = won; changed = true; }
   }
@@ -819,7 +870,7 @@ export function describeSelf(net, fields) {
     const differs = Array.isArray(v) ? !sameList(me[k], v) : me[k] !== v;
     if (differs) { me[k] = v; changed = true; }
   }
-  if (!changed) return net;
+  if (!changed && checkMachineRecord(net, me)) return net;
 
   me.updatedAt = Date.now();
   return write(net);
@@ -832,13 +883,18 @@ export const advertise = (net, endpoints) => describeSelf(net, { endpoints });
 export function allEndpoints(net) {
   const out = [];
   for (const m of Object.values(net.machines)) {
-    if (m.id === net.self) continue;
+    if (m.id === net.self || net.revoked?.[m.id]) continue;
     for (const e of m.endpoints ?? []) if (!out.includes(e)) out.push(e);
   }
-  for (const e of net.machines[net.self]?.endpoints ?? []) {
+  for (const e of (net.revoked?.[net.self] ? [] : net.machines[net.self]?.endpoints ?? [])) {
     if (!out.includes(e)) out.push(e);
   }
+  if (net.bootstrap?.machine !== net.self && net.machines?.[net.bootstrap?.machine]
+      && !net.revoked?.[net.bootstrap.machine] && secureHubAddress(net.bootstrap.url)
+      && !out.includes(net.bootstrap.url)) out.push(net.bootstrap.url);
   return out;
 }
 
 // ------------------------------------------------------------------ publish
+
+setProofSigner(() => machineSigningInfo().privateKey);

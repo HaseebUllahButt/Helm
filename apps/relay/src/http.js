@@ -4,7 +4,7 @@ import { q, now, newId, newInviteCode } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, issueDevice, revoke,
   authenticate, allEndpoints, localKey, deviceToken,
-  hubProof, issueChallenge, HELLO_PATH, sanitizeRoster,
+  hubProof, issueChallenge, HELLO_PATH, sanitizeRoster, hubTrust, signNetworkProof, checkDeviceRequest,
 } from '@helm/protocol/network';
 import { ROLE } from '@helm/protocol/identity';
 import { fanOut } from './notify.js';
@@ -22,9 +22,11 @@ const LOOPBACK_HOST = /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])(:\d+)?$/;
 // A public Helm page can inherit this computer's membership, but only if
 // its exact origin is already an address in this computer's network.
 /** A page served to this computer's own browser, not one proxied from outside. */
+const forwarded = (req) => Object.keys(req.headers).some(k => k === 'forwarded' || k.startsWith('x-forwarded-'));
+
 function localPage(req) {
+  if (forwarded(req)) return false;
   if (!isLoopback(req) || !LOOPBACK_HOST.test(String(req.headers.host))) return false;
-  if (req.headers['x-forwarded-for'] || req.headers['x-forwarded-host']) return false;
   const origin = req.headers.origin;
   if (!origin) return true;
   try { return LOOPBACK_HOST.test(new URL(origin).host); } catch { return false; }
@@ -35,18 +37,18 @@ function desktopOrigin(req, net) {
   const origin = req.headers.origin;
   if (!origin || !net) return null;
   return allEndpoints(net).some((endpoint) => {
-    try { return new URL(endpoint).origin === origin; } catch { return false; }
+    try { const url = new URL(endpoint); return url.protocol === 'https:' && url.origin === origin; } catch { return false; }
   }) ? origin : null;
 }
 
-function localSignIn(net, label) {
+function localSignIn(net, label, proofKey) {
   const remembered = q.localDeviceGet.get()?.device_id;
-  const existing = remembered ? deviceToken(net, remembered) : null;
+  const existing = remembered ? deviceToken(net, remembered, proofKey) : null;
   const { id, token } = existing
     ? { id: remembered, token: existing }
-    : issueDevice(net, label || 'this machine');
+    : issueDevice(net, label || 'this machine', proofKey);
   if (!existing) q.localDeviceSet.run(id);
-  return { token, deviceId: id, network: net.id, endpoints: allEndpoints(net), local: true };
+  return { token, deviceId: id, network: net.id, endpoints: allEndpoints(net), trust: hubTrust(net), local: true };
 }
 
 function confirmNetwork(net) {
@@ -188,7 +190,7 @@ function allowedOrigin(req, net) {
   if (/^(127\.\d+\.\d+\.\d+|\[::1\]|localhost)(:\d+)?$/.test(host)) return origin;
 
   for (const endpoint of net ? allEndpoints(net) : []) {
-    try { if (new URL(endpoint).host === host) return origin; } catch { /* not a URL */ }
+    try { if (new URL(endpoint).origin === origin) return origin; } catch { /* not a URL */ }
   }
   return null;
 }
@@ -202,7 +204,7 @@ const reply = (res, code, body, origin = null) => {
     vary: 'Origin, Accept-Encoding',
     ...(origin ? {
       'access-control-allow-origin': origin,
-      'access-control-allow-headers': 'content-type, authorization',
+      'access-control-allow-headers': 'content-type, authorization, x-helm-proof',
       'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
     } : {}),
     ...SECURITY_HEADERS,
@@ -317,10 +319,14 @@ export const clientTokenFrom = (header) => {
  * means a revocation from the CLI or another process takes effect on the very
  * next request instead of whenever this process happened to reload.
  */
-export function identify(token) {
+export function identify(token, req, proof) {
   const net = loadNetwork();
-  if (!net) return null;
+  if (!net || net.revoked?.[net.self]) return null;
   const claims = authenticate(net, token);
+  if (claims && req && !localPage(req)) {
+    const path = new URL(req.url, 'http://localhost').pathname.replace(/^\/helm(?=\/)/, '');
+    if (!checkDeviceRequest(net, claims, proof ?? req.headers['x-helm-proof'], req.method, path)) return null;
+  }
   return claims ? { net, claims } : null;
 }
 
@@ -399,7 +405,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       if (body.network !== net.id) {
         return reply(res, 409, { error: 'this computer belongs to a different network' }, trusted);
       }
-      return reply(res, 200, localSignIn(net, body.label), trusted);
+      return reply(res, 200, localSignIn(net, body.label, body.proofKey), trusted);
     }
 
     if (req.method === 'OPTIONS') return json(res, 204, {});
@@ -417,6 +423,16 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       const nonce = typeof body?.nonce === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(body.nonce) ? body.nonce : null;
       if (!nonce) return json(res, 400, { error: 'nonce required' });
       return json(res, 200, { net: net.id, proof: hubProof(net, nonce), challenge: issueChallenge() });
+    }
+
+    if (path === '/api/hub/identity' && req.method === 'POST') {
+      const net = loadNetwork();
+      if (!net || net.revoked?.[net.self]) return json(res, 403, { error: 'This machine is no longer a network member.' });
+      const body = await readBody(req, 4096).catch(() => ({}));
+      if (typeof body.nonce !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(body.nonce)) return json(res, 400, { error: 'Send a valid challenge.' });
+      return json(res, 200, signNetworkProof(net, 'hub-identity', {
+        nonce: body.nonce, network: net.id, challenge: issueChallenge(), key: net.machines[net.self]?.codeSignPubkey,
+      }));
     }
 
     if (path === '/api/health') {
@@ -449,7 +465,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       if (req.headers.origin) {
         try { localOrigin = LOOPBACK.test(new URL(req.headers.origin).host); } catch { localOrigin = false; }
       }
-      if (!isLoopback(req) || !localHost || !sameSite || !localOrigin) {
+      if (!isLoopback(req) || forwarded(req) || !localHost || !sameSite || !localOrigin) {
         res.writeHead(403, { 'content-type': 'application/json', ...SECURITY_HEADERS });
         return res.end(JSON.stringify({ error: 'only a page served by this machine may do that' }));
       }
@@ -467,6 +483,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       if (!net) return json(res, 503, { error: 'this machine is not in a network yet' });
 
       const body = await readBody(req).catch(() => ({}));
+      if (body.proofKey !== undefined && (typeof body.proofKey !== 'string' || body.proofKey.length > 512)) return json(res, 400, { error: 'Send a valid browser key.' });
 
       // A browser on the machine itself signs in with the local key instead of
       // a pairing password: anyone who can read that file can already read the
@@ -477,7 +494,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       // terminates HTTPS and proxies to this hub over loopback, so a request
       // from the internet also arrives from 127.0.0.1 - and the key alone
       // would travel further than this machine.
-      if (body.local && isLoopback(req) && safeEqual(body.local, localKey())) {
+      if (body.local && localPage(req) && safeEqual(body.local, localKey())) {
         // One credential for this machine's own browsers, not one per page
         // load. Every fresh profile, every cleared site-data and every token
         // this hub cut used to leave another permanent device in a roster that
@@ -489,7 +506,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
         // remembered device has since been removed, `deviceToken` says so and
         // a new one is issued - which is what makes pruning stick rather than
         // locking the owner out of their own machine.
-        return json(res, 200, localSignIn(net, body.label));
+        return json(res, 200, localSignIn(net, body.label, body.proofKey));
       }
 
       const expected = currentPassword();
@@ -519,14 +536,14 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       }
 
       confirmNetwork(net);
-      const { id, token } = issueDevice(net, body.label || 'web');
+      const { id, token } = issueDevice(net, body.label || 'web', body.proofKey);
       // Pairing is the first time this device was here, and the moment the
       // owner most wants to hear about it: a link that leaked would look
       // exactly like this, and the only witness is a device already paired.
       q.seenSet.run(id, now());
       announceNewDevice(net.devices[id]);
       return json(res, 200, {
-        token, deviceId: id, network: net.id, endpoints: allEndpoints(net),
+        token, deviceId: id, network: net.id, endpoints: allEndpoints(net), trust: hubTrust(net),
       });
     }
 
@@ -569,7 +586,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
 
     // ---------------------------------------------------- authenticated routes
 
-    const who = identify(clientTokenFrom(req.headers.authorization));
+    const who = identify(clientTokenFrom(req.headers.authorization), req);
     if (!who) return json(res, 401, { error: 'unauthorized' });
     const { net, claims } = who;
 
@@ -626,6 +643,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
         id: net.id,
         self: net.self,
         you: claims.sub,
+        trust: hubTrust(net),
         machines: listMachines(online),
         devices: Object.values(net.devices),
         endpoints: allEndpoints(net),
@@ -648,7 +666,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       if (!name || !hosts.includes(host)) return json(res, 400, { error: 'not a link of this network' });
       return json(res, 200, {
         action: `https://${name}.${host}/.helm-share/enter`,
-        grant: mintShareGrant(net, { name, host, sub: claims.sub }),
+        grant: mintShareGrant(net, { name, host, sub: claims.sub, authority: claims.issuer, credentialExpiresAt: claims.exp }),
         next: safeSharePath(body?.next),
       });
     }

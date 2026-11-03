@@ -197,7 +197,8 @@ export async function startRelay({
     };
     if (!token) return reject();
 
-    const who = identify(token);
+    const proof = String(req.headers['sec-websocket-protocol'] || '').split(',').map(p => p.trim()).find(p => p.startsWith('helmproof.'))?.slice(10);
+    const who = identify(token, req, proof);
     if (!who) return reject();
     const { net, claims } = who;
 

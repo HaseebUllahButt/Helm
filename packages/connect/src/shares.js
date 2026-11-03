@@ -1,3 +1,4 @@
+import { loadNetwork } from '@helm/protocol/network';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
@@ -23,7 +24,7 @@ export function listShares(now = Date.now()) {
   try {
     const list = JSON.parse(readFileSync(FILE(), 'utf8'));
     return Array.isArray(list)
-      ? list.filter((s) => shareName(s?.name) && Number.isInteger(s?.port) && (s.expiresAt == null || s.expiresAt > now))
+      ? list.filter((s) => shareName(s?.name) && Number.isInteger(s?.port) && s.port !== (loadNetwork()?.port ?? 8787) && (s.expiresAt == null || s.expiresAt > now))
       : [];
   } catch { return []; }
 }
@@ -43,6 +44,7 @@ function save(list) {
 export function addShare({ name, port, password, keep, ttlMs, private: members, preserveHost, chat } = {}) {
   const wanted = Number(port);
   if (!Number.isInteger(wanted) || wanted < 1 || wanted > 65535) throw new Error('give the local port to share, e.g. 3000');
+  if (wanted === (loadNetwork()?.port ?? 8787)) throw new Error('Do not share the Helm port. Share the app port instead.');
   const picked = name == null || name === '' ? randomShareName() : shareName(name);
   if (!picked) throw new Error(`a link name is ${NAME_RULE}`);
   if (members && password) throw new Error('a private link opens only for your own Helm devices; it takes no password');

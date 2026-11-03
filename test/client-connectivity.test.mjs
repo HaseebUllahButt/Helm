@@ -95,7 +95,11 @@ function harness({ endpoints = ['https://good'], delays = {}, statuses = {}, rea
     }),
   };
   vm.runInNewContext(code, context, { filename: 'client.ts' });
-  const client = new context.module.exports.Client(endpoints, 'test-token');
+  // Route tests use a transport stand-in. hub-auth tests use real signatures.
+  const auth = { headers: async () => ({}), protocols: async () => ['helm', 'test-token'],
+    offer: async (_target, payload) => ({ ...payload, credential: 'test-token' }),
+    allowed: () => true, acceptTrust() {} };
+  const client = new context.module.exports.Client(endpoints, 'test-token', undefined, auth);
   client.on((env, kind, payload) => events.push({ env, kind, payload }));
   const start = () => client.connect().catch(error => error.message);
   return { client, exports: context.module.exports, sockets, peers, events, requests, timers, document, advance, start, parses: () => parses,
@@ -1126,7 +1130,7 @@ test('just after waking, a read tries the web route after 0.5 s', async () => {
 
 test('signing in gives up on a stalled network instead of waiting for ever', async () => {
   const h = harness({ delays: { 'https://stalled': Infinity } });
-  void h.exports.login('https://stalled', 'secret').catch(() => {});
+  void h.exports.login('https://stalled', 'secret', undefined, 'fixture-key').catch(() => {});
   await h.advance(1);
   const request = h.requests.find(r => r.url.endsWith('/api/auth/login'));
   assert.ok(request?.init?.signal, 'the sign-in request has a deadline');

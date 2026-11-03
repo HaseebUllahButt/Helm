@@ -183,7 +183,8 @@ export async function join({ code, at, name, port = 8787 }) {
   const net = loadNetwork();
   const host = net.machines[inviter];
   if (host && !(host.endpoints ?? []).includes(base)) {
-    host.endpoints = [...(host.endpoints ?? []), base];
+    // Keep this invitation address local. Only the inviter signs its record.
+    net.bootstrap = { machine: inviter, url: base };
     saveNetwork(net);
   }
 

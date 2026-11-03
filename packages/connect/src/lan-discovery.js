@@ -78,6 +78,7 @@ export function withHeardAddresses({ urls, net, self, mine = new Set(), heard, c
     if (id === self || net.revoked?.[id]) continue;
     for (const url of machine.endpoints ?? []) machineFor.set(url, id);
   }
+  if (net.bootstrap?.url && net.machines?.[net.bootstrap.machine] && !net.revoked?.[net.bootstrap.machine]) machineFor.set(net.bootstrap.url, net.bootstrap.machine);
   for (const { url, id } of heard) {
     if (id === self || mine.has(url) || net.revoked?.[id]) continue;
     const listed = net.machines?.[id]?.endpoints;

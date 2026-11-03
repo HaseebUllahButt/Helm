@@ -142,8 +142,9 @@ test('a pass is for one link, on one host, for a minute', async () => {
   const fresh = N.loadNetwork();
   const old = S.mintShareGrant(fresh, { name: 'secret', host: HOST, sub: phone.id, now: Date.now() - 61_000 });
   assert.equal((await enter({ grant: old, next: '/' })).status, 401, 'an expired pass');
-  const forged = S.mintShareGrant({ ...fresh, key: N.loadNetwork().key.replace(/^./, (c) => (c === 'A' ? 'B' : 'A')) },
-    { name: 'secret', host: HOST, sub: phone.id });
+  const forgedClaims = JSON.parse(Buffer.from(S.mintShareGrant(fresh, { name: 'secret', host: HOST, sub: phone.id }), 'base64url'));
+  forgedClaims.signature = 'forged';
+  const forged = Buffer.from(JSON.stringify(forgedClaims)).toString('base64url');
   assert.equal((await enter({ grant: forged, next: '/' })).status, 401, 'a pass signed with another key');
 
   // The hub decides where a pass may go: never to an address someone named.
@@ -310,8 +311,11 @@ test('helm forward takes the next free port unless one was asked for', async (t)
 
 /** A machine on the hub: answers share.list, dials only its shared ports. */
 async function fakeMachine(id, list, { readyDelay = 0 } = {}) {
+  const current = N.loadNetwork();
+  current.machines[id] = { id, name: id, endpoints: [], updatedAt: Date.now(), codeSignPubkey: N.machineSigningInfo().codeSignPubkey };
+  N.saveNetwork(current);
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/helm/ws?name=sharer`, {
-    headers: { authorization: `Bearer ${mintToken(net.key, { net: net.id, sub: id, role: 'machine' })}` },
+    headers: { authorization: `Bearer ${N.machineToken({ ...N.loadNetwork(), self: id })}` },
   });
   const tunnels = new Map();
   const send = (o) => ws.send(JSON.stringify(o));
