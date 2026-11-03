@@ -305,7 +305,15 @@ export class SessionResume {
       // A terminal lives in the host process, which outlives us - so its
       // record stays until `adoptTerminals()` has asked what really survived.
       if (s.pty) continue;
-      if (s.external) { await this.#core.external.refreshExternalActivity(s); continue; }
+      if (s.external) {
+        // The old daemon owned the wait and its cancellation handle.
+        if (s.takeover) {
+          s.takeover = null;
+          this.#sessions.emit('session', s);
+        }
+        await this.#core.external.refreshExternalActivity(s);
+        continue;
+      }
       if (!s.driver) { this.#sessions.runtime.watch(this.#core.handle(s)); continue; }
       // An agent process the host kept is still running whatever it was
       // running: its active turn and questions are still answerable. Any

@@ -154,3 +154,19 @@ test('take over waits for the running step, then moves the same CLI into a share
   assert.match(shared, new RegExp(`ACCOUNT=${home}`));
   assert.throws(() => sessions.get(external.id), 'the old monitor row is gone');
 });
+
+test('a takeover wait saved before restart does not remain stuck', async t => {
+  class Runtime extends EventEmitter { async listLive() { return new Map(); } watch() {} }
+  const options = { nativeDiscovery: false, makeDriver: () => { throw new Error('must not start a driver'); } };
+  const original = new Sessions(new Runtime(), options);
+  const external = await original.resumeExternal({ engine: 'claude', account: 'claude', id: conversation, cwd: work });
+  external.takeover = 'waiting';
+  await original.stop();
+  const restarted = new Sessions(new Runtime(), options);
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  assert.notEqual(restarted.get(external.id).takeover, 'waiting');
+  restarted.flush();
+  const saved = JSON.parse((await import('node:fs')).readFileSync(join(process.env.HELM_DIR, 'sessions.json'), 'utf8'));
+  assert.notEqual(saved.sessions.find(s => s.id === external.id).takeover, 'waiting');
+});
