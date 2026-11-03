@@ -121,12 +121,19 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
     const refresh = () => {
       if (asking || done || document.hidden) return;
       asking = true;
-      client.rpc<{ return: TaskReturnState }>(source.id, 'task.status', { handoffId })
+      client.rpc<{ return: TaskReturnState; send?: TaskTransferResult }>(source.id, 'task.status', { handoffId })
         .then((reply) => {
           if (!live) return;
-          const text = JSON.stringify(reply.return);
-          if (text !== shown) { shown = text; setReturnState(reply.return); }
-          if (reply.return?.status === 'returned') { done = true; clearInterval(timer); }
+          const text = JSON.stringify([reply.return, reply.send]);
+          if (text !== shown) {
+            shown = text; setReturnState(reply.return);
+            if (reply.send) {
+              if (JSON.stringify(reply.send) !== JSON.stringify(taskResult)) setTaskResult(reply.send);
+              try { finishTaskSend(savedKey, reply.send); }
+              catch { setError('Cannot save the latest task status. Keep this screen open.'); }
+            }
+          }
+          if (reply.return?.status === 'returned' || reply.send?.status === 'failed') { done = true; clearInterval(timer); }
         }).catch(() => {})
         .finally(() => { asking = false; });
     };
@@ -292,7 +299,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
-          <h1>{taskResult ? 'Task sent' : task ? 'Send task' : receipt ? 'Project sent' : 'Send a project'}</h1>
+          <h1>{taskResult?.status === 'failed' ? 'Task send failed' : taskResult ? 'Task sent' : task ? 'Send task' : receipt ? 'Project sent' : 'Send a project'}</h1>
           <span className="sub"><Route machine={source.name} folder={folder} /></span>
         </div>
       </div>
@@ -300,11 +307,11 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
       <div className="scroll"><div className="pad column">
         {taskResult ? (
           <>
-            <div className="transfer-done">
-              <span className="done-mark"><Icon name="check" size={18} /></span>
+            <div className={taskResult.status === 'failed' ? 'banner transfer-warning' : 'transfer-done'}>
+              <span className={taskResult.status === 'failed' ? 'warn-mark' : 'done-mark'}><Icon name={taskResult.status === 'failed' ? 'alert' : 'check'} size={18} /></span>
               <span className="grow">
-                <span className="done-title">{taskResult.status === 'running' ? 'Running' : 'Queued'} on {taskResult.targetName}</span>
-                <span className="done-sub">{taskResult.status === 'running'
+                <span className="done-title">{taskResult.status === 'failed' ? 'Task send failed' : taskResult.status === 'running' ? 'Running' : 'Queued'} on {taskResult.targetName}</span>
+                <span className="done-sub">{taskResult.status === 'failed' ? 'Check the task and retry with the saved request.' : taskResult.status === 'running'
                   ? 'The other machine has the task. You can close this laptop.'
                   : 'Helm will send the task when the other machine reconnects.'}</span>
               </span>
@@ -313,12 +320,13 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             <p className="note">Open the new chat there to see progress and questions.</p>
             {!bulk && <TaskReturn client={client} envId={source.id} transfer={{ ...returnState,
               status: returnState.status === 'waiting' ? taskResult.status ?? 'waiting' : returnState.status, handoffId, role: 'source',
+              error: taskResult.status === 'failed' ? taskResult.error : returnState.error,
               machineId: taskResult.targetMachineId!, machineName: taskResult.targetName! }} />}
             {taskResult.warning && <div className="banner">{taskResult.warning}</div>}
             {error && <div className="error">{error}</div>}
             <div className="transfer-actions">
               {taskResult.receipt && <button className="primary big" disabled={busy} onClick={openTask}>Open task there</button>}
-              {taskResult.status === 'queued' && <button className="primary big" disabled={busy} onClick={send}>Check or retry delivery</button>}
+              {(taskResult.status === 'queued' || taskResult.status === 'failed') && <button className="primary big" disabled={busy} onClick={send}>Check or retry delivery</button>}
               <button className="linkish" onClick={() => {
                 try { if (taskResult.status === 'running') forgetTaskSend(savedKey); }
                 catch { setError('Cannot clear this saved send. Check browser storage and try again.'); return; }

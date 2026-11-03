@@ -457,7 +457,8 @@ export interface TransferResult {
 export interface TaskTransferResult {
   sent: boolean;
   requiresAcknowledgement?: boolean;
-  status?: 'running' | 'queued' | 'copying';
+  status?: 'running' | 'queued' | 'copying' | 'failed';
+  error?: string;
   /** A big project copying ahead of its task: how far it got. */
   progress?: { phase: 'pausing' | 'copying' | 'starting' | SendJob['phase']; folder: string; bytes: number; total: number | null; percent?: number; rate?: number | string | null; files?: SendJob['files']; eta?: number | null; jobId?: string };
   handoffId?: string;

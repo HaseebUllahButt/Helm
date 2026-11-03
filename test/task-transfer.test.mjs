@@ -291,6 +291,26 @@ test('an unknown queued task stays queued without an automatic accept attempt', 
   assert.equal(JSON.parse(readFileSync(join(options.directory, `${params.handoffId}.json`))).result.status, 'queued');
 });
 
+test('a failed receiver receipt ends automatic recovery and reports the failure', async () => {
+  const { options, params, source, accepted } = fixture();
+  const rpc = options.rpc;
+  let reads = 0;
+  options.rpc = (...args) => {
+    if (args[1] === M.HANDOFF_ACCEPT) throw new Error('socket closed');
+    if (args[1] === M.HANDOFF_STATUS) { reads++; return { status: 'failed', error: 'The account needs a login.' }; }
+    return rpc(...args);
+  };
+  await new TaskTransfers(options).send(params, 'phone');
+  const restarted = new TaskTransfers(options);
+  await restarted.reconcile();
+  assert.equal(source.taskTransfer.status, 'failed');
+  assert.equal(restarted.status(params, 'phone').send.status, 'failed');
+  assert.match(restarted.status(params, 'phone').send.error, /needs a login/);
+  await restarted.reconcile();
+  assert.equal(reads, 1, 'a known failure waits for an owner retry');
+  assert.equal(accepted.length, 0);
+});
+
 test('a refused task reports failure on its source and waits for an explicit retry', async () => {
   const { options, params, source } = fixture();
   const rpc = options.rpc;
@@ -303,6 +323,23 @@ test('a refused task reports failure on its source and waits for an explicit ret
   assert.equal(source.taskTransfer.status, 'failed');
   await new TaskTransfers(options).reconcile();
   assert.equal(accepts, 1);
+});
+
+test('a successful explicit retry clears a failed source notice when no return was requested', async () => {
+  const { options, params, source } = fixture();
+  params.returnToSource = false;
+  const rpc = options.rpc;
+  options.rpc = (...args) => {
+    if (args[1] === M.HANDOFF_ACCEPT) throw new Error('socket closed');
+    if (args[1] === M.HANDOFF_STATUS) return { status: 'failed', error: 'Login required.' };
+    return rpc(...args);
+  };
+  await new TaskTransfers(options).send(params, 'phone');
+  await new TaskTransfers(options).reconcile();
+  assert.equal(source.taskTransfer.status, 'failed');
+  options.rpc = rpc;
+  assert.equal((await new TaskTransfers(options).send(params, 'phone')).status, 'running');
+  assert.equal(source.taskTransfer, null);
 });
 
 test('peer callers, unavailable accounts and target execution failures never become successful sends', async () => {

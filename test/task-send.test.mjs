@@ -71,3 +71,16 @@ test('a source chat never calls a failed send a running task', () => {
   const tree = app.TaskReturn({ client: {}, envId: 'source', transfer: { role: 'source', status: 'failed', machineName: 'VM', error: 'Login required.' } });
   assert.equal(find(tree, 'strong').props.children, 'Task send failed');
 });
+
+test('a restored failed send shows its failure and keeps the original retry request', () => {
+  const store = new Map(), saved = load(store), key = saved.taskSendKey(undefined, 'source', '/project');
+  saved.prepareTaskSend(key, request);
+  saved.finishTaskSend(key, { sent: false, status: 'failed', targetMachineId: 'target', targetName: 'VM', error: 'Login required.', preflight: {} });
+  const app = renderModule(transferCode, { './taskSend': load(store), './session/TaskReturn': { TaskReturn: 'return-card' },
+    './send/SendView': { SendView: 'project-send' } });
+  const view = app.TransferView({ client: {}, source: { id: 'source' }, envs: [], folder: '/project', onBack() {} });
+  const tree = view.type(view.props);
+  assert.equal(find(tree, 'h1').props.children, 'Task send failed');
+  assert.equal(find(tree, 'return-card').props.transfer.error, 'Login required.');
+  assert.equal(saved.readTaskSend(key).request.handoffId, request.handoffId);
+});

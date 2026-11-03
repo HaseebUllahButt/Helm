@@ -198,6 +198,8 @@ export class TaskTransfers {
       if (error.rpc || !networkFailure(error)) {
         record.resumeSend = false;
         record.sendError = String(error.message).slice(0, 500);
+        record.result = { sent: false, status: 'failed', handoffId: params.handoffId, targetMachineId: target.id,
+          targetName: target.name, preflight: record.preflight, error: record.sendError };
         this.#save(params.handoffId, record);
         report('failed', record.sendError);
         throw error;
@@ -233,9 +235,9 @@ export class TaskTransfers {
     if (record.request.parent?.sessionId && record.request.returnToSource) this.sessions.setTaskTransfer?.(record.request.parent.sessionId, {
       handoffId, role: 'source', status: 'running', machineId: target.id, machineName: target.name,
     });
-    else if (record.bulk?.sourceId) {
+    else if (record.request.parent?.sessionId || record.bulk?.sourceId) {
       let source;
-      try { source = this.sessions.get(record.bulk.sourceId); } catch { /* source was removed */ }
+      try { source = this.sessions.get(record.request.parent?.sessionId ?? record.bulk.sourceId); } catch { /* source was removed */ }
       if (source?.taskTransfer?.handoffId === handoffId) this.sessions.setTaskTransfer?.(source.id, null);
     }
     return result;
@@ -491,8 +493,20 @@ export class TaskTransfers {
             // only an owner retry can authorize a new prompt attempt.
             const target = this.network().machines[record.request.targetMachineId];
             if (target && !this.network().revoked?.[target.id]) {
-              const receipt = await this.rpc(target.id, M.HANDOFF_STATUS, { handoffId: id }, { direct: true, timeout: 5000 });
-              if (receipt.status === 'running') this.#accepted(target, id, record, receipt, record.result?.route ?? 'relay');
+              let receipt;
+              try { receipt = await this.rpc(target.id, M.HANDOFF_STATUS, { handoffId: id }, { direct: true, timeout: 5000 }); }
+              catch { /* A missing receipt cannot authorize another send. */ }
+              if (receipt?.status === 'running') this.#accepted(target, id, record, receipt, record.result?.route ?? 'relay');
+              else if (receipt?.status === 'failed') {
+                record.resumeSend = false;
+                record.sendError = receipt.error || 'The target could not start this task.';
+                record.result = { sent: false, status: 'failed', handoffId: id, targetMachineId: target.id,
+                  targetName: target.name, preflight: record.preflight, error: record.sendError };
+                this.#save(id, record);
+                const sourceId = record.request.parent?.sessionId;
+                if (sourceId) this.sessions.setTaskTransfer?.(sourceId, { handoffId: id, role: 'source', status: 'failed',
+                  machineId: target.id, machineName: target.name, error: record.sendError });
+              }
             }
           } else await this.send({ ...record.intent, handoffId: id, allowSkipped: true }, this.network().self);
         }
@@ -507,6 +521,7 @@ export class TaskTransfers {
     if (!ID.test(params?.handoffId ?? '')) throw new Error('invalid handoff id');
     const record = JSON.parse(readFileSync(join(this.directory, `${params.handoffId}.json`), 'utf8'));
     return { handoffId: params.handoffId, returnToSource: record.request?.returnToSource === true,
+      send: record.result,
       return: record.return ?? { status: 'waiting', error: record.returnError } };
   }
 
