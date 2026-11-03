@@ -127,6 +127,9 @@ test('Send task includes env, keeps a retry identity, and opens the destination 
     assert.equal(await page.getByLabel('Include .env files').isDisabled(),true);
     assert.equal(await page.getByLabel('Instructions for continuing').isDisabled(),true);
     await page.evaluate(() => window.reopenTransfer());
+    await page.getByRole('button', { name: 'Forget saved send', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+    assert.equal(await page.evaluate(() => window.attempts.length), 1, 'closing recovery does not send anything');
     await page.getByRole('button',{name:'Retry to VM',exact:true}).click();
     await page.getByText('Helm is copying files to VM: 40% of 1000 B · 200 B/s',{exact:true}).waitFor();
     await page.getByText('Running on VM',{exact:true}).waitFor();

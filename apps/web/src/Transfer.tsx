@@ -13,8 +13,24 @@ import type { SendJob } from './client';
 import type { TaskReturnState } from './client';
 import { followModelRefresh } from './modelRefresh';
 import { taskSendKey, readTaskSend, prepareTaskSend, finishTaskSend, forgetTaskSend } from './taskSend';
+import { Confirm } from './Modal';
 
 const leaf = (p: string) => p.replace(/\/+$/, '').split('/').pop() || p;
+
+function ForgetSavedSend({ savedKey, onDone }: { savedKey: string; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState('');
+  return <>
+    <button className="linkish" onClick={() => setOpen(true)}>Forget saved send</button>
+    {error && <p className="error">{error}</p>}
+    {open && <Confirm title="Forget this send on this device?"
+      body="This removes the saved screen. The earlier task may still run. Check the target before sending another task."
+      confirmLabel="Forget saved send" onCancel={() => setOpen(false)} onConfirm={() => {
+        try { forgetTaskSend(savedKey); onDone(); }
+        catch { setError('Cannot clear this saved send. Check browser storage and try again.'); setOpen(false); }
+      }} />}
+  </>;
+}
 
 function readinessTone(status?: string) {
   if (status === 'pass') return 'pass';
@@ -53,7 +69,8 @@ export function TransferView(props: TransferProps) {
     try { return { record: readTaskSend(taskSendKey(props.client.token, props.source.id, props.folder, props.session?.id)), error: '' }; }
     catch (error) { return { record: null, error: errorMessage(error) }; }
   }, [props.client, props.source.id, props.folder, props.session?.id]);
-  if (saved.error) return <><button className="linkish" onClick={props.onBack}>Back</button><p className="error">{saved.error}</p></>;
+  if (saved.error) return <><button className="linkish" onClick={props.onBack}>Back</button><p className="error">{saved.error}</p>
+    <ForgetSavedSend savedKey={taskSendKey(props.client.token, props.source.id, props.folder, props.session?.id)} onDone={props.onBack} /></>;
   return props.session || taskIntent || saved.record ? <TaskTransferView {...props} initialTask
     initialTargetId={taskIntent?.targetMachineId} initialIncludeEnv={taskIntent?.includeEnv} />
     : <SendView {...props} onTask={setTaskIntent} />;
@@ -514,6 +531,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             {task && locked && error && <p className="note" title={handoffId}>Retry continues the same send. Check whether the chat has paused.</p>}
           </>
         )}
+        {locked && !busy && taskResult?.status !== 'running' && <ForgetSavedSend savedKey={savedKey} onDone={onBack} />}
       </div></div>
 
       {!receipt && !taskResult && preview && (
