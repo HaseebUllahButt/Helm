@@ -11,14 +11,27 @@
  * on one never share a draft.
  */
 const KEY = (env: string, session: string) => `helm-draft:${env}:${session}`;
+const failures = new Map<string, { message: string; text?: string; unread?: boolean }>();
+
+export function draftFailure(env: string, session: string) { return failures.get(KEY(env, session)); }
+export function reportDraftFailure(env: string, session: string, message: string, text?: string, unread = false) {
+  failures.set(KEY(env, session), { message, text, unread });
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('helm:draft-error', { detail: { env, session, message, text, unread } }));
+}
 
 export function loadDraft(env: string, session: string): string {
-  try { return localStorage.getItem(KEY(env, session)) ?? ''; } catch { return ''; }
+  try { return localStorage.getItem(KEY(env, session)) ?? ''; }
+  catch { throw new Error('Cannot read the saved draft. Check browser storage and reload.'); }
 }
 
 export function saveDraft(env: string, session: string, text: string) {
   try {
     if (text) localStorage.setItem(KEY(env, session), text);
     else localStorage.removeItem(KEY(env, session));
-  } catch { /* storage full or denied: the draft is a nicety, not state */ }
+    failures.delete(KEY(env, session));
+  } catch {
+    throw new Error(text
+      ? 'Cannot save this draft. Keep this chat open to keep your words.'
+      : 'Cannot clear the saved draft. Old words may return.');
+  }
 }

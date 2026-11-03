@@ -165,7 +165,7 @@ test('early reads and ticket ids cannot strand or swap identical waiting message
   await sessions.input(session.id, 'Early echo');
   await tick();
   assert.equal(events().filter((event) => event.type === 'turn.accept').length, 1);
-  assert.ok(!events().some((event) => event.type === 'turn.deliver'), 'read before the call returned: nothing left to mark sent');
+  assert.ok(events().some((event) => event.type === 'turn.deliver'), 'the send boundary is saved before the early read');
   driver.onSteer = undefined;
   await sessions.input(session.id, 'Same text');
   await sessions.input(session.id, 'Same text');
@@ -180,6 +180,171 @@ test('early reads and ticket ids cannot strand or swap identical waiting message
   assert.deepEqual(events().filter((event) => event.type === 'turn.accept').slice(1).map((event) => event.turnId), [identical[1].inputId, identical[0].inputId]);
 });
 
+test('a failed Stop does not send a handed message a second time', async t => {
+  const { sessions, session, driver, ticket } = await setup(t, 'claude');
+  driver.dropsHandedOnInterrupt = true;
+  driver.push('item.start', { id: 'tool', kind: 'tool', turnId: driver.turnId });
+  await sessions.input(session.id, 'Handed once');
+  await tick();
+  assert.equal(driver.steered.length, 1);
+  driver.onInterrupt = () => { throw new Error('stop failed'); };
+  await assert.rejects(sessions.interrupt(session.id), /stop failed/);
+  driver.push('input.consumed', { text: 'Handed once', inputId: ticket('Handed once') });
+  driver.finish();
+  await tick();
+  assert.deepEqual(driver.sent, ['Original task']);
+  assert.equal(driver.steered.length, 1);
+});
+
+test('restart does not replay a queued send while its outcome is unknown', async t => {
+  const { sessions, session, driver, ticket } = await setup(t, 'devin');
+  const entered = deferred(), held = deferred();
+  driver.send = async text => { driver.sent.push(text); entered.resolve(); await held.promise; };
+  await sessions.input(session.id, 'Queued send', { delivery: 'queue' });
+  driver.finish();
+  await entered.promise;
+  const id = ticket('Queued send');
+  await sessions.stop();
+  const made = [];
+  const restarted = new Sessions(new Runtime(), { events: new EventLog(sessions.events.dir), nativeDiscovery: false,
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+    makeDriver: (engine, opts) => { const d = new FakeDriver({ engine, ...opts }); made.push(d); return d; } });
+  t.after(() => { held.resolve(); return restarted.stop(); });
+  await restarted.resume();
+  await tick();
+  assert.equal(made.flatMap(d => d.sent).includes('Queued send'), false);
+  assert.notEqual(restarted.history(session.id).events.findLast(e => e.type === 'turn.done' && e.turnId === id)?.status, 'ok');
+});
+
+test('restart preserves an uncertain mid-turn handover without sending it again', async t => {
+  const { sessions, session, driver, ticket } = await setup(t, 'claude');
+  const entered = deferred(), held = deferred();
+  driver.onSteer = () => { entered.resolve(); return held.promise; };
+  driver.push('item.start', { id: 'tool', kind: 'tool', turnId: driver.turnId });
+  await sessions.input(session.id, 'Uncertain handover');
+  await entered.promise;
+  const id = ticket('Uncertain handover');
+  await sessions.stop();
+  const made = [];
+  const restarted = new Sessions(new Runtime(), { events: new EventLog(sessions.events.dir), nativeDiscovery: false,
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+    makeDriver: (engine, opts) => { const d = new FakeDriver({ engine, ...opts }); made.push(d); return d; } });
+  t.after(() => { held.resolve(); return restarted.stop(); });
+  await restarted.resume();
+  await tick();
+  assert.equal(made.flatMap(d => d.sent).includes('Uncertain handover'), false);
+  assert.notEqual(restarted.history(session.id).events.findLast(e => e.type === 'turn.done' && e.turnId === id)?.status, 'ok');
+});
+
+for (const mode of ['turn.start', 'input.consumed', 'input.observed']) test(`a surviving agent can confirm delivery after restart with ${mode}`, async t => {
+  const { sessions, session, driver, ticket } = await setup(t, 'claude');
+  const held = deferred(), entered = deferred();
+  driver.onSteer = () => { entered.resolve(); return held.promise; };
+  driver.push('item.start', { id: 'tool', kind: 'tool', turnId: driver.turnId });
+  await sessions.input(session.id, 'Confirm after restart');
+  await entered.promise;
+  const id = ticket('Confirm after restart');
+  const clientId = driver.steered[0].clientId;
+  assert.ok(clientId, 'save a provider message identity before handing it over');
+  await sessions.stop();
+  let rebound;
+  const restarted = new Sessions(new Runtime(), { events: new EventLog(sessions.events.dir), nativeDiscovery: false,
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => true }),
+    makeDriver: (engine, opts) => (rebound = new FakeDriver({ engine, ...opts })) });
+  t.after(() => { held.resolve(); return restarted.stop(); });
+  await restarted.resume();
+  const saved = restarted.get(session.id);
+  assert.equal(saved.queuePaused, true);
+  assert.match(saved.recovery?.message ?? '', /may have received/);
+  assert.deepEqual(rebound.sent, []);
+  rebound.push('turn.done', { turnId: 'native-1', status: 'ok' });
+  rebound.push('status', { status: 'idle' });
+  assert.match(saved.recovery?.message ?? '', /may have received/, 'the old turn ending does not prove delivery');
+  rebound.push('input.consumed', { inputId: 'unrelated', text: 'Confirm after restart' });
+  rebound.push('input.consumed', { text: 'Confirm after restart' });
+  assert.equal(restarted.history(session.id).events.some(e => e.type === 'turn.accept' && e.turnId === id), false,
+    'the same words do not prove which message arrived');
+  rebound.push(mode, { turnId: 'late-provider-turn', ...(mode === 'input.observed' ? { clientId } : { inputId: id }), text: 'Confirm after restart' });
+  await tick();
+  const events = restarted.history(session.id).events;
+  assert.ok(events.some(e => ['turn.accept', 'turn.done'].includes(e.type) && e.turnId === id));
+  assert.equal(saved.recovery, undefined);
+  assert.equal(saved.queuePaused, false);
+  assert.deepEqual(rebound.sent, []);
+});
+
+test('a failed handover with an unknown outcome is not retried', async t => {
+  const { sessions, session, driver, ticket, events } = await setup(t, 'codex');
+  const held = deferred();
+  driver.onSteer = () => held.promise;
+  driver.push('item.start', { id: 'tool', kind: 'tool', turnId: driver.turnId });
+  await sessions.input(session.id, 'Maybe received');
+  await tick();
+  const id = ticket('Maybe received');
+  await sessions.input(session.id, 'Wait behind it', { delivery: 'queue' });
+  held.reject(new Error('connection lost'));
+  await tick();
+  assert.equal(session.queuePaused, true);
+  driver.finish();
+  await tick();
+  assert.equal(driver.sent.includes('Maybe received'), false);
+  assert.equal(driver.sent.includes('Wait behind it'), false);
+  assert.equal(driver.steered.length, 1);
+  assert.equal(events().some(e => e.type === 'turn.deliver' && e.turnId === id && e.requeued), false);
+  assert.equal(events().some(e => e.type === 'turn.accept' && e.turnId === id), false);
+  driver.push('input.consumed', { inputId: id, text: 'Maybe received' });
+  await tick();
+  assert.equal(session.queuePaused, false);
+  assert.equal(driver.sent.at(-1), 'Wait behind it');
+});
+
+test('restart during Stop keeps a handed message uncertain', async t => {
+  const { sessions, session, driver, ticket } = await setup(t, 'claude');
+  driver.dropsHandedOnInterrupt = true;
+  driver.push('item.start', { id: 'tool', kind: 'tool', turnId: driver.turnId });
+  await sessions.input(session.id, 'Stop in progress');
+  await tick();
+  const id = ticket('Stop in progress');
+  const entered = deferred(), held = deferred();
+  driver.onInterrupt = () => { entered.resolve(); return held.promise; };
+  const stopping = sessions.interrupt(session.id).catch(() => {});
+  await entered.promise;
+  await sessions.stop();
+  const made = [];
+  const restarted = new Sessions(new Runtime(), { events: new EventLog(sessions.events.dir), nativeDiscovery: false,
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+    makeDriver: (engine, opts) => { const d = new FakeDriver({ engine, ...opts }); made.push(d); return d; } });
+  t.after(async () => { driver.finish('interrupted'); held.resolve(); await stopping; await restarted.stop(); });
+  await restarted.resume();
+  await tick();
+  const outcome = restarted.history(session.id).events.findLast(e => e.type === 'turn.done' && e.turnId === id);
+  assert.match(outcome.error, /could not confirm delivery/);
+  assert.equal(made.flatMap(d => d.sent).includes('Stop in progress'), false);
+  assert.equal(restarted.history(session.id).events.some(e => e.type === 'turn.accept' && e.turnId === id), false);
+});
+
+test('a handed message returns after a confirmed Stop and restart', async t => {
+  const { sessions, session, driver, ticket } = await setup(t, 'claude');
+  driver.dropsHandedOnInterrupt = true;
+  driver.push('item.start', { id: 'tool', kind: 'tool', turnId: driver.turnId });
+  await sessions.input(session.id, 'After Stop');
+  await tick();
+  const id = ticket('After Stop');
+  driver.onInterrupt = () => { session.queuePaused = true; driver.finish('interrupted'); };
+  await sessions.interrupt(session.id);
+  session.queuePaused = false;
+  await sessions.stop();
+  const made = [];
+  const restarted = new Sessions(new Runtime(), { events: new EventLog(sessions.events.dir), nativeDiscovery: false,
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+    makeDriver: (engine, opts) => { const d = new FakeDriver({ engine, ...opts }); made.push(d); return d; } });
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  await tick();
+  assert.deepEqual(made.flatMap(d => d.sent).filter(text => text === 'After Stop'), ['After Stop']);
+  assert.equal(restarted.history(session.id).events.some(e => e.type === 'turn.accept' && e.turnId === id), false);
+});
+
 test('a message being handed over cannot be withdrawn, and one the CLI refuses goes back to wait', async (t) => {
   const { sessions, session, driver, ticket } = await setup(t, 'codex');
   const held = deferred();
@@ -188,7 +353,7 @@ test('a message being handed over cannot be withdrawn, and one the CLI refuses g
   await sessions.input(session.id, 'Reserved');
   await tick();
   assert.equal(sessions.dequeue(session.id, ticket('Reserved')).found, false);
-  held.reject(new Error('turn no longer accepts steering'));
+  held.reject(Object.assign(new Error('turn no longer accepts steering'), { deliveryNotSent: true }));
   await tick();
   // Refused once, it is not offered again mid-turn: the reply's end takes it.
   driver.push('item.start', { id: 'tool-2', kind: 'tool', turnId: driver.turnId });
@@ -205,7 +370,7 @@ test('a refused message keeps its place ahead of messages added while the CLI wa
   await sessions.input(session.id, 'Original follow-up');
   await tick();
   await sessions.input(session.id, 'Later follow-up', { delivery: 'queue' });
-  held.reject(new Error('Steer refused'));
+  held.reject(Object.assign(new Error('Steer refused'), { deliveryNotSent: true }));
   await tick();
   driver.finish(); await tick();
   assert.equal(driver.sent.at(-1), 'Original follow-up');
@@ -387,6 +552,59 @@ test('an echo names the ticket it answers so a long log keeps both', () => {
   assert.equal(retained.find((event) => event.type === 'turn.start' && event.turnId === 'native').inputId, 'local-second');
 });
 
+test('a long log retains an uncertain ticket and its return to the queue', () => {
+  const log = new EventLog(join(process.env.HELM_DIR, 'events-delivery-retention'));
+  const id = 'retained-delivery';
+  log.append(id, { type: 'turn.start', turnId: 'named-ticket', text: 'Saved', queued: true });
+  log.append(id, { type: 'turn.deliver', turnId: 'named-ticket' });
+  log.append(id, { type: 'turn.deliver', turnId: 'named-ticket', requeued: true });
+  log.append(id, { type: 'item.start', id: 'reply', turnId: 'host', kind: 'text' });
+  for (let i = 0; i < 2400; i++) log.append(id, { type: 'item.delta', id: 'reply', text: '.' });
+  const retained = new EventLog(log.dir).tail(id, 0);
+  assert.ok(retained.some(e => e.type === 'turn.start' && e.turnId === 'named-ticket'));
+  assert.equal(retained.findLast(e => e.type === 'turn.deliver' && e.turnId === 'named-ticket')?.requeued, true);
+});
+
+test('an unrelated echo cannot erase an uncertain ticket from a long log', () => {
+  const log = new EventLog(join(process.env.HELM_DIR, 'events-uncertain-retention'));
+  const id = 'retained-uncertain';
+  log.append(id, { type: 'turn.start', turnId: 'local-uncertain', text: 'Same words', queued: true });
+  log.append(id, { type: 'turn.deliver', turnId: 'local-uncertain', clientId: 'saved-id' });
+  log.append(id, { type: 'turn.start', turnId: 'unrelated', text: 'Same words' });
+  log.append(id, { type: 'turn.done', turnId: 'unrelated', status: 'ok' });
+  log.append(id, { type: 'turn.start', turnId: 'host', text: 'Other work' });
+  log.append(id, { type: 'item.start', id: 'reply', turnId: 'host', kind: 'text' });
+  for (let i = 0; i < 2400; i++) log.append(id, { type: 'item.delta', id: 'reply', text: '.' });
+  const retained = new EventLog(log.dir).tail(id, 0);
+  assert.ok(retained.some(e => e.type === 'turn.start' && e.turnId === 'local-uncertain'));
+  assert.ok(retained.some(e => e.type === 'turn.deliver' && e.turnId === 'local-uncertain' && e.clientId === 'saved-id'));
+});
+
+test('the app returns a message to its waiting controls after a confirmed Stop', async () => {
+  const { apply, emptyLog } = await import('../apps/web/src/session/types.ts');
+  const state = emptyLog();
+  let seq = 0;
+  const ev = event => apply(state, { seq: ++seq, at: seq, ...event });
+  ev({ type: 'turn.start', turnId: 'local-waiting', text: 'Next', queued: true });
+  ev({ type: 'turn.deliver', turnId: 'local-waiting' });
+  assert.equal(state.turns[0].delivered, true);
+  ev({ type: 'turn.deliver', turnId: 'local-waiting', requeued: true });
+  assert.equal(state.turns[0].queued, true);
+  assert.equal(state.turns[0].delivered, false);
+});
+
+test('the app does not match an uncertain send to an unrelated echo with the same words', async () => {
+  const { apply, emptyLog } = await import('../apps/web/src/session/types.ts');
+  const state = emptyLog();
+  let seq = 0;
+  const ev = event => apply(state, { seq: ++seq, at: seq, ...event });
+  ev({ type: 'turn.start', turnId: 'local-unknown', text: 'Same words', queued: true });
+  ev({ type: 'turn.deliver', turnId: 'local-unknown' });
+  ev({ type: 'turn.start', turnId: 'other-turn', text: 'Same words' });
+  assert.deepEqual(state.turns.map(turn => turn.id), ['local-unknown', 'other-turn']);
+  assert.equal(state.turns[0].delivered, true);
+});
+
 test('the app adopts the named message for an echo and shows a refused one as failed', async () => {
   const { apply, emptyLog } = await import('../apps/web/src/session/types.ts');
   const state = emptyLog();
@@ -524,12 +742,14 @@ test('Claude matches each read to its own message and ignores replays that are n
   await driver.steer('Early', [], { inputId: 'early' });
   assert.equal(events.find((event) => event.type === 'input.consumed').inputId, 'early');
   immediate = false;
-  await driver.steer('Identical', [], { inputId: 'first' });
+  await driver.steer('Identical', [], { inputId: 'first', clientId: 'saved-provider-id' });
   await driver.steer('Identical', [], { inputId: 'second' });
   const messages = writes.filter((message) => message.type === 'user');
+  assert.equal(messages[1].uuid, 'saved-provider-id');
   replay({ ...messages[1], uuid: 'unknown' });
   replay(messages[2], 'subagent');
   assert.equal(events.filter((event) => event.type === 'input.consumed').length, 1);
+  assert.ok(events.some(event => event.type === 'input.observed' && event.clientId === 'unknown'));
   replay(messages[2]); replay(messages[1]);
   assert.deepEqual(events.filter((event) => event.type === 'input.consumed').map((event) => event.inputId), ['early', 'second', 'first']);
   await driver.steer('Never read', [], { inputId: 'lost' });

@@ -1,5 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual, createHmac } from 'node:crypto';
-import { proofOf, checkProof } from './identity.js';
+import { signNetworkProof, checkNetworkProof } from './proof.js';
 
 /**
  * Public links to something running on one of your machines - helm's own
@@ -87,31 +87,32 @@ export function publicHosts(net) {
 // cookie of its own, which names the member, so every request can check that
 // the member is still one. A password is never membership.
 
+const currentAuthorities = (net, ids) => Array.isArray(ids) && ids.length > 0 && ids.every(id => typeof id === 'string' && !!net.machines?.[id] && !net.revoked?.[id]);
+
 const GRANT = 'share-grant';
 const PASS = 'share-member';
 export const GRANT_TTL_MS = 60_000;
 /** How long a member's cookie lasts before another trip through the app. */
 export const MEMBER_TTL_MS = 12 * 60 * 60 * 1000;
 
-const pack = (claims) => Buffer.from(JSON.stringify(claims)).toString('base64url');
 function unpack(value, net, label) {
-  const [payload, mac, extra] = String(value ?? '').split('.');
-  if (!payload || !mac || extra !== undefined || !net?.key) return null;
-  if (!checkProof(net.key, label, `${net.id}:${payload}`, mac)) return null;
-  try { return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { return null; }
+  if (typeof value !== 'string' || value.length > 8192) return null;
+  try {
+    const raw = Buffer.from(value, 'base64url');
+    if (raw.toString('base64url') !== value) return null;
+    const claims = JSON.parse(raw.toString('utf8'));
+    return checkNetworkProof(net, label, claims) ? claims : null;
+  } catch { return null; }
 }
-const sign = (net, label, claims) => {
-  const payload = pack(claims);
-  return `${payload}.${proofOf(net.key, label, `${net.id}:${payload}`)}`;
-};
+const sign = (net, label, claims) => Buffer.from(JSON.stringify(signNetworkProof(net, label, claims))).toString('base64url');
 
 /** Is this id a machine or device of the network right now? */
 export const isMember = (net, sub) => typeof sub === 'string' && !net?.revoked?.[sub]
   && (Object.hasOwn(net?.devices ?? {}, sub) || Object.hasOwn(net?.machines ?? {}, sub));
 
 /** A one-use pass for member `sub` into link `name` on `host`. */
-export function mintShareGrant(net, { name, host, sub, now = Date.now() }) {
-  return sign(net, GRANT, { n: name, h: host, s: sub, e: now + GRANT_TTL_MS, j: randomBytes(12).toString('base64url') });
+export function mintShareGrant(net, { name, host, sub, authority = net.self, credentialExpiresAt, now = Date.now() }) {
+  return sign(net, GRANT, { n: name, h: host, s: sub, a: [authority], ce: credentialExpiresAt ?? null, e: Math.min(now + GRANT_TTL_MS, credentialExpiresAt ?? Infinity), j: randomBytes(12).toString('base64url') });
 }
 
 /**
@@ -122,18 +123,18 @@ export function mintShareGrant(net, { name, host, sub, now = Date.now() }) {
 export function checkShareGrant(net, value, { name, host, now = Date.now() }) {
   const c = unpack(value, net, GRANT);
   if (!c || c.n !== name || c.h !== host || !(c.e > now) || c.e > now + GRANT_TTL_MS
-    || typeof c.j !== 'string' || !isMember(net, c.s)) return null;
+    || typeof c.j !== 'string' || !currentAuthorities(net, c.a) || !isMember(net, c.s)) return null;
   return c;
 }
 
 /** The member's cookie for one link host. */
-export const memberCookie = (net, { name, host, sub, expiresAt }) =>
-  sign(net, PASS, { n: name, h: host, s: sub, e: expiresAt });
+export const memberCookie = (net, { name, host, sub, expiresAt, authorities = [net.self] }) =>
+  sign(net, PASS, { n: name, h: host, s: sub, a: authorities, e: expiresAt });
 
 /** The member it names, if it is for this link, unexpired, and they still are one. */
 export function checkMemberCookie(net, value, { name, host, now = Date.now() }) {
   const c = unpack(value, net, PASS);
-  if (!c || c.n !== name || c.h !== host || !(c.e > now) || !isMember(net, c.s)) return null;
+  if (!c || c.n !== name || c.h !== host || !(c.e > now) || c.e > now + MEMBER_TTL_MS || !currentAuthorities(net, c.a) || !isMember(net, c.s)) return null;
   return c.s;
 }
 

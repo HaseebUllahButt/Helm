@@ -11,7 +11,7 @@ import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import {
-  loadNetwork, mergeRoster, allEndpoints, describeSelf, hubCredential,
+  loadNetwork, mergeRoster, allEndpoints, describeSelf, hubCredential, secureHubAddress,
   roster as rosterOf, rosterHash, machineName, NAME_RULE, machineKind,
   MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
@@ -39,7 +39,6 @@ import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub, directCaller } from './peer.js';
 import { allowDirectSignal } from './direct-auth.js';
-import { lanAddresses } from './net-addr.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
@@ -83,6 +82,7 @@ import { useOwnerLogins } from './browser.js';
 import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
 import { ActionDelivery } from './action-delivery.js';
+import { NativeMessageDelivery } from './session-subagents.js';
 import { InputDelivery } from './input-delivery.js';
 import { ChatEventStream } from './event-stream.js';
 import { SessionUpdates } from './session-updates.js';
@@ -317,7 +317,9 @@ export class Link {
     try {
       info = await this.daemon.describe();
       if (!current()) return;
-      credential = await hubCredential(loadNetwork() ?? this.daemon.net, this.url, { signal: opening.signal });
+      const net = loadNetwork() ?? this.daemon.net;
+      // Our own hub can run on another port than the saved one.
+      credential = await hubCredential(net, this.url, { signal: opening.signal, machine: isSelf ? net.self : this.hintFor });
     } catch (err) {
       if (!current()) return;
       if (err.untrusted && !this.warned) {
@@ -502,7 +504,7 @@ export class Daemon {
         // ones it forwards: against who the hub introduced, never who the
         // request says it is from. Machine offers first prove that identity
         // with their pinned signing key in onFrame below.
-        authorize: (device, frame) => directCaller(loadNetwork() ?? this.net, device, frame.sub, loadSettings()?.directRoutes !== false),
+        authorize: (device, frame, credential) => directCaller(loadNetwork() ?? this.net, device, frame.sub, loadSettings()?.directRoutes !== false, credential),
         // Machines open channels to ask questions; they hear events through
         // their hubs. Only phones and browsers want them sent direct.
         events: (device) => !Object.hasOwn((loadNetwork() ?? this.net).machines ?? {}, device),
@@ -817,6 +819,9 @@ export class Daemon {
   async stop() {
     if (this.#stopped) return;
     this.#stopped = true;
+    // Stop schedules first: a tick during the awaits below would send work
+    // into parts that are already stopping.
+    this.schedules?.stop();
     this.#eventStream.stop();
     this.#updates.stop();
     this.inputDelivery?.stop();
@@ -833,7 +838,6 @@ export class Daemon {
     this.taskTransfers?.stop();
     await this.forwards?.stop();
     await this.sendEngine?.stop();
-    this.schedules?.stop();
     this.search?.close();
     this.github?.stop();
     this.#stopWatch?.();
@@ -899,7 +903,7 @@ export class Daemon {
       ] : [],
     });
     this.#hintOwners = plan.owners;
-    return plan.urls;
+    return plan.urls.filter(secureHubAddress);
   }
 
   /** Hinted address -> the machine that announced it, for this round's links. */
@@ -988,12 +992,7 @@ export class Daemon {
    */
   async #publishSelf() {
     const net = loadNetwork() ?? this.net;
-    const endpoints = [...new Set([
-      ...this.extra,
-      ...(this.advertiseLan
-        ? lanAddresses().map((a) => `http://${a.address}:${this.port}`)
-        : []),
-    ])];
+    const endpoints = [...new Set(this.extra)].filter(secureHubAddress);
     const ssh = await sshInfo().catch(() => ({}));
     const code = codeKeyInfo();
     const signing = codeSigningInfo();
@@ -1005,6 +1004,7 @@ export class Daemon {
       codePubkey: code.codePubkey,
       codeSignPubkey: signing.codeSignPubkey,
       sendV2: true,
+      signedHub: true,
     });
   }
 
@@ -1607,7 +1607,7 @@ export class Daemon {
       // Ports forwarded on purpose to another machine with `helm forward`.
       ...forwardedPorts(),
       ...(Array.isArray(extra) ? extra.map(Number) : []),
-    ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
+    ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536 && p !== this.port);
   }
 
   #directTunnel(link, frame, caller) {
@@ -1861,10 +1861,16 @@ export class Daemon {
         const shareNetwork = loadNetwork() ?? this.net;
         await assertShareNameAvailable(p.name, shareNetwork, env =>
           hubRpc(shareNetwork, env, M.SHARE_LIST, {}, { timeout: 4000, budget: 5000 }), this.sendPresence());
+        if (Number(p.port) === this.port) throw new Error('Do not share the Helm port. Share the app port instead.');
         await checkSharePort(Number(p.port));
         return { share: this.#shareView(addShare(p)) };
       }
       case M.SHARE_REMOVE:
+        // The webhook Spin is not in shares.json: stopping it pauses its tasks.
+        if (this.schedules?.shareName && String(p.name ?? '').toLowerCase() === this.schedules.shareName) {
+          const paused = this.schedules.closeWebhooks();
+          return { removed: paused.length > 0, paused };
+        }
         return { removed: removeShare(p.name) };
 
       case M.FORWARD_LIST:
@@ -2157,12 +2163,20 @@ export class Daemon {
           this.inputDelivery ??= new InputDelivery(this.sessions);
           return this.inputDelivery.status(p.actionId, caller);
         }
+        if (p.kind === 'native') {
+          this.nativeMessageDelivery ??= new NativeMessageDelivery(this.sessions);
+          return this.nativeMessageDelivery.status(p.actionId, caller);
+        }
         this.actionDelivery ??= new ActionDelivery(this.sessions);
         return this.actionDelivery.status(p.actionId, caller);
       case 'session.answer-deliver':
         await this.sessionRecovery;
         this.actionDelivery ??= new ActionDelivery(this.sessions);
         return this.actionDelivery.deliver(p, caller);
+      case 'session.native-message-deliver':
+        await this.sessionRecovery;
+        this.nativeMessageDelivery ??= new NativeMessageDelivery(this.sessions);
+        return this.nativeMessageDelivery.deliver(p, caller);
       case M.SESSION_DELIVER:
         await this.sessionRecovery;
         this.inputDelivery ??= new InputDelivery(this.sessions);
@@ -2185,7 +2199,7 @@ export class Daemon {
       case M.SESSION_CANVAS: return this.sessions.openCanvas(p.id, p);
       case M.SESSION_CANVAS_CLOSED: return this.sessions.closeCanvas(p.id, p.requestId);
       case M.SESSION_RENDER: return this.sessions.renderVisual(p.id, p);
-      case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref, p.page);
+      case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref, p.file === true ? 'file' : p.page);
       case M.SESSION_EVENTS:
         await this.sessions.prepareHistory(p.id);
         return this.sessions.history(p.id, {

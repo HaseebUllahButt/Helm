@@ -1,3 +1,4 @@
+import { browserProofKey } from '../hubAuth';
 import { errorMessage } from '../errors';
 import { useEffect, useRef, useState } from 'react';
 import { useNow } from '../useNow';
@@ -113,17 +114,17 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
     }
     let cancelled = false;
     const base = 'http://127.0.0.1:8787';
-    fetch(`${base}/api/auth/desktop`, {
+    browserProofKey().then(proofKey => fetch(`${base}/api/auth/desktop`, {
       method: 'POST', cache: 'no-store',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ network, label: 'this computer' }),
+      body: JSON.stringify({ network, proofKey, label: 'this computer' }),
       signal: AbortSignal.timeout(5000),
-    })
+    }))
       .then((r) => r.ok ? r.json() : null)
       .then((v) => {
         if (cancelled || autoStarted.current || !v?.token || v.network !== network) return;
         autoStarted.current = true;
-        finish({ token: v.token, deviceId: v.deviceId,
+        finish({ token: v.token, deviceId: v.deviceId, trust: v.trust,
           endpoints: [...new Set<string>([location.origin, base, ...(v.endpoints ?? [])])] });
       })
       .catch(() => {})

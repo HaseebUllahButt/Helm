@@ -1,4 +1,4 @@
-import { errorMessage } from '../errors';
+import { errorMessage, SAFETY_BLOCK } from '../errors';
 
 /** A task outcome, with a safe message and a way to continue. */
 export interface Problem { title: string; text: string; action: string; raw?: string }
@@ -44,5 +44,6 @@ export function plainProblem(kind: Kind, message: string): Problem {
       text: when ? `This account’s limit resets at ${when}. Waiting messages stay until you continue.` : 'This account reached its usage limit. Waiting messages stay until you continue.',
     };
   }
+  if (SAFETY_BLOCK.test(message ?? '')) return { title: 'Blocked for safety', action: 'Try again', text: plainError(message), raw };
   return { title: 'Task failed', action: 'Try again', text: plainError(message ?? ''), raw };
 }

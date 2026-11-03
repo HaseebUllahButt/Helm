@@ -200,43 +200,14 @@ const dirName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
 export const whereOf = (s: Session) => (s.quick ? 'sketch' : dirName(chatFolder(s)));
 
 /**
- * A session that is waiting on you, as the first thing on Home.
- *
- * It says what is asking and where, and how long it has been waiting; the
- * answer itself lives in the session, where the diff or the command is on
- * screen to be read before Allow is tapped.
- */
-/** "3:40 pm", "tomorrow 9:00 am", "Mon 9:00 am" - when a snooze ends, in words. */
-export const NEVER_SNOOZE = Number.MAX_SAFE_INTEGER;
-
-export const when = (ts: number) => {
-  if (ts === NEVER_SNOOZE) return 'Never';
-  const d = new Date(ts);
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  const days = Math.round((new Date(d.toDateString()).getTime() - new Date(new Date().toDateString()).getTime()) / 86_400_000);
-  return days <= 0 ? time : days === 1 ? `tomorrow ${time}` : `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
-};
-
-/** Short delays, or keep this thread quiet until it is opened again. */
-function snoozeChoices(): { label: string; at: number }[] {
-  const now = Date.now();
-  return [
-    { label: '5 mins', at: now + 5 * 60_000 },
-    { label: '1 hr', at: now + 3_600_000 },
-    { label: '3 hrs', at: now + 3 * 3_600_000 },
-    { label: 'Never', at: NEVER_SNOOZE },
-  ];
-}
-
-/**
  * A chat that waits on you, as a plain sidebar row: a breathing dot, the
  * title, and what it wants. A row with a question or a request opens the
- * waiting box at the top (`onPick`); a failure opens the chat. Snooze and
- * clearing a helper failure sit behind the ⋯ button.
+ * waiting box at the top (`onPick`); a failure opens the chat. Clearing a
+ * helper failure sits behind the ⋯ button, which shows only when there is one.
  */
-export function NeedCard({ s, machine, selected = false, onOpen, onPick, onSnooze, onDismiss }: {
+export function NeedCard({ s, machine, selected = false, onOpen, onPick, onDismiss }: {
   s: Session; machine: string; selected?: boolean; onOpen: () => void; onPick?: () => void;
-  onSnooze: (until: number) => void; onDismiss: () => Promise<void>;
+  onDismiss: () => Promise<void>;
 }) {
   const [choosing, setChoosing] = useState(false);
   const [dismissing, setDismissing] = useState(false);
@@ -267,18 +238,14 @@ export function NeedCard({ s, machine, selected = false, onOpen, onPick, onSnooz
             <span className="need-m">{machine}</span>
           </span>
         </button>
-        <button className="need-more" aria-label={`More for ${s.title}`} aria-expanded={choosing} onClick={() => setChoosing((c) => !c)}>
+        {!!s.team?.failed && <button className="need-more" aria-label={`More for ${s.title}`} aria-expanded={choosing} onClick={() => setChoosing((c) => !c)}>
           <Icon name="more" size={15} />
-        </button>
+        </button>}
       </div>
-      {choosing && (
+      {choosing && !!s.team?.failed && (
         <div className="need-foot">
-          <span className="need-foot-k">Snooze</span>
-          {snoozeChoices().map((c) => (
-            <button key={c.label} onClick={() => { setChoosing(false); onSnooze(c.at); }}>{c.label}</button>
-          ))}
-          {!!s.team?.failed && <button className="need-dismiss" disabled={dismissing} onClick={() => void dismiss()}
-            title="Clear this helper failure alert on all devices. Its history stays. New failures show alerts.">{dismissing ? 'Dismissing…' : s.team.failed === 1 ? 'Dismiss failure' : 'Dismiss failures'}</button>}
+          <button className="need-dismiss" disabled={dismissing} onClick={() => void dismiss()}
+            title="Clear this helper failure alert on all devices. Its history stays. New failures show alerts.">{dismissing ? 'Dismissing…' : s.team.failed === 1 ? 'Dismiss failure' : 'Dismiss failures'}</button>
         </div>
       )}
       {dismissError && <p className="error" role="alert">{dismissError}</p>}

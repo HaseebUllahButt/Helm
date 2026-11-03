@@ -15,11 +15,16 @@ import { createInterface } from 'node:readline';
 import { expand } from './paths.js';
 
 /** Only the same local Codex account can share the parent's context. */
+/** Same words as SAFETY_BLOCK in apps/web/src/errors.ts. */
+const SAFETY_BLOCK = /flagged for possible|content (?:was|has been) flagged|violates? (?:our|the) (?:usage|content) polic|appears to violate|cyber permissive/i;
+
 export function codexHelperFork(parent, parentProfile, profile, cwd, worktree, socket) {
   if (!parent?.engineSessionId || parent.engine !== 'codex' || profile.engine !== 'codex'
     || !parentProfile || parentProfile.wraps || profile.wraps || worktree || !socket
     || resolve(expand(parent.cwd)) !== resolve(expand(cwd))
     || accountKey(parentProfile) !== accountKey(profile)) return null;
+  // A copy of a history the safety filter blocked is blocked too.
+  if (parent.recovery?.kind === 'error' && SAFETY_BLOCK.test(parent.recovery.message ?? '')) return null;
   const before = materialize(parentProfile), after = materialize(profile);
   const home = spec => resolve(expand(spec.env.CODEX_HOME || process.env.CODEX_HOME || '~/.codex'));
   if (before.cmd !== after.cmd || home(before) !== home(after)) return null;

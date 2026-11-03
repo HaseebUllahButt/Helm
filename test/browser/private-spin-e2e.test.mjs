@@ -49,7 +49,7 @@ writeFileSync(join(webRoot, 'index.html'), `<!doctype html><meta name="viewport"
 const hub = await startRelay({ port, host: '127.0.0.1', webRoot, password: 'test-pairing-code' });
 const daemon = new Daemon({ port, advertiseLan: false });
 const machine = new WebSocket(`ws://127.0.0.1:${port}/helm/ws?name=Laptop&role=self`, {
-  headers: { authorization: `Bearer ${mintToken(net.key, { net: net.id, sub: net.self, role: 'machine' })}` },
+  headers: { authorization: `Bearer ${N.machineToken(net)}` },
 });
 const link = { id: 'test-hub', send: (type, extra) => machine.send(JSON.stringify({ t: type, ...extra })) };
 machine.on('message', async (raw) => {

@@ -37,7 +37,7 @@ export async function runVisualCommand(command, args, { rpc, self, findSession, 
     print(JSON.stringify({ sessionId: target.session.id, ...result }, null, 2));
     return result;
   }
-  const params = { id: target.session.id, ...(pdf ? { pages: pdf.pages, total: pdf.total } : { html }), title: options.title || 'Visual reply', height: Number(options.height ?? 420), renderId, ...(command === 'canvas' ? { placement: 'canvas', ...(url ? { url } : {}) } : {}) };
+  const params = { id: target.session.id, ...(pdf ? { pages: pdf.pages, total: pdf.total, ...(pdf.file ? { file: pdf.file } : {}) } : { html }), title: options.title || 'Visual reply', height: Number(options.height ?? 420), renderId, ...(command === 'canvas' ? { placement: 'canvas', ...(url ? { url } : {}) } : {}) };
   let result;
   try { result = await rpc(target.env, 'session.render', params, 60_000); }
   catch (error) { throw new Error(`${error.message}. If delivery is uncertain, retry the same file and options with --render-id ${renderId}; that ID prevents duplicate visuals.`); }

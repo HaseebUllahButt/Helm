@@ -38,7 +38,8 @@ before(async () => {
     window.reads=[];
     const client={pendingActions:()=>[],resumeActions:async()=>[],on:()=>()=>{},subscribe:()=>{},rpc:async(_env,method,params)=>{
       if(method==='session.visual'){window.reads.push(params);if(params.ref!=='doc')return {html:pages[params.ref]};
-        if(params.page===undefined)return {total:40,pages:Array.from({length:30},()=>({width:1600,height:900}))};
+        if(params.file)return {file:btoa('%PDF-1.4 test')};
+        if(params.page===undefined)return {total:40,download:true,pages:Array.from({length:30},()=>({width:1600,height:900}))};
         return {image:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aBZkAAAAASUVORK5CYII='};}
       if(method==='session.events')return {session:window.chats[params.id],events:params.since||params.id!=='a'?[]:events,pending:[],last:params.id==='a'?6:0};
       if(method==='session.watch')return {last:0};
@@ -183,9 +184,19 @@ test('a PDF shows as page pictures, read-only, loading only the pages near the v
     await dock.locator('.pdf-page').last().scrollIntoViewIfNeeded();
     await dock.getByRole('img', { name: 'Page 30', exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector('.pdf-page[data-page="1"] img'));
-    await dock.getByRole('button', { name: 'Zoom' }).click();
-    assert.ok(await dock.locator('.pdf-page').first().evaluate(el => el.getBoundingClientRect().width > el.parentElement.clientWidth), 'Zoom makes a page wider than the canvas');
-    await dock.getByRole('button', { name: 'Fit width' }).click();
+    assert.equal(await dock.getByRole('button', { name: /^(Zoom|Fit width)$/ }).count(), 0);
+    const saved = page.waitForEvent('download');
+    await dock.getByRole('button', { name: 'Download' }).click();
+    const file = await saved;
+    assert.equal(file.suggestedFilename(), 'Before and Now.pdf');
+    assert.ok(await page.evaluate(() => window.reads.some(r => r.ref === 'doc' && r.file === true)));
+    await dock.getByRole('button', { name: 'Fullscreen', exact: true }).click();
+    await page.locator('.canvas.dock-full').waitFor();
+    const box = await page.locator('.canvas').boundingBox();
+    assert.equal(Math.round(box.width), width, 'Fullscreen covers the window');
+    await page.keyboard.press('Escape');
+    await page.locator('.canvas:not(.dock-full)').waitFor();
+    assert.equal(await page.locator('.canvas').count(), 1, 'Escape leaves full screen and keeps the canvas open');
     assert.equal(await dock.locator('iframe, textarea, [contenteditable]').count(), 0);
     assert.equal(await dock.getByRole('button', { name: /^(Save|Edit|Create file)$/ }).count(), 0, 'a PDF has no edit or save controls');
   }

@@ -307,6 +307,8 @@ export function apply(state: LogState, e: HelmEvent): void {
         if (t.items.length && !t.items.every(it => it.turnId === id)) continue;
         // An echo that names its message is that message, whatever it says.
         if (e.inputId != null) { if (t.id === e.inputId) { open = t; break; } continue; }
+        // Matching words alone cannot prove which delivered message was read.
+        if (t.delivered) continue;
         if (!t.id.startsWith('local-')) continue;
         // Compared trimmed: helm strips the trailing newline off what it
         // sends, and the CLI echoes the prompt back with it still attached.
@@ -404,7 +406,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       return;
     case 'turn.deliver': {
       const turn = state.turns.find((t) => t.id === e.turnId);
-      if (turn) { turn.delivered = true; turn.revision = e.seq; }
+      if (turn) { turn.delivered = e.requeued !== true; turn.revision = e.seq; }
       return;
     }
     case 'turn.edit': {

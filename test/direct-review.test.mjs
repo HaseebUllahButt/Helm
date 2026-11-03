@@ -29,6 +29,16 @@ const { signDirectOffer, allowDirectSignal } = await import('../packages/connect
 const { codeSigningInfo } = await import('../packages/connect/src/code-transfer.js');
 test.after(() => { cleanup(); rmSync(root, { recursive: true, force: true }); });
 
+function browserIdentity(net, label) {
+  const pair = generateKeyPairSync('ed25519');
+  const phone = N.issueDevice(net, label, pair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url'));
+  return { ...phone, offer(payload) {
+    if (payload.type !== 'offer') return payload;
+    const deviceProof = sign(null, Buffer.from(JSON.stringify(['helm-device-offer-v1', net.id, phone.id, net.self, payload.negotiation, payload.sdp])), pair.privateKey).toString('base64url');
+    return { ...payload, credential: phone.token, deviceProof };
+  } };
+}
+
 async function until(check) {
   for (let i = 0; i < 400; i++) {
     if (check()) return;
@@ -70,7 +80,7 @@ test('directRoutes false suppresses capability and incoming machine offers, pres
   const net = N.createNetwork({ name: 'target', port: 8787 });
   net.machines.source = { id: 'source', name: 'source', endpoints: [] };
   N.saveNetwork(net);
-  const phone = N.issueDevice(net, 'phone');
+  const phone = browserIdentity(net, 'phone');
   writeFileSync(join(process.env.HELM_DIR, 'config.json'), JSON.stringify({ directRoutes: false }));
   const daemon = new Daemon();
   daemon.sessions = { terminalBackend: async () => 'panes' };
@@ -79,7 +89,7 @@ test('directRoutes false suppresses capability and incoming machine offers, pres
   assert.notEqual((await daemon.describe()).directRpc, 1);
   await daemon.onFrame({}, { t: T.SIGNAL, peer: 'machine', device: 'source', payload: { type: 'offer' } });
   assert.equal(introduced.length, 0);
-  await daemon.onFrame({}, { t: T.SIGNAL, peer: 'phone', device: phone.id, payload: { type: 'offer' } });
+  await daemon.onFrame({}, { t: T.SIGNAL, peer: 'phone', device: phone.id, payload: phone.offer({ type: 'offer', sdp: 'test', negotiation: 'fixture' }) });
   assert.equal(introduced.length, 1);
   writeFileSync(join(process.env.HELM_DIR, 'config.json'), '{}');
 });
@@ -115,6 +125,7 @@ test('a machine cannot use a hub introduction to impersonate another machine', {
   const net = N.loadNetwork();
   const attacker = 'aabbcc112233', victim = 'ddeeff445566';
   for (const id of [attacker, victim]) net.machines[id] = { id, name: id, endpoints: [] };
+  net.machines[attacker].codeSignPubkey = codeSigningInfo().codeSignPubkey;
   N.saveNetwork(net);
   const hub = await startRelay({ port: 0, host: '127.0.0.1', dbFile: process.env.HELM_DB, openLogin: false });
   const url = `http://127.0.0.1:${hub.server.address().port}`;
@@ -122,7 +133,7 @@ test('a machine cannot use a hub introduction to impersonate another machine', {
   let target, sender;
   const peers = new PeerHub((peer, payload) => target.send(T.SIGNAL, { peer, payload }),
     async (method, params, caller) => { calls.push(caller); return caller; },
-    { authorize: (device, frame) => directCaller(N.loadNetwork(), device, frame.sub) });
+    { authorize: (device, frame, credential) => directCaller(N.loadNetwork(), device, frame.sub, true, credential) });
   const daemon = new Daemon();
   daemon.port = hub.server.address().port;
   daemon.peers = peers;
@@ -216,9 +227,9 @@ test('concurrent large replies on a persistent channel all arrive', { timeout: 1
   assert.equal(responses.every(frame => frame.ok && frame.result === payload), true);
 });
 
-test('unsigned browser channels still work and cannot request hub-only share secrets or another identity', async context => {
+test('signed browser channels still work and cannot request hub-only share secrets or another identity', async context => {
   const net = N.createNetwork({ name: 'target', port: 8787 });
-  const phone = N.issueDevice(net, 'browser');
+  const phone = browserIdentity(net, 'browser');
   writeFileSync(join(process.env.HELM_DIR, 'config.json'), '{}');
   const daemon = new Daemon();
   // Stored fixture: this test checks access to its password hash, not a
@@ -229,12 +240,12 @@ test('unsigned browser channels still work and cannot request hub-only share sec
   const frames = [];
   daemon.peers = new PeerHub((_id, payload) => void sender.receive(payload),
     (method, params, caller) => daemon.dispatch(method, params, caller), {
-      authorize: (device, frame) => directCaller(N.loadNetwork(), device, frame.sub),
+      authorize: (device, frame, credential) => directCaller(N.loadNetwork(), device, frame.sub, true, credential),
       events: device => !Object.hasOwn(N.loadNetwork().machines, device),
     });
   const link = {};
   context.after(() => { sender?.close(); daemon.peers.stop(); });
-  sender = directPeer({ signal: payload => void daemon.onFrame(link, { t: T.SIGNAL, peer: 'browser', device: phone.id, payload }),
+  sender = directPeer({ signal: payload => void daemon.onFrame(link, { t: T.SIGNAL, peer: 'browser', device: phone.id, payload: phone.offer(payload) }),
     onMessage: frame => frames.push(frame) });
   await sender.ready;
   await sender.send({ t: T.RPC, id: 'list', method: M.SHARE_LIST, params: { forHub: true } });

@@ -172,6 +172,7 @@ test('a PDF becomes page pictures on the publishing machine; the canvas reads on
   assert.equal(made.total, 3);
   assert.deepEqual(made.pages.map(p => [p.width, p.height]), [[3, 2], [3, 2], [3, 2]]);
   assert.ok(runs[1].includes('-jpeg') && runs[1].includes('1600'), 'JPEG at 1600 px keeps text sharp');
+  assert.equal(made.file, pdf.toString('base64'), 'the PDF itself travels for Download');
   await assert.rejects(preparePdf(file('fake.pdf'), { run }), /not a PDF/);
   const none = async () => { throw Object.assign(new Error('spawn pdfinfo ENOENT'), { code: 'ENOENT' }); };
   await assert.rejects(preparePdf(file('doc.pdf'), { run: none }), /^Error: Install poppler-utils on this machine to show PDFs/);
@@ -186,6 +187,7 @@ test('a PDF becomes page pictures on the publishing machine; the canvas reads on
   assert.throws(() => validateVisual({ ...pdfParams, pages: Array(MAX_PDF_PAGES + 1).fill(made.pages[0]) }), /1–100 page pictures/);
   assert.throws(() => validateVisual({ ...pdfParams, html: '<h1>both</h1>' }), /page pictures/);
   assert.throws(() => validateVisual({ ...pdfParams, total: 1 }), /page count/);
+  assert.throws(() => validateVisual({ ...pdfParams, file: Buffer.from('PRIVATE').toString('base64') }), /must be a PDF/);
 
   writeFileSync(file('sessions.json'), JSON.stringify({ version: 1, sessions: [{ id: 'pdf1', engine: 'claude', nativeCli: true, status: 'idle', cwd: '/tmp', title: 'PDF' }] }));
   const sessions = new Sessions(new EventEmitter(), { makeDriver: () => { throw new Error('must not start a provider'); } });
@@ -196,6 +198,10 @@ test('a PDF becomes page pictures on the publishing machine; the canvas reads on
   assert.equal(visual.bytes, jpeg.length * 3);
   assert.equal(sessions.get('pdf1').canvas.visual.ref, visual.ref);
   assert.deepEqual(sessions.readVisual('pdf1', visual.ref), { total: 3, pages: [{ width: 3, height: 2 }, { width: 3, height: 2 }, { width: 3, height: 2 }] });
+  assert.throws(() => sessions.readVisual('pdf1', visual.ref, 'file'), /no saved file/, 'a PDF sent without its file has no Download');
+  const withFile = sessions.renderVisual('pdf1', { ...pdfParams, renderId: params(10).renderId, file: made.file }).visual;
+  assert.equal(sessions.readVisual('pdf1', withFile.ref).download, true);
+  assert.deepEqual(sessions.readVisual('pdf1', withFile.ref, 'file'), { file: pdf.toString('base64') });
   assert.deepEqual(sessions.readVisual('pdf1', visual.ref, 2), { image: `data:image/jpeg;base64,${jpeg.toString('base64')}` });
   assert.throws(() => sessions.readVisual('pdf1', visual.ref, 3), /no such page/);
   assert.throws(() => sessions.readVisual('pdf1', visual.ref, '0'), /no such page/);

@@ -15,6 +15,18 @@ owner's home or network to bypass this check.
   verify-<you>; $V key Enter` opens its screen. `$V key
   Control+Shift+s; $V click "Devices & pairing"; $V text` shows "Linux
   Chrome · this device · online now".
+- **Transport:** remote access requires HTTPS. HTTP works only on loopback.
+  LAN discovery stays off. A browser stays signed in until it is removed.
+  Its credential still carries a seven-day expiry, because older Helm refuses
+  one without it; newer Helm ignores the expiry.
+  Old credentials stop working after the security update. A browser pairs
+  with a private device key. Remote requests prove that key for one machine,
+  challenge and request. Direct offers prove it for the target and connection.
+  Removing the credential's signer also closes existing direct connections.
+  A machine connects only to a hub that signs as the owner of the address
+  it dialled. A machine that joined through an older Helm has no inviter
+  receipt. Machines that have not seen it yet refuse it: make a new join
+  command.
 - **Traps:** never press "Make join command" or remove devices on the real
   network to test. Removing a device signs it out everywhere. Join links
   expire in minutes. Public machines need inbound UDP 44301–44332 in both
@@ -24,7 +36,7 @@ owner's home or network to bypass this check.
   firewall rules and never change the owner's network.
 - **Tests:** `test/machine-kind`, `device-presence`, `roster-watch`,
   `gossip`, `lan-discovery`, `direct-mesh`, `auth`, `local-login`,
-  `hub-authz`, `roster-trust`.
+  `hub-authz`, `roster-trust`, `security-transport`, `security-routes`; `test/browser/hub-auth`.
 
 ## Check installation and connections
 - Open Settings and select **Check connection**. Each answering machine reports
@@ -62,9 +74,17 @@ owner's home or network to bypass this check.
   status**, not another send. A stopped send's **Retry** uses its original
   destination. Git history travels with current Send; dependencies and caches
   stay behind. It does not use GitHub; a new agent rebuilds dependencies.
+  Task sends save their request number and content before sending. Reopening
+  Send keeps that request until its confirmed result is dismissed. Source
+  machines resume saved copies after restart. If the owner resumed work in
+  the source chat, copying waits for that reply to finish. After an attempted
+  delivery, automatic recovery only checks receipts; the hub delivers queued
+  work. Only an owner retry can restart a failed target prompt. A known target
+  refusal waits for that retry. Unconfirmed delivery must never become a new
+  task number.
 - **Tests:** `test/transfers`, `task-transfer`, `transfer-cli`,
   `transfer-check`, `transfer-activity`, `code-transfer`, `handoffs`,
-  `send-engine`, `send-recovery`; `test/browser/transfers`, `send-v2`.
+  `send-engine`, `send-recovery`, `task-send`; `test/browser/transfers`, `send-v2`.
 
 ## Move a chat to another machine
 - **Reach:** ⋯ on a sidebar row or in the chat → **Move to another machine**.
@@ -91,11 +111,13 @@ owner's home or network to bypass this check.
   `send-engine`.
 
 ## `helm exec` and `helm copy`
-- **Not yet driven** against the copy. `$V rpc exec.start
-  '{"id":"t1","argv":["echo","hi"]}'` then `$V rpc exec.read
-  '{"id":"t1","wait":true}'` should show "hi".
+- **Prove:** start a command with `$V rpc exec.start` using a 32-digit hex
+  id. Read its output with `exec.read`, restart the private daemon, then
+  read the same id again. A running command and its output must survive.
 - **Traps:** if exec says the command may have started, never rerun it;
-  read it with `exec-status`. Output keeps only the last 256 KB for an hour.
+  read it with `exec-status`. A detached supervisor saves its output and
+  result across daemon restarts. Output keeps only the last 256 KB for an
+  hour; the id remains reserved after that, so it cannot start the work again.
   `helm copy` needs rsync 3.2.3+ on both ends; a break resumes on rerun.
   With protected arguments, rsync receives its folder and options inside
   the byte stream. Check those before passing them to rsync, and bind the

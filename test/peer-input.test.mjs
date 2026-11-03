@@ -5,7 +5,7 @@ import { build } from 'esbuild';
 import zlib from 'node:zlib';
 
 const bundle = await build({ entryPoints: [new URL('../packages/connect/src/peer.js', import.meta.url).pathname],
-  bundle: true, write: false, format: 'cjs', platform: 'node', external: ['node-datachannel/polyfill', './direct-config.js'] });
+  bundle: true, write: false, format: 'cjs', platform: 'node', external: ['node-datachannel/polyfill', './direct-config.js', '@helm/protocol/network'] });
 
 async function harness({ result = 'ok' } = {}) {
   const maps = [], calls = [], sent = [];
@@ -18,10 +18,10 @@ async function harness({ result = 'ok' } = {}) {
     async setLocalDescription(answer) { this.localDescription = answer; }
     close() {}
   }
-  const context = { module: { exports: {} }, exports: {}, setTimeout, clearTimeout, Buffer, Date,
+  const context = { module: { exports: {} }, exports: {}, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, Date,
     JSON: { stringify: JSON.stringify, parse: (...args) => { parses++; return JSON.parse(...args); } },
     Map: class extends Map { constructor(...args) { super(...args); maps.push(this); } },
-    require: specifier => specifier === './direct-config.js'
+    require: specifier => specifier === '@helm/protocol/network' ? { authenticate: () => null } : specifier === './direct-config.js'
       ? { nativeDirectConfig: () => ({ iceServers: [] }) }
       : specifier === 'node:zlib' ? zlib : { RTCPeerConnection: Connection } };
   vm.runInNewContext(bundle.outputFiles[0].text, context);

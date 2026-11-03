@@ -109,7 +109,8 @@ test('production roster updates preserve identity, permissions, and existing reg
     assert.equal(N.loadNetwork().machines.ccdd.name, 'renamed');
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
     assert.equal(fs.statSync(home).mode & 0o777, 0o700);
-    assert.deepEqual(fs.readdirSync(home), ['network.json']);
+    // Saving signs this machine's record, so its signing key is made once.
+    assert.deepEqual(fs.readdirSync(home), ['code_ed25519', 'code_ed25519.pub', 'network.json']);
   `);
 });
 

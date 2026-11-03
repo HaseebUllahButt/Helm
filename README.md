@@ -214,16 +214,19 @@ not a count of successful tasks.
 
 ### Scheduled tasks
 
-In **Thread details → Schedules**, run a prompt on an interval (five-minute
-minimum), at a fixed time, or from a webhook. A task can reuse the thread or
-start a fresh thread each run. Busy, stopped or archived threads never get
-scheduled work. Automation does not bypass permissions, and every run uses
-provider usage: only schedule trusted tasks.
+The app no longer has a schedule screen. Machines still run the scheduled tasks
+that exist: on an interval, at a fixed time, or from a webhook. Each run sends a
+saved message to its chat. Busy, stopped or archived chats never get scheduled
+work. Automation does not bypass permissions, and every run uses provider usage.
 
-Webhooks get a secret POST URL; the machine and home must be online. Optional
-HMAC uses `X-Hub-Signature-256`. Prompts can use `{{body}}`, `{{body.field}}`,
-`{{query.field}}` and `{{headers.name}}`. **Payloads are untrusted input**: the
-template decides what the agent sees.
+Use `helm schedule list` to see them on every machine, and `helm schedule show
+<id>` for one. `pause` and `resume` stop and start a task; `remove` deletes it
+for good. A Helm restart does not pause a task.
+
+Webhooks get a secret POST URL through a Spin; the machine and home must be
+online. Optional HMAC uses `X-Hub-Signature-256`. Prompts can use `{{body}}`,
+`{{body.field}}`, `{{query.field}}` and `{{headers.name}}`. **Payloads are
+untrusted input**: the template decides what the agent sees.
 
 Schedules, including webhook secrets, are saved in `~/.helm/schedules.json`
 (mode 0600).

@@ -108,20 +108,28 @@ test('Send task includes env, keeps a retry identity, and opens the destination 
           receipt:{sessionId:'remote',folder:'/destination',files:2,bytes:20}};
       }
     };
-    createRoot(document.getElementById('root')).render(<TransferView client={client} source={source}
+    let root = createRoot(document.getElementById('root'));
+    const mount = () => root.render(<TransferView client={client} source={source}
       envs={[source,target]} folder='/project' session={session} onBack={()=>{}}
       onOpenSession={(env,session)=>{window.opened={env,session};}} />);
+    window.reopenTransfer = () => { root.unmount(); root = createRoot(document.getElementById('root')); mount(); };
+    mount();
   `, resolveDir:process.cwd(),loader:'tsx' },bundle:true,write:false,format:'iife',jsx:'automatic'});
   const browser = await chromium.launch({headless:true,...(process.env.HELM_TEST_CHROMIUM ? {executablePath:process.env.HELM_TEST_CHROMIUM} : {})});
   try {
     const page = await browser.newPage();
-    await page.setContent('<div id="root"></div>');
+    await page.route('http://helm-transfer.test/**', route => route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
+    await page.goto('http://helm-transfer.test/');
     await page.addScriptTag({content:bundle.outputFiles[0].text});
     await page.getByRole('button',{name:'Send task to VM',exact:true}).click();
     await page.getByText('Reply lost; retry the task',{exact:true}).waitFor();
     assert.equal(await page.getByLabel('Include .env files').isChecked(),true);
     assert.equal(await page.getByLabel('Include .env files').isDisabled(),true);
     assert.equal(await page.getByLabel('Instructions for continuing').isDisabled(),true);
+    await page.evaluate(() => window.reopenTransfer());
+    await page.getByRole('button', { name: 'Forget saved send', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+    assert.equal(await page.evaluate(() => window.attempts.length), 1, 'closing recovery does not send anything');
     await page.getByRole('button',{name:'Retry to VM',exact:true}).click();
     await page.getByText('Helm is copying files to VM: 40% of 1000 B · 200 B/s',{exact:true}).waitFor();
     await page.getByText('Running on VM',{exact:true}).waitFor();
@@ -162,7 +170,8 @@ test('Send task honors the env choice at phone and desktop widths', async () => 
   try {
     for (const width of [390, 1280]) {
       const page=await browser.newPage({viewport:{width,height:844}});
-      await page.setContent('<div class="main showing" style="height:100vh;width:100%;display:flex;flex-direction:column"><div id="root" style="flex:1;display:flex;flex-direction:column;min-height:0"></div></div>');
+      await page.route('http://helm-transfer.test/**', route => route.fulfill({ contentType: 'text/html', body: '<div class="main showing" style="height:100vh;width:100%;display:flex;flex-direction:column"><div id="root" style="flex:1;display:flex;flex-direction:column;min-height:0"></div></div>' }));
+      await page.goto('http://helm-transfer.test/');
       await page.addStyleTag({content:readFileSync('apps/web/src/styles.css','utf8').replace(/^@import[^;]+;/gm,'')});
       await page.addScriptTag({content:bundle.outputFiles[0].text});
       await page.getByText('Agent and machine options',{exact:true}).click();

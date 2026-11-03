@@ -49,7 +49,11 @@
   Limits: 100 pages, 2 MiB a page, 24 MiB in all. Canvas shows the pages
   one under the other, read-only, and loads only those near the view
   (`session.visual` with `page`). No PDF reader is needed on the viewing
-  device. Without poppler-utils the command says what to install. Its
+  device. A PDF of 16 MiB or less also keeps the file itself; Download
+  reads it with `session.visual` `file: true`. Larger and older PDFs have
+  no Download. Without poppler-utils the command says what to install.
+  The head's Fullscreen button uses the browser's full screen where it
+  exists, else covers the window; Escape leaves full screen first. Its
   first screen also lists the chat's pictures and pages, so Back from a
   page never ends on an error. Saves go through
   `git.write` with the hash the file was read at: a file the agent changed

@@ -4,7 +4,7 @@ import { EventEmitter, once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -79,6 +79,9 @@ test('Codex forks require the same local account, folder and native daemon', () 
   assert.equal(fork(parent, profile, profile, '/different/folder'), null);
   assert.equal(fork(parent, profile, profile, parent.cwd, true), null);
   assert.equal(fork(parent, profile, profile, parent.cwd, false, null), null);
+  const blocked = { kind: 'error', message: 'This content was flagged for possible cybersecurity risk.' };
+  assert.equal(fork({ ...parent, recovery: blocked }), null);
+  assert.equal(fork({ ...parent, recovery: { kind: 'error', message: 'The service is busy.' } }).threadId, 'parent-thread');
 });
 
 test('Codex recovery history leaves out queued tickets and keeps accepted tool results', () => {
@@ -463,8 +466,12 @@ test('collecting a completed result removes its queued notice and survives resta
   sessions.delegationResult(child.id);
   sessions.delegationResult(child.id, { consume: true, parentId: parent.id, callerThreadId: 'another-thread' });
   assert.equal(sessions.turnState(parent.id, ticket.turnId), 'open', 'ordinary and unrelated reads cannot consume a notice');
+  sessions.flush();
   const result = sessions.delegationResult(child.id, { consume: true, parentId: parent.id, callerThreadId: parent.engineSessionId });
   assert.equal(result.complete, true);
+  const saved = JSON.parse(readFileSync(join(process.env.HELM_DIR, 'sessions.json'), 'utf8'));
+  assert.ok(saved.sessions.find(s => s.id === child.id).delegation.consumedSeq > 0,
+    'the acknowledgement is on disk before the result returns');
   assert.equal(sessions.turnState(parent.id, ticket.turnId), 'removed');
   // Crash after the acknowledgement was saved but before turn.remove was
   // flushed: the durable marker still prevents queue restoration.
@@ -479,6 +486,26 @@ test('collecting a completed result removes its queued notice and survives resta
   drivers.get(parent.id).finish();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(drivers.get(parent.id).sent, 'Implement and ship', 'finishing the parent does not deliver the result again');
+});
+
+test('a result is not acknowledged when its receipt cannot be saved', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Work');
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  drivers.get(child.id).finish();
+  await new Promise(resolve => setImmediate(resolve));
+  const ticket = sessions.history(parent.id).events.find(e => String(e.turnId).startsWith(`local-result-${child.id}-`));
+  sessions.flush();
+  const blocked = join(process.env.HELM_DIR, 'sessions.json.tmp');
+  mkdirSync(blocked);
+  t.after(() => rmSync(blocked, { recursive: true, force: true }));
+  assert.throws(() => sessions.delegationResult(child.id, { consume: true, parentId: parent.id, callerThreadId: parent.engineSessionId }), /save/i);
+  assert.equal(sessions.turnState(parent.id, ticket.turnId), 'open');
+  assert.equal(sessions.get(child.id).delegation.consumedSeq ?? 0, 0);
+  rmSync(blocked, { recursive: true, force: true });
+  assert.equal(sessions.delegationResult(child.id, { consume: true, parentId: parent.id, callerThreadId: parent.engineSessionId }).complete, true);
+  assert.equal(sessions.turnState(parent.id, ticket.turnId), 'removed');
 });
 
 test('a completion notice uses its outcome before idle arrives after a steering ticket', async t => {

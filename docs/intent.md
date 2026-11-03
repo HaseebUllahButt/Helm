@@ -10,7 +10,7 @@ machine -> folder -> chat. Each chat runs one profile: a CLI on an account.
 
 ## The bar
 
-1. Pairing a device is one private link. A device stays in until removed.
+1. Pairing a device is one private link. A device stays signed in until the owner removes it.
 2. A chat waiting on the owner is impossible to miss and one tap from answered.
 3. It reads like a live chat: text streams, tool calls show as they start,
    approvals are cards with the real choices.
@@ -23,7 +23,7 @@ machine -> folder -> chat. Each chat runs one profile: a CLI on an account.
 - **No T3 Code code or apps.** T3's ideas and layout, Helm's own look.
 - **One owner per network.** No shared Helm account, no hosted dependency.
 - **Profiles point at secrets, never copy them.**
-- **Passwords only start a pairing and last minutes; devices are durable.**
+- **Passwords only start pairing and last minutes. A paired device never has to sign in again.** The owner chose this on 2026-11-03: never sign the owner out.
 - **Agents run headless through each CLI's own protocol** and give a typed
   event stream. Reading a terminal and typing `y`/`n` blind was the old way
   and made the screen dead while the agent worked. herdr still owns plain
@@ -56,9 +56,40 @@ machine -> folder -> chat. Each chat runs one profile: a CLI on an account.
   (`refreshAppLauncher`) and sets the frame once the window's browser has
   exited (`syncWindowFrame`): Chromium writes its settings back after it lets
   go of the profile lock.
-- **A laptop's hub is plain http on its local network** (bound to `0.0.0.0` so
-  a phone on the same wifi is fast). On a network you do not trust, run
-  `helm up --install --host 127.0.0.1`.
+- **Remote hub access needs HTTPS.** HTTP works only over loopback. LAN
+  discovery stays off until Helm has an encrypted LAN transport. Encrypted
+  direct links remain available through a reachable HTTPS hub.
+- **Machine credentials need the machine's private signing key.** The shared
+  network key alone cannot sign them. Upgrade all machines together. Old
+  machine and browser credentials are refused. Remote browsers must sign in
+  again. Browser requests also need a private device key. Keep that key in
+  browser storage as a non-exportable CryptoKey. A copied token alone must
+  never authorize a remote request or a direct offer. Restore signing keys from backups; replacing a pinned key breaks trust.
+- **Machine records need the owner's signature.** Check it with the saved
+  signing key before applying changes. Keep old unsigned records fixed.
+  A machine with no saved signing key must rejoin through an invitation.
+  Never learn a replacement key from an unsigned update. Keep an invitation
+  address in a local note until its owner advertises any address, for one
+  day at most: an old address can change owner. Never edit the inviter
+  record to add that address.
+- **A new machine needs its inviter's receipt.** `/api/join` signs one.
+  Gossip accepts a machine it has not seen only with a receipt from a
+  member it already knows. A machine that joined through an older Helm has
+  none, so it must rejoin.
+- **A hub signs its hello with its machine key.** A dialler sends a
+  credential only to the machine that owns the address it dialled, and the
+  credential names that hub. A record with `signedHub` marks a machine that
+  does this; for it, an unsigned hello is a downgrade and is refused.
+  Without the flag, the old shared-key hello still works, so machines on
+  different versions can update each other.
+- **Local sign-in refuses forwarded traffic.** Spins must never expose Helm's
+  own port. Check existing links as well as new links.
+- **Private Spin passes need a current machine signature.** The shared key
+  alone cannot issue a pass. Enforce signer removal and the cookie lifetime.
+- **A machine can admit other machines while trusted.** After a suspected
+  compromise, review machines and devices added before removal. Revoking a
+  signer also blocks browser credentials that it signed.
+
 - **A herdr pane read includes old scrollback,** so an old warning reads as
   current. Read the live screen.
 - **Reviews:** a second model's review has been confidently wrong here. Run

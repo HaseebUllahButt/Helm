@@ -44,7 +44,11 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   $V click Approve; $V wait "TOOL APPROVAL"   # "second" was delivered and asks again
   ```
 - **Traps:** each CLI reads a mid-reply message at a different moment
-  (Codex after its next step, Claude after its current tools).
+  (Codex after its next step, Claude after its current tools). Save the send
+  boundary before calling a CLI. A lost reply does not prove delivery or
+  refusal, so do not send that message again. Hold later messages until a
+  receipt or the owner resolves the uncertainty. A confirmed Stop can put
+  back only messages the CLI says it drops; save that return before retrying.
 - **Tests:** `test/dispatch-queue`, `input-delivery`, `peer-input`,
   `upgrade-input`; `test/browser/composer-card`.
 
@@ -107,10 +111,16 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `native-claude-chat`.
 
 ## @ chats and / commands
-- **Not yet driven:** `$V type "@"` should list up to three chats; `/` lists
-  commands. The CLIs' own built-in slash commands are not listed.
+- **Trap:** a new Claude sends `init` only with the first message. The `/`
+  list comes from its answer to Helm's `initialize`, which also gives what
+  each command does. Waiting for `init` left the list empty in every chat
+  that was not running, which the owner saw first on the phone.
+- **Prove `/` (driven 2026-11-04):** `up --real`, a new Claude sketch with no
+  message, `$V type "/"`: the list shows with descriptions. `$V restart`,
+  reload, type `/` again: it still shows.
+- **Not yet driven:** `$V type "@"` should list up to three chats.
 - **Tests:** `test/commands`, `commands-devin`, `slash-title`,
-  `hidden-context`.
+  `hidden-context`, `driver-claude`.
 
 ## Long chats: folds, copy, selection
 - **Latest first:** opening a chat or returning to it reads its newest window.

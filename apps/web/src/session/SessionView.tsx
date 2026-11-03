@@ -2,7 +2,7 @@ import { errorMessage } from '../errors';
 import { useCopySelection } from '../useCopySelection';
 import type { Transcribe } from './voice';
 import { useDismiss } from '../useDismiss';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode, type SetStateAction } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { recacheWarning, type Recache } from '@helm/usage/recache';
 import { Markdown } from '../Markdown';
@@ -14,12 +14,12 @@ import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { nativeConversation } from './nativeView';
 import { CompactionLine, GoneImage } from './Transcript';
-import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
+import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader, visualPart } from './VisualReply';
 import { useChatKeys, useDeleteKey } from './chatKeys';
 import { Canvas, chatPages, useCanvas } from './Canvas';
 import { isImageAttachment, numbered, prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
-import { loadDraft, saveDraft } from '../draftStore';
+import { useDraftStorage } from '../useDraftStorage';
 import { userMessage } from './userMessage';
 import { useGitStatus } from './gitStatus';
 import { ThreadDetails, type DetailsTab } from './ThreadDetails';
@@ -72,7 +72,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
 }) {
   const isShell = session.engine === 'shell';
   const isExternal = !!session.external;
-  const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...(page === undefined ? {} : { page }) }, 60_000), [client, env.id, session.id]);
+  const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...visualPart(page) }, 60_000), [client, env.id, session.id]);
   const [messages, setMessages] = useState<Message[] | null>(() => keptMessages.get(`${env.id}:${session.id}`) ?? null);
   // What is on screen stays in memory for the next visit (see keptMessages).
   useEffect(() => { if (messages?.length) keepMessages(`${env.id}:${session.id}`, messages); }, [messages, env.id, session.id]);
@@ -93,8 +93,23 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const [compacting, setCompacting] = useState(session.compacting || false);
   // When it entered the status it is in, for "working 14m" beside the word.
   const [statusAt, setStatusAt] = useState(session.updatedAt);
-  const [draft, setDraft] = useState(() => loadDraft(env.id, session.id));
-  useEffect(() => saveDraft(env.id, session.id, draft), [env.id, session.id, draft]);
+  const storage = useDraftStorage(env.id, session.id);
+  const [draft, setDraftValue] = useState(storage.initial);
+  const draftRef = useRef(draft);
+  const setDraft = (next: SetStateAction<string>) => {
+    const value = typeof next === 'function' ? next(draftRef.current) : next;
+    draftRef.current = value;
+    setDraftValue(value);
+    storage.save(value);
+  };
+  useEffect(() => {
+    const restore = (event: Event) => {
+      const { env: machine, id, text } = (event as CustomEvent).detail;
+      if (machine === env.id && id === session.id) setDraft(current => [text, current].filter(Boolean).join('\n\n'));
+    };
+    window.addEventListener('helm:restore-draft', restore);
+    return () => window.removeEventListener('helm:restore-draft', restore);
+  }, [env.id, session.id]);
   const [error, setError] = useState('');
   const [menu, setMenu] = useState(false);
   useDismiss(menu, useCallback(() => setMenu(false), []));
@@ -475,6 +490,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         />
       )}
       {(error || (!messages && readError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || readError}</div>}
+      {storage.error && <div className="error floating" role="alert">{storage.error}</div>}
     </Composer>
   );
 
@@ -600,6 +616,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         ? <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} handle={questionHandle}>{composer}</NativeClaudeApprovals>
         : composer())}
       {raw && !session.nativeCli && error && <div className="error floating" role="alert" onClick={() => setError('')}>{error}</div>}
+      {raw && !session.nativeCli && storage.error && <div className="error floating" role="alert">{storage.error}</div>}
     </>
   );
 }

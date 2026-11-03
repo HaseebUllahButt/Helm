@@ -812,11 +812,16 @@ for (const width of [1280, 390]) for (const childState of ['error', 'blocked']) 
     window.mount(client);
   }, childState);
   const card = page.locator('.sidebar .need').filter({ hasText: 'Game task' });
-  await card.getByRole('button', { name: 'More for Game task' }).click();
-  await card.getByRole('button', { name: '5 mins' }).waitFor();
-  assert.equal(await page.getByRole('dialog', { name: 'Agents', exact: true }).count(), 0);
-  await card.getByRole('button', { name: 'More for Game task' }).click();
-  await card.getByRole('button', { name: '5 mins' }).waitFor({ state: 'detached' });
+  await card.locator('.need-main').waitFor();
+  if (childState === 'error') {
+    await card.getByRole('button', { name: 'More for Game task' }).click();
+    await card.getByRole('button', { name: 'Dismiss failure' }).waitFor();
+    assert.equal(await page.getByRole('dialog', { name: 'Agents', exact: true }).count(), 0);
+    await card.getByRole('button', { name: 'More for Game task' }).click();
+    await card.getByRole('button', { name: 'Dismiss failure' }).waitFor({ state: 'detached' });
+  } else {
+    assert.equal(await card.getByRole('button', { name: 'More for Game task' }).count(), 0, 'a row with no failure has no ⋯');
+  }
   await card.locator('.need-main').click();
   const details = page.getByRole('dialog', { name: 'Agents', exact: true });
   await details.getByRole('heading', { name: 'Agents' }).waitFor();
@@ -832,55 +837,21 @@ for (const width of [1280, 390]) for (const childState of ['error', 'blocked']) 
   await page.locator('.session-bar').getByText('Game task', { exact: true }).waitFor();
 });
 
-test('snooze offers short delays and Never survives refresh until the chat is opened', async t => {
+test('a waiting chat has no snooze and an old snoozed value is deleted on start', async t => {
   const { page, boot } = await pageFor(t, { width: 390, height: 1000 });
   await boot();
-  const mount = () => page.evaluate(() => {
-    const session = { id: 'snooze-chat', title: 'Quiet chat', cwd: '/project', engine: 'codex', profileId: 'codex', driver: 'codex', status: 'blocked', alive: true, pending: 1, updatedAt: Date.now() };
+  await page.evaluate(() => localStorage.setItem('helm.snoozed', JSON.stringify({ 'laptop:quiet-chat': Number.MAX_SAFE_INTEGER })));
+  await page.reload(); await boot();
+  await page.evaluate(() => {
+    const session = { id: 'quiet-chat', title: 'Quiet chat', cwd: '/project', engine: 'codex', profileId: 'codex', driver: 'codex', status: 'blocked', alive: true, pending: 1, updatedAt: Date.now() };
     window.mount(window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [session] }));
   });
-  await mount();
-  const card = page.locator('.sidebar .need');
-  await card.getByRole('button', { name: 'More for Quiet chat' }).click();
-  assert.deepEqual(await card.locator('.need-foot button').allTextContents(), ['5 mins', '1 hr', '3 hrs', 'Never']);
-  assert.equal(await card.locator('input').count(), 0);
-  const before = Date.now();
-  await card.getByRole('button', { name: '5 mins', exact: true }).click();
-  const until = await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:snooze-chat']);
-  assert.ok(until >= before + 299000 && until <= Date.now() + 300000);
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  await card.getByRole('button', { name: 'More for Quiet chat' }).click();
-  await card.getByRole('button', { name: 'Never', exact: true }).click();
-  await card.waitFor({ state: 'detached' });
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:snooze-chat']), Number.MAX_SAFE_INTEGER);
-  await page.reload(); await boot(); await mount();
-  await page.locator('.sidebar').getByRole('button', { name: 'Snoozed 1', exact: true }).click();
-  await page.locator('.sidebar').getByText('Snoozed · Never', { exact: true }).waitFor();
-  await page.locator('.sidebar').getByText('Quiet chat', { exact: true }).click();
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:snooze-chat']), undefined);
-});
-
-for (const status of ['working', 'idle']) test(`snoozing a child's alert restores a ${status} parent's ongoing work`, async t => {
-  const { page, boot } = await pageFor(t, { width: 1280, height: 1000 });
-  await page.clock.install();
-  await boot();
-  await page.evaluate(status => {
-    const parent = { id: 'working-parent', title: 'Continue game', cwd: '/project', engine: 'claude', driver: 'claude', profileId: 'claude', status, alive: true, turns: 1, updatedAt: Date.now(), team: { working: status === 'idle' ? 1 : 0, blocked: 1, failed: 0 } };
-    window.mount(window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [parent] }));
-  }, status);
   const sidebar = page.locator('.sidebar');
-  const card = sidebar.locator('.need');
-  await card.getByRole('button', { name: 'More for Continue game' }).click();
-  await card.getByRole('button', { name: '5 mins', exact: true }).click();
-  await card.waitFor({ state: 'detached' });
-  await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).locator('.tstat.working').waitFor();
-  assert.equal(await sidebar.getByRole('button', { name: 'Snoozed 1', exact: true }).count(), 0);
-  assert.ok(!/waiting/.test(await page.title()));
-  await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).click();
-  assert.ok(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:working-parent'] > Date.now()), 'opening the working parent keeps the snooze');
-  await page.clock.fastForward(331000);
+  const card = sidebar.locator('.need').filter({ hasText: 'Quiet chat' });
   await card.waitFor();
-  assert.equal(await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).count(), 0);
+  assert.equal(await card.getByRole('button', { name: 'More for Quiet chat' }).count(), 0, 'a row without a helper failure has no ⋯');
+  assert.equal(await sidebar.getByText(/Snooze/).count(), 0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('helm.snoozed')), null);
 });
 
 for (const width of [1280, 390]) test(`native child failure opens its older transcript output at ${width}px`, async t => {
@@ -955,7 +926,7 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   assert.equal(await card.locator('.need-what').innerText(), '1 helper task failed');
   const dismissBounds = await card.getByRole('button', { name: 'Dismiss failure', exact: true }).boundingBox();
   const reviewBounds = await card.locator('.need-main').boundingBox();
-  assert.ok(dismissBounds.y >= reviewBounds.y + reviewBounds.height, 'dismiss and snooze do not overlap the row');
+  assert.ok(dismissBounds.y >= reviewBounds.y + reviewBounds.height, 'dismiss does not overlap the row');
   await page.screenshot({ path: `/tmp/helm-dismiss-child-${width}.png` });
   await page.evaluate(() => { window.rejectDismiss = true; });
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
@@ -964,7 +935,6 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
   await card.waitFor({ state: 'detached' });
   assert.deepEqual(await page.evaluate(() => window.dismissRequest), { env: 'laptop', params: { id: 'dismiss-parent' } });
-  assert.equal(await page.evaluate(() => localStorage.getItem('helm.snoozed')), null, 'dismissal is not a browser-local snooze');
   await page.locator('.sidebar .thread-row').filter({ hasText: 'Keep building' }).locator('.tstat.working').waitFor();
   await page.reload(); await boot(); await mount();
   await page.locator('.sidebar .thread-row').filter({ hasText: 'Keep building' }).waitFor();

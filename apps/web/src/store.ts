@@ -1,3 +1,4 @@
+import type { HubTrust } from './hubAuth';
 import { txn } from './idb';
 
 /**
@@ -26,7 +27,7 @@ if (typeof window !== 'undefined') {
   });
 }
 
-export interface StoredAuth { endpoints: string[]; token: string; deviceId?: string }
+export interface StoredAuth { endpoints: string[]; token: string; deviceId?: string; trust?: HubTrust }
 
 async function idbGet(): Promise<StoredAuth | null> {
   try { return (await txn<StoredAuth | undefined>('kv', 'readonly', (s) => s.get(KEY))) ?? null; }

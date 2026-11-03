@@ -57,6 +57,11 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   `session-driver`, `native-codex`, `spawn-cli`, `cli-subagents`.
 
 ## The CLIs' own subagents
+- **Messages:** A helper message keeps its delivery number across reconnects.
+  The machine saves a receipt before it calls the CLI. A restart during that
+  call can leave delivery uncertain. Check the helper, then use **Check the
+  previous message** to clear that check. The message may already have arrived.
+  Older machines must update before the app can send a helper message.
 - **Codex proof (driven 2026-10-27):** a private real chat started one v2
   child with `fork_turns="all"`. Agents showed one finished child. Its
   view showed its own task and "OK" reply, including after a private

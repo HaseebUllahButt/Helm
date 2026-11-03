@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { join } from 'node:path';
@@ -33,6 +33,8 @@ const notice = (child, predicate) => new Promise((resolve, reject) => {
 
 test('running helper and exactly one copy of each message survive an actual daemon replacement', { timeout: 45_000 }, async t => {
   const hub = await startRelay({ port: 0, host: '127.0.0.1', openLogin: false });
+  const sockets = new Set();
+  hub.server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   const port = hub.server.address().port;
   const net = createNetwork({ name: 'restart-test', port });
   const agent = join(root, 'agent.mjs');
@@ -60,9 +62,18 @@ test('running helper and exactly one copy of each message survive an actual daem
     for (const child of children) if (child.exitCode === null && child.signalCode === null) {
       const done = once(child, 'exit'); child.kill('SIGTERM'); await done;
     }
-    const host = new TerminalHost({ socketPath: process.env.HELM_PROCS_SOCKET, unit: 'helm-test-procs' });
-    if (await host.ensure({ spawn: false }).catch(() => false)) await host.shutdown();
-    await hub.stop(); rmSync(root, { recursive: true, force: true });
+    for (const socketPath of [process.env.HELM_PROCS_SOCKET, process.env.HELM_TERMINALS_SOCKET, process.env.HELM_NATIVE_SOCKET]) {
+      const host = new TerminalHost({ socketPath, unit: 'helm-test-procs' });
+      await host.ensure({ spawn: false }).catch(() => false);
+      if (existsSync(socketPath)) {
+        await host.shutdown();
+        await waitFor(() => !existsSync(socketPath));
+      } else host.detach();
+    }
+    hub.stop();
+    for (const socket of sockets) socket.destroy();
+    await new Promise(resolve => hub.server.close(resolve));
+    rmSync(root, { recursive: true, force: true });
   });
   let daemon = await boot();
   let ready = notice(daemon, value => value.helper); daemon.send('setup');

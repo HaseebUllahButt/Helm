@@ -255,8 +255,11 @@ test('a machine opens tunnels only to ports it shared, and hides hashes from mem
 
 /** A machine on the hub: answers share.list, dials only its shared ports. */
 async function fakeMachine(id, list) {
+  const current = N.loadNetwork();
+  current.machines[id] = { id, name: id, endpoints: [], updatedAt: Date.now(), codeSignPubkey: N.machineSigningInfo().codeSignPubkey };
+  N.saveNetwork(current);
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/helm/ws?name=sharer`, {
-    headers: { authorization: `Bearer ${mintToken(net.key, { net: net.id, sub: id, role: 'machine' })}` },
+    headers: { authorization: `Bearer ${N.machineToken({ ...N.loadNetwork(), self: id })}` },
   });
   const tunnels = new Map();
   ws.opened = 0;
