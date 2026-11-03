@@ -146,16 +146,42 @@ test('a failed clone says why and tries again; deleting the chat stops a clone',
   await sessions.stop();
 });
 
-test('a restart mid-clone leaves the chat, saying the clone stopped', async () => {
-  const { make } = await setup('restart');
+test('a restart mid-clone starts the clone again, and a waiting message still goes', async () => {
+  const { make, drivers, cloner } = await setup('restart');
   const first = make();
-  const s = await first.start({ cwd: join(process.env.HELM_DIR, 'work', 'cut'), profileId: 'claudea', clone: { repo: 'me/cut' } });
+  const target = join(process.env.HELM_DIR, 'work', 'cut');
+  const s = await first.start({ cwd: target, profileId: 'claudea', clone: { repo: 'me/cut' } });
+  await first.input(s.id, 'look around');
   await first.stop();
   const again = make();
+  assert.equal(again.get(s.id).clone.state, 'failed', 'before resume the chat says the clone stopped');
+  assert.match(again.get(s.id).clone.error, /restarted/);
   await again.resume();
+  await tick();
+  assert.equal(cloner.calls.length, 2);
+  assert.deepEqual(cloner.calls.at(-1), { repo: 'me/cut', target, login: undefined, partialOk: true });
+  const back = again.get(s.id);
+  assert.equal(back.clone.state, 'cloning');
+  assert.equal(back.clone.restarted, undefined);
+  cloner.job.finish('done');
+  await tick();
+  assert.equal(again.get(s.id).clone.state, 'done');
+  assert.deepEqual(drivers.at(-1).sent, ['look around']);
+  await again.stop();
+});
+
+test('a clone that cannot start again after a restart says why', async () => {
+  const { make, cloner } = await setup('restart-refused');
+  const first = make();
+  const s = await first.start({ cwd: join(process.env.HELM_DIR, 'work', 'taken'), profileId: 'claudea', clone: { repo: 'me/taken' } });
+  await first.stop();
+  const again = make();
+  cloner.begin = async () => { throw new Error('~/work/taken is already there. Pick another folder.'); };
+  await again.resume();
+  await tick();
   const back = again.get(s.id);
   assert.equal(back.clone.state, 'failed');
-  assert.match(back.clone.error, /restarted/);
+  assert.match(back.clone.error, /could not start the clone again: .*already there/);
   assert.equal(back.status, 'idle');
   await again.stop();
 });

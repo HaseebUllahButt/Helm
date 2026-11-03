@@ -448,9 +448,9 @@ export class Sessions extends EventEmitter {
         // Whatever was compacting before the daemon stopped has said nothing since.
         delete s.compacting;
         // A clone (or the agent's start after it) the restart cut off: the
-        // chat says so and offers to go again.
+        // chat says so, and resume() starts it again.
         if (s.clone && !['done', 'failed'].includes(s.clone.state)) {
-          s.clone = { ...s.clone, state: 'failed', error: 'Helm restarted before the repo was in.' };
+          s.clone = { ...s.clone, state: 'failed', error: 'Helm restarted before the repo was in.', restarted: true };
           if (s.status === 'starting') s.status = 'idle';
         }
         // Its setup command died with the daemon: it runs again from the
@@ -2302,6 +2302,19 @@ export class Sessions extends EventEmitter {
       if (s.chatWorktree?.setup !== 'running') continue;
       this.emit('session', s);
       this.#setUp(s, this.#worktrees.setupCommand(s));
+    }
+    // So does a clone. The old git died with the daemon and took its half
+    // folder; a part it left is this chat's own, and the retry clears it.
+    for (const s of this.#index.values()) {
+      if (!s.clone?.restarted || s.clone.state !== 'failed' || !this.cloner) continue;
+      delete s.clone.restarted;
+      void this.retryClone(s.id).catch((err) => {
+        if (this.#index.get(s.id) !== s) return;
+        s.clone = { ...s.clone, state: 'failed', error: `Helm could not start the clone again: ${err.message}` };
+        s.status = 'idle';
+        this.#save();
+        this.emit('session', s);
+      });
     }
   }
 

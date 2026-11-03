@@ -76,8 +76,9 @@
   shows "Could not clone …" and "Try again" under "Needs you".
 - **Traps:** the clone uses gh's git setting (ssh on the laptop). A gh too
   old for `--json` (2.45 on Ubuntu 24.04) is read from plain `gh auth
-  status` words. A restart mid-clone offers "Try again" and first clears the
-  half-made folder this chat started.
+  status` words. A restart mid-clone starts the clone again by itself, like a
+  cut-off setup command, and first clears the half-made folder this chat
+  started. Waiting messages still go. If it cannot start, "Try again" stays.
 - **Tests:** `test/github-repos`, `test/clone-chat`.
 
 ## Accounts, models, defaults
