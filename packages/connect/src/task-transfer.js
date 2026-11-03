@@ -166,7 +166,7 @@ export class TaskTransfers {
       request.prompt = 'Continue the encrypted task using its transferred project.';
       request.requestDigest = handoffRequestDigest(request);
       request.sourceSignature = signHandoffDigest(request.requestDigest);
-      record = { fingerprint, intent, request, preflight, resumeSend: true,
+      record = { fingerprint, intent, request, preflight, resumeSend: true, deliveryAttempted: false,
         sourceFolder: resolve(expand(intent.folder)), baseline: snapshotBaseline(snapshot),
         checkpoint: intent.returnToSource ? taskCheckpoint(join(this.directory, `${params.handoffId}.git-checkpoints`), snapshot) : null,
         baselineEnvelope: intent.returnToSource ? sealCodeSnapshot(snapshot, codeKeyInfo().codePubkey, params.handoffId) : null };
@@ -184,6 +184,10 @@ export class TaskTransfers {
       });
     };
     report('sending');
+    // A restart after this point cannot safely call accept again. The
+    // receiver can treat an explicit retry as permission to restart a failed task.
+    record.deliveryAttempted = true;
+    this.#save(params.handoffId, record);
     let receipt;
     let route = 'relay';
     try {
@@ -206,14 +210,18 @@ export class TaskTransfers {
       report('queued');
       return record.result;
     }
+    return this.#accepted(target, params.handoffId, record, receipt, route);
+  }
+
+  #accepted(target, handoffId, record, receipt, route) {
     const result = {
-      sent: true, status: 'running', handoffId: params.handoffId, route,
+      sent: true, status: 'running', handoffId, route,
       targetMachineId: target.id, targetName: target.name, preflight: record.preflight, receipt,
     };
     if (record.request.parent) {
       try {
         this.sessions.linkChild(record.request.parent.sessionId, {
-          handoffId: params.handoffId, machineId: target.id, sessionId: receipt.sessionId,
+          handoffId, machineId: target.id, sessionId: receipt.sessionId,
           folder: receipt.folder, digest: receipt.digest, title: record.request.title,
         });
       } catch (error) { result.warning = `The task is running, but its source link could not be saved: ${error.message}`; }
@@ -221,8 +229,15 @@ export class TaskTransfers {
     record.result = result;
     record.resumeSend = false;
     delete record.sendError;
-    this.#save(params.handoffId, record);
-    report('running');
+    this.#save(handoffId, record);
+    if (record.request.parent?.sessionId && record.request.returnToSource) this.sessions.setTaskTransfer?.(record.request.parent.sessionId, {
+      handoffId, role: 'source', status: 'running', machineId: target.id, machineName: target.name,
+    });
+    else if (record.bulk?.sourceId) {
+      let source;
+      try { source = this.sessions.get(record.bulk.sourceId); } catch { /* source was removed */ }
+      if (source?.taskTransfer?.handoffId === handoffId) this.sessions.setTaskTransfer?.(source.id, null);
+    }
     return result;
   }
 
@@ -292,6 +307,10 @@ export class TaskTransfers {
         setTimeout(() => { if (this.copying.get(params.handoffId) === job) this.copying.delete(params.handoffId); }, this.failedKeepMs).unref?.();
         record.bulk.error = String(error.message).slice(0, 500);
         record.resumeSend = this.stopped || this.sendEngine?.stopping === true || networkFailure(error);
+        if (record.bulk.sourceId) {
+          try { this.sessions.setTaskTransfer?.(record.bulk.sourceId, { handoffId: params.handoffId, role: 'source', status: 'failed',
+            machineId: target.id, machineName: target.name, error: record.bulk.error }); } catch { /* source was removed */ }
+        }
         try { this.#save(params.handoffId, record); }
         catch (saveError) { console.error(`[helm] Could not save task transfer status: ${saveError.message}`); }
       })
@@ -325,6 +344,9 @@ export class TaskTransfers {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
+    if (source && source.taskTransfer?.handoffId === params.handoffId) this.sessions.setTaskTransfer?.(source.id, {
+      handoffId: params.handoffId, role: 'source', status: 'copying', machineId: target.id, machineName: target.name,
+    });
     const quiet = { write() { return true; } };
     const progress = { write(chunk) {
       const p = progressFrom(chunk);
@@ -425,6 +447,7 @@ export class TaskTransfers {
     request.requestDigest = handoffRequestDigest(request);
     request.sourceSignature = signHandoffDigest(request.requestDigest);
     record.request = request;
+    record.deliveryAttempted = false;
     this.#save(params.handoffId, record);
     return this.#deliver(target, params, record);
   }
@@ -453,7 +476,25 @@ export class TaskTransfers {
         if (this.inflight.has(id)) return;
         const record = JSON.parse(readFileSync(join(this.directory, file), 'utf8'));
         if (record.intent && record.resumeSend !== false && record.result?.status !== 'running') {
-          await this.send({ ...record.intent, handoffId: id, allowSkipped: true }, this.network().self);
+          const sourceId = record.bulk?.sourceId ?? record.request?.parent?.sessionId;
+          let source;
+          try { source = sourceId ? this.sessions.get(sourceId) : null; } catch { /* A deleted source cannot be interrupted. */ }
+          if (!record.request && ['starting', 'working', 'blocked'].includes(source?.status)) {
+            if (source.taskTransfer?.handoffId !== id || source.taskTransfer?.status !== 'waiting-to-send') this.sessions.setTaskTransfer?.(sourceId, {
+              handoffId: id, role: 'source', status: 'waiting-to-send', machineId: record.intent.targetMachineId,
+              machineName: this.network().machines[record.intent.targetMachineId]?.name,
+            });
+            return;
+          }
+          if (record.request && record.deliveryAttempted !== false) {
+            // The hub or target may already have run it. Read a receipt;
+            // only an owner retry can authorize a new prompt attempt.
+            const target = this.network().machines[record.request.targetMachineId];
+            if (target && !this.network().revoked?.[target.id]) {
+              const receipt = await this.rpc(target.id, M.HANDOFF_STATUS, { handoffId: id }, { direct: true, timeout: 5000 });
+              if (receipt.status === 'running') this.#accepted(target, id, record, receipt, record.result?.route ?? 'relay');
+            }
+          } else await this.send({ ...record.intent, handoffId: id, allowSkipped: true }, this.network().self);
         }
         await this.collect(id);
       }));

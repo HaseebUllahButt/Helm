@@ -73,9 +73,12 @@ owner's home or network to bypass this check.
   stay behind. It does not use GitHub; a new agent rebuilds dependencies.
   Task sends save their request number and content before sending. Reopening
   Send keeps that request until its confirmed result is dismissed. Source
-  machines resume saved copies and queued delivery after restart. A known
-  target refusal waits for an explicit retry. Unconfirmed delivery must never
-  become a new task number.
+  machines resume saved copies after restart. If the owner resumed work in
+  the source chat, copying waits for that reply to finish. After an attempted
+  delivery, automatic recovery only checks receipts; the hub delivers queued
+  work. Only an owner retry can restart a failed target prompt. A known target
+  refusal waits for that retry. Unconfirmed delivery must never become a new
+  task number.
 - **Tests:** `test/transfers`, `task-transfer`, `transfer-cli`,
   `transfer-check`, `transfer-activity`, `code-transfer`, `handoffs`,
   `send-engine`, `send-recovery`, `task-send`; `test/browser/transfers`, `send-v2`.

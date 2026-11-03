@@ -172,6 +172,7 @@ function fixture() {
     if (method === M.AGENT_LIST) return { agents: [{ id: 'codex', engine: 'codex', available: true, defaultMode: 'full' }] };
     if (method === M.TASK_COLLECT) return handoffs.collect(params.handoffId, sourceId);
     if (method === M.TASK_RETURNED) return handoffs.returned(params, sourceId);
+    if (method === M.HANDOFF_STATUS) return handoffs.status(params.handoffId, sourceId);
     assert.equal(method, M.HANDOFF_ACCEPT);
     accepted.push(params);
     options.onRoute('direct');
@@ -238,7 +239,7 @@ test('transport failure queues the frozen encrypted request and retry reuses it 
 });
 
 test('queued task delivery resumes from its saved request without an open screen', async () => {
-  const { options, params, source, accepted } = fixture();
+  const { options, params, source, accepted, handoffs, starts } = fixture();
   const rpc = options.rpc;
   let offline = true;
   options.rpc = (...args) => {
@@ -250,11 +251,44 @@ test('queued task delivery resumes from its saved request without an open screen
   assert.equal(source.taskTransfer.status, 'queued');
   assert.equal(JSON.parse(readFileSync(join(options.directory, `${params.handoffId}.json`))).result.status, 'queued');
   offline = false;
+  // The hub delivers the queued request while the source screen is closed.
+  const record = JSON.parse(readFileSync(join(options.directory, `${params.handoffId}.json`)));
+  await handoffs.accept(record.request, sourceId);
   await new TaskTransfers(options).reconcile();
-  assert.equal(accepted.length, 1);
+  assert.equal(accepted.length, 0, 'recovery only reads the receiver receipt');
+  assert.equal(starts.length, 1);
   assert.equal(source.taskTransfer.status, 'running');
   await new TaskTransfers(options).reconcile();
-  assert.equal(accepted.length, 1, 'a running task is not dispatched again');
+  assert.equal(accepted.length, 0, 'a running task is not dispatched again');
+});
+
+test('automatic queued recovery never restarts a failed destination prompt', async () => {
+  const { options, params, accepted, handoffs, inputs } = fixture();
+  const rpc = options.rpc;
+  options.rpc = async (...args) => {
+    const reply = await rpc(...args);
+    if (args[1] === M.HANDOFF_ACCEPT) throw new Error('socket closed after the task started');
+    return reply;
+  };
+  assert.equal((await new TaskTransfers(options).send(params, 'phone')).status, 'queued');
+  assert.equal(inputs.length, 1);
+  handoffs.sessions.turnState = () => 'failed';
+  await new TaskTransfers(options).reconcile();
+  assert.equal(accepted.length, 1);
+  assert.equal(inputs.length, 1, 'a failed turn needs an owner retry');
+});
+
+test('an unknown queued task stays queued without an automatic accept attempt', async () => {
+  const { options, params, accepted } = fixture();
+  const rpc = options.rpc;
+  options.rpc = (...args) => {
+    if (args[1] === M.HANDOFF_ACCEPT) throw new Error('socket closed');
+    return rpc(...args);
+  };
+  await new TaskTransfers(options).send(params, 'phone');
+  await new TaskTransfers(options).reconcile();
+  assert.equal(accepted.length, 0);
+  assert.equal(JSON.parse(readFileSync(join(options.directory, `${params.handoffId}.json`))).result.status, 'queued');
 });
 
 test('a refused task reports failure on its source and waits for an explicit retry', async () => {

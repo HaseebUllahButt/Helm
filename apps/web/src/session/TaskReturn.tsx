@@ -12,7 +12,7 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
   const source = transfer.role === 'source';
   const returned = transfer.status === 'returned';
   const conflict = transfer.status === 'conflict';
-  const sending = ['sending', 'copying', 'queued', 'failed'].includes(transfer.status);
+  const sending = ['sending', 'copying', 'queued', 'failed', 'waiting-to-send'].includes(transfer.status);
   const openOriginal = async () => {
     if (!original || !onOpenSession) return;
     setBusy(true); setError('');
@@ -33,6 +33,7 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
   return <div className="banner" role="status">
     <strong>{source
       ? transfer.status === 'failed' ? 'Task send failed'
+        : transfer.status === 'waiting-to-send' ? 'Task send waits for this chat'
         : transfer.status === 'queued' ? `Task waiting to reach ${transfer.machineName}`
         : sending ? `Sending task to ${transfer.machineName}`
         : returned ? 'Task returned here' : conflict ? 'Returned changes need review' : `Task sent to ${transfer.machineName}`
@@ -40,6 +41,7 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
         : `Finished changes return to ${transfer.machineName}`}</strong>
     <p className="note">{source
       ? transfer.status === 'failed' ? 'Open Send to check the task and retry.'
+        : transfer.status === 'waiting-to-send' ? 'Finish this reply before the saved task send continues.'
         : sending ? 'The task has not started there. Helm keeps the saved send.'
         : returned ? 'Your project is updated. Continue in this chat.'
         : conflict ? `Your edits stay. Find the returned project at ${transfer.folder}.`
