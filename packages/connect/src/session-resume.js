@@ -68,17 +68,30 @@ export class SessionResume {
    * unanswerable now - close them the way `resume` does for a dead process.
    */
   procGone(id) {
-    const s = this.#core.index.get(id);
-    if (!s?.driver || this.#core.drivers.has(id)) return;
+    const profiles = loadProfiles()?.profiles ?? [];
+    for (const s of this.#core.index.values()) {
+      if (!s.driver || s.nativeSocket || this.#core.drivers.has(s.id)) continue;
+      const profile = s.driver === 'codex' ? profiles.find(p => p.id === s.profileId) : null;
+      const procId = hostedProcId(s, profile ? materialize(profile) : null);
+      if (procId === id) this.#settleGone(s);
+    }
+  }
+
+  #settleGone(s) {
+    const id = s.id;
     const tail = this.#sessions.events.tail(id, 0);
-    const closed = new Set(tail.filter((e) => ['turn.done', 'turn.remove'].includes(e.type)).map((e) => e.turnId));
+    const closed = new Set(tail.filter((e) => ['turn.done', 'turn.remove', 'turn.accept'].includes(e.type)).map((e) => e.turnId));
+    const delivered = new Map(tail.filter(e => e.type === 'turn.deliver').map(e => [e.turnId, e]));
     // A message still waiting in the queue never reached the dead process:
     // it stays queued, and goes to the next one.
     const waiting = new Set((this.#core.deliveryState.queue(id) ?? []).map((item) => item.turnId));
     for (const e of tail) {
       if (e.type !== 'turn.start' || closed.has(e.turnId) || waiting.has(e.turnId)) continue;
       closed.add(e.turnId);
-      this.#sessions.events.append(id, { type: 'turn.done', turnId: e.turnId, status: 'interrupted', error: 'agent exited' });
+      const attempt = delivered.get(e.turnId);
+      const uncertain = attempt && !attempt.requeued;
+      this.#sessions.events.append(id, { type: 'turn.done', turnId: e.turnId, status: uncertain ? 'error' : 'interrupted',
+        error: uncertain ? 'Helm could not confirm delivery. Check the agent\'s work before sending this again.' : 'agent exited' });
     }
     for (const p of this.#sessions.events.pending(id)) {
       this.#sessions.events.append(id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
