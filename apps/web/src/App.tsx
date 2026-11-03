@@ -366,7 +366,9 @@ function Shell({ client, conn, onSignOut }: {
     const top = nav.current.stack.at(-1);
     const shown = top?.kind === 'session' ? top.session : null;
     if (!envId || !letGo.current.has(key) || (shown?.id ?? (top?.kind === 'starting' ? top.startId : null)) !== key) return;
-    const draft = shown ? loadDraft(envId, shown.id) : '';
+    let draft = '';
+    try { draft = shown ? loadDraft(envId, shown.id) : ''; }
+    catch (failure) { setError(errorMessage(failure)); return; }
     // A chat that cloned a repo starts again in that folder, without cloning it twice.
     const chat = (shown?.clone ? undefined : startAgain(client, key, draft)) ?? (shown ? startLike(envId, shown, draft) : undefined);
     if (!chat) return;

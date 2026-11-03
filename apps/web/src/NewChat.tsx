@@ -126,6 +126,16 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   const startEnv = envId ? envs.find((e) => e.id === envId && e.online) : online.length === 1 ? online[0] : undefined;
   const [step, setStep] = useState<Step>(startEnv ? initialFolder || startQuick ? 'cli' : 'folder' : 'machine');
   const [machine, setMachine] = useState<Environment | null>(startEnv ?? null);
+  const folderScope = useRef({ machine: startEnv?.id ?? null, active: true });
+  if (folderScope.current.machine !== (machine?.id ?? null)) {
+    folderScope.current.active = false;
+    folderScope.current = { machine: machine?.id ?? null, active: true };
+  }
+  useEffect(() => {
+    const scope = folderScope.current;
+    scope.active = true;
+    return () => { scope.active = false; };
+  }, [machine?.id]);
   const [folder, setFolder] = useState(startEnv && !startQuick ? initialFolder ?? '' : '');
   /** No folder: the CLI step starts a quick chat. */
   const [quick, setQuick] = useState(startQuick);
@@ -228,9 +238,10 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     // What this device already knows is inside shows at once; the machine's
     // own answer replaces it when it lands.
     setInside((all) => ({ ...all, [path]: knownInside(machine.id, path) }));
+    const scope = folderScope.current;
     listFolder(client, machine.id, path)
-      .then((r) => setInside((all) => ({ ...all, [path]: r.entries })))
-      .catch((e) => { setInside((all) => ({ ...all, [path]: all[path] ?? [] })); setError(errorMessage(e)); });
+      .then((r) => { if (scope.active) setInside((all) => ({ ...all, [path]: r.entries })); })
+      .catch((e) => { if (scope.active) { setInside((all) => ({ ...all, [path]: all[path] ?? [] })); setError(errorMessage(e)); } });
   };
   const collapse = (id: string) => setOpened((all) => {
     // Closing a folder closes everything opened inside it too.
