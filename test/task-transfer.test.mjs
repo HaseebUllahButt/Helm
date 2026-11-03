@@ -4,10 +4,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 
-const root = mkdtempSync(join(process.cwd(), '.helm-task-send-state-'));
+const root = mkdtempSync(join(tmpdir(), 'helm-task-send-state-'));
+process.env.HOME = root;
 Object.assign(process.env, { HELM_DIR: root, HELM_DB: join(root, 'hub.sqlite'), HELM_SSH_DIR: join(root, 'ssh'), HELM_PROCS_SOCKET: join(root, 'procs.sock'), HELM_TERMINALS_SOCKET: join(root, 'terminals.sock') });
-const work = join(process.cwd(), `.helm-task-send-${process.pid}`);
+const work = join(root, 'work');
 mkdirSync(work, { recursive: true });
 test.after(() => { rmSync(root, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); });
 
