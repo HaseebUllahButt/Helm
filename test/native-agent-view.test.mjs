@@ -4,10 +4,11 @@ import vm from 'node:vm';
 import { build } from 'esbuild';
 
 const bundle = await build({ entryPoints: ['apps/web/src/session/NativeAgentView.tsx'], bundle: true, write: false, format: 'cjs', external: ['react', 'react/jsx-runtime', './Composer', './Transcript', '../EngineMark', '../Icon'] });
-function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', envId = 'pc') {
+function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', envId = 'pc', actions = []) {
   const hooks = [], effects = [], cleanups = [];
   let cursor = 0, first = true, resolveSend;
   const sent = [];
+  const acknowledged = [];
   const react = {
     useState(value) { const i = cursor++; if (!(i in hooks)) hooks[i] = typeof value === 'function' ? value() : value; return [hooks[i], next => { hooks[i] = typeof next === 'function' ? next(hooks[i]) : next; }]; },
     useRef(value) { const i = cursor++; return hooks[i] ??= { current: value }; },
@@ -20,7 +21,8 @@ function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', env
   const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
   const module = { exports: {} };
   vm.runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => modules[name] ?? {}, localStorage: storage, window: { addEventListener() {}, removeEventListener() {} }, setTimeout, clearTimeout });
-  const client = { rpc: (_, method, params) => {
+  const client = { nativeMessageActions: () => actions, ackNativeMessage: id => acknowledged.push(id),
+    resumeNativeMessage: action => Promise.resolve({ actionId: action.actionId }), rpc: (_, method, params) => {
     if (method === 'session.native-message') { sent.push(params); return new Promise(resolve => { resolveSend = resolve; }); }
     return new Promise(() => {});
   } };
@@ -32,7 +34,7 @@ function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', env
     for (const child of Array.isArray(children) ? children : [children]) { const found = find(child); if (found) return found; }
   }
   function render() { cursor = 0; const tree = module.exports.NativeAgentView(props); if (first) { first = false; cleanups.push(...effects.map(fn => fn())); } return find(tree); }
-  return { render, sent, resolveSend: () => resolveSend({ ok: true }), unmount: () => cleanups.forEach(fn => fn?.()) };
+  return { render, sent, acknowledged, resolveSend: () => resolveSend({ ok: true, actionId: 'message' }), unmount: () => cleanups.forEach(fn => fn?.()) };
 }
 
 test('a late helper send reply keeps newer typed words', async () => {
@@ -56,4 +58,23 @@ test('helper drafts survive leaving and stay separate from other helpers', () =>
   assert.equal(fixture(saved, 'other').render().draft, '');
   assert.equal(fixture(saved, 'helper', 'other').render().draft, '');
   assert.equal(fixture(saved, 'helper', 'parent', 'other').render().draft, '');
+});
+
+test('a send that finishes after leaving keeps its receipt and draft', async () => {
+  const saved=new Map(), view=fixture(saved);
+  view.render().setDraft('first'); view.render().onSend(); view.unmount(); view.resolveSend();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(view.acknowledged,[]);
+  assert.equal(fixture(saved).render().draft,'first');
+});
+
+test('returning to a confirmed send clears only its unchanged draft', async () => {
+  const saved=new Map(), original=fixture(saved);
+  original.render().setDraft('first'); original.unmount();
+  const action={actionId:'message',confirmed:true,params:{data:'first'}};
+  const returned=fixture(saved,'helper','parent','pc',[action]); returned.render();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(returned.render().draft,'');
+  assert.deepEqual(returned.acknowledged,['message']);
+  returned.unmount();
 });

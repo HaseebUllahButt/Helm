@@ -31,9 +31,35 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
   const storage = useDraftStorage(env.id, draftKey);
   const [draft, setDraft] = useState(storage.initial);
   const revision = useRef(0);
-  const editDraft = (text: string) => { revision.current += 1; setDraft(text); storage.save(text); };
+  const draftRef = useRef(draft);
+  const mounted = useRef(false);
+  const sendingRef = useRef(false);
+  const editDraft = (text: string) => { revision.current += 1; draftRef.current = text; setDraft(text); return storage.save(text); };
   const [sending, setSending] = useState(false);
   const [sentAt, setSentAt] = useState(0);
+
+  useEffect(() => {
+    mounted.current = true;
+    let stopped = false;
+    const recover = async () => {
+      try {
+        for (const action of client.nativeMessageActions(env.id, parent.id, agent.id)) {
+          if (stopped) return;
+          const savedRevision = revision.current;
+          sendingRef.current = true; setSending(true); setError('Checking the previous message.');
+          const result = await client.resumeNativeMessage(action);
+          if (stopped) return;
+          const unchanged = revision.current === savedRevision && draftRef.current.trim() === action.params.data;
+          const cleared = !unchanged || editDraft('');
+          if (cleared) client.ackNativeMessage(result.actionId);
+          setError(''); setSentAt(Date.now());
+        }
+      } catch (failure) { if (!stopped) setError(errorMessage(failure)); }
+      finally { if (!stopped) { sendingRef.current = false; setSending(false); } }
+    };
+    void recover();
+    return () => { stopped = true; mounted.current = false; };
+  }, [client, env.id, parent.id, agent.id]);
 
   useEffect(() => {
     let stopped = false, timer: ReturnType<typeof setTimeout> | undefined, seen = '';
@@ -68,16 +94,19 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
 
   const send = async () => {
     const text = draft.trim();
-    if (!text || sending) return;
+    if (!text || sendingRef.current) return;
     const sentRevision = revision.current;
+    sendingRef.current = true;
     setSending(true); setError('');
     try {
-      await client.rpc(env.id, 'session.native-message', { id: parent.id, agentId: agent.id, data: text }, 70_000);
-      if (revision.current === sentRevision) editDraft('');
+      const result = await client.rpc<{ actionId: string }>(env.id, 'session.native-message', { id: parent.id, agentId: agent.id, data: text }, 70_000);
+      if (!mounted.current) return;
+      const cleared = revision.current !== sentRevision || editDraft('');
+      if (cleared) client.ackNativeMessage(result.actionId);
       setSentAt(Date.now());
     } catch (failure) {
-      setError(errorMessage(failure));
-    } finally { setSending(false); }
+      if (mounted.current) setError(errorMessage(failure));
+    } finally { if (mounted.current) { sendingRef.current = false; setSending(false); } }
   };
 
   const engine = card.engine ?? agent.engine ?? parent.engine;

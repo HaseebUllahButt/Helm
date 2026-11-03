@@ -1590,8 +1590,10 @@ export class Client {
       if (!key?.startsWith(prefix)) continue;
       const action = JSON.parse(localStorage.getItem(key) || 'null');
       if (!/^[a-f0-9]{32}$/.test(action?.actionId ?? '') || typeof action.env !== 'string'
-        || !['session.deliver', 'session.answer-deliver'].includes(action.method) || typeof action.params?.id !== 'string'
+        || !['session.deliver', 'session.answer-deliver', 'session.native-message-deliver'].includes(action.method) || typeof action.params?.id !== 'string'
         || (action.method === 'session.deliver' && typeof action.params.data !== 'string')
+        || (action.method === 'session.native-message-deliver' && (typeof action.params.agentId !== 'string'
+          || typeof action.params.data !== 'string' || action.params.actionId !== action.actionId))
         || (action.params.attachments !== undefined && (!Array.isArray(action.params.attachments)
           || action.params.attachments.some((file: any) => typeof file?.filename !== 'string'
             || typeof file?.mime !== 'string' || typeof file?.data !== 'string')))) {
@@ -1602,14 +1604,15 @@ export class Client {
     return saved;
   }
   private confirmedActions = new Set<string>();
+  private confirmedNative = new Map<string, any>();
   private failedDeliveryActions = new Map<string, any>();
   deliveryStorageError = '';
   pendingActions(): any[] {
-    return this.savedActions().filter(action => !action.failure && !this.confirmedActions.has(action.actionId)
+    return this.savedActions().filter(action => action.method !== 'session.native-message-deliver' && !action.failure && !this.confirmedActions.has(action.actionId)
       && !this.failedDeliveryActions.has(action.actionId));
   }
   failedActions(): any[] {
-    const failed = new Map(this.savedActions().filter(action => action.failure && !this.confirmedActions.has(action.actionId)).map(action => [action.actionId, action]));
+    const failed = new Map(this.savedActions().filter(action => action.method !== 'session.native-message-deliver' && action.failure && !this.confirmedActions.has(action.actionId)).map(action => [action.actionId, action]));
     for (const [id, action] of this.failedDeliveryActions) failed.set(id, action);
     return [...failed.values()];
   }
@@ -1621,7 +1624,17 @@ export class Client {
       this.emit(action.env, 'delivery', { id: action.params.id });
     }
   }
-  private finishAction(action: any) {
+  private finishAction(action: any, result?: any) {
+    if (action.method === 'session.native-message-deliver') {
+      const confirmed = { ...action, confirmed: true, result };
+      try { this.saveAction(confirmed); this.confirmedNative.delete(action.actionId); }
+      catch {
+        this.confirmedNative.set(action.actionId, confirmed);
+        this.deliveryStorageError = 'Cannot save the message receipt. Keep this chat open.';
+        this.emit(action.env, 'delivery', { id: action.params.id });
+      }
+      return;
+    }
     this.failedDeliveryActions.delete(action.actionId);
     this.confirmedActions.add(action.actionId);
     try {
@@ -1656,6 +1669,26 @@ export class Client {
   resumeActions(env: string, id: string) {
     return Promise.allSettled(this.pendingActions().filter(item => item.env === env && item.params.id === id)
       .map(item => this.deliverAction(item)));
+  }
+  nativeMessageActions(env: string, id: string, agentId: string): any[] {
+    const actions = new Map(this.savedActions().filter(item => item.method === 'session.native-message-deliver'
+      && item.env === env && item.params.id === id && item.params.agentId === agentId && !item.failure)
+      .map(item => [item.actionId, item]));
+    for (const [key, item] of this.confirmedNative) {
+      if (item.env === env && item.params.id === id && item.params.agentId === agentId) actions.set(key, item);
+    }
+    return [...actions.values()];
+  }
+  ackNativeMessage(actionId: string) {
+    const action = this.confirmedNative.get(actionId) ?? this.savedActions().find(item => item.actionId === actionId
+      && item.method === 'session.native-message-deliver' && item.confirmed);
+    if (!action?.confirmed) return;
+    this.saveAction(action, true);
+    this.confirmedNative.delete(actionId);
+  }
+  resumeNativeMessage(action: any, timeout = 70_000): Promise<any> {
+    const done = action.confirmed ? Promise.resolve(action.result) : this.deliverAction(action, timeout);
+    return done.then(result => ({ ...result, actionId: action.actionId }));
   }
   private delivering = new Map<string, Promise<any>>();
   private deliveryProof = new Map<string, () => void>();
@@ -1695,7 +1728,7 @@ export class Client {
       try {
         const wait = Math.max(1, Math.min(10_000, deadline - Date.now()));
         const status = firstAttempt ? { state: 'missing' } : await this.call<any>(env, 'session.action-status',
-          { actionId, kind: method === 'session.deliver' ? 'input' : 'answer' }, wait);
+          { actionId, kind: method === 'session.deliver' ? 'input' : method === 'session.native-message-deliver' ? 'native' : 'answer' }, wait);
         if (signal.aborted) return;
         firstAttempt = false;
         if (status.state === 'done') {
@@ -1704,7 +1737,7 @@ export class Client {
             throw Object.assign(new Error(typeof status.error === 'string' ? status.error : status.error.message),
               { code: status.error.code ?? 'delivery_failed' });
           }
-          this.finishAction(action);
+          this.finishAction(action, status.result);
           return status.result;
         }
         if (status.state === 'missing') {
@@ -1715,7 +1748,7 @@ export class Client {
           let timer: ReturnType<typeof setTimeout> | undefined;
           let result: any;
           try {
-            result = await Promise.any([
+            result = method === 'session.native-message-deliver' ? await this.call(env, method, params, wait) : await Promise.any([
               this.call(env, method, params, wait),
               new Promise((resolve, reject) => {
                 const delay = Math.min(1500, wait / 2);
@@ -1734,7 +1767,7 @@ export class Client {
               throw Object.assign(new Error(typeof result.error === 'string' ? result.error : result.error.message),
                 { code: result.error.code ?? 'delivery_failed' });
             }
-            this.finishAction(action);
+            this.finishAction(action, method === 'session.deliver' ? result : result.result);
             return method === 'session.deliver' ? result : result.result;
           }
         }
@@ -1748,6 +1781,10 @@ export class Client {
             Object.entries(params).filter(([key]) => key !== 'messageId')), Math.max(1, deadline - Date.now()));
           this.saveAction(action, true);
           return result;
+        }
+        if (method === 'session.native-message-deliver' && error?.code === 'unknown_method') {
+          this.saveAction(action, true);
+          throw Object.assign(new Error('Update this machine before sending to its helper.'), { code: 'unknown_method' });
         }
         // Other coded failures can follow acceptance, such as a full receiver disk.
         // Read the receipt before treating those failures as final.
@@ -1776,6 +1813,16 @@ export class Client {
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
+    if (method === 'session.native-message') {
+      const held = this.nativeMessageActions(env, params.id, params.agentId)[0];
+      if (held && held.params.data !== params.data) {
+        return Promise.reject(new Error('Checking the previous message. Check this helper before sending again.'));
+      }
+      const actionId = held?.actionId ?? newMessageId();
+      const action = held ?? { env, method: 'session.native-message-deliver', actionId,
+        params: JSON.parse(JSON.stringify({ ...params, actionId })) };
+      return this.resumeNativeMessage(action, timeout) as Promise<T>;
+    }
     if (method === 'session.answer') {
       const held = this.pendingActions().find(item => item.env === env && item.method === 'session.answer-deliver'
         && item.params.id === params.id && item.params.requestId === params.requestId);

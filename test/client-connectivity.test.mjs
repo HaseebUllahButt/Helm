@@ -1397,3 +1397,49 @@ test('a history reply can finish after its original deadline while its pieces ar
   assert.equal(h.requests.filter(r=>r.url.endsWith('/api/read')).length,0);
   h.client.close();
 });
+
+test('native helper messages retain a delivery number until the view confirms it', async () => {
+  const h=harness(); h.start(); await h.advance(200);
+  const sending=h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'once'},30000);
+  await h.advance(1);
+  const frame=h.sockets[0].frames.find(item=>item.method==='session.native-message-deliver');
+  assert.ok(frame);
+  assert.match(frame.params.actionId,/^[a-f0-9]{32}$/);
+  h.sockets[0].message({t:'rpcResult',id:frame.id,ok:true,result:{state:'done',result:{ok:true}}});
+  const result=await sending;
+  assert.equal(result.actionId,frame.params.actionId);
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper')[0].confirmed,true);
+  h.client.ackNativeMessage(frame.params.actionId);
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,0);
+  h.client.close();
+});
+
+test('a lost native helper reply checks the same receipt before any retry', async () => {
+  const h=harness({delays:{'https://good/api/action':Infinity}}); h.start(); await h.advance(200);
+  const sending=h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'once'},30000);
+  await h.advance(1);
+  const first=h.sockets[0].frames.find(item=>item.method==='session.native-message-deliver');
+  const blocked=h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'new'},30000);
+  await assert.rejects(blocked,/previous message/i);
+  await h.advance(10501);
+  const status=h.sockets[0].frames.find(item=>item.method==='session.action-status');
+  assert.equal(status.params.kind,'native');
+  assert.equal(status.params.actionId,first.params.actionId);
+  h.sockets[0].message({t:'rpcResult',id:status.id,ok:true,result:{state:'done',result:{ok:true}}});
+  assert.equal((await sending).actionId,first.params.actionId);
+  assert.equal(h.sockets[0].frames.filter(item=>item.method==='session.native-message-deliver').length,1);
+  h.client.close();
+});
+
+test('an older machine is asked to update without using an unsafe send', async () => {
+  const h=harness(); h.start(); await h.advance(200);
+  const sending=h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'once'},30000);
+  const rejected=assert.rejects(sending,/Update this machine/);
+  await h.advance(1);
+  const frame=h.sockets[0].frames.find(item=>item.method==='session.native-message-deliver');
+  h.sockets[0].message({t:'rpcResult',id:frame.id,ok:false,error:{code:'unknown_method',message:'unknown method'}});
+  await rejected;
+  assert.equal(h.sockets[0].frames.some(item=>item.method==='session.native-message'),false);
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,0);
+  h.client.close();
+});

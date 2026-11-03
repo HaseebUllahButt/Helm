@@ -19,9 +19,9 @@ export function useDraftStorage(env: string, id: string) {
   }, [env, id]);
   const save = useCallback((text: string) => {
     // Do not overwrite words that could not be read on entry.
-    if (unseen.current) return;
-    try { saveDraft(env, id, text); setError(''); }
-    catch (failure) { setError((failure as Error).message); }
+    if (unseen.current) return false;
+    try { saveDraft(env, id, text); setError(''); return true; }
+    catch (failure) { setError((failure as Error).message); return false; }
   }, [env, id]);
   return { initial: initial.text, error, save };
 }
