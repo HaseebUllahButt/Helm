@@ -10,6 +10,7 @@ owner's home or network to bypass this check.
 ## Machines and devices
 - **Reach:** Open a machine from Home on a computer, from the machine list on
   phone Home, or from search on any screen.
+- Phone Home shows online machines. Expand **Machines** to see offline machines too.
 - **Prove (driven 2026-10-15):** `$V click "Search anything"; $V type
   verify-<you>; $V key Enter` opens its screen. `$V key
   Control+Shift+s; $V click "Devices & pairing"; $V text` shows "Linux

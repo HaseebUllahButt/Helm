@@ -1328,6 +1328,15 @@ function Shell({ client, conn, onSignOut }: {
   const downFor = downSince ? Date.now() - downSince : 0;
   const status = conn.online ? 'live' : conn.reachable ? 'reconnecting' : downFor > 12_000 ? 'offline' : 'connecting';
 
+  const phoneMachineRow = (e: Environment) => (
+    <button key={e.id} type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
+      <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+      <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
+      <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
+      <span className="chev"><Icon name="forward" size={15} /></span>
+    </button>
+  );
+
   return (
     <div className="shell">
       <aside className={`sidebar${!showMain ? ' showing' : ''}${wide && sidebarCollapsed ? ' collapsed' : ''}`}>
@@ -1424,15 +1433,11 @@ function Shell({ client, conn, onSignOut }: {
             </div>
 
             {!wide && envs.length > 0 && <div className="phone-machines">
-              <div className="section">Machines</div>
-              <div className="rows plain">
-                {envs.map((e) => <button key={e.id} type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
-                  <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-                  <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
-                  <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
-                  <span className="chev"><Icon name="forward" size={15} /></span>
-                </button>)}
-              </div>
+              <Fold shelf title="Machines" count={envs.length}
+                note={`${envs.filter((e) => e.online).length} online`}
+                peek={<div className="rows plain">{envs.filter((e) => e.online).map(phoneMachineRow)}</div>}>
+                <div className="rows plain">{envs.map(phoneMachineRow)}</div>
+              </Fold>
             </div>}
 
             {pinnedNow.length > 0 && (
