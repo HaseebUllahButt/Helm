@@ -1463,3 +1463,16 @@ test('an uncertain native send can be cleared only for its own helper', async ()
   assert.equal(h.sockets[0].frames.some(item=>item.method==='session.native-message-deliver'),false);
   h.client.close();
 });
+
+test('a helper message refused before sending leaves no pending delivery', async () => {
+  const h=harness(); h.start(); await h.advance(200);
+  const sending=h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'once'},30000);
+  const rejected=assert.rejects(sending,/no such helper/i);
+  await h.advance(1);
+  const frame=h.sockets[0].frames.find(item=>item.method==='session.native-message-deliver');
+  h.sockets[0].message({t:'rpcResult',id:frame.id,ok:true,result:{state:'done',error:{code:'delivery_failed',message:'No such helper.'}}});
+  await rejected;
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,0);
+  assert.equal(h.client.savedActions().filter(item=>item.method==='session.native-message-deliver').length,0);
+  h.client.close();
+});

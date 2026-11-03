@@ -1792,6 +1792,13 @@ export class Client {
           this.saveAction(action, true);
           throw Object.assign(new Error('Update this machine before sending to its helper.'), { code: 'unknown_method' });
         }
+        if (method === 'session.native-message-deliver'
+          && (finalFailure || ['invalid_argument', 'delivery_conflict'].includes(error?.code))) {
+          try { this.saveAction(action, true); }
+          catch { this.failAction(action, error); }
+          error.deliveryRejected = true;
+          throw error;
+        }
         // Other coded failures can follow acceptance, such as a full receiver disk.
         // Read the receipt before treating those failures as final.
         if (finalFailure || ['invalid_argument', 'delivery_conflict', 'unknown_method'].includes(error?.code)) {
