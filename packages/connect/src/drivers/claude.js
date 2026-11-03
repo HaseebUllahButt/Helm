@@ -539,7 +539,7 @@ export class ClaudeDriver extends Driver {
     }
     this.#write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } });
     this.push('permission.resolved', { requestId, decision: decision.option });
-    this.push('status', { status: 'working' });
+    this.push('status', { status: this.pending.size ? 'blocked' : 'working' });
   }
 
   /** With `cancel_queued`, a message handed over mid-reply is dropped with the reply. */

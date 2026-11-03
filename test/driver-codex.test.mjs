@@ -374,8 +374,23 @@ function scriptedCodex(t, { openTurn = null, transcript, reply }) {
     cwd: fake.dir, mode: 'ask', engineSessionId: 'scripted-thread', transcript,
     procHost: host, openTurn: () => openTurn });
   t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
-  return { driver, log: collect(driver), writes, notify };
+  return { driver, log: collect(driver), writes, notify, emit };
 }
+
+test('answering one Codex approval keeps the next request blocked', async t => {
+  const { driver, emit } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  for (const id of ['first', 'second']) emit({ id, method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'scripted-thread', turnId: 'turn', itemId: id, command: 'echo hi', cwd: '/tmp' } });
+  assert.equal(driver.pending.size, 2);
+  await driver.answer([...driver.pending.keys()][0], { option: 'allow' });
+  assert.equal(driver.pending.size, 1);
+  assert.equal(driver.status, 'blocked');
+  await driver.answer([...driver.pending.keys()][0], { option: 'deny' });
+  assert.equal(driver.status, 'working');
+});
 
 test('a late completion of an older turn does not mark the newer turn idle', async (t) => {
   const { driver, log, notify, writes } = scriptedCodex(t, {

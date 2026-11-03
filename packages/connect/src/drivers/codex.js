@@ -1574,7 +1574,7 @@ export class CodexDriver extends Driver {
     this.#server.respond(raw.id, result);
     this.#requests.delete(requestId);
     this.push('permission.resolved', { requestId, decision: decision.option });
-    this.push('status', { status: 'working' });
+    this.push('status', { status: this.pending.size ? 'blocked' : 'working' });
   }
 
   async interrupt({ background = false } = {}) {
