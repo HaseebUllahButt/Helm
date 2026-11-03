@@ -255,6 +255,7 @@ export class SessionDelegation {
         // Persist before removing tickets: a restart in between still knows
         // not to revive or deliver a result that the parent already read.
         this.#core.save();
+        this.#core.flush();
         for (const item of [...(this.#core.deliveryState.queue(parent.id) ?? [])]) {
           if (this.#consumedResult(parent, item.turnId)) this.#sessions.dequeue(parent.id, item.turnId);
         }

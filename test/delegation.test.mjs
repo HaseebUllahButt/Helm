@@ -4,7 +4,7 @@ import { EventEmitter, once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -466,8 +466,12 @@ test('collecting a completed result removes its queued notice and survives resta
   sessions.delegationResult(child.id);
   sessions.delegationResult(child.id, { consume: true, parentId: parent.id, callerThreadId: 'another-thread' });
   assert.equal(sessions.turnState(parent.id, ticket.turnId), 'open', 'ordinary and unrelated reads cannot consume a notice');
+  sessions.flush();
   const result = sessions.delegationResult(child.id, { consume: true, parentId: parent.id, callerThreadId: parent.engineSessionId });
   assert.equal(result.complete, true);
+  const saved = JSON.parse(readFileSync(join(process.env.HELM_DIR, 'sessions.json'), 'utf8'));
+  assert.ok(saved.sessions.find(s => s.id === child.id).delegation.consumedSeq > 0,
+    'the acknowledgement is on disk before the result returns');
   assert.equal(sessions.turnState(parent.id, ticket.turnId), 'removed');
   // Crash after the acknowledgement was saved but before turn.remove was
   // flushed: the durable marker still prevents queue restoration.
