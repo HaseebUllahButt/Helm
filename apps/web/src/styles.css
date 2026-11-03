@@ -123,25 +123,18 @@
   --emerald:   oklch(0.76 0.075 165);
   --red:       #e88a8a;
 
-  /* Each engine's own colour, at about two thirds the chroma it ships with.
-     Recognisable at 26px, and a list of nine of them is a list, not a bag of
-     sweets. */
-  --claude:    #d3a186;
-  --codex:     #b9c1d6;
-  --opencode:  #b3abd8;
-  --opencode2: #9ebbe7;
-  --devin:     #a3cdb9;
-  --agy:       #93b1ee;
-  /* Grok, Cursor, pi and Muse ship black-and-white marks, so they stay
-     neutral. */
-  --grok:      #c8ccd4;
-  --cursor:    #c8ccd4;
-  --pi:        #c8ccd4;
-  --muse:      #c8ccd4;
-  --gemini:    #a9b3ec;
-  --kimi:      #9fc3e0;
-  --omp:       #b292ee;
-  --vibe:      #e59a6c;
+  /* Each engine's mark in the colour its maker ships. Codex, opencode,
+     Devin, Grok, Cursor, pi, Kimi and Muse ship black-and-white marks; on
+     the dark mark tile that is white. Mistral, Gemini, OMP and Antigravity
+     draw their own colours in EngineMark. */
+  --claude:    #d97757;
+  --mono-mark: #f4f5f7;
+  --gemini:    #9b72cb;
+  --omp:       #9b4dff;
+  --agy:       #3186ff;
+  --vibe:      #fa500f;
+  /* Purple for merged and renamed, which once borrowed opencode's colour. */
+  --violet:    #b3abd8;
 
   /* A type scale, so sizes are chosen from a set rather than invented at
      each call site. Sized for a phone read at arm's length, often outdoors:
@@ -632,17 +625,17 @@ code, pre, kbd { font-family: var(--mono); }
 .detail-list dd.mono { font-family: var(--mono); font-size: 12px; }
 .modal-actions .danger-text { color: var(--red); margin-right: auto; }
 .mark.claude   { background: color-mix(in srgb, var(--claude) 12%, transparent);   color: var(--claude); }
-.mark.codex    { background: color-mix(in srgb, var(--codex) 11%, transparent);    color: var(--codex); }
-.mark.opencode { background: color-mix(in srgb, var(--opencode) 12%, transparent); color: var(--opencode); }
-.mark.opencode2 { background: color-mix(in srgb, var(--opencode2) 12%, transparent); color: var(--opencode2); }
-.mark.devin    { background: color-mix(in srgb, var(--devin) 11%, transparent);    color: var(--devin); }
+.mark.codex    { background: color-mix(in srgb, var(--mono-mark) 11%, transparent);    color: var(--mono-mark); }
+.mark.opencode { background: color-mix(in srgb, var(--mono-mark) 12%, transparent); color: var(--mono-mark); }
+.mark.opencode2 { background: color-mix(in srgb, var(--mono-mark) 12%, transparent); color: var(--mono-mark); }
+.mark.devin    { background: color-mix(in srgb, var(--mono-mark) 11%, transparent);    color: var(--mono-mark); }
 .mark.agy      { background: color-mix(in srgb, var(--agy) 11%, transparent);      color: var(--agy); }
-.mark.grok     { background: color-mix(in srgb, var(--grok) 10%, transparent);     color: var(--grok); }
-.mark.cursor   { background: color-mix(in srgb, var(--cursor) 10%, transparent);   color: var(--cursor); }
-.mark.pi       { background: color-mix(in srgb, var(--pi) 10%, transparent);       color: var(--pi); }
-.mark.muse     { background: color-mix(in srgb, var(--muse) 10%, transparent);     color: var(--muse); }
+.mark.grok     { background: color-mix(in srgb, var(--mono-mark) 10%, transparent);     color: var(--mono-mark); }
+.mark.cursor   { background: color-mix(in srgb, var(--mono-mark) 10%, transparent);   color: var(--mono-mark); }
+.mark.pi       { background: color-mix(in srgb, var(--mono-mark) 10%, transparent);       color: var(--mono-mark); }
+.mark.muse     { background: color-mix(in srgb, var(--mono-mark) 10%, transparent);     color: var(--mono-mark); }
 .mark.gemini   { background: color-mix(in srgb, var(--gemini) 11%, transparent);   color: var(--gemini); }
-.mark.kimi     { background: color-mix(in srgb, var(--kimi) 11%, transparent);     color: var(--kimi); }
+.mark.kimi     { background: color-mix(in srgb, var(--mono-mark) 11%, transparent);     color: var(--mono-mark); }
 .mark.omp      { background: color-mix(in srgb, var(--omp) 11%, transparent);      color: var(--omp); }
 .mark.vibe     { background: color-mix(in srgb, var(--vibe) 11%, transparent);     color: var(--vibe); }
 .mark.shell    { background: color-mix(in srgb, var(--emerald) 12%, transparent);  color: var(--emerald); }
@@ -2222,20 +2215,20 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 :root[data-theme="light"] .mark { background: #1d2027; }
 /* A letter mark takes its colour from the text token, which is dark here. */
 :root[data-theme="light"] .mark:not(.claude):not(.codex):not(.opencode):not(.opencode2):not(.devin):not(.agy):not(.grok):not(.cursor):not(.pi):not(.muse):not(.gemini):not(.kimi):not(.omp):not(.vibe):not(.shell) { color: #b9bfcb; }
-:root[data-theme="light"] .mark.claude    { background: color-mix(in srgb, #d3a186 12%, #14161b); }
-:root[data-theme="light"] .mark.codex     { background: color-mix(in srgb, #b9c1d6 11%, #14161b); }
-:root[data-theme="light"] .mark.opencode  { background: color-mix(in srgb, #b3abd8 12%, #14161b); }
-:root[data-theme="light"] .mark.opencode2 { background: color-mix(in srgb, #9ebbe7 12%, #14161b); }
-:root[data-theme="light"] .mark.devin     { background: color-mix(in srgb, #a3cdb9 11%, #14161b); }
-:root[data-theme="light"] .mark.agy       { background: color-mix(in srgb, #93b1ee 11%, #14161b); }
+:root[data-theme="light"] .mark.claude    { background: color-mix(in srgb, #d97757 14%, #14161b); }
+:root[data-theme="light"] .mark.codex,
+:root[data-theme="light"] .mark.opencode,
+:root[data-theme="light"] .mark.opencode2,
+:root[data-theme="light"] .mark.devin,
 :root[data-theme="light"] .mark.grok,
 :root[data-theme="light"] .mark.cursor,
 :root[data-theme="light"] .mark.pi,
-:root[data-theme="light"] .mark.muse      { background: color-mix(in srgb, #c8ccd4 10%, #14161b); }
-:root[data-theme="light"] .mark.gemini    { background: color-mix(in srgb, #a9b3ec 11%, #14161b); }
-:root[data-theme="light"] .mark.kimi      { background: color-mix(in srgb, #9fc3e0 11%, #14161b); }
-:root[data-theme="light"] .mark.omp       { background: color-mix(in srgb, #b292ee 11%, #14161b); }
-:root[data-theme="light"] .mark.vibe      { background: color-mix(in srgb, #e59a6c 11%, #14161b); }
+:root[data-theme="light"] .mark.kimi,
+:root[data-theme="light"] .mark.muse      { background: #14161b; }
+:root[data-theme="light"] .mark.agy       { background: color-mix(in srgb, #3186ff 12%, #14161b); }
+:root[data-theme="light"] .mark.gemini    { background: color-mix(in srgb, #9b72cb 12%, #14161b); }
+:root[data-theme="light"] .mark.omp       { background: color-mix(in srgb, #9b4dff 12%, #14161b); }
+:root[data-theme="light"] .mark.vibe      { background: color-mix(in srgb, #fa500f 12%, #14161b); }
 :root[data-theme="light"] .mark.shell     { background: color-mix(in srgb, #7fc7a4 12%, #14161b); }
 
 /* Panels on a light page need an edge and a lift the dark theme gets from
@@ -2461,7 +2454,7 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .pr-state { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--mutedfg); }
 .pr-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .pr-state.open { color: var(--emerald); }
-.pr-state.merged { color: var(--opencode); }
+.pr-state.merged { color: var(--violet); }
 .pr-state.closed { color: var(--red); }
 
 .changes-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 0 4px 10px; font-size: var(--t-meta); color: var(--text-dim); }
@@ -2486,7 +2479,7 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
   flex: none; width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
   font: 700 11px/1 var(--mono); background: var(--accent); color: var(--text-dim);
 }
-.gst.sM { color: var(--sky); } .gst.sA, .gst.su { color: var(--emerald); } .gst.sD { color: var(--red); } .gst.sR { color: var(--opencode); }
+.gst.sM { color: var(--sky); } .gst.sA, .gst.su { color: var(--emerald); } .gst.sD { color: var(--red); } .gst.sR { color: var(--violet); }
 .gcount { flex: none; font: 12px var(--mono); }
 .viewedbox {
   flex: none; width: 40px; height: 40px; align-self: center; border-radius: var(--radius);

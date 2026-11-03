@@ -8,16 +8,16 @@
  *
  * Sources: Anthropic's Claude mark, OpenAI's Blossom, opencode's official
  * square brand mark, Cognition's Devin mark, xAI's Grok mark, Cursor's cube,
- * Mistral's block M (one colour, the stepped rows of its logo),
+ * Mistral's pixel M (from mistral.ai),
  * pi's block mark (from pi.dev), omp's gradient pi (from omp.sh), Google's
  * Gemini spark, Moonshot's Kimi mark, Meta's Muse mark, and Google's
  * Antigravity arch (the "jetski" logo the Antigravity IDE ships). OpenCode 2
- * keeps the square mark and adds a small v2 badge so the two CLIs are
+ * keeps the square mark and adds a round "2" badge so the two CLIs are
  * distinguishable.
  *
- * Antigravity and omp are the marks that are not single-colour: each is known
- * by its gradient, so they keep it, muted to sit in the same palette as the
- * rest.
+ * Every mark is in its maker's own colours. Mistral's rows, Gemini's spark,
+ * OMP's and Antigravity's gradients are drawn here; the rest take one colour
+ * from styles.css.
  */
 
 import { memo, useId } from 'react';
@@ -81,7 +81,8 @@ export const EngineMark = memo(function EngineMark({ engine, className = '' }: {
       <span className={`mark opencode2 ${className}`} title={label}>
         <svg {...common} fill="currentColor">
           <path d="M22 24H2V0h20zM17 4.8H7v14.4h10z" />
-          <path d="M16.9 13.6c1.7 0 2.8.9 2.8 2.2 0 .9-.5 1.6-1.5 2.2l-1.1.7h2.8v1.4h-5.1v-1.2l2.5-1.6c.6-.4.9-.8.9-1.2 0-.4-.3-.7-.8-.7s-.8.3-1 .9l-1.3-.4c.3-1.4 1.3-2.3 2.8-2.3z" fill="var(--panel)" />
+          <circle cx="16.95" cy="16.95" r="5.6" fill="currentColor" stroke="#14161b" strokeWidth="1.2" />
+          <path d="M16.9 13.6c1.7 0 2.8.9 2.8 2.2 0 .9-.5 1.6-1.5 2.2l-1.1.7h2.8v1.4h-5.1v-1.2l2.5-1.6c.6-.4.9-.8.9-1.2 0-.4-.3-.7-.8-.7s-.8.3-1 .9l-1.3-.4c.3-1.4 1.3-2.3 2.8-2.3z" fill="#14161b" />
         </svg>
       </span>
     );
@@ -122,8 +123,12 @@ export const EngineMark = memo(function EngineMark({ engine, className = '' }: {
   if (engine === 'vibe') {
     return (
       <span className={`mark vibe ${className}`} title={label}>
-        <svg {...common} fill="currentColor">
-          <path d="M0.0 0.0h4.8v4.8h-4.8zM19.2 0.0h4.8v4.8h-4.8zM0.0 4.8h9.6v4.8h-9.6zM14.4 4.8h9.6v4.8h-9.6zM0.0 9.6h24.0v4.8h-24.0zM0.0 14.4h4.8v4.8h-4.8zM9.6 14.4h4.8v4.8h-4.8zM19.2 14.4h4.8v4.8h-4.8zM0.0 19.2h4.8v4.8h-4.8zM19.2 19.2h4.8v4.8h-4.8z" />
+        <svg {...common} viewBox="-1.5 -4.5 24 24">
+          <path fill="#ffaf01" d="M3 0h3v3H3zM15 0h3v3h-3z" />
+          <path fill="#ff8204" d="M3 3h6v3H3zM12 3h6v3h-6z" />
+          <path fill="#fa500f" d="M3 6h15v3H3z" />
+          <path fill="#e61300" d="M3 9h3v3H3zM9 9h3v3H9zM15 9h3v3h-3z" />
+          <path fill="#c4001d" d="M0 12h9v3H0zM12 12h9v3h-9z" />
         </svg>
       </span>
     );
@@ -147,9 +152,9 @@ export const EngineMark = memo(function EngineMark({ engine, className = '' }: {
         <svg {...common} viewBox="10 14 44 44">
           <defs>
             <linearGradient id={gradient} x1="14" y1="16" x2="50" y2="56" gradientUnits="userSpaceOnUse">
-              <stop offset="0" stopColor="#dc8fc6" />
-              <stop offset=".5" stopColor="#b292ee" />
-              <stop offset="1" stopColor="#8fd0d8" />
+              <stop offset="0" stopColor="#ed4abf" />
+              <stop offset=".5" stopColor="#9b4dff" />
+              <stop offset="1" stopColor="#5ad8e6" />
             </linearGradient>
           </defs>
           <path fill={`url(#${gradient})`} d="M14 16h36v8H40v32h-8V24h-6v22h-8V24h-4z" />
@@ -161,8 +166,15 @@ export const EngineMark = memo(function EngineMark({ engine, className = '' }: {
   if (engine === 'gemini') {
     return (
       <span className={`mark gemini ${className}`} title={label}>
-        <svg {...common} fill="currentColor" fillRule="evenodd">
-          <path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" />
+        <svg {...common} fillRule="evenodd">
+          <defs>
+            <linearGradient id={gradient} x1="2" y1="22" x2="22" y2="2" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stopColor="#4285f4" />
+              <stop offset=".55" stopColor="#9b72cb" />
+              <stop offset="1" stopColor="#d96570" />
+            </linearGradient>
+          </defs>
+          <path fill={`url(#${gradient})`} d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" />
         </svg>
       </span>
     );
@@ -195,11 +207,11 @@ export const EngineMark = memo(function EngineMark({ engine, className = '' }: {
         <svg {...common} viewBox="20.7 21 138 138">
           <defs>
             <linearGradient id={gradient} x1="62" y1="150" x2="128" y2="34" gradientUnits="userSpaceOnUse">
-              <stop offset="0" stopColor="#93b1ee" />
-              <stop offset=".5" stopColor="#93b1ee" />
-              <stop offset=".72" stopColor="#a6cfa2" />
-              <stop offset=".86" stopColor="#e5cb8b" />
-              <stop offset="1" stopColor="#e8a08f" />
+              <stop offset="0" stopColor="#3186ff" />
+              <stop offset=".5" stopColor="#3186ff" />
+              <stop offset=".72" stopColor="#00b95c" />
+              <stop offset=".86" stopColor="#fbbc04" />
+              <stop offset="1" stopColor="#fc413d" />
             </linearGradient>
           </defs>
           <path fill={`url(#${gradient})`} d="M144.248 149.062c7.5 5.626 18.75 1.876 8.437-8.437-30.937-30-24.375-112.5-62.812-112.5-38.438 0-31.875 82.5-62.813 112.5-11.25 11.25.938 14.063 8.438 8.437 29.062-19.687 27.187-54.375 54.375-54.375 27.187 0 25.312 34.688 54.375 54.375Z" />

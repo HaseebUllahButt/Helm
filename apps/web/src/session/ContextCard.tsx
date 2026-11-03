@@ -1,7 +1,7 @@
 import { Markdown } from '../Markdown';
 import type { ContextUsage } from './contextUsage';
 
-const SHADES = ['var(--primary-q)', 'var(--sky)', 'var(--emerald)', 'var(--amber)', 'var(--claude)', 'var(--opencode)', 'var(--red)'];
+const SHADES = ['var(--primary-q)', 'var(--sky)', 'var(--emerald)', 'var(--amber)', 'var(--claude)', 'var(--violet)', 'var(--red)'];
 
 /**
  * How full the chat's memory is, as one bar: what is in it, what Claude
