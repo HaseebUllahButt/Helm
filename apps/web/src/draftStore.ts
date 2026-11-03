@@ -11,12 +11,12 @@
  * on one never share a draft.
  */
 const KEY = (env: string, session: string) => `helm-draft:${env}:${session}`;
-const failures = new Map<string, string>();
+const failures = new Map<string, { message: string; text?: string; unread?: boolean }>();
 
-export function draftFailure(env: string, session: string) { return failures.get(KEY(env, session)) ?? ''; }
-export function reportDraftFailure(env: string, session: string, message: string) {
-  failures.set(KEY(env, session), message);
-  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('helm:draft-error', { detail: { env, session, message } }));
+export function draftFailure(env: string, session: string) { return failures.get(KEY(env, session)); }
+export function reportDraftFailure(env: string, session: string, message: string, text?: string, unread = false) {
+  failures.set(KEY(env, session), { message, text, unread });
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('helm:draft-error', { detail: { env, session, message, text, unread } }));
 }
 
 export function loadDraft(env: string, session: string): string {

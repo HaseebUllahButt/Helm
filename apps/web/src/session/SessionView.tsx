@@ -102,6 +102,14 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     setDraftValue(value);
     storage.save(value);
   };
+  useEffect(() => {
+    const restore = (event: Event) => {
+      const { env: machine, id, text } = (event as CustomEvent).detail;
+      if (machine === env.id && id === session.id) setDraft(current => [text, current].filter(Boolean).join('\n\n'));
+    };
+    window.addEventListener('helm:restore-draft', restore);
+    return () => window.removeEventListener('helm:restore-draft', restore);
+  }, [env.id, session.id]);
   const [error, setError] = useState('');
   const [menu, setMenu] = useState(false);
   useDismiss(menu, useCallback(() => setMenu(false), []));

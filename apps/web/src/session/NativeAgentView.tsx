@@ -35,7 +35,18 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
   const draftRef = useRef(draft);
   const mounted = useRef(false);
   const sendingRef = useRef(false);
-  const editDraft = (text: string) => { revision.current += 1; draftRef.current = text; setDraft(text); return storage.save(text); };
+  const editDraft = (text: string) => {
+    revision.current += 1; draftRef.current = text; setDraft(text);
+    const saved = storage.save(text);
+    if (saved) {
+      try {
+        for (const action of client.nativeMessageActions(env.id, parent.id, agent.id)) {
+          if (action.confirmed) client.ackNativeMessage(action.actionId);
+        }
+      } catch (failure) { setError(errorMessage(failure)); }
+    }
+    return saved;
+  };
   const [sending, setSending] = useState(false);
   const [sentAt, setSentAt] = useState(0);
   const [uncertain, setUncertain] = useState('');
@@ -59,7 +70,7 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
           const result = await client.resumeNativeMessage(action);
           if (stopped) return;
           const unchanged = revision.current === savedRevision && draftRef.current.trim() === action.params.data;
-          const cleared = !unchanged || editDraft('');
+          const cleared = unchanged ? editDraft('') : storage.isSaved();
           if (cleared) client.ackNativeMessage(result.actionId);
           setError(''); setUncertain(''); setSentAt(Date.now());
         }
@@ -110,7 +121,7 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
     try {
       const result = await client.rpc<{ actionId: string }>(env.id, 'session.native-message', { id: parent.id, agentId: agent.id, data: text }, 70_000);
       if (!mounted.current) return;
-      const cleared = revision.current !== sentRevision || editDraft('');
+      const cleared = revision.current !== sentRevision ? storage.isSaved() : editDraft('');
       if (cleared) client.ackNativeMessage(result.actionId);
       setUncertain('');
       setSentAt(Date.now());

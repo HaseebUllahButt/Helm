@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { build } from 'esbuild';
 
 const bundle = await build({ entryPoints: ['apps/web/src/session/NativeAgentView.tsx'], bundle: true, write: false, format: 'cjs', external: ['react', 'react/jsx-runtime', './Composer', './Transcript', '../EngineMark', '../Icon', '../Modal'] });
-function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', envId = 'pc', actions = [], denyClear = false) {
+function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', envId = 'pc', actions = [], denyClear = false, controls = {}) {
   const hooks = [], effects = [], cleanups = [];
   let cursor = 0, first = true, resolveSend;
   const sent = [];
@@ -20,10 +20,13 @@ function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', env
   const Composer = function Composer() {};
   const Confirm = function Confirm() {};
   const modules = { react, 'react/jsx-runtime': jsx, './Composer': { Composer }, './Transcript': { Transcript() {} }, '../EngineMark': { EngineMark() {} }, '../Icon': { BackIcon() {} }, '../Modal': { Confirm } };
-  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => { if (denyClear) throw Error('denied'); return saved.delete(key); } };
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => { if (controls.denyWrite) throw Error('denied'); saved.set(key, value); }, removeItem: key => { if (denyClear) throw Error('denied'); return saved.delete(key); } };
   const module = { exports: {} };
-  vm.runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => modules[name] ?? {}, localStorage: storage, window: { addEventListener() {}, removeEventListener() {} }, setTimeout, clearTimeout });
-  const client = { nativeMessageActions: () => actions, ackNativeMessage: id => acknowledged.push(id),
+  const handlers = new Map();
+  vm.runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => modules[name] ?? {}, localStorage: storage,
+    window: { addEventListener: (name, fn) => handlers.set(name, fn), removeEventListener: name => handlers.delete(name), dispatchEvent: event => handlers.get(event.type)?.(event) },
+    CustomEvent: class { constructor(type, opts) { this.type=type; this.detail=opts.detail; } }, setTimeout, clearTimeout });
+  const client = { nativeMessageActions: () => actions, ackNativeMessage: id => { if (actions.some(action => action.actionId===id)) { acknowledged.push(id); actions.splice(0,actions.length); } },
     abandonNativeMessage: (...args) => { abandoned.push(args); actions.splice(0,actions.length); },
     resumeNativeMessage: action => action.fail ? Promise.reject(Object.assign(Error('Checking delivery.'), {code:'delivery_pending'})) : Promise.resolve({ actionId: action.actionId }), rpc: (_, method, params) => {
     if (method === 'session.native-message') { sent.push(params); return new Promise(resolve => { resolveSend = resolve; }); }
@@ -95,6 +98,20 @@ test('a failed draft clear keeps the confirmed receipt for the next visit', asyn
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(view.acknowledged,[]);
   assert.equal(fixture(saved).render().draft,'first');
+  view.unmount();
+});
+
+test('an unsaved newer draft keeps its receipt until the words can be saved', async () => {
+  const saved=new Map(), actions=[], controls={};
+  const view=fixture(saved,'helper','parent','pc',actions,false,controls);
+  view.render().setDraft('first'); view.render().onSend();
+  controls.denyWrite=true; view.render().setDraft('new words');
+  actions.push({actionId:'message',confirmed:true,params:{data:'first'}});
+  view.resolveSend(); await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(view.acknowledged,[]);
+  assert.equal(view.render().draft,'new words');
+  controls.denyWrite=false; view.render().setDraft('new words saved');
+  assert.deepEqual(view.acknowledged,['message']);
   view.unmount();
 });
 

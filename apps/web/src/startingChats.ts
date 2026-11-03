@@ -146,7 +146,7 @@ function attempt(client: Client, chat: StartingChat) {
       let draftSaved = true;
       if (chat.draft) {
         try { saveDraft(chat.envId, session.id, chat.draft); }
-        catch (failure) { draftSaved = false; reportDraftFailure(chat.envId, session.id, errorMessage(failure)); }
+        catch (failure) { draftSaved = false; reportDraftFailure(chat.envId, session.id, errorMessage(failure), chat.draft); }
       }
       const deliver = async () => {
         if (!chat.message) { if (draftSaved) removeSaved(chat.id); return; }
@@ -160,8 +160,20 @@ function attempt(client: Client, chat: StartingChat) {
             return;
           }
           if (retryableDelivery(error)) return;
-          chat.draft = [chat.message, loadDraft(chat.envId, session.id)].filter(Boolean).join('\n\n');
-          saveDraft(chat.envId, session.id, chat.draft);
+          let prior = '';
+          try { prior = loadDraft(chat.envId, session.id); }
+          catch (failure) {
+            reportDraftFailure(chat.envId, session.id, errorMessage(failure), chat.message, true);
+            window.dispatchEvent(new CustomEvent('helm:restore-draft', { detail: { env: chat.envId, id: session.id, text: chat.message } }));
+            return;
+          }
+          chat.draft = [chat.message, prior].filter(Boolean).join('\n\n');
+          try { saveDraft(chat.envId, session.id, chat.draft); }
+          catch (failure) {
+            reportDraftFailure(chat.envId, session.id, errorMessage(failure), chat.draft);
+            window.dispatchEvent(new CustomEvent('helm:restore-draft', { detail: { env: chat.envId, id: session.id, text: chat.message } }));
+            return;
+          }
           // Keep the start copy if saving the live draft failed.
           removeSaved(chat.id);
           window.dispatchEvent(new CustomEvent('helm:restore-draft', {

@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { build } from 'esbuild';
 const bundle = await build({ entryPoints: ['apps/web/src/startingChats.ts'], bundle: true, write: false, format: 'cjs' });
-function fixture(saved = new Map(), { denyRemoval = false, denyDraftRead = false } = {}) {
+function fixture(saved = new Map(), { denyRemoval = false, denyDraftRead = false, denyDraftWrite = false } = {}) {
   const events = [];
   const context = { module: { exports: {} }, exports: {}, Date, crypto: globalThis.crypto, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
     window: { dispatchEvent: event => events.push(event) },
-    localStorage: { getItem: key => { if (denyDraftRead && key.startsWith('helm-draft:')) throw new Error('read denied'); return saved.get(key) ?? null; }, setItem: (key, value) => saved.set(key, value), removeItem: key => { if (denyRemoval) throw new Error('Cannot remove saved start'); return saved.delete(key); }, get length() { return saved.size; }, key: i => [...saved.keys()][i] ?? null } };
+    localStorage: { getItem: key => { if (denyDraftRead && key.startsWith('helm-draft:')) throw new Error('read denied'); return saved.get(key) ?? null; }, setItem: (key, value) => { if (denyDraftWrite && key.startsWith('helm-draft:')) throw new Error('write denied'); saved.set(key, value); }, removeItem: key => { if (denyRemoval) throw new Error('Cannot remove saved start'); return saved.delete(key); }, get length() { return saved.size; }, key: i => [...saved.keys()][i] ?? null } };
   vm.runInNewContext(bundle.outputFiles[0].text, context);
   return { ...context.module.exports, saved, events };
 }
@@ -56,6 +56,16 @@ test('a failed draft read keeps the saved start and reports the failure', async 
   assert.equal(h.saved.get('helm-draft:pc:chat'), 'unseen words');
   assert.equal(JSON.parse(h.saved.get('helm.startingChat.v1:' + chat.id)).message, 'first message');
   assert.match(h.events.find(event => event.type === 'helm:draft-error').detail.message, /read.*draft/i);
+});
+
+test('a draft that cannot move from a starting chat remains available in the live chat', async () => {
+  const h=fixture(new Map(), {denyDraftWrite:true}); let created;
+  const start=new Promise(resolve=>{created=resolve;});
+  const chat=h.beginChat({}, {envId:'pc'},()=>start,'unfinished words');
+  created({id:'chat'}); await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(chat.state,'started');
+  assert.equal(JSON.parse(h.saved.get('helm.startingChat.v1:'+chat.id)).draft,'unfinished words');
+  assert.equal(h.events.find(event=>event.type==='helm:draft-error').detail.text,'unfinished words');
 });
 
 test('reload repeats the saved start and queued delivery IDs', async () => {
