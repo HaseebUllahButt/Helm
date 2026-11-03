@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { build } from 'esbuild';
 const bundle = await build({ entryPoints: ['apps/web/src/startingChats.ts'], bundle: true, write: false, format: 'cjs' });
-function fixture(saved = new Map(), { denyRemoval = false } = {}) {
+function fixture(saved = new Map(), { denyRemoval = false, denyDraftRead = false } = {}) {
   const events = [];
   const context = { module: { exports: {} }, exports: {}, Date, crypto: globalThis.crypto, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
     window: { dispatchEvent: event => events.push(event) },
-    localStorage: { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => { if (denyRemoval) throw new Error('Cannot remove saved start'); return saved.delete(key); }, get length() { return saved.size; }, key: i => [...saved.keys()][i] ?? null } };
+    localStorage: { getItem: key => { if (denyDraftRead && key.startsWith('helm-draft:')) throw new Error('read denied'); return saved.get(key) ?? null; }, setItem: (key, value) => saved.set(key, value), removeItem: key => { if (denyRemoval) throw new Error('Cannot remove saved start'); return saved.delete(key); }, get length() { return saved.size; }, key: i => [...saved.keys()][i] ?? null } };
   vm.runInNewContext(bundle.outputFiles[0].text, context);
   return { ...context.module.exports, saved, events };
 }
@@ -43,6 +43,19 @@ test('a first-message storage failure restores its text and keeps a newer draft'
   assert.equal(chat.state, 'started');
   assert.equal(chat.draft, 'first message\n\nnewer text');
   assert.equal(h.events.length, 1);
+});
+
+test('a failed draft read keeps the saved start and reports the failure', async () => {
+  const h = fixture(new Map(), { denyDraftRead: true }); let created;
+  const start = new Promise(resolve => { created = resolve; });
+  const chat = h.beginChat({ input: async () => { throw new Error('send failed'); } }, { envId: 'pc' }, () => start);
+  h.sendWhenReady(chat.id, 'first message');
+  h.saved.set('helm-draft:pc:chat', 'unseen words');
+  created({ id: 'chat' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.saved.get('helm-draft:pc:chat'), 'unseen words');
+  assert.equal(JSON.parse(h.saved.get('helm.startingChat.v1:' + chat.id)).message, 'first message');
+  assert.match(h.events.find(event => event.type === 'helm:draft-error').detail.message, /read.*draft/i);
 });
 
 test('reload repeats the saved start and queued delivery IDs', async () => {
@@ -179,7 +192,8 @@ test('successful input never restores accepted text when saved-start removal fai
   h.sendWhenReady(chat.id,'already accepted'); created({id:'created'}); await start;
   for(let i=0;i<8;i++) await Promise.resolve();
   assert.equal(chat.draft,'');
-  assert.equal(h.events.length,0);
+  assert.equal(h.events.filter(event => event.type === 'helm:restore-draft').length,0);
+  assert.equal(h.events.filter(event => event.type === 'helm:draft-error').length,1);
   assert.equal(h.saved.has('helm-draft:pc:created'),false);
   assert.equal(h.saved.has('helm.startingChat.v1:'+chat.id),true);
 });

@@ -19,7 +19,7 @@ function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', env
   const modules = { react, 'react/jsx-runtime': jsx, './Composer': { Composer }, './Transcript': { Transcript() {} }, '../EngineMark': { EngineMark() {} }, '../Icon': { BackIcon() {} } };
   const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
   const module = { exports: {} };
-  vm.runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => modules[name] ?? {}, localStorage: storage, setTimeout, clearTimeout });
+  vm.runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => modules[name] ?? {}, localStorage: storage, window: { addEventListener() {}, removeEventListener() {} }, setTimeout, clearTimeout });
   const client = { rpc: (_, method, params) => {
     if (method === 'session.native-message') { sent.push(params); return new Promise(resolve => { resolveSend = resolve; }); }
     return new Promise(() => {});

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Client, Environment, NativeAgent, NativeAgentDetail, Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { BackIcon } from '../Icon';
-import { loadDraft, saveDraft } from '../draftStore';
+import { useDraftStorage } from '../useDraftStorage';
 import { Composer } from './Composer';
 import { Transcript } from './Transcript';
 import { apply, emptyLog, type HelmEvent, type LogState } from './types';
@@ -28,9 +28,10 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
   const [more, setMore] = useState(false);
   const [error, setError] = useState('');
   const draftKey = `native:${JSON.stringify([parent.id, agent.id])}`;
-  const [draft, setDraft] = useState(() => loadDraft(env.id, draftKey));
+  const storage = useDraftStorage(env.id, draftKey);
+  const [draft, setDraft] = useState(storage.initial);
   const revision = useRef(0);
-  const editDraft = (text: string) => { revision.current += 1; setDraft(text); saveDraft(env.id, draftKey, text); };
+  const editDraft = (text: string) => { revision.current += 1; setDraft(text); storage.save(text); };
   const [sending, setSending] = useState(false);
   const [sentAt, setSentAt] = useState(0);
 
@@ -97,6 +98,7 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
         </div>
       </div>
       {error && <p className="error native-error" role="alert">{error}</p>}
+      {storage.error && <p className="error native-error" role="alert">{storage.error}</p>}
       <Transcript
         turns={log.turns} status={working ? 'working' : 'idle'} loaded={log.loaded}
         empty={working ? 'Waiting for the helper…' : 'This helper left no messages.'}

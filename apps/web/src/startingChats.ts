@@ -1,7 +1,7 @@
 import { errorMessage } from './errors';
 import type { Client, Session } from './client';
 import { newMessageId, retryableDelivery } from '@helm/protocol/reliable-input';
-import { loadDraft } from './draftStore';
+import { loadDraft, reportDraftFailure, saveDraft } from './draftStore';
 
 /**
  * New chats whose agent is still starting.
@@ -143,20 +143,25 @@ function attempt(client: Client, chat: StartingChat) {
       if (origin) origins.set(session.id, origin);
       // Save the target before delivery. Reloads repeat this exact delivery ID.
       persist(chat);
+      let draftSaved = true;
+      if (chat.draft) {
+        try { saveDraft(chat.envId, session.id, chat.draft); }
+        catch (failure) { draftSaved = false; reportDraftFailure(chat.envId, session.id, errorMessage(failure)); }
+      }
       const deliver = async () => {
-        if (!chat.message) { removeSaved(chat.id); return; }
+        if (!chat.message) { if (draftSaved) removeSaved(chat.id); return; }
         try {
           await Promise.resolve().then(() => client.input(chat.envId, { id: session.id, data: chat.message }, 120_000, chat.messageId));
         } catch (error) {
           // The saved failure card already owns these words.
           const failure = error as { deliveryRetained?: boolean; deliveryPersisted?: boolean };
           if (failure?.deliveryRetained === true) {
-            if (failure.deliveryPersisted === true) removeSaved(chat.id);
+            if (failure.deliveryPersisted === true && draftSaved) removeSaved(chat.id);
             return;
           }
           if (retryableDelivery(error)) return;
           chat.draft = [chat.message, loadDraft(chat.envId, session.id)].filter(Boolean).join('\n\n');
-          localStorage.setItem(`helm-draft:${chat.envId}:${session.id}`, chat.draft);
+          saveDraft(chat.envId, session.id, chat.draft);
           // Keep the start copy if saving the live draft failed.
           removeSaved(chat.id);
           window.dispatchEvent(new CustomEvent('helm:restore-draft', {
@@ -165,10 +170,11 @@ function attempt(client: Client, chat: StartingChat) {
           return;
         }
         // A cleanup failure cannot turn accepted words into a fresh draft.
-        removeSaved(chat.id);
+        if (draftSaved) removeSaved(chat.id);
       };
-      if (chat.draft) localStorage.setItem(`helm-draft:${chat.envId}:${session.id}`, chat.draft);
-      void deliver().catch(() => { /* The saved start still holds the text. */ });
+      void deliver().catch((failure) => {
+        reportDraftFailure(chat.envId, session.id, errorMessage(failure, { fallback: 'Cannot save this draft. Check browser storage.' }));
+      });
       active.delete(chat.id);
       chat.state = 'started';
       if (!chat.message) cameUpEmpty.add(session.id);
