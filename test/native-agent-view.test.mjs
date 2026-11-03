@@ -47,3 +47,13 @@ test('a late helper send reply keeps newer typed words', async () => {
   view.unmount();
 });
 
+test('helper drafts survive leaving and stay separate from other helpers', () => {
+  const saved = new Map();
+  const view = fixture(saved);
+  view.render().setDraft('keep these words');
+  view.unmount();
+  assert.equal(fixture(saved).render().draft, 'keep these words');
+  assert.equal(fixture(saved, 'other').render().draft, '');
+  assert.equal(fixture(saved, 'helper', 'other').render().draft, '');
+  assert.equal(fixture(saved, 'helper', 'parent', 'other').render().draft, '');
+});

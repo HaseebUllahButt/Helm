@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Client, Environment, NativeAgent, NativeAgentDetail, Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { BackIcon } from '../Icon';
+import { loadDraft, saveDraft } from '../draftStore';
 import { Composer } from './Composer';
 import { Transcript } from './Transcript';
 import { apply, emptyLog, type HelmEvent, type LogState } from './types';
@@ -26,9 +27,10 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
   const [card, setCard] = useState<NativeAgent>(agent);
   const [more, setMore] = useState(false);
   const [error, setError] = useState('');
-  const [draft, setDraft] = useState('');
+  const draftKey = `native:${JSON.stringify([parent.id, agent.id])}`;
+  const [draft, setDraft] = useState(() => loadDraft(env.id, draftKey));
   const revision = useRef(0);
-  const editDraft = (text: string) => { revision.current += 1; setDraft(text); };
+  const editDraft = (text: string) => { revision.current += 1; setDraft(text); saveDraft(env.id, draftKey, text); };
   const [sending, setSending] = useState(false);
   const [sentAt, setSentAt] = useState(0);
 
