@@ -78,3 +78,11 @@ for websites that cannot run inside a frame.
   other; an away machine is told when it is back (`pending`). A refused
   `in` half asks the other machine and goes if its half is gone.
 - **Tests:** `test/forward-service`, `share-private`, `tunnel-ports`.
+
+## Access checks
+
+- Refuse Helm's own port in new links and existing link files. Forwarded
+  requests cannot use local sign-in, even when their host says localhost.
+- Private links need a pass signed by a current machine. Old shared-key
+  cookies stop working. The browser gets a new pass through the app.
+- Test `test/security-routes`, `share-private`, `share-links`, and `loopback`.

@@ -301,13 +301,13 @@ test('a direct request is checked against who the hub introduced, not what it sa
   assert.throws(() => directCaller(net, 'a', 'nobody'), { code: 'forbidden' });
   // A phone's own channel cannot claim to be anyone else.
   assert.throws(() => directCaller(net, 'phone', 'a'), { code: 'forbidden' });
-  assert.equal(directCaller(net, 'phone', undefined), 'phone');
+  assert.throws(() => directCaller(net, 'phone', undefined), { code: 'forbidden' });
   // A revoked caller is refused on the very next request.
   assert.throws(() => directCaller(net, 'old', undefined), { code: 'forbidden' });
   assert.throws(() => directCaller({ ...net, revoked: { b: true } }, 'a', undefined), { code: 'forbidden' });
   assert.throws(() => directCaller(net, 'stranger', undefined), { code: 'forbidden' });
   assert.throws(() => directCaller(net, 'a', undefined, false), { code: 'forbidden' });
-  assert.equal(directCaller(net, 'phone', undefined, false), 'phone');
+  assert.throws(() => directCaller(net, 'phone', undefined, false), { code: 'forbidden' });
 });
 
 test('losing every hub presence fails offline even with an open direct channel', async () => {

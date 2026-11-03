@@ -1,3 +1,4 @@
+import { HubAuth, browserProofKey, type HubTrust } from './hubAuth';
 /**
  * Talking to machines.
  *
@@ -680,7 +681,7 @@ const byReach = (a: Reached, b: Reached) => b.reach - a.reach || a.elapsed - b.e
  * "the best answer so far" and "the best answer there is" are two reads of
  * the same round rather than two rounds.
  */
-function startProbes(endpoints: string[], token: string, timeout: number, onReach?: (reached: Reached[]) => void) {
+function startProbes(endpoints: string[], token: string, timeout: number, onReach?: (reached: Reached[]) => void, authorize?: (base: string, signal: AbortSignal) => Promise<Record<string, string>>) {
   const statuses: number[] = [];
   // Answering at all is worth knowing separately from winning: a 401 is a
   // machine that is there and refusing us, which is not a dead address.
@@ -695,9 +696,11 @@ function startProbes(endpoints: string[], token: string, timeout: number, onReac
     const timer = setTimeout(() => ctl.abort(), timeout);
     const started = performance.now();
     try {
+      const proof = await authorize?.(base, ctl.signal);
       const res = await fetch(`${base}/api/network`, {
+        redirect: 'error',
         signal: ctl.signal,
-        headers: { authorization: `Bearer ${token}` },
+        headers: { authorization: `Bearer ${token}`, ...proof },
       });
       statuses.push(res.status);
       answered.add(base);
@@ -712,7 +715,7 @@ function startProbes(endpoints: string[], token: string, timeout: number, onReac
       });
       first();
       onReach?.(up.slice().sort(byReach));
-    } catch { /* unreachable, or too slow even for our patience */ }
+    } catch (error) { if ((error as { code?: string })?.code === 'unauthorized') statuses.push(401); }
     finally { clearTimeout(timer); }
   });
 
@@ -741,8 +744,8 @@ function startProbes(endpoints: string[], token: string, timeout: number, onReac
  * a normal network is everything. `later` resolves when the last probe
  * finishes, so a hub that was merely far away still gets counted.
  */
-function probeInTwoPhases(endpoints: string[], token: string, settleAfter = PROBE_MS, onReach?: (reached: Reached[]) => void) {
-  const round = startProbes(endpoints, token, PROBE_PATIENCE_MS, onReach);
+function probeInTwoPhases(endpoints: string[], token: string, settleAfter = PROBE_MS, onReach?: (reached: Reached[]) => void, authorize?: (base: string, signal: AbortSignal) => Promise<Record<string, string>>) {
+  const round = startProbes(endpoints, token, PROBE_PATIENCE_MS, onReach, authorize);
   let deadlineTimer: ReturnType<typeof setTimeout>;
   let graceTimer: ReturnType<typeof setTimeout>;
   const deadline = new Promise<void>((resolve) => { deadlineTimer = setTimeout(resolve, settleAfter); });
@@ -981,7 +984,7 @@ export class Client {
     this.rttSamples.delete(env);
   }
 
-  constructor(public endpoints: string[], public token: string) {
+  constructor(public endpoints: string[], public token: string, trust?: HubTrust, public auth = new HubAuth(token, trust)) {
     // Wherever this page came from is a hub that works: it just served the
     // page. Stored endpoints can be years of addresses old, so it goes in
     // whether or not the list remembers it.
@@ -1064,7 +1067,7 @@ export class Client {
     const endpoints = this.endpoints.filter(base => reachableFromHere(base)
       && (base === hub || (this.failedHubs.get(base) ?? 0) <= Date.now()));
     const round = startProbes(endpoints, this.token, PROBE_PATIENCE_MS,
-      reached => this.upgradeHub(reached, version, hub));
+      reached => this.upgradeHub(reached, version, hub), (base, signal) => this.auth.headers(base, 'GET', '/api/network', signal));
     this.reachCheck = round.settled.finally(() => { this.reachCheck = null; });
   }
 
@@ -1104,27 +1107,29 @@ export class Client {
 
   private prepareSocket(hub: string) {
     if (!reachableFromHere(hub)) throw new Error('Use HTTPS to connect to another machine.');
-    const ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/ws?chunks=1`, ['helm', this.token]);
-    let cancel!: () => void;
-    const ready = new Promise<WebSocket>((resolve, reject) => {
-      const timer = setTimeout(() => finish(new Error('socket connection timed out')), 20_000);
-      const finish = (error?: Error) => {
-        clearTimeout(timer);
-        this.socketCleanups.delete(cancel);
-        ws.onopen = ws.onerror = ws.onclose = null;
-        if (error) { try { ws.close(); } catch {} reject(error); }
-        else resolve(ws);
+    let ws: WebSocket | undefined;
+    let cancelled = false;
+    let finishSocket: ((error?: Error) => void) | undefined;
+    const cancel = () => { cancelled = true; finishSocket?.(new Error('connection superseded')); };
+    this.socketCleanups.add(cancel);
+    const ready = this.auth.protocols(hub).then(protocols => new Promise<WebSocket>((resolve, reject) => {
+      if (cancelled) { reject(new Error('connection superseded')); return; }
+      ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/ws?chunks=1`, protocols);
+      const timer = setTimeout(() => finishSocket?.(new Error('socket connection timed out')), 20_000);
+      finishSocket = (error?: Error) => {
+        clearTimeout(timer); this.socketCleanups.delete(cancel);
+        ws!.onopen = ws!.onerror = ws!.onclose = null;
+        if (error) { try { ws!.close(); } catch {} reject(error); } else resolve(ws!);
       };
-      cancel = () => finish(new Error('connection superseded'));
-      this.socketCleanups.add(cancel);
-      ws.onopen = () => finish();
-      ws.onerror = ws.onclose = () => finish(new Error('could not reach the hub'));
-    });
-    return { ws, ready, cancel };
+      ws.onopen = () => finishSocket?.();
+      ws.onerror = ws.onclose = () => finishSocket?.(new Error('could not reach the hub'));
+    })).finally(() => this.socketCleanups.delete(cancel));
+    return { get ws() { return ws; }, ready, cancel };
   }
 
   async connect(hubHint: string | null = null): Promise<void> {
     if (this.closed || this.connecting || (this.connected && !hubHint)) return;
+    if (this.auth.needsPairing) { this.emit('', 'unauthorized', {}); return; }
     if (!this.recoveryTimer) this.recoveryTimer = setInterval(() => this.recoverConnection(), 5000);
     const migrating = this.connected;
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
@@ -1160,7 +1165,7 @@ export class Client {
             const other = results.find(candidate => candidate.base !== warmHub);
             if (other) offerAlternative(other.base);
             if (hub) this.upgradeHub(results, version, hub);
-          });
+          }, (base, signal) => this.auth.headers(base, 'GET', '/api/network', signal));
         const selection = soon.then(probe => probe.best ? probe : available);
         const warm = prepared?.ready.then(() => {
           return { best: warmHub!, unauthorized: false, answered: new Set([warmHub!]) };
@@ -1179,7 +1184,7 @@ export class Client {
         }
         ({ best: hub, unauthorized } = probe);
         if (prepared && hub !== warmHub) { prepared.cancel(); prepared = undefined; }
-        if (prepared && prepared.ws.readyState !== WebSocket.OPEN) {
+        if (prepared && prepared.ws?.readyState !== WebSocket.OPEN) {
           try {
             hub = await Promise.race([prepared.ready.then(() => hub), alternative]);
             if (hub !== warmHub) { prepared.cancel(); prepared = undefined; }
@@ -1220,10 +1225,19 @@ export class Client {
     if (this.closed) { prepared?.cancel(); this.connecting = false; return; }
     if (!migrating) this.relay = hub;
 
+    let protocols: string[] | undefined;
+    try { protocols = prepared?.ws ? undefined : await this.auth.protocols(hub); }
+    catch (error) {
+      this.connecting = false;
+      if ((error as { code?: string })?.code === 'unauthorized') this.emit('', 'unauthorized', {});
+      else if (!migrating) { this.lastError = String((error as Error)?.message || error); this.scheduleReconnect(); }
+      throw error;
+    }
+    if (this.closed || version !== this.connectVersion) { prepared?.cancel(); return; }
     await new Promise<void>((resolve, reject) => {
       const url = `${hub.replace(/^http/, 'ws')}/ws?chunks=1`;
       // Keep credentials out of URLs and access logs.
-      const ws = prepared?.ws ?? new WebSocket(url, ['helm', this.token]);
+      const ws = prepared?.ws ?? new WebSocket(url, protocols);
       if (!migrating) this.ws = ws;
       const assembly: Pick<Peer, 'fragments'> = { fragments: new Map() };
       let settled = false, stopped = false;
@@ -1375,7 +1389,7 @@ export class Client {
     // moves; folding them in here is what keeps a device working after the
     // address it was first added on has stopped existing.
     this.network()
-      .then((n) => { if (n.endpoints?.length) this.learn(n.endpoints); })
+      .then((n) => { if (n.endpoints?.length) this.learn(n.endpoints, n.trust); })
       .catch(() => {});
   }
 
@@ -1400,7 +1414,8 @@ export class Client {
    * is dropped on the strength of a failure that might just have been this
    * device being offline - because if it were, we would not be here.
    */
-  learn(endpoints: string[]) {
+  learn(endpoints: string[], trust?: HubTrust) {
+    if (trust) { this.auth.acceptTrust(trust); this.emit('', 'trust', { trust: this.auth.trust }); }
     // `here()` leads, because the cap is a real eviction: two machines
     // advertising a LAN address, a tailnet address, a public one and whatever
     // they had last week is already more than twelve, and the address that
@@ -1411,7 +1426,7 @@ export class Client {
     const advertised = new Set([...here(), ...endpoints]);
     const alive = this.endpoints.filter(
       (e) => advertised.has(e) || this.answered.has(e) || !this.tried.has(e));
-    const merged = [...new Set([...here(), ...endpoints, ...alive])].slice(0, MAX_ENDPOINTS);
+    const merged = [...new Set([...here(), ...endpoints, ...alive])].filter(base => this.auth.allowed(base)).slice(0, MAX_ENDPOINTS);
     const same =
       merged.length === this.endpoints.length &&
       merged.every((e, i) => e === this.endpoints[i]);
@@ -2171,7 +2186,7 @@ export class Client {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       if (this.peers.get(env) === peer) {
-        this.signal(env, { type: 'offer', sdp: pc.localDescription!.sdp, negotiation });
+        this.signal(env, { type: 'offer', ...await this.auth.offer(env, { sdp: pc.localDescription!.sdp, negotiation }) });
         offerSent = true;
         for (const candidate of localCandidates) this.signal(env, { type: 'candidate', candidate, negotiation });
         localCandidates.length = 0;
@@ -2297,11 +2312,12 @@ export class Client {
 
   private async httpAt<T>(base: string, path: string, init: RequestInit = {}): Promise<T> {
     if (!reachableFromHere(base)) throw new Error('Use HTTPS to connect to another machine.');
+    const proof = await this.auth.headers(base, init.method ?? 'GET', path, init.signal ?? undefined);
     const res = await fetch(`${base}${path}`, {
       ...init,
       redirect: 'error',
       signal: init.signal ?? AbortSignal.timeout(20_000),
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...init.headers },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...init.headers, ...proof },
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -2323,7 +2339,7 @@ export class Client {
   network() {
     return this.http<{
       id: string; self: string; you: string;
-      machines: Environment[]; devices: Device[]; endpoints: string[];
+      machines: Environment[]; devices: Device[]; endpoints: string[]; trust?: HubTrust;
     }>('/api/network');
   }
 
@@ -2505,14 +2521,14 @@ export const CLEARTEXT_NOTE =
  * accepts it only from loopback, and only if it matches the file in ~/.helm
  * that just handed it to us.
  */
-export async function login(endpoint: string, password: string, local?: string) {
+export async function login(endpoint: string, password: string, local?: string, proofKey?: string) {
   const base = endpoint.replace(/\/$/, '');
   if (!reachableFromHere(base)) throw new Error('Use HTTPS to connect to another machine.');
   const res = await fetch(`${base}/api/auth/login`, {
     redirect: 'error',
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ password, local, label: deviceLabel() }),
+    body: JSON.stringify({ password, local, proofKey: proofKey ?? await browserProofKey(), label: deviceLabel() }),
     // A stalled network must not leave the sign-in button busy for ever.
     signal: AbortSignal.timeout(30_000),
   });
@@ -2522,10 +2538,11 @@ export async function login(endpoint: string, password: string, local?: string) 
       body.error ?? (res.status === 401 ? 'wrong password' : `the machine returned ${res.status}`)
     );
   }
-  const { token, deviceId, endpoints } = await res.json();
+  const { token, deviceId, endpoints, trust } = await res.json();
   return {
     token: token as string,
     deviceId: deviceId as string,
+    trust: trust as HubTrust | undefined,
     endpoints: [...new Set<string>([base, ...(endpoints ?? [])])],
   };
 }

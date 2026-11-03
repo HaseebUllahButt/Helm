@@ -12,7 +12,15 @@ before(async () => {
   });
   const bundle = await build({ stdin: { contents: `
     import { Client } from './apps/web/src/client';
-    window.Client = Client;
+    // These tests measure browser scheduling against stand-in hubs.
+    // security-routes tests exercise real machine and browser signatures.
+    window.Client = class extends Client {
+      constructor(endpoints, token) { super(endpoints, token, undefined, {
+        headers: async () => ({}), protocols: async () => ['helm', token],
+        offer: async (_target, payload) => ({ ...payload, credential: token }),
+        allowed: () => true, acceptTrust() {},
+      }); }
+    };
   `, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, format: 'iife' });
   script = bundle.outputFiles[0].text;
 });

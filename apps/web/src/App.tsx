@@ -98,14 +98,15 @@ export function App() {
 
   useEffect(() => {
     if (!auth) return;
-    const c = new Client(auth.endpoints, auth.token);
+    const c = new Client(auth.endpoints, auth.token, auth.trust);
     const off = c.on((_e, kind, payload) => {
       if (kind === 'connection') setConn({ online: !!payload.online, reachable: payload.reachable ?? !!payload.online, error: payload.error });
-      if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints });
+      if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints, trust: c.auth.trust });
+      if (kind === 'trust') saveAuth({ ...auth, endpoints: c.endpoints, trust: payload.trust });
       if (kind === 'unauthorized') {
         forgetWorkspace(workspaceScope(auth.token));
         clearAuth();
-        setNotice('This device is no longer in the network. Pair it again with a new link from `helm link`.');
+        setNotice('Sign in again with a new pairing code from `helm login`.');
         setAuth(null); setClient(null);
       }
     });

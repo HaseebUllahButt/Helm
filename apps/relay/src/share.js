@@ -335,12 +335,12 @@ ${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${es
     if (!grant || !spend(grant.j, grant.e)) {
       return privatePage(res, share, base, next, 'This sign-in expired or someone used it. Sign in again.');
     }
-    const expiresAt = Date.now() + MEMBER_TTL_MS;
-    const value = memberCookie(net, { name: share.name, host: base, sub: grant.s, expiresAt });
+    const expiresAt = Math.min(Date.now() + MEMBER_TTL_MS, grant.ce ?? Infinity);
+    const value = memberCookie(net, { name: share.name, host: base, sub: grant.s, expiresAt, authorities: [...new Set([grant.issuer, ...grant.a])] });
     res.writeHead(303, {
       location: next, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
       'set-cookie': [
-        `${MEMBER}=${value}; Path=/; Max-Age=${Math.floor(MEMBER_TTL_MS / 1000)}; HttpOnly; Secure; SameSite=Lax`,
+        `${MEMBER}=${value}; Path=/; Max-Age=${Math.max(0, Math.floor((expiresAt - Date.now()) / 1000))}; HttpOnly; Secure; SameSite=Lax`,
         `${SEEN}=1; Path=/; Max-Age=${30 * 86400}; HttpOnly; Secure; SameSite=Lax`,
       ],
     });

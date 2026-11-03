@@ -62,7 +62,19 @@ machine -> folder -> chat. Each chat runs one profile: a CLI on an account.
 - **Machine credentials need the machine's private signing key.** The shared
   network key alone cannot sign them. Upgrade all machines together. Old
   machine and browser credentials are refused. Remote browsers must sign in
-  again. Restore signing keys from backups; replacing a pinned key breaks trust.
+  again. Browser requests also need a private device key. Keep that key in
+  browser storage as a non-exportable CryptoKey. A copied token alone must
+  never authorize a remote request or a direct offer. Restore signing keys from backups; replacing a pinned key breaks trust.
+- **Machine records need the owner's signature.** Check it with the saved
+  signing key before applying changes. Keep old unsigned records fixed.
+  A machine with no saved signing key must rejoin through an invitation.
+  Never learn a replacement key from an unsigned update. Keep an invitation
+  address in a local note until its owner advertises it. Never edit the
+  inviter record to add that address.
+- **Local sign-in refuses forwarded traffic.** Spins must never expose Helm's
+  own port. Check existing links as well as new links.
+- **Private Spin passes need a current machine signature.** The shared key
+  alone cannot issue a pass. Enforce signer removal and the cookie lifetime.
 - **A machine can admit other machines while trusted.** After a suspected
   compromise, review machines and devices added before removal. Revoking a
   signer also blocks browser credentials that it signed.
