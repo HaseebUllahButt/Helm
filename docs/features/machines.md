@@ -100,11 +100,13 @@ owner's home or network to bypass this check.
   `send-engine`.
 
 ## `helm exec` and `helm copy`
-- **Not yet driven** against the copy. `$V rpc exec.start
-  '{"id":"t1","argv":["echo","hi"]}'` then `$V rpc exec.read
-  '{"id":"t1","wait":true}'` should show "hi".
+- **Prove:** start a command with `$V rpc exec.start` using a 32-digit hex
+  id. Read its output with `exec.read`, restart the private daemon, then
+  read the same id again. A running command and its output must survive.
 - **Traps:** if exec says the command may have started, never rerun it;
-  read it with `exec-status`. Output keeps only the last 256 KB for an hour.
+  read it with `exec-status`. A detached supervisor saves its output and
+  result across daemon restarts. Output keeps only the last 256 KB for an
+  hour; the id remains reserved after that, so it cannot start the work again.
   `helm copy` needs rsync 3.2.3+ on both ends; a break resumes on rerun.
   With protected arguments, rsync receives its folder and options inside
   the byte stream. Check those before passing them to rsync, and bind the

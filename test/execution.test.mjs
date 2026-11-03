@@ -16,6 +16,8 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const spec = (code, extra = {}) => ({ argv: [process.execPath, '-e', code], cwd: root, timeout: 5000, ...extra });
 const launch = args => startWork(args, { env: { ...process.env, HELM_DIR: root } });
 const id = n => n.toString(16).padStart(32, '0');
+let jobDirectory = 0;
+const makeJobs = options => new ExecutionJobs({ directory: join(root, `jobs-${++jobDirectory}`), ...options });
 
 async function result(jobs, key, owner = 'owner') {
   let cursor = 0, output = '', errors = '', read;
@@ -31,7 +33,7 @@ async function result(jobs, key, owner = 'owner') {
 }
 
 test('a managed command preserves argv, explicit environment, cwd and exit code without shell expansion', async t => {
-  const jobs = new ExecutionJobs({ launch }); t.after(() => jobs.stop());
+  const jobs = makeJobs(); t.after(() => jobs.stop());
   const literal = '$(touch never-created) `echo unsafe` "quoted"';
   jobs.start({ ...spec('console.log(JSON.stringify({args:process.argv.slice(1),cwd:process.cwd(),env:process.env.WORK_TEST}));console.error("err");process.exitCode=7'), id: id(1), argv: [process.execPath, '-e', 'console.log(JSON.stringify({args:process.argv.slice(1),cwd:process.cwd(),env:process.env.WORK_TEST}));console.error("err");process.exitCode=7', literal], env: { WORK_TEST: 'explicit value' } }, 'owner');
   const r = await result(jobs, id(1));
@@ -41,7 +43,7 @@ test('a managed command preserves argv, explicit environment, cwd and exit code 
 });
 
 test('a command request is idempotent, its output is owner-bound and invalid input never executes', async t => {
-  const jobs = new ExecutionJobs({ launch }); t.after(() => jobs.stop());
+  const jobs = makeJobs(); t.after(() => jobs.stop());
   const request = { id: id(2), ...spec('console.log("once")') };
   assert.equal(jobs.start(request, 'owner').id, id(2));
   assert.equal(jobs.start(request, 'owner').id, id(2));
@@ -51,6 +53,120 @@ test('a command request is idempotent, its output is owner-bound and invalid inp
   assert.throws(() => jobs.start({ id: id(3), argv: ['echo'], cwd: 'relative' }, 'owner'), /absolute/);
   assert.throws(() => jobs.start({ id: id(3), argv: ['echo'], env: { NAME: 42 } }, 'owner'), /environment/);
   assert.equal((await result(jobs, id(2))).output.trim(), 'once');
+});
+
+test('a running command and its result survive a daemon restart without a second start', async t => {
+  const directory = join(root, 'restart-jobs');
+  const gate = join(root, 'restart-gate');
+  const count = join(root, 'restart-count');
+  const code = `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(count)},'start\\n');const w=fs.watch(${JSON.stringify(root)},()=>{if(fs.existsSync(${JSON.stringify(gate)})){w.close();console.log('after restart');}});console.log('before restart')`;
+  const request = { id: id(30), ...spec(code, { timeout: 20000 }) };
+  const before = new ExecutionJobs({ directory });
+  const after = new ExecutionJobs({ directory });
+  t.after(async () => {
+    try { after.cancel({ id: request.id }, 'owner'); await result(after, request.id); } catch {}
+    await before.stop(); await after.stop();
+  });
+  before.start(request, 'owner');
+  let cursor = 0, seen = '';
+  while (!seen.includes('before restart')) {
+    const read = await before.read({ id: request.id, since: cursor, wait: 1000 }, 'owner');
+    for (const chunk of read.chunks) seen += Buffer.from(chunk.data, 'base64').toString();
+    cursor = read.last;
+  }
+  await before.stop();
+  assert.notEqual((await after.read({ id: request.id }, 'owner')).status, 'exited');
+  await assert.rejects(() => after.read({ id: request.id }, 'intruder'), /not found/);
+  assert.throws(() => after.start({ ...request, argv: ['different'] }, 'owner'), /another request/);
+  assert.equal(after.start(request, 'owner').id, request.id);
+  writeFileSync(gate, 'release');
+  const done = await result(after, request.id);
+  assert.equal(done.exitCode, 0);
+  assert.match(done.output, /before restart/);
+  assert.match(done.output, /after restart/);
+  assert.equal(readFileSync(count, 'utf8'), 'start\n');
+  await after.stop();
+  const later = new ExecutionJobs({ directory });
+  try { assert.equal((await result(later, request.id)).output, done.output); }
+  finally { await later.stop(); }
+});
+
+test('a running command can be cancelled after the daemon restarts', async t => {
+  const directory = join(root, 'restart-cancel-jobs');
+  const request = { id: id(33), ...spec('console.log("ready");setInterval(()=>{},1000)', { timeout: 12000 }) };
+  const before = new ExecutionJobs({ directory });
+  const after = new ExecutionJobs({ directory });
+  t.after(async () => {
+    try { after.cancel({ id: request.id }, 'owner'); await result(after, request.id); } catch {}
+    await before.stop(); await after.stop();
+  });
+  before.start(request, 'owner');
+  let cursor = 0, seen = '';
+  while (!seen.includes('ready')) {
+    const read = await before.read({ id: request.id, since: cursor, wait: 1000 }, 'owner');
+    for (const chunk of read.chunks) seen += Buffer.from(chunk.data, 'base64').toString();
+    cursor = read.last;
+  }
+  await before.stop();
+  assert.equal(after.cancel({ id: request.id }, 'owner').status, 'running');
+  assert.equal((await result(after, request.id)).exitCode, 130);
+});
+
+test('an unknown supervisor never causes the same command to start again', async t => {
+  let launches = 0;
+  const fake = () => { launches++; return Object.assign(new EventEmitter(), { pid: process.pid }); };
+  const directory = join(root, 'unknown-job');
+  const request = { id: id(31), ...spec('console.log("once")') };
+  const first = new ExecutionJobs({ launch: fake, directory });
+  const after = new ExecutionJobs({ launch: fake, directory });
+  t.after(async () => { await first.stop(); await after.stop(); });
+  first.start(request, 'owner');
+  await first.stop();
+  const unknown = await after.read({ id: request.id }, 'owner');
+  assert.equal(unknown.status, 'exited');
+  assert.match(unknown.error, /unknown.*Do not rerun/);
+  assert.equal(after.start(request, 'owner').status, 'exited');
+  assert.equal(launches, 1);
+});
+
+test('a supervisor keeps output after its daemon is killed', { timeout: 15000 }, async t => {
+  const { spawn } = await import('node:child_process');
+  const directory = join(root, 'killed-daemon-jobs');
+  const gate = join(root, 'killed-daemon-gate');
+  const count = join(root, 'killed-daemon-count');
+  const code = `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(count)},'once\\n');const w=fs.watch(${JSON.stringify(root)},()=>{if(fs.existsSync(${JSON.stringify(gate)})){w.close();console.log('finished');}});console.log('started')`;
+  const request = { id: id(32), ...spec(code, { timeout: 12000 }) };
+  const runner = `
+    import { ExecutionJobs } from ${JSON.stringify(new URL('../packages/connect/src/execution.js', import.meta.url).href)};
+    const jobs = new ExecutionJobs({ directory: ${JSON.stringify(directory)} });
+    const request = ${JSON.stringify(request)};
+    jobs.start(request, 'owner');
+    let cursor = 0, text = '';
+    while (!text.includes('started')) {
+      const read = await jobs.read({ id: request.id, since: cursor, wait: 1000 }, 'owner');
+      for (const chunk of read.chunks) text += Buffer.from(chunk.data, 'base64').toString();
+      cursor = read.last;
+    }
+    process.send('started');
+    setInterval(() => {}, 1000);
+  `;
+  const daemon = spawn(process.execPath, ['--input-type=module', '-e', runner], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  const after = new ExecutionJobs({ directory });
+  t.after(async () => {
+    if (daemon.exitCode === null && daemon.signalCode === null) daemon.kill('SIGKILL');
+    try { after.cancel({ id: request.id }, 'owner'); await result(after, request.id); } catch {}
+    await after.stop();
+  });
+  assert.equal((await once(daemon, 'message'))[0], 'started');
+  const gone = once(daemon, 'exit'); daemon.kill('SIGKILL'); await gone;
+  assert.equal((await after.read({ id: request.id }, 'owner')).status, 'running');
+  assert.equal(after.start(request, 'owner').id, request.id);
+  writeFileSync(gate, 'release');
+  const done = await result(after, request.id);
+  assert.equal(done.exitCode, 0);
+  assert.match(done.output, /started/);
+  assert.match(done.output, /finished/);
+  assert.equal(readFileSync(count, 'utf8'), 'once\n');
 });
 
 test('heavy work never waits: two heavy commands run at the same time', async () => {
@@ -67,21 +183,15 @@ test('heavy work never waits: two heavy commands run at the same time', async ()
   assert.ok(!messages.some(m => m.status === 'queued'));
 });
 
-test('no command is refused for being one too many; only finished results are dropped', async t => {
+test('no command is refused for being one too many', async t => {
   // A launcher whose commands never finish, so every one stays running.
-  const fake = () => {
-    const child = new EventEmitter();
-    // Cancel arrives as a message; the fake then closes like a real one.
-    Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), stdin: { end() {} }, pid: 1, connected: true,
-      send: () => { child.connected = false; setImmediate(() => child.emit('close', 130)); } });
-    return child;
-  };
-  const jobs = new ExecutionJobs({ launch: fake }); t.after(() => jobs.stop());
+  const fake = () => new EventEmitter();
+  const jobs = makeJobs({ launch: fake }); t.after(() => jobs.stop());
   for (let n = 1; n <= 70; n++) assert.equal(jobs.start({ id: id(1000 + n), ...spec('') }, 'owner').status, 'starting');
 });
 
 test('output retention is bounded and paged with an explicit truncation marker', async t => {
-  const jobs = new ExecutionJobs({ launch }); t.after(() => jobs.stop());
+  const jobs = makeJobs(); t.after(() => jobs.stop());
   jobs.start({ id: id(8), ...spec('process.stdout.write("x".repeat(600000))') }, 'owner');
   await pause(400);
   const first = await jobs.read({ id: id(8) }, 'owner');
@@ -92,11 +202,13 @@ test('output retention is bounded and paged with an explicit truncation marker',
 });
 
 test('completed output expires even without another command starting', async t => {
-  const jobs = new ExecutionJobs({ launch, retainMs: 30 }); t.after(() => jobs.stop());
-  jobs.start({ id: id(9), ...spec('console.log("saved briefly")') }, 'owner');
+  const jobs = makeJobs({ retainMs: 30 }); t.after(() => jobs.stop());
+  const request = { id: id(9), ...spec('console.log("saved briefly")') };
+  jobs.start(request, 'owner');
   assert.equal((await result(jobs, id(9))).exitCode, 0);
   await pause(60);
   await assert.rejects(() => jobs.read({ id: id(9) }, 'owner'), /expired/);
+  assert.throws(() => jobs.start(request, 'owner'), /expired/);
 });
 
 test('orphaned descendants cannot keep a completed command alive', async () => {
@@ -194,6 +306,6 @@ test('exec-cancel asks once and says whether the command had already finished', 
 });
 
 test('a finished result is kept for an hour by default', t => {
-  const jobs = new ExecutionJobs({ launch }); t.after(() => jobs.stop());
+  const jobs = makeJobs(); t.after(() => jobs.stop());
   assert.equal(jobs.retainMs, 60 * 60_000);
 });

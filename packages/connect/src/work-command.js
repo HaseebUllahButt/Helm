@@ -13,3 +13,12 @@ export function startWork(spec, { env = process.env } = {}) {
   child.send(spec, error => { if (error) child.emit('error', error); });
   return child;
 }
+
+/** Detached supervisors own remote commands, even while the daemon restarts. */
+export function startDurableWork(_spec, { directory, env = process.env } = {}) {
+  const child = spawn(process.execPath, ['--no-warnings', worker, '--durable', directory], {
+    env, stdio: 'ignore', detached: true,
+  });
+  child.unref();
+  return child;
+}
