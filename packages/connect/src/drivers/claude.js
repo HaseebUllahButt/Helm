@@ -128,6 +128,8 @@ export class ClaudeDriver extends Driver {
   #hosted = false;
   #exited = null;
   #ready = null;
+  /** Claude's answer to Helm's `initialize`: it lists the commands at once. */
+  #initialized = null;
   #starting = null;
   /**
    * `${messageId}#${index}` for text/thinking blocks, the tool_use id for
@@ -163,7 +165,7 @@ export class ClaudeDriver extends Driver {
   #capabilities = new Set();
   /** uuid -> { text, inputId } for messages steered into a turn and not yet read. */
   #inputs = new Map();
-  /** Commands advertised by this exact Claude Code process at init. */
+  /** Commands this exact Claude Code process accepts, with what each one does. */
   #commands = [];
   /**
    * What a command Claude answers itself (/context, /cost, /model) printed,
@@ -358,7 +360,7 @@ export class ClaudeDriver extends Driver {
     } else {
       this.once('init', markReady);
     }
-    void this.#initialize();
+    this.#initialized = this.#initialize();
     this.#exited = new Promise((resolve) => {
       pipe.onExit(({ code, signal, stderr }) => {
         this.#pipe = null;
@@ -418,6 +420,12 @@ export class ClaudeDriver extends Driver {
     const request = this.#control({ subtype: 'initialize',
       hooks: { PreModelSwitch: [{ hookCallbackIds: [MODEL_SWITCH_HOOK] }] } });
     request.then((response) => {
+      const commands = response?.subtype === 'success' ? response.response?.commands : null;
+      if (Array.isArray(commands)) {
+        this.#commands = commands.filter((c) => typeof c?.name === 'string' && c.name).map((c) => ({
+          name: c.name, ...(typeof c.description === 'string' && c.description ? { description: c.description } : {}), source: 'Claude',
+        }));
+      }
       const on = response?.subtype === 'success' && atLeast(response.response?.claude_code_version, MODEL_SWITCH_SINCE);
       if (on !== this.#modelSwitchSignal) this.#setModelSwitchSignal(on);
     }, () => {});
@@ -483,9 +491,15 @@ export class ClaudeDriver extends Driver {
     }
   }
 
+  /**
+   * A new Claude sends its `init` only with the first message, so a chat
+   * opened before any message waited for a list that never came. Its answer
+   * to `initialize` lists the commands at once, also for a process Helm took
+   * over after a restart.
+   */
   async availableCommands() {
     await this.start();
-    await this.#ready;
+    await Promise.race([this.#initialized, Promise.resolve(this.#ready).then(() => this.#commands.length ? null : this.#initialized)]);
     return this.#commands;
   }
 
@@ -687,9 +701,11 @@ export class ClaudeDriver extends Driver {
     if (m.subtype === 'init') {
       this.engineSessionId = m.session_id ?? this.engineSessionId;
       this.#capabilities = new Set(m.capabilities ?? []);
+      // Only names here; keep what `initialize` said each one does.
+      const known = new Map(this.#commands.map((c) => [c.name, c]));
       this.#commands = (m.slash_commands ?? [])
         .filter((name) => typeof name === 'string' && name)
-        .map((name) => ({ name, source: 'Claude' }));
+        .map((name) => ({ ...known.get(name), name, source: 'Claude' }));
       // Whether a thinking-level change keeps the prompt cache is Claude's to
       // say: true when it sends effort inside the conversation, false when a
       // change rewrites the cached prefix, absent when it does not know.

@@ -111,10 +111,16 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `native-claude-chat`.
 
 ## @ chats and / commands
-- **Not yet driven:** `$V type "@"` should list up to three chats; `/` lists
-  commands. The CLIs' own built-in slash commands are not listed.
+- **Trap:** a new Claude sends `init` only with the first message. The `/`
+  list comes from its answer to Helm's `initialize`, which also gives what
+  each command does. Waiting for `init` left the list empty in every chat
+  that was not running, which the owner saw first on the phone.
+- **Prove `/` (driven 2026-11-04):** `up --real`, a new Claude sketch with no
+  message, `$V type "/"`: the list shows with descriptions. `$V restart`,
+  reload, type `/` again: it still shows.
+- **Not yet driven:** `$V type "@"` should list up to three chats.
 - **Tests:** `test/commands`, `commands-devin`, `slash-title`,
-  `hidden-context`.
+  `hidden-context`, `driver-claude`.
 
 ## Long chats: folds, copy, selection
 - **Latest first:** opening a chat or returning to it reads its newest window.
