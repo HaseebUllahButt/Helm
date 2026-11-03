@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { build } from 'esbuild';
 
 const bundle = await build({ entryPoints: ['apps/web/src/session/NativeAgentView.tsx'], bundle: true, write: false, format: 'cjs', external: ['react', 'react/jsx-runtime', './Composer', './Transcript', '../EngineMark', '../Icon'] });
-function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', envId = 'pc', actions = []) {
+function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', envId = 'pc', actions = [], denyClear = false) {
   const hooks = [], effects = [], cleanups = [];
   let cursor = 0, first = true, resolveSend;
   const sent = [];
@@ -18,7 +18,7 @@ function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', env
   const jsx = { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: 'fragment' };
   const Composer = function Composer() {};
   const modules = { react, 'react/jsx-runtime': jsx, './Composer': { Composer }, './Transcript': { Transcript() {} }, '../EngineMark': { EngineMark() {} }, '../Icon': { BackIcon() {} } };
-  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => { if (denyClear) throw Error('denied'); return saved.delete(key); } };
   const module = { exports: {} };
   vm.runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => modules[name] ?? {}, localStorage: storage, window: { addEventListener() {}, removeEventListener() {} }, setTimeout, clearTimeout });
   const client = { nativeMessageActions: () => actions, ackNativeMessage: id => acknowledged.push(id),
@@ -77,4 +77,13 @@ test('returning to a confirmed send clears only its unchanged draft', async () =
   assert.equal(returned.render().draft,'');
   assert.deepEqual(returned.acknowledged,['message']);
   returned.unmount();
+});
+
+test('a failed draft clear keeps the confirmed receipt for the next visit', async () => {
+  const saved=new Map(), view=fixture(saved,'helper','parent','pc',[],true);
+  view.render().setDraft('first'); view.render().onSend(); view.resolveSend();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(view.acknowledged,[]);
+  assert.equal(fixture(saved).render().draft,'first');
+  view.unmount();
 });

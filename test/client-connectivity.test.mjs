@@ -1409,6 +1409,10 @@ test('native helper messages retain a delivery number until the view confirms it
   const result=await sending;
   assert.equal(result.actionId,frame.params.actionId);
   assert.equal(h.client.nativeMessageActions('pc','parent','helper')[0].confirmed,true);
+  const repeated=await h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'once'},30000);
+  assert.equal(repeated.actionId,frame.params.actionId);
+  assert.equal(h.sockets[0].frames.filter(item=>item.method==='session.native-message-deliver').length,1);
+  await assert.rejects(h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'different'},30000),/previous message/i);
   h.client.ackNativeMessage(frame.params.actionId);
   assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,0);
   h.client.close();
