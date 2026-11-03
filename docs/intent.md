@@ -10,7 +10,7 @@ machine -> folder -> chat. Each chat runs one profile: a CLI on an account.
 
 ## The bar
 
-1. Pairing a device is one private link. Browser access lasts seven days. Removing a device ends access.
+1. Pairing a device is one private link. A device stays signed in until the owner removes it.
 2. A chat waiting on the owner is impossible to miss and one tap from answered.
 3. It reads like a live chat: text streams, tool calls show as they start,
    approvals are cards with the real choices.
@@ -23,7 +23,7 @@ machine -> folder -> chat. Each chat runs one profile: a CLI on an account.
 - **No T3 Code code or apps.** T3's ideas and layout, Helm's own look.
 - **One owner per network.** No shared Helm account, no hosted dependency.
 - **Profiles point at secrets, never copy them.**
-- **Passwords only start pairing and last minutes. Browser credentials last seven days.**
+- **Passwords only start pairing and last minutes. A paired device never has to sign in again.** The owner chose this on 2026-11-03: never sign the owner out.
 - **Agents run headless through each CLI's own protocol** and give a typed
   event stream. Reading a terminal and typing `y`/`n` blind was the old way
   and made the screen dead while the agent worked. herdr still owns plain

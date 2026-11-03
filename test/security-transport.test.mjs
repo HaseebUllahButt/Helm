@@ -31,12 +31,17 @@ test('a stolen shared key cannot create machine or browser credentials', () => {
   assert.equal(N.authenticate(revoked, N.machineToken(net)), null);
 });
 
-test('browser credentials end after seven days', () => {
+test('a browser stays signed in until it is removed', () => {
   const net = N.createNetwork();
   const phone = N.issueDevice(net);
+  // Older Helm still needs an expiry within seven days.
+  const { exp } = verifyToken(net.key, phone.token);
+  assert.ok(exp > Date.now() && exp <= Date.now() + 7 * 24 * 60 * 60_000);
   const now = Date.now;
   try {
-    Date.now = () => now() + 8 * 24 * 60 * 60_000;
+    Date.now = () => now() + 90 * 24 * 60 * 60_000;
+    assert.ok(N.authenticate(net, phone.token));
+    N.revoke(net, phone.id);
     assert.equal(N.authenticate(net, phone.token), null);
   } finally { Date.now = now; }
 });

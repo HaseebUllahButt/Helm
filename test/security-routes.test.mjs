@@ -149,6 +149,18 @@ test('remote browser requests require fresh device proofs bound to the target an
   assert.equal(N.checkDeviceRequest(net, verifyToken(net.key, phone.token), encoded, 'GET', '/api/network'), false);
 });
 
+test('a phone with a wrong clock stays signed in', async t => {
+  const { base, publicOrigin, phone, auth } = await browserFor(t);
+  const remote = { authorization: `Bearer ${phone.token}`, 'x-forwarded-for': '192.0.2.1', host: 'current.example' };
+  const now = Date.now;
+  let proof;
+  try {
+    Date.now = () => now() + 10 * 60_000;
+    proof = await auth.headers(publicOrigin, 'GET', '/api/network');
+  } finally { Date.now = now; }
+  assert.equal((await fetch(base + '/api/network', { headers: { ...remote, ...proof } })).status, 200);
+});
+
 test('remote browser WebSockets require a proof and refuse its replay', async t => {
   const { base, publicOrigin, phone, auth } = await browserFor(t);
   const protocols = await auth.protocols(publicOrigin);
@@ -188,11 +200,12 @@ test('direct browser offers bind the credential to the target and DTLS identity'
   assert.equal(allowDirectSignal(net, phone.id, { type: 'offer', credential: phone.token }), false);
 });
 
-for (const mode of ['expiry', 'signer removal']) test(`a live direct browser connection closes after ${mode}`, async t => {
+for (const mode of ['an old expiry', 'signer removal']) test(`a live direct browser connection after ${mode}`, async t => {
   const { net, phone, auth } = await browserFor(t);
-  let current = net, sender, calls = 0, close;
+  let current = net, sender, calls = 0, close, answer;
   const closed = new Promise(resolve => { close = resolve; });
-  const receiver = new PeerHub((_id, payload) => void sender.receive(payload), async () => { calls++; return true; },
+  const answered = new Promise(resolve => { answer = resolve; });
+  const receiver = new PeerHub((_id, payload) => void sender.receive(payload), async () => { calls++; answer(); return true; },
     { authorize: (device, frame, credential) => directCaller(current, device, frame.sub, true, credential) });
   const originalNow = Date.now;
   t.after(() => { Date.now = originalNow; sender?.close(); receiver.stop(); });
@@ -201,12 +214,17 @@ for (const mode of ['expiry', 'signer removal']) test(`a live direct browser con
     if (allowDirectSignal(current, phone.id, payload)) await receiver.signal('audit', payload, null, phone.id);
   }, onMessage() {}, onClose: () => close(), connectTimeout: 5000 });
   await sender.ready;
-  if (mode === 'expiry') Date.now = () => verifyToken(net.key, phone.token).exp + 1;
-  else {
-    current = structuredClone(net); current.self = 'ffffffffffff'; current.revoked[net.self] = Date.now(); delete current.machines[net.self];
-    receiver.dropRevoked(current.revoked);
+  if (mode === 'an old expiry') {
+    // Only removal signs a browser out; its expiry is for older Helm.
+    Date.now = () => verifyToken(net.key, phone.token).exp + 1;
+    await sender.send({ t: 'rpc', id: 'after', method: 'session.list' });
+    await answered;
+    assert.equal(calls, 1);
+    assert.equal(receiver.count, 1);
+    return;
   }
-  if (mode === 'expiry') await sender.send({ t: 'rpc', id: 'after', method: 'session.list' });
+  current = structuredClone(net); current.self = 'ffffffffffff'; current.revoked[net.self] = Date.now(); delete current.machines[net.self];
+  receiver.dropRevoked(current.revoked);
   await closed;
   assert.equal(calls, 0);
   assert.equal(receiver.count, 0);
