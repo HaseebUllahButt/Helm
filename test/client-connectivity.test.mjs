@@ -1447,3 +1447,19 @@ test('an older machine is asked to update without using an unsafe send', async (
   assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,0);
   h.client.close();
 });
+
+test('an uncertain native send can be cleared only for its own helper', async () => {
+  const h=harness(); h.start(); await h.advance(200);
+  const actionId='c'.repeat(32);
+  h.client.saveAction({env:'pc',method:'session.native-message-deliver',actionId,started:true,
+    params:{id:'parent',agentId:'helper',data:'earlier',actionId}});
+  assert.throws(()=>h.client.abandonNativeMessage('pc','parent','other',actionId),/message/i);
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,1);
+  h.client.delivering.set(actionId,Promise.resolve());
+  assert.throws(()=>h.client.abandonNativeMessage('pc','parent','helper',actionId),/still checking/i);
+  h.client.delivering.delete(actionId);
+  h.client.abandonNativeMessage('pc','parent','helper',actionId);
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,0);
+  assert.equal(h.sockets[0].frames.some(item=>item.method==='session.native-message-deliver'),false);
+  h.client.close();
+});

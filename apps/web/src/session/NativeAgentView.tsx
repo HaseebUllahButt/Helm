@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Client, Environment, NativeAgent, NativeAgentDetail, Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { BackIcon } from '../Icon';
+import { Confirm } from '../Modal';
 import { useDraftStorage } from '../useDraftStorage';
 import { Composer } from './Composer';
 import { Transcript } from './Transcript';
@@ -37,6 +38,14 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
   const editDraft = (text: string) => { revision.current += 1; draftRef.current = text; setDraft(text); return storage.save(text); };
   const [sending, setSending] = useState(false);
   const [sentAt, setSentAt] = useState(0);
+  const [uncertain, setUncertain] = useState('');
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  const showUncertain = () => {
+    try {
+      setUncertain(client.nativeMessageActions(env.id, parent.id, agent.id).find(action => !action.confirmed)?.actionId ?? '');
+    } catch { /* The delivery error already says storage is unavailable. */ }
+  };
 
   useEffect(() => {
     mounted.current = true;
@@ -52,9 +61,9 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
           const unchanged = revision.current === savedRevision && draftRef.current.trim() === action.params.data;
           const cleared = !unchanged || editDraft('');
           if (cleared) client.ackNativeMessage(result.actionId);
-          setError(''); setSentAt(Date.now());
+          setError(''); setUncertain(''); setSentAt(Date.now());
         }
-      } catch (failure) { if (!stopped) setError(errorMessage(failure)); }
+      } catch (failure) { if (!stopped) { setError(errorMessage(failure)); showUncertain(); } }
       finally { if (!stopped) { sendingRef.current = false; setSending(false); } }
     };
     void recover();
@@ -103,9 +112,10 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
       if (!mounted.current) return;
       const cleared = revision.current !== sentRevision || editDraft('');
       if (cleared) client.ackNativeMessage(result.actionId);
+      setUncertain('');
       setSentAt(Date.now());
     } catch (failure) {
-      if (mounted.current) setError(errorMessage(failure));
+      if (mounted.current) { setError(errorMessage(failure)); showUncertain(); }
     } finally { if (mounted.current) { sendingRef.current = false; setSending(false); } }
   };
 
@@ -127,7 +137,14 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
         </div>
       </div>
       {error && <p className="error native-error" role="alert">{error}</p>}
+      {uncertain && !sending && <button className="ghost native-error" onClick={() => setConfirmClear(true)}>Check the previous message</button>}
       {storage.error && <p className="error native-error" role="alert">{storage.error}</p>}
+      {confirmClear && <Confirm title="Clear the delivery check?"
+        body="The previous message may already have reached the helper. Check the helper first. If you send it again, it may arrive twice."
+        confirmLabel="I checked the helper" onCancel={() => setConfirmClear(false)} onConfirm={() => {
+          try { client.abandonNativeMessage(env.id, parent.id, agent.id, uncertain); setUncertain(''); setError(''); setConfirmClear(false); }
+          catch (failure) { setError(errorMessage(failure)); setConfirmClear(false); }
+        }} />}
       <Transcript
         turns={log.turns} status={working ? 'working' : 'idle'} loaded={log.loaded}
         empty={working ? 'Waiting for the helper…' : 'This helper left no messages.'}

@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { build } from 'esbuild';
 
-const bundle = await build({ entryPoints: ['apps/web/src/session/NativeAgentView.tsx'], bundle: true, write: false, format: 'cjs', external: ['react', 'react/jsx-runtime', './Composer', './Transcript', '../EngineMark', '../Icon'] });
+const bundle = await build({ entryPoints: ['apps/web/src/session/NativeAgentView.tsx'], bundle: true, write: false, format: 'cjs', external: ['react', 'react/jsx-runtime', './Composer', './Transcript', '../EngineMark', '../Icon', '../Modal'] });
 function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', envId = 'pc', actions = [], denyClear = false) {
   const hooks = [], effects = [], cleanups = [];
   let cursor = 0, first = true, resolveSend;
   const sent = [];
   const acknowledged = [];
+  const abandoned = [];
   const react = {
     useState(value) { const i = cursor++; if (!(i in hooks)) hooks[i] = typeof value === 'function' ? value() : value; return [hooks[i], next => { hooks[i] = typeof next === 'function' ? next(hooks[i]) : next; }]; },
     useRef(value) { const i = cursor++; return hooks[i] ??= { current: value }; },
@@ -17,12 +18,14 @@ function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', env
   };
   const jsx = { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: 'fragment' };
   const Composer = function Composer() {};
-  const modules = { react, 'react/jsx-runtime': jsx, './Composer': { Composer }, './Transcript': { Transcript() {} }, '../EngineMark': { EngineMark() {} }, '../Icon': { BackIcon() {} } };
+  const Confirm = function Confirm() {};
+  const modules = { react, 'react/jsx-runtime': jsx, './Composer': { Composer }, './Transcript': { Transcript() {} }, '../EngineMark': { EngineMark() {} }, '../Icon': { BackIcon() {} }, '../Modal': { Confirm } };
   const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => { if (denyClear) throw Error('denied'); return saved.delete(key); } };
   const module = { exports: {} };
   vm.runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => modules[name] ?? {}, localStorage: storage, window: { addEventListener() {}, removeEventListener() {} }, setTimeout, clearTimeout });
   const client = { nativeMessageActions: () => actions, ackNativeMessage: id => acknowledged.push(id),
-    resumeNativeMessage: action => Promise.resolve({ actionId: action.actionId }), rpc: (_, method, params) => {
+    abandonNativeMessage: (...args) => { abandoned.push(args); actions.splice(0,actions.length); },
+    resumeNativeMessage: action => action.fail ? Promise.reject(Object.assign(Error('Checking delivery.'), {code:'delivery_pending'})) : Promise.resolve({ actionId: action.actionId }), rpc: (_, method, params) => {
     if (method === 'session.native-message') { sent.push(params); return new Promise(resolve => { resolveSend = resolve; }); }
     return new Promise(() => {});
   } };
@@ -33,8 +36,15 @@ function fixture(saved = new Map(), agentId = 'helper', parentId = 'parent', env
     const children = node.props?.children;
     for (const child of Array.isArray(children) ? children : [children]) { const found = find(child); if (found) return found; }
   }
-  function render() { cursor = 0; const tree = module.exports.NativeAgentView(props); if (first) { first = false; cleanups.push(...effects.map(fn => fn())); } return find(tree); }
-  return { render, sent, acknowledged, resolveSend: () => resolveSend({ ok: true, actionId: 'message' }), unmount: () => cleanups.forEach(fn => fn?.()) };
+  let tree;
+  function render() { cursor = 0; tree = module.exports.NativeAgentView(props); if (first) { first = false; cleanups.push(...effects.map(fn => fn())); } return find(tree); }
+  function element(type, label, node) {
+    if (Array.isArray(node)) { for (const child of node) { const found=element(type,label,child); if(found) return found; } return; }
+    if (!node || typeof node !== 'object') return;
+    if (node.type===type && (label===undefined || node.props?.children===label)) return node;
+    return element(type,label,node.props?.children);
+  }
+  return { render, sent, acknowledged, abandoned, Confirm, element: (type, label) => element(type, label, tree), resolveSend: () => resolveSend({ ok: true, actionId: 'message' }), unmount: () => cleanups.forEach(fn => fn?.()) };
 }
 
 test('a late helper send reply keeps newer typed words', async () => {
@@ -85,5 +95,18 @@ test('a failed draft clear keeps the confirmed receipt for the next visit', asyn
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(view.acknowledged,[]);
   assert.equal(fixture(saved).render().draft,'first');
+  view.unmount();
+});
+
+test('an uncertain send requires a warning and explicit confirmation to clear', async () => {
+  const actions=[{actionId:'message',params:{data:'first'},fail:true}];
+  const view=fixture(new Map(),'helper','parent','pc',actions);
+  view.render(); await new Promise(resolve=>setImmediate(resolve)); view.render();
+  view.element('button','Check the previous message').props.onClick(); view.render();
+  const confirmation=view.element(view.Confirm);
+  assert.match(confirmation.props.body,/may already have reached/i);
+  assert.deepEqual(view.abandoned,[]);
+  confirmation.props.onConfirm();
+  assert.deepEqual(view.abandoned,[['pc','parent','helper','message']]);
   view.unmount();
 });

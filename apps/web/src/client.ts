@@ -1686,6 +1686,12 @@ export class Client {
     this.saveAction(action, true);
     this.confirmedNative.delete(actionId);
   }
+  abandonNativeMessage(env: string, id: string, agentId: string, actionId: string) {
+    const action = this.nativeMessageActions(env, id, agentId).find(item => item.actionId === actionId);
+    if (!action || action.confirmed) throw new Error('Cannot clear this message. Check the helper again.');
+    if (this.delivering.has(actionId)) throw new Error('Helm is still checking this message. Try again after it stops.');
+    this.saveAction(action, true);
+  }
   resumeNativeMessage(action: any, timeout = 70_000): Promise<any> {
     const done = action.confirmed ? Promise.resolve(action.result) : this.deliverAction(action, timeout);
     return done.then(result => ({ ...result, actionId: action.actionId }));
