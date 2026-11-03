@@ -1707,11 +1707,13 @@ export class Sessions extends EventEmitter {
   detach(id, watcher) { return this.#viewers.detach(id, watcher); }
 
   async answer(id, requestId, decision) {
-    const s = this.get(id);
+    let s;
+    try { s = this.get(id); }
+    catch (error) { error.deliveryNotSent = true; throw error; }
     const ask = this.#natives.hookAsks.get(requestId);
     const asked = this.events.pending(id).find((request) => request.requestId === requestId);
     if (s.nativeCli) {
-      if (!ask || ask.id !== id) throw new Error('that question was already answered on the terminal');
+      if (!ask || ask.id !== id) throw Object.assign(new Error('This question was already answered in the terminal.'), { deliveryNotSent: true });
       // The same answer `claude -p` takes, printed by the waiting hook.
       let response;
       if (decision?.option === 'deny') response = { behavior: 'deny', message: decision.message || 'The owner declined this from Helm.' };
@@ -1726,7 +1728,7 @@ export class Sessions extends EventEmitter {
       return { ok: true, ...await this.#approvalNote(s, requestId, decision, asked?.title, decision?.option === 'deny') };
     }
     const d = this.#drivers.get(id);
-    if (!d) throw new Error('the agent is not running; that prompt is gone');
+    if (!d) throw Object.assign(new Error('The agent stopped. This request is no longer open.'), { deliveryNotSent: true });
     await d.answer(requestId, decision);
     // Only Claude's decline takes the owner's words with the answer.
     const carried = decision?.option === 'deny' && DRIVERS[s.driver] === DRIVERS.claude;

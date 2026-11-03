@@ -81,6 +81,16 @@ class FakeDriver extends EventEmitter {
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
 
+test('approval refusals before a driver call prove the answer was not sent', async t => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  t.after(() => sessions.stop());
+  await assert.rejects(sessions.answer('missing-chat', 'request', { option: 'allow' }), { deliveryNotSent: true });
+  const chat = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  FakeDriver.made.at(-1).push('status', { status: 'exited' });
+  await assert.rejects(sessions.answer(chat.id, 'request', { option: 'allow' }), { deliveryNotSent: true });
+});
+
 test('app discovery gets live agent roots and skips the shared Codex server', async t => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
