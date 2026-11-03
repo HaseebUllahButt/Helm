@@ -55,6 +55,48 @@ test('share requests remove expired password records and preserve active retry c
 const http = await import('node:http');
 const { connect } = await import('node:net');
 const { once } = await import('node:events');
+const { default: WebSocket, WebSocketServer } = await import('ws');
+
+async function liveShare(t, expiresAt) {
+  const app = http.createServer();
+  const appWs = new WebSocketServer({ server: app });
+  appWs.on('connection', ws => ws.on('message', data => ws.send(data)));
+  await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
+  let shares = [{ name: 'test', port: app.address().port, createdAt: Date.now(), ...(expiresAt ? { expiresAt } : {}) }];
+  const route = createShareRoute({ online: new Map([['machine', {}]]),
+    callEnv: async () => ({ shares }),
+    openTcp: () => new Promise((resolve, reject) => {
+      const stream = connect(app.address().port, '127.0.0.1', () => resolve(stream));
+      stream.once('error', reject);
+    }),
+  });
+  const hub = http.createServer();
+  hub.on('upgrade', (req, socket, head) => route.upgrade(req, socket, head).catch(() => socket.destroy()));
+  await new Promise(resolve => hub.listen(0, '127.0.0.1', resolve));
+  const client = new WebSocket(`ws://127.0.0.1:${hub.address().port}/live`, { headers: { host: 'test.links.test' } });
+  t.after(async () => {
+    client.terminate();
+    for (const ws of appWs.clients) ws.terminate();
+    appWs.close(); app.closeAllConnections(); hub.closeAllConnections();
+    await Promise.all([new Promise(resolve => app.close(resolve)), new Promise(resolve => hub.close(resolve))]);
+  });
+  await once(client, 'open');
+  const echo = once(client, 'message'); client.send('before');
+  assert.equal(String((await echo)[0]), 'before');
+  return { client, stop: () => { shares = []; } };
+}
+
+test('an open Spin websocket closes after Stop', { timeout: 8000 }, async t => {
+  const { client, stop } = await liveShare(t);
+  const closed = once(client, 'close');
+  stop();
+  await closed;
+});
+
+test('an open Spin websocket closes at expiry', { timeout: 3000 }, async t => {
+  const { client } = await liveShare(t, Date.now() + 300);
+  await once(client, 'close');
+});
 
 async function proxy(t, openTcp, port) {
   const { value: share, maps } = captureMaps(t, () => createShareRoute({

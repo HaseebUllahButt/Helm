@@ -41,7 +41,9 @@ for websites that cannot run inside a frame.
 - **Access checks:** a known link keeps its decision for at most five seconds.
   The next request checks the source machine before it uses an old tunnel.
   A slow unrelated machine does not delay that check. Old discovery replies
-  cannot replace newer source replies. Unknown names share one discovery per
+  cannot replace newer source replies. Open WebSocket connections close at
+  expiry or after the next source check finds the link stopped or changed.
+  Unknown names share one discovery per
   second; a new name can wait up to one second on its first visit.
 - **Names:** app and CLI creation check other online machines. Offline
   machines do not reserve names. If two machines later report the same name,
