@@ -11,7 +11,7 @@ import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import {
-  loadNetwork, mergeRoster, allEndpoints, describeSelf, hubCredential,
+  loadNetwork, mergeRoster, allEndpoints, describeSelf, hubCredential, secureHubAddress,
   roster as rosterOf, rosterHash, machineName, NAME_RULE, machineKind,
   MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
@@ -39,7 +39,6 @@ import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub, directCaller } from './peer.js';
 import { allowDirectSignal } from './direct-auth.js';
-import { lanAddresses } from './net-addr.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
@@ -899,7 +898,7 @@ export class Daemon {
       ] : [],
     });
     this.#hintOwners = plan.owners;
-    return plan.urls;
+    return plan.urls.filter(secureHubAddress);
   }
 
   /** Hinted address -> the machine that announced it, for this round's links. */
@@ -988,12 +987,7 @@ export class Daemon {
    */
   async #publishSelf() {
     const net = loadNetwork() ?? this.net;
-    const endpoints = [...new Set([
-      ...this.extra,
-      ...(this.advertiseLan
-        ? lanAddresses().map((a) => `http://${a.address}:${this.port}`)
-        : []),
-    ])];
+    const endpoints = [...new Set(this.extra)].filter(secureHubAddress);
     const ssh = await sshInfo().catch(() => ({}));
     const code = codeKeyInfo();
     const signing = codeSigningInfo();

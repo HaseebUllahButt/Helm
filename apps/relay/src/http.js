@@ -4,7 +4,7 @@ import { q, now, newId, newInviteCode } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, issueDevice, revoke,
   authenticate, allEndpoints, localKey, deviceToken,
-  hubProof, issueChallenge, HELLO_PATH,
+  hubProof, issueChallenge, HELLO_PATH, sanitizeRoster,
 } from '@helm/protocol/network';
 import { ROLE } from '@helm/protocol/identity';
 import { fanOut } from './notify.js';
@@ -549,6 +549,15 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       if (row.used_by) return json(res, 409, { error: 'invite already used' });
       if (row.expires_at < now()) return json(res, 410, { error: 'invite expired' });
 
+      const member = sanitizeRoster({ machines: { [body.self]: {
+        id: body.self, name: body.name, codeSignPubkey: body.codeSignPubkey,
+        endpoints: [], updatedAt: Date.now(), addedAt: Date.now(),
+      } } }).machines[body.self];
+      if (!member?.codeSignPubkey || net.machines[body.self] || net.revoked[body.self]) {
+        return json(res, 400, { error: 'Update Helm on the joining machine and try again.' });
+      }
+      net.machines[body.self] = member;
+      saveNetwork(net);
       q.inviteUse.run(String(body.name || 'machine').slice(0, 64), code);
       // `role` travels back so the joining machine knows what it was invited
       // as, and can set itself up as a home without being told again.

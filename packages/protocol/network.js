@@ -17,7 +17,7 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch, realpathSync, renameSync, statSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
 import { hostname, homedir } from 'node:os';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import {
@@ -188,6 +188,46 @@ export const machineKind = (v) => (MACHINE_KINDS.includes(v) ? v : null);
 // acts as a pc everywhere it is read.
 const rosterKind = (v) => (v === 'nas' ? v : machineKind(v));
 
+/** The private signing key stays on this machine, outside the shared roster. */
+export function machineSigningInfo() {
+  assertWritableDirectory();
+  const file = join(HELM_DIR, 'code_ed25519');
+  if (!existsSync(file) && !existsSync(`${file}.pub`)) {
+    mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
+    const pair = generateKeyPairSync('ed25519');
+    writeFileSync(file, pair.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600, flag: 'wx' });
+    writeFileSync(`${file}.pub`, pair.publicKey.export({ type: 'spki', format: 'der' }), { mode: 0o600, flag: 'wx' });
+  }
+  chmodSync(HELM_DIR, 0o700);
+  const privateKey = createPrivateKey(readFileSync(file));
+  const publicKey = createPublicKey(privateKey);
+  const codeSignPubkey = publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  if (readFileSync(`${file}.pub`).toString('base64url') !== codeSignPubkey) throw new Error('The machine signing keys do not match. Restore them from a backup.');
+  chmodSync(file, 0o600);
+  chmodSync(`${file}.pub`, 0o600);
+  return { privateKey, publicKey, codeSignPubkey };
+}
+
+const credentialBody = (claims) => Buffer.from('helm-credential-v2:' + JSON.stringify([
+  claims.net, claims.sub, claims.role, claims.issuer, claims.ch ?? null, claims.exp ?? null,
+]));
+const signedToken = (net, claims) => {
+  const signed = { ...claims, issuer: net.self };
+  signed.signature = sign(null, credentialBody(signed), machineSigningInfo().privateKey).toString('base64url');
+  return mintToken(net.key, signed);
+};
+const DEVICE_TTL = 7 * 24 * 60 * 60_000;
+
+/** Remote connections must use TLS. Loopback stays available for local tools. */
+export function secureHubAddress(base) {
+  try {
+    const url = new URL(base);
+    const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    return !url.username && !url.password && !url.search && !url.hash
+      && url.pathname === '/' && (url.protocol === 'https:' || (url.protocol === 'http:' && local));
+  } catch { return false; }
+}
+
 /**
  * Start a brand new network with this machine as its first member.
  *
@@ -207,7 +247,7 @@ export function createNetwork({ name = hostname(), port = 8787 } = {}) {
     machines: {
       [id]: {
         id, name: cleanName(name, hostname()), kind: 'vm', endpoints: [],
-        updatedAt: Date.now(), addedAt: Date.now(),
+        updatedAt: Date.now(), addedAt: Date.now(), codeSignPubkey: machineSigningInfo().codeSignPubkey,
       },
     },
     devices: {},
@@ -216,8 +256,7 @@ export function createNetwork({ name = hostname(), port = 8787 } = {}) {
 }
 
 /** Join a network we have been handed the key to. */
-export function joinNetwork({ id, key, name = hostname(), port = 8787, machines = {}, devices = {}, revoked = {} }) {
-  const self = newDeviceId();
+export function joinNetwork({ id, key, name = hostname(), port = 8787, machines = {}, devices = {}, revoked = {}, self = newDeviceId() }) {
   // What the inviter handed us is a roster from the network, which is exactly
   // the thing `mergeRoster` refuses to take on trust; hold it to the same bar.
   const given = sanitizeRoster({ id, machines, devices, revoked });
@@ -227,7 +266,7 @@ export function joinNetwork({ id, key, name = hostname(), port = 8787, machines 
       ...given.machines,
       [self]: {
         id: self, name: cleanName(name, hostname()), endpoints: [],
-        updatedAt: Date.now(), addedAt: Date.now(),
+        updatedAt: Date.now(), addedAt: Date.now(), codeSignPubkey: machineSigningInfo().codeSignPubkey,
       },
     },
     devices: given.devices,
@@ -248,19 +287,12 @@ export function forgetNetwork() {
  * wire from a daemon any more: see `hubCredential`.
  */
 export const machineToken = (net) =>
-  mintToken(net.key, { net: net.id, sub: net.self, role: ROLE.MACHINE });
+  signedToken(net, { net: net.id, sub: net.self, role: ROLE.MACHINE });
 
 // ------------------------------------------------------------ hub handshake
 //
-// A machine dials every address in the roster, and most of those are plain
-// http on some LAN. It used to open with its durable machine token, to
-// whatever answered: anyone holding that IP on a café's wifi - or just
-// listening on it - got a credential that never expires, and every frame it
-// sent back (an RPC, an SSH key for authorized_keys) was obeyed. So now the
-// hub goes first: it proves it holds the network key by MACing our nonce,
-// and we answer its challenge with a token that is good for one use, for a
-// minute. A hub that cannot prove itself is never sent anything; a sniffer
-// on the wire sees a credential that is already spent.
+// Remote hubs require HTTPS. The shared-key proof checks network membership;
+// the signed credential proves the caller owns its pinned machine key.
 
 export const HELLO_PATH = '/api/hub/hello';
 const HUB_PROOF = 'hub-proof';
@@ -273,7 +305,7 @@ export const checkHubProof = (net, nonce, mac) =>
   checkProof(net.key, HUB_PROOF, `${net.id}:${nonce}`, mac);
 
 /** A machine token spendable once, against the challenge the hub issued. */
-export const oneTimeToken = (net, challenge) => mintToken(net.key, {
+export const oneTimeToken = (net, challenge) => signedToken(net, {
   net: net.id, sub: net.self, role: ROLE.MACHINE, ch: challenge, exp: Date.now() + CREDENTIAL_TTL_MS,
 });
 
@@ -336,6 +368,7 @@ function postJson(url, body, { timeout, signal }) {
 export const hubHello = { post: postJson };
 
 export async function hubCredential(net, base, { timeout = 15_000, signal } = {}) {
+  if (!secureHubAddress(base)) throw new Error('Use HTTPS to connect to another machine.');
   const nonce = randomBytes(24).toString('base64url');
   const res = await hubHello.post(`${base.replace(/\/+$/, '')}${HELLO_PATH}`, { nonce }, { timeout, signal });
   if (res.status === 404) {
@@ -355,7 +388,7 @@ export async function hubCredential(net, base, { timeout = 15_000, signal } = {}
 }
 
 /**
- * A credential for a phone or browser. Durable: only revocation ends it.
+ * A browser credential lasts seven days. Revocation also ends it.
  *
  * The label is whatever the browser called itself in the login body, so it is
  * cleaned on the way in for the same reason a machine name is: it goes into
@@ -369,7 +402,7 @@ export function issueDevice(net, label = 'device') {
     addedAt: Date.now(), updatedAt: Date.now(),
   };
   write(net);
-  return { id, token: mintToken(net.key, { net: net.id, sub: id, role: ROLE.DEVICE }) };
+  return { id, token: signedToken(net, { net: net.id, sub: id, role: ROLE.DEVICE, exp: Date.now() + DEVICE_TTL }) };
 }
 
 /**
@@ -383,15 +416,14 @@ export function issueDevice(net, label = 'device') {
  */
 export function deviceToken(net, id) {
   if (!net.devices[id] || net.revoked[id]) return null;
-  return mintToken(net.key, { net: net.id, sub: id, role: ROLE.DEVICE });
+  return signedToken(net, { net: net.id, sub: id, role: ROLE.DEVICE, exp: Date.now() + DEVICE_TTL });
 }
 
 /**
  * Is this token allowed in right now?
  *
  * Signature first (cheap, and settles whether the bearer knows the key at
- * all), then the revocation list, which is the only piece of shared state
- * authentication depends on.
+ * all), then the pinned signing key, roster membership, expiry and revocation.
  */
 export function authenticate(net, token) {
   const claims = verifyToken(net.key, token);
@@ -400,6 +432,15 @@ export function authenticate(net, token) {
   if (claims.role !== ROLE.MACHINE && claims.role !== ROLE.DEVICE) return null;
   if (typeof claims.sub !== 'string' || !ids.test(claims.sub)) return null;
   if (net.revoked[claims.sub]) return null;
+  if (claims.role === ROLE.MACHINE && !Object.hasOwn(net.machines ?? {}, claims.sub)) return null;
+  if (claims.role === ROLE.MACHINE && claims.issuer !== claims.sub) return null;
+  if (typeof claims.issuer !== 'string' || net.revoked[claims.issuer]) return null;
+  const key = net.machines?.[claims.issuer]?.codeSignPubkey;
+  if (!key || typeof claims.signature !== 'string') return null;
+  try {
+    if (!verify(null, credentialBody(claims), createPublicKey({ key: Buffer.from(key, 'base64url'), type: 'spki', format: 'der' }), Buffer.from(claims.signature, 'base64url'))) return null;
+  } catch { return null; }
+  if (claims.role === ROLE.DEVICE && !(claims.exp > Date.now() && claims.exp <= Date.now() + DEVICE_TTL)) return null;
   if (claims.role === ROLE.DEVICE && !Object.hasOwn(net.devices ?? {}, claims.sub)) return null;
   if (claims.exp !== undefined && !(claims.exp > Date.now())) return null;
   // A handshake credential is good once, and only here: the challenge it

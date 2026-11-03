@@ -647,10 +647,13 @@ const MAX_ENDPOINTS = 12;
 /** The origin this page was served from, if it was served from one. */
 const here = (): string[] => (typeof location === 'undefined' || !location.origin ? [] : [location.origin]);
 
-const reachableFromHere = (base: string) =>
-  typeof location === 'undefined' ||
-  location.protocol !== 'https:' ||
-  !base.startsWith('http://');
+const reachableFromHere = (base: string) => {
+  try {
+    const url = new URL(base);
+    return !url.username && !url.password && !url.search && !url.hash && url.pathname === '/'
+      && (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)));
+  } catch { return false; }
+};
 
 /** A hub that answered: where it is, how much of the network it can see. */
 interface Reached { base: string; reach: number; elapsed: number; machines: Set<string> }
@@ -1100,6 +1103,7 @@ export class Client {
   }
 
   private prepareSocket(hub: string) {
+    if (!reachableFromHere(hub)) throw new Error('Use HTTPS to connect to another machine.');
     const ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/ws?chunks=1`, ['helm', this.token]);
     let cancel!: () => void;
     const ready = new Promise<WebSocket>((resolve, reject) => {
@@ -1212,6 +1216,7 @@ export class Client {
     }
     if (version !== this.connectVersion) { prepared?.cancel(); return; }
     if (!hub) throw new Error('no machine in this network is reachable right now');
+    if (!reachableFromHere(hub)) throw new Error('Use HTTPS to connect to another machine.');
     if (this.closed) { prepared?.cancel(); this.connecting = false; return; }
     if (!migrating) this.relay = hub;
 
@@ -2291,8 +2296,10 @@ export class Client {
   }
 
   private async httpAt<T>(base: string, path: string, init: RequestInit = {}): Promise<T> {
+    if (!reachableFromHere(base)) throw new Error('Use HTTPS to connect to another machine.');
     const res = await fetch(`${base}${path}`, {
       ...init,
+      redirect: 'error',
       signal: init.signal ?? AbortSignal.timeout(20_000),
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...init.headers },
     });
@@ -2469,10 +2476,7 @@ export const LOOPBACK_HOST = /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])$/;
 /**
  * Would a secret sent to this address cross a network in the clear?
  *
- * A machine's hub is plain http on its LAN address by design - a phone on the
- * same wifi reaching a laptop directly is the fast path - so this is not an
- * error, and the app says so calmly. It is the one thing worth telling a
- * person before they pair or mint a link on a network they do not own.
+ * Remote HTTP is refused. Loopback HTTP stays available for local access.
  */
 export function isCleartext(url: string): boolean {
   try {
@@ -2482,7 +2486,7 @@ export function isCleartext(url: string): boolean {
 }
 
 export const CLEARTEXT_NOTE =
-  'This connection is not encrypted. Use it only on a network you trust.';
+  'Use HTTPS to connect to another machine.';
 
 /**
  * Sign in.
@@ -2503,7 +2507,9 @@ export const CLEARTEXT_NOTE =
  */
 export async function login(endpoint: string, password: string, local?: string) {
   const base = endpoint.replace(/\/$/, '');
+  if (!reachableFromHere(base)) throw new Error('Use HTTPS to connect to another machine.');
   const res = await fetch(`${base}/api/auth/login`, {
+    redirect: 'error',
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ password, local, label: deviceLabel() }),
