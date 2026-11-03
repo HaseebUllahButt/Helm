@@ -79,6 +79,9 @@ test('Codex forks require the same local account, folder and native daemon', () 
   assert.equal(fork(parent, profile, profile, '/different/folder'), null);
   assert.equal(fork(parent, profile, profile, parent.cwd, true), null);
   assert.equal(fork(parent, profile, profile, parent.cwd, false, null), null);
+  const blocked = { kind: 'error', message: 'This content was flagged for possible cybersecurity risk.' };
+  assert.equal(fork({ ...parent, recovery: blocked }), null);
+  assert.equal(fork({ ...parent, recovery: { kind: 'error', message: 'The service is busy.' } }).threadId, 'parent-thread');
 });
 
 test('Codex recovery history leaves out queued tickets and keeps accepted tool results', () => {

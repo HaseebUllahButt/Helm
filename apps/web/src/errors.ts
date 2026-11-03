@@ -15,6 +15,9 @@ function readableMessage(message: string): string | undefined {
   return line[0].toUpperCase() + line.slice(1);
 }
 
+/** A provider's safety filter refused the reply. Same words as SAFETY_BLOCK in packages/connect/src/delegation.js. */
+export const SAFETY_BLOCK = /flagged for possible|content (?:was|has been) flagged|violates? (?:our|the) (?:usage|content) polic|appears to violate|cyber permissive/i;
+
 export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot finish this action. Try again.' }: ErrorContext = {}): string {
   const value = error && typeof error === 'object' ? error as { message?: unknown; code?: unknown; status?: unknown; name?: unknown } : {};
   const message = typeof error === 'string' ? error : typeof value.message === 'string' ? value.message : '';
@@ -33,6 +36,7 @@ export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot 
   }
 
   if (/model.*(not supported|not available|unavailable)|does not offer/i.test(text)) return 'This account cannot use this model. Select another model.';
+  if (SAFETY_BLOCK.test(text)) return 'The AI service blocked this chat for safety. Continue in a new chat or with another AI.';
   if (/an internal error occurred/i.test(text)) return 'The AI service did not finish this reply. Try again. Select another model if it fails again.';
   if (/file is empty/i.test(text)) return 'The file is empty. Select another file.';
   if (/file is [\d.]+ MB|file.*too large/i.test(text)) return 'The file is too large. Select a file smaller than 20 MB.';
