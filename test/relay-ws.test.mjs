@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter, once } from 'node:events';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-relay-ws-'));
 Object.assign(process.env, { HELM_DIR: root, HELM_DB: join(root, 'hub.sqlite') });
@@ -85,8 +86,9 @@ async function hubFixture(t) {
   const layer = createWsLayer();
   const server = createServer();
   server.on('upgrade', (req, socket, head) => {
-    const env = new URL(req.url, 'http://hub').searchParams.get('env');
-    const auth = env ? { role: 'env', env: net.machines[env], info: {} } : { role: 'client', sub: net.self };
+    const query = new URL(req.url, 'http://hub').searchParams;
+    const env = query.get('env');
+    const auth = env ? { role: 'env', env: net.machines[env], info: {} } : { role: 'client', sub: net.self, machine: query.has('machine') };
     layer.wss.handleUpgrade(req, socket, head, ws => layer.wss.emit('connection', ws, req, auth));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -116,10 +118,147 @@ async function hubFixture(t) {
     await until(frame => frame.t === 'welcome');
     return { ws, frames, until, settled, send };
   };
-  return { layer, open };
+  return { layer, open, net };
 }
 
-test('a reconnecting machine receives every waiting job', async t => {
+test('a stalled machine receives one queued frame at a time', { timeout: 10000 }, async t => {
+  const { layer, open, net } = await hubFixture(t);
+  const target = await open('env=m1');
+  const worker = await open('env=m2');
+  const source = await open('machine=1');
+  const ids = ['1', '2', '3'].map(n => n.padStart(24, '0'));
+  const receiptId = '4'.padStart(24, '0');
+  t.after(() => { for (const id of [...ids, receiptId]) db.prepare('DELETE FROM handoff_queue WHERE id = ?').run(id); });
+  const serverSocket = layer.online.get('m1');
+  const realSend = serverSocket.send.bind(serverSocket);
+  const writes = [], changed = new EventEmitter();
+  serverSocket.send = (raw, ...args) => {
+    const frame = JSON.parse(raw);
+    if (frame.t !== 'handoff.job' && frame.t !== 'handoff.complete') return realSend(raw, ...args);
+    writes.push({ raw, args, frame }); changed.emit('write');
+  };
+  const waitWrites = async count => { while (writes.length < count) await once(changed, 'write'); };
+  const submit = async (id, number) => {
+    source.send({ t: 'rpc', id: `submit-${number}`, method: 'dispatch.submit',
+      params: { targetMachineId: 'm1', params: { handoffId: id, sourceMachineId: net.self,
+        targetMachineId: 'm1', snapshotDigest: 'a'.repeat(64), requestDigest: 'b'.repeat(64) } } });
+    const answer = await source.until(frame => frame.t === 'rpcResult' && frame.id === `submit-${number}`);
+    assert.equal(answer.ok, true);
+  };
+  await submit(ids[0], 1);
+  await waitWrites(1);
+  await submit(ids[1], 2);
+  // A clock change can put new work before the current scan cursor.
+  const earlier = { handoffId: ids[2], sourceMachineId: net.self, targetMachineId: 'm1',
+    snapshotDigest: 'a'.repeat(64), requestDigest: 'b'.repeat(64) };
+  q.handoffInsert.run(ids[2], net.self, 'm1', earlier.snapshotDigest, JSON.stringify(earlier), Date.now() - 1000, Date.now());
+  await submit(ids[2], 3);
+  q.handoffInsert.run(receiptId, 'm1', 'm2', 'a'.repeat(64), JSON.stringify({ parent: { sessionId: 'parent' } }), Date.now(), Date.now());
+  worker.send({ t: 'handoff.result', handoffId: receiptId, ok: true,
+    receipt: { sessionId: 'child', folder: '/work', digest: 'b'.repeat(64) } });
+  await worker.settled();
+  assert.equal(writes.length, 1, 'new requests must not send while the first callback is held');
+  assert.equal(q.handoffGet.get(ids[0]).status, 'queued');
+  for (let i = 0; i < 4; i++) {
+    await waitWrites(i + 1);
+    const { raw, args } = writes[i];
+    assert.equal(typeof args.at(-1), 'function', 'wait for the socket send callback');
+    realSend(raw, ...args);
+  }
+  await target.until(frame => frame.t === 'handoff.complete' && frame.handoffId === receiptId);
+  for (const id of ids) await target.until(frame => frame.t === 'handoff.job' && frame.handoffId === id);
+});
+
+test('a disconnected stalled machine gets its unsent jobs after reconnect', { timeout: 10000 }, async t => {
+  const { layer, open, net } = await hubFixture(t);
+  const target = await open('env=m1');
+  const source = await open('machine=1');
+  const ids = ['5', '6'].map(n => n.padStart(24, '0'));
+  t.after(() => { for (const id of ids) db.prepare('DELETE FROM handoff_queue WHERE id = ?').run(id); });
+  const serverSocket = layer.online.get('m1');
+  const realSend = serverSocket.send.bind(serverSocket);
+  const writes = [];
+  serverSocket.send = (raw, ...args) => {
+    const frame = JSON.parse(raw);
+    if (frame.t !== 'handoff.job') return realSend(raw, ...args);
+    writes.push({ frame, args });
+  };
+  for (const [i, id] of ids.entries()) {
+    source.send({ t: 'rpc', id: `disconnect-${i}`, method: 'dispatch.submit',
+      params: { targetMachineId: 'm1', params: { handoffId: id, sourceMachineId: net.self,
+        targetMachineId: 'm1', snapshotDigest: 'a'.repeat(64), requestDigest: 'b'.repeat(64) } } });
+    await source.until(frame => frame.t === 'rpcResult' && frame.id === `disconnect-${i}`);
+  }
+  assert.equal(writes.length, 1);
+  const closed = once(serverSocket, 'close'); target.ws.terminate(); await closed;
+  writes[0].args.at(-1)?.();
+  const replacement = await open('env=m1');
+  for (const id of ids) await replacement.until(frame => frame.t === 'handoff.job' && frame.handoffId === id);
+  assert.equal(writes.length, 1, 'a late callback cannot restart the old socket');
+});
+
+test('a fast answer is not overwritten by a later send callback', { timeout: 10000 }, async t => {
+  const { layer, open, net } = await hubFixture(t);
+  const target = await open('env=m1');
+  const source = await open('machine=1');
+  const id = '7'.padStart(24, '0');
+  t.after(() => db.prepare('DELETE FROM handoff_queue WHERE id = ?').run(id));
+  const serverSocket = layer.online.get('m1');
+  const realSend = serverSocket.send.bind(serverSocket);
+  let sent;
+  serverSocket.send = (raw, ...args) => {
+    if (JSON.parse(raw).t !== 'handoff.job') return realSend(raw, ...args);
+    sent = args.at(-1);
+    realSend(raw);
+  };
+  source.send({ t: 'rpc', id: 'fast-answer', method: 'dispatch.submit',
+    params: { targetMachineId: 'm1', params: { handoffId: id, sourceMachineId: net.self,
+      targetMachineId: 'm1', snapshotDigest: 'a'.repeat(64), requestDigest: 'b'.repeat(64) } } });
+  await target.until(frame => frame.t === 'handoff.job' && frame.handoffId === id);
+  target.send({ t: 'handoff.result', handoffId: id, ok: true,
+    receipt: { sessionId: 'child', folder: '/work', digest: 'b'.repeat(64) } });
+  await target.settled();
+  assert.equal(q.handoffGet.get(id).status, 'running');
+  assert.equal(typeof sent, 'function');
+  sent();
+  await target.settled();
+  assert.equal(q.handoffGet.get(id).status, 'running');
+});
+
+test('a chunked handoff waits for each piece to be sent', { timeout: 10000 }, async t => {
+  const { layer, open, net } = await hubFixture(t);
+  const target = await open('env=m1');
+  const source = await open('machine=1');
+  const id = '8'.padStart(24, '0');
+  t.after(() => db.prepare('DELETE FROM handoff_queue WHERE id = ?').run(id));
+  const serverSocket = layer.online.get('m1');
+  serverSocket.chunks = true;
+  const realSend = serverSocket.send.bind(serverSocket);
+  const writes = [], changed = new EventEmitter();
+  serverSocket.send = (raw, ...args) => {
+    const frame = JSON.parse(raw);
+    if (frame.t !== 'dc-chunk') return realSend(raw, ...args);
+    writes.push({ raw, args, frame }); changed.emit('write');
+  };
+  source.send({ t: 'rpc', id: 'chunked-job', method: 'dispatch.submit',
+    params: { targetMachineId: 'm1', params: { handoffId: id, sourceMachineId: net.self,
+      targetMachineId: 'm1', snapshotDigest: 'a'.repeat(64), requestDigest: 'b'.repeat(64), pad: 'x'.repeat(50000) } } });
+  await source.until(frame => frame.t === 'rpcResult' && frame.id === 'chunked-job');
+  assert.equal(writes.length, 1);
+  const count = writes[0].frame.n;
+  assert.ok(count > 1);
+  for (let i = 0; i < count; i++) {
+    while (writes.length <= i) await once(changed, 'write');
+    assert.equal(writes.length, i + 1);
+    assert.equal(writes[i].frame.i, i);
+    realSend(writes[i].raw, ...writes[i].args);
+  }
+  await target.until(frame => frame.t === 'dc-chunk' && frame.i === count - 1);
+  const pieces = target.frames.filter(frame => frame.t === 'dc-chunk');
+  assert.equal(JSON.parse(pieces.map(piece => piece.data).join('')).handoffId, id);
+});
+
+test('a reconnecting machine receives every waiting job', { timeout: 10000 }, async t => {
   const { open } = await hubFixture(t);
   const ids = [];
   t.after(() => { for (const id of ids) db.prepare('DELETE FROM handoff_queue WHERE id = ?').run(id); });
@@ -131,11 +270,11 @@ test('a reconnecting machine receives every waiting job', async t => {
     if (i < 100) q.handoffDelivered.run(base + i, id);
   }
   const target = await open('env=m1');
-  await target.settled();
+  await target.until(frame => frame.t === 'handoff.job' && frame.handoffId === ids.at(-1));
   assert.deepEqual(new Set(target.frames.filter(f => f.t === 'handoff.job').map(f => f.handoffId)), new Set(ids));
 });
 
-test('a reconnecting source receives every saved receipt', async t => {
+test('a reconnecting source receives every saved receipt', { timeout: 10000 }, async t => {
   const { open } = await hubFixture(t);
   const ids = [];
   t.after(() => { for (const id of ids) db.prepare('DELETE FROM handoff_queue WHERE id = ?').run(id); });
@@ -146,7 +285,7 @@ test('a reconnecting source receives every saved receipt', async t => {
     q.handoffRunning.run(JSON.stringify({ sessionId: `child-${i}`, folder: '/work', digest: 'b'.repeat(64) }), base + i, id);
   }
   const source = await open('env=m2');
-  await source.settled();
+  await source.until(frame => frame.t === 'handoff.complete' && frame.handoffId === ids.at(-1));
   assert.deepEqual(new Set(source.frames.filter(f => f.t === 'handoff.complete').map(f => f.handoffId)), new Set(ids));
 });
 

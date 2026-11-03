@@ -149,6 +149,10 @@ db.exec(`
     updated_at      INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS handoff_target_status ON handoff_queue(target_id, status, created_at);
+  CREATE INDEX IF NOT EXISTS handoff_waiting_order ON handoff_queue(target_id, created_at, id)
+    WHERE status IN ('queued', 'delivered');
+  CREATE INDEX IF NOT EXISTS handoff_receipt_order ON handoff_queue(source_id, created_at, id)
+    WHERE status = 'running';
 `);
 
 // `CREATE TABLE IF NOT EXISTS` leaves an existing table alone, so a hub that
@@ -261,17 +265,25 @@ export const q = {
   handoffPending: db.prepare(
     `SELECT * FROM handoff_queue
      WHERE target_id = ? AND status IN ('queued', 'delivered')
-     ORDER BY created_at`
+     ORDER BY created_at, id LIMIT 1`
+  ),
+  handoffPendingAfter: db.prepare(
+    `SELECT * FROM handoff_queue
+     WHERE target_id = ? AND status IN ('queued', 'delivered') AND (created_at, id) > (?, ?)
+     ORDER BY created_at, id LIMIT 1`
   ),
   handoffDelivered: db.prepare(
     `UPDATE handoff_queue SET status = 'delivered', attempts = attempts + 1, updated_at = ?
-     WHERE id = ?`
+     WHERE id = ? AND status IN ('queued', 'delivered')`
   ),
-  // Finished work travelling back: a source machine's answered queue, newest
-  // first, so reconnecting can be told where its children landed.
+  // Finished work travelling back to its source, in stable creation order.
   handoffCompletions: db.prepare(
     `SELECT * FROM handoff_queue WHERE source_id = ? AND status = 'running'
-     ORDER BY updated_at DESC`
+     ORDER BY created_at, id LIMIT 1`
+  ),
+  handoffCompletionsAfter: db.prepare(
+    `SELECT * FROM handoff_queue WHERE source_id = ? AND status = 'running' AND (created_at, id) > (?, ?)
+     ORDER BY created_at, id LIMIT 1`
   ),
   handoffRunning: db.prepare(
     `UPDATE handoff_queue SET status = 'running', result = ?, error = NULL, updated_at = ?

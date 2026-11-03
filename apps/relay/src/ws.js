@@ -227,51 +227,110 @@ export function createWsLayer() {
     } catch { /* a store that cannot sweep is no reason to refuse work */ }
   };
 
-  /**
-   * Hand a target's waiting tasks to it - on connect, and right after a
-   * submit if it happens to be online now. Delivered rows stay queryable as
-   * delivered until the daemon's HANDOFF_RESULT lands.
-   */
-  function deliverPending(targetId) {
-    const sock = online.get(targetId);
-    if (!sock) return;
-    for (const row of q.handoffPending.iterate(targetId)) {
-      let params;
-      try { params = JSON.parse(row.payload); } catch { continue; }
-      send(sock, T.HANDOFF_JOB, {
-        handoffId: row.id, sourceMachineId: row.source_id, params,
-      });
-      q.handoffDelivered.run(now(), row.id);
+  // One pump owns both kinds of handoff frames on a machine's socket. A
+  // later request marks a scan for another pass, never starts a second pump.
+  const deliveries = new WeakMap();
+  const currentSocket = (id, sock) => sock.readyState === 1 && online.get(id) === sock;
+
+  function writeHandoff(id, sock, frame) {
+    return new Promise(resolve => {
+      if (!currentSocket(id, sock)) return resolve(false);
+      let done = false;
+      const finish = ok => {
+        if (done) return;
+        done = true;
+        sock.off('close', closed);
+        resolve(ok && currentSocket(id, sock));
+      };
+      const closed = () => finish(false);
+      sock.once('close', closed);
+      try { sock.send(frame, error => finish(!error)); }
+      catch { finish(false); }
+    });
+  }
+
+  async function sendHandoff(id, sock, type, extra) {
+    const frame = encodeTunnelFrame({ t: type, ...extra }, sock.binaryTunnel === true);
+    if (!sock.chunks || typeof frame !== 'string' || frame.length <= CHUNK_AT || frame.length > CHUNK_AT * CHUNK_MAX) {
+      return writeHandoff(id, sock, frame);
+    }
+    // Produce each piece only when the previous one has left the ws buffer.
+    const gid = `h${(++pieceGroups).toString(36)}`;
+    const n = Math.ceil(frame.length / CHUNK_AT);
+    for (let i = 0; i < n; i++) {
+      const piece = JSON.stringify({ t: 'dc-chunk', gid, i, n, data: frame.slice(i * CHUNK_AT, (i + 1) * CHUNK_AT) });
+      if (!await writeHandoff(id, sock, piece)) return false;
+    }
+    return true;
+  }
+
+  async function pumpHandoffs(id, sock, state) {
+    while (currentSocket(id, sock) && (state.pending.active || state.completions.active)) {
+      const kind = state[state.turn].active ? state.turn : state.turn === 'pending' ? 'completions' : 'pending';
+      state.turn = kind === 'pending' ? 'completions' : 'pending';
+      const scan = state[kind];
+      const first = kind === 'pending' ? q.handoffPending : q.handoffCompletions;
+      const after = kind === 'pending' ? q.handoffPendingAfter : q.handoffCompletionsAfter;
+      const row = scan.cursor ? after.get(id, scan.cursor.createdAt, scan.cursor.id) : first.get(id);
+      if (!row) {
+        if (scan.again) { scan.again = false; scan.cursor = null; }
+        else scan.active = false;
+        continue;
+      }
+      scan.cursor = { createdAt: row.created_at, id: row.id };
+      let params, receipt;
+      try {
+        params = JSON.parse(row.payload);
+        if (kind === 'completions') receipt = JSON.parse(row.result);
+      } catch { continue; }
+      let type, extra;
+      if (kind === 'pending') {
+        type = T.HANDOFF_JOB;
+        extra = { handoffId: row.id, sourceMachineId: row.source_id, params };
+      } else {
+        if (!params?.parent?.sessionId || !receipt?.sessionId || !receipt?.folder || !receipt?.digest) continue;
+        type = T.HANDOFF_COMPLETE;
+        extra = { handoffId: row.id, targetMachineId: row.target_id,
+          parentSessionId: params.parent.sessionId, title: params.title ?? null, receipt };
+      }
+      if (!await sendHandoff(id, sock, type, extra)) {
+        if (currentSocket(id, sock)) sock.terminate();
+        return;
+      }
+      // A fast target can answer before the send callback. Never replace its
+      // saved result with a late delivered state.
+      if (kind === 'pending') q.handoffDelivered.run(now(), row.id);
     }
   }
 
-  /**
-   * The other half of a queued handoff: when the target reports a result,
-   * the machine that asked for the work is told where its child session
-   * landed. Delivered every time the source connects and each time one of
-   * its tasks finishes - no ack exists, but the session link underneath
-   * dedupes by handoffId, so repeats cost nothing.
-   */
-  function deliverCompletions(sourceId) {
-    const sock = online.get(sourceId);
-    if (!sock) return;
-    for (const row of q.handoffCompletions.iterate(sourceId)) {
-      let params; let receipt;
-      try {
-        params = JSON.parse(row.payload);
-        receipt = JSON.parse(row.result);
-      } catch { continue; }
-      if (!params?.parent?.sessionId) continue;
-      if (!receipt?.sessionId || !receipt?.folder || !receipt?.digest) continue;
-      send(sock, T.HANDOFF_COMPLETE, {
-        handoffId: row.id,
-        targetMachineId: row.target_id,
-        parentSessionId: params.parent.sessionId,
-        title: params.title ?? null,
-        receipt,
-      });
-    }
+  function startHandoffPump(id, sock, state) {
+    if (state.pumping || !currentSocket(id, sock)) return;
+    state.pumping = true;
+    void pumpHandoffs(id, sock, state).catch(() => {
+      // A failed store or socket must reconnect before trying this work again.
+      if (currentSocket(id, sock)) sock.terminate();
+    }).finally(() => {
+      state.pumping = false;
+      if (state.pending.active || state.completions.active) startHandoffPump(id, sock, state);
+    });
   }
+
+  function requestHandoffs(id, kind) {
+    const sock = online.get(id);
+    if (!sock || !currentSocket(id, sock)) return;
+    let state = deliveries.get(sock);
+    if (!state) {
+      state = { pending: { active: false }, completions: { active: false }, turn: 'pending', pumping: false };
+      deliveries.set(sock, state);
+    }
+    const scan = state[kind];
+    if (scan.active) scan.again = true;
+    else Object.assign(scan, { active: true, again: false, cursor: null });
+    startHandoffPump(id, sock, state);
+  }
+
+  const deliverPending = id => requestHandoffs(id, 'pending');
+  const deliverCompletions = id => requestHandoffs(id, 'completions');
 
   /**
    * `dispatch.submit` validation. The params inside the wrapper are opaque
