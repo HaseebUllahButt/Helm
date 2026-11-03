@@ -141,6 +141,7 @@
   --gemini:    #a9b3ec;
   --kimi:      #9fc3e0;
   --omp:       #b292ee;
+  --vibe:      #e59a6c;
 
   /* A type scale, so sizes are chosen from a set rather than invented at
      each call site. Sized for a phone read at arm's length, often outdoors:
@@ -643,6 +644,7 @@ code, pre, kbd { font-family: var(--mono); }
 .mark.gemini   { background: color-mix(in srgb, var(--gemini) 11%, transparent);   color: var(--gemini); }
 .mark.kimi     { background: color-mix(in srgb, var(--kimi) 11%, transparent);     color: var(--kimi); }
 .mark.omp      { background: color-mix(in srgb, var(--omp) 11%, transparent);      color: var(--omp); }
+.mark.vibe     { background: color-mix(in srgb, var(--vibe) 11%, transparent);     color: var(--vibe); }
 .mark.shell    { background: color-mix(in srgb, var(--emerald) 12%, transparent);  color: var(--emerald); }
 
 .mdot { width: 7px; height: 7px; border-radius: 50%; flex: none; margin: 0 4px; }
@@ -2219,7 +2221,7 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 }
 :root[data-theme="light"] .mark { background: #1d2027; }
 /* A letter mark takes its colour from the text token, which is dark here. */
-:root[data-theme="light"] .mark:not(.claude):not(.codex):not(.opencode):not(.opencode2):not(.devin):not(.agy):not(.grok):not(.cursor):not(.pi):not(.muse):not(.gemini):not(.kimi):not(.omp):not(.shell) { color: #b9bfcb; }
+:root[data-theme="light"] .mark:not(.claude):not(.codex):not(.opencode):not(.opencode2):not(.devin):not(.agy):not(.grok):not(.cursor):not(.pi):not(.muse):not(.gemini):not(.kimi):not(.omp):not(.vibe):not(.shell) { color: #b9bfcb; }
 :root[data-theme="light"] .mark.claude    { background: color-mix(in srgb, #d3a186 12%, #14161b); }
 :root[data-theme="light"] .mark.codex     { background: color-mix(in srgb, #b9c1d6 11%, #14161b); }
 :root[data-theme="light"] .mark.opencode  { background: color-mix(in srgb, #b3abd8 12%, #14161b); }
@@ -2233,6 +2235,7 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 :root[data-theme="light"] .mark.gemini    { background: color-mix(in srgb, #a9b3ec 11%, #14161b); }
 :root[data-theme="light"] .mark.kimi      { background: color-mix(in srgb, #9fc3e0 11%, #14161b); }
 :root[data-theme="light"] .mark.omp       { background: color-mix(in srgb, #b292ee 11%, #14161b); }
+:root[data-theme="light"] .mark.vibe      { background: color-mix(in srgb, #e59a6c 11%, #14161b); }
 :root[data-theme="light"] .mark.shell     { background: color-mix(in srgb, #7fc7a4 12%, #14161b); }
 
 /* Panels on a light page need an edge and a lift the dark theme gets from

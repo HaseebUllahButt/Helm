@@ -5,6 +5,7 @@ import { OpencodeDriver, Opencode2Driver } from './drivers/opencode.js';
 import { DevinDriver } from './drivers/devin.js';
 import { GrokDriver } from './drivers/grok.js';
 import { CursorDriver } from './drivers/cursor.js';
+import { VibeDriver } from './drivers/vibe.js';
 import { AgyDriver } from './drivers/agy.js';
 import { AntigravityDriver } from './drivers/antigravity.js';
 import { PiDriver, OmpDriver } from './drivers/pi.js';
@@ -20,6 +21,7 @@ export const DRIVERS = {
   devin: DevinDriver,
   grok: GrokDriver,
   cursor: CursorDriver,
+  vibe: VibeDriver,
   agy: AgyDriver,
   antigravity: AntigravityDriver,
   pi: PiDriver,

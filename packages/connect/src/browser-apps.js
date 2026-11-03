@@ -24,7 +24,7 @@ export function procListeners(text) {
 
 export function internalApp(argv) {
   const names = argv.slice(0, 2).map(arg => basename(arg).toLowerCase());
-  if (names.some(name => /^(helm(?:-.*)?(?:\.js)?|codex|claude|devin|opencode|pi|cursor-agent|agy|antigravity|grok|chromium|chrome|chrome_crashpad)(?:\.exe)?$/.test(name))) return true;
+  if (names.some(name => /^(helm(?:-.*)?(?:\.js)?|codex|claude|devin|opencode|pi|cursor-agent|agy|antigravity|grok|vibe(?:-acp|-rs)?|chromium|chrome|chrome_crashpad)(?:\.exe)?$/.test(name))) return true;
   return argv.some(arg => /(?:^|[/\\])(?:@anthropic-ai|@openai|@zed-industries)(?:[/\\])/.test(arg)
     || /(?:^|[/\\-])mcp(?:[/\\-]|$)|^app-server$|^--remote-debugging-|^run-server$/.test(arg));
 }

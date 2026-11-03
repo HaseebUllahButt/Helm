@@ -220,6 +220,8 @@ const shortModel = (slug: string, labels?: Record<string, string>, engine?: stri
   // already carry their tier ("Gemini 3.8 Flash (High)") - so the chip is
   // the whole name minus a "provider/" prefix.
   if (['devin', 'opencode', 'opencode2', 'pi', 'omp', 'grok', 'antigravity'].includes(engine ?? '')) return name.replace(/^[^/]+\//, '');
+  // Vibe: "GLM-5.3 Flash (Mistral Hosted)" -> "GLM-5.3 Flash", "Mistral Large 4" -> "Large 4".
+  if (engine === 'vibe') return name.replace(/\s*\(Mistral Hosted\)$/i, '').replace(/^Mistral\s+/i, '');
   // "GPT-5.6-Luna" -> "Luna"; "claude-fable-5-1" -> "fable"
   const tail = name.split(/[-\s]/).filter(Boolean).pop() ?? name;
   return /^\d/.test(tail) ? name.replace(/^(gpt|claude)[-\s]?/i, '') : tail.toLowerCase();

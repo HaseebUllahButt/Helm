@@ -8,6 +8,7 @@
  *
  * Sources: Anthropic's Claude mark, OpenAI's Blossom, opencode's official
  * square brand mark, Cognition's Devin mark, xAI's Grok mark, Cursor's cube,
+ * Mistral's block M (one colour, the stepped rows of its logo),
  * pi's block mark (from pi.dev), omp's gradient pi (from omp.sh), Google's
  * Gemini spark, Moonshot's Kimi mark, Meta's Muse mark, and Google's
  * Antigravity arch (the "jetski" logo the Antigravity IDE ships). OpenCode 2
@@ -27,7 +28,7 @@ export const OPENAI_PATH = 'M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.6
 
 const shell = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
-  grok: 'Grok', cursor: 'Cursor', pi: 'Pi', omp: 'OMP',
+  grok: 'Grok', cursor: 'Cursor', vibe: 'Mistral Vibe', pi: 'Pi', omp: 'OMP',
   agy: 'Antigravity CLI', antigravity: 'Antigravity', gemini: 'Gemini', kimi: 'Kimi', muse: 'Muse',
 };
 
@@ -113,6 +114,16 @@ export const EngineMark = memo(function EngineMark({ engine, className = '' }: {
       <span className={`mark cursor ${className}`} title={label}>
         <svg {...common} fill="currentColor" fillRule="evenodd">
           <path d="M22.106 5.68L12.5.135a.998.998 0 00-.998 0L1.893 5.68a.84.84 0 00-.419.726v11.186c0 .3.16.577.42.727l9.607 5.547a.999.999 0 00.998 0l9.608-5.547a.84.84 0 00.42-.727V6.407a.84.84 0 00-.42-.726zm-.603 1.176L12.228 22.92c-.063.108-.228.064-.228-.061V12.34a.59.59 0 00-.295-.51l-9.11-5.26c-.107-.062-.063-.228.062-.228h18.55c.264 0 .428.286.296.514z" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (engine === 'vibe') {
+    return (
+      <span className={`mark vibe ${className}`} title={label}>
+        <svg {...common} fill="currentColor">
+          <path d="M0.0 0.0h4.8v4.8h-4.8zM19.2 0.0h4.8v4.8h-4.8zM0.0 4.8h9.6v4.8h-9.6zM14.4 4.8h9.6v4.8h-9.6zM0.0 9.6h24.0v4.8h-24.0zM0.0 14.4h4.8v4.8h-4.8zM9.6 14.4h4.8v4.8h-4.8zM19.2 14.4h4.8v4.8h-4.8zM0.0 19.2h4.8v4.8h-4.8zM19.2 19.2h4.8v4.8h-4.8z" />
         </svg>
       </span>
     );

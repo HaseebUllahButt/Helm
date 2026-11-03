@@ -7,6 +7,7 @@ const ENGINE: Record<string, { label: string; cls: string }> = {
   devin:    { label: 'Devin',       cls: 'devin' },
   grok:     { label: 'Grok',        cls: 'grok' },
   cursor:   { label: 'Cursor',      cls: 'cursor' },
+  vibe:     { label: 'Mistral Vibe', cls: 'vibe' },
   pi:       { label: 'Pi',          cls: 'pi' },
   omp:      { label: 'OMP',         cls: 'omp' },
   agy:      { label: 'Antigravity CLI', cls: 'agy' },

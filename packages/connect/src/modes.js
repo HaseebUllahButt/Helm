@@ -64,6 +64,14 @@ export const MODES = {
     { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'The agent edits files and runs commands.', acp: 'agent' },
     { id: 'auto', label: 'Act without asking', short: 'yolo', hint: 'The agent acts without approval requests or permission blocks.', acp: 'agent', autoAllow: 'all', danger: true },
   ],
+  // Vibe's session modes are its agents. Smart Approve has a Mistral model
+  // check each step and asks only about the risky ones.
+  vibe: [
+    { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'The agent asks before each edit and command.', acp: 'ask' },
+    { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'The agent edits files without asking. Commands need approval.', acp: 'accept-edits' },
+    { id: 'smart', label: 'Vibe reviews', short: 'auto', hint: 'Vibe approves safe steps itself; you see the risky ones.', acp: 'smart-approve' },
+    { id: 'yolo', label: 'Act without asking', short: 'yolo', hint: 'The agent acts without approval requests.', acp: 'auto-approve', danger: true },
+  ],
   // agy's `--mode` flag knows accept-edits and plan; "everything" is the
   // --dangerously-skip-permissions flag. There is no way to answer a
   // permission prompt over stream-json, so ask relies on the account's own
