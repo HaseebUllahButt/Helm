@@ -156,6 +156,8 @@ const HOME_FILES = {
   agy: [{ rel: 'antigravity-cli/antigravity-oauth-token', read: readGoogleOauth }],
   antigravity: [{ rel: 'antigravity-cli/antigravity-oauth-token', read: readGoogleOauth }],
   gemini: [{ rel: 'oauth_creds.json', read: readGoogleOauth }],
+  // Vibe saves the Mistral key as MISTRAL_API_KEY=... (or in the system keyring).
+  vibe: [{ rel: '.env', read: readDevin }],
 };
 
 /** Engines whose store sits under XDG_DATA_HOME rather than the config home. */
@@ -180,6 +182,7 @@ const ENV_TOKENS = {
   gemini: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
   grok: ['XAI_API_KEY', 'GROK_API_KEY'],
   cursor: ['CURSOR_API_KEY'],
+  vibe: ['MISTRAL_API_KEY'],
   kimi: ['MOONSHOT_API_KEY', 'KIMI_API_KEY'],
 };
 

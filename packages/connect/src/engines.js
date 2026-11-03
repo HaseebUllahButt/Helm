@@ -136,6 +136,24 @@ export const ENGINES = {
       nonInteractiveFlags: ['-p', '--print', '--list-models'],
     },
   },
+  vibe: {
+    id: 'vibe',
+    label: 'Mistral Vibe',
+    bin: 'vibe',
+    // VIBE_HOME moves the whole of ~/.vibe: config.toml, the .env that holds
+    // the Mistral key, and logs/session/ where chats are saved.
+    homeEnv: 'VIBE_HOME',
+    defaultHome: '~/.vibe',
+    resumeArgs: (id) => ['--resume', id],
+    // Run headless through `vibe-acp`, the ACP program installed next to
+    // `vibe` - verified vibe 3.0.4 (drivers/vibe.js).
+    driver: 'vibe',
+    proc: {
+      names: ['vibe', 'vibe-rs'],
+      nonInteractiveSub: ['mcp', 'config', 'help', 'update'],
+      nonInteractiveFlags: ['-p', '--prompt', '--prompt-file', '--setup', '--check-upgrade', '-v', '--version'],
+    },
+  },
   pi: {
     id: 'pi',
     label: 'Pi',
