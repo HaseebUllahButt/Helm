@@ -2034,7 +2034,6 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .need-more:hover { background: var(--hover); color: var(--text); }
 @media (pointer: coarse) { .need-more { opacity: .6; } .need-t { padding-right: 26px; } }
 .need-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 10px 8px 26px; }
-.need-foot-k { font-size: var(--t-micro); color: var(--mutedfg); margin-right: 2px; }
 .need-foot button { height: 28px; padding: 0 10px; border-radius: 8px; font-size: var(--t-meta); background: var(--accent); color: var(--text); }
 .need-foot button:hover:not(:disabled) { background: var(--hover); }
 .need-foot .need-dismiss { color: var(--text-dim); }

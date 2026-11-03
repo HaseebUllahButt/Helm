@@ -85,9 +85,8 @@ function dedupeDetected(list: Session[], found: InventorySession[]): InventorySe
  */
 const botThread = (s: Session) => /^whatsapp-/i.test(s.title);
 
-export function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onOpen, onNewTerminal, onResume, resuming, isSnoozed = () => false, sendJobs = [], sendTarget }: {
+export function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onOpen, onNewTerminal, onResume, resuming, sendJobs = [], sendTarget }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[]; sendJobs?: SendJob[]; sendTarget?: string;
-  isSnoozed?: (session: Session) => boolean;
   /** What this machine last said it was running, while it cannot be asked. */
   remembered?: Session[]; rememberedAt?: number;
   reload: () => void; onBack: () => void; onNewSession: () => void; onAddProject: () => void;
@@ -227,7 +226,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
 
   const live = (s: Session) => s.engine !== 'shell' && !s.archived && hit(s);
   const mine = rows.filter(live);
-  const attention = (s: Session) => needsAttention(s) && !isSnoozed(s);
+  const attention = needsAttention;
   const blocked = mine.filter(attention).sort(byRecent);
   // An offline machine cannot say what is running now. Its last word stays
   // in the lists below, marked as old, never under "working": the sidebar
@@ -376,7 +375,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
     />
   ) : (
     <SessionRow
-      key={s.id} s={s} onOpen={() => onOpen(s)} offline={!env.online} attentionSuppressed={isSnoozed(s)}
+      key={s.id} s={s} onOpen={() => onOpen(s)} offline={!env.online}
       selecting={selecting} marked={marked.has(s.id)} onToggle={() => toggle(s.id)}
       onRename={(t) => setTitle(s, t)}
       onPin={s.id.startsWith('pane:') ? undefined : () => setPinned(s)}
@@ -716,8 +715,7 @@ function ProjectActions({ title, online, sendLabel = 'Send', onStart, onSend, on
  * only from inside it. An agent helm did not start is left alone - helm
  * does not own that process and has no business ending it.
  */
-function SessionRow({ s, onOpen, onRename, onPin, onArchive, onDelete, busy, selecting = false, marked = false, onToggle, offline = false, attentionSuppressed = false }: {
-  attentionSuppressed?: boolean;
+function SessionRow({ s, onOpen, onRename, onPin, onArchive, onDelete, busy, selecting = false, marked = false, onToggle, offline = false }: {
   s: Session; onOpen?: () => void; onRename?: (title: string) => void;
   /** The machine is not answering: a busy status is its last word, not now. */
   offline?: boolean;
@@ -762,8 +760,8 @@ function SessionRow({ s, onOpen, onRename, onPin, onArchive, onDelete, busy, sel
           </span>
           {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
           {busy ? <span className="chip working"><i />opening</span>
-            : offline && runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? <span className="chip exited">Last status: {busyWord(s.status, s.compacting)}</span>
-            : <StatusChip status={runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? busyWord(s.status, s.compacting) : s.status} at={s.updatedAt} />}
+            : offline && runningThread(s) && !needsAttention(s) ? <span className="chip exited">Last status: {busyWord(s.status, s.compacting)}</span>
+            : <StatusChip status={runningThread(s) && !needsAttention(s) ? busyWord(s.status, s.compacting) : s.status} at={s.updatedAt} />}
         </Main>
         {!selecting && managed && <ThreadActions s={s} onRename={onRename} onPin={onPin} onArchive={onArchive} onDelete={onDelete} />}
       </div>
