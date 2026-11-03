@@ -71,6 +71,10 @@ test('local-only clients reach remote machines over the existing outbound daemon
     linkDown: source => mesh.down(source),
     onFrame: async (source, frame) => { bridgeFrames.push(frame); mesh.receive(source, frame); },
   };
+  // A machine dials only an address that a member owns.
+  const listed = N.loadNetwork();
+  listed.machines[remote].endpoints = [upstream];
+  N.saveNetwork(listed);
   link = new Link(daemon, upstream).start();
   await until(() => mesh.machines().has(remote));
   const headers = { authorization: `Bearer ${phone.token}`, 'content-type': 'application/json' };

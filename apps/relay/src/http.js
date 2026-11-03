@@ -4,7 +4,8 @@ import { q, now, newId, newInviteCode } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, issueDevice, revoke,
   authenticate, allEndpoints, localKey, deviceToken,
-  hubProof, issueChallenge, HELLO_PATH, sanitizeRoster, hubTrust, signNetworkProof, checkDeviceRequest,
+  hubHelloAnswer, issueChallenge, HELLO_PATH, sanitizeRoster, hubTrust, signNetworkProof, checkDeviceRequest,
+  admitMachine,
 } from '@helm/protocol/network';
 import { ROLE } from '@helm/protocol/identity';
 import { fanOut } from './notify.js';
@@ -21,8 +22,10 @@ const LOOPBACK_HOST = /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])(:\d+)?$/;
 
 // A public Helm page can inherit this computer's membership, but only if
 // its exact origin is already an address in this computer's network.
+/** A request a proxy passed on: it can come over loopback from anywhere. */
+export const forwarded = (req) => Object.keys(req.headers).some(k => k === 'forwarded' || k.startsWith('x-forwarded-'));
+
 /** A page served to this computer's own browser, not one proxied from outside. */
-const forwarded = (req) => Object.keys(req.headers).some(k => k === 'forwarded' || k.startsWith('x-forwarded-'));
 
 function localPage(req) {
   if (forwarded(req)) return false;
@@ -33,7 +36,7 @@ function localPage(req) {
 }
 
 function desktopOrigin(req, net) {
-  if (!isLoopback(req) || !LOOPBACK_HOST.test(String(req.headers.host))) return null;
+  if (forwarded(req) || !isLoopback(req) || !LOOPBACK_HOST.test(String(req.headers.host))) return null;
   const origin = req.headers.origin;
   if (!origin || !net) return null;
   return allEndpoints(net).some((endpoint) => {
@@ -405,6 +408,9 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       if (body.network !== net.id) {
         return reply(res, 409, { error: 'this computer belongs to a different network' }, trusted);
       }
+      if (body.proofKey !== undefined && (typeof body.proofKey !== 'string' || body.proofKey.length > 512)) {
+        return reply(res, 400, { error: 'Send a valid browser key.' }, trusted);
+      }
       return reply(res, 200, localSignIn(net, body.label, body.proofKey), trusted);
     }
 
@@ -422,7 +428,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       const body = await readBody(req).catch(() => ({}));
       const nonce = typeof body?.nonce === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(body.nonce) ? body.nonce : null;
       if (!nonce) return json(res, 400, { error: 'nonce required' });
-      return json(res, 200, { net: net.id, proof: hubProof(net, nonce), challenge: issueChallenge() });
+      return json(res, 200, hubHelloAnswer(net, nonce));
     }
 
     if (path === '/api/hub/identity' && req.method === 'POST') {
@@ -573,14 +579,16 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       if (!member?.codeSignPubkey || net.machines[body.self] || net.revoked[body.self]) {
         return json(res, 400, { error: 'Update Helm on the joining machine and try again.' });
       }
-      net.machines[body.self] = member;
+      // The receipt other machines need before they accept the new machine.
+      const admission = admitMachine(net, body.self, member.codeSignPubkey);
+      net.machines[body.self] = { ...member, admission };
       saveNetwork(net);
       q.inviteUse.run(String(body.name || 'machine').slice(0, 64), code);
       // `role` travels back so the joining machine knows what it was invited
       // as, and can set itself up as a home without being told again.
       return json(res, 200, {
         id: net.id, key: net.key, self: net.self, ...roster(net),
-        endpoints: allEndpoints(net), role: row.role ?? 'pc',
+        endpoints: allEndpoints(net), role: row.role ?? 'pc', admission,
       });
     }
 

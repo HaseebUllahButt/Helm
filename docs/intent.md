@@ -69,8 +69,19 @@ machine -> folder -> chat. Each chat runs one profile: a CLI on an account.
   signing key before applying changes. Keep old unsigned records fixed.
   A machine with no saved signing key must rejoin through an invitation.
   Never learn a replacement key from an unsigned update. Keep an invitation
-  address in a local note until its owner advertises it. Never edit the
-  inviter record to add that address.
+  address in a local note until its owner advertises any address, for one
+  day at most: an old address can change owner. Never edit the inviter
+  record to add that address.
+- **A new machine needs its inviter's receipt.** `/api/join` signs one.
+  Gossip accepts a machine it has not seen only with a receipt from a
+  member it already knows. A machine that joined through an older Helm has
+  none, so it must rejoin.
+- **A hub signs its hello with its machine key.** A dialler sends a
+  credential only to the machine that owns the address it dialled, and the
+  credential names that hub. A record with `signedHub` marks a machine that
+  does this; for it, an unsigned hello is a downgrade and is refused.
+  Without the flag, the old shared-key hello still works, so machines on
+  different versions can update each other.
 - **Local sign-in refuses forwarded traffic.** Spins must never expose Helm's
   own port. Check existing links as well as new links.
 - **Private Spin passes need a current machine signature.** The shared key

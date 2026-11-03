@@ -34,7 +34,7 @@ async function fixture(t, { modern = true, collision = false, listError = false,
     let body = ''; for await (const chunk of req) body += chunk;
     const { nonce } = JSON.parse(body);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ net: net.id, challenge: 'share-cli-fixture', proof: N.hubProof(net, nonce) }));
+    res.end(JSON.stringify(N.hubHelloAnswer(N.loadNetwork(), nonce)));
   });
   const sockets = new WebSocketServer({ server });
   sockets.on('connection', ws => ws.on('message', bytes => {

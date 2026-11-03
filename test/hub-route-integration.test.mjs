@@ -60,7 +60,12 @@ test('both routes to a machine are timed over real hubs and its own hub is used'
     let stderr = '';
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.on('message', message => messages.push(message));
-    child.send({ command: 'start', network: { ...N.loadNetwork(), self: remote }, bridgeId: network.self });
+    // Both fixture hubs sign as `remote`, though the VM address is not its
+    // own, so this machine sends the VM no hub name. The far hubs knew this
+    // machine before it signed hub hellos, so they still take such a credential.
+    const copy = structuredClone({ ...N.loadNetwork(), self: remote });
+    delete copy.machines[network.self].signedHub;
+    child.send({ command: 'start', network: copy, bridgeId: network.self });
     return until(() => {
       assert.equal(messages.find(message => message.error)?.error, undefined, stderr);
       return messages.find(message => message.ready)?.ready;
@@ -71,6 +76,8 @@ test('both routes to a machine are timed over real hubs and its own hub is used'
   // The machine publishes `own` as its address; `vm` is a third party.
   const roster = N.loadNetwork();
   roster.machines[remote].endpoints = [own];
+  // A machine dials only an address that a member owns: here the VM's.
+  roster.machines.ddee00112233 = { id: 'ddee00112233', name: 'vm', endpoints: [vm], addedAt: Date.now(), updatedAt: Date.now() };
   N.saveNetwork(roster);
 
   mesh = new HubMesh(N.loadNetwork, () => {}, () => {}, () => {});

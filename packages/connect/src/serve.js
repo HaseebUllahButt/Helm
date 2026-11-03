@@ -167,8 +167,8 @@ export async function join({ code, at, name, port = 8787 }) {
     throw new Error(`could not join: ${(await res.json().catch(() => ({}))).error ?? res.status}`);
   }
 
-  const { id, key, machines, devices, revoked, self: inviter, role } = await res.json();
-  joinNetwork({ id, key, self, name: name || hostname(), port, machines, devices, revoked });
+  const { id, key, machines, devices, revoked, self: inviter, role, admission } = await res.json();
+  joinNetwork({ id, key, self, name: name || hostname(), port, machines, devices, revoked, admission });
   if (previous) {
     // Invites and passwords minted in the temporary install network must
     // never become a route into the network we have just joined.
@@ -184,7 +184,7 @@ export async function join({ code, at, name, port = 8787 }) {
   const host = net.machines[inviter];
   if (host && !(host.endpoints ?? []).includes(base)) {
     // Keep this invitation address local. Only the inviter signs its record.
-    net.bootstrap = { machine: inviter, url: base };
+    net.bootstrap = { machine: inviter, url: base, at: Date.now() };
     saveNetwork(net);
   }
 
