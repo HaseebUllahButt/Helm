@@ -66,6 +66,11 @@ export class Schedules {
   save(input) {
     const current = input.id ? this.records.find(r => r.id === input.id) : null;
     if (input.id && !current) throw new Error('schedule not found');
+    // Pausing needs no checks: it must work while a run is sending, and for a
+    // chat that is archived or deleted.
+    if (current && input.enabled === false && Object.keys(input).every(key => key === 'id' || key === 'enabled')) {
+      current.enabled = false; this.persist(); return { schedule: this.view(current) };
+    }
     if (!current && this.records.length >= MAX_TASKS) throw new Error('too many scheduled tasks');
     if (current && this.running.has(current.id)) throw new Error('wait for the current dispatch to finish');
     const next = { ...current, ...input };
@@ -140,7 +145,10 @@ export class Schedules {
       if (delivery) { delivery.status = 'sent'; delivery.sessionId = session.id; delete delivery.prompt; }
       this.persist(); return { ok: true, sessionId: session.id, turnId };
     } catch (error) {
-      record.lastError = error.message; record.enabled = false;
+      // A Helm restart is not a task failure. Keep the task on and keep its
+      // dispatch identity, so the next Helm resumes the same turn once.
+      if (generation !== this.generation) error.interrupted = true;
+      else { record.lastError = error.message; record.enabled = false; }
       // Retain the durable dispatch identity: resuming after uncertain delivery
       // must reuse the same turn/thread rather than duplicate the work.
       if (delivery) delivery.status = 'error';
@@ -190,12 +198,20 @@ export class Schedules {
           record.nextRunAt = nextScheduledRun(record, this.now()); this.persist(); continue;
         }
         try { await this.run(record.id, false, delivery); }
-        catch (error) { record.lastError = error.message; record.enabled = false; this.persist(); }
+        catch (error) { if (!error.interrupted) { record.lastError = error.message; record.enabled = false; this.persist(); } }
       }
     } finally { this.ticking = false; }
   }
+  // The webhook Spin is open while a webhook task is on. Stop on it pauses
+  // them all; `helm schedule resume` opens it again.
   share() {
-    return this.port && this.records.some(r => r.type === 'webhook') ? { name: this.shareName, port: this.port, automation: true, createdAt: 0 } : null;
+    return this.port && this.records.some(r => r.type === 'webhook' && r.enabled) ? { name: this.shareName, port: this.port, automation: true, createdAt: 0 } : null;
+  }
+  closeWebhooks() {
+    const paused = this.records.filter(r => r.type === 'webhook' && r.enabled);
+    for (const record of paused) record.enabled = false;
+    if (paused.length) this.persist();
+    return paused.map(({ id, name }) => ({ id, name }));
   }
   async listen() {
     if (this.server || !this.shareName) return;

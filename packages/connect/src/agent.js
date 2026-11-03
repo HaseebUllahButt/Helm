@@ -818,6 +818,9 @@ export class Daemon {
   async stop() {
     if (this.#stopped) return;
     this.#stopped = true;
+    // Stop schedules first: a tick during the awaits below would send work
+    // into parts that are already stopping.
+    this.schedules?.stop();
     this.#eventStream.stop();
     this.#updates.stop();
     this.inputDelivery?.stop();
@@ -834,7 +837,6 @@ export class Daemon {
     this.taskTransfers?.stop();
     await this.forwards?.stop();
     await this.sendEngine?.stop();
-    this.schedules?.stop();
     this.search?.close();
     this.github?.stop();
     this.#stopWatch?.();
@@ -1863,6 +1865,11 @@ export class Daemon {
         return { share: this.#shareView(addShare(p)) };
       }
       case M.SHARE_REMOVE:
+        // The webhook Spin is not in shares.json: stopping it pauses its tasks.
+        if (this.schedules?.shareName && String(p.name ?? '').toLowerCase() === this.schedules.shareName) {
+          const paused = this.schedules.closeWebhooks();
+          return { removed: paused.length > 0, paused };
+        }
         return { removed: removeShare(p.name) };
 
       case M.FORWARD_LIST:
