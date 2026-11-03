@@ -1,5 +1,5 @@
 import { errorMessage } from '../errors';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Client, Environment, NativeAgent, NativeAgentDetail, Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { BackIcon } from '../Icon';
@@ -27,6 +27,8 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
   const [more, setMore] = useState(false);
   const [error, setError] = useState('');
   const [draft, setDraft] = useState('');
+  const revision = useRef(0);
+  const editDraft = (text: string) => { revision.current += 1; setDraft(text); };
   const [sending, setSending] = useState(false);
   const [sentAt, setSentAt] = useState(0);
 
@@ -64,10 +66,11 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
   const send = async () => {
     const text = draft.trim();
     if (!text || sending) return;
+    const sentRevision = revision.current;
     setSending(true); setError('');
     try {
       await client.rpc(env.id, 'session.native-message', { id: parent.id, agentId: agent.id, data: text }, 70_000);
-      setDraft('');
+      if (revision.current === sentRevision) editDraft('');
       setSentAt(Date.now());
     } catch (failure) {
       setError(errorMessage(failure));
@@ -99,7 +102,7 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
       {more && <p className="native-foot" role="note">Showing the latest part.</p>}
       {canMessage ? (
         <Composer
-          draft={draft} setDraft={setDraft} engine={engine} keys={false} canAttach={false} preparing={sending}
+          draft={draft} setDraft={editDraft} engine={engine} keys={false} canAttach={false} preparing={sending}
           onSend={() => void send()}
           statusLine={<span className="native-foot-line">{engine === 'codex'
             ? 'Send directly to this helper'
