@@ -1530,7 +1530,7 @@ export class CodexDriver extends Driver {
     if (this.nativeSocket && !this.nativeConnected) await this.start();
     const req = this.pending.get(requestId);
     const raw = this.#requests.get(requestId);
-    if (!req || !raw) throw new Error(`no pending request ${requestId}`);
+    if (!req || !raw) throw Object.assign(new Error('This request is no longer open.'), { deliveryNotSent: true });
     if (raw.method === 'thread/approveGuardianDeniedAction') {
       if (!['allow', 'deny'].includes(decision.option)) throw new Error('Choose Allow anyway or Keep denied.');
       if (decision.option === 'allow') {

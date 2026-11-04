@@ -981,7 +981,7 @@ export class AcpDriver extends Driver {
   async answer(requestId, decision) {
     const req = this.pending.get(requestId);
     const raw = this.#requests.get(requestId);
-    if (!req || !raw) throw new Error(`no pending request ${requestId}`);
+    if (!req || !raw) throw Object.assign(new Error('This request is no longer open.'), { deliveryNotSent: true });
     const pick = (kind) => raw.options.find((o) => o.kind === kind)?.optionId;
     let outcome;
     if (decision.option === 'deny') {

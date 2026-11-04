@@ -534,7 +534,7 @@ export class ClaudeDriver extends Driver {
    */
   async answer(requestId, decision) {
     const req = this.pending.get(requestId);
-    if (!req) throw new Error(`no pending request ${requestId}`);
+    if (!req) throw Object.assign(new Error('This request is no longer open.'), { deliveryNotSent: true });
     const raw = req.raw;
     let response;
     if (decision.option === 'deny') {

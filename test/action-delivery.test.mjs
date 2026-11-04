@@ -105,3 +105,29 @@ for (const phase of ['acceptance', 'result']) test(`a full disk during ${phase} 
     syncBuiltinESMExports();
   }
 });
+
+test('an older closed-request receipt becomes a final failure without answering again', async () => {
+  let calls = 0;
+  const delivery = new ActionDelivery({ answer: async () => { calls++; throw new Error('no pending request ff4f8010-289b-4ac7-9f4b-5bd95e84c93c'); } }, { dir: join(root, 'closed-old') });
+  const path = delivery.path(request.actionId, 'phone');
+  assert.equal((await delivery.deliver(request, 'phone')).state, 'checking');
+  const digest = delivery.read(path).digest;
+  assert.deepEqual(delivery.status(request.actionId, 'phone'), {
+    state: 'done', result: undefined, error: { message: 'This request is no longer open.', code: 'delivery_failed' },
+  });
+  assert.equal(delivery.read(path).digest, digest, 'keep the binding to the original answer');
+  assert.equal((await delivery.deliver(request, 'phone')).state, 'done');
+  assert.equal(calls, 1);
+  assert.equal(new ActionDelivery({}, {dir:delivery.dir}).status(request.actionId, 'phone').state, 'done');
+});
+
+test('other older approval errors remain uncertain and never repeat', async () => {
+  for (const error of ['connection closed', 'write failed: no pending request ask', 'no pending request ask\nwrite failed']) {
+    const delivery = new ActionDelivery({}, { dir: join(root, 'still-unknown-' + Buffer.from(error).toString('hex')) });
+    const path = delivery.path(request.actionId, 'phone');
+    const record = { digest: 'original', state:'checking', error };
+    delivery.save(path, record);
+    assert.equal(delivery.status(request.actionId, 'phone').state, 'checking');
+    assert.deepEqual(delivery.read(path), record);
+  }
+});

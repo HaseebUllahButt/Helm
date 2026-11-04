@@ -454,7 +454,7 @@ class PiRpcDriver extends Driver {
   async answer(requestId, decision) {
     const req = this.pending.get(requestId);
     const raw = this.#requests.get(requestId);
-    if (!req || !raw) throw new Error(`no pending request ${requestId}`);
+    if (!req || !raw) throw Object.assign(new Error('This request is no longer open.'), { deliveryNotSent: true });
     let response;
     if (decision.option === 'deny') {
       response = raw.method === 'confirm' ? { confirmed: false } : { cancelled: true };
