@@ -26,7 +26,10 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   a receipt proves their result. `deliveryRetained` tells first-message recovery
   that the saved failure already holds its words.
   Approvals interrupted during delivery stay unknown after a restart. Never
-  replay them: the agent can already have acted.
+  replay them: the agent can already have acted. A closed request refused before
+  a driver writes its answer is a final failure. Older receipts with the exact
+  `no pending request <id>` error become final failures when read. Preserve their
+  request digest and never replay them. Other unknown errors stay held.
 - **Tests:** `test/action-delivery`, `input-delivery`, `http-read`;
   `test/browser/client-actions`, `client-reconnect`, `delivery-recovery`.
 - **Rule:** app errors use `apps/web/src/errors.ts`. Keep clear, short messages.
