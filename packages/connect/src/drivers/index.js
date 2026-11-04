@@ -216,11 +216,16 @@ export function assertFolder(driver) {
 /**
  * The protocol each driver was written against. An older CLI may speak it
  * differently; say so loudly once rather than fail quietly mid-session.
+ *
+ * Diagnostic only, so a start never waits for it: `vibe-acp --version`
+ * alone takes a second, paid by the first chat after every restart. The
+ * returned promise is for tests; drivers do not await it.
  */
-export async function checkVersion(engine, cmd, env, min, log) {
-  const have = await cliVersion(cmd, env);
-  if (!have) { log(`${engine}: could not read ${cmd} --version; assuming ${min}`); return; }
-  if (semverLess(have, min)) {
-    log(`${engine}: ${cmd} is ${have}; helm's driver was written against ${min}. Expect breakage - upgrade the CLI.`);
-  }
+export function checkVersion(engine, cmd, env, min, log) {
+  return cliVersion(cmd, env).then((have) => {
+    if (!have) { log(`${engine}: could not read ${cmd} --version; assuming ${min}`); return; }
+    if (semverLess(have, min)) {
+      log(`${engine}: ${cmd} is ${have}; helm's driver was written against ${min}. Expect breakage - upgrade the CLI.`);
+    }
+  }).catch((err) => log(`${engine} version check: ${err.message}`));
 }

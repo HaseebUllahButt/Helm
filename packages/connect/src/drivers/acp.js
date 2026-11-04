@@ -203,7 +203,7 @@ export class AcpDriver extends Driver {
 
   async #start() {
     assertFolder(this);
-    if (this.spec.min) await checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
+    if (this.spec.min) void checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
     await this.spec.prepare?.(this);
 
     // The process may already be running: the terminal host holds agent

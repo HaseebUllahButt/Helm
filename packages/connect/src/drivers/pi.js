@@ -122,7 +122,7 @@ class PiRpcDriver extends Driver {
 
   async #start() {
     assertFolder(this);
-    if (this.spec.min) await checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
+    if (this.spec.min) void checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
     // Whether agent_end is the end has to be known before the first one
     // arrives, so start waits for the answer. It runs beside the spawn and
     // is cached per binary, so only a daemon's first start pays for it.

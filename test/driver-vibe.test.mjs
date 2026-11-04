@@ -23,15 +23,23 @@ const CONFIG = (mode = 'accept-edits', model = 'zai-glm-5-3-flash', thinking = '
 ];
 
 /** A `vibe` and its `vibe-acp` in one folder; vibe-acp plays a recorded session. */
-function fakeVibe({ signedIn = true } = {}) {
+function fakeVibe({ signedIn = true, slowVersion = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'helm-fake-vibe-'));
   const log = join(dir, 'stdin.ndjson');
+  // A slow --version answers only once this file exists.
+  const versionGate = join(dir, 'version-may-answer');
   const agent = `
 const fs = require('node:fs');
 const out = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
 const config = ${JSON.stringify(CONFIG())};
 let buf = '';
-if (process.argv.includes('--version')) { console.log('vibe-acp 3.0.4'); process.exit(0); }
+if (process.argv.includes('--version')) {
+  fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ version: true }) + '\\n');
+  const answer = () => { console.log('vibe-acp 3.0.4'); process.exit(0); };
+  if (!${slowVersion}) answer();
+  else setInterval(() => { if (fs.existsSync(${JSON.stringify(versionGate)})) answer(); }, 20);
+} else
+
 process.stdin.on('data', (d) => {
   buf += d;
   let i;
@@ -66,7 +74,7 @@ process.stdin.on('data', (d) => {
     chmodSync(cmd, 0o755);
   }
   return {
-    dir, cmd: join(dir, 'vibe'),
+    dir, cmd: join(dir, 'vibe'), versionGate,
     sent: () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []),
   };
 }
@@ -104,6 +112,19 @@ test('vibe: a turn sets the mode, model and thinking, then streams the reply', a
   const catalog = driver.catalog();
   assert.deepEqual(catalog.efforts, ['low', 'high', 'max']);
   assert.equal(catalog.labels['mistral-large-4-0-3'], 'Mistral Large 4');
+});
+
+test('vibe: a chat starts without waiting for the version check', async (t) => {
+  // vibe-acp --version alone takes about a second; a start must not pay it.
+  const fake = fakeVibe({ slowVersion: true });
+  const lines = [];
+  const driver = new VibeDriver({ cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'yolo', log: (m) => lines.push(m) });
+  t.after(() => { writeFileSync(fake.versionGate, ''); return driver.kill(); });
+  await driver.start();
+  assert.equal(driver.engineSessionId, 'vibe-1');
+  // The check still runs beside the start.
+  while (!fake.sent().some((m) => m.version)) await new Promise((r) => setImmediate(r));
+  assert.ok(!lines.some((m) => /--version/.test(m)), 'the version check has not answered yet');
 });
 
 test('vibe: no Mistral sign-in tells the owner what to run', async (t) => {
