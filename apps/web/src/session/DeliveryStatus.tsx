@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Client } from '../client';
 import { errorMessage } from '../errors';
 
@@ -6,7 +6,11 @@ export function DeliveryStatus({ client, env, id }: { client: Client; env: strin
   const [checking, setChecking] = useState(false);
   const [failures, setFailures] = useState<any[]>([]);
   const [problem, setProblem] = useState('');
+  const retry = useRef(() => {});
+  const [retrying, setRetrying] = useState(false);
   useEffect(() => {
+    let mounted = true;
+    let running = false;
     const refresh = () => {
       try {
         setChecking(client.pendingActions().some(item => item.env === env && item.params.id === id));
@@ -18,15 +22,40 @@ export function DeliveryStatus({ client, env, id }: { client: Client; env: strin
         return false;
       }
     };
-    const off = client.on((machine, kind) => { if (machine === env && kind === 'delivery') refresh(); });
-    if (refresh()) {
-      try { void client.resumeActions(env, id).catch(() => refresh()); }
-      catch { refresh(); }
-    }
-    return off;
+    const resume = () => {
+      if (running || !refresh()) return;
+      running = true;
+      setRetrying(true);
+      // Keep the original action number. A lost reply must not send twice.
+      Promise.resolve().then(() => client.resumeActions(env, id)).catch(() => {}).finally(() => {
+        running = false;
+        if (mounted) { setRetrying(false); refresh(); }
+      });
+    };
+    retry.current = resume;
+    const off = client.on((machine, kind, payload) => {
+      if (machine === env && kind === 'delivery') refresh();
+      if ((kind === 'connection' && payload?.online)
+        || (machine === env && ((kind === 'presence' && payload?.online)
+          || (kind === 'transport' && payload?.direct)))) resume();
+    });
+    const visible = () => { if (!document.hidden) resume(); };
+    document.addEventListener('visibilitychange', visible);
+    window.addEventListener('online', resume);
+    resume();
+    return () => {
+      mounted = false;
+      retry.current = () => {};
+      off();
+      document.removeEventListener('visibilitychange', visible);
+      window.removeEventListener('online', resume);
+    };
   }, [client, env, id]);
   return <>
-    {checking && <div className="thread-recovery" role="status">Checking delivery…</div>}
+    {checking && <div className="thread-recovery" role="status">
+      <span>Checking delivery…</span>
+      <button disabled={retrying} onClick={() => retry.current()}>Check again</button>
+    </div>}
     {problem && <div className="thread-recovery" role="alert">{problem}</div>}
     {failures.map(action => <div key={action.actionId} className="thread-recovery failed-delivery" role="alert">
       <div>

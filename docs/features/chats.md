@@ -14,7 +14,9 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
 - **Delivery:** the browser saves the action number and content before sending.
   If live links fail, ordinary web requests send chat messages and approvals.
   A lost reply triggers a result check. Opening the chat checks saved actions
-  again. The chat shows "Checking delivery" while a result is unknown.
+  again. Returning to the app or restoring a connection checks again.
+  The owner can also press "Check again" without closing the chat.
+  Each check keeps the original action number. The chat shows "Checking delivery" while a result is unknown.
   A saved chat message with the same message number also confirms delivery.
   This proof ends the check without sending again. Live replies stay visible
   while a history read waits. A final failed receipt keeps the full request

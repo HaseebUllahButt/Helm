@@ -264,3 +264,38 @@ test('a late turn clears a final failure held only in memory', async t => {
   assert.equal(await page.evaluate(() => window.client.failedActions().length), 0);
   assert.equal(await page.evaluate(() => window.client.pendingActions().length), 0);
 });
+
+for (const recovery of ['button', 'connection', 'presence', 'transport', 'online', 'visible']) {
+  test(`an exhausted delivery check recovers through ${recovery} without reopening the chat`, async t => {
+    const { page, state, delivery } = await fixture(t);
+    const saved = action();
+    await delivery.deliver(saved.params, 'phone');
+    await page.evaluate(saved => {
+      window.saveAction(saved);
+      const resume = window.client.resumeActions.bind(window.client);
+      window.checks = 0;
+      window.client.resumeActions = (...args) => {
+        window.checks++;
+        // An earlier check used its whole connection budget. Keep its saved send.
+        if (window.checks === 1) return Promise.resolve([{status:'rejected'}]);
+        return resume(...args);
+      };
+      window.mount(true);
+    }, saved);
+    const retry = page.getByRole('button', { name:'Check again', exact:true });
+    await retry.waitFor();
+    await page.waitForFunction(() => !document.querySelector('button').disabled);
+    if (recovery === 'button') await retry.click();
+    else await page.evaluate(recovery => {
+      if (recovery === 'online') window.dispatchEvent(new Event('online'));
+      else if (recovery === 'visible') document.dispatchEvent(new Event('visibilitychange'));
+      else window.client.emit(recovery === 'connection' ? '' : 'pc', recovery,
+        recovery === 'transport' ? {direct:true} : {online:true});
+    }, recovery);
+    await retry.waitFor({ state:'detached' });
+    assert.equal(await page.evaluate(() => window.client.pendingActions().length), 0);
+    assert.equal(await page.evaluate(() => window.checks), 2);
+    assert.equal(state.inputs, 1, 'recovery reads the saved receipt without sending twice');
+    assert.equal(state.calls.filter(call => call.method === 'session.deliver').length, 0);
+  });
+}
