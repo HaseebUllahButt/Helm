@@ -889,6 +889,7 @@ pre.snippet {
 /* Turns breathe: the gap before a new question is wider than any gap inside
    an answer, so the eye finds where each exchange starts. */
 .timeline > .turn.user ~ .turn.user, .timeline > .turn.assistant + .turn.user { margin-top: 22px; }
+.timeline-row ~ .timeline-row > .turn.user:first-child { margin-top: 22px; }
 .turn.user .bubble {
   max-width: 85%; padding: 9px 13px; border-radius: 16px 16px 5px 16px;
   background: var(--raised); border: 1px solid var(--line); color: var(--text);
@@ -3457,7 +3458,8 @@ button.tf-name:hover { color: var(--text); text-decoration: underline; text-unde
      reply, a helper note, the end of the chat - starts on the left too,
      so there the row stays in the flow. */
   .turn.assistant { position: relative; }
-  .turn.assistant:has(+ .turn.user) > .final-meta { position: absolute; top: calc(100% - 8px); left: 4px; }
+  .turn.assistant:has(+ .turn.user) > .final-meta,
+  .timeline-row:has(+ .timeline-row > .turn.user) > .turn.assistant:last-child > .final-meta { position: absolute; top: calc(100% - 8px); left: 4px; }
 }
 /* A touch screen has no hover to reveal the time, so it stays in the bubble:
    at the end of the last line when it fits, the way messaging apps do, so a

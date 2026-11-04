@@ -2130,7 +2130,7 @@ export class Daemon {
         return result;
       }
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
-      case M.SESSION_NATIVE_AGENT: return this.sessions.nativeAgent(p.id, p.agentId, { full: p.full === true });
+      case M.SESSION_NATIVE_AGENT: return this.sessions.nativeAgent(p.id, p.agentId, { full: p.full === true, limit: p.limit });
       case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
@@ -2183,7 +2183,7 @@ export class Daemon {
         return this.inputDelivery.deliver(p, caller);
       case M.SESSION_INPUT:   return this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments, delivery: p.delivery, references: p.references });
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
-      case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit, known: typeof p.known === 'string' ? p.known : null });
+      case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit, pageBytes: p.pageBytes, known: typeof p.known === 'string' ? p.known : null });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
       case M.SESSION_DISCARD_EMPTY: return this.sessions.discardEmpty(p.id);
       case M.SESSION_TITLE:   return this.sessions.rename(p.id, p.title);

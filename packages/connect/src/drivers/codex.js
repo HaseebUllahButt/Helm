@@ -36,6 +36,9 @@ export const CODEX_MIN_VERSION = '0.154.0';
 
 /** Codex keeps its thinking to itself unless asked; its own app asks for the full notes. */
 const THINKING_NOTES = 'detailed';
+// Helm holds its subscription for the existing idle period. Once released,
+// Codex must not hold the same chat for another thirty minutes.
+const SERVER_ARGS = ['app-server', '--stdio', '-c', 'thread_unload_delay_secs=0'];
 const MAX_OUTPUT = 32_000;
 /** A diff is read in a fold on a phone, and `events.js` caps it there too. */
 const MAX_DIFF = 8_000;
@@ -474,7 +477,7 @@ export class CodexServer {
           this.#forgetHeld();
           await this.procHost.openProc(this.procId, {
             cmd: this.nativeProxy ? process.execPath : this.cmd,
-            args: this.nativeProxy ? [fileURLToPath(new URL('../../bin/helm-codex-proxy.js', import.meta.url)), this.nativeSocket] : ['app-server', '--stdio'],
+            args: this.nativeProxy ? [fileURLToPath(new URL('../../bin/helm-codex-proxy.js', import.meta.url)), this.nativeSocket] : SERVER_ARGS,
             cwd: undefined, env: serverEnv(this.env),
           });
         }
@@ -489,7 +492,7 @@ export class CodexServer {
         // handshake; only an already-running proc has been initialized.
         if (this.#adopted) return true;
       } else {
-        const child = spawn(this.cmd, ['app-server', '--stdio'], {
+        const child = spawn(this.cmd, SERVER_ARGS, {
           env: serverEnv({ ...process.env, ...this.env }),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
@@ -1027,7 +1030,7 @@ export class CodexDriver extends Driver {
   /** What a thread is opened with, on start and on a later reload. */
   #threadParams() {
     const { approvalPolicy, approvalsReviewer, sandbox } = this.#policy();
-    const config = { ...codexOnlineOff(this.env), ...Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
+    const config = { ...codexOnlineOff(this.env), ...(!this.nativeSocket ? { thread_unload_delay_secs: 0 } : {}), ...Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
       .map((k) => [`shell_environment_policy.set.${k}`, this.env[k]])) };
     return { cwd: this.cwd, approvalPolicy, approvalsReviewer, sandbox, ...(this.model ? { model: this.model } : {}),
       ...(this.instructions ? { developerInstructions: this.instructions } : {}),
@@ -1601,6 +1604,28 @@ export class CodexDriver extends Driver {
   /** codex's service tier - what the TUI calls /fast. Also per-turn. */
   async setSpeed(speed) { this.speed = speed || null; }
 
+  /** An idle parent may still own commands or native helpers. */
+  async canRelease() {
+    if (!this.#server || !this.threadId) return true;
+    for (const threadId of [this.threadId, ...this.#subagentThreads.keys()]) {
+      const state = await this.#server.call('thread/read', { threadId, includeTurns: false }, 10_000);
+      if (state.result?.thread?.status?.type === 'notLoaded') continue;
+      if (state.error) {
+        if (threadId !== this.threadId && /not found|no rollout|does not exist/i.test(state.error.message)) continue;
+        this.log(`Keep the Codex chat running: ${state.error.message}`); return false;
+      }
+      if (state.result?.thread?.status?.type !== 'idle') return false;
+      const work = await this.#server.call('thread/backgroundTerminals/list', { threadId }, 10_000);
+      // Unknown background state is not proof that it is safe to stop.
+      if (work.error || !Array.isArray(work.result?.data)) {
+        this.log(`Keep the Codex chat running. Codex cannot confirm background work: ${work.error?.message ?? 'no command list'}`);
+        return false;
+      }
+      if (work.result.data.length || work.result.nextCursor) return false;
+    }
+    return this.status === 'idle' && !this.pending.size;
+  }
+
   async kill() {
     this.killed = true;
     if (!this.#server) return;
@@ -1619,6 +1644,12 @@ export class CodexDriver extends Driver {
     }
     if (this.#turnId && this.status === 'working') {
       try { await this.#server.call('turn/interrupt', { threadId: this.threadId, turnId: this.#turnId }); } catch { /* fine */ }
+    }
+    if (this.threadId) {
+      const reply = await this.#server.call('thread/unsubscribe', { threadId: this.threadId }, 10_000);
+      // Old Codex builds may not support this call. Detaching still closes
+      // the account process when this was its last chat.
+      if (reply.error) this.log(`Could not release the Codex chat: ${reply.error.message}`);
     }
     this.#server.detach(this);
     this.#server = null;

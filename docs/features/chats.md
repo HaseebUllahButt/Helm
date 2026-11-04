@@ -128,9 +128,13 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `hidden-context`, `driver-claude`.
 
 ## Long chats: folds, copy, selection
-- **Latest first:** opening a chat or returning to it reads its newest window.
-  Saved text can appear first when offline. Missed live events do not replay.
-  Older replies load with the earlier-history control.
+- **Latest first:** opening a chat reads its newest window. Saved text can
+  appear first when offline. Older replies load as the reader scrolls up,
+  or with the earlier-history control. Loaded pages stay on the device.
+- **Long views:** draw only nearby turns. Keep measured space for the rest.
+  Keep selected words, open tools and focused controls alive off screen.
+  Native chat polls read the latest window and keep older pages already
+  loaded; a live refresh must not replace them or move the reader.
 - **Live reading:** a hidden chat releases its live view. Only devices with
   an open view receive its text. Text redraws before repeated tool updates;
   events keep their original order. Repeated tool output sends its newest
@@ -156,6 +160,7 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   Helm used 5.3 s for the 32 s reply and PandaCode's own preview 10.7 s.
 - **Traps:** iPhone handles and Safari permissions still need a device.
 - **Tests:** `test/browser/activity-fold`, `chat-fold`,
-  `history-pagination`, `transcript-performance`, `copy-selection`,
+  `history-pagination`, `whole-chat`, `windowed-row`, `native-history-window`,
+  `transcript-performance`, `copy-selection`,
   `highlight-performance`, `markdown-loading`, `latest-first`, `chat-sync`;
   `test/event-stream`, `stream-routing`.

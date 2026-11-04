@@ -76,7 +76,8 @@ export class SessionViewers {
    * the raw screen asks for it explicitly, and silently returning scrollback
    * here would make the chat view lie about what it is showing.
    */
-  async messages(id, { limit = 120, known = null } = {}) {
+  async messages(id, { limit = 120, known = null, pageBytes = 4 << 20 } = {}) {
+    limit = Math.max(1, Math.floor(Number(limit) || 120));
     const s = this.#sessions.get(id);
     if (s.driver) return { messages: [], source: 'events' };
     // A launched native process must be linked by process identity, never
@@ -110,12 +111,21 @@ export class SessionViewers {
     }
     // Asking for messages is how a chat view says it is watching.
     this.watchTranscript(id, s.transcript);
-    const messages = s.external && s.transcript && ['codex', 'claude'].includes(s.engine)
-      ? structuredClone((await this.#core.external.readTranscript(s).catch(error => {
-          if (error.code === 'ENOENT') return { messages: [] };
-          throw error;
-        })).messages.slice(-limit))
-      : await readMessages({ engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit });
+    const tailBytes = Math.max(4 << 20, Number(pageBytes) || 4 << 20);
+    const database = ['opencode', 'opencode2', 'devin'].includes(s.engine);
+    let messages, available;
+    if (s.external && s.transcript && ['codex', 'claude'].includes(s.engine)) {
+      const shared = await this.#core.external.readTranscript(s).catch(error => {
+        if (error.code === 'ENOENT') return { messages: [] };
+        throw error;
+      });
+      available = shared.messages.length;
+      messages = structuredClone(shared.messages.slice(-limit));
+    } else {
+      messages = await readMessages({ engine: s.engine, path: s.transcript, sessionId: s.engineSessionId,
+        limit: limit + 1, all: database && limit > 120, tailBytes });
+      available = messages.length;
+    }
     if (s.nativeChat) {
       const images = new Map(this.#sessions.events.tail(id, 0).filter(event => event.type === 'native.images')
         .map(event => [event.prompt, event]));
@@ -126,12 +136,15 @@ export class SessionViewers {
         message.attachments = saved.attachments.map(image => ({ ...image, data: this.#sessions.events.attachment(id, image.ref) }));
       }
     }
-    const shown = withVisualMessages(messages, this.#sessions.events.tail(id, 0));
+    const truncated = !database && !(s.external && ['codex', 'claude'].includes(s.engine))
+      && s.transcript && (await stat(s.transcript).catch(() => ({ size: 0 }))).size > tailBytes;
+    const hasMore = available > limit || !!truncated;
+    const shown = withVisualMessages(messages.slice(-limit), this.#sessions.events.tail(id, 0));
     // The app reads a native chat every few seconds. When it already has
     // these messages, say so instead of sending the whole list again.
     const version = createHash('sha256').update(JSON.stringify(shown)).digest('base64url').slice(0, 22);
-    if (known === version) return { unchanged: true, version, status: s.status, source: s.transcript };
-    return { messages: shown, version, status: s.status, source: s.transcript };
+    if (known === version) return { unchanged: true, version, hasMore, status: s.status, source: s.transcript };
+    return { messages: shown, version, hasMore, status: s.status, source: s.transcript };
   }
 
   async read(id, { lines = 200, source = 'recent', ansi = false } = {}) {
