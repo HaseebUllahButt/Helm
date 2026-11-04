@@ -40,12 +40,11 @@ function keep(key: string, view: Kept) {
 }
 
 /**
- * Open at the latest work, then fetch the rest of the chat behind it, one
- * page at a time. The owner reads whole chats on the phone to learn from
- * them, so the history must not stop at the first screen; the device keeps
- * what it has fetched (logCache), and the next open only adds what is new.
+ * Open at the latest work. Read older pages when the reader scrolls up.
+ * Keep fetched pages on the device, so returning to them needs no network
+ * read. Explicit wholeChat callers may still request background loading.
  */
-export function useSessionLog(client: Client, env: string, sessionId: string, { wholeChat = true } = {}) {
+export function useSessionLog(client: Client, env: string, sessionId: string, { wholeChat = false } = {}) {
   const [state, setState] = useState<LogState>(() => {
     const view = kept.get(`${env}:${sessionId}`);
     return view ? { ...view.log, pending: [...view.log.pending] } : emptyLog();

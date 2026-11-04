@@ -227,7 +227,7 @@ export class SessionSubagents {
   }
 
   /** One of a session's own subagents, with its result and recent activity; `full` adds its whole conversation. */
-  async nativeAgent(id, agentId, { full = false } = {}) {
+  async nativeAgent(id, agentId, { full = false, limit = NATIVE_MESSAGES } = {}) {
     const s = this.#sessions.get(id);
     if (!this.hasNative(s)) throw new Error('this chat has no subagents');
     await this.refreshNative(s, { force: true });
@@ -268,13 +268,18 @@ export class SessionSubagents {
         found.push({ role: 'user', text: m.text, tools: [], at: new Date(m.at).toISOString() });
       }
     }
+    limit = Math.max(1, Math.floor(Number(limit) || NATIVE_MESSAGES));
     let from = found.length, bytes = 0;
-    while (from > 0 && found.length - from < NATIVE_MESSAGES) {
+    while (from > 0 && found.length - from < limit) {
       bytes += JSON.stringify(found[from - 1]).length;
-      if (bytes > NATIVE_BYTES && from < found.length) break;
+      if (bytes > Math.max(NATIVE_BYTES, limit * NATIVE_BYTES / 40) && from < found.length) break;
       from--;
     }
-    const events = transcriptEvents(found.slice(from), { open: ['working', 'blocked'].includes(card.status) });
+    let parent = from;
+    while (parent > 0 && found[parent]?.role !== 'user') parent--;
+    const context = from > parent && found[parent]?.role === 'user'
+      ? { id: `native-message-${found[parent].sourceId ?? parent}-0`, text: found[parent].text, at: found[parent].at } : null;
+    const events = transcriptEvents(found.slice(from), { offset: from, context, open: ['working', 'blocked'].includes(card.status) });
     return { agent, events, more: from > 0 };
   }
 

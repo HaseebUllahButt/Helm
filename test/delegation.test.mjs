@@ -335,6 +335,44 @@ test('an idle child waiting on its own background command is not released until 
   assert.equal(original.status, 'exited');
 });
 
+test('an untouched Codex chat starts fresh after its empty runtime is released', async t => {
+  const set = globalThis.setTimeout;
+  let reap;
+  t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => ms === 30 * 60_000
+    ? (reap = fn, { unref() {} }) : set(fn, ms, ...args));
+  const { sessions, drivers } = setup(t);
+  const chat = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const original = drivers.get(chat.id), oldId = chat.engineSessionId;
+  original.push('status', { status: 'idle' });
+  assert.ok(reap);
+  const exited = new Promise(resolve => original.on('event', e => { if (e.type === 'status' && e.status === 'exited') resolve(); }));
+  reap(); await exited;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sessions.get(chat.id).engineSessionId, null);
+  await sessions.input(chat.id, 'My first prompt');
+  assert.notEqual(drivers.get(chat.id).engineSessionId, oldId);
+  assert.equal(drivers.get(chat.id).sent, 'My first prompt');
+});
+
+test('a slow idle check leaves new prompts free to run and cannot stop their work', async t => {
+  const { sessions, drivers } = setup(t, opts => new FakeDriver(opts), { delegationIdleMs: 10 });
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Inspect' });
+  const original = drivers.get(child.id);
+  let release, checking;
+  const began = new Promise(resolve => { checking = resolve; });
+  original.canRelease = () => { checking(); return new Promise(resolve => { release = resolve; }); };
+  original.finish();
+  await began;
+  t.after(() => release?.(true));
+  await sessions.messageDelegation(parent.id, child.id, 'Continue now');
+  assert.equal(original.sent, 'Continue now');
+  release(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(original.status, 'working');
+  assert.equal(drivers.get(child.id), original);
+});
+
 test('a child sharing a Codex account releases its own driver without closing another thread', async t => {
   const { sessions, drivers } = setup(t, opts => new FakeDriver(opts), { delegationIdleMs: 10 });
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
