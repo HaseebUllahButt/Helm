@@ -110,8 +110,12 @@ export function safePoint({ status, transcript, signal, pid }) {
         const tail = added.slice(-65_536).trimEnd().split('\n').at(-1);
         const rec = JSON.parse(tail);
         const content = rec.message?.content ?? rec.payload?.content;
+        // A finished command or edit, however the CLI records one: Claude and
+        // Codex nest a tool_result in a user turn, Codex marks a `*_output`
+        // payload, and Pi (and opencode) write a whole `toolResult` message.
         return (rec.type === 'user' && Array.isArray(content) && content.some((b) => b?.type === 'tool_result'))
-          || /_output$/.test(rec.payload?.type ?? '');
+          || /_output$/.test(rec.payload?.type ?? '')
+          || rec.message?.role === 'toolResult';
       } catch { return false; }
     };
     const check = () => {

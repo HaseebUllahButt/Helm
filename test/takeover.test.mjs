@@ -109,6 +109,23 @@ test('a result already in the transcript is not a new safe point', async () => {
   }
 });
 
+test('a Pi tool step landing is a safe point, even though Pi records it as a toolResult message', async () => {
+  const path = join(root, 'pi-step.jsonl');
+  writeFileSync(path, JSON.stringify({ type: 'session', version: 3, id: 'pi1', cwd: work }) + '\n'
+    + JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'go' }] } }) + '\n');
+  const cancel = new AbortController();
+  const waiting = safePoint({ transcript: path, pid: process.pid, signal: cancel.signal, status: () => 'working' });
+  try {
+    appendFileSync(path, JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'bash' }] } }) + '\n');
+    await new Promise((r) => setTimeout(r, 200));
+    appendFileSync(path, JSON.stringify({ type: 'message', message: { role: 'toolResult', content: [{ type: 'text', text: 'done' }] } }) + '\n');
+    assert.deepEqual(await waiting, { wasWorking: true });
+  } finally {
+    cancel.abort();
+    await waiting.catch(() => {});
+  }
+});
+
 test('take over waits for the running step, then moves the same CLI into a shared terminal and carries on', { skip: !pty && 'no pty' }, async (t) => {
   // The CLI the owner started from their shell before Helm, mid-task. The
   // shell keeps the window open after the CLI leaves, as a real one does.
