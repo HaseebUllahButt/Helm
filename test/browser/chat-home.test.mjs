@@ -32,7 +32,7 @@ before(async () => {
       old5: mk('old5', 'Check the logs', '/work/project', {updatedAt:now - 70 * 3600e3}),
     };
     window.mount = () => {
-      const envs = ['laptop','vm'].map(id => ({id,name:id === 'laptop' ? 'Laptop' : 'vm',online:true,info:{}}));
+      const envs = ['laptop','vm','sleeping'].map(id => ({id,name:id === 'laptop' ? 'Laptop' : id,online:id !== 'sleeping',info:{}}));
       window.calls = [];
       const client = {pendingActions:()=>[],resumeActions:async()=>[],token,relay:'http://helm-test',
         environments:async()=>({environments:envs}), on:()=>()=>{}, subscribe:()=>{}, watchLatency:()=>()=>{},
@@ -202,3 +202,18 @@ for (const width of [1280,390]) test(`a machine's home asks what to build, lists
   assert.match(await page.locator('.newchat-greeting').innerText(),/^Pick a folder on/);
   await shot(page,`new-chat-picker-${width}.png`);
 });
+
+ test('phone Home keeps online machines visible and expands to show offline machines', async t => {
+  const page = await pageFor(t, 390);
+  const machines = page.locator('.phone-machines');
+  const toggle = machines.getByRole('button', { name: /^Machines/ });
+  await machines.getByRole('button', { name: 'Laptop Online' }).waitFor();
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(await machines.getByText('sleeping', { exact: true }).count(), 0);
+  await toggle.click();
+  await machines.getByRole('button', { name: 'sleeping Offline' }).waitFor();
+  assert.equal(await machines.locator('.row.machine').count(), 3);
+  await toggle.click();
+  assert.equal(await machines.getByText('sleeping', { exact: true }).count(), 0);
+  assert.equal(await machines.locator('.row.machine').count(), 2);
+ });

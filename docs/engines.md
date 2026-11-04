@@ -2,9 +2,9 @@
 
 A feature that touches chats needs a decision for each tool, even "not
 supported here". This page says where the tools differ and what breaks.
-Read from the code on 2026-11-02; check the driver before you trust a row.
+Read from the code on 2026-11-04; check the driver before you trust a row.
 
-Ten tools have a headless driver: Helm runs the CLI itself and reads its
+Eleven tools have a headless driver: Helm runs the CLI itself and reads its
 event stream (`DRIVERS` in `session-wire.js`). Gemini, Kimi and Muse work
 only as native chats: the owner starts them in a terminal and Helm reads
 their history. `shell` is a plain terminal. ACP is the Agent Client
@@ -19,6 +19,7 @@ Protocol: JSON over stdin and stdout (`drivers/acp.js`).
 | devin | ACP | its own edit/read/bypass | if the agent says so | effort is `thought_level` | `session/load` replays | no | Helm answers `/usage` |
 | grok | ACP `agent --no-leader … stdio` | Claude's mode words | if the agent says so | effort is a start flag | `session/load` | no | context only |
 | cursor | ACP `acp` | ask/agent; Helm answers auto | yes | `cursor-agent models` | load; no history reader | no | context only |
+| vibe | ACP `vibe-acp`, next to `vibe` | ask/accept-edits/smart-approve/auto-approve | yes | `model` and `thinking` options | `session/load`; no native chat | no | context only |
 | antigravity | ACP, a binary Helm installs | default/auto_edit/yolo | if the agent says so | no effort | `session/resume`; no native chat | no | context only |
 | agy | stream-json NDJSON | none: Helm cannot answer requests | saved as files | each change restarts it | no cancel, stop kills it | no | per-turn difference |
 | pi, omp | `--mode rpc` (`pi.js`) | no modes; extension dialogs become cards | yes | `set_model`, `set_thinking_level` | `abort`; `--session` | no | from messages |
@@ -70,6 +71,11 @@ A new tool, or a feature for "every tool", must look at each of these:
   stay. Without it Helm steers a shared Grok backend.
 - **Pi:** when the version sends `agent_settled`, `agent_end` is not the
   end: compaction runs after it.
+- **Vibe:** the profile names `vibe`, but the driver runs `vibe-acp` from
+  the same folder. With no Mistral sign-in, `session/new` says "Missing API
+  key"; Helm shows `vibe --setup` instead. Its chat store
+  (`logs/session/unified`) has no reader yet, so terminal Vibe chats do not
+  show in Helm.
 - **Antigravity:** never run `--version` (about 1 GB unpack) and never
   clean its shared temp folder (it kills a live agent).
 - **Rewind:** off for native, shared and outside chats, even on Claude and

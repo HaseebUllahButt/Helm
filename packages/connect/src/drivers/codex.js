@@ -463,8 +463,7 @@ export class CodexServer {
       }
       // Diagnostic only: a slow wrapper's --version must not hold up a
       // usable app-server (or reconnection to one that is already running).
-      void checkVersion('codex', this.cmd, this.env, CODEX_MIN_VERSION, this.log)
-        .catch((err) => this.log(`codex version check: ${err.message}`));
+      void checkVersion('codex', this.cmd, this.env, CODEX_MIN_VERSION, this.log);
       // The server exits if its home does not exist yet.
       if (this.env.CODEX_HOME) mkdirSync(expand(this.env.CODEX_HOME), { recursive: true });
       if (this.procHost) {

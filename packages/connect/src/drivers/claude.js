@@ -250,7 +250,7 @@ export class ClaudeDriver extends Driver {
   async #start() {
     if (this.#pipe) return;
     assertFolder(this);
-    await checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
+    void checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
     if (this.procId && this.procHost?.hasProc(this.procId)) {
       const pipe = this.procHost.procPipe(this.procId);
       if (pipe) {
