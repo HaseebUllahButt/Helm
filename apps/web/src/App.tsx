@@ -1315,7 +1315,7 @@ function Shell({ client, conn, onSignOut }: {
               on a phone this list. Nothing else leaves a machine. */}
           <div className="brand">
             <button type="button" className="brand-home" onClick={goHome} title="Home" aria-label="Home">
-              <img src="/favicon.svg?v=7" alt="" />
+              <img src="/favicon.svg?v=8" alt="" />
               <b className="wordmark">helm</b>
             </button>
           </div>
