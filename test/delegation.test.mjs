@@ -896,12 +896,20 @@ test('helm delegate same runs the helper on the account this chat runs as', asyn
 test('delegation instructions keep only rules; the details live in helm delegate --help', async () => {
   const { commandHelp } = await import('../packages/connect/src/help.js');
   const note = delegationNote();
-  assert.ok(note.length < 700, 'it rides along in every session');
-  assert.equal(delegationNote(profiles), note);
-  assert.equal(delegationNote([]), note);
+  assert.ok(note.length < 720, 'it rides along in every session');
+  assert.equal(delegationNote('codex'), note, 'Helm\'s own Codex fork reuses the cache; Codex\'s own child did not');
+  assert.equal(delegationNote('pi'), note, 'tools nobody measured keep helm delegate');
   assert.match(note, /Do the work yourself by default/);
   assert.match(note, /never your CLI's own subagent tool/);
   assert.match(note, /open, message and stop it/);
+  // Claude's own Agent is cheaper for short work on the same account.
+  const claude = delegationNote('claude');
+  assert.ok(claude.length < 720, 'it rides along in every session');
+  assert.doesNotMatch(claude, /never your CLI's own subagent tool/);
+  assert.match(claude, /if it is short and on your account, use your Agent tool \(run_in_background false\)/);
+  assert.match(claude, /a fork if it needs this chat, model haiku for mechanical work/);
+  assert.match(claude, /another account, tool or machine, a worktree, or work that outlasts your turn\) use helm delegate/);
+  for (const shared of [/Do the work yourself by default/, /never unset HELM_SESSION_ID/, /judgment calls yourself/, /Keep your helpers/]) assert.match(claude, shared);
   assert.match(note, /never unset HELM_SESSION_ID/);
   assert.match(note, /--model cheap/);
   assert.match(note, /Keep your helpers/);
@@ -1229,6 +1237,7 @@ test('agents are told which machine they are on and how to reach the others', as
   assert.match(brief, /Never rerun a helm exec that may have started/);
   assert.match(brief, /--keep only when the owner asks/);
   assert.ok(brief.includes(delegationNote()));
+  assert.ok(helmBrief(net, { engine: 'claude' }).includes(delegationNote('claude')), 'each chat gets the route for its own tool');
   const alone = helmBrief({ self: 'a', machines: { a: net.machines.a } });
   assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');
   assert.match(alone, /\[Helm pickup: .*run helm pickup\.\]/, 'every agent learns where its handover goes');
@@ -1265,9 +1274,11 @@ test('the notes every agent gets match the committed size', async () => {
   // Only machines that can start a browser get its note; count it once.
   const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:')).join('\n');
   const notes = [brief, browserNote(), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
+  // Claude chats get their own helper route (delegationNote).
+  const claudeNotes = notes.replace(delegationNote(), delegationNote('claude'));
   assert.deepEqual(
-    { notesBytes: Buffer.byteLength(notes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
-    { notesBytes: budget.notesBytes, reminderBytes: budget.reminderBytes },
+    { notesBytes: Buffer.byteLength(notes), claudeNotesBytes: Buffer.byteLength(claudeNotes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
+    { notesBytes: budget.notesBytes, claudeNotesBytes: budget.claudeNotesBytes, reminderBytes: budget.reminderBytes },
   );
 });
 

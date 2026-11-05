@@ -537,7 +537,7 @@ export class Daemon {
       publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     // A chat in its own worktree is also told where its work goes back to.
-    this.sessions.delegationBrief = (s) => [helmBrief(loadNetwork() ?? this.net, { parentId: s?.delegation?.parentId ?? null }), worktreeNote(s)].filter(Boolean).join('\n');
+    this.sessions.delegationBrief = (s) => [helmBrief(loadNetwork() ?? this.net, { parentId: s?.delegation?.parentId ?? null, engine: s?.engine ?? null }), worktreeNote(s)].filter(Boolean).join('\n');
     // What was said in every chat here, for the search box (search-index.js).
     this.search = new SearchIndex({ log: (line) => console.log(`[helm] ${line}`) });
     this.keeper = new OwnerKeeper({

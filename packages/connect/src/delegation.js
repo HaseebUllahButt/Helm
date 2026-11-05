@@ -131,11 +131,22 @@ export function cheapModel(engine, models = []) {
 }
 
 /**
- * Keep helpers visible to the owner. Same-account Codex helpers can reuse
- * their parent's context; other engines and accounts start a new chat.
+ * Keep helpers visible to the owner, at the lowest usage. Claude's own Agent
+ * tool is cheaper for short work on the same account: a fork reuses the
+ * parent's cached context, and Claude runs its helpers with its own savings.
+ * Its helpers show as cards the owner can open and message, but not stop one
+ * by one, so long or background work still goes to helm delegate. Codex
+ * keeps helm delegate: Helm's same-account fork reuses the cache, and
+ * Codex's own child had no cached input (docs/features/helpers.md). Other
+ * tools are not measured, so they keep helm delegate too.
  */
-export function delegationNote() {
-  return '[Helm helpers: Do the work yourself by default. For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself. Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]';
+const SAME_TOOL_HELPERS = {
+  claude: 'For a side task that would flood your context or truly runs in parallel: if it is short and on your account, use your Agent tool (run_in_background false), a fork if it needs this chat, model haiku for mechanical work. Otherwise (another account, tool or machine, a worktree, or work that outlasts your turn) use helm delegate. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Keep judgment calls yourself.',
+};
+export function delegationNote(engine = null) {
+  const route = SAME_TOOL_HELPERS[engine]
+    ?? 'For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself.';
+  return `[Helm helpers: Do the work yourself by default. ${route} Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]`;
 }
 
 /**
@@ -181,18 +192,18 @@ export function helperNote(parentId) {
 }
 
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId) => [parentId && helperNote(parentId), delegationNote(), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
-export function helmBrief(net, { parentId = null } = {}) {
+export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});
   const self = net?.machines?.[net?.self];
   const seen = new Set();
   const others = machines
     .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
-  if (!self?.name || !others.length) return toolNotes(parentId);
+  if (!self?.name || !others.length) return toolNotes(parentId, engine);
   return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}. Reach them through helm (helm exec, helm copy, helm spawn), not SSH: helm help lists every command and helm <command> --help explains one. Never rerun a helm exec that may have started; read it with helm exec-status. Links from helm share (spins) end after 3 hours; add --keep only when the owner asks. To show the owner a dev server, run helm forward <port> yourself; send only the localhost link it prints.]
-${toolNotes(parentId)}`;
+${toolNotes(parentId, engine)}`;
 }
 
 /**

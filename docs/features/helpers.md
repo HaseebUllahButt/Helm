@@ -58,6 +58,21 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   `session-driver`, `native-codex`, `spawn-cli`, `cli-subagents`.
 
 ## The CLIs' own subagents
+- **Which one an agent uses (`delegationNote`):** Claude chats use their own
+  Agent tool for short work on the same account. A fork reuses the parent's
+  cached context, and a non-fork helper starts smaller than a new chat
+  (16.7k against 28k tokens in the 2026-11-06 run). Long or background
+  work, another account, tool or machine, and worktrees go to `helm
+  delegate`: the owner cannot stop one built-in helper alone, only its
+  parent. Codex and every other tool keep `helm delegate`; Codex's own
+  child had no cached input (below), and the others are not measured.
+- **Claude proof (driven 2026-11-06, real Haiku chat in `verify-helm up
+  --real`):** asked for "a helper", the chat used Agent on Haiku. Agents
+  showed "Count .conf files in /etc · Finished". A message typed in its
+  view was passed on by the parent, and the helper answered, also after
+  `verify-helm restart`. Haiku sent `run_in_background` as the string
+  "false", so Claude ran it in the background; the parent still waited
+  and reported.
 - **Messages:** A helper message keeps its delivery number across reconnects.
   The machine saves a receipt before it calls the CLI. A restart during that
   call can leave delivery uncertain. Check the helper, then use **Check the
@@ -69,8 +84,7 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   daemon restart. The child's input had no cached tokens, so Helm leaves
   `multi_agent_v2` unchanged. Do not enable it merely because the child
   cards work.
-- **Claude not yet driven;** needs a real Claude chat that starts a Task.
-  A failed child puts the parent in "Needs you".
+- A failed child puts the parent in "Needs you".
 - **Tests:** `test/native-subagents`, `cli-subagents`;
   `driver-codex`; `test/browser/subagents`, `orchestration`.
 
