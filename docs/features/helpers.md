@@ -11,11 +11,20 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
 - **Prove (driven 2026-10-15):** in a fake-ask chat:
   ```sh
   $V click Agents; sleep 3                  # wait past "Finding accounts…"
-  $V click "Task"; $V type "my child task"; $V click "Start subagent"
+  $V click "New task"; $V click "Describe one task"; $V type "my child task"; $V click "Start helper"
   $V wait "Needs approval"; $V click Allow; $V wait "FINISHED"
   ```
 - **Proof:** "ACTIVE 1" with "my child task · fake-ask · CLI default", then
   "FINISHED 1" and "working on it done.".
+- **Task box:** Enter starts the helper, Shift+Enter makes a new line (on a
+  phone Return makes a new line). Paste, drop or the paperclip adds pictures
+  and files; they go with the first message. A machine without
+  `helperAttachments` gets no paperclip. The helper card has no message box:
+  **Open chat** is the way to talk to a helper.
+- **Prove pictures (driven 2026-11-06):** pick "Fake agent (sees pictures)",
+  paste a picture into the task box, press Enter, then **Open chat**: the
+  first message shows the picture. `fake-slow` cannot see pictures and shows
+  "this agent cannot see images" instead.
 - **Traps:** the child's result starts a new parent turn, so fake-ask asks
   again. Close the sheet with "Close thread details"; Back may not.
 - **Tests:** `test/browser/subagents`, `orchestration`, `child-requests`,
