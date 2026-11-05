@@ -73,13 +73,15 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
 
 ## The CLIs' own subagents
 - **Which one an agent uses (`delegationNote`):** Claude chats use their own
-  Agent tool for short work on the same account. A fork reuses the parent's
-  cached context, and a non-fork helper starts smaller than a new chat
-  (16.7k against 28k tokens in the 2026-11-06 run). Long or background
-  work, another account, tool or machine, and worktrees go to `helm
-  delegate`: the owner cannot stop one built-in helper alone, only its
-  parent. Codex and every other tool keep `helm delegate`; Codex's own
-  child had no cached input (below), and the others are not measured.
+  Agent tool for work on the same account, short or long. A fork reuses
+  the parent's cached context, and a non-fork helper starts smaller than a
+  new chat (16.7k against 28k tokens in the 2026-11-06 run). Long work
+  runs in the background, so the parent stays free to talk: the owner's
+  orchestrator mode. The owner cannot stop one built-in helper alone, only
+  its parent, and accepts that: they step in by message. Another account,
+  tool or machine, and worktrees go to `helm delegate`. Codex and every
+  other tool keep `helm delegate`; Codex's own child had no cached input
+  (below), and the others are not measured.
 - **Claude proof (driven 2026-11-06, real Haiku chat in `verify-helm up
   --real`):** asked for "a helper", the chat used Agent on Haiku. Agents
   showed "Count .conf files in /etc · Finished". A message typed in its
