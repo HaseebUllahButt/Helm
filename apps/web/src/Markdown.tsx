@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { render, renderNodes, loadHighlighting, hasHighlighting } from './md';
 import { drawDiagrams } from './diagrams';
+import { drawMath } from './math';
 
 /**
  * Agent prose as prose. The transcript is markdown - headings, lists, fenced
@@ -168,6 +169,8 @@ export const Markdown = memo(function Markdown({ text, className = '', live = fa
     now.open = undefined;
     el.append(renderNodes(text.slice(cut)));
   }, [text, live, html, highlighted]);
+  // Math is drawn while a reply streams too: each formula is small and whole.
+  useLayoutEffect(() => { if (host.current) drawMath(host.current); }, [text, live, html, highlighted]);
 
   // One delegated handler for every copy button in this message.
   useEffect(() => {

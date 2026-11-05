@@ -1366,6 +1366,8 @@ export class Daemon {
       home: homedir(),
       precopiedHandoff: true,
       agentMessages: true,
+      // A new helper task can carry pasted pictures and files.
+      helperAttachments: true,
       sendV2: true,
       // Answers requests from other machines over a direct channel, checking
       // each one as a hub would (direct-mesh.js). Older machines leave this

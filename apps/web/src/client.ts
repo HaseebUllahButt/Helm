@@ -40,6 +40,8 @@ export interface Environment {
     voice?: boolean;
     /** Named agent messages and reply history. */
     agentMessages?: boolean;
+    /** A new helper task can carry pasted pictures and files. */
+    helperAttachments?: boolean;
     runtime?: { version: string };
     /** Which helm this machine runs; null where it is not a git checkout. */
     version?: { commit: string; full?: string; time?: number; dirty?: boolean; dir?: string; branch: string; subject: string; updatable: boolean } | null;

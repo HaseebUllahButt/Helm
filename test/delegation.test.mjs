@@ -157,6 +157,26 @@ test('native child activity reaches a delegated ancestor and clears when its pro
   assert.equal(sessions.hasActiveDelegations(parent.id), false);
 });
 
+test('a new helper task carries pasted pictures; a bad one starts no helper', async t => {
+  class PictureDriver extends FakeDriver {
+    async sendWithAttachments(text, images) { this.images = images; await this.send(text); }
+  }
+  const { sessions, drivers } = setup(t, (opts) => new PictureDriver(opts));
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Look at this',
+    attachments: [{ filename: 'shot.png', mime: 'image/png', data: png }] });
+  const driver = drivers.get(child.id);
+  for (let i = 0; i < 100 && !driver.images; i++) await new Promise((r) => setImmediate(r));
+  assert.equal(driver.images?.length, 1);
+  assert.equal(driver.images[0].mime, 'image/png');
+  driver.finish();
+  const before = parent.delegations.length;
+  await assert.rejects(sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Bad',
+    attachments: [{ filename: 'x.bin', mime: 'application/octet-stream', data: '!!' }] }), /not valid base64/);
+  assert.equal(parent.delegations.length, before, 'no helper starts for a bad attachment');
+});
+
 test('a Claude chat in a terminal can start helpers; a plain terminal cannot', async t => {
   const { sessions } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
