@@ -248,6 +248,7 @@ const DETAILS = {
   delegate: `
   Start a helper for this chat.
   The owner sees a card to open, message or stop the helper.
+  Claude chats use their Agent tool for short work on the same account.
     <account>        Use same for this chat's account.
                      Run helm agents to list accounts on this machine.
                      Use helm spawn for another machine.
