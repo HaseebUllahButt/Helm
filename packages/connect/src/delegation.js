@@ -144,18 +144,19 @@ export function cheapModel(engine, models = []) {
  * tool is cheaper for short work on the same account: a fork reuses the
  * parent's cached context, and Claude runs its helpers with its own savings.
  * Its helpers show as cards the owner can open and message, but not stop one
- * by one, so long or background work still goes to helm delegate. Codex
+ * by one; the owner accepts that for long work too, and steps in by message.
+ * Long work runs in the background so the parent stays free to talk. Codex
  * keeps helm delegate: Helm's same-account fork reuses the cache, and
  * Codex's own child had no cached input (docs/features/helpers.md). Other
  * tools are not measured, so they keep helm delegate too.
  */
 const SAME_TOOL_HELPERS = {
-  claude: 'For a side task that would flood your context or truly runs in parallel: if it is short and on your account, use your Agent tool (run_in_background false), a fork if it needs this chat, model haiku for mechanical work. Otherwise (another account, tool or machine, a worktree, or work that outlasts your turn) use helm delegate. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Keep judgment calls yourself.',
+  claude: 'For a side task that would flood your context or truly runs in parallel on your account, short or long, use your Agent tool: a fork if it needs this chat, model haiku for mechanical work, run_in_background true for long work. Use helm delegate for another account, tool or machine, or a worktree. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Keep judgment calls yourself.',
 };
 export function delegationNote(engine = null) {
   const route = SAME_TOOL_HELPERS[engine]
     ?? 'For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself.';
-  return `[Helm helpers: Do the work yourself by default. ${route} Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]`;
+  return `[Helm helpers: Do the work yourself by default. ${route} The owner: "orchestrator mode is when u give work to others and u are always there to talk to me". Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]`;
 }
 
 /**
