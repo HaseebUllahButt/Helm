@@ -49,6 +49,11 @@ export function VisualFrame({ html, title, height = 420, expanded = false, onEsc
       if (event.source !== ref.current?.contentWindow || event.data?.type !== 'helm.visual' || event.data.token !== token) return;
       if (typeof event.data.height === 'number' && Number.isFinite(event.data.height)) setMeasured(Math.max(120, Math.min(1200, Math.ceil(event.data.height))));
       if (event.data.escape) escape.current?.();
+      // A Ctrl/Cmd key pressed in the page: Helm's own shortcuts still work.
+      const key = event.data.key;
+      if (key && typeof key.key === 'string' && typeof key.code === 'string' && (key.ctrlKey || key.metaKey)) {
+        ref.current?.dispatchEvent(new KeyboardEvent('keydown', { key: key.key, code: key.code, ctrlKey: !!key.ctrlKey, metaKey: !!key.metaKey, shiftKey: !!key.shiftKey, altKey: !!key.altKey, bubbles: true, cancelable: true }));
+      }
       if (typeof event.data.href === 'string' && /^https?:\/\//i.test(event.data.href) && navigator.userActivation?.isActive) window.open(event.data.href, '_blank', 'noopener,noreferrer');
     };
     const theme = () => ref.current?.contentWindow?.postMessage({ type: 'helm.visual.theme', token, theme: currentTheme() }, '*');

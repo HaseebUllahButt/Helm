@@ -56,6 +56,17 @@ function bootVisual(config) {
   document.addEventListener('keydown', event => {
     if (parent !== window && event.key === 'Escape' && event.isTrusted) { event.preventDefault(); send({ escape: true }); }
   }, true);
+  // A page in focus gets the keys, not Helm: Ctrl+S saved the page as HTML in
+  // place of folding the sidebar. Ctrl/Cmd keys go to Helm, except the ones a
+  // reader uses here (copy, select all, find, zoom, reload) and keys the page
+  // takes for itself.
+  const KEEP = new Set(['c', 'x', 'v', 'a', 'z', 'y', 'f', 'g', 'r', 'w', 'q', '+', '-', '=', '0', 'control', 'meta', 'shift', 'alt']);
+  addEventListener('keydown', event => {
+    if (parent === window || !event.isTrusted || event.defaultPrevented || event.isComposing) return;
+    if (!(event.ctrlKey || event.metaKey) || KEEP.has(event.key.toLowerCase())) return;
+    event.preventDefault();
+    send({ key: { key: event.key, code: event.code, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, altKey: event.altKey } });
+  });
 }
 
 /**
