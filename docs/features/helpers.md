@@ -75,9 +75,10 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
 - **Which one an agent uses (`delegationNote`):** Claude chats use their own
   Agent tool for work on the same account, short or long. A fork reuses
   the parent's cached context, and a non-fork helper starts smaller than a
-  new chat (16.7k against 28k tokens in the 2026-11-06 run). Long work
-  runs in the background, so the parent stays free to talk: the owner's
-  orchestrator mode. The owner cannot stop one built-in helper alone, only
+  new chat (16.7k against 28k tokens in the 2026-11-06 run). Helpers run
+  in the foreground. Only when the owner asks for orchestrator mode do they
+  run in the background, so the parent stays free to talk. The owner
+  cannot stop one built-in helper alone, only
   its parent, and accepts that: they step in by message. Another account,
   tool or machine, and worktrees go to `helm delegate`. Codex and every
   other tool keep `helm delegate`; Codex's own child had no cached input

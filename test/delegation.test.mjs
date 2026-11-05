@@ -936,10 +936,13 @@ test('delegation instructions keep only rules; the details live in helm delegate
   assert.ok(claude.length < 800, 'it rides along in every session');
   assert.doesNotMatch(claude, /never your CLI's own subagent tool/);
   assert.match(claude, /on your account, short or long, use your Agent tool/);
-  assert.match(claude, /a fork if it needs this chat, model haiku for mechanical work, run_in_background true for long work/);
+  assert.match(claude, /a fork if it needs this chat, model haiku for mechanical work, run_in_background false\./);
   assert.match(claude, /helm delegate for another account, tool or machine, or a worktree/);
   // The owner's own words, for every tool.
-  for (const n of [note, claude]) assert.ok(n.includes('The owner: "orchestrator mode is when u give work to others and u are always there to talk to me".'));
+  for (const n of [note, claude]) {
+    assert.ok(n.includes('The owner: "orchestrator mode is when u give work to others and u are always there to talk to me".'));
+    assert.match(n, /to talk to me". Use it only when the owner asks for it\./);
+  }
   for (const shared of [/Do the work yourself by default/, /never unset HELM_SESSION_ID/, /judgment calls yourself/, /Keep your helpers/]) assert.match(claude, shared);
   assert.match(note, /never unset HELM_SESSION_ID/);
   assert.match(note, /--model cheap/);
