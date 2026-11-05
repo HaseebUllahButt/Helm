@@ -68,6 +68,19 @@ timelines and other coloured parts take the chart colours above.
 Its SVG is cleaned again: no links, pictures, scripts or remote CSS. A
 diagram with an error stays as code with the reason.
 
+## Math in replies
+
+Math written as `$...$`, `$$...$$`, `\(...\)`, `\[...\]` or a
+```` ```math ```` block is drawn with KaTeX (apps/web/src/math.ts), as in
+T3 Code. Agents are told to write math this way. A single `$` follows
+Pandoc's rule, so prices such as "$5 and $10" stay text; math never runs
+into code. KaTeX (about 270 KB) loads only when a reply has math. Its
+style sheet comes with the app; Vite must not pack its fonts into the CSS,
+because Helm's page rules block packed fonts (vite.config.ts). KaTeX output
+is added after DOMPurify, with `trust` off and `maxSize` set: TeX cannot
+make links, classes, styles or HTML. TeX that KaTeX cannot read stays as
+its source. Copy gives back the TeX.
+
 ## Security decisions
 
 Pages run in a sandbox with an opaque origin: no access to Helm's cookies,

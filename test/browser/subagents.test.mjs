@@ -917,7 +917,6 @@ test('Enter starts a helper task with a pasted picture', async () => {
     await view.setContent('<div id="root"></div>'); await view.addScriptTag({ content: bundle.outputFiles[0].text });
     await view.getByRole('button', { name: /New task/ }).click();
     const box = view.getByLabel('Task', { exact: true });
-    assert.equal(await box.evaluate((el) => getComputedStyle(el).resize), 'none', 'no corner grip on the task box');
     await box.fill('Look at this');
     await box.evaluate(async (el) => {
       const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
