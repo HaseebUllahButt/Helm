@@ -218,7 +218,7 @@ export function writingNote() {
 }
 
 export function visualNote() {
-  return '[Helm visuals: Use plain text by default, including reviews, comparisons and progress reports. Make or publish visuals only when the owner asks. Keep verification screenshots private unless asked to show them. Skills must follow the owner\'s chosen format. Report useful findings based on evidence; do not stop at a fixed count. Put a small diagram in a reply as a ```mermaid block; Helm draws it. Never draw boxes or arrows with text characters. For a requested visual, read helm render --help, make one self-contained HTML file, check it with helm preview, then publish it with helm render. Use helm canvas <file-or-spin-url> to open requested project files, visuals or live pages beside the chat.]';
+  return '[Helm visuals: Use plain text by default, including reviews, comparisons and progress reports. Make or publish visuals only when the owner asks. Keep verification screenshots private unless asked to show them. Skills must follow the owner\'s chosen format. Report useful findings based on evidence; do not stop at a fixed count. Put a small diagram in a reply as a ```mermaid block; Helm draws it. Write math as LaTeX in $...$ or $$...$$; Helm draws it. Never draw boxes or arrows with text characters. For a requested visual, read helm render --help, make one self-contained HTML file, check it with helm preview, then publish it with helm render. Use helm canvas <file-or-spin-url> to open requested project files, visuals or live pages beside the chat.]';
 }
 
 /** Read-only parents cannot acquire write access through a different CLI. */

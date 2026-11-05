@@ -1,5 +1,6 @@
 @import '@xterm/xterm/css/xterm.css';
 @import './session/side-dock.css';
+@import 'katex/dist/katex.min.css';
 
 /* Saved visual replies: controls belong to Helm; the page stays isolated. */
 /* A saved page has no frame of its own, as in T3 Code: it sits on the chat's
@@ -996,6 +997,11 @@ pre.snippet {
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 1rem 0; }
 .md table { border-collapse: collapse; margin: 0.65rem 0; font-size: var(--t-meta); display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--line-2); padding: 4px 10px; text-align: left; }
+/* Math (math.ts). Before KaTeX loads, a formula shows its TeX as quiet code. */
+.md .math:not([data-tex]), .md .math-source { font-family: var(--mono, monospace); font-size: 0.88em; color: var(--mutedfg); white-space: pre-wrap; }
+.md .math-display { display: block; margin: 0.65rem 0; overflow-x: auto; overflow-y: hidden; }
+.md .math-display .katex-display { margin: 0; }
+.md .math .katex { font-size: 1.1em; }
 .md th { background: var(--accent); }
 .md img { max-width: 100%; border-radius: 8px; }
 
@@ -2737,7 +2743,9 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-form { display: grid; gap: 10px; margin: 0; padding: 14px; border: 1px solid var(--line-2); border-radius: var(--radius-xl); background: var(--card); }
 .delegation-form > label { font-size: var(--t-meta); font-weight: 550; color: var(--text-dim); }
 .delegation-form > textarea { width: 100%; min-width: 0; margin: 0; padding: 9px 10px; }
-.delegation-form textarea { resize: vertical; }
+/* No corner grip: the box is big enough, and the grip read as a second close mark. */
+.delegation-form textarea { resize: none; }
+.delegation-form .delegation-files { padding: 0; }
 .delegation-form .error { margin: 0; }
 .delegation-config {
   display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 10px;
@@ -2756,6 +2764,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-start span { flex: 1; min-width: 0; color: var(--mutedfg); font-size: var(--t-micro); }
 .delegation-start button { width: auto; margin: 0; flex-shrink: 0; min-height: 40px; }
 .delegation-start .ghost { padding: 8px 14px; }
+.delegation-start .delegation-attach { padding: 8px 10px; display: inline-flex; align-items: center; color: var(--text-dim); }
 .delegation-branches { display: grid; gap: 16px; }
 .delegation-group h3 { display: flex; gap: 6px; margin: 0 0 4px; font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--mutedfg); }
 .delegation-group h3 span { font-weight: 400; }
@@ -2791,9 +2800,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 /* A CLI's own subagents, beside Helm's tasks. */
 .native-activity summary { cursor: pointer; color: var(--mutedfg); font-size: var(--t-meta); }
 .native-activity ol { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; font: var(--t-micro) var(--mono); color: var(--text-dim); overflow-wrap: anywhere; }
-.delegation-follow { display: flex; gap: 8px; align-items: flex-end; margin: 0; }
-.delegation-follow textarea { flex: 1; min-width: 0; margin: 0; padding: 9px 10px; resize: vertical; }
-.delegation-follow button { width: auto; margin: 0; flex: none; }
 .delegation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .delegation-actions { margin-left: -8px; }
 .delegation-actions button { width: auto; margin: 0; min-height: 36px; padding: 6px 8px; }
@@ -2807,13 +2813,11 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   .delegation-start span { flex-basis: 100%; }
   .delegation-config .grow { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .delegation-task small { white-space: normal; overflow-wrap: anywhere; }
-  .delegation-follow { flex-direction: column; align-items: stretch; }
-  .delegation-follow button { align-self: flex-end; }
   .delegation-actions button { flex: 1 1 auto; }
 }
 @media (pointer: coarse), (max-width: 599px) { .delegation-new { min-height: 44px; } }
 @media (pointer: coarse) {
-  .delegation-start button, .delegation-follow button, .delegation-actions button { min-height: 44px; }
+  .delegation-start button, .delegation-actions button { min-height: 44px; }
   .delegation-account-label .linkish { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { .delegation-status i { animation: none !important; } }

@@ -1,5 +1,5 @@
 import { errorMessage } from '../errors';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
 import { Client, type CliAgent, type Environment, type ModelList, type Session, type DelegationResult, type NativeAgent, type NativeAgentDetail, type SubagentDefaults } from '../client';
 import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
@@ -8,7 +8,7 @@ import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
 import { useDialog } from '../useDialog';
-import { newMessageId } from '@helm/protocol/reliable-input';
+import { clipboardFiles, isImageAttachment, prepareAttachment } from './image';
 import { AgentMessages } from './AgentMessages';
 import { PermissionSheet } from './PermissionSheet';
 import type { Permission, Decision } from './types';
@@ -18,6 +18,8 @@ const STATUS: Record<string, string> = {
   error: 'Failed', interrupted: 'Stopped', idle: 'Ready',
 };
 const ACTIVE = ['blocked', 'working', 'starting'];
+/** A phone: no Shift+Enter, so Return makes a new line there. */
+const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 const stateOf = (task: Session) => task.delegation?.status || task.status;
 /**
  * The accounts new chats offer on this machine, plus the one this chat runs
@@ -58,11 +60,11 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   const [selected, setSelected] = useState('');
   const [result, setResult] = useState<DelegationResult | null>(null);
   const [permissions, setPermissions] = useState<Permission[]>([]);
-  const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
-  const message = messageDrafts[selected] ?? '';
-  const setMessage = (text: string) => setMessageDrafts((all) => ({ ...all, [selected]: text }));
   const [sending, setSending] = useState(false);
-  const messageAttempt = useRef<{ id: string; target: string; text: string } | null>(null);
+  // Pictures and files pasted, dropped or picked into the new task.
+  const [files, setFiles] = useState<{ name: string; mime: string; data: string; url: string }[]>([]);
+  const [preparing, setPreparing] = useState(0);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [acting, setActing] = useState('');
   const [notice, setNotice] = useState('');
   const [revision, setRevision] = useState(0);
@@ -250,15 +252,49 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     setSessions((all) => [...all.filter((existing) => existing.id !== session.id), session]);
     select(session.id); setFocus(session.id);
   };
+  // An older machine drops what it does not know, so it is not offered there.
+  const canAttachFiles = env.info?.helperAttachments === true;
+  const seesImages = options?.imagesByModel?.[selectedModel] ?? options?.images ?? true;
+  const attach = async (chosen: File[]) => {
+    if (!chosen.length) return;
+    setError(null);
+    setPreparing((count) => count + 1);
+    const failures: string[] = [];
+    const ready: typeof files = [];
+    try {
+      for (const file of chosen) {
+        try {
+          const prepared = await prepareAttachment(file);
+          if (isImageAttachment(prepared) && !seesImages) failures.push(`${file.name || 'image'}: this model cannot see images`);
+          else ready.push(prepared);
+        } catch (failure) { failures.push(`${file.name || 'file'}: ${errorMessage(failure, { fallback: 'Helm cannot read the file.' })}`); }
+      }
+      if (ready.length) setFiles((all) => [...all, ...ready]);
+      if (failures.length) setError({ text: `Not added: ${failures.join('; ')}`, at: 'form' });
+    } finally { setPreparing((count) => Math.max(0, count - 1)); }
+  };
+  const onPaste = (event: ClipboardEvent) => {
+    if (!canAttachFiles) return;
+    const pasted = clipboardFiles(event.clipboardData);
+    if (!pasted.length) return;
+    event.preventDefault();
+    void attach(pasted);
+  };
+  const onDrop = (event: DragEvent) => {
+    if (!canAttachFiles || !event.dataTransfer?.files.length) return;
+    event.preventDefault();
+    void attach(Array.from(event.dataTransfer.files));
+  };
   const start = async () => {
-    if (!agent?.available || !task.trim() || busy) return;
+    if (!agent?.available || !task.trim() || busy || preparing) return;
     setBusy(true); setError(null);
     try {
       const { session } = await client.rpc<{ session: Session }>(env.id, 'session.delegate', {
         id: parent.id, profileId: account, model: model || undefined,
         ...(effort ? { effort } : {}), mode: mode || undefined, task: task.trim(),
-      }, 70_000);
-      setTask(''); setComposing(false); setChoosingAccount(false); controls.close();
+        ...(files.length ? { attachments: files.map((file) => ({ filename: file.name, mime: file.mime, data: file.data })) } : {}),
+      }, 120_000);
+      setTask(''); setFiles([]); setComposing(false); setChoosingAccount(false); controls.close();
       added(session);
     } catch (failure: any) { fail('form')(failure); }
     finally { setBusy(false); }
@@ -268,27 +304,6 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     setActing(kind); setError(null); setNotice('');
     try { await action(); } catch (failure: any) { fail(selected)(failure); }
     finally { setActing(''); }
-  };
-  const sendMessage = async () => {
-    if (!message.trim() || sending) return;
-    setSending(true); setError(null); setNotice('');
-    try {
-      if (!env.info?.agentMessages) {
-        await client.rpc(env.id, 'session.delegation-message', { parentId: parent.id, id: selected, data: message.trim() });
-      } else {
-        const text = message.trim();
-        if (messageAttempt.current?.target !== selected || messageAttempt.current?.text !== text) {
-          messageAttempt.current = { id: newMessageId(), target: selected, text };
-        }
-        await client.rpc(env.id, 'session.agent-send', { id: parent.id, to: { env: env.id, id: selected },
-          text, messageId: messageAttempt.current.id, asUser: true }, 70_000);
-        messageAttempt.current = null;
-      }
-      setMessage('');
-      setNotice(result?.complete ? 'Helm sent the message.' : 'Helm sent the message. The agent receives it when it next starts work.');
-      bump();
-    } catch (failure: any) { fail(selected)(failure); }
-    finally { setSending(false); }
   };
   const answer = async (permission: Permission, decision: Decision) => {
     setSending(true); setError(null);
@@ -317,9 +332,11 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     setSessions((all) => all.filter((item) => item.id !== child.id));
     setSelected(''); setFocus('new');
   });
-  const submitOnShortcut = (submit: () => void) => (event: KeyboardEvent) => {
-    if (event.nativeEvent.isComposing) return;
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); }
+  // Enter sends and Shift+Enter makes a new line, as in the chat. A phone
+  // keyboard has no Shift+Enter, so there Return stays a new line.
+  const submitOnEnter = (submit: () => void) => (event: KeyboardEvent) => {
+    if (event.nativeEvent.isComposing || event.key !== 'Enter' || event.shiftKey) return;
+    if (!touch || event.metaKey || event.ctrlKey) { event.preventDefault(); submit(); }
   };
   const errorBox = (at: string) => error?.at === at && <p className="error" role="alert">{error.text}</p>;
 
@@ -336,13 +353,6 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
         : !result.error && <p className="note">{result.complete ? 'The agent finished without a written reply.' : 'The agent has not replied yet.'}</p>}
       {result?.error && <p className="error">{errorMessage(result.error, { machine: env.name })}</p>}
       {result?.truncated && <p className="note">Showing the most recent output.</p>}
-      <form className="delegation-follow" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-        <label htmlFor={`message-${child.id}`} className="vh">Message helper</label>
-        <textarea id={`message-${child.id}`} rows={2} maxLength={32000} value={message} disabled={sending}
-          placeholder={complete ? 'Enter the next task' : 'Give more instructions'} onChange={(event) => setMessage(event.target.value)}
-          onKeyDown={submitOnShortcut(() => void sendMessage())} />
-        <button className="primary" disabled={sending || !message.trim()}>{sending ? 'Sending…' : 'Send message'}</button>
-      </form>
       <div className="delegation-actions">
         {onOpen && <button type="button" className="ghost" onClick={() => onOpen(child)}>Open chat</button>}
         {complete ? <>
@@ -434,7 +444,18 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
         {nativeOnly ? null : composing ? <form className="delegation-form" aria-label="New task" onSubmit={(event) => { event.preventDefault(); void start(); }}>
           <label htmlFor="delegate-task">Task</label>
           <textarea id="delegate-task" rows={3} maxLength={32000} autoFocus placeholder="Describe one task"
-            value={task} disabled={busy} onChange={(event) => setTask(event.target.value)} onKeyDown={submitOnShortcut(() => void start())} />
+            value={task} disabled={busy} onChange={(event) => setTask(event.target.value)} onKeyDown={submitOnEnter(() => void start())}
+            onPaste={onPaste} onDrop={onDrop} onDragOver={(event) => { if (canAttachFiles) event.preventDefault(); }} />
+          {(files.length > 0 || preparing > 0) && <div className="attach-previews delegation-files">
+            {files.map((file, index) => {
+              const label = isImageAttachment(file) ? `Image ${files.slice(0, index + 1).filter(isImageAttachment).length}` : file.name;
+              return <span key={index} className={`attach-preview${isImageAttachment(file) ? '' : ' file'}`} title={file.name}>
+                {isImageAttachment(file) ? <img src={file.url} alt={label} /> : <span className="attach-file"><span className="attach-file-name">{file.name}</span></span>}
+                <button type="button" aria-label={`Remove ${label}`} disabled={busy} onClick={() => setFiles((all) => all.filter((_, at) => at !== index))}>×</button>
+              </span>;
+            })}
+            {preparing > 0 && <span className="note" role="status">Adding…</span>}
+          </div>}
           <div className="delegation-chips">
             <span className="chips">
               <button type="button" className={`chip-pick account${choosingAccount ? ' on' : ''}`} disabled={busy || (loading && !agents.length)}
@@ -457,8 +478,16 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
             : controls.sheet}
           {errorBox('form')}
           <div className="delegation-start">
-            <button type="button" className="ghost" disabled={busy} onClick={() => { setComposing(false); setFocus('new'); }}>Cancel</button>
-            <button className="primary" disabled={busy || loading || !agent?.available || !task.trim()}>{busy ? 'Starting…' : 'Start helper'}</button>
+            {canAttachFiles && <>
+              <input ref={fileRef} type="file" multiple hidden onChange={(event) => { if (event.target.files?.length) void attach(Array.from(event.target.files)); event.target.value = ''; }} />
+              <button type="button" className="ghost delegation-attach" disabled={busy} title="Attach files or images" aria-label="Attach files or images" onClick={() => fileRef.current?.click()}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+                </svg>
+              </button>
+            </>}
+            <button type="button" className="ghost" disabled={busy} onClick={() => { setComposing(false); setFiles([]); setFocus('new'); }}>Cancel</button>
+            <button className="primary" disabled={busy || loading || preparing > 0 || !agent?.available || !task.trim()}>{busy ? 'Starting…' : 'Start helper'}</button>
           </div>
         </form>
           : null}

@@ -48,6 +48,11 @@ export function selectionClipboard(selection: Selection, root: HTMLElement) {
     if (first?.hasAttribute('value')) list.setAttribute('start', first.getAttribute('value')!);
   });
   container.querySelectorAll('.codehead, button').forEach(el => el.remove());
+  // A drawn formula copies as the TeX it came from, not its drawn pieces twice.
+  container.querySelectorAll<HTMLElement>('.math[data-tex]').forEach(el => {
+    const fence = el.classList.contains('math-display') ? '$$' : '$';
+    el.replaceWith(`${fence}${el.dataset.tex}${fence}`);
+  });
   // Clipboard markup should contain prose, not application layout attributes.
   container.querySelectorAll('*').forEach(el => {
     for (const attr of Array.from(el.attributes)) {

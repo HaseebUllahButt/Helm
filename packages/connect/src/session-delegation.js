@@ -9,6 +9,7 @@ import { makeHelperWorktree } from './chat-worktree.js';
 import { authStatuses } from './auth.js';
 import { wire } from './session-wire.js';
 import { clip } from './session-text.js';
+import { acceptAttachments } from './session-attachments.js';
 
 const UNHOMED_DELEGATION_MS = 24 * 60 * 60_000;
 
@@ -133,10 +134,13 @@ export class SessionDelegation {
   }
 
   /** A task owned by its orchestrator, with durable output and configurable permissions. */
-  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId, worktree = false, hidden = false, tour = false }) {
+  async delegate({ id, cwd, profileId, model, mode, effort, task, attachments = [], callerThreadId, worktree = false, hidden = false, tour = false }) {
     if (typeof task !== 'string' || !task.trim() || (!tour && task.length > 32_000)) {
       throw new Error('a subagent task must contain 1–32000 characters');
     }
+    // Pictures and files pasted into the task go with its first message.
+    // Checked here, so a bad one starts no helper.
+    acceptAttachments(attachments);
     const parent = id ? this.#sessions.get(id) : null;
     const parentGeneration = parent?.stopGeneration ?? 0;
     // A Claude chat in a terminal is a parent too: its helpers' results are
@@ -208,7 +212,7 @@ export class SessionDelegation {
     this.updateTeam(child);
     if (parent) this.#sessions.emit('session', parent);
     // Codex may keep the parent's context. Helm's own history starts here.
-    try { await this.#sessions.input(child.id, task.trim()); }
+    try { await this.#sessions.input(child.id, task.trim(), attachments?.length ? { attachments } : undefined); }
     catch (error) {
       throw new Error(`subagent ${child.id} could not receive its task: ${error.message}; read it with helm delegate-result ${child.id}`);
     }
