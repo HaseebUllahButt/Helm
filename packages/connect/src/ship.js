@@ -2,6 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { M } from '@helm/protocol';
 import { locked, installFromCheckout } from './update.js';
+import { markShipping } from './chat-worktree.js';
 
 /**
  * `helm ship`: the rollout every Helm change ends with, as one command. It
@@ -97,7 +98,14 @@ function runCheck(dir) {
  * @param {object} o.net     this machine's network (loadNetwork())
  * @param {Function} o.rpc   hubRpc(net, machineId, method, params, opts)
  */
-export async function ship({
+export async function ship(options = {}) {
+  // The chat's worktree must outlive its merge: see markShipping.
+  const top = tryGit(options.cwd ?? process.cwd(), ['rev-parse', '--show-toplevel']);
+  const unmark = top ? await markShipping(top) : () => {};
+  try { return await shipNow(options); } finally { unmark(); }
+}
+
+async function shipNow({
   cwd = process.cwd(), net, rpc, check = true, waitMs = 10 * 60_000, log = console.log,
   now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), checks = runCheck,
   updateLock = locked, install = installFromCheckout, verifyRelease = async () => {},
@@ -190,7 +198,8 @@ export async function ship({
           if (result.failed?.length) throw new Error('Helm could not restart. Run helm doctor.');
           return { done: true };
         } catch (err) {
-          return { error: err };
+          // Another update's new release is still starting: wait for it, as for its lock.
+          return err.code === 'RELEASE_STARTING' ? { reason: err.message } : { error: err };
         }
       });
       if (moved?.reason) {

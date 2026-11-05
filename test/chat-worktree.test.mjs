@@ -462,3 +462,24 @@ test('a restart closes an idle agent whose folder was removed by hand, and does 
   await next.stop();
   await first.stop();
 });
+
+test('a ship marker keeps a worktree only while its process lives', async () => {
+  const { markShipping, shipping } = await import('../packages/connect/src/chat-worktree.js');
+  const { spawn, execFileSync } = await import('node:child_process');
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'helm-ship-mark-'));
+  try {
+    execFileSync('git', ['init', '-q', dir]);
+    assert.equal(await shipping(dir), false);
+    const unmark = await markShipping(dir);
+    assert.equal(await shipping(dir), true);
+    unmark();
+    assert.equal(await shipping(dir), false);
+    const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+    await markShipping(dir, child.pid);
+    await new Promise((done) => child.once('exit', done));
+    assert.equal(await shipping(dir), false, 'a dead ship does not hold the folder');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
