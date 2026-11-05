@@ -904,10 +904,21 @@ export class CodexDriver extends Driver {
       try {
         // Changing developer instructions breaks the parent's cache prefix.
         const { developerInstructions, ...inherited } = common;
-        if (!inherited.model) {
+        // Codex caches per model: a copy on another model reuses nothing.
+        // A model left unset on either side is the account default.
+        const { parentModel } = this.helperFork;
+        let fallback = null;
+        if (!inherited.model || !parentModel) {
           const config = await server.call('config/read', { cwd: this.cwd, includeLayers: false });
-          if (!config.result?.config?.model) throw new Error('Codex did not give the helper default model.');
-          inherited.model = config.result.config.model;
+          fallback = config.result?.config?.model || null;
+        }
+        if (!inherited.model) {
+          if (!fallback) throw new Error('Codex did not give the helper default model.');
+          inherited.model = fallback;
+        }
+        const source = parentModel || fallback;
+        if (source && source !== inherited.model) {
+          throw new Error(`the helper runs on ${inherited.model} and its parent on ${source}, so a copy reuses no cache.`);
         }
         forked = await server.call('thread/fork', { ...inherited, threadId: this.helperFork.threadId,
           ephemeral: true, excludeTurns: true });

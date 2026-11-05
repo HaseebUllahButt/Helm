@@ -14,11 +14,20 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { expand } from './paths.js';
 
-/** Only the same local Codex account can share the parent's context. */
 /** Same words as SAFETY_BLOCK in apps/web/src/errors.ts. */
 const SAFETY_BLOCK = /flagged for possible|content (?:was|has been) flagged|violates? (?:our|the) (?:usage|content) polic|appears to violate|cyber permissive/i;
 
-export function codexHelperFork(parent, parentProfile, profile, cwd, worktree, socket) {
+/**
+ * Only the same local Codex account, on the parent's model, starts from a
+ * copy of the parent. Codex keeps its cache per model: on another model the
+ * copy reuses nothing and the helper pays full price for the parent's whole
+ * history. A new chat, with the context the parent writes in the task, is
+ * cheaper. `model` is the helper's model, null for the account default; the
+ * driver checks it again once that default is known (`parentModel`).
+ */
+export function codexHelperFork(parent, parentProfile, profile, cwd, worktree, socket, model = null) {
+  const parentModel = parent?.engineModel || parent?.model || null;
+  if (model && parentModel && model !== parentModel) return null;
   if (!parent?.engineSessionId || parent.engine !== 'codex' || profile.engine !== 'codex'
     || !parentProfile || parentProfile.wraps || profile.wraps || worktree || !socket
     || resolve(expand(parent.cwd)) !== resolve(expand(cwd))
@@ -30,7 +39,7 @@ export function codexHelperFork(parent, parentProfile, profile, cwd, worktree, s
   if (before.cmd !== after.cmd || home(before) !== home(after)) return null;
   if ([...new Set([...Object.keys(before.env), ...Object.keys(after.env)])]
     .some(key => key !== 'CODEX_HOME' && before.env[key] !== after.env[key])) return null;
-  return { threadId: parent.engineSessionId, nativeSocket: socket, note: helperNote(parent.id) };
+  return { threadId: parent.engineSessionId, nativeSocket: socket, note: helperNote(parent.id), parentModel };
 }
 
 /** Restore only this helper's accepted turns, including saved tool results. */

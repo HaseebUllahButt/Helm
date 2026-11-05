@@ -112,7 +112,7 @@ async function setup(t, { rejectFork = false, holdTurn = false } = {}) {
   const make = (extra = {}) => {
     const driver = new CodexDriver({ cmd: 'unused', env: { CODEX_HOME: root }, cwd: root,
       model: 'helper-model', mode: 'readonly', instructions: 'New helper instructions', procHost: host,
-      helperFork: { threadId: 'parent', nativeSocket: socket, note: 'You are a helper.' }, ...extra });
+      helperFork: { threadId: 'parent', nativeSocket: socket, note: 'You are a helper.', parentModel: 'helper-model' }, ...extra });
     drivers.push(driver);
     return { driver, log: collect(driver) };
   };
@@ -170,6 +170,27 @@ test('a failed fork uses a new saved chat and sends the helper task once', async
   assert.deepEqual(requests.filter(r => ['thread/fork', 'thread/start'].includes(r.method)).map(r => r.method), ['thread/fork', 'thread/start']);
   assert.equal(requests.find(r => r.method === 'thread/start').params.ephemeral, undefined);
   assert.equal(requests.filter(r => r.method === 'turn/start').length, 1);
+});
+
+// Codex caches per model: a copy on another model would pay full price for
+// the parent's whole history, so the helper starts a new chat instead.
+test('a helper copies its parent only on the same model, with the account default filled in', async t => {
+  const cases = [
+    { helper: 'helper-model', parent: 'parent-model', want: 'thread/start' },
+    { helper: 'helper-model', parent: null, want: 'thread/start' },
+    { helper: null, parent: null, want: 'thread/fork' },
+  ];
+  for (const { helper, parent, want } of cases) {
+    const { make, requests } = await setup(t);
+    const { driver, log } = make({ model: helper });
+    driver.helperFork = { ...driver.helperFork, parentModel: parent };
+    await driver.send('Inspect.');
+    await log.until(e => e.type === 'turn.done');
+    const label = `helper ${helper ?? 'default'}, parent ${parent ?? 'default'}`;
+    assert.deepEqual(requests.filter(r => ['thread/fork', 'thread/start'].includes(r.method)).map(r => r.method), [want], label);
+    if (want === 'thread/fork') assert.equal(requests.find(r => r.method === 'thread/fork').params.model, 'default-model', label);
+    else assert.equal(requests.filter(r => r.method === 'turn/start').length, 1, `${label}: the task goes once`);
+  }
 });
 
 test('a lost helper context becomes a saved chat seeded only from its own history', async t => {

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { getProfiles } from './profiles.js';
 import { nativeWorking } from './native-subagents.js';
 import { ENGINES } from './engines.js';
-import { startPrefs, subagentPrefs } from './settings.js';
+import { modelPrefs, startPrefs, subagentPrefs } from './settings.js';
 import { codexHelperFork, delegationMode, delegationOutput, isWakeTurn, turnOf } from './delegation.js';
 import { nativeCodexSocket } from './drivers/codex.js';
 import { makeHelperWorktree } from './chat-worktree.js';
@@ -183,8 +183,9 @@ export class SessionDelegation {
       checkout = await makeHelperWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
       folder = checkout.path;
     }
+    // The model the helper will start on (sessions.start): its own, else the account's.
     const codexFork = !tour && codexHelperFork(parent, profiles.find(p => p.id === parent?.profileId), profile, folder, worktree,
-      profile.engine === 'codex' ? nativeCodexSocket(profile) : null);
+      profile.engine === 'codex' ? nativeCodexSocket(profile) : null, model || modelPrefs(profile)?.default || null);
     const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent && !tour, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
       ...(codexFork ? { codexFork } : {}),
       ...(checkout ? { worktree: { path: checkout.path, branch: checkout.branch, base: checkout.base, repo: checkout.repo } } : {}),

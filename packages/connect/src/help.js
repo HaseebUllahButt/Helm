@@ -263,6 +263,9 @@ const DETAILS = {
   Helm closes helper software after 30 seconds without work.
   A follow-up message resumes the same chat.
   Claude keeps its context for an hour.
+  A Codex helper on this chat's account, folder and model starts as a copy
+  of this chat and reuses its cache. Any other helper starts empty:
+  put the context it needs in the task.
   Read a helper with helm delegate-result <id>.
   Keep finished helpers. The owner reads them under this chat.`,
 

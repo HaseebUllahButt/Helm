@@ -37,8 +37,13 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   wakes by itself later (a background watcher timing out) never gives the
   parent another turn. Those relays were nearly all "stale watcher, nothing
   changed". Real news goes by `helm say`; the helper's brief says so.
-- **Codex context:** a local helper on the same account and in the same
-  folder can start from its parent's cached context. This needs a running
+- **Codex context:** a local helper on the same account, in the same
+  folder and on the parent's model can start from its parent's cached
+  context. Codex caches per model, so a copy on another model reuses
+  nothing and pays full price for the parent's history; that helper starts
+  a new chat, and the parent writes the context it needs in the task. A
+  model left unset is the account default; the driver reads it before it
+  copies. This needs a running
   native Codex daemon. Helm keeps the parent's instructions and puts the
   helper note beside its first task. The helper view shows only its own
   turns. Other accounts, engines, folders and worktrees use a new chat.
