@@ -3942,6 +3942,10 @@ details.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
 .canvas:fullscreen .canvas-close .when-page { display: block; }
 .canvas:fullscreen .canvas-close .when-window { display: none; }
 @media (min-width: 900px) { .app-window .sidebar .bar.side { padding-right: 10px; } }
+/* Side panels (Agents, Git) reach the window's top right corner too: their own
+   Close button moves left of Helm's window Close so the two never overlap. */
+.app-window .details-heading { align-items: flex-start; padding-top: 10px; padding-right: calc(20px + var(--overlay-right)); }
+.app-window .details-heading > div { padding-top: 8px; }
 .window-close { position: fixed; top: 10px; right: 8px; z-index: 1000; }
 .window-close:hover:not(:disabled) { color: #fff; background: var(--red); }
 
