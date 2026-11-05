@@ -149,5 +149,9 @@
   a `$$...$$` block and a price such as "$5", send `say-file: <file>` to
   **fake**. Proof: the formulas are typeset, the price stays text, and
   `errors` shows no blocked font.
-- **Tests:** `test/browser/markdown-loading`, `diagrams`, `math`,
+- **Prove math in a page (driven 2026-11-06):** write a page with `$W_Q$`
+  in its text and in a string its script writes into a table, then run
+  `$H canvas <file> --session <chat-id>`. Proof: both are typeset in the
+  canvas, and `$H preview <file>` shows the same.
+- **Tests:** `test/browser/markdown-loading`, `diagrams`, `math`, `visual-math`,
   `inline-diff`, `copy-selection`.

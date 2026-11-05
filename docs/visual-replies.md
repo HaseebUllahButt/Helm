@@ -81,6 +81,16 @@ is added after DOMPurify, with `trust` off and `maxSize` set: TeX cannot
 make links, classes, styles or HTML. TeX that KaTeX cannot read stays as
 its source. Copy gives back the TeX.
 
+Saved pages (`helm render`, `helm canvas`) draw math too
+(packages/connect/src/visual-math.js). The page frame cannot load outside
+scripts or fonts, so when a page has math in its text or in its scripts'
+strings, the publishing machine writes KaTeX, its style sheet and its
+fonts (woff2 as data) into the page: about 650 KB. A small script in the
+page draws math at load and again when the page changes, because lesson
+pages often build their tables with JavaScript. Template literals such as
+`${a}-${b}` do not count as math. Pages published before this change keep
+their plain text until the agent publishes them again.
+
 ## Security decisions
 
 Pages run in a sandbox with an opaque origin: no access to Helm's cookies,
