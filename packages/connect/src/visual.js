@@ -6,6 +6,8 @@ import { existsSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse, parseFragment, serialize } from 'parse5';
+import { addPageMath } from './visual-math.js';
+import { systemChromium } from './chromium-find.js';
 import { visualDocument } from '@helm/protocol/visual';
 
 export const MAX_VISUAL_BYTES = 4 * 1024 * 1024;
@@ -211,6 +213,7 @@ export async function prepareVisual(file) {
     if (node.content) await walk(node.content);
   };
   await walk(doc);
+  if (!picture) addPageMath(doc, { parseFragment });
   const snapshot = serialize(doc);
   if (Buffer.byteLength(snapshot) > MAX_VISUAL_BYTES) throw new Error('visual exceeds 4 MiB including images');
   return snapshot;
@@ -222,7 +225,9 @@ export async function previewVisual(html, { output, width = 900, appearance = 'd
   if (!['dark', 'light'].includes(appearance)) throw new Error('appearance must be dark or light');
   const { chromium } = await import('playwright');
   const executablePath = process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM
-    || ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
+    || ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync)
+    // Brave, Edge, Vivaldi or Helium, as helm browser finds them.
+    || systemChromium();
   let browser;
   try { browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}), timeout: 15_000 }); }
   catch (error) { throw new Error(`preview needs Chromium; set HELM_CHROMIUM_PATH or run npx playwright install chromium. ${error.message}`); }

@@ -352,6 +352,8 @@ const DETAILS = {
   - Use a fluid width. Give each chart a fixed height in px. Do not use 100vh.
   - SVG text gets smaller with the drawing. Keep labels 12 px or larger at
     phone width.
+  Write math as $...$ or $$...$$, also in text your script writes. Helm
+  draws it with KaTeX. Never write W_Q or x^2 as plain text.
   Colours follow the owner's theme: --bg --card --raised --text --text-dim
   --mutedfg --line, and --radius --font-sans --font-mono.
 
