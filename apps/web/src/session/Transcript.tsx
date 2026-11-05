@@ -793,7 +793,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
       {head && !!turn.cause?.length && (
         <div className="turn wake-cause" title="The agent started again after this background work ended.">
           {turn.cause.map((c, i) => <p key={i} className={c.status === 'failed' ? 'failed' : undefined}>
-            <Icon name={c.status === 'failed' ? 'alert' : 'bolt'} size={13} /><span>{c.summary}</span>
+            <Icon name={c.status === 'failed' ? 'alert' : 'subagents'} size={13} /><span>{c.summary}</span>
           </p>)}
         </div>
       )}
