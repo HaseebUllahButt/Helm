@@ -35,9 +35,13 @@
   A refusal before setup can retry under the same start number after its
   cause is fixed. A fresh driver failure can also retry after full cleanup,
   with no clone, worktree or resumed chat setup. Never repeat partial setup.
-  Codex chat setup through its native daemon gets 90 seconds; discovery
-  reads keep their shorter wait. The old five-second start timeout can retry.
-- **Tests:** `test/start-receipts`, `test/startingChats`; `test/browser/new-chat`, `chat-home`, `onboarding`;
+  Codex chat setup gets 90 seconds, in its native daemon and in Helm's own;
+  discovery reads keep their shorter wait. The old five-second start timeout
+  can retry.
+- **After a restart (owner, 2026-11-05):** new chats and sends wait only
+  until the saved chats are read back, never for old agents to reconnect.
+  One stuck reconnect after a reboot held every new chat for 13 minutes.
+- **Tests:** `test/start-receipts`, `test/startingChats`, `test/reattach`; `test/browser/new-chat`, `chat-home`, `onboarding`;
   `test/quick-chat`, `picker-prefs`, `onboarding`.
 
 ## First chat setup

@@ -190,6 +190,59 @@ test('one account reconnecting slowly does not hold back another account', async
   await again.stop();
 });
 
+test('a reconnect that never answers does not hold back a new chat', async () => {
+  const { make, drivers } = setup('stuck-reconnect');
+  const first = await make();
+  const old = await first.start({ cwd: '/tmp', profileId: 'codex' });
+  await first.input(old.id, 'hi'); drivers.get(old.id).finish('t1');
+  await first.stop();
+  let answer;
+  const stuck = new Promise((resolve) => { answer = resolve; });
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const again = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-stuck-reconnect')),
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => true, procPipe: () => null }),
+    makeDriver: (engine, opts) => {
+      const d = new FakeDriver({ engine, ...opts });
+      if (opts.env.HELM_SESSION_ID === old.id) d.start = () => stuck;
+      return d;
+    },
+  });
+  let restored;
+  const ready = new Promise((resolve) => { restored = resolve; });
+  let finished = false;
+  const resumed = again.resume({ onRestored: restored }).then(() => { finished = true; });
+  await ready;
+  const fresh = await again.start({ quick: true, profileId: 'codex' });
+  assert.equal(again.get(fresh.id).status, 'idle');
+  assert.equal(finished, false, 'the old chat is still reconnecting');
+  answer();
+  await resumed;
+  await again.stop();
+});
+
+test('a finished Codex helper fork is not reconnected after a reboot; one with work in flight is', async () => {
+  const { make, drivers } = setup('helper-reboot', { procHost: Object.assign(new EventEmitter(), { hasProc: () => false, procPipe: () => null }) });
+  const first = await make();
+  const parent = await first.start({ cwd: '/tmp', profileId: 'codex' });
+  const helper = (status) => ({ parentId: parent.id, status, codexFork: { threadId: 'parent-thread', nativeSocket: '/nonexistent/codex.sock' } });
+  const done = await first.start({ cwd: '/tmp', profileId: 'codex' });
+  await first.input(done.id, 'check'); drivers.get(done.id).finish('t1');
+  first.get(done.id).delegation = helper('done');
+  const busy = await first.start({ cwd: '/tmp', profileId: 'codex' });
+  await first.input(busy.id, 'check');
+  first.get(busy.id).delegation = helper('running');
+  await first.stop();
+  drivers.clear();
+  const again = await make();
+  await again.resume();
+  assert.equal(drivers.has(done.id), false, 'nothing was in flight, so no agent started');
+  assert.equal(again.get(done.id).status, 'idle');
+  assert.equal(drivers.get(busy.id)?.started, true, 'its open turn still reconnects');
+  await again.stop();
+});
+
 test('a turn that reports tokens but no price is priced at list rates, and a Claude total is not double counted', async () => {
   const { make, drivers } = setup('cost');
   const sessions = await make();

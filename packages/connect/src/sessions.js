@@ -2323,9 +2323,9 @@ export class Sessions extends EventEmitter {
 
   // After a daemon restart (session-resume.js)
   adoptTerminals() { return this.#resumer.adoptTerminals(); }
-  async resume() {
+  async resume({ onRestored } = {}) {
     this.#worktrees.watch();
-    await this.#resumer.resume();
+    await this.#resumer.resume({ onRestored });
     // A setup the restart cut off runs again before the agent gets anything.
     for (const s of this.#index.values()) {
       if (s.chatWorktree?.setup !== 'running') continue;

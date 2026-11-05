@@ -1190,3 +1190,19 @@ test('native Codex setup survives the discovery timeout while reads still time o
   t.mock.timers.tick(90_001);
   assert.match((await hung).error.message, /timed out/);
 });
+
+test("Helm's own Codex gives up on opening a chat that never answers, but lets turns run", async t => {
+  const pipe = { onData() {}, onExit() {}, write() {}, end() {}, kill() {} };
+  const server = new CodexServer('unused', {}, () => {}, { hasProc: () => true, procPipe: () => pipe });
+  await server.ensure();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let turnSettled = false;
+  void server.call('turn/start', {}).then(() => { turnSettled = true; });
+  for (const method of ['thread/start', 'thread/resume', 'thread/fork']) {
+    const hung = server.call(method, {});
+    t.mock.timers.tick(90_001);
+    assert.equal((await hung).error.message, `Codex ${method} timed out`);
+  }
+  await Promise.resolve();
+  assert.equal(turnSettled, false, 'a turn has no time limit');
+});
