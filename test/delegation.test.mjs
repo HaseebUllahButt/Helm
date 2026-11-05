@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { WRITING_REMINDER } from '../packages/protocol/brief.js';
 
@@ -82,6 +82,15 @@ test('Codex forks require the same local account, folder and native daemon', () 
   const blocked = { kind: 'error', message: 'This content was flagged for possible cybersecurity risk.' };
   assert.equal(fork({ ...parent, recovery: blocked }), null);
   assert.equal(fork({ ...parent, recovery: { kind: 'error', message: 'The service is busy.' } }).threadId, 'parent-thread');
+  // Codex caches per model: only a helper on the parent's model gets a copy.
+  const on = (p, model) => codexHelperFork(p, profile, profile, parent.cwd, false, '/private/codex.sock', model);
+  assert.equal(on({ ...parent, engineModel: 'gpt-sol' }, 'gpt-terra'), null);
+  assert.equal(on({ ...parent, model: 'gpt-sol' }, 'gpt-terra'), null);
+  assert.equal(on({ ...parent, engineModel: 'gpt-sol' }, 'gpt-sol').parentModel, 'gpt-sol');
+  assert.equal(on({ ...parent, engineModel: 'gpt-sol', model: 'gpt-old' }, 'gpt-sol').parentModel, 'gpt-sol', 'the model Codex reports wins');
+  // An unset side is the account default; the driver checks it once known.
+  assert.equal(on(parent, 'gpt-terra').parentModel, null);
+  assert.equal(on({ ...parent, engineModel: 'gpt-sol' }, null).parentModel, 'gpt-sol');
 });
 
 test('Codex recovery history leaves out queued tickets and keeps accepted tool results', () => {
@@ -1462,4 +1471,20 @@ test('tour helpers stay visible and do not send their JSON to the parent', async
   assert.equal(sessions.delegationResult(child.id).status, 'done');
   assert.equal(drivers.get(parent.id).sent, undefined);
   assert.ok((await sessions.list({ parentId: parent.id })).some(s => s.id === child.id));
+});
+
+test('a Codex helper gets a copy of its parent only on the parent\'s model', async t => {
+  const { sessions, drivers } = setup(t);
+  const socket = join(process.env.HELM_DIR, 'codex-home', 'app-server-control', 'app-server-control.sock');
+  mkdirSync(dirname(socket), { recursive: true });
+  writeFileSync(socket, '');
+  t.after(() => rmSync(socket, { force: true }));
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main', model: 'gpt-sol' });
+  const helper = async (model) => {
+    const { session } = await sessions.delegate({ id: parent.id, profileId: 'codex-main', model, task: 'Look around' });
+    drivers.get(session.id).finish();
+    return sessions.get(session.id).delegation.codexFork;
+  };
+  assert.equal(await helper('gpt-terra'), undefined, 'another model starts a new chat');
+  assert.equal((await helper('gpt-sol'))?.parentModel, 'gpt-sol');
 });
