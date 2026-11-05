@@ -278,3 +278,33 @@ test('a refused restart cannot pass ship even when the installed version is curr
   assert.equal(git(r.installed,'rev-parse','HEAD'),git(r.main,'rev-parse','main'));
   assert.equal(proved,false);assert.equal(lines.some(line=>line.includes('Shipped ')),false);
 });
+
+test('waits while another update\'s new release is still starting, then installs', async () => {
+  const r = repos();
+  let starting = 2;
+  const install = async (dir, source) => {
+    if (starting-- > 0) throw Object.assign(new Error('The new release is still starting. Try again after recovery finishes.'), { code: 'RELEASE_STARTING' });
+    return installFromCheckout(dir, source, { rebuild: false, restart: false });
+  };
+  const { lines, result } = run(r, { network: { offline: false }, ship: { install } });
+  assert.equal((await result).ok, true);
+  assert.match(lines.join('\n'), /Waiting for the update that runs on this machine/);
+  assert.equal(git(r.installed, 'rev-parse', 'HEAD'), git(r.main, 'rev-parse', 'main'));
+});
+
+// Helm removes a merged, idle chat's worktree. Ship merges first and
+// installs after: the folder it runs in must stay until it ends.
+test('the chat worktree counts as in use from the merge until ship ends', async () => {
+  const { keepReason } = await import('../packages/connect/src/chat-worktree.js');
+  const r = repos();
+  const record = { path: r.wt, branch: 'helm/x', base: 'main', start: git(r.main, 'rev-parse', 'main') };
+  const during = [];
+  const install = async (dir, source) => {
+    during.push(await keepReason(record));
+    return installFromCheckout(dir, source, { rebuild: false, restart: false });
+  };
+  const { result } = run(r, { network: { offline: false }, ship: { install } });
+  assert.equal((await result).ok, true);
+  assert.deepEqual(during, ['shipping'], 'merged, yet kept while ship runs');
+  assert.equal(await keepReason(record), null, 'removable once ship ends');
+});
