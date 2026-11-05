@@ -598,11 +598,20 @@ export class Daemon {
     // are still running. Ask which before resuming: `resume` reads the
     // surviving-proc list to know which open turns are still live rather
     // than interrupted.
-    this.sessionRecovery = this.sessions.adoptTerminals()
+    //
+    // New chats and sends wait for the saved chats, not for their agents to
+    // reconnect. After a reboot one stuck reconnect held every new chat and
+    // every message for 13 minutes; each driver already waits for its own.
+    let restored;
+    const recordsRestored = new Promise((resolve) => { restored = resolve; });
+    const resumed = this.sessions.adoptTerminals()
       .catch(() => {})
-      .then(() => this.sessions.resume())
+      .then(() => this.sessions.resume({ onRestored: restored }))
+      // Logged here: it can fail after new chats were let through.
+      .catch((error) => { console.error(`[helm] session recovery: ${error.message}`); throw Object.assign(error, { logged: true }); });
+    this.sessionRecovery = Promise.race([resumed, recordsRestored])
       .then(() => { if (!this.#stopped) { this.inputDelivery.resume(); this.schedules?.start(); this.sessions.startLimitRecovery(); this.chatMoves.start(); } })
-      .catch((error) => console.error(`[helm] session recovery: ${error.message}`));
+      .catch((error) => { if (!error?.logged) console.error(`[helm] session recovery: ${error?.message}`); });
     // Caches worth having warm, none worth being late for: they start once
     // the links are up. Re-reading the shell's aliases blocks for a moment,
     // and that moment used to sit in front of this machine coming online.

@@ -48,7 +48,8 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   restart keeps that connection. When Codex loses the fork, Helm starts a
   saved Codex chat from that helper's own tasks, replies and tool results.
   The Helm chat and its visible history stay the same. This recovery can
-  need fresh input tokens.
+  need fresh input tokens. After a reboot only a fork with work in flight
+  reconnects; a finished one starts at its next message.
 - **Proof (driven 2026-10-27):** a private real helper reused cached input,
   kept its Codex chat through a Helm restart and a process-host restart,
   then recovered in the same Helm chat after a private Codex daemon restart.
