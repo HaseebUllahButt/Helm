@@ -1,3 +1,4 @@
+import { WindowedRow, useEarlierOnScroll } from './WindowedRow';
 import { useCopySelection } from '../useCopySelection';
 import { createContext, Fragment, useContext, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Markdown } from '../Markdown';
@@ -792,7 +793,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
       {head && !!turn.cause?.length && (
         <div className="turn wake-cause" title="The agent started again after this background work ended.">
           {turn.cause.map((c, i) => <p key={i} className={c.status === 'failed' ? 'failed' : undefined}>
-            <Icon name={c.status === 'failed' ? 'alert' : 'bolt'} size={13} /><span>{c.summary}</span>
+            <Icon name={c.status === 'failed' ? 'alert' : 'subagents'} size={13} /><span>{c.summary}</span>
           </p>)}
         </div>
       )}
@@ -888,7 +889,7 @@ function placeOf(el: HTMLElement) {
   const anchors: string[] = [], offset: number[] = [];
   // A step inside a fold is hidden when the chat opens again, so its turn
   // is kept as well.
-  for (const attr of ['data-item-id', 'data-turn-id']) {
+  for (const attr of ['data-item-id', 'data-turn-id', 'data-row-turn']) {
     for (const node of el.querySelectorAll<HTMLElement>(`[${attr}]`)) {
       const box = node.getBoundingClientRect();
       if (!box.height || box.bottom <= top) continue;
@@ -903,17 +904,13 @@ function placeOf(el: HTMLElement) {
   return { anchors, offset };
 }
 
-/** Turns drawn in a chat's first frame, then how many join per step. */
-const FIRST_TURNS = 12;
-const MORE_TURNS = 40;
-
 export function Transcript({ place, turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, onRewind, pending = [], onReviewRequest, focusItem, readVisual, openAgent }: {
   /** Names this chat: leaving and coming back keeps the reader where they were. */
   place?: string;
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
   pending?: Permission[]; onReviewRequest?: (requestId: string) => void;
   /** The machine holds more of this conversation than is on screen. */
-  earlier?: boolean; loadingEarlier?: boolean; onEarlier?: () => void;
+  earlier?: boolean; loadingEarlier?: boolean; onEarlier?: () => void | Promise<void>;
   /** Offered on a turn that ended in an error: send its prompt again. */
   onResend?: (turn: Turn) => void;
   /** Offered while a message is still queued: take it back into the draft. */
@@ -960,25 +957,10 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
   // inside the current turn's fold. Its turn.start may already be present
   // as a sparse anchor, so comparing only the first turn misses this case.
   const historyRead = useRef<{ turns: Set<string>; items: Map<string, { text: string; command?: string; input?: Item['input'] }> } | undefined>(undefined);
-  // A chat opens on its newest turns in the first frame, and the older ones
-  // join in steps right after, so a chat switch shows at once even in a long
-  // chat (owner, 2026-11-01). Coming back to a place, or to a step someone
-  // asked for, needs every turn at once.
-  const [tail, setTail] = useState<number | null>(() => cameBack.current || focusItem ? null : FIRST_TURNS);
-  const shown = tail === null || turns.length <= tail ? turns : turns.slice(-tail);
-  useEffect(() => {
-    if (tail === null) return;
-    // A chat that fits is done; an empty one waits for its turns to arrive.
-    if (turns.length <= tail) { if (turns.length) setTail(null); return; }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // After the paint, not before it: the new chat is on screen first.
-    const frame = requestAnimationFrame(() => { timer = setTimeout(() => setTail((n) => n === null || n + MORE_TURNS >= turns.length ? null : n + MORE_TURNS), 0); });
-    return () => { cancelAnimationFrame(frame); clearTimeout(timer); };
-  }, [tail, turns.length, loaded]);
-  useEffect(() => { if (revealed) setTail(null); }, [revealed]);
+  const shown = turns;
+  useEarlierOnScroll(box, !!earlier, !!loadingEarlier, onEarlier);
   const readEarlier = () => {
     if (loadingEarlier || !onEarlier) return;
-    setTail(null);
     historyRead.current = {
       turns: new Set(turns.map(turn => turn.id)),
       items: new Map(turns.flatMap(turn => turn.items.map(item => [item.id, { text: item.text, command: item.command, input: item.input }] as const))),
@@ -1035,7 +1017,7 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
   // Only changed transcript content needs a synchronous layout read. Older
   // turns arriving above keep the reader where they were - iOS Safari has no
   // scroll anchoring to do it for us.
-  const seen = useRef<{ h: number; first?: string }>({ h: 0 });
+  const seen = useRef<{ h: number; first?: string; stamp?: string }>({ h: 0 });
   const revision = turns.map((turn) => turn.revision ?? 0).join(',');
   useLayoutEffect(() => {
     const el = box.current;
@@ -1043,7 +1025,8 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
     const h = el.scrollHeight;
     const first = shown[0]?.id;
     const prev = seen.current;
-    seen.current = { h, first };
+    const stamp = `${turns.at(-1)?.id}:${turns.at(-1)?.revision}:${openTurn?.id}:${openTurn?.revision}`;
+    seen.current = { h, first, stamp };
     const read = historyRead.current;
     if (read && !loadingEarlier) {
       historyRead.current = undefined;
@@ -1084,7 +1067,7 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
       if (Math.abs(moved) >= 1) el.scrollTop += moved;
     } else if (prev.first !== undefined && first !== prev.first) el.scrollTop += moved = h - prev.h;
     // Growth the correction does not explain happened below: new work.
-    if (h - prev.h > Math.max(0, moved) + 1) setUnread(true);
+    if (prev.stamp && stamp !== prev.stamp && !loadingEarlier) setUnread(true);
   }, [turns, revision, status, loaded, earlier, loadingEarlier, shown.length]);
   // After any move above, the reader's place is wherever they now are. The
   // correction above put the held step back where it was, so while it is
@@ -1102,7 +1085,7 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
     const el = box.current;
     if (!el) return;
     const base = el.getBoundingClientRect().top - el.scrollTop;
-    const ys = [...el.querySelectorAll<HTMLElement>('.turn.user')].map((n) => n.getBoundingClientRect().top - base);
+    const ys = [...el.querySelectorAll<HTMLElement>('[data-row-prompt]')].map((n) => n.getBoundingClientRect().top - base);
     const here = el.scrollTop;
     const target = dir < 0 ? [...ys].reverse().find((y) => y < here - 12) : ys.find((y) => y > here + 12);
     if (target == null) { el.scrollTo({ top: dir < 0 ? 0 : el.scrollHeight, behavior: 'smooth' }); return; }
@@ -1141,11 +1124,17 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
     const next = turns[i + 1];
     if (next && !next.text && next.items.some((it) => it.kind === 'error')) saidBelow.add(t.id);
   });
+  const eagerTurns = new Set(turns.slice(-4));
   const view = (t: Turn, items?: Item[], head = true, tail = true, key: string = t.id) => (
-    <TurnView key={key} turn={t} revision={t.revision} items={items} head={head} tail={tail} saidBelow={saidBelow.has(t.id)}
-      working={working && t === openTurn} blocked={status === 'blocked'}
-      onResend={onResend ? resend : undefined} onWithdraw={onWithdraw ? withdraw : undefined}
-      onBranch={onBranch && t !== turns[0] ? branch : undefined} onRewind={onRewind ? rewind : undefined} />
+    <WindowedRow key={key} enabled={turns.length > 24} eager={eagerTurns.has(t)}
+      turn={t.id} prompt={head && !!t.text}
+      force={t === openTurn || !!shownItem && t.items.some(item => item.id === shownItem.id)
+        || !!cameBack.current?.anchors.some(anchor => anchor.includes(CSS.escape(t.id)))}>
+      <TurnView turn={t} revision={t.revision} items={items} head={head} tail={tail} saidBelow={saidBelow.has(t.id)}
+        working={working && t === openTurn} blocked={status === 'blocked'}
+        onResend={onResend ? resend : undefined} onWithdraw={onWithdraw ? withdraw : undefined}
+        onBranch={onBranch && t !== turns[0] ? branch : undefined} onRewind={onRewind ? rewind : undefined} />
+    </WindowedRow>
   );
   // A turn split around a hosted answer draws as slices. The same slice of
   // an unchanged turn must be the same list, or every slice draws again on

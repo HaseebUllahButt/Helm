@@ -248,10 +248,13 @@ const DETAILS = {
   delegate: `
   Start a helper for this chat.
   The owner sees a card to open, message or stop the helper.
+  Claude chats use their Agent tool for work on the same account.
     <account>        Use same for this chat's account.
                      Run helm agents to list accounts on this machine.
                      Use helm spawn for another machine.
     --model <id>     Pick a model ID, or cheap for the account's small model.
+                     Without a choice, use the parent's model on the same CLI.
+                     A saved helper model takes priority.
     --wait --json    Wait for the result, then print it as JSON.
     --cwd <folder>   Run in another folder.
     --worktree       Use a separate project copy on a new helm/ branch.
@@ -262,6 +265,9 @@ const DETAILS = {
   Helm closes helper software after 30 seconds without work.
   A follow-up message resumes the same chat.
   Claude keeps its context for an hour.
+  A Codex helper on this chat's account, folder and model starts as a copy
+  of this chat and reuses its cache. Any other helper starts empty:
+  put the context it needs in the task.
   Read a helper with helm delegate-result <id>.
   Keep finished helpers. The owner reads them under this chat.`,
 
@@ -348,6 +354,8 @@ const DETAILS = {
   - Use a fluid width. Give each chart a fixed height in px. Do not use 100vh.
   - SVG text gets smaller with the drawing. Keep labels 12 px or larger at
     phone width.
+  Write math as $...$ or $$...$$, also in text your script writes. Helm
+  draws it with KaTeX. Never write W_Q or x^2 as plain text.
   Colours follow the owner's theme: --bg --card --raised --text --text-dim
   --mutedfg --line, and --radius --font-sans --font-mono.
 

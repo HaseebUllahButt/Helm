@@ -203,7 +203,7 @@ export class AcpDriver extends Driver {
 
   async #start() {
     assertFolder(this);
-    if (this.spec.min) await checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
+    if (this.spec.min) void checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
     await this.spec.prepare?.(this);
 
     // The process may already be running: the terminal host holds agent
@@ -981,7 +981,7 @@ export class AcpDriver extends Driver {
   async answer(requestId, decision) {
     const req = this.pending.get(requestId);
     const raw = this.#requests.get(requestId);
-    if (!req || !raw) throw new Error(`no pending request ${requestId}`);
+    if (!req || !raw) throw Object.assign(new Error('This request is no longer open.'), { deliveryNotSent: true });
     const pick = (kind) => raw.options.find((o) => o.kind === kind)?.optionId;
     let outcome;
     if (decision.option === 'deny') {

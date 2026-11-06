@@ -81,12 +81,14 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
     return () => { stopped = true; mounted.current = false; };
   }, [client, env.id, parent.id, agent.id]);
 
+  const [historyLimit, setHistoryLimit] = useState(40);
+  const [readingEarlier, setReadingEarlier] = useState(false);
   useEffect(() => {
     let stopped = false, timer: ReturnType<typeof setTimeout> | undefined, seen = '';
     const load = async () => {
       try {
         const r = await client.rpc<{ agent: NativeAgentDetail; events: HelmEvent[]; more?: boolean }>(
-          env.id, 'session.native-agent', { id: parent.id, agentId: agent.id, full: true }, 30_000);
+          env.id, 'session.native-agent', { id: parent.id, agentId: agent.id, full: true, limit: historyLimit }, 30_000);
         if (stopped) return;
         setError('');
         setCard(r.agent);
@@ -100,17 +102,19 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
           setLog(next);
           setMore(!!r.more);
         }
+        setReadingEarlier(false);
         if (r.agent.status === 'working' || r.agent.status === 'blocked' || Date.now() - sentAt < AFTER_SEND_MS) timer = setTimeout(load, POLL_MS);
       } catch (failure) {
         if (stopped) return;
         setError(errorMessage(failure));
+        setReadingEarlier(false);
         setLog((current) => current.loaded ? current : { ...current, loaded: true });
         timer = setTimeout(load, POLL_MS * 3);
       }
     };
     void load();
     return () => { stopped = true; clearTimeout(timer); };
-  }, [client, env.id, parent.id, agent.id, sentAt]);
+  }, [client, env.id, parent.id, agent.id, sentAt, historyLimit]);
 
   const send = async () => {
     const text = draft.trim();
@@ -158,9 +162,9 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
         }} />}
       <Transcript
         turns={log.turns} status={working ? 'working' : 'idle'} loaded={log.loaded}
+        earlier={more} loadingEarlier={readingEarlier} onEarlier={() => { setReadingEarlier(true); setHistoryLimit(n => n + 40); }}
         empty={working ? 'Waiting for the helper…' : 'This helper left no messages.'}
       />
-      {more && <p className="native-foot" role="note">Showing the latest part.</p>}
       {canMessage ? (
         <Composer
           draft={draft} setDraft={editDraft} engine={engine} keys={false} canAttach={false} preparing={sending}

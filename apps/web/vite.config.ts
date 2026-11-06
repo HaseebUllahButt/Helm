@@ -22,6 +22,9 @@ export default defineConfig({
     // old hashed files after a week, once the new build has been written.
     emptyOutDir: false,
     sourcemap: true,
+    // Helm's page rules block fonts packed into the CSS: KaTeX's small
+    // fonts must stay separate files.
+    assetsInlineLimit: (file: string) => (/\.(woff2?|ttf)$/.test(file) ? false : undefined),
     rollupOptions: {
       output: { manualChunks: { react: ['react', 'react-dom', 'react-dom/client'] } },
     },

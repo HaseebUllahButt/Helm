@@ -60,7 +60,14 @@ A new tool, or a feature for "every tool", must look at each of these:
   only questions reach the owner.
 - **Codex:** one app-server serves every chat on an account. Never put a
   chat's variables (`HELM_SESSION_ID` and others) in its environment; each
-  thread sets them through Codex's shell policy. Codex has no command list
+  thread sets them through Codex's shell policy. At the unchanged idle
+  deadline, check native children and background terminals before releasing
+  a chat. Unsubscribe that chat; leave other chats on the account running.
+  Helm-owned servers use zero extra unload delay, so Codex does not add
+  another 30 minutes. Terminal-owned servers keep their settings. Unknown
+  background state keeps the chat alive and writes the reason to the log.
+  A restart suspends the connection and does not unsubscribe.
+  Codex has no slash command list
   of its own, so Helm keeps a fixed one.
 - **ACP:** do not copy the tool's mode or model notices back before Helm's
   own choices are applied, or the chat's saved choices are lost. On stop,

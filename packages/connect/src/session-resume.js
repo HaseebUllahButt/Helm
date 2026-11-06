@@ -304,8 +304,12 @@ export class SessionResume {
     }
   }
 
-  /** Re-watch every surviving pane after a daemon restart. */
-  async resume() {
+  /**
+   * Re-watch every surviving pane after a daemon restart. `onRestored` runs
+   * once every saved chat is back in order, before the agents reconnect: a
+   * slow reconnect must hold only its own chat, never new chats or sends.
+   */
+  async resume({ onRestored } = {}) {
     const reattaching = [];
     // One gate per account, not one for the machine: the crowd that timed
     // out was forty threads on one app-server, and a slow account must not
@@ -368,7 +372,10 @@ export class SessionResume {
       // of work that is done. Its next message rebuilds it.
       if (hosted && !nativeAlive && s.chatWorktree && !existsSync(expand(s.chatWorktree.path)) && !this.#inFlight(s)) {
         await this.#sessions.procs.close(procId).catch((err) => this.#sessions.log(`[${s.id}] could not close its agent: ${err.message}`));
-      } else if (nativeAlive || hosted || s.delegation?.codexFork) {
+      } else if (nativeAlive || hosted || (s.delegation?.codexFork && this.#inFlight(s))) {
+        // A Codex helper fork with nothing in flight is not reattached: after
+        // a reboot its terminal's Codex is gone, so this would only open an
+        // app-server for finished work. Its next message starts it as usual.
         if (s.recovery?.kind === 'restart') delete s.recovery;
         const tail = this.#sessions.events.tail(s.id, 0);
         this.#restoreOpenTurns(s, tail, true);
@@ -416,6 +423,7 @@ export class SessionResume {
       this.#core.delivery.pump(s);
     }
     this.#core.save();
+    onRestored?.();
     await Promise.allSettled(reattaching);
     for (const child of this.#core.index.values()) {
       if (!child.delegation) continue;

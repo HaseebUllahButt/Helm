@@ -14,7 +14,9 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
 - **Delivery:** the browser saves the action number and content before sending.
   If live links fail, ordinary web requests send chat messages and approvals.
   A lost reply triggers a result check. Opening the chat checks saved actions
-  again. The chat shows "Checking delivery" while a result is unknown.
+  again. Returning to the app or restoring a connection checks again.
+  The owner can also press "Check again" without closing the chat.
+  Each check keeps the original action number. The chat shows "Checking delivery" while a result is unknown.
   A saved chat message with the same message number also confirms delivery.
   This proof ends the check without sending again. Live replies stay visible
   while a history read waits. A final failed receipt keeps the full request
@@ -24,7 +26,10 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   a receipt proves their result. `deliveryRetained` tells first-message recovery
   that the saved failure already holds its words.
   Approvals interrupted during delivery stay unknown after a restart. Never
-  replay them: the agent can already have acted.
+  replay them: the agent can already have acted. A closed request refused before
+  a driver writes its answer is a final failure. Older receipts with the exact
+  `no pending request <id>` error become final failures when read. Preserve their
+  request digest and never replay them. Other unknown errors stay held.
 - **Tests:** `test/action-delivery`, `input-delivery`, `http-read`;
   `test/browser/client-actions`, `client-reconnect`, `delivery-recovery`.
 - **Rule:** app errors use `apps/web/src/errors.ts`. Keep clear, short messages.
@@ -123,9 +128,13 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `hidden-context`, `driver-claude`.
 
 ## Long chats: folds, copy, selection
-- **Latest first:** opening a chat or returning to it reads its newest window.
-  Saved text can appear first when offline. Missed live events do not replay.
-  Older replies load with the earlier-history control.
+- **Latest first:** opening a chat reads its newest window. Saved text can
+  appear first when offline. Older replies load as the reader scrolls up,
+  or with the earlier-history control. Loaded pages stay on the device.
+- **Long views:** draw only nearby turns. Keep measured space for the rest.
+  Keep selected words, open tools and focused controls alive off screen.
+  Native chat polls read the latest window and keep older pages already
+  loaded; a live refresh must not replace them or move the reader.
 - **Live reading:** a hidden chat releases its live view. Only devices with
   an open view receive its text. Text redraws before repeated tool updates;
   events keep their original order. Repeated tool output sends its newest
@@ -151,6 +160,7 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   Helm used 5.3 s for the 32 s reply and PandaCode's own preview 10.7 s.
 - **Traps:** iPhone handles and Safari permissions still need a device.
 - **Tests:** `test/browser/activity-fold`, `chat-fold`,
-  `history-pagination`, `transcript-performance`, `copy-selection`,
+  `history-pagination`, `whole-chat`, `windowed-row`, `native-history-window`,
+  `transcript-performance`, `copy-selection`,
   `highlight-performance`, `markdown-loading`, `latest-first`, `chat-sync`;
   `test/event-stream`, `stream-routing`.

@@ -70,6 +70,14 @@ process.stdin.on('data', (d) => {
       out({ type: 'control_response', response: { subtype: 'error', request_id: msg.request_id, error: 'Unsupported control request subtype: get_context_usage' } });
       continue;
     }
+    if (kind === 'codex' && msg.method === 'thread/unsubscribe') {
+      out({ id: msg.id, result: {} });
+      continue;
+    }
+    if (kind === 'codex' && msg.method === 'thread/backgroundTerminals/list') {
+      out({ id: msg.id, result: { data: [], nextCursor: null } });
+      continue;
+    }
     if (kind === 'codex' && msg.method === 'thread/read') {
       out({ id: msg.id, result: { thread: liveThreads.get(msg.params.threadId)
         ?? { id: msg.params.threadId, status: { type: 'idle' }, turns: [] } } });

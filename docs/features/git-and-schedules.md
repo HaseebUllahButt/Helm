@@ -77,7 +77,13 @@ edited files in; with none, the Git sheet says so.
   before removing a merged worktree; a rebuilt branch starts afresh. A
   Codex thread still open in its daemon keeps its folder: the native check
   joins it again within 2.5 s and rebuilds it, which looped every 3 s.
-- **Tests:** `test/chat-worktree`, `native-codex`, `delegation`.
+  `helm ship` merges first and installs after, so the merged chat looked
+  done mid-install: its folder went, the agent and its background jobs
+  stopped, and the install's helper program crashed in the deleted folder
+  ("Cannot start release recovery"). Ship leaves `helm-ship.json` in the
+  worktree's git folder; a live ship keeps the folder (`keepReason`
+  "shipping").
+- **Tests:** `test/chat-worktree`, `native-codex`, `delegation`, `ship`.
 
 ## CI / CD
 - **Not yet driven;** needs a GitHub repo and account. Merge needs an

@@ -223,9 +223,10 @@ test('agy: a second start during the handshake waits for the same start', async 
   const driver = new AgyDriver({ cmd, args: [], cwd: dir, env });
   t.after(() => driver.kill());
   const log = collect(driver);
-  const first = driver.start();
   // The pipe is bound and init emitted before agy has said hello.
-  await new Promise((resolve) => driver.once('init', resolve));
+  const bound = new Promise((resolve) => driver.once('init', resolve));
+  const first = driver.start();
+  await bound;
   const sending = driver.send('hello');
   await log.until((e) => e.type === 'status');
   assert.equal(driver.status, 'working', 'starting is part of answering');

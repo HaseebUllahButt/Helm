@@ -507,9 +507,9 @@ function Shell({ client, conn, onSignOut }: {
       // A new chat from the start: machine first. "In this folder" is Ctrl+Shift+N.
       if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
       // Fold or unfold the sidebar (the owner's choice of key). A terminal
-      // keeps Ctrl+S: it pauses output there. The canvas keeps it to save
-      // the file you type in.
-      if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyS' && !el?.closest?.('.xterm, .canvas')) { e.preventDefault(); collapseSidebar((was) => !was); return; }
+      // keeps Ctrl+S: it pauses output there. A file in the canvas keeps it
+      // to save the file you type in; a page in the canvas does not.
+      if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyS' && !el?.closest?.('.xterm, .canvas-file:not(.canvas-page)')) { e.preventDefault(); collapseSidebar((was) => !was); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       // Settings and usage from anywhere. Letters with Ctrl/Cmd+Shift that
@@ -1315,7 +1315,7 @@ function Shell({ client, conn, onSignOut }: {
               on a phone this list. Nothing else leaves a machine. */}
           <div className="brand">
             <button type="button" className="brand-home" onClick={goHome} title="Home" aria-label="Home">
-              <img src="/favicon.svg?v=7" alt="" />
+              <img src="/favicon.svg?v=8" alt="" />
               <b className="wordmark">helm</b>
             </button>
           </div>

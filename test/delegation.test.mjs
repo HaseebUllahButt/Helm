@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { WRITING_REMINDER } from '../packages/protocol/brief.js';
 
@@ -82,6 +82,15 @@ test('Codex forks require the same local account, folder and native daemon', () 
   const blocked = { kind: 'error', message: 'This content was flagged for possible cybersecurity risk.' };
   assert.equal(fork({ ...parent, recovery: blocked }), null);
   assert.equal(fork({ ...parent, recovery: { kind: 'error', message: 'The service is busy.' } }).threadId, 'parent-thread');
+  // Codex caches per model: only a helper on the parent's model gets a copy.
+  const on = (p, model) => codexHelperFork(p, profile, profile, parent.cwd, false, '/private/codex.sock', model);
+  assert.equal(on({ ...parent, engineModel: 'gpt-sol' }, 'gpt-terra'), null);
+  assert.equal(on({ ...parent, model: 'gpt-sol' }, 'gpt-terra'), null);
+  assert.equal(on({ ...parent, engineModel: 'gpt-sol' }, 'gpt-sol').parentModel, 'gpt-sol');
+  assert.equal(on({ ...parent, engineModel: 'gpt-sol', model: 'gpt-old' }, 'gpt-sol').parentModel, 'gpt-sol', 'the model Codex reports wins');
+  // An unset side is the account default; the driver checks it once known.
+  assert.equal(on(parent, 'gpt-terra').parentModel, null);
+  assert.equal(on({ ...parent, engineModel: 'gpt-sol' }, null).parentModel, 'gpt-sol');
 });
 
 test('Codex recovery history leaves out queued tickets and keeps accepted tool results', () => {
@@ -148,6 +157,26 @@ test('native child activity reaches a delegated ancestor and clears when its pro
   assert.equal(sessions.hasActiveDelegations(parent.id), false);
 });
 
+test('a new helper task carries pasted pictures; a bad one starts no helper', async t => {
+  class PictureDriver extends FakeDriver {
+    async sendWithAttachments(text, images) { this.images = images; await this.send(text); }
+  }
+  const { sessions, drivers } = setup(t, (opts) => new PictureDriver(opts));
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Look at this',
+    attachments: [{ filename: 'shot.png', mime: 'image/png', data: png }] });
+  const driver = drivers.get(child.id);
+  for (let i = 0; i < 100 && !driver.images; i++) await new Promise((r) => setImmediate(r));
+  assert.equal(driver.images?.length, 1);
+  assert.equal(driver.images[0].mime, 'image/png');
+  driver.finish();
+  const before = parent.delegations.length;
+  await assert.rejects(sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Bad',
+    attachments: [{ filename: 'x.bin', mime: 'application/octet-stream', data: '!!' }] }), /not valid base64/);
+  assert.equal(parent.delegations.length, before, 'no helper starts for a bad attachment');
+});
+
 test('a Claude chat in a terminal can start helpers; a plain terminal cannot', async t => {
   const { sessions } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
@@ -190,7 +219,7 @@ test('credential diagnostics preserve current modes and never publish token valu
   }
 });
 
-test('a helper starts on the machine default for its account, never the parent model; explicit and saved helper defaults win', async t => {
+test('helpers keep the parent model on the same engine; explicit and saved choices win', async t => {
   const { saveSubagentPrefs, saveModelPrefs } = await import('../packages/connect/src/settings.js');
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main', model: 'parent-model' });
@@ -200,11 +229,11 @@ test('a helper starts on the machine default for its account, never the parent m
     return session;
   };
   const plain = await launch('codex-main');
-  assert.notEqual(plain.model, 'parent-model');
-  assert.equal(plain.delegation.requestedModel, null);
+  assert.equal(plain.model, 'parent-model');
+  assert.equal(plain.delegation.requestedModel, 'parent-model');
   saveModelPrefs(profiles[0], { default: 'machine-default' });
   t.after(() => saveModelPrefs(profiles[0], { default: null }));
-  assert.equal((await launch('codex-main')).model, 'machine-default');
+  assert.equal((await launch('codex-main')).model, 'parent-model');
   assert.equal((await launch('codex-main', { model: 'override-model' })).model, 'override-model');
   saveSubagentPrefs(profiles[0], { model: 'helper-default', effort: 'high' });
   t.after(() => saveSubagentPrefs(profiles[0], { model: null, effort: null }));
@@ -215,7 +244,10 @@ test('a helper starts on the machine default for its account, never the parent m
   assert.equal(explicit.model, 'explicit');
   assert.equal(explicit.effort, 'low');
   saveSubagentPrefs(profiles[0], { model: null });
-  assert.equal((await launch('codex-main')).model, 'machine-default');
+  assert.equal((await launch('codex-main')).model, 'parent-model');
+  sessions.get(parent.id).engineModel = 'reported-model';
+  assert.equal((await launch('codex-main')).model, 'reported-model');
+  assert.notEqual((await launch('claude-main')).model, 'reported-model');
 });
 
 test('helpers are offered the accounts new chats show: one row per account, hidden ones left out', async () => {
@@ -333,6 +365,44 @@ test('an idle child waiting on its own background command is not released until 
   original.backgroundTasks = 0;
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(original.status, 'exited');
+});
+
+test('an untouched Codex chat starts fresh after its empty runtime is released', async t => {
+  const set = globalThis.setTimeout;
+  let reap;
+  t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => ms === 30 * 60_000
+    ? (reap = fn, { unref() {} }) : set(fn, ms, ...args));
+  const { sessions, drivers } = setup(t);
+  const chat = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const original = drivers.get(chat.id), oldId = chat.engineSessionId;
+  original.push('status', { status: 'idle' });
+  assert.ok(reap);
+  const exited = new Promise(resolve => original.on('event', e => { if (e.type === 'status' && e.status === 'exited') resolve(); }));
+  reap(); await exited;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sessions.get(chat.id).engineSessionId, null);
+  await sessions.input(chat.id, 'My first prompt');
+  assert.notEqual(drivers.get(chat.id).engineSessionId, oldId);
+  assert.equal(drivers.get(chat.id).sent, 'My first prompt');
+});
+
+test('a slow idle check leaves new prompts free to run and cannot stop their work', async t => {
+  const { sessions, drivers } = setup(t, opts => new FakeDriver(opts), { delegationIdleMs: 10 });
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Inspect' });
+  const original = drivers.get(child.id);
+  let release, checking;
+  const began = new Promise(resolve => { checking = resolve; });
+  original.canRelease = () => { checking(); return new Promise(resolve => { release = resolve; }); };
+  original.finish();
+  await began;
+  t.after(() => release?.(true));
+  await sessions.messageDelegation(parent.id, child.id, 'Continue now');
+  assert.equal(original.sent, 'Continue now');
+  release(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(original.status, 'working');
+  assert.equal(drivers.get(child.id), original);
 });
 
 test('a child sharing a Codex account releases its own driver without closing another thread', async t => {
@@ -858,14 +928,28 @@ test('helm delegate same runs the helper on the account this chat runs as', asyn
 test('delegation instructions keep only rules; the details live in helm delegate --help', async () => {
   const { commandHelp } = await import('../packages/connect/src/help.js');
   const note = delegationNote();
-  assert.ok(note.length < 700, 'it rides along in every session');
-  assert.equal(delegationNote(profiles), note);
-  assert.equal(delegationNote([]), note);
+  assert.ok(note.length < 800, 'it rides along in every session');
+  assert.equal(delegationNote('codex'), note, 'Helm\'s own Codex fork reuses the cache; Codex\'s own child did not');
+  assert.equal(delegationNote('pi'), note, 'tools nobody measured keep helm delegate');
   assert.match(note, /Do the work yourself by default/);
   assert.match(note, /never your CLI's own subagent tool/);
   assert.match(note, /open, message and stop it/);
+  // Claude's own Agent is cheaper for short work on the same account.
+  const claude = delegationNote('claude');
+  assert.ok(claude.length < 800, 'it rides along in every session');
+  assert.doesNotMatch(claude, /never your CLI's own subagent tool/);
+  assert.match(claude, /on your account, short or long, use your Agent tool/);
+  assert.match(claude, /a fork if it needs this chat, keep your model unless the owner asks for another, run_in_background false\./);
+  assert.match(claude, /helm delegate for another account, tool or machine, or a worktree/);
+  // The owner's own words, for every tool.
+  for (const n of [note, claude]) {
+    assert.ok(n.includes('The owner: "orchestrator mode is when u give work to others and u are always there to talk to me".'));
+    assert.match(n, /to talk to me". Use it only when the owner asks for it\./);
+  }
+  for (const shared of [/Do the work yourself by default/, /never unset HELM_SESSION_ID/, /judgment calls yourself/, /Keep your helpers/]) assert.match(claude, shared);
   assert.match(note, /never unset HELM_SESSION_ID/);
-  assert.match(note, /--model cheap/);
+  assert.match(note, /Use your account and model unless the owner asks for another/);
+  assert.doesNotMatch(note + claude, /--model cheap|model haiku/);
   assert.match(note, /Keep your helpers/);
   assert.match(note, /only test chats that are not helpers/);
   assert.doesNotMatch(note, /--heavy|slot|--worktree|--cwd/, 'flags are looked up, not carried');
@@ -1191,6 +1275,7 @@ test('agents are told which machine they are on and how to reach the others', as
   assert.match(brief, /Never rerun a helm exec that may have started/);
   assert.match(brief, /--keep only when the owner asks/);
   assert.ok(brief.includes(delegationNote()));
+  assert.ok(helmBrief(net, { engine: 'claude' }).includes(delegationNote('claude')), 'each chat gets the route for its own tool');
   const alone = helmBrief({ self: 'a', machines: { a: net.machines.a } });
   assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');
   assert.match(alone, /\[Helm pickup: .*run helm pickup\.\]/, 'every agent learns where its handover goes');
@@ -1227,9 +1312,11 @@ test('the notes every agent gets match the committed size', async () => {
   // Only machines that can start a browser get its note; count it once.
   const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:')).join('\n');
   const notes = [brief, browserNote(), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
+  // Claude chats get their own helper route (delegationNote).
+  const claudeNotes = notes.replace(delegationNote(), delegationNote('claude'));
   assert.deepEqual(
-    { notesBytes: Buffer.byteLength(notes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
-    { notesBytes: budget.notesBytes, reminderBytes: budget.reminderBytes },
+    { notesBytes: Buffer.byteLength(notes), claudeNotesBytes: Buffer.byteLength(claudeNotes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
+    { notesBytes: budget.notesBytes, claudeNotesBytes: budget.claudeNotesBytes, reminderBytes: budget.reminderBytes },
   );
 });
 
@@ -1413,4 +1500,21 @@ test('tour helpers stay visible and do not send their JSON to the parent', async
   assert.equal(sessions.delegationResult(child.id).status, 'done');
   assert.equal(drivers.get(parent.id).sent, undefined);
   assert.ok((await sessions.list({ parentId: parent.id })).some(s => s.id === child.id));
+});
+
+test('a Codex helper gets a copy of its parent only on the parent\'s model', async t => {
+  const { sessions, drivers } = setup(t);
+  const socket = join(process.env.HELM_DIR, 'codex-home', 'app-server-control', 'app-server-control.sock');
+  mkdirSync(dirname(socket), { recursive: true });
+  writeFileSync(socket, '');
+  t.after(() => rmSync(socket, { force: true }));
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main', model: 'gpt-sol' });
+  const helper = async (model) => {
+    const { session } = await sessions.delegate({ id: parent.id, profileId: 'codex-main', model, task: 'Look around' });
+    drivers.get(session.id).finish();
+    return sessions.get(session.id).delegation.codexFork;
+  };
+  assert.equal(await helper('gpt-terra'), undefined, 'another model starts a new chat');
+  assert.equal((await helper('gpt-sol'))?.parentModel, 'gpt-sol');
+  assert.equal((await helper())?.parentModel, 'gpt-sol', 'an unset model keeps the parent and its cache');
 });

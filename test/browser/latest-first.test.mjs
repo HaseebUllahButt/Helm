@@ -75,7 +75,7 @@ test('a saved chat opens at the latest reply without replaying missed events', a
   assert.equal(await page.evaluate(() => window.state.earlier), true);
 });
 
-test('hidden chats release their stream and resume with one latest read and current questions', async t => {
+test('hidden chats release their stream and recover a history gap with current questions', async t => {
   const page = await device(t);
   await page.evaluate(() => window.mount()); await ready(page);
   await page.evaluate(() => {
@@ -90,8 +90,8 @@ test('hidden chats release their stream and resume with one latest read and curr
   assert.equal(await page.locator('output').innerText(), 'Now waiting for you');
   assert.deepEqual(await page.evaluate(() => ({ status: window.state.log.status, asks: window.state.log.pending.map(p => p.requestId) })), { status: 'blocked', asks: ['ask-now'] });
   const reads = await page.evaluate(() => window.calls.filter(c => c.method === 'session.events'));
-  assert.equal(reads.length, 2);
-  assert.ok(reads.every(c => c.params.tail === 200 && !c.params.since));
+  assert.deepEqual(reads.map(c => c.params.tail ? 'tail' : 'since'), ['tail', 'since', 'tail']);
+  assert.equal(reads[1].params.since, 3, 'check for a contiguous update before replacing the window');
 });
 
 test('returning during delayed watch and history replies renews the stream and rejects stale text', async t => {

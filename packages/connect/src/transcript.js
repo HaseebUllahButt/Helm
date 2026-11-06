@@ -364,9 +364,9 @@ function codexParser() {
   return { out, accept };
 }
 
-async function codexMessages(path, { all = false } = {}) {
+async function codexMessages(path, { tailBytes = 4 << 20, all = false } = {}) {
   const parser = codexParser();
-  await readLines(path, parser.accept, { tailBytes: all ? Infinity : 4 << 20, rule: RULES.codexMessages });
+  await readLines(path, parser.accept, { tailBytes: all ? Infinity : tailBytes, rule: RULES.codexMessages });
   return parser.out;
 }
 
@@ -575,9 +575,9 @@ function claudeParser(sidechain = false) {
     clearChanges() { changedFrom = Infinity; } };
 }
 
-async function claudeMessages(path, { all = false, sidechain = false } = {}) {
+async function claudeMessages(path, { tailBytes = 4 << 20, all = false, sidechain = false } = {}) {
   const parser = claudeParser(sidechain);
-  await readLines(path, parser.accept, { tailBytes: all ? Infinity : 4 << 20,
+  await readLines(path, parser.accept, { tailBytes: all ? Infinity : tailBytes,
     rule: sidechain ? RULES.claudeSidechain : RULES.claudeMessages });
   return parser.out;
 }
@@ -881,7 +881,7 @@ function devinMessages(db, sessionId, { all = false } = {}) {
  * content array carrying text, thinking and toolCall parts. `title` and
  * `model_change` records carry the display name and the current model.
  */
-async function piMessages(path, { all = false } = {}) {
+async function piMessages(path, { tailBytes = 4 << 20, all = false } = {}) {
   const out = [];
   await readLines(path, (rec) => {
     if (rec.type !== 'message') return;
@@ -899,7 +899,7 @@ async function piMessages(path, { all = false } = {}) {
       role: m.role, text: clip(text), tools, thinking,
       at: rec.timestamp ?? m.timestamp, sourceId: m.id,
     });
-  }, { tailBytes: all ? Infinity : 4 << 20 });
+  }, { tailBytes: all ? Infinity : tailBytes });
   return out;
 }
 
@@ -908,7 +908,7 @@ async function piMessages(path, { all = false } = {}) {
  * role. Tool calls arrive either as content blocks or OpenAI-style
  * `tool_calls` fields on the record.
  */
-async function grokMessages(path, { all = false } = {}) {
+async function grokMessages(path, { tailBytes = 4 << 20, all = false } = {}) {
   const out = [];
   await readLines(path, (rec) => {
     const role = rec.role ?? rec.type;
@@ -928,7 +928,7 @@ async function grokMessages(path, { all = false } = {}) {
       thinking: thinking || !!rec.reasoning || !!rec.reasoning_content,
       at: rec.timestamp ?? rec.created_at, sourceId: rec.id ?? rec.uuid,
     });
-  }, { tailBytes: all ? Infinity : 4 << 20 });
+  }, { tailBytes: all ? Infinity : tailBytes });
   return out;
 }
 
@@ -936,7 +936,7 @@ async function grokMessages(path, { all = false } = {}) {
  * Muse's session.jsonl is a record-per-line event log; conversation rows look
  * like `{record:{kind|role, content|text}}`. Read only what is plainly there.
  */
-async function museMessages(path, { all = false } = {}) {
+async function museMessages(path, { tailBytes = 4 << 20, all = false } = {}) {
   const out = [];
   await readLines(path, (rec) => {
     const r = rec.record ?? rec;
@@ -951,7 +951,7 @@ async function museMessages(path, { all = false } = {}) {
       role, text: clip(flat), tools,
       at: r.timestamp ?? r.at ?? rec.timestamp, sourceId: r.id,
     });
-  }, { tailBytes: all ? Infinity : 4 << 20 });
+  }, { tailBytes: all ? Infinity : tailBytes });
   return out;
 }
 
@@ -1067,11 +1067,11 @@ export function databaseMessages(engine, path, sessionId, opts) {
 }
 
 /** Read a transcript as a list of messages, oldest first. */
-export async function messages({ engine, path, sessionId, limit = 120, all = false, sidechain = false }) {
+export async function messages({ engine, path, sessionId, limit = 120, all = false, sidechain = false, tailBytes = 4 << 20 }) {
   if (!path || !existsSync(path)) return [];
   let found = [];
-  if (engine === 'codex') found = await codexMessages(path, { all });
-  else if (engine === 'claude') found = await claudeMessages(path, { all, sidechain });
+  if (engine === 'codex') found = await codexMessages(path, { all, tailBytes });
+  else if (engine === 'claude') found = await claudeMessages(path, { all, sidechain, tailBytes });
   // The database engines read synchronously, and a long Devin chat is
   // hundreds of MB of stored snapshots - about a second of a frozen daemon
   // for the default window, nine for the whole history. Off the thread.
@@ -1079,8 +1079,8 @@ export async function messages({ engine, path, sessionId, limit = 120, all = fal
     found = await offThread(import.meta.url, 'databaseMessages', [engine, path, sessionId, { all }])
       .catch(() => databaseMessages(engine, path, sessionId, { all }));
   }
-  else if (engine === 'pi' || engine === 'omp') found = await piMessages(path, { all });
-  else if (engine === 'grok') found = await grokMessages(path, { all });
-  else if (engine === 'muse') found = await museMessages(path, { all });
+  else if (engine === 'pi' || engine === 'omp') found = await piMessages(path, { all, tailBytes });
+  else if (engine === 'grok') found = await grokMessages(path, { all, tailBytes });
+  else if (engine === 'muse') found = await museMessages(path, { all, tailBytes });
   return all ? found : found.slice(-limit);
 }

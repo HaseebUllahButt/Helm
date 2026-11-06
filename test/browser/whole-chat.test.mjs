@@ -4,14 +4,16 @@ import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { chromium } from '@playwright/test';
 
-// The owner reads whole chats on the phone to learn from them: after the
-// latest screen, the rest of the chat arrives on its own and stays saved.
+// Older history stays on the machine until the reader asks for it.
+// Saved pages remain readable on the next visit.
 let browser, script, css;
 before(async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
     import { useSessionLog } from './apps/web/src/session/useSessionLog';
+    import * as cache from './apps/web/src/session/logCache';
+    window.cache = cache;
     import { Transcript } from './apps/web/src/session/Transcript';
     const client = { subscribe() {}, on() { return () => {}; }, rpc: window.rpc };
     function App() {
@@ -69,63 +71,58 @@ async function open(t, { fail = 0, context, slow = 0 } = {}) {
 const whole = (page) => page.waitForFunction(() => window.state?.log.loaded && !window.state.earlier && !window.state.loadingEarlier
   && document.body.innerText.includes('Question 0'));
 
-test('the rest of a chat follows the latest screen without a tap', async t => {
+const ready = page => page.waitForFunction(() => window.state?.log.loaded && !window.state.syncing);
+async function readAll(page) {
+  while (await page.evaluate(() => window.state.earlier)) {
+    await page.evaluate(() => window.state.loadEarlier());
+    await page.waitForFunction(() => !window.state.loadingEarlier);
+  }
+}
+
+test('opening a chat reads only its latest window; scrolling up reads one older page', async t => {
   const { page, calls } = await open(t);
-  await whole(page);
-  assert.ok(calls[0].tail, 'the latest screen is read first');
-  const pages = calls.filter(c => c.before);
-  assert.equal(pages.length, Math.ceil((TURNS - 1) / 2));
-  assert.ok(pages.every(c => c.pageBytes === 1_000_000), 'background pages are big ones');
-  assert.equal(await page.locator('.turn.user').count(), TURNS);
-  assert.equal(await page.getByRole('button', { name: 'Earlier in this chat' }).count(), 0);
-});
-
-test('a failed background page shows no error, and a tap on the button carries on to the start', async t => {
-  const { page, calls } = await open(t, { fail: 1 });
-  await page.waitForFunction(() => window.state?.log.loaded && window.state.earlier && !window.state.loadingEarlier);
-  assert.equal(await page.locator('.error, [role="alert"]').count(), 0);
+  await ready(page);
+  assert.ok(calls[0].tail);
+  assert.equal(calls.filter(c => c.before).length, 0);
+  await page.locator('.chat').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new WheelEvent('wheel', { deltaY: -200 })); });
+  await page.waitForFunction(() => window.state.log.turns.length > 1 && !window.state.loadingEarlier);
   assert.equal(calls.filter(c => c.before).length, 1);
-  await page.getByRole('button', { name: 'Earlier in this chat', exact: true }).click();
+  assert.equal(calls.find(c => c.before).pageBytes, undefined);
+  await readAll(page);
   await whole(page);
+  assert.equal(await page.locator('.turn.user').count(), TURNS);
 });
 
-test('a whole chat saved on the device is not fetched again', async t => {
+test('a failed older page can be retried without downloading the rest of the chat', async t => {
+  const { page, calls } = await open(t, { fail: 1 });
+  await ready(page);
+  await page.getByRole('button', { name: 'Earlier in this chat', exact: true }).click();
+  await page.waitForFunction(() => window.state.error && !window.state.loadingEarlier);
+  await page.getByRole('button', { name: 'Earlier in this chat', exact: true }).click();
+  await page.waitForFunction(() => !window.state.error && window.state.log.turns.length === 3);
+  assert.equal(calls.filter(c => c.before).length, 2);
+});
+
+test('older pages saved on the device do not need another network read', async t => {
   const first = await open(t);
-  await whole(first.page);
-  // Let the save land, then come back to the chat in a fresh page.
-  await first.page.waitForTimeout(500);
+  await ready(first.page);
+  await readAll(first.page);
+  await first.page.waitForFunction(async () => (await window.cache.loadCached('machine', 'chat'))?.first === 1);
   await first.page.close();
   const again = await open(t, { context: first.context });
   await whole(again.page);
-  await again.page.waitForTimeout(500);
   assert.equal(again.calls.filter(c => c.before).length, 0);
   assert.equal(await again.page.locator('.turn.user').count(), TURNS);
   t.after(() => first.context.close());
 });
 
-test('older pages arriving above keep the reader on the same words', async t => {
-  const { page } = await open(t, { slow: 400 });
-  await page.waitForFunction(() => window.state?.log.loaded && document.querySelectorAll('.turn').length);
-  const where = () => page.evaluate(() => {
-    const chat = document.querySelector('.chat'), top = chat.getBoundingClientRect().top;
-    const node = [...chat.querySelectorAll('.turn.user')].at(-1);
-    return { text: node.innerText.slice(0, 12), y: Math.round(node.getBoundingClientRect().top - top) };
-  });
-  await page.evaluate(() => { const chat = document.querySelector('.chat'); chat.scrollTop = Math.max(0, chat.scrollHeight - chat.clientHeight - 300); });
-  await page.waitForTimeout(100);
-  assert.equal(await page.evaluate(() => window.state.loadingEarlier || window.state.earlier), true, 'older pages are still on their way');
-  const before = await where();
-  await whole(page);
-  await page.waitForTimeout(100);
-  assert.deepEqual(await where(), before);
-});
-
 test('a catch-up read that brings nothing new leaves every message as it was', async t => {
   const { page } = await open(t);
-  await whole(page);
+  await ready(page);
+  await readAll(page);
   await page.evaluate(() => { window.kept = window.state.log.turns.slice(); });
   await page.evaluate(() => window.state.refresh());
   await page.waitForFunction(() => !window.state.syncing);
-  const same = await page.evaluate(() => window.state.log.turns.every((turn, i) => turn === window.kept[i]) && window.state.log.turns.length === window.kept.length);
-  assert.equal(same, true, 'no message was rebuilt, so none is redrawn');
+  assert.equal(await page.evaluate(() => window.state.log.turns.every((turn, i) => turn === window.kept[i])
+    && window.state.log.turns.length === window.kept.length), true);
 });

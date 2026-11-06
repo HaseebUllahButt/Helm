@@ -537,7 +537,7 @@ export class Daemon {
       publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     // A chat in its own worktree is also told where its work goes back to.
-    this.sessions.delegationBrief = (s) => [helmBrief(loadNetwork() ?? this.net, { parentId: s?.delegation?.parentId ?? null }), worktreeNote(s)].filter(Boolean).join('\n');
+    this.sessions.delegationBrief = (s) => [helmBrief(loadNetwork() ?? this.net, { parentId: s?.delegation?.parentId ?? null, engine: s?.engine ?? null }), worktreeNote(s)].filter(Boolean).join('\n');
     // What was said in every chat here, for the search box (search-index.js).
     this.search = new SearchIndex({ log: (line) => console.log(`[helm] ${line}`) });
     this.keeper = new OwnerKeeper({
@@ -598,11 +598,20 @@ export class Daemon {
     // are still running. Ask which before resuming: `resume` reads the
     // surviving-proc list to know which open turns are still live rather
     // than interrupted.
-    this.sessionRecovery = this.sessions.adoptTerminals()
+    //
+    // New chats and sends wait for the saved chats, not for their agents to
+    // reconnect. After a reboot one stuck reconnect held every new chat and
+    // every message for 13 minutes; each driver already waits for its own.
+    let restored;
+    const recordsRestored = new Promise((resolve) => { restored = resolve; });
+    const resumed = this.sessions.adoptTerminals()
       .catch(() => {})
-      .then(() => this.sessions.resume())
+      .then(() => this.sessions.resume({ onRestored: restored }))
+      // Logged here: it can fail after new chats were let through.
+      .catch((error) => { console.error(`[helm] session recovery: ${error.message}`); throw Object.assign(error, { logged: true }); });
+    this.sessionRecovery = Promise.race([resumed, recordsRestored])
       .then(() => { if (!this.#stopped) { this.inputDelivery.resume(); this.schedules?.start(); this.sessions.startLimitRecovery(); this.chatMoves.start(); } })
-      .catch((error) => console.error(`[helm] session recovery: ${error.message}`));
+      .catch((error) => { if (!error?.logged) console.error(`[helm] session recovery: ${error?.message}`); });
     // Caches worth having warm, none worth being late for: they start once
     // the links are up. Re-reading the shell's aliases blocks for a moment,
     // and that moment used to sit in front of this machine coming online.
@@ -1357,6 +1366,8 @@ export class Daemon {
       home: homedir(),
       precopiedHandoff: true,
       agentMessages: true,
+      // A new helper task can carry pasted pictures and files.
+      helperAttachments: true,
       sendV2: true,
       // Answers requests from other machines over a direct channel, checking
       // each one as a hub would (direct-mesh.js). Older machines leave this
@@ -2130,7 +2141,7 @@ export class Daemon {
         return result;
       }
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
-      case M.SESSION_NATIVE_AGENT: return this.sessions.nativeAgent(p.id, p.agentId, { full: p.full === true });
+      case M.SESSION_NATIVE_AGENT: return this.sessions.nativeAgent(p.id, p.agentId, { full: p.full === true, limit: p.limit });
       case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
@@ -2183,7 +2194,7 @@ export class Daemon {
         return this.inputDelivery.deliver(p, caller);
       case M.SESSION_INPUT:   return this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments, delivery: p.delivery, references: p.references });
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
-      case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit, known: typeof p.known === 'string' ? p.known : null });
+      case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit, pageBytes: p.pageBytes, known: typeof p.known === 'string' ? p.known : null });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
       case M.SESSION_DISCARD_EMPTY: return this.sessions.discardEmpty(p.id);
       case M.SESSION_TITLE:   return this.sessions.rename(p.id, p.title);

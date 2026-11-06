@@ -250,7 +250,7 @@ export class ClaudeDriver extends Driver {
   async #start() {
     if (this.#pipe) return;
     assertFolder(this);
-    await checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
+    void checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
     if (this.procId && this.procHost?.hasProc(this.procId)) {
       const pipe = this.procHost.procPipe(this.procId);
       if (pipe) {
@@ -534,7 +534,7 @@ export class ClaudeDriver extends Driver {
    */
   async answer(requestId, decision) {
     const req = this.pending.get(requestId);
-    if (!req) throw new Error(`no pending request ${requestId}`);
+    if (!req) throw Object.assign(new Error('This request is no longer open.'), { deliveryNotSent: true });
     const raw = req.raw;
     let response;
     if (decision.option === 'deny') {

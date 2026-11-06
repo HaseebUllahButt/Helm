@@ -36,6 +36,9 @@ export const CODEX_MIN_VERSION = '0.154.0';
 
 /** Codex keeps its thinking to itself unless asked; its own app asks for the full notes. */
 const THINKING_NOTES = 'detailed';
+// Helm holds its subscription for the existing idle period. Once released,
+// Codex must not hold the same chat for another thirty minutes.
+const SERVER_ARGS = ['app-server', '--stdio', '-c', 'thread_unload_delay_secs=0'];
 const MAX_OUTPUT = 32_000;
 /** A diff is read in a fold on a phone, and `events.js` caps it there too. */
 const MAX_DIFF = 8_000;
@@ -463,8 +466,7 @@ export class CodexServer {
       }
       // Diagnostic only: a slow wrapper's --version must not hold up a
       // usable app-server (or reconnection to one that is already running).
-      void checkVersion('codex', this.cmd, this.env, CODEX_MIN_VERSION, this.log)
-        .catch((err) => this.log(`codex version check: ${err.message}`));
+      void checkVersion('codex', this.cmd, this.env, CODEX_MIN_VERSION, this.log);
       // The server exits if its home does not exist yet.
       if (this.env.CODEX_HOME) mkdirSync(expand(this.env.CODEX_HOME), { recursive: true });
       if (this.procHost) {
@@ -475,7 +477,7 @@ export class CodexServer {
           this.#forgetHeld();
           await this.procHost.openProc(this.procId, {
             cmd: this.nativeProxy ? process.execPath : this.cmd,
-            args: this.nativeProxy ? [fileURLToPath(new URL('../../bin/helm-codex-proxy.js', import.meta.url)), this.nativeSocket] : ['app-server', '--stdio'],
+            args: this.nativeProxy ? [fileURLToPath(new URL('../../bin/helm-codex-proxy.js', import.meta.url)), this.nativeSocket] : SERVER_ARGS,
             cwd: undefined, env: serverEnv(this.env),
           });
         }
@@ -490,7 +492,7 @@ export class CodexServer {
         // handshake; only an already-running proc has been initialized.
         if (this.#adopted) return true;
       } else {
-        const child = spawn(this.cmd, ['app-server', '--stdio'], {
+        const child = spawn(this.cmd, SERVER_ARGS, {
           env: serverEnv({ ...process.env, ...this.env }),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
@@ -549,8 +551,11 @@ export class CodexServer {
 
   // Opening a chat can load tools and plugins. Keep quick discovery reads
   // short, but give chat setup time to finish before the UI's 120 s wait.
-  call(method, params, timeout = this.nativeSocket
-    ? (/^thread\/(start|resume|fork)$/.test(method) ? 90_000 : 5000) : null) {
+  // Helm's own app-server gets the same limit for opening a chat: an answer
+  // that never came held a reconnect, and the chats behind it, for minutes.
+  // Turns stay unlimited there; they can rightly run for hours.
+  call(method, params, timeout = /^thread\/(start|resume|fork)$/.test(method) ? 90_000
+    : this.nativeSocket ? 5000 : null) {
     const id = ++this.#seq;
     return new Promise((resolve) => {
       let timer;
@@ -899,10 +904,21 @@ export class CodexDriver extends Driver {
       try {
         // Changing developer instructions breaks the parent's cache prefix.
         const { developerInstructions, ...inherited } = common;
-        if (!inherited.model) {
+        // Codex caches per model: a copy on another model reuses nothing.
+        // A model left unset on either side is the account default.
+        const { parentModel } = this.helperFork;
+        let fallback = null;
+        if (!inherited.model || !parentModel) {
           const config = await server.call('config/read', { cwd: this.cwd, includeLayers: false });
-          if (!config.result?.config?.model) throw new Error('Codex did not give the helper default model.');
-          inherited.model = config.result.config.model;
+          fallback = config.result?.config?.model || null;
+        }
+        if (!inherited.model) {
+          if (!fallback) throw new Error('Codex did not give the helper default model.');
+          inherited.model = fallback;
+        }
+        const source = parentModel || fallback;
+        if (source && source !== inherited.model) {
+          throw new Error(`the helper runs on ${inherited.model} and its parent on ${source}, so a copy reuses no cache.`);
         }
         forked = await server.call('thread/fork', { ...inherited, threadId: this.helperFork.threadId,
           ephemeral: true, excludeTurns: true });
@@ -1028,7 +1044,7 @@ export class CodexDriver extends Driver {
   /** What a thread is opened with, on start and on a later reload. */
   #threadParams() {
     const { approvalPolicy, approvalsReviewer, sandbox } = this.#policy();
-    const config = { ...codexOnlineOff(this.env), ...Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
+    const config = { ...codexOnlineOff(this.env), ...(!this.nativeSocket ? { thread_unload_delay_secs: 0 } : {}), ...Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
       .map((k) => [`shell_environment_policy.set.${k}`, this.env[k]])) };
     return { cwd: this.cwd, approvalPolicy, approvalsReviewer, sandbox, ...(this.model ? { model: this.model } : {}),
       ...(this.instructions ? { developerInstructions: this.instructions } : {}),
@@ -1531,7 +1547,7 @@ export class CodexDriver extends Driver {
     if (this.nativeSocket && !this.nativeConnected) await this.start();
     const req = this.pending.get(requestId);
     const raw = this.#requests.get(requestId);
-    if (!req || !raw) throw new Error(`no pending request ${requestId}`);
+    if (!req || !raw) throw Object.assign(new Error('This request is no longer open.'), { deliveryNotSent: true });
     if (raw.method === 'thread/approveGuardianDeniedAction') {
       if (!['allow', 'deny'].includes(decision.option)) throw new Error('Choose Allow anyway or Keep denied.');
       if (decision.option === 'allow') {
@@ -1602,6 +1618,28 @@ export class CodexDriver extends Driver {
   /** codex's service tier - what the TUI calls /fast. Also per-turn. */
   async setSpeed(speed) { this.speed = speed || null; }
 
+  /** An idle parent may still own commands or native helpers. */
+  async canRelease() {
+    if (!this.#server || !this.threadId) return true;
+    for (const threadId of [this.threadId, ...this.#subagentThreads.keys()]) {
+      const state = await this.#server.call('thread/read', { threadId, includeTurns: false }, 10_000);
+      if (state.result?.thread?.status?.type === 'notLoaded') continue;
+      if (state.error) {
+        if (threadId !== this.threadId && /not found|no rollout|does not exist/i.test(state.error.message)) continue;
+        this.log(`Keep the Codex chat running: ${state.error.message}`); return false;
+      }
+      if (state.result?.thread?.status?.type !== 'idle') return false;
+      const work = await this.#server.call('thread/backgroundTerminals/list', { threadId }, 10_000);
+      // Unknown background state is not proof that it is safe to stop.
+      if (work.error || !Array.isArray(work.result?.data)) {
+        this.log(`Keep the Codex chat running. Codex cannot confirm background work: ${work.error?.message ?? 'no command list'}`);
+        return false;
+      }
+      if (work.result.data.length || work.result.nextCursor) return false;
+    }
+    return this.status === 'idle' && !this.pending.size;
+  }
+
   async kill() {
     this.killed = true;
     if (!this.#server) return;
@@ -1620,6 +1658,12 @@ export class CodexDriver extends Driver {
     }
     if (this.#turnId && this.status === 'working') {
       try { await this.#server.call('turn/interrupt', { threadId: this.threadId, turnId: this.#turnId }); } catch { /* fine */ }
+    }
+    if (this.threadId) {
+      const reply = await this.#server.call('thread/unsubscribe', { threadId: this.threadId }, 10_000);
+      // Old Codex builds may not support this call. Detaching still closes
+      // the account process when this was its last chat.
+      if (reply.error) this.log(`Could not release the Codex chat: ${reply.error.message}`);
     }
     this.#server.detach(this);
     this.#server = null;

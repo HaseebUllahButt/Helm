@@ -228,8 +228,41 @@ function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false, r
     cwd: fake.dir, mode: 'ask', engineSessionId: 'recovered-thread',
     procHost: host, openTurn: () => 'stale-log-turn' });
   t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
-  return { driver, log: collect(driver), writes };
+  return { driver, log: collect(driver), writes, host };
 }
+
+test('releasing one idle Codex chat unloads only that chat while its sibling works', async t => {
+  const { driver, writes, host } = adoptedCodex(t, {
+    thread: { status: { type: 'idle' }, turns: [] },
+    reply: request => request.method === 'turn/start' ? { result: { turn: { id: 'sibling-turn' } } } : undefined,
+  });
+  const sibling = new CodexDriver({ cmd: driver.cmd, env: driver.env, cwd: driver.cwd,
+    procHost: host, engineSessionId: 'sibling' });
+  t.after(() => sibling.kill());
+  await driver.start();
+  await sibling.send('Keep working');
+  await driver.kill();
+  assert.equal(sibling.status, 'working');
+  assert.deepEqual(writes.filter(r => r.method === 'thread/unsubscribe').map(r => r.params.threadId), ['recovered-thread']);
+  assert.equal(writes.some(r => r.method === 'turn/interrupt'), false);
+  await sibling.steer('Continue');
+  assert.equal(writes.at(-1).params.threadId, 'sibling');
+});
+
+test('idle Codex release checks background commands and keeps unknown state running', async t => {
+  let work = { result: { data: [{ processId: 'background' }], nextCursor: null } };
+  const { driver, writes } = adoptedCodex(t, {
+    thread: { status: { type: 'idle' }, turns: [] },
+    reply: request => request.method === 'thread/backgroundTerminals/list' ? work : undefined,
+  });
+  await driver.start();
+  assert.equal(await driver.canRelease(), false);
+  work = { error: { code: -32601, message: 'Method not found' } };
+  assert.equal(await driver.canRelease(), false);
+  work = { result: { data: [], nextCursor: null } };
+  assert.equal(await driver.canRelease(), true);
+  assert.equal(writes.some(r => r.method === 'thread/unsubscribe'), false);
+});
 
 for (const [name, status, turns, expected] of [
   ['completed', { type: 'idle' }, [{ id: 'stale-log-turn', status: 'completed' }], 'idle'],
@@ -604,7 +637,7 @@ test('plain: initialize, thread/start, turn/start; text streams as deltas', asyn
   assert.deepEqual(sent[0].params.clientInfo.name, 'helm');
   assert.equal(sent[1].method, 'initialized');
   assert.equal(sent[2].method, 'thread/start');
-  assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write', config: { 'features.apps': false } });
+  assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write', config: { 'features.apps': false, thread_unload_delay_secs: 0 } });
   assert.equal(sent[3].method, 'turn/start');
   assert.deepEqual(sent[3].params.input, [{ type: 'text', text: 'Reply with exactly the words: hello from helm', text_elements: [] }]);
   assert.equal(sent[3].params.effort, 'low');
@@ -666,7 +699,7 @@ test('each thread names its own session; the shared app-server names none', asyn
   await driver.send('Reply with exactly the words: hello from helm');
   await log.until((e) => e.type === 'turn.done');
   const start = fake.stdinLines().find((l) => l.method === 'thread/start');
-  assert.deepEqual(start.params.config, { 'features.apps': false, ...Object.fromEntries(Object.entries(ids).map(([k, v]) => [`shell_environment_policy.set.${k}`, v])) });
+  assert.deepEqual(start.params.config, { 'features.apps': false, thread_unload_delay_secs: 0, ...Object.fromEntries(Object.entries(ids).map(([k, v]) => [`shell_environment_policy.set.${k}`, v])) });
   const serverEnv = readFileSync(envFile, 'utf8');
   for (const k of Object.keys(ids)) assert.doesNotMatch(serverEnv, new RegExp(`^${k}=`, 'm'));
   await driver.kill();
@@ -1156,4 +1189,20 @@ test('native Codex setup survives the discovery timeout while reads still time o
   const hung = server.call('thread/start', {});
   t.mock.timers.tick(90_001);
   assert.match((await hung).error.message, /timed out/);
+});
+
+test("Helm's own Codex gives up on opening a chat that never answers, but lets turns run", async t => {
+  const pipe = { onData() {}, onExit() {}, write() {}, end() {}, kill() {} };
+  const server = new CodexServer('unused', {}, () => {}, { hasProc: () => true, procPipe: () => pipe });
+  await server.ensure();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let turnSettled = false;
+  void server.call('turn/start', {}).then(() => { turnSettled = true; });
+  for (const method of ['thread/start', 'thread/resume', 'thread/fork']) {
+    const hung = server.call(method, {});
+    t.mock.timers.tick(90_001);
+    assert.equal((await hung).error.message, `Codex ${method} timed out`);
+  }
+  await Promise.resolve();
+  assert.equal(turnSettled, false, 'a turn has no time limit');
 });

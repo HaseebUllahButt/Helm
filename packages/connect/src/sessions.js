@@ -146,6 +146,7 @@ export class Sessions extends EventEmitter {
   checkpoints = new Checkpoints();
   /** sessionId -> reap timer */
   #reapers = new Map();
+  #stopped = false;
   /** A resumed task waits for its previous process to finish releasing. */
   #retiring = new Map();
   /** external id -> 'archived' | 'removed', for rows helm does not own */
@@ -1447,6 +1448,7 @@ export class Sessions extends EventEmitter {
 
   /** Finished children release their runtime quickly; their conversation stays resumable. */
   #reap(s, status) {
+    if (this.#stopped) return;
     // A turn just ended: its work may have been merged back.
     if (status === 'idle' && s.chatWorktree) setTimeout(() => void this.#worktrees.tidy(s), 3000).unref?.();
     clearTimeout(this.#reapers.get(s.id));
@@ -1465,14 +1467,33 @@ export class Sessions extends EventEmitter {
         || d.backgroundTasks > 0) {
         this.#reap(s, 'idle'); return;
       }
-      const retiring = Promise.resolve().then(() => d.kill()).then(() => {
-        if (this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
-        if (this.#index.has(s.id)) this.emit('session', { ...wire(s), alive: false });
-      }, error => this.log(`[${s.id}] could not release idle provider: ${error.message}`)).finally(() => {
-        if (this.#retiring.get(s.id) === retiring) this.#retiring.delete(s.id);
-        if (this.#drivers.get(s.id) === d && this.#index.has(s.id)) this.#reap(s, s.status);
+      // A slow read must not block a new prompt. Only the actual release
+      // takes the retirement lock; recheck the chat after the read returns.
+      void Promise.resolve().then(() => d.canRelease?.() ?? true).then(eligible => {
+        if (this.#stopped || this.#drivers.get(s.id) !== d || this.#reapers.has(s.id)) return;
+        if (!eligible || d.status !== 'idle' || s.status !== 'idle'
+          || this.#deliveryState.isSending(s.id) || this.#deliveryState.hasQueue(s.id)
+          || d.pending?.size || this.events.pending(s.id).length || this.events.activeTurn(s.id)
+          || this.hasActiveDelegations(s.id) || d.backgroundTasks > 0) {
+          this.#reap(s, s.status); return;
+        }
+        const retiring = Promise.resolve().then(() => d.kill()).then(() => {
+          if (this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
+          // Codex does not save a rollout until the first prompt. A new,
+          // untouched chat must start fresh after its empty runtime closes.
+          if (s.engine === 'codex' && s.unsent && !s.hasInput && !s.external && !s.nativeSocket) {
+            s.engineSessionId = null; s.transcript = null; this.#save();
+          }
+          if (this.#index.has(s.id)) this.emit('session', { ...wire(s), alive: false });
+        }, error => this.log(`[${s.id}] could not release idle provider: ${error.message}`)).finally(() => {
+          if (this.#retiring.get(s.id) === retiring) this.#retiring.delete(s.id);
+          if (this.#drivers.get(s.id) === d && this.#index.has(s.id)) this.#reap(s, s.status);
+        });
+        this.#retiring.set(s.id, retiring);
+      }).catch(error => {
+        this.log(`[${s.id}] could not check the idle agent: ${error.message}`);
+        this.#reap(s, s.status);
       });
-      this.#retiring.set(s.id, retiring);
     }, s.delegation ? this.delegationIdleMs : IDLE_REAP_MS);
     t.unref?.();
     this.#reapers.set(s.id, t);
@@ -2302,9 +2323,9 @@ export class Sessions extends EventEmitter {
 
   // After a daemon restart (session-resume.js)
   adoptTerminals() { return this.#resumer.adoptTerminals(); }
-  async resume() {
+  async resume({ onRestored } = {}) {
     this.#worktrees.watch();
-    await this.#resumer.resume();
+    await this.#resumer.resume({ onRestored });
     // A setup the restart cut off runs again before the agent gets anything.
     for (const s of this.#index.values()) {
       if (s.chatWorktree?.setup !== 'running') continue;
@@ -2356,6 +2377,7 @@ export class Sessions extends EventEmitter {
 
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
+    this.#stopped = true;
     this.flush();
     clearInterval(this.limitRecoveryTimer);
     this.limitRecoveryTimer = null;
