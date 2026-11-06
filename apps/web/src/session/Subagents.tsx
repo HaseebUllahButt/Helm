@@ -78,8 +78,9 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   const offered = offeredOf(agents, parent.profileId);
   const agent = offered.find((candidate) => candidate.id === account);
   const savedDefaults = agent?.subagentDefaults ?? catalog?.subagentDefaults ?? {};
-  // What this machine starts the account on, the same as a new chat.
-  const fallbackModel = catalog?.default || agent?.defaultModel || '';
+  // Match the server: keep the parent's model on the same CLI.
+  const parentModel = agent?.engine === parent.engine ? parent.engineModel || parent.model : null;
+  const fallbackModel = parentModel || catalog?.default || agent?.defaultModel || '';
   const selectedModel = model || savedDefaults.model || fallbackModel;
   const belongsHere = (session: Session) => !session.archived && session.delegation?.parentId === parent.id;
   const children = sessions.filter(belongsHere);
@@ -101,7 +102,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   const options: ModelList | null = agent ? {
     default: agent.defaultModel ?? null, models: agent.models ?? [], labels: agent.labels,
     ...catalog,
-    prefs: { ...catalog?.prefs, default: savedDefaults.model ?? null, approved: catalog?.prefs?.approved ?? [] },
+    prefs: { ...catalog?.prefs, default: savedDefaults.model || parentModel || null, approved: catalog?.prefs?.approved ?? [] },
     defaults: { ...(catalog?.defaults ?? agent.defaults), ...savedDefaults },
     effort: savedDefaults.effort || catalog?.defaults?.effort || agent.defaults?.effort || catalog?.effort,
     // A helper's permissions are the account's, narrowed for a read-only

@@ -153,11 +153,11 @@ export function cheapModel(engine, models = []) {
  * tools are not measured, so they keep helm delegate too.
  */
 const SAME_TOOL_HELPERS = {
-  claude: 'For a side task that would flood your context or truly runs in parallel on your account, short or long, use your Agent tool: a fork if it needs this chat, model haiku for mechanical work, run_in_background false. Use helm delegate for another account, tool or machine, or a worktree. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Keep judgment calls yourself.',
+  claude: 'For a side task that would flood your context or truly runs in parallel on your account, short or long, use your Agent tool: a fork if it needs this chat, keep your model unless the owner asks for another, run_in_background false. Use helm delegate for another account, tool or machine, or a worktree. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Keep judgment calls yourself.',
 };
 export function delegationNote(engine = null) {
   const route = SAME_TOOL_HELPERS[engine]
-    ?? 'For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself.';
+    ?? 'For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use your account and model unless the owner asks for another. Keep judgment calls yourself.';
   return `[Helm helpers: Do the work yourself by default. ${route} The owner: "orchestrator mode is when u give work to others and u are always there to talk to me". Use it only when the owner asks for it. Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]`;
 }
 

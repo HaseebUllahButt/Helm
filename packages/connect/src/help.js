@@ -253,6 +253,8 @@ const DETAILS = {
                      Run helm agents to list accounts on this machine.
                      Use helm spawn for another machine.
     --model <id>     Pick a model ID, or cheap for the account's small model.
+                     Without a choice, use the parent's model on the same CLI.
+                     A saved helper model takes priority.
     --wait --json    Wait for the result, then print it as JSON.
     --cwd <folder>   Run in another folder.
     --worktree       Use a separate project copy on a new helm/ branch.

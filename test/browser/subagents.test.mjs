@@ -122,9 +122,9 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       assert.equal(await view.evaluate(()=>window.calls.filter(c=>c.method==='session.delegate').length),0);
       await view.evaluate(()=>window.releaseCatalog());
       await view.getByRole('button',{name:/^model:/}).click();
-      // Model names only, the machine's default for the account already chosen.
+      // The parent's model stays selected when the account catalog arrives.
       await view.getByRole('option',{name:'normal-model',exact:true}).waitFor();
-      assert.equal(await view.getByRole('option',{name:'normal-model',exact:true}).getAttribute('aria-selected'),'true');
+      assert.equal(await view.getByRole('option',{name:'Parent Model',exact:true}).getAttribute('aria-selected'),'true');
       assert.equal(await view.getByRole('option',{name:/Default on|Inherit/}).count(),0);
       await view.getByRole('button',{name:'close',exact:true}).click();
       await view.getByRole('button',{name:/^thinking:/}).waitFor();

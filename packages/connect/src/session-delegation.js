@@ -171,11 +171,12 @@ export class SessionDelegation {
     }
     const auth = (await authStatuses([profile])).get(profile.id);
     if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
-    // A helper starts on the model chosen for it, else the helper default,
-    // else what this machine starts the account on (start() below) - never
-    // the parent's model, which is the parent's choice, not the account's.
+    // Keep the parent's model on the same engine so eligible forks can
+    // reuse its cache. Explicit and saved helper choices still win.
+    // Another engine uses its own account default.
     const defaults = subagentPrefs(profile);
-    model ||= defaults.model || undefined;
+    model ||= defaults.model || (parent?.engine === profile.engine
+      ? parent.engineModel || parent.model : null) || undefined;
     effort ||= defaults.effort;
     const selectedMode = delegationMode(profile.engine, parent?.mode, mode, defaults.mode || startPrefs(profile)?.mode, parent?.engine);
     // `--worktree`: the child gets its own checkout of the same repository

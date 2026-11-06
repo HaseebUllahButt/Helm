@@ -219,7 +219,7 @@ test('credential diagnostics preserve current modes and never publish token valu
   }
 });
 
-test('a helper starts on the machine default for its account, never the parent model; explicit and saved helper defaults win', async t => {
+test('helpers keep the parent model on the same engine; explicit and saved choices win', async t => {
   const { saveSubagentPrefs, saveModelPrefs } = await import('../packages/connect/src/settings.js');
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main', model: 'parent-model' });
@@ -229,11 +229,11 @@ test('a helper starts on the machine default for its account, never the parent m
     return session;
   };
   const plain = await launch('codex-main');
-  assert.notEqual(plain.model, 'parent-model');
-  assert.equal(plain.delegation.requestedModel, null);
+  assert.equal(plain.model, 'parent-model');
+  assert.equal(plain.delegation.requestedModel, 'parent-model');
   saveModelPrefs(profiles[0], { default: 'machine-default' });
   t.after(() => saveModelPrefs(profiles[0], { default: null }));
-  assert.equal((await launch('codex-main')).model, 'machine-default');
+  assert.equal((await launch('codex-main')).model, 'parent-model');
   assert.equal((await launch('codex-main', { model: 'override-model' })).model, 'override-model');
   saveSubagentPrefs(profiles[0], { model: 'helper-default', effort: 'high' });
   t.after(() => saveSubagentPrefs(profiles[0], { model: null, effort: null }));
@@ -244,7 +244,10 @@ test('a helper starts on the machine default for its account, never the parent m
   assert.equal(explicit.model, 'explicit');
   assert.equal(explicit.effort, 'low');
   saveSubagentPrefs(profiles[0], { model: null });
-  assert.equal((await launch('codex-main')).model, 'machine-default');
+  assert.equal((await launch('codex-main')).model, 'parent-model');
+  sessions.get(parent.id).engineModel = 'reported-model';
+  assert.equal((await launch('codex-main')).model, 'reported-model');
+  assert.notEqual((await launch('claude-main')).model, 'reported-model');
 });
 
 test('helpers are offered the accounts new chats show: one row per account, hidden ones left out', async () => {
@@ -936,7 +939,7 @@ test('delegation instructions keep only rules; the details live in helm delegate
   assert.ok(claude.length < 800, 'it rides along in every session');
   assert.doesNotMatch(claude, /never your CLI's own subagent tool/);
   assert.match(claude, /on your account, short or long, use your Agent tool/);
-  assert.match(claude, /a fork if it needs this chat, model haiku for mechanical work, run_in_background false\./);
+  assert.match(claude, /a fork if it needs this chat, keep your model unless the owner asks for another, run_in_background false\./);
   assert.match(claude, /helm delegate for another account, tool or machine, or a worktree/);
   // The owner's own words, for every tool.
   for (const n of [note, claude]) {
@@ -945,7 +948,8 @@ test('delegation instructions keep only rules; the details live in helm delegate
   }
   for (const shared of [/Do the work yourself by default/, /never unset HELM_SESSION_ID/, /judgment calls yourself/, /Keep your helpers/]) assert.match(claude, shared);
   assert.match(note, /never unset HELM_SESSION_ID/);
-  assert.match(note, /--model cheap/);
+  assert.match(note, /Use your account and model unless the owner asks for another/);
+  assert.doesNotMatch(note + claude, /--model cheap|model haiku/);
   assert.match(note, /Keep your helpers/);
   assert.match(note, /only test chats that are not helpers/);
   assert.doesNotMatch(note, /--heavy|slot|--worktree|--cwd/, 'flags are looked up, not carried');
@@ -1512,4 +1516,5 @@ test('a Codex helper gets a copy of its parent only on the parent\'s model', asy
   };
   assert.equal(await helper('gpt-terra'), undefined, 'another model starts a new chat');
   assert.equal((await helper('gpt-sol'))?.parentModel, 'gpt-sol');
+  assert.equal((await helper())?.parentModel, 'gpt-sol', 'an unset model keeps the parent and its cache');
 });
