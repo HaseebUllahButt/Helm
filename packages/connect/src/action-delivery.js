@@ -27,7 +27,17 @@ export class ActionDelivery {
     } finally { rmSync(temp, { force: true }); }
   }
   status(actionId, caller) {
-    const record = this.read(this.path(actionId, caller));
+    const path = this.path(actionId, caller);
+    let record = this.read(path);
+    // Older drivers refused closed requests without marking the answer unsent.
+    // This exact error happened before any write. Other unknown outcomes stay held.
+    if (record?.state === 'checking' && typeof record.error === 'string'
+      && /^no pending request [A-Za-z0-9_.:-]+$/.test(record.error) && !this.active.has(path)) {
+      record = { ...record, state: 'done', error: {
+        message: 'This request is no longer open.', code: 'delivery_failed',
+      } };
+      this.save(path, record);
+    }
     return record ? { state: record.state, result: record.result, error: record.error } : { state: 'missing' };
   }
   async deliver(params, caller) {
@@ -48,7 +58,10 @@ export class ActionDelivery {
         const result = await this.sessions.answer(id, requestId, decision);
         this.save(path, { digest, state: 'done', result });
       } catch (error) {
-        this.save(path, { digest, state: 'checking', error: String(error.message ?? error) });
+        // Only a refusal before contacting the agent proves the answer did not run.
+        this.save(path, error.deliveryNotSent === true
+          ? { digest, state: 'done', error: { message: String(error.message ?? error), code: error.code ?? 'delivery_failed' } }
+          : { digest, state: 'checking', error: String(error.message ?? error) });
       }
       return this.status(actionId, caller);
     }).finally(() => this.active.delete(path));

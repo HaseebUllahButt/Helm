@@ -72,7 +72,7 @@ export class DriverEvents {
     // of a message the CLI refused before it echoed it.)
     if (e.type === 'turn.done' && !e.turnId && e.status === 'ok' && !card && !this.#sessions.events.activeTurn(s.id)) return;
     if (!card) trackDelegationReply(s, e);
-    let forwarded = e;
+    let forwarded = e, confirmedAfterAppend = null;
     // A helper started: from now on this chat's log is one place its
     // subagents are found, whatever CLI it is.
     if (e.type === 'item.start' && e.kind === 'subagent' && !s.spawned) { s.spawned = true; this.#core.save(); }
@@ -181,6 +181,11 @@ export class DriverEvents {
     // The CLI used a message handed to it mid-turn: from here it is part of
     // the conversation, at this point in it.
     if (e.type === 'input.consumed') return this.#core.delivery.consumed(s, e.text, e.inputId);
+    if (e.type === 'input.observed') {
+      const recovered = this.#core.delivery.matchUnconfirmed(s, null, e.clientId);
+      if (recovered) this.#core.delivery.confirmUnconfirmed(s, recovered);
+      return;
+    }
     // The CLI refused or lost a message handed to it mid-turn. It fails as
     // its own bubble rather than leaving it "sent" with nothing behind it.
     if (e.type === 'input.failed') return this.#core.delivery.consumed(s, e.text, e.inputId, e.error || 'The CLI did not take this message.');
@@ -217,13 +222,24 @@ export class DriverEvents {
       if (index >= 0) {
         const entry = awaiting[index];
         this.#core.deliveryState.removeAwaitingEcho(s.id, entry.turnId, d);
+        this.#core.delivery.confirmed(s, entry.turnId);
         forwarded = { ...forwarded, inputId: entry.turnId, ...(entry.source === 'agent' ? { source: 'agent' } : {}), ...(entry.checkpoint ? { checkpoint: entry.checkpoint } : {}) };
       }
       // Handed over too late for the turn it was typed into, the CLI runs
       // it as the next one instead; the echo is the client's cue.
       const steered = this.#core.deliveryState.steered(s.id);
       const i = steered?.findIndex((x) => forwarded.inputId != null ? x.turnId === forwarded.inputId : x.text.trim() === echo) ?? -1;
-      if (i >= 0) this.#core.deliveryState.removeSteered(s.id, steered[i].turnId);
+      if (i >= 0) {
+        this.#core.deliveryState.removeSteered(s.id, steered[i].turnId);
+        this.#core.delivery.confirmed(s, steered[i].turnId);
+      }
+      if (index < 0 && i < 0) {
+        const recovered = this.#core.delivery.matchUnconfirmed(s, forwarded.inputId, forwarded.turnId);
+        if (recovered) {
+          forwarded = { ...forwarded, inputId: recovered };
+          confirmedAfterAppend = recovered;
+        }
+      }
     }
     if (e.type === 'title') return this.#core.titles.titled(s, e.title, 'agent');
     // Every turn has always said what it cost and nothing added them up.
@@ -264,7 +280,8 @@ export class DriverEvents {
         this.#core.delegation.updateTeam(s);
       }
       // A wake-up that was cut short is not the task being stopped.
-      if (e.status === 'error' || (e.status === 'interrupted' && !wake)) {
+      const deliveryPending = s.recovery?.deliveryTurnId || s.recovery?.deliveryPending;
+      if (!deliveryPending && (e.status === 'error' || (e.status === 'interrupted' && !wake))) {
         const limited = e.status === 'error' && isUsageLimit(e);
         // A stop the owner asked for already says so (and whether helpers
         // were stopped too); the driver's own end-of-turn keeps those words.
@@ -278,7 +295,7 @@ export class DriverEvents {
           s.recovery.turnId = e.turnId;
           s.queuePaused = true;
         }
-      } else if (!wake && !s.stoppedAt) delete s.recovery;
+      } else if (!deliveryPending && !wake && !s.stoppedAt) delete s.recovery;
       if (e.usage) s.lastUsage = { ...e.usage, at: Date.now(), model: s.model || s.engineModel };
       // A CLI that reports tokens but no price (Codex, and most others)
       // still gets a figure, at the same published rates the Usage screen
@@ -313,6 +330,7 @@ export class DriverEvents {
     const event = this.#sessions.events.append(s.id, forwarded);
     s.lastSeq = event.seq;
     this.#sessions.emit('event', { id: s.id, event });
+    if (confirmedAfterAppend) this.#core.delivery.confirmUnconfirmed(s, confirmedAfterAppend, true);
     if (e.type === 'subagent.status' && e.status === 'idle' && s.delegation && !this.#sessions.hasActiveDelegations(s.id)
       && !['working', 'blocked', 'starting'].includes(s.status)) {
       const done = this.#sessions.events.tail(s.id, 500).findLast(entry => entry.type === 'turn.done');

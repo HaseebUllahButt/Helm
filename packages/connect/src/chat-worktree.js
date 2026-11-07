@@ -1,10 +1,11 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { addWorktree, worktreeBase } from './git.js';
 import { collapse, expand } from './paths.js';
+import { processStart } from './procinfo.js';
 
 /**
  * Every chat in an opted-in repo works in its own git worktree.
@@ -222,9 +223,38 @@ export async function renameChatBranch(record, title) {
  * too) and nothing is left uncommitted. Links Helm made do not count as
  * changes.
  */
+/**
+ * `helm ship` merges a chat's branch first and installs after. The merged,
+ * idle chat then looked finished: its folder went mid-install, and the
+ * agent, its background jobs and the install's own helper program lost the
+ * folder they ran in. A marker in the worktree's private git folder keeps
+ * it while that ship runs. A dead or reused process id does not count.
+ */
+const SHIP_MARK = 'helm-ship.json';
+const shipMark = async (dir) => join(await git(dir, ['rev-parse', '--absolute-git-dir']), SHIP_MARK);
+
+/** Keep this worktree until the returned function runs. Never throws. */
+export async function markShipping(dir, pid = process.pid) {
+  let file = null;
+  try {
+    file = await shipMark(dir);
+    writeFileSync(file, JSON.stringify({ pid, start: processStart(pid) }));
+  } catch { file = null; }
+  return () => { if (file) rmSync(file, { force: true }); };
+}
+
+export async function shipping(dir) {
+  try {
+    const { pid, start } = JSON.parse(readFileSync(await shipMark(dir), 'utf8'));
+    process.kill(pid, 0);
+    return !start || processStart(pid) === start;
+  } catch { return false; }
+}
+
 export async function keepReason(record, { merged = true } = {}) {
   const dir = expand(record.path);
   if (!existsSync(dir)) return 'gone';
+  if (await shipping(dir)) return 'shipping';
   const tip = await git(dir, ['rev-parse', `refs/heads/${record.branch}`]).catch(() => null);
   if (!tip) return 'no branch';
   if (merged && tip === record.start) return 'no commits';
@@ -292,7 +322,12 @@ export async function dropMergedBranch(record) {
   const repo = expand(record.repo);
   const tip = await git(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${record.branch}`]).catch(() => null);
   if (!tip) return true;
-  const base = await git(repo, ['rev-parse', '--verify', '--quiet', `${record.base}^{commit}`]).catch(() => null);
+  // A base branch deleted since (a helper's parent, merged) gives way to what
+  // the repo has checked out now, as restoreChatWorktree does. A tip that
+  // branch holds loses nothing when its own branch goes.
+  const now = await baseOf(repo).catch(() => null);
+  const base = await git(repo, ['rev-parse', '--verify', '--quiet', `${record.base}^{commit}`]).catch(() => null)
+    ?? (now && now !== record.branch ? await git(repo, ['rev-parse', '--verify', '--quiet', `${now}^{commit}`]).catch(() => null) : null);
   if (!base || !await exec('git', ['-C', repo, 'merge-base', '--is-ancestor', tip, base]).then(() => true, () => false)) return false;
   await git(repo, ['branch', '-D', record.branch]);
   return true;

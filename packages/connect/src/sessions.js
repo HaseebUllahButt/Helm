@@ -146,6 +146,7 @@ export class Sessions extends EventEmitter {
   checkpoints = new Checkpoints();
   /** sessionId -> reap timer */
   #reapers = new Map();
+  #stopped = false;
   /** A resumed task waits for its previous process to finish releasing. */
   #retiring = new Map();
   /** external id -> 'archived' | 'removed', for rows helm does not own */
@@ -448,9 +449,9 @@ export class Sessions extends EventEmitter {
         // Whatever was compacting before the daemon stopped has said nothing since.
         delete s.compacting;
         // A clone (or the agent's start after it) the restart cut off: the
-        // chat says so and offers to go again.
+        // chat says so, and resume() starts it again.
         if (s.clone && !['done', 'failed'].includes(s.clone.state)) {
-          s.clone = { ...s.clone, state: 'failed', error: 'Helm restarted before the repo was in.' };
+          s.clone = { ...s.clone, state: 'failed', error: 'Helm restarted before the repo was in.', restarted: true };
           if (s.status === 'starting') s.status = 'idle';
         }
         // Its setup command died with the daemon: it runs again from the
@@ -514,7 +515,7 @@ export class Sessions extends EventEmitter {
 
   /** Write a waiting index change now. Nothing waiting, nothing written. */
   flush() {
-    if (!this.#saveTimer) return;
+    if (!this.#saveTimer) return true;
     clearTimeout(this.#saveTimer);
     this.#saveTimer = null;
     pendingSaves.delete(this.#flushSave);
@@ -533,10 +534,12 @@ export class Sessions extends EventEmitter {
         { mode: 0o600 }
       );
       renameSync(`${INDEX_FILE}.tmp`, INDEX_FILE);
+      return true;
     } catch (error) {
       // Off the caller's stack now, so a full disk must not end the daemon.
       // The next change tries again.
       this.log(`could not save the session list: ${error.message}`);
+      return false;
     }
   }
 
@@ -850,8 +853,8 @@ export class Sessions extends EventEmitter {
       if (options.reservedSessionId) this.#saveStart(session.id);
       return session;
     } catch (error) {
-      // Only failures before chat setup can safely repeat under this number.
-      error.startRetrySafe = !setupStarted;
+      // Repeat only before setup, or after the driver confirms full cleanup.
+      error.startRetrySafe = !setupStarted || error.startRetrySafe === true;
       throw error;
     } finally { this.flush(); }
   }
@@ -932,7 +935,7 @@ export class Sessions extends EventEmitter {
     // worktree (session-worktrees.js); made once the chat has its id.
     const own = await this.#worktrees.plan({ cwd, quick, brain, clone, delegation });
     onStartSetup();
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning, own, reservedSessionId, chatWorktree: helperWorktree });
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning, own, startRetrySafe: !clone && !own, reservedSessionId, chatWorktree: helperWorktree });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -1079,7 +1082,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ reservedSessionId, cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null, cloning = null, own = null, chatWorktree = null }) {
+  async #startDriven({ reservedSessionId, cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null, cloning = null, own = null, startRetrySafe = false, chatWorktree = null }) {
     this.#rewinder.assertRewindUnlocked(null, cwd ? expand(cwd) : null);
     const id = reservedSessionId ?? randomBytes(6).toString('hex');
     // The chat's own worktree, before its agent starts there. When it
@@ -1200,10 +1203,14 @@ export class Sessions extends EventEmitter {
       this.#forgetSession(session.id);
       this.#deliveryState.clear(session.id);
       driver?.removeAllListeners?.('event');
-      await Promise.resolve(driver?.kill?.()).catch(() => {});
+      let stopped = true;
+      await Promise.resolve(driver?.kill?.()).catch(() => { stopped = false; });
       this.#dropQuickDir(session);
       await this.#worktrees.dropped(session);
       this.#save();
+      // No prompt has run. Plain fresh starts can repeat after full cleanup.
+      // Clone, worktree and resumed starts keep their setup reservations.
+      if (stopped && startRetrySafe && !engineSessionId && !forkFrom) err.startRetrySafe = true;
       throw err;
     }
   }
@@ -1441,6 +1448,7 @@ export class Sessions extends EventEmitter {
 
   /** Finished children release their runtime quickly; their conversation stays resumable. */
   #reap(s, status) {
+    if (this.#stopped) return;
     // A turn just ended: its work may have been merged back.
     if (status === 'idle' && s.chatWorktree) setTimeout(() => void this.#worktrees.tidy(s), 3000).unref?.();
     clearTimeout(this.#reapers.get(s.id));
@@ -1459,14 +1467,33 @@ export class Sessions extends EventEmitter {
         || d.backgroundTasks > 0) {
         this.#reap(s, 'idle'); return;
       }
-      const retiring = Promise.resolve().then(() => d.kill()).then(() => {
-        if (this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
-        if (this.#index.has(s.id)) this.emit('session', { ...wire(s), alive: false });
-      }, error => this.log(`[${s.id}] could not release idle provider: ${error.message}`)).finally(() => {
-        if (this.#retiring.get(s.id) === retiring) this.#retiring.delete(s.id);
-        if (this.#drivers.get(s.id) === d && this.#index.has(s.id)) this.#reap(s, s.status);
+      // A slow read must not block a new prompt. Only the actual release
+      // takes the retirement lock; recheck the chat after the read returns.
+      void Promise.resolve().then(() => d.canRelease?.() ?? true).then(eligible => {
+        if (this.#stopped || this.#drivers.get(s.id) !== d || this.#reapers.has(s.id)) return;
+        if (!eligible || d.status !== 'idle' || s.status !== 'idle'
+          || this.#deliveryState.isSending(s.id) || this.#deliveryState.hasQueue(s.id)
+          || d.pending?.size || this.events.pending(s.id).length || this.events.activeTurn(s.id)
+          || this.hasActiveDelegations(s.id) || d.backgroundTasks > 0) {
+          this.#reap(s, s.status); return;
+        }
+        const retiring = Promise.resolve().then(() => d.kill()).then(() => {
+          if (this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
+          // Codex does not save a rollout until the first prompt. A new,
+          // untouched chat must start fresh after its empty runtime closes.
+          if (s.engine === 'codex' && s.unsent && !s.hasInput && !s.external && !s.nativeSocket) {
+            s.engineSessionId = null; s.transcript = null; this.#save();
+          }
+          if (this.#index.has(s.id)) this.emit('session', { ...wire(s), alive: false });
+        }, error => this.log(`[${s.id}] could not release idle provider: ${error.message}`)).finally(() => {
+          if (this.#retiring.get(s.id) === retiring) this.#retiring.delete(s.id);
+          if (this.#drivers.get(s.id) === d && this.#index.has(s.id)) this.#reap(s, s.status);
+        });
+        this.#retiring.set(s.id, retiring);
+      }).catch(error => {
+        this.log(`[${s.id}] could not check the idle agent: ${error.message}`);
+        this.#reap(s, s.status);
       });
-      this.#retiring.set(s.id, retiring);
     }, s.delegation ? this.delegationIdleMs : IDLE_REAP_MS);
     t.unref?.();
     this.#reapers.set(s.id, t);
@@ -1621,13 +1648,14 @@ export class Sessions extends EventEmitter {
   renderVisual(id, params) {
     const s = this.get(id);
     if (!this.#index.has(id) || s.engine === 'shell') throw new Error('visual replies need a saved agent chat');
-    const { html, pages, total, kind, title, height, renderId, placement, url } = validateVisual(params);
+    const { html, pages, total, file, kind, title, height, renderId, placement, url } = validateVisual(params);
     const itemId = `visual-${renderId}`;
     // A PDF keeps each page picture on its own, and a short list of them as
     // its saved copy, so a device loads only the pages it shows.
     const parts = pages?.map(page => ({ ...this.events.putAttachment(id, { filename: `${renderId}.jpg`, mime: page.mime, data: page.data }), mime: page.mime, width: page.width, height: page.height }));
+    const whole = parts && file ? this.events.putAttachment(id, { filename: `${renderId}.pdf`, mime: 'application/pdf', data: file }) : undefined;
     const data = parts
-      ? Buffer.from(JSON.stringify({ total, pages: parts.map(({ ref, mime, width, height }) => ({ ref, mime, width, height })) })).toString('base64')
+      ? Buffer.from(JSON.stringify({ total, pages: parts.map(({ ref, mime, width, height }) => ({ ref, mime, width, height })), ...(whole ? { file: whole.ref } : {}) })).toString('base64')
       : Buffer.from(html).toString('base64');
     const ref = createHash('sha256').update(Buffer.from(data, 'base64')).digest('hex').slice(0, 32);
     const prior = this.events.tail(id, 0).find(e => e.type === 'item.start' && e.id === itemId);
@@ -1656,7 +1684,10 @@ export class Sessions extends EventEmitter {
     return { visual };
   }
 
-  /** A saved page, or for a PDF its page list, or one page picture by number. */
+  /**
+   * A saved page, or for a PDF its page list, one page picture by number, or
+   * with 'file' the PDF itself. An older PDF kept only its pictures.
+   */
   readVisual(id, ref, page) {
     this.get(id);
     if (!this.#index.has(id)) throw new Error('no such saved agent chat');
@@ -1667,7 +1698,12 @@ export class Sessions extends EventEmitter {
     const text = Buffer.from(data, 'base64').toString('utf8');
     if (found.visual.kind !== 'pdf') return { html: text };
     const list = JSON.parse(text);
-    if (page === undefined) return { total: list.total, pages: list.pages.map(({ width, height }) => ({ width, height })) };
+    if (page === undefined) return { total: list.total, pages: list.pages.map(({ width, height }) => ({ width, height })), ...(list.file ? { download: true } : {}) };
+    if (page === 'file') {
+      const whole = list.file && this.events.attachment(id, list.file);
+      if (!whole) throw new Error('this PDF has no saved file to download');
+      return { file: whole };
+    }
     const part = Number.isInteger(page) ? list.pages[page] : undefined;
     if (!part) throw new Error('no such page in this PDF');
     const picture = this.events.attachment(id, part.ref);
@@ -1698,11 +1734,13 @@ export class Sessions extends EventEmitter {
   detach(id, watcher) { return this.#viewers.detach(id, watcher); }
 
   async answer(id, requestId, decision) {
-    const s = this.get(id);
+    let s;
+    try { s = this.get(id); }
+    catch (error) { error.deliveryNotSent = true; throw error; }
     const ask = this.#natives.hookAsks.get(requestId);
     const asked = this.events.pending(id).find((request) => request.requestId === requestId);
     if (s.nativeCli) {
-      if (!ask || ask.id !== id) throw new Error('that question was already answered on the terminal');
+      if (!ask || ask.id !== id) throw Object.assign(new Error('This question was already answered in the terminal.'), { deliveryNotSent: true });
       // The same answer `claude -p` takes, printed by the waiting hook.
       let response;
       if (decision?.option === 'deny') response = { behavior: 'deny', message: decision.message || 'The owner declined this from Helm.' };
@@ -1717,7 +1755,7 @@ export class Sessions extends EventEmitter {
       return { ok: true, ...await this.#approvalNote(s, requestId, decision, asked?.title, decision?.option === 'deny') };
     }
     const d = this.#drivers.get(id);
-    if (!d) throw new Error('the agent is not running; that prompt is gone');
+    if (!d) throw Object.assign(new Error('The agent stopped. This request is no longer open.'), { deliveryNotSent: true });
     await d.answer(requestId, decision);
     // Only Claude's decline takes the owner's words with the answer.
     const carried = decision?.option === 'deny' && DRIVERS[s.driver] === DRIVERS.claude;
@@ -2285,14 +2323,27 @@ export class Sessions extends EventEmitter {
 
   // After a daemon restart (session-resume.js)
   adoptTerminals() { return this.#resumer.adoptTerminals(); }
-  async resume() {
+  async resume({ onRestored } = {}) {
     this.#worktrees.watch();
-    await this.#resumer.resume();
+    await this.#resumer.resume({ onRestored });
     // A setup the restart cut off runs again before the agent gets anything.
     for (const s of this.#index.values()) {
       if (s.chatWorktree?.setup !== 'running') continue;
       this.emit('session', s);
       this.#setUp(s, this.#worktrees.setupCommand(s));
+    }
+    // So does a clone. The old git died with the daemon and took its half
+    // folder; a part it left is this chat's own, and the retry clears it.
+    for (const s of this.#index.values()) {
+      if (!s.clone?.restarted || s.clone.state !== 'failed' || !this.cloner) continue;
+      delete s.clone.restarted;
+      void this.retryClone(s.id).catch((err) => {
+        if (this.#index.get(s.id) !== s) return;
+        s.clone = { ...s.clone, state: 'failed', error: `Helm could not start the clone again: ${err.message}` };
+        s.status = 'idle';
+        this.#save();
+        this.emit('session', s);
+      });
     }
   }
 
@@ -2326,6 +2377,7 @@ export class Sessions extends EventEmitter {
 
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
+    this.#stopped = true;
     this.flush();
     clearInterval(this.limitRecoveryTimer);
     this.limitRecoveryTimer = null;

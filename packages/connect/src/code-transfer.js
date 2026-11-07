@@ -1,3 +1,4 @@
+import { machineSigningInfo } from '@helm/protocol/network';
 /**
  * Code-only handoff.
  *
@@ -33,7 +34,6 @@ import { HELM_DIR, expand, HOME } from './paths.js';
 import { Worker } from 'node:worker_threads';
 
 const KEY_FILE = join(HELM_DIR, 'code_x25519');
-const SIGN_KEY_FILE = join(HELM_DIR, 'code_ed25519');
 const MAX_FILES = 20_000;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
@@ -129,40 +129,9 @@ export function createEphemeralCodeKey() {
 // hub can carry the work, but only the source can sign it.
 const SIGN_PREFIX = 'helm-handoff-v1:';
 
-function signPairFromFiles() {
-  if (!existsSync(SIGN_KEY_FILE) || !existsSync(`${SIGN_KEY_FILE}.pub`)) return null;
-  try {
-    const privateKey = createPrivateKey(readFileSync(SIGN_KEY_FILE));
-    const publicKey = createPublicKey({
-      key: readFileSync(`${SIGN_KEY_FILE}.pub`), type: 'spki', format: 'der',
-    });
-    return { privateKey, publicKey };
-  } catch {
-    return null;
-  }
-}
-
 /** The machine's signing identity; the private key never leaves it. */
 export function codeSigningInfo() {
-  let pair = signPairFromFiles();
-  if (!pair) {
-    if (pathExists(SIGN_KEY_FILE) || pathExists(`${SIGN_KEY_FILE}.pub`)) {
-      throw new Error('Helm code-transfer signing key is unreadable; remove both code_ed25519 files and restart');
-    }
-    mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
-    pair = generateKeyPairSync('ed25519');
-    writeFileSync(SIGN_KEY_FILE, pair.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600, flag: 'wx' });
-    writeFileSync(`${SIGN_KEY_FILE}.pub`, pair.publicKey.export({ type: 'spki', format: 'der' }), { mode: 0o600, flag: 'wx' });
-  }
-  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
-  chmodSync(HELM_DIR, 0o700);
-  chmodSync(SIGN_KEY_FILE, 0o600);
-  chmodSync(`${SIGN_KEY_FILE}.pub`, 0o600);
-  return {
-    privateKey: pair.privateKey,
-    publicKey: pair.publicKey,
-    codeSignPubkey: b64(pair.publicKey.export({ type: 'spki', format: 'der' })),
-  };
+  return machineSigningInfo();
 }
 
 /**

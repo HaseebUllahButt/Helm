@@ -126,7 +126,7 @@ export class AgyDriver extends Driver {
   async #spawn() {
     if (this.#pipe && !this.#dead) return;
     assertFolder(this);
-    await checkVersion(this.engine, this.cmd, this.env, AGY_MIN_VERSION, this.log);
+    void checkVersion(this.engine, this.cmd, this.env, AGY_MIN_VERSION, this.log);
 
     if (this.procId && this.procHost?.hasProc(this.procId)) {
       const pipe = this.procHost.procPipe(this.procId);

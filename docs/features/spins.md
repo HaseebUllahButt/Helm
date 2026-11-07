@@ -26,6 +26,17 @@ for websites that cannot run inside a frame.
   `share-flow`, `share-recovery`, `share-input`, `tunnel-flow`, `tunnel-ports`, `caddy`, `proxy`;
   `test/browser/private-links`.
 
+## The webhook Spin
+- **Rules:** webhook schedules on a machine share one Spin,
+  `helm-hooks-<id>`. It is not in `shares.json`: the running Helm lists it
+  while a webhook task is on. Stop (app or `helm share stop`) pauses every
+  webhook task there; `helm schedule resume` opens it again. An older
+  machine cannot stop it; the app says so.
+- **Prove:** `$V rpc schedule.save` a `"type":"webhook"` task on a chat.
+  Spins shows "Stop pauses its webhook tasks". Press Stop: the row goes and
+  a note names `helm schedule resume`.
+- **Tests:** `test/schedules`, `share-cli`.
+
 ## Private links
 - **Prove:** `test/browser/private-spin-e2e` runs the real sign-in, share
   gate, daemon tunnels and plain Vite behind a private TLS gateway. It
@@ -41,7 +52,9 @@ for websites that cannot run inside a frame.
 - **Access checks:** a known link keeps its decision for at most five seconds.
   The next request checks the source machine before it uses an old tunnel.
   A slow unrelated machine does not delay that check. Old discovery replies
-  cannot replace newer source replies. Unknown names share one discovery per
+  cannot replace newer source replies. Open WebSocket connections close at
+  expiry or after the next source check finds the link stopped or changed.
+  Unknown names share one discovery per
   second; a new name can wait up to one second on its first visit.
 - **Names:** app and CLI creation check other online machines. Offline
   machines do not reserve names. If two machines later report the same name,
@@ -78,3 +91,11 @@ for websites that cannot run inside a frame.
   other; an away machine is told when it is back (`pending`). A refused
   `in` half asks the other machine and goes if its half is gone.
 - **Tests:** `test/forward-service`, `share-private`, `tunnel-ports`.
+
+## Access checks
+
+- Refuse Helm's own port in new links and existing link files. Forwarded
+  requests cannot use local sign-in, even when their host says localhost.
+- Private links need a pass signed by a current machine. Old shared-key
+  cookies stop working. The browser gets a new pass through the app.
+- Test `test/security-routes`, `share-private`, `share-links`, and `loopback`.

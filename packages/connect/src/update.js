@@ -523,7 +523,7 @@ async function recoverUpdate(dir, git) {
   if (!state || state.dir !== dir) return null;
   if (state.phase === 'starting') {
     if (Date.now() >= state.deadline) await watchRelease({ id: state.id });
-    else throw new Error('The new release is still starting. Try again after recovery finishes.');
+    else throw Object.assign(new Error('The new release is still starting. Try again after recovery finishes.'), { code: 'RELEASE_STARTING' });
     return null;
   }
   if (state.phase === 'prepared' && state.publishing !== false) await restoreArtifacts(state);
@@ -681,7 +681,9 @@ async function finishUpdate(state, restart) {
   writeUpdateState(state);
   const worker = spawn(process.execPath, ['--input-type=module', '-e',
     `const m = await import(${JSON.stringify(import.meta.url)}); process.send('ready'); await m.watchRelease({id:${JSON.stringify(state.id)}});`],
-    { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: process.env });
+    // Its own folder: the caller's may be a chat worktree that is gone by
+    // now, and Node cannot start in a deleted folder.
+    { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: process.env, cwd: HELM_DIR });
   await new Promise((resolve, reject) => {
     worker.once('message', resolve);
     worker.once('error', reject);

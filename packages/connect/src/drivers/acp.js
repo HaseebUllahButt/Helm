@@ -38,6 +38,9 @@ import { modeFor, modesFor } from '../modes.js';
  *   onStdoutLine(driver, line)  consume a non-JSON stdout line (antigravity
  *                     prints its OAuth URL outside the protocol)
  *   onExit(driver)    after the process dies: clean up what prepare made
+ *   explainError(message)  null, or the words to show instead of a refused
+ *                     session/new (vibe's missing sign-in becomes the step
+ *                     the owner takes)
  *   resumeVerb        the session-resume method to try before 'session/load'
  *   promptWhileBusy   the agent folds a second session/prompt into the run
  *                     already going instead of refusing it (opencode 1's
@@ -200,7 +203,7 @@ export class AcpDriver extends Driver {
 
   async #start() {
     assertFolder(this);
-    if (this.spec.min) await checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
+    if (this.spec.min) void checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
     await this.spec.prepare?.(this);
 
     // The process may already be running: the terminal host holds agent
@@ -285,8 +288,10 @@ export class AcpDriver extends Driver {
         if (authenticated) created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
       }
       if (created.error) {
-        this.push('error', { message: `${this.engine} session/new failed: ${created.error.message}`, kind: 'init' });
-        throw new Error(`${this.engine} session/new failed: ${created.error.message}`);
+        const message = this.spec.explainError?.(created.error.message)
+          ?? `${this.engine} session/new failed: ${created.error.message}`;
+        this.push('error', { message, kind: 'init' });
+        throw new Error(message);
       }
       this.engineSessionId = created.result.sessionId;
       this.#takeOptions(created.result);
@@ -976,7 +981,7 @@ export class AcpDriver extends Driver {
   async answer(requestId, decision) {
     const req = this.pending.get(requestId);
     const raw = this.#requests.get(requestId);
-    if (!req || !raw) throw new Error(`no pending request ${requestId}`);
+    if (!req || !raw) throw Object.assign(new Error('This request is no longer open.'), { deliveryNotSent: true });
     const pick = (kind) => raw.options.find((o) => o.kind === kind)?.optionId;
     let outcome;
     if (decision.option === 'deny') {
@@ -1138,7 +1143,9 @@ export class AcpDriver extends Driver {
         // first a copy of the prompt, then the real title once the model has
         // written one - so whoever listens takes the latest, not the first.
         const title = typeof u.title === 'string' ? u.title.trim() : '';
-        if (title) this.push('title', { title });
+        // Vibe's first name is the start of the prompt, which is Helm's own
+        // <helm_instructions> block, cut short. That is not a name.
+        if (title && !/^<[\w-]*instructions\b/i.test(title)) this.push('title', { title });
         return;
       }
       default: return; // user_message_chunk and friends

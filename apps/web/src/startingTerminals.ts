@@ -1,5 +1,6 @@
 import { errorMessage } from './errors';
 import type { Client, Session } from './client';
+import { newMessageId } from '@helm/protocol/reliable-input';
 
 /**
  * New terminals whose machine has not answered yet.
@@ -39,6 +40,7 @@ export interface FirstScreen {
 const terminals = new Map<string, StartingTerminal>();
 const listeners = new Set<(t: StartingTerminal) => void>();
 const screens = new Map<string, FirstScreen & { stop: () => void }>();
+const starts = new Map<string, TerminalStart>();
 let seq = 0;
 
 const notify = (t: StartingTerminal) => { for (const l of listeners) l(t); };
@@ -73,9 +75,16 @@ function likelySize() {
 }
 
 /** Open a terminal and keep its first screen for whoever draws it. */
-export async function openTerminal(client: Client, envId: string, cwd: string): Promise<Session> {
-  const watcher = globalThis.crypto?.randomUUID?.() ?? `terminal-${Date.now()}-${Math.random()}`;
-  const size = likelySize();
+type TerminalStart = { startId: string; attach: { watcher: string; cols: number; rows: number } };
+function terminalStart(): TerminalStart {
+  return { startId: newMessageId(), attach: {
+    ...likelySize(), watcher: globalThis.crypto?.randomUUID?.() ?? `terminal-${Date.now()}-${Math.random()}`,
+  } };
+}
+
+export async function openTerminal(client: Client, envId: string, cwd: string, start = terminalStart()): Promise<Session> {
+  const { watcher, cols, rows } = start.attach;
+  const size = { cols, rows };
   // The machine pushes output from the moment it takes the screen, and a
   // push can arrive before the reply does. Listen first; keep this
   // terminal's pieces once its id is known.
@@ -87,7 +96,7 @@ export async function openTerminal(client: Client, envId: string, cwd: string): 
   });
   let r: { session: Session; attach?: { text: string | null; position?: number } };
   try {
-    r = await client.rpc(envId, 'session.start', { cwd, profileId: 'shell', attach: { ...size, watcher } }, 45_000);
+    r = await client.rpc(envId, 'session.start', { cwd, profileId: 'shell', ...start }, 45_000);
   } catch (e) { off(); throw e; }
   if (!r?.session) { off(); throw new Error('The machine did not open a terminal. Try again.'); }
   // An older machine does not send the screen; the terminal then asks for it.
@@ -110,6 +119,7 @@ export async function openTerminal(client: Client, envId: string, cwd: string): 
 export function beginTerminal(client: Client, envId: string, cwd: string, done: (t: StartingTerminal) => void): StartingTerminal {
   const t: StartingTerminal = { id: `term-${Date.now().toString(36)}-${++seq}`, envId, cwd, state: 'opening', since: Date.now() };
   terminals.set(t.id, t);
+  starts.set(t.id, terminalStart());
   attempt(client, t, done);
   return t;
 }
@@ -120,11 +130,12 @@ function attempt(client: Client, t: StartingTerminal, done: (t: StartingTerminal
   finishers.set(t.id, done);
   t.state = 'opening'; t.error = undefined; t.since = Date.now();
   notify(t);
-  openTerminal(client, t.envId, t.cwd).then(
+  openTerminal(client, t.envId, t.cwd, starts.get(t.id)).then(
     (session) => {
       t.session = session;
       t.state = 'opened';
       finishers.delete(t.id);
+      starts.delete(t.id);
       notify(t);
       done(t);
       terminals.delete(t.id);
@@ -142,4 +153,5 @@ export function retryTerminal(client: Client, id: string) {
 export function forgetTerminal(id: string) {
   terminals.delete(id);
   finishers.delete(id);
+  starts.delete(id);
 }

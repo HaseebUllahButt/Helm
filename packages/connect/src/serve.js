@@ -1,13 +1,13 @@
+import { newDeviceId } from '@helm/protocol/identity';
 import { assertRestoreReviewed } from './restore-guard.js';
 import { join as pathJoin } from 'node:path';
 import { hostname } from 'node:os';
 import { startRelay } from '@helm/relay';
 import {
   loadNetwork, saveNetwork, createNetwork, joinNetwork, allEndpoints,
-  describeSelf, machineKind,
+  describeSelf, machineKind, machineSigningInfo,
 } from '@helm/protocol/network';
 import { Daemon } from './agent.js';
-import { lanAddresses } from './net-addr.js';
 import { HELM_DIR } from './paths.js';
 import { findWebRoot } from './web-build.js';
 
@@ -154,19 +154,21 @@ export async function join({ code, at, name, port = 8787 }) {
     throw new Error('this machine is already in a network - run `helm leave` first');
   }
   const base = joinOrigin(at);
+  const self = newDeviceId();
+  const codeSignPubkey = machineSigningInfo().codeSignPubkey;
   const res = await fetch(`${base}/api/join`, {
     method: 'POST',
     redirect: 'error',
     signal: AbortSignal.timeout(10_000),
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ code, name: name || hostname() }),
+    body: JSON.stringify({ code, name: name || hostname(), self, codeSignPubkey }),
   });
   if (!res.ok) {
     throw new Error(`could not join: ${(await res.json().catch(() => ({}))).error ?? res.status}`);
   }
 
-  const { id, key, machines, devices, revoked, self: inviter, role } = await res.json();
-  joinNetwork({ id, key, name: name || hostname(), port, machines, devices, revoked });
+  const { id, key, machines, devices, revoked, self: inviter, role, admission } = await res.json();
+  joinNetwork({ id, key, self, name: name || hostname(), port, machines, devices, revoked, admission });
   if (previous) {
     // Invites and passwords minted in the temporary install network must
     // never become a route into the network we have just joined.
@@ -181,7 +183,8 @@ export async function join({ code, at, name, port = 8787 }) {
   const net = loadNetwork();
   const host = net.machines[inviter];
   if (host && !(host.endpoints ?? []).includes(base)) {
-    host.endpoints = [...(host.endpoints ?? []), base];
+    // Keep this invitation address local. Only the inviter signs its record.
+    net.bootstrap = { machine: inviter, url: base, at: Date.now() };
     saveNetwork(net);
   }
 
@@ -208,9 +211,7 @@ function report({
   // addresses we found ourselves, a tunnel we opened, an address supplied
   // with --advertise. None of it belongs under "other hubs".
   const mine = net.machines[net.self]?.endpoints ?? [];
-  const lan = ['127.0.0.1', '::1', 'localhost'].includes(host)
-    ? []
-    : lanAddresses().map((a) => `http://${a.address}:${port}`);
+  const lan = [];
   const others = allEndpoints(net).filter(
     (e) => !mine.includes(e) && !lan.includes(e) && e !== publicUrl
   );
@@ -248,9 +249,9 @@ function report({
   if (others.length) console.log(`  Other machines:    ${others.join('  ')}`);
 
   if (!publicUrl && !advertised.length && !others.length) {
-    console.log('\n  Reachable on this network only. To install the app to a phone');
-    console.log('  home screen you need https - either add a machine with a public');
-    console.log('  address, or run once with --tunnel.');
+    console.log('\n  Open Helm on this machine with helm open.');
+    console.log('  Use HTTPS for access from another device.');
+    console.log('  Add a machine with an HTTPS address, or use --tunnel.');
   }
   if (tunnelKind === 'permanent') {
     console.log('\n  This link is permanent - add it to your phone home screen.');
@@ -273,15 +274,14 @@ function report({
     console.log(`\n  ! no public address.\n`);
     console.log(tunnelError.split('\n').map((l) => `    ${l}`).join('\n'));
     console.log('\n    Carrying on without one - this machine is still reachable');
-    console.log('    from any other machine in the network, and on this network.');
+    console.log('    through another connected machine. Local access stays available.');
   }
   if (!webRoot) {
     console.log('\n  ! the web app is not built - run: npm --workspace @helm/web run build');
   }
 
   if (offerLink) {
-    console.log('\n  The password expires. Controllers you have already added do not -');
-    console.log('  they stay until you remove them, and survive restarts.');
+    console.log('\n  The device stays signed in until you remove it.');
   }
   console.log(`\n  Serving ${daemon.name}. Leave this running; ctrl-c to stop.\n`);
 }

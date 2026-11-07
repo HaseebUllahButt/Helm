@@ -51,8 +51,10 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
   white (`--need`). Yellow stays for warnings. A waiting chat is a plain row
   with a white dot that breathes three times, then stays still (endless
   motion redraws the window); its second line says what it wants.
-  Snooze and "Dismiss failure" sit behind the row's ⋯. A row with a request
-  opens the waiting box; a failure opens the chat.
+  A row with a request opens the waiting box; a failure opens the chat.
+  A row with a helper failure also has a ⋯ with "Dismiss failure".
+- **No snooze (owner, 2026-11-03):** a chat that needs you always shows as
+  needing you. On start the app deletes the old `helm.snoozed` browser value.
 - **Prove (driven 2026-10-28):** start two fake-ask chats with
   `$V rpc session.start` and `session.input`, then
   `$V click "<title>"` in the sidebar: the box opens with "2 of 2".

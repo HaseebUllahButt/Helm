@@ -128,6 +128,8 @@ export class ClaudeDriver extends Driver {
   #hosted = false;
   #exited = null;
   #ready = null;
+  /** Claude's answer to Helm's `initialize`: it lists the commands at once. */
+  #initialized = null;
   #starting = null;
   /**
    * `${messageId}#${index}` for text/thinking blocks, the tool_use id for
@@ -163,7 +165,7 @@ export class ClaudeDriver extends Driver {
   #capabilities = new Set();
   /** uuid -> { text, inputId } for messages steered into a turn and not yet read. */
   #inputs = new Map();
-  /** Commands advertised by this exact Claude Code process at init. */
+  /** Commands this exact Claude Code process accepts, with what each one does. */
   #commands = [];
   /**
    * What a command Claude answers itself (/context, /cost, /model) printed,
@@ -248,7 +250,7 @@ export class ClaudeDriver extends Driver {
   async #start() {
     if (this.#pipe) return;
     assertFolder(this);
-    await checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
+    void checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
     if (this.procId && this.procHost?.hasProc(this.procId)) {
       const pipe = this.procHost.procPipe(this.procId);
       if (pipe) {
@@ -358,7 +360,7 @@ export class ClaudeDriver extends Driver {
     } else {
       this.once('init', markReady);
     }
-    void this.#initialize();
+    this.#initialized = this.#initialize();
     this.#exited = new Promise((resolve) => {
       pipe.onExit(({ code, signal, stderr }) => {
         this.#pipe = null;
@@ -418,6 +420,12 @@ export class ClaudeDriver extends Driver {
     const request = this.#control({ subtype: 'initialize',
       hooks: { PreModelSwitch: [{ hookCallbackIds: [MODEL_SWITCH_HOOK] }] } });
     request.then((response) => {
+      const commands = response?.subtype === 'success' ? response.response?.commands : null;
+      if (Array.isArray(commands)) {
+        this.#commands = commands.filter((c) => typeof c?.name === 'string' && c.name).map((c) => ({
+          name: c.name, ...(typeof c.description === 'string' && c.description ? { description: c.description } : {}), source: 'Claude',
+        }));
+      }
       const on = response?.subtype === 'success' && atLeast(response.response?.claude_code_version, MODEL_SWITCH_SINCE);
       if (on !== this.#modelSwitchSignal) this.#setModelSwitchSignal(on);
     }, () => {});
@@ -456,7 +464,7 @@ export class ClaudeDriver extends Driver {
    * steps, so this lands when the step in flight ends - what typing while
    * the CLI works does. The replay says when it was used.
    */
-  async steer(text, attachments = [], { inputId } = {}) {
+  async steer(text, attachments = [], { inputId, clientId } = {}) {
     if (!this.#pipe || !this.#inTurn) throw new Error('claude has no active turn to steer');
     const content = [];
     if (text) content.push({ type: 'text', text });
@@ -470,7 +478,7 @@ export class ClaudeDriver extends Driver {
     if (!content.length) content.push({ type: 'text', text: '(empty message)' });
     // The replay names this uuid, which is how its read is matched to the
     // right waiting message even when two say the same thing.
-    const uuid = randomUUID();
+    const uuid = clientId ?? randomUUID();
     this.#inputs.set(uuid, { text: resultText(content), inputId });
     try {
       this.#write({
@@ -483,9 +491,15 @@ export class ClaudeDriver extends Driver {
     }
   }
 
+  /**
+   * A new Claude sends its `init` only with the first message, so a chat
+   * opened before any message waited for a list that never came. Its answer
+   * to `initialize` lists the commands at once, also for a process Helm took
+   * over after a restart.
+   */
   async availableCommands() {
     await this.start();
-    await this.#ready;
+    await Promise.race([this.#initialized, Promise.resolve(this.#ready).then(() => this.#commands.length ? null : this.#initialized)]);
     return this.#commands;
   }
 
@@ -520,7 +534,7 @@ export class ClaudeDriver extends Driver {
    */
   async answer(requestId, decision) {
     const req = this.pending.get(requestId);
-    if (!req) throw new Error(`no pending request ${requestId}`);
+    if (!req) throw Object.assign(new Error('This request is no longer open.'), { deliveryNotSent: true });
     const raw = req.raw;
     let response;
     if (decision.option === 'deny') {
@@ -539,7 +553,7 @@ export class ClaudeDriver extends Driver {
     }
     this.#write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } });
     this.push('permission.resolved', { requestId, decision: decision.option });
-    this.push('status', { status: 'working' });
+    this.push('status', { status: this.pending.size ? 'blocked' : 'working' });
   }
 
   /** With `cancel_queued`, a message handed over mid-reply is dropped with the reply. */
@@ -687,9 +701,11 @@ export class ClaudeDriver extends Driver {
     if (m.subtype === 'init') {
       this.engineSessionId = m.session_id ?? this.engineSessionId;
       this.#capabilities = new Set(m.capabilities ?? []);
+      // Only names here; keep what `initialize` said each one does.
+      const known = new Map(this.#commands.map((c) => [c.name, c]));
       this.#commands = (m.slash_commands ?? [])
         .filter((name) => typeof name === 'string' && name)
-        .map((name) => ({ name, source: 'Claude' }));
+        .map((name) => ({ ...known.get(name), name, source: 'Claude' }));
       // Whether a thinking-level change keeps the prompt cache is Claude's to
       // say: true when it sends effort inside the conversation, false when a
       // change rewrites the cached prefix, absent when it does not know.
@@ -844,6 +860,7 @@ export class ClaudeDriver extends Driver {
       if (this.#inTurn) {
         if (input) this.push('input.consumed', input);
         else if (!m.uuid) this.push('input.consumed', { text });
+        else this.push('input.observed', { clientId: m.uuid });
         return;
       }
       // The CLI accepted our message; this uuid is the turn. A steer that

@@ -122,9 +122,9 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       assert.equal(await view.evaluate(()=>window.calls.filter(c=>c.method==='session.delegate').length),0);
       await view.evaluate(()=>window.releaseCatalog());
       await view.getByRole('button',{name:/^model:/}).click();
-      // Model names only, the machine's default for the account already chosen.
+      // The parent's model stays selected when the account catalog arrives.
       await view.getByRole('option',{name:'normal-model',exact:true}).waitFor();
-      assert.equal(await view.getByRole('option',{name:'normal-model',exact:true}).getAttribute('aria-selected'),'true');
+      assert.equal(await view.getByRole('option',{name:'Parent Model',exact:true}).getAttribute('aria-selected'),'true');
       assert.equal(await view.getByRole('option',{name:/Default on|Inherit/}).count(),0);
       await view.getByRole('button',{name:'close',exact:true}).click();
       await view.getByRole('button',{name:/^thinking:/}).waitFor();
@@ -370,13 +370,7 @@ test('launch options stay folded until asked for, then create a linked child and
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.list'&&c.params.parentId==='parent')));
   await page.getByRole('button',{name:'Decline',exact:true}).click();
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.answer'&&c.params.id==='child'&&c.params.decision.option==='deny')));
-  await page.getByLabel('Message helper').fill('Keep the security checks intact');
-  const messagesBeforeComposition = await page.evaluate(() => window.calls.filter((call) => call.method === 'session.agent-send').length);
-  await page.getByLabel('Message helper').dispatchEvent('keydown', {key:'Enter',metaKey:true,isComposing:true});
-  assert.equal(await page.evaluate(() => window.calls.filter((call) => call.method === 'session.agent-send').length), messagesBeforeComposition);
-  await page.getByRole('button',{name:'Send message',exact:true}).click();
-  await page.getByRole('status').filter({hasText:'Helm sent the message.'}).waitFor();
-  assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.agent-send'&&c.params.id==='parent'&&c.params.to.id==='child'&&c.params.asUser===true&&c.params.text==='Keep the security checks intact')));
+  assert.equal(await page.getByLabel('Message helper').count(), 0, 'the card has no message box; Open chat is the way to talk');
   assert.equal(await page.evaluate(()=>window.opened),undefined);
   await page.getByRole('button',{name:'Open chat',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.opened),'child');
@@ -688,7 +682,7 @@ test('a CLI\'s subagent opens as a chat of its whole conversation', async () => 
         { seq:10, type:'turn.done', turnId:'native-1', status:'ok' });
       return out;
     };
-    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],nativeMessageActions:()=>[],resumeNativeMessage:async()=>({}),ackNativeMessage:()=>{},input:(env,params)=>client.rpc(env,'session.input',params),
       on: () => () => {},
       rpc: async (envId, method, params) => {
         (window.calls ??= []).push({ method, params });
@@ -744,7 +738,7 @@ test('a subagent whose parent can pass messages on takes one from its chat', asy
       startedAt:1, updatedAt:2, branch:null, toolUseId:'spawn1', last:'Saves twice.', canMessage:true };
     const parent = { id:'parent', title:'Fix intake', cwd:'/project', engine:'codex', status:'idle', driver:'codex', nativeCards:[card] };
     let sent = '';
-    const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
+    const client = {pendingActions:()=>[],resumeActions:async()=>[],nativeMessageActions:()=>[],resumeNativeMessage:async()=>({}),ackNativeMessage:()=>{},input:(env,params)=>client.rpc(env,'session.input',params),
       on: () => () => {},
       rpc: async (envId, method, params) => {
         (window.calls ??= []).push({ method, params });
@@ -902,37 +896,42 @@ test('a terminal chat has the Git button and the full Agents panel', async () =>
   } finally { await view.close(); }
 });
 
-test('helper message drafts survive card changes and another helper send', async () => {
+test('Enter starts a helper task with a pasted picture', async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react'; import {createRoot} from 'react-dom/client';
     import {Subagents} from './apps/web/src/session/Subagents';
-    const parent={id:'parent',engine:'codex',profileId:'fake',title:'Parent'};
-    const children=['first','second'].map(id=>({id,title:id,engine:'codex',profileId:'fake',status:'done',delegation:{parentId:'parent',status:'done'}}));
+    const parent={id:'parent',engine:'claude',profileId:'fake',title:'Parent'};
+    window.calls=[];
     const client={pendingActions:()=>[],resumeActions:async()=>[],on:()=>()=>{},rpc:async(env,method,params)=>{
-      if(method==='session.list')return {sessions:children};
-      if(method==='agent.list')return {agents:[]};
-      if(method==='session.delegation-result')return {status:'done',complete:true,output:'Finished.'};
-      if(method==='session.agent-send')return new Promise(resolve=>window.finishSend=()=>resolve({ok:true}));
+      window.calls.push({method,params});
+      if(method==='session.list')return {sessions:[]};
+      if(method==='agent.list')return {agents:[{id:'fake',engine:'claude',available:true,modes:[],models:[]}]};
+      if(method==='model.list')return {models:[],default:null};
+      if(method==='session.delegate')return {session:{id:'child',title:params.task,engine:'claude',profileId:'fake',status:'working',delegation:{parentId:'parent',status:'working'}}};
       return {ok:true};
     }};
-    createRoot(document.getElementById('root')).render(<Subagents client={client} env={{id:'local',name:'Laptop',online:true,info:{agentMessages:true}}} parent={parent} embedded onClose={()=>{}} />);
+    createRoot(document.getElementById('root')).render(<Subagents client={client} env={{id:'local',name:'Laptop',online:true,info:{helperAttachments:true}}} parent={parent} embedded onClose={()=>{}} />);
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   const view = await browser.newPage();
   try {
     await view.setContent('<div id="root"></div>'); await view.addScriptTag({ content: bundle.outputFiles[0].text });
-    const first = view.locator('[data-task="first"]'), second = view.locator('[data-task="second"]');
-    await first.click(); await view.getByLabel('Message helper').fill('First draft');
-    await second.click(); await view.getByLabel('Message helper').fill('Second draft');
-    await first.click();
-    assert.equal(await view.getByLabel('Message helper').inputValue(), 'First draft');
-    await view.getByRole('button', { name: 'Send message', exact: true }).click();
-    await view.waitForFunction(() => !!window.finishSend);
-    await second.click();
-    assert.equal(await view.getByLabel('Message helper').inputValue(), 'Second draft');
-    await view.evaluate(() => window.finishSend());
-    await view.getByRole('button', { name: 'Send message', exact: true }).waitFor();
-    await view.waitForFunction(() => !document.querySelector('.delegation-follow textarea').disabled);
-    assert.equal(await view.getByLabel('Message helper').inputValue(), 'Second draft');
-    await first.click(); assert.equal(await view.getByLabel('Message helper').inputValue(), '');
+    await view.getByRole('button', { name: /New task/ }).click();
+    const box = view.getByLabel('Task', { exact: true });
+    await box.fill('Look at this');
+    await box.evaluate(async (el) => {
+      const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+      const data = new DataTransfer();
+      data.items.add(new File([png], 'shot.png', { type: 'image/png' }));
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await view.getByRole('img', { name: 'Image 1' }).waitFor();
+    await box.press('Shift+Enter');
+    assert.equal(await view.evaluate(() => window.calls.filter((c) => c.method === 'session.delegate').length), 0, 'Shift+Enter makes a new line');
+    await box.press('Enter');
+    await view.waitForFunction(() => window.calls.some((c) => c.method === 'session.delegate'));
+    const sent = await view.evaluate(() => window.calls.find((c) => c.method === 'session.delegate').params);
+    assert.equal(sent.task, 'Look at this');
+    assert.equal(sent.attachments.length, 1);
+    assert.equal(sent.attachments[0].mime, 'image/jpeg');
   } finally { await view.close(); }
 });

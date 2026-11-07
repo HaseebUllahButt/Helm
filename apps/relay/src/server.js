@@ -1,3 +1,4 @@
+import { loadNetwork } from '@helm/protocol/network';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -28,7 +29,7 @@ export async function startRelay({
 
   const http = await import('./http.js');
   const {
-    makeHttpHandler, clientTokenFrom, identify, rotatePassword, ROLE, SECURITY_HEADERS,
+    makeHttpHandler, clientTokenFrom, identify, rotatePassword, ROLE, SECURITY_HEADERS, forwarded,
   } = http;
   const { createStaticHandler } = await import('./static.js');
   const { createWsLayer } = await import('./ws.js');
@@ -103,7 +104,7 @@ export async function startRelay({
 
   // The Close button of the Helm window on this desktop (app-window.js): only
   // a page this machine serves to itself may ask, so no other site can.
-  const windowPage = (req) => loopback(req) && !req.headers['x-forwarded-for']
+  const windowPage = (req) => loopback(req) && !forwarded(req)
     && LOCAL_HOST.test(String(req.headers.host || '')) && req.headers.origin === `http://${req.headers.host}`;
   const closeWindow = (res) => {
     const closed = closeAppWindow();
@@ -113,10 +114,15 @@ export async function startRelay({
   };
 
   const server = createServer((req, res) => {
+    if ((!loopback(req) && !req.socket.encrypted) || req.headers['x-forwarded-proto'] === 'http') {
+      res.writeHead(426, { 'content-type': 'text/plain' });
+      res.end('Use HTTPS to connect to Helm.');
+      return;
+    }
     // A share's host is never helm: everything on it belongs to the shared
     // app. Caddy's certificate check is answered to Caddy alone.
     const handled = shares.owns(req) ? shares.route(req, res)
-      : req.url.startsWith('/api/share/ask?') && loopback(req) && !req.headers['x-forwarded-for'] ? shares.ask(req, res).then(() => true)
+      : req.url.startsWith('/api/share/ask?') && loopback(req) && !forwarded(req) ? shares.ask(req, res).then(() => true)
       : req.url === '/api/window/close' && req.method === 'POST' && windowPage(req) ? closeWindow(res)
       : null;
     Promise.resolve(handled ?? (helmPath(req), routeHelm(req, res))).catch((err) => {
@@ -138,7 +144,29 @@ export async function startRelay({
       .map((p) => p.trim())
       .find((p) => p.startsWith('helm1.')) || null;
 
+  wss.on('connection', (ws, req) => {
+    const credential = tokenFromProtocols(req.headers['sec-websocket-protocol'])
+      || clientTokenFrom(req.headers.authorization);
+    // Recheck durable credentials without spending a one-use challenge twice.
+    let initial;
+    try {
+      initial = JSON.parse(Buffer.from(credential.split('.')[1], 'base64url').toString());
+    } catch { ws.close(1008); return; }
+    const timer = setInterval(() => {
+      const current = loadNetwork();
+      // A browser stays connected until it is removed: its expiry is only
+      // for older Helm (see authenticate).
+      if (!current || current.revoked?.[initial.sub] || current.revoked?.[initial.issuer]) ws.close(1008, 'Sign in again.');
+    }, 1000);
+    timer.unref();
+    ws.once('close', () => clearInterval(timer));
+  });
+
   server.on('upgrade', (req, socket, head) => {
+    if ((!loopback(req) && !req.socket.encrypted) || req.headers['x-forwarded-proto'] === 'http') {
+      socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n');
+      return;
+    }
     if (shares.owns(req)) {
       shares.upgrade(req, socket, head).catch(() => socket.destroy());
       return;
@@ -170,19 +198,13 @@ export async function startRelay({
     };
     if (!token) return reject();
 
-    const who = identify(token);
+    const proof = String(req.headers['sec-websocket-protocol'] || '').split(',').map(p => p.trim()).find(p => p.startsWith('helmproof.'))?.slice(10);
+    const who = identify(token, req, proof);
     if (!who) return reject();
     const { net, claims } = who;
 
-    // Membership is proved by the signature, not by whether we happen to have
-    // heard of this machine yet. A machine that joined via another hub will
-    // reach us before any gossip does, and turning it away - or quietly
-    // demoting it to a client, which is what a roster lookup used to do -
-    // would leave it permanently invisible as somewhere you can run agents.
-    const machine = claims.role === ROLE.MACHINE
-      ? net.machines[claims.sub]
-        ?? { id: claims.sub, name: url.searchParams.get('name') || claims.sub.slice(0, 8) }
-      : null;
+    // Authentication requires a pinned machine signing key and roster entry.
+    const machine = claims.role === ROLE.MACHINE ? net.machines[claims.sub] : null;
 
     // A machine attaches to exactly one hub as *itself*: its own, over
     // loopback, which is what lets a phone reach this machine through the hub
@@ -213,7 +235,7 @@ export async function startRelay({
           // The app served by this machine to a browser on this machine.
           // Caddy also comes over loopback, but with the public host and
           // X-Forwarded-For.
-          local: loopback(req) && LOCAL_HOST.test(String(req.headers.host || '')) && !req.headers['x-forwarded-for'],
+          local: loopback(req) && LOCAL_HOST.test(String(req.headers.host || '')) && !forwarded(req),
         })
       );
 

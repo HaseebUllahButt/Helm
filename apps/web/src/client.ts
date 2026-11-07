@@ -1,3 +1,4 @@
+import { HubAuth, browserProofKey, type HubTrust } from './hubAuth';
 /**
  * Talking to machines.
  *
@@ -39,6 +40,8 @@ export interface Environment {
     voice?: boolean;
     /** Named agent messages and reply history. */
     agentMessages?: boolean;
+    /** A new helper task can carry pasted pictures and files. */
+    helperAttachments?: boolean;
     runtime?: { version: string };
     /** Which helm this machine runs; null where it is not a git checkout. */
     version?: { commit: string; full?: string; time?: number; dirty?: boolean; dir?: string; branch: string; subject: string; updatable: boolean } | null;
@@ -456,7 +459,8 @@ export interface TransferResult {
 export interface TaskTransferResult {
   sent: boolean;
   requiresAcknowledgement?: boolean;
-  status?: 'running' | 'queued' | 'copying';
+  status?: 'running' | 'queued' | 'copying' | 'failed';
+  error?: string;
   /** A big project copying ahead of its task: how far it got. */
   progress?: { phase: 'pausing' | 'copying' | 'starting' | SendJob['phase']; folder: string; bytes: number; total: number | null; percent?: number; rate?: number | string | null; files?: SendJob['files']; eta?: number | null; jobId?: string };
   handoffId?: string;
@@ -647,10 +651,13 @@ const MAX_ENDPOINTS = 12;
 /** The origin this page was served from, if it was served from one. */
 const here = (): string[] => (typeof location === 'undefined' || !location.origin ? [] : [location.origin]);
 
-const reachableFromHere = (base: string) =>
-  typeof location === 'undefined' ||
-  location.protocol !== 'https:' ||
-  !base.startsWith('http://');
+const reachableFromHere = (base: string) => {
+  try {
+    const url = new URL(base);
+    return !url.username && !url.password && !url.search && !url.hash && url.pathname === '/'
+      && (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)));
+  } catch { return false; }
+};
 
 /** A hub that answered: where it is, how much of the network it can see. */
 interface Reached { base: string; reach: number; elapsed: number; machines: Set<string> }
@@ -677,7 +684,7 @@ const byReach = (a: Reached, b: Reached) => b.reach - a.reach || a.elapsed - b.e
  * "the best answer so far" and "the best answer there is" are two reads of
  * the same round rather than two rounds.
  */
-function startProbes(endpoints: string[], token: string, timeout: number, onReach?: (reached: Reached[]) => void) {
+function startProbes(endpoints: string[], token: string, timeout: number, onReach?: (reached: Reached[]) => void, authorize?: (base: string, signal: AbortSignal) => Promise<Record<string, string>>) {
   const statuses: number[] = [];
   // Answering at all is worth knowing separately from winning: a 401 is a
   // machine that is there and refusing us, which is not a dead address.
@@ -692,9 +699,11 @@ function startProbes(endpoints: string[], token: string, timeout: number, onReac
     const timer = setTimeout(() => ctl.abort(), timeout);
     const started = performance.now();
     try {
+      const proof = await authorize?.(base, ctl.signal);
       const res = await fetch(`${base}/api/network`, {
+        redirect: 'error',
         signal: ctl.signal,
-        headers: { authorization: `Bearer ${token}` },
+        headers: { authorization: `Bearer ${token}`, ...proof },
       });
       statuses.push(res.status);
       answered.add(base);
@@ -709,7 +718,7 @@ function startProbes(endpoints: string[], token: string, timeout: number, onReac
       });
       first();
       onReach?.(up.slice().sort(byReach));
-    } catch { /* unreachable, or too slow even for our patience */ }
+    } catch (error) { if ((error as { code?: string })?.code === 'unauthorized') statuses.push(401); }
     finally { clearTimeout(timer); }
   });
 
@@ -738,8 +747,8 @@ function startProbes(endpoints: string[], token: string, timeout: number, onReac
  * a normal network is everything. `later` resolves when the last probe
  * finishes, so a hub that was merely far away still gets counted.
  */
-function probeInTwoPhases(endpoints: string[], token: string, settleAfter = PROBE_MS, onReach?: (reached: Reached[]) => void) {
-  const round = startProbes(endpoints, token, PROBE_PATIENCE_MS, onReach);
+function probeInTwoPhases(endpoints: string[], token: string, settleAfter = PROBE_MS, onReach?: (reached: Reached[]) => void, authorize?: (base: string, signal: AbortSignal) => Promise<Record<string, string>>) {
+  const round = startProbes(endpoints, token, PROBE_PATIENCE_MS, onReach, authorize);
   let deadlineTimer: ReturnType<typeof setTimeout>;
   let graceTimer: ReturnType<typeof setTimeout>;
   const deadline = new Promise<void>((resolve) => { deadlineTimer = setTimeout(resolve, settleAfter); });
@@ -978,7 +987,7 @@ export class Client {
     this.rttSamples.delete(env);
   }
 
-  constructor(public endpoints: string[], public token: string) {
+  constructor(public endpoints: string[], public token: string, trust?: HubTrust, public auth = new HubAuth(token, trust)) {
     // Wherever this page came from is a hub that works: it just served the
     // page. Stored endpoints can be years of addresses old, so it goes in
     // whether or not the list remembers it.
@@ -1061,7 +1070,7 @@ export class Client {
     const endpoints = this.endpoints.filter(base => reachableFromHere(base)
       && (base === hub || (this.failedHubs.get(base) ?? 0) <= Date.now()));
     const round = startProbes(endpoints, this.token, PROBE_PATIENCE_MS,
-      reached => this.upgradeHub(reached, version, hub));
+      reached => this.upgradeHub(reached, version, hub), (base, signal) => this.auth.headers(base, 'GET', '/api/network', signal));
     this.reachCheck = round.settled.finally(() => { this.reachCheck = null; });
   }
 
@@ -1100,27 +1109,30 @@ export class Client {
   }
 
   private prepareSocket(hub: string) {
-    const ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/ws?chunks=1`, ['helm', this.token]);
-    let cancel!: () => void;
-    const ready = new Promise<WebSocket>((resolve, reject) => {
-      const timer = setTimeout(() => finish(new Error('socket connection timed out')), 20_000);
-      const finish = (error?: Error) => {
-        clearTimeout(timer);
-        this.socketCleanups.delete(cancel);
-        ws.onopen = ws.onerror = ws.onclose = null;
-        if (error) { try { ws.close(); } catch {} reject(error); }
-        else resolve(ws);
+    if (!reachableFromHere(hub)) throw new Error('Use HTTPS to connect to another machine.');
+    let ws: WebSocket | undefined;
+    let cancelled = false;
+    let finishSocket: ((error?: Error) => void) | undefined;
+    const cancel = () => { cancelled = true; finishSocket?.(new Error('connection superseded')); };
+    this.socketCleanups.add(cancel);
+    const ready = this.auth.protocols(hub).then(protocols => new Promise<WebSocket>((resolve, reject) => {
+      if (cancelled) { reject(new Error('connection superseded')); return; }
+      ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/ws?chunks=1`, protocols);
+      const timer = setTimeout(() => finishSocket?.(new Error('socket connection timed out')), 20_000);
+      finishSocket = (error?: Error) => {
+        clearTimeout(timer); this.socketCleanups.delete(cancel);
+        ws!.onopen = ws!.onerror = ws!.onclose = null;
+        if (error) { try { ws!.close(); } catch {} reject(error); } else resolve(ws!);
       };
-      cancel = () => finish(new Error('connection superseded'));
-      this.socketCleanups.add(cancel);
-      ws.onopen = () => finish();
-      ws.onerror = ws.onclose = () => finish(new Error('could not reach the hub'));
-    });
-    return { ws, ready, cancel };
+      ws.onopen = () => finishSocket?.();
+      ws.onerror = ws.onclose = () => finishSocket?.(new Error('could not reach the hub'));
+    })).finally(() => this.socketCleanups.delete(cancel));
+    return { get ws() { return ws; }, ready, cancel };
   }
 
   async connect(hubHint: string | null = null): Promise<void> {
     if (this.closed || this.connecting || (this.connected && !hubHint)) return;
+    if (this.auth.needsPairing) { this.emit('', 'unauthorized', {}); return; }
     if (!this.recoveryTimer) this.recoveryTimer = setInterval(() => this.recoverConnection(), 5000);
     const migrating = this.connected;
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
@@ -1156,7 +1168,7 @@ export class Client {
             const other = results.find(candidate => candidate.base !== warmHub);
             if (other) offerAlternative(other.base);
             if (hub) this.upgradeHub(results, version, hub);
-          });
+          }, (base, signal) => this.auth.headers(base, 'GET', '/api/network', signal));
         const selection = soon.then(probe => probe.best ? probe : available);
         const warm = prepared?.ready.then(() => {
           return { best: warmHub!, unauthorized: false, answered: new Set([warmHub!]) };
@@ -1175,7 +1187,7 @@ export class Client {
         }
         ({ best: hub, unauthorized } = probe);
         if (prepared && hub !== warmHub) { prepared.cancel(); prepared = undefined; }
-        if (prepared && prepared.ws.readyState !== WebSocket.OPEN) {
+        if (prepared && prepared.ws?.readyState !== WebSocket.OPEN) {
           try {
             hub = await Promise.race([prepared.ready.then(() => hub), alternative]);
             if (hub !== warmHub) { prepared.cancel(); prepared = undefined; }
@@ -1212,13 +1224,23 @@ export class Client {
     }
     if (version !== this.connectVersion) { prepared?.cancel(); return; }
     if (!hub) throw new Error('no machine in this network is reachable right now');
+    if (!reachableFromHere(hub)) throw new Error('Use HTTPS to connect to another machine.');
     if (this.closed) { prepared?.cancel(); this.connecting = false; return; }
     if (!migrating) this.relay = hub;
 
+    let protocols: string[] | undefined;
+    try { protocols = prepared?.ws ? undefined : await this.auth.protocols(hub); }
+    catch (error) {
+      this.connecting = false;
+      if ((error as { code?: string })?.code === 'unauthorized') this.emit('', 'unauthorized', {});
+      else if (!migrating) { this.lastError = String((error as Error)?.message || error); this.scheduleReconnect(); }
+      throw error;
+    }
+    if (this.closed || version !== this.connectVersion) { prepared?.cancel(); return; }
     await new Promise<void>((resolve, reject) => {
       const url = `${hub.replace(/^http/, 'ws')}/ws?chunks=1`;
       // Keep credentials out of URLs and access logs.
-      const ws = prepared?.ws ?? new WebSocket(url, ['helm', this.token]);
+      const ws = prepared?.ws ?? new WebSocket(url, protocols);
       if (!migrating) this.ws = ws;
       const assembly: Pick<Peer, 'fragments'> = { fragments: new Map() };
       let settled = false, stopped = false;
@@ -1370,7 +1392,7 @@ export class Client {
     // moves; folding them in here is what keeps a device working after the
     // address it was first added on has stopped existing.
     this.network()
-      .then((n) => { if (n.endpoints?.length) this.learn(n.endpoints); })
+      .then((n) => { if (n.endpoints?.length) this.learn(n.endpoints, n.trust); })
       .catch(() => {});
   }
 
@@ -1395,7 +1417,8 @@ export class Client {
    * is dropped on the strength of a failure that might just have been this
    * device being offline - because if it were, we would not be here.
    */
-  learn(endpoints: string[]) {
+  learn(endpoints: string[], trust?: HubTrust) {
+    if (trust) { this.auth.acceptTrust(trust); this.emit('', 'trust', { trust: this.auth.trust }); }
     // `here()` leads, because the cap is a real eviction: two machines
     // advertising a LAN address, a tailnet address, a public one and whatever
     // they had last week is already more than twelve, and the address that
@@ -1406,7 +1429,7 @@ export class Client {
     const advertised = new Set([...here(), ...endpoints]);
     const alive = this.endpoints.filter(
       (e) => advertised.has(e) || this.answered.has(e) || !this.tried.has(e));
-    const merged = [...new Set([...here(), ...endpoints, ...alive])].slice(0, MAX_ENDPOINTS);
+    const merged = [...new Set([...here(), ...endpoints, ...alive])].filter(base => this.auth.allowed(base)).slice(0, MAX_ENDPOINTS);
     const same =
       merged.length === this.endpoints.length &&
       merged.every((e, i) => e === this.endpoints[i]);
@@ -1570,8 +1593,10 @@ export class Client {
       if (!key?.startsWith(prefix)) continue;
       const action = JSON.parse(localStorage.getItem(key) || 'null');
       if (!/^[a-f0-9]{32}$/.test(action?.actionId ?? '') || typeof action.env !== 'string'
-        || !['session.deliver', 'session.answer-deliver'].includes(action.method) || typeof action.params?.id !== 'string'
+        || !['session.deliver', 'session.answer-deliver', 'session.native-message-deliver'].includes(action.method) || typeof action.params?.id !== 'string'
         || (action.method === 'session.deliver' && typeof action.params.data !== 'string')
+        || (action.method === 'session.native-message-deliver' && (typeof action.params.agentId !== 'string'
+          || typeof action.params.data !== 'string' || action.params.actionId !== action.actionId))
         || (action.params.attachments !== undefined && (!Array.isArray(action.params.attachments)
           || action.params.attachments.some((file: any) => typeof file?.filename !== 'string'
             || typeof file?.mime !== 'string' || typeof file?.data !== 'string')))) {
@@ -1582,14 +1607,15 @@ export class Client {
     return saved;
   }
   private confirmedActions = new Set<string>();
+  private confirmedNative = new Map<string, any>();
   private failedDeliveryActions = new Map<string, any>();
   deliveryStorageError = '';
   pendingActions(): any[] {
-    return this.savedActions().filter(action => !action.failure && !this.confirmedActions.has(action.actionId)
+    return this.savedActions().filter(action => action.method !== 'session.native-message-deliver' && !action.failure && !this.confirmedActions.has(action.actionId)
       && !this.failedDeliveryActions.has(action.actionId));
   }
   failedActions(): any[] {
-    const failed = new Map(this.savedActions().filter(action => action.failure && !this.confirmedActions.has(action.actionId)).map(action => [action.actionId, action]));
+    const failed = new Map(this.savedActions().filter(action => action.method !== 'session.native-message-deliver' && action.failure && !this.confirmedActions.has(action.actionId)).map(action => [action.actionId, action]));
     for (const [id, action] of this.failedDeliveryActions) failed.set(id, action);
     return [...failed.values()];
   }
@@ -1601,7 +1627,17 @@ export class Client {
       this.emit(action.env, 'delivery', { id: action.params.id });
     }
   }
-  private finishAction(action: any) {
+  private finishAction(action: any, result?: any) {
+    if (action.method === 'session.native-message-deliver') {
+      const confirmed = { ...action, confirmed: true, result };
+      try { this.saveAction(confirmed); this.confirmedNative.delete(action.actionId); }
+      catch {
+        this.confirmedNative.set(action.actionId, confirmed);
+        this.deliveryStorageError = 'Cannot save the message receipt. Keep this chat open.';
+        this.emit(action.env, 'delivery', { id: action.params.id });
+      }
+      return;
+    }
     this.failedDeliveryActions.delete(action.actionId);
     this.confirmedActions.add(action.actionId);
     try {
@@ -1636,6 +1672,32 @@ export class Client {
   resumeActions(env: string, id: string) {
     return Promise.allSettled(this.pendingActions().filter(item => item.env === env && item.params.id === id)
       .map(item => this.deliverAction(item)));
+  }
+  nativeMessageActions(env: string, id: string, agentId: string): any[] {
+    const actions = new Map(this.savedActions().filter(item => item.method === 'session.native-message-deliver'
+      && item.env === env && item.params.id === id && item.params.agentId === agentId && !item.failure)
+      .map(item => [item.actionId, item]));
+    for (const [key, item] of this.confirmedNative) {
+      if (item.env === env && item.params.id === id && item.params.agentId === agentId) actions.set(key, item);
+    }
+    return [...actions.values()];
+  }
+  ackNativeMessage(actionId: string) {
+    const action = this.confirmedNative.get(actionId) ?? this.savedActions().find(item => item.actionId === actionId
+      && item.method === 'session.native-message-deliver' && item.confirmed);
+    if (!action?.confirmed) return;
+    this.saveAction(action, true);
+    this.confirmedNative.delete(actionId);
+  }
+  abandonNativeMessage(env: string, id: string, agentId: string, actionId: string) {
+    const action = this.nativeMessageActions(env, id, agentId).find(item => item.actionId === actionId);
+    if (!action || action.confirmed) throw new Error('Cannot clear this message. Check the helper again.');
+    if (this.delivering.has(actionId)) throw new Error('Helm is still checking this message. Try again after it stops.');
+    this.saveAction(action, true);
+  }
+  resumeNativeMessage(action: any, timeout = 70_000): Promise<any> {
+    const done = action.confirmed ? Promise.resolve(action.result) : this.deliverAction(action, timeout);
+    return done.then(result => ({ ...result, actionId: action.actionId }));
   }
   private delivering = new Map<string, Promise<any>>();
   private deliveryProof = new Map<string, () => void>();
@@ -1675,7 +1737,7 @@ export class Client {
       try {
         const wait = Math.max(1, Math.min(10_000, deadline - Date.now()));
         const status = firstAttempt ? { state: 'missing' } : await this.call<any>(env, 'session.action-status',
-          { actionId, kind: method === 'session.deliver' ? 'input' : 'answer' }, wait);
+          { actionId, kind: method === 'session.deliver' ? 'input' : method === 'session.native-message-deliver' ? 'native' : 'answer' }, wait);
         if (signal.aborted) return;
         firstAttempt = false;
         if (status.state === 'done') {
@@ -1684,7 +1746,7 @@ export class Client {
             throw Object.assign(new Error(typeof status.error === 'string' ? status.error : status.error.message),
               { code: status.error.code ?? 'delivery_failed' });
           }
-          this.finishAction(action);
+          this.finishAction(action, status.result);
           return status.result;
         }
         if (status.state === 'missing') {
@@ -1695,7 +1757,7 @@ export class Client {
           let timer: ReturnType<typeof setTimeout> | undefined;
           let result: any;
           try {
-            result = await Promise.any([
+            result = method === 'session.native-message-deliver' ? await this.call(env, method, params, wait) : await Promise.any([
               this.call(env, method, params, wait),
               new Promise((resolve, reject) => {
                 const delay = Math.min(1500, wait / 2);
@@ -1714,7 +1776,7 @@ export class Client {
               throw Object.assign(new Error(typeof result.error === 'string' ? result.error : result.error.message),
                 { code: result.error.code ?? 'delivery_failed' });
             }
-            this.finishAction(action);
+            this.finishAction(action, method === 'session.deliver' ? result : result.result);
             return method === 'session.deliver' ? result : result.result;
           }
         }
@@ -1728,6 +1790,17 @@ export class Client {
             Object.entries(params).filter(([key]) => key !== 'messageId')), Math.max(1, deadline - Date.now()));
           this.saveAction(action, true);
           return result;
+        }
+        if (method === 'session.native-message-deliver' && error?.code === 'unknown_method') {
+          this.saveAction(action, true);
+          throw Object.assign(new Error('Update this machine before sending to its helper.'), { code: 'unknown_method' });
+        }
+        if (method === 'session.native-message-deliver'
+          && (finalFailure || ['invalid_argument', 'delivery_conflict'].includes(error?.code))) {
+          try { this.saveAction(action, true); }
+          catch { this.failAction(action, error); }
+          error.deliveryRejected = true;
+          throw error;
         }
         // Other coded failures can follow acceptance, such as a full receiver disk.
         // Read the receipt before treating those failures as final.
@@ -1756,6 +1829,16 @@ export class Client {
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
+    if (method === 'session.native-message') {
+      const held = this.nativeMessageActions(env, params.id, params.agentId)[0];
+      if (held && held.params.data !== params.data) {
+        return Promise.reject(new Error('Checking the previous message. Check this helper before sending again.'));
+      }
+      const actionId = held?.actionId ?? newMessageId();
+      const action = held ?? { env, method: 'session.native-message-deliver', actionId,
+        params: JSON.parse(JSON.stringify({ ...params, actionId })) };
+      return this.resumeNativeMessage(action, timeout) as Promise<T>;
+    }
     if (method === 'session.answer') {
       const held = this.pendingActions().find(item => item.env === env && item.method === 'session.answer-deliver'
         && item.params.id === params.id && item.params.requestId === params.requestId);
@@ -2166,7 +2249,7 @@ export class Client {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       if (this.peers.get(env) === peer) {
-        this.signal(env, { type: 'offer', sdp: pc.localDescription!.sdp, negotiation });
+        this.signal(env, { type: 'offer', ...await this.auth.offer(env, { sdp: pc.localDescription!.sdp, negotiation }) });
         offerSent = true;
         for (const candidate of localCandidates) this.signal(env, { type: 'candidate', candidate, negotiation });
         localCandidates.length = 0;
@@ -2291,10 +2374,13 @@ export class Client {
   }
 
   private async httpAt<T>(base: string, path: string, init: RequestInit = {}): Promise<T> {
+    if (!reachableFromHere(base)) throw new Error('Use HTTPS to connect to another machine.');
+    const proof = await this.auth.headers(base, init.method ?? 'GET', path, init.signal ?? undefined);
     const res = await fetch(`${base}${path}`, {
       ...init,
+      redirect: 'error',
       signal: init.signal ?? AbortSignal.timeout(20_000),
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...init.headers },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...init.headers, ...proof },
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -2316,7 +2402,7 @@ export class Client {
   network() {
     return this.http<{
       id: string; self: string; you: string;
-      machines: Environment[]; devices: Device[]; endpoints: string[];
+      machines: Environment[]; devices: Device[]; endpoints: string[]; trust?: HubTrust;
     }>('/api/network');
   }
 
@@ -2469,10 +2555,7 @@ export const LOOPBACK_HOST = /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])$/;
 /**
  * Would a secret sent to this address cross a network in the clear?
  *
- * A machine's hub is plain http on its LAN address by design - a phone on the
- * same wifi reaching a laptop directly is the fast path - so this is not an
- * error, and the app says so calmly. It is the one thing worth telling a
- * person before they pair or mint a link on a network they do not own.
+ * Remote HTTP is refused. Loopback HTTP stays available for local access.
  */
 export function isCleartext(url: string): boolean {
   try {
@@ -2482,7 +2565,7 @@ export function isCleartext(url: string): boolean {
 }
 
 export const CLEARTEXT_NOTE =
-  'This connection is not encrypted. Use it only on a network you trust.';
+  'Use HTTPS to connect to another machine.';
 
 /**
  * Sign in.
@@ -2501,12 +2584,14 @@ export const CLEARTEXT_NOTE =
  * accepts it only from loopback, and only if it matches the file in ~/.helm
  * that just handed it to us.
  */
-export async function login(endpoint: string, password: string, local?: string) {
+export async function login(endpoint: string, password: string, local?: string, proofKey?: string) {
   const base = endpoint.replace(/\/$/, '');
+  if (!reachableFromHere(base)) throw new Error('Use HTTPS to connect to another machine.');
   const res = await fetch(`${base}/api/auth/login`, {
+    redirect: 'error',
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ password, local, label: deviceLabel() }),
+    body: JSON.stringify({ password, local, proofKey: proofKey ?? await browserProofKey(), label: deviceLabel() }),
     // A stalled network must not leave the sign-in button busy for ever.
     signal: AbortSignal.timeout(30_000),
   });
@@ -2516,10 +2601,11 @@ export async function login(endpoint: string, password: string, local?: string) 
       body.error ?? (res.status === 401 ? 'wrong password' : `the machine returned ${res.status}`)
     );
   }
-  const { token, deviceId, endpoints } = await res.json();
+  const { token, deviceId, endpoints, trust } = await res.json();
   return {
     token: token as string,
     deviceId: deviceId as string,
+    trust: trust as HubTrust | undefined,
     endpoints: [...new Set<string>([base, ...(endpoints ?? [])])],
   };
 }

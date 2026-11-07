@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { SessionViewers } from '../packages/connect/src/session-viewers.js';
 
@@ -91,4 +94,27 @@ test('PTY attachment preserves the host snapshot position and supports older hos
   terminal.snapshot = async () => ({ text: 'old host' });
   assert.equal((await positioned.attach('chat')).position, undefined);
   positioned.stop();
+});
+
+
+test('native history grows its byte window even when a large tool result hides all older messages', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-native-window-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'chat.jsonl');
+  const records = Array.from({ length: 150 }, (_, i) => JSON.stringify({ type: 'assistant',
+    message: { id: 'm' + i, content: [{ type: 'text', text: 'Reply ' + i }] } }));
+  records.push(JSON.stringify({ type: 'progress', data: 'x'.repeat((4 << 20) + 1000) }));
+  writeFileSync(path, records.join('\n') + '\n');
+  const { viewers, sessions } = fixture(t, async () => ({}));
+  Object.assign(sessions.get(), { engine: 'claude', transcript: path });
+  sessions.events.tail = () => [];
+  const first = await viewers.messages('chat', { limit: 40 });
+  assert.equal(first.hasMore, true, 'a byte boundary does not mean the chat starts here');
+  const older = await viewers.messages('chat', { limit: 80, pageBytes: 8 << 20 });
+  assert.equal(older.messages.length, 80);
+  assert.equal(older.hasMore, true);
+  const all = await viewers.messages('chat', { limit: 200, pageBytes: 20 << 20 });
+  assert.equal(all.messages.length, 150);
+  assert.equal(all.hasMore, false);
+  assert.equal(all.messages[0].text, 'Reply 0');
 });

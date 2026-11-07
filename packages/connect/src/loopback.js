@@ -18,6 +18,8 @@ export function connectLoopback(port) {
 
 /** Check before publishing; never leave a probe connected to the app. */
 export async function checkSharePort(port) {
+  const { loadNetwork } = await import('@helm/protocol/network');
+  if (port === (loadNetwork()?.port ?? 8787)) throw new Error('Do not share the Helm port. Share the app port instead.');
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('give the local port to share, e.g. 3000');
   await new Promise((resolve, reject) => {
     const socket = connectLoopback(port);

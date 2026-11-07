@@ -1,8 +1,10 @@
 import { errorMessage } from '../errors';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Client, Environment, NativeAgent, NativeAgentDetail, Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { BackIcon } from '../Icon';
+import { Confirm } from '../Modal';
+import { useDraftStorage } from '../useDraftStorage';
 import { Composer } from './Composer';
 import { Transcript } from './Transcript';
 import { apply, emptyLog, type HelmEvent, type LogState } from './types';
@@ -26,16 +28,67 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
   const [card, setCard] = useState<NativeAgent>(agent);
   const [more, setMore] = useState(false);
   const [error, setError] = useState('');
-  const [draft, setDraft] = useState('');
+  const draftKey = `native:${JSON.stringify([parent.id, agent.id])}`;
+  const storage = useDraftStorage(env.id, draftKey);
+  const [draft, setDraft] = useState(storage.initial);
+  const revision = useRef(0);
+  const draftRef = useRef(draft);
+  const mounted = useRef(false);
+  const sendingRef = useRef(false);
+  const editDraft = (text: string) => {
+    revision.current += 1; draftRef.current = text; setDraft(text);
+    const saved = storage.save(text);
+    if (saved) {
+      try {
+        for (const action of client.nativeMessageActions(env.id, parent.id, agent.id)) {
+          if (action.confirmed) client.ackNativeMessage(action.actionId);
+        }
+      } catch (failure) { setError(errorMessage(failure)); }
+    }
+    return saved;
+  };
   const [sending, setSending] = useState(false);
   const [sentAt, setSentAt] = useState(0);
+  const [uncertain, setUncertain] = useState('');
+  const [confirmClear, setConfirmClear] = useState(false);
 
+  const showUncertain = () => {
+    try {
+      setUncertain(client.nativeMessageActions(env.id, parent.id, agent.id).find(action => !action.confirmed)?.actionId ?? '');
+    } catch { /* The delivery error already says storage is unavailable. */ }
+  };
+
+  useEffect(() => {
+    mounted.current = true;
+    let stopped = false;
+    const recover = async () => {
+      try {
+        for (const action of client.nativeMessageActions(env.id, parent.id, agent.id)) {
+          if (stopped) return;
+          const savedRevision = revision.current;
+          sendingRef.current = true; setSending(true); setError('Checking the previous message.');
+          const result = await client.resumeNativeMessage(action);
+          if (stopped) return;
+          const unchanged = revision.current === savedRevision && draftRef.current.trim() === action.params.data;
+          const cleared = unchanged ? editDraft('') : storage.isSaved();
+          if (cleared) client.ackNativeMessage(result.actionId);
+          setError(''); setUncertain(''); setSentAt(Date.now());
+        }
+      } catch (failure) { if (!stopped) { setError(errorMessage(failure)); showUncertain(); } }
+      finally { if (!stopped) { sendingRef.current = false; setSending(false); } }
+    };
+    void recover();
+    return () => { stopped = true; mounted.current = false; };
+  }, [client, env.id, parent.id, agent.id]);
+
+  const [historyLimit, setHistoryLimit] = useState(40);
+  const [readingEarlier, setReadingEarlier] = useState(false);
   useEffect(() => {
     let stopped = false, timer: ReturnType<typeof setTimeout> | undefined, seen = '';
     const load = async () => {
       try {
         const r = await client.rpc<{ agent: NativeAgentDetail; events: HelmEvent[]; more?: boolean }>(
-          env.id, 'session.native-agent', { id: parent.id, agentId: agent.id, full: true }, 30_000);
+          env.id, 'session.native-agent', { id: parent.id, agentId: agent.id, full: true, limit: historyLimit }, 30_000);
         if (stopped) return;
         setError('');
         setCard(r.agent);
@@ -49,29 +102,36 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
           setLog(next);
           setMore(!!r.more);
         }
+        setReadingEarlier(false);
         if (r.agent.status === 'working' || r.agent.status === 'blocked' || Date.now() - sentAt < AFTER_SEND_MS) timer = setTimeout(load, POLL_MS);
       } catch (failure) {
         if (stopped) return;
         setError(errorMessage(failure));
+        setReadingEarlier(false);
         setLog((current) => current.loaded ? current : { ...current, loaded: true });
         timer = setTimeout(load, POLL_MS * 3);
       }
     };
     void load();
     return () => { stopped = true; clearTimeout(timer); };
-  }, [client, env.id, parent.id, agent.id, sentAt]);
+  }, [client, env.id, parent.id, agent.id, sentAt, historyLimit]);
 
   const send = async () => {
     const text = draft.trim();
-    if (!text || sending) return;
+    if (!text || sendingRef.current) return;
+    const sentRevision = revision.current;
+    sendingRef.current = true;
     setSending(true); setError('');
     try {
-      await client.rpc(env.id, 'session.native-message', { id: parent.id, agentId: agent.id, data: text }, 70_000);
-      setDraft('');
+      const result = await client.rpc<{ actionId: string }>(env.id, 'session.native-message', { id: parent.id, agentId: agent.id, data: text }, 70_000);
+      if (!mounted.current) return;
+      const cleared = revision.current !== sentRevision ? storage.isSaved() : editDraft('');
+      if (cleared) client.ackNativeMessage(result.actionId);
+      setUncertain('');
       setSentAt(Date.now());
     } catch (failure) {
-      setError(errorMessage(failure));
-    } finally { setSending(false); }
+      if (mounted.current) { setError(errorMessage(failure)); showUncertain(); }
+    } finally { if (mounted.current) { sendingRef.current = false; setSending(false); } }
   };
 
   const engine = card.engine ?? agent.engine ?? parent.engine;
@@ -92,14 +152,22 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
         </div>
       </div>
       {error && <p className="error native-error" role="alert">{error}</p>}
+      {uncertain && !sending && <button className="ghost native-error" onClick={() => setConfirmClear(true)}>Check the previous message</button>}
+      {storage.error && <p className="error native-error" role="alert">{storage.error}</p>}
+      {confirmClear && <Confirm title="Clear the delivery check?"
+        body="The previous message may already have reached the helper. Check the helper first. If you send it again, it may arrive twice."
+        confirmLabel="I checked the helper" onCancel={() => setConfirmClear(false)} onConfirm={() => {
+          try { client.abandonNativeMessage(env.id, parent.id, agent.id, uncertain); setUncertain(''); setError(''); setConfirmClear(false); }
+          catch (failure) { setError(errorMessage(failure)); setConfirmClear(false); }
+        }} />}
       <Transcript
         turns={log.turns} status={working ? 'working' : 'idle'} loaded={log.loaded}
+        earlier={more} loadingEarlier={readingEarlier} onEarlier={() => { setReadingEarlier(true); setHistoryLimit(n => n + 40); }}
         empty={working ? 'Waiting for the helper…' : 'This helper left no messages.'}
       />
-      {more && <p className="native-foot" role="note">Showing the latest part.</p>}
       {canMessage ? (
         <Composer
-          draft={draft} setDraft={setDraft} engine={engine} keys={false} canAttach={false} preparing={sending}
+          draft={draft} setDraft={editDraft} engine={engine} keys={false} canAttach={false} preparing={sending}
           onSend={() => void send()}
           statusLine={<span className="native-foot-line">{engine === 'codex'
             ? 'Send directly to this helper'

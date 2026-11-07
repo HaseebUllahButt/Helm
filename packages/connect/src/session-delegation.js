@@ -2,13 +2,14 @@ import { randomBytes } from 'node:crypto';
 import { getProfiles } from './profiles.js';
 import { nativeWorking } from './native-subagents.js';
 import { ENGINES } from './engines.js';
-import { startPrefs, subagentPrefs } from './settings.js';
+import { modelPrefs, startPrefs, subagentPrefs } from './settings.js';
 import { codexHelperFork, delegationMode, delegationOutput, isWakeTurn, turnOf } from './delegation.js';
 import { nativeCodexSocket } from './drivers/codex.js';
 import { makeHelperWorktree } from './chat-worktree.js';
 import { authStatuses } from './auth.js';
 import { wire } from './session-wire.js';
 import { clip } from './session-text.js';
+import { acceptAttachments } from './session-attachments.js';
 
 const UNHOMED_DELEGATION_MS = 24 * 60 * 60_000;
 
@@ -133,10 +134,13 @@ export class SessionDelegation {
   }
 
   /** A task owned by its orchestrator, with durable output and configurable permissions. */
-  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId, worktree = false, hidden = false, tour = false }) {
+  async delegate({ id, cwd, profileId, model, mode, effort, task, attachments = [], callerThreadId, worktree = false, hidden = false, tour = false }) {
     if (typeof task !== 'string' || !task.trim() || (!tour && task.length > 32_000)) {
       throw new Error('a subagent task must contain 1–32000 characters');
     }
+    // Pictures and files pasted into the task go with its first message.
+    // Checked here, so a bad one starts no helper.
+    acceptAttachments(attachments);
     const parent = id ? this.#sessions.get(id) : null;
     const parentGeneration = parent?.stopGeneration ?? 0;
     // A Claude chat in a terminal is a parent too: its helpers' results are
@@ -167,11 +171,12 @@ export class SessionDelegation {
     }
     const auth = (await authStatuses([profile])).get(profile.id);
     if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
-    // A helper starts on the model chosen for it, else the helper default,
-    // else what this machine starts the account on (start() below) - never
-    // the parent's model, which is the parent's choice, not the account's.
+    // Keep the parent's model on the same engine so eligible forks can
+    // reuse its cache. Explicit and saved helper choices still win.
+    // Another engine uses its own account default.
     const defaults = subagentPrefs(profile);
-    model ||= defaults.model || undefined;
+    model ||= defaults.model || (parent?.engine === profile.engine
+      ? parent.engineModel || parent.model : null) || undefined;
     effort ||= defaults.effort;
     const selectedMode = delegationMode(profile.engine, parent?.mode, mode, defaults.mode || startPrefs(profile)?.mode, parent?.engine);
     // `--worktree`: the child gets its own checkout of the same repository
@@ -183,8 +188,9 @@ export class SessionDelegation {
       checkout = await makeHelperWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
       folder = checkout.path;
     }
+    // The model the helper will start on (sessions.start): its own, else the account's.
     const codexFork = !tour && codexHelperFork(parent, profiles.find(p => p.id === parent?.profileId), profile, folder, worktree,
-      profile.engine === 'codex' ? nativeCodexSocket(profile) : null);
+      profile.engine === 'codex' ? nativeCodexSocket(profile) : null, model || modelPrefs(profile)?.default || null);
     const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent && !tour, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
       ...(codexFork ? { codexFork } : {}),
       ...(checkout ? { worktree: { path: checkout.path, branch: checkout.branch, base: checkout.base, repo: checkout.repo } } : {}),
@@ -208,7 +214,7 @@ export class SessionDelegation {
     this.updateTeam(child);
     if (parent) this.#sessions.emit('session', parent);
     // Codex may keep the parent's context. Helm's own history starts here.
-    try { await this.#sessions.input(child.id, task.trim()); }
+    try { await this.#sessions.input(child.id, task.trim(), attachments?.length ? { attachments } : undefined); }
     catch (error) {
       throw new Error(`subagent ${child.id} could not receive its task: ${error.message}; read it with helm delegate-result ${child.id}`);
     }
@@ -248,13 +254,20 @@ export class SessionDelegation {
     // A parent still waiting reads again and takes the result itself.
     if (owner && !result.complete) this.#waiters.set(id, Date.now());
     if (owner && result.complete) {
-      this.#waiters.delete(id);
       const completed = events.findLast(e => e.type === 'turn.done' && !String(e.turnId).startsWith('local-'));
       if (completed) {
+        const previous = session.delegation.consumedSeq;
         session.delegation.consumedSeq = Math.max(session.delegation.consumedSeq ?? 0, completed.seq);
         // Persist before removing tickets: a restart in between still knows
         // not to revive or deliver a result that the parent already read.
         this.#core.save();
+        if (!this.#core.flush()) {
+          if (previous === undefined) delete session.delegation.consumedSeq;
+          else session.delegation.consumedSeq = previous;
+          this.#core.save();
+          throw new Error('Could not save the result receipt. Read the result again.');
+        }
+        this.#waiters.delete(id);
         for (const item of [...(this.#core.deliveryState.queue(parent.id) ?? [])]) {
           if (this.#consumedResult(parent, item.turnId)) this.#sessions.dequeue(parent.id, item.turnId);
         }

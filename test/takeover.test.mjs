@@ -37,7 +37,7 @@ setInterval(() => {}, 1000);
 const { loadPty } = await import('../packages/connect/src/pty.js');
 const { TerminalHost, NATIVE_SOCKET_PATH } = await import('../packages/connect/src/terminals.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
-const { resumeCommand } = await import('../packages/connect/src/takeover.js');
+const { resumeCommand, safePoint } = await import('../packages/connect/src/takeover.js');
 const { sharedConversation } = await import('../packages/connect/src/native-cli.js');
 const pty = await loadPty();
 
@@ -85,6 +85,47 @@ test('claude -c or --resume in the old window joins the shared terminal instead 
     'a later SessionStart replaces stale host metadata after clear');
 });
 
+test('a result already in the transcript is not a new safe point', async () => {
+  const path = join(root, 'old-result.jsonl');
+  const result = JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'done' }] } });
+  writeFileSync(path, result + '\n');
+  const cancel = new AbortController();
+  let checked;
+  const checkedAgain = new Promise(resolve => { checked = resolve; });
+  let calls = 0, finished = false;
+  const waiting = safePoint({ transcript: path, pid: process.pid, signal: cancel.signal, status: () => {
+    if (++calls === 2) setImmediate(checked);
+    return 'working';
+  } }).then(value => { finished = true; return value; });
+  try {
+    appendFileSync(path, '\n');
+    await checkedAgain;
+    assert.equal(finished, false, 'the prior step must not stop the current step');
+    appendFileSync(path, result + '\n');
+    assert.deepEqual(await waiting, { wasWorking: true });
+  } finally {
+    cancel.abort();
+    await waiting.catch(() => {});
+  }
+});
+
+test('a Pi tool step landing is a safe point, even though Pi records it as a toolResult message', async () => {
+  const path = join(root, 'pi-step.jsonl');
+  writeFileSync(path, JSON.stringify({ type: 'session', version: 3, id: 'pi1', cwd: work }) + '\n'
+    + JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'go' }] } }) + '\n');
+  const cancel = new AbortController();
+  const waiting = safePoint({ transcript: path, pid: process.pid, signal: cancel.signal, status: () => 'working' });
+  try {
+    appendFileSync(path, JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'bash' }] } }) + '\n');
+    await new Promise((r) => setTimeout(r, 200));
+    appendFileSync(path, JSON.stringify({ type: 'message', message: { role: 'toolResult', content: [{ type: 'text', text: 'done' }] } }) + '\n');
+    assert.deepEqual(await waiting, { wasWorking: true });
+  } finally {
+    cancel.abort();
+    await waiting.catch(() => {});
+  }
+});
+
 test('take over waits for the running step, then moves the same CLI into a shared terminal and carries on', { skip: !pty && 'no pty' }, async (t) => {
   // The CLI the owner started from their shell before Helm, mid-task. The
   // shell keeps the window open after the CLI leaves, as a real one does.
@@ -129,4 +170,20 @@ test('take over waits for the running step, then moves the same CLI into a share
   assert.equal(host.nativeSessions().find((s) => s.id === next.id).nativeChat, true);
   assert.match(shared, new RegExp(`ACCOUNT=${home}`));
   assert.throws(() => sessions.get(external.id), 'the old monitor row is gone');
+});
+
+test('a takeover wait saved before restart does not remain stuck', async t => {
+  class Runtime extends EventEmitter { async listLive() { return new Map(); } watch() {} }
+  const options = { nativeDiscovery: false, makeDriver: () => { throw new Error('must not start a driver'); } };
+  const original = new Sessions(new Runtime(), options);
+  const external = await original.resumeExternal({ engine: 'claude', account: 'claude', id: conversation, cwd: work });
+  external.takeover = 'waiting';
+  await original.stop();
+  const restarted = new Sessions(new Runtime(), options);
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  assert.notEqual(restarted.get(external.id).takeover, 'waiting');
+  restarted.flush();
+  const saved = JSON.parse((await import('node:fs')).readFileSync(join(process.env.HELM_DIR, 'sessions.json'), 'utf8'));
+  assert.notEqual(saved.sessions.find(s => s.id === external.id).takeover, 'waiting');
 });

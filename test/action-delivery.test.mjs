@@ -49,6 +49,24 @@ test('damaged saved records fail closed', async () => {
   await assert.rejects(delivery.deliver(request, 'phone'));
 });
 
+test('a refused approval has a final failure only when the agent was not contacted', async () => {
+  for (const notSent of [true, false]) {
+    let calls = 0;
+    const dir = join(root, `refused-${notSent}`);
+    const sessions = { answer: async () => {
+      calls++;
+      throw Object.assign(new Error('The agent stopped.'), { deliveryNotSent: notSent });
+    } };
+    const delivery = new ActionDelivery(sessions, { dir });
+    const result = await delivery.deliver(request, 'phone');
+    assert.equal(result.state, notSent ? 'done' : 'checking');
+    if (notSent) assert.deepEqual(result.error, { message: 'The agent stopped.', code: 'delivery_failed' });
+    const restarted = new ActionDelivery(sessions, { dir });
+    assert.deepEqual(await restarted.deliver(request, 'phone'), result);
+    assert.equal(calls, 1, 'neither final nor uncertain failures replay the answer');
+  }
+});
+
 
 for (const phase of ['acceptance', 'result']) test(`a full disk during ${phase} leaves no temporary file or repeatable approval`, async t => {
   const dir = join(root, 'full-' + phase);
@@ -85,5 +103,31 @@ for (const phase of ['acceptance', 'result']) test(`a full disk during ${phase} 
   } finally {
     mocked.mock.restore();
     syncBuiltinESMExports();
+  }
+});
+
+test('an older closed-request receipt becomes a final failure without answering again', async () => {
+  let calls = 0;
+  const delivery = new ActionDelivery({ answer: async () => { calls++; throw new Error('no pending request ff4f8010-289b-4ac7-9f4b-5bd95e84c93c'); } }, { dir: join(root, 'closed-old') });
+  const path = delivery.path(request.actionId, 'phone');
+  assert.equal((await delivery.deliver(request, 'phone')).state, 'checking');
+  const digest = delivery.read(path).digest;
+  assert.deepEqual(delivery.status(request.actionId, 'phone'), {
+    state: 'done', result: undefined, error: { message: 'This request is no longer open.', code: 'delivery_failed' },
+  });
+  assert.equal(delivery.read(path).digest, digest, 'keep the binding to the original answer');
+  assert.equal((await delivery.deliver(request, 'phone')).state, 'done');
+  assert.equal(calls, 1);
+  assert.equal(new ActionDelivery({}, {dir:delivery.dir}).status(request.actionId, 'phone').state, 'done');
+});
+
+test('other older approval errors remain uncertain and never repeat', async () => {
+  for (const error of ['connection closed', 'write failed: no pending request ask', 'no pending request ask\nwrite failed']) {
+    const delivery = new ActionDelivery({}, { dir: join(root, 'still-unknown-' + Buffer.from(error).toString('hex')) });
+    const path = delivery.path(request.actionId, 'phone');
+    const record = { digest: 'original', state:'checking', error };
+    delivery.save(path, record);
+    assert.equal(delivery.status(request.actionId, 'phone').state, 'checking');
+    assert.deepEqual(delivery.read(path), record);
   }
 });

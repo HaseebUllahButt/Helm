@@ -312,6 +312,66 @@ test('quiet for an hour with unmerged commits, the folder goes and the branch st
   await s.stop();
 });
 
+/** A chat with one commit of its own, quiet for an hour, so its folder is parked. */
+async function parkedChat(s, dir) {
+  const chat = await s.start({ cwd: dir, profileId: 'claudea' });
+  writeFileSync(join(chat.cwd, 'mine.txt'), 'only on the branch\n');
+  git(chat.cwd, 'add', 'mine.txt');
+  git(chat.cwd, 'commit', '-qm', 'mine');
+  const later = () => s.get(chat.id).updatedAt + UNUSED_MS;
+  assert.equal(await s.worktreeTidy(chat.id, later()), true);
+  assert.equal(s.get(chat.id).chatWorktree.parked, true);
+  return { chat, later, branch: s.get(chat.id).chatWorktree.branch };
+}
+const hasBranch = (dir, branch) => { try { git(dir, 'rev-parse', '--verify', `refs/heads/${branch}`); return true; } catch { return false; } };
+
+test('deleting a parked chat removes its branch once the work is merged, and keeps it before', async () => {
+  const dir = repo();
+  const { sessions: s } = sessions();
+  const kept = await parkedChat(s, dir);
+  await s.kill(kept.chat.id);
+  assert.ok(hasBranch(dir, kept.branch), 'unmerged work stays after the chat is deleted');
+
+  const merged = await parkedChat(s, dir);
+  git(dir, 'merge', '-q', '--no-edit', merged.branch);
+  await s.kill(merged.chat.id);
+  assert.ok(!hasBranch(dir, merged.branch), 'no chat is left to remove a merged branch later');
+  await s.stop();
+});
+
+test('a crash after removing a parked folder retains its branch cleanup step', async () => {
+  const dir = repo();
+  const { sessions: s } = sessions();
+  const { chat, later, branch } = await parkedChat(s, dir);
+  const info = s.get(chat.id).chatWorktree;
+  delete info.parked;
+  info.parking = true;
+  assert.equal(await s.worktreeTidy(chat.id, later()), false, 'unmerged work remains');
+  assert.equal(info.parking, undefined);
+  assert.equal(info.parked, true, 'recovery records that the folder removal completed');
+  git(dir, 'merge', '-q', '--no-edit', branch);
+  assert.equal(await s.worktreeTidy(chat.id, later()), true);
+  assert.ok(!hasBranch(dir, branch));
+  await s.stop();
+});
+
+test('a parked branch whose base branch went is removed once the current branch holds it', async () => {
+  const dir = repo();
+  git(dir, 'checkout', '-q', '-b', 'helm/parent');
+  const { sessions: s } = sessions();
+  const { chat, later, branch } = await parkedChat(s, dir);
+  assert.equal(s.get(chat.id).chatWorktree.base, 'helm/parent');
+  // The parent merges the work, then its own branch into main, and deletes it.
+  git(dir, 'merge', '-q', '--no-edit', branch);
+  git(dir, 'checkout', '-q', 'main');
+  git(dir, 'merge', '-q', '--no-edit', 'helm/parent');
+  git(dir, 'branch', '-q', '-D', 'helm/parent');
+  assert.equal(await s.worktreeTidy(chat.id, later()), true);
+  assert.ok(!hasBranch(dir, branch));
+  assert.equal(s.get(chat.id).chatWorktree.parked, undefined);
+  await s.stop();
+});
+
 test('a helper started with --worktree gets the record a chat has: linked, tidied and rebuilt', async () => {
   const dir = repo({ config: null });
   const { sessions: s, drivers } = sessions();
@@ -401,4 +461,25 @@ test('a restart closes an idle agent whose folder was removed by hand, and does 
   assert.ok(existsSync(kept.cwd));
   await next.stop();
   await first.stop();
+});
+
+test('a ship marker keeps a worktree only while its process lives', async () => {
+  const { markShipping, shipping } = await import('../packages/connect/src/chat-worktree.js');
+  const { spawn, execFileSync } = await import('node:child_process');
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'helm-ship-mark-'));
+  try {
+    execFileSync('git', ['init', '-q', dir]);
+    assert.equal(await shipping(dir), false);
+    const unmark = await markShipping(dir);
+    assert.equal(await shipping(dir), true);
+    unmark();
+    assert.equal(await shipping(dir), false);
+    const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+    await markShipping(dir, child.pid);
+    await new Promise((done) => child.once('exit', done));
+    assert.equal(await shipping(dir), false, 'a dead ship does not hold the folder');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

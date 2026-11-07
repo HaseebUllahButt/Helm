@@ -1,6 +1,6 @@
 import dgram from 'node:dgram';
 import { proofOf } from '@helm/protocol/identity';
-import { loadSettings } from './settings.js';
+import { bootstrapAddress } from '@helm/protocol/network';
 import { broadcastAddresses, isPrivateV4, lanIsRoutable } from './net-addr.js';
 
 /**
@@ -51,10 +51,9 @@ export function announceTag(net, id, period) {
  * real network unless they ask for it, so a test daemon never shouts on the
  * owner's wifi.
  */
-export function lanDiscoveryEnabled(cfg = loadSettings(), env = process.env) {
-  if (cfg?.lanDiscovery === false || env.HELM_LAN_DISCOVERY === '0') return false;
-  if (env.HELM_LAN_DISCOVERY === '1') return true;
-  return env.HELM_NO_SERVICE !== '1';
+export function lanDiscoveryEnabled() {
+  // Keep discovery off until it can advertise an encrypted LAN transport.
+  return false;
 }
 
 /**
@@ -80,6 +79,8 @@ export function withHeardAddresses({ urls, net, self, mine = new Set(), heard, c
     if (id === self || net.revoked?.[id]) continue;
     for (const url of machine.endpoints ?? []) machineFor.set(url, id);
   }
+  const boot = bootstrapAddress(net);
+  if (boot) machineFor.set(boot.url, boot.machine);
   for (const { url, id } of heard) {
     if (id === self || mine.has(url) || net.revoked?.[id]) continue;
     const listed = net.machines?.[id]?.endpoints;

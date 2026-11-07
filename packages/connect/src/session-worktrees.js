@@ -165,6 +165,17 @@ export class SessionWorktrees {
     const path = s.chatWorktree.path;
     let removed = null;
     try {
+      if (s.chatWorktree.parking) {
+        // A crash can land on either side of the folder removal. Recover
+        // from the disk before deciding whether its branch can go.
+        const missing = !existsSync(expand(path));
+        for (const o of this.#sharing(s)) {
+          delete o.chatWorktree.parking;
+          if (missing) o.chatWorktree.parked = true;
+        }
+        this.#core.save();
+        this.#sessions.flush();
+      }
       if (s.chatWorktree.parked) {
         // A message now waits, then rebuilds the folder from base if the branch went.
         this.#removing.set(path, new Promise((resolve) => { removed = resolve; }));
@@ -182,9 +193,17 @@ export class SessionWorktrees {
       for (const o of this.#sharing(s)) await this.#sessions.release(o.id);
       if (this.#core.index.get(s.id) !== s || !idle() || await verdict() !== action) return false;
       const park = action === 'park';
+      if (park) {
+        for (const o of this.#sharing(s)) o.chatWorktree.parking = true;
+        this.#core.save();
+        this.#sessions.flush();
+      }
       await removeChatWorktree(s.chatWorktree, { keepBranch: park });
       if (park) {
-        for (const o of this.#sharing(s)) o.chatWorktree = { ...o.chatWorktree, parked: true };
+        for (const o of this.#sharing(s)) {
+          o.chatWorktree = { ...o.chatWorktree, parked: true };
+          delete o.chatWorktree.parking;
+        }
         this.#core.save();
       }
       this.#sessions.log(`[${s.id}] removed ${park ? 'parked' : merged ? 'merged' : 'unused'} worktree ${s.chatWorktree.path} (${s.chatWorktree.branch}${park ? ' kept' : ''})`);
@@ -204,12 +223,17 @@ export class SessionWorktrees {
     return [s, ...[...this.#core.index.values()].filter((o) => o !== s && o.chatWorktree?.path === s.chatWorktree?.path)];
   }
 
-  /** A deleted chat takes its worktree along when nothing in it would be lost. */
+  /**
+   * A deleted chat takes its worktree along when nothing in it would be lost.
+   * A parked one has only its branch: it goes if merged, because no chat is
+   * left to check it later. Unmerged work stays.
+   */
   async dropped(s) {
-    if (!s.chatWorktree || !existsSync(expand(s.chatWorktree.path))) return;
+    if (!s.chatWorktree) return;
     if ([...this.#core.index.values()].some((o) => o !== s && o.chatWorktree?.path === s.chatWorktree.path)) return;
     try {
-      if (!await keepReason(s.chatWorktree, { merged: false })) await removeChatWorktree(s.chatWorktree);
+      if (!existsSync(expand(s.chatWorktree.path))) await dropMergedBranch(s.chatWorktree);
+      else if (!await keepReason(s.chatWorktree, { merged: false })) await removeChatWorktree(s.chatWorktree);
     } catch (err) { this.#sessions.log(`[${s.id}] could not remove its worktree: ${err.message}`); }
   }
 }

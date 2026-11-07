@@ -33,8 +33,15 @@
   folder, clone, or terminal setup can leave no saved chat. Keep the queued
   words and stop with a recovery error; do not repeat uncertain setup.
   A refusal before setup can retry under the same start number after its
-  cause is fixed. Never treat a crash or partial setup as a safe refusal.
-- **Tests:** `test/start-receipts`, `test/startingChats`; `test/browser/new-chat`, `chat-home`, `onboarding`;
+  cause is fixed. A fresh driver failure can also retry after full cleanup,
+  with no clone, worktree or resumed chat setup. Never repeat partial setup.
+  Codex chat setup gets 90 seconds, in its native daemon and in Helm's own;
+  discovery reads keep their shorter wait. The old five-second start timeout
+  can retry.
+- **After a restart (owner, 2026-11-05):** new chats and sends wait only
+  until the saved chats are read back, never for old agents to reconnect.
+  One stuck reconnect after a reboot held every new chat for 13 minutes.
+- **Tests:** `test/start-receipts`, `test/startingChats`, `test/reattach`; `test/browser/new-chat`, `chat-home`, `onboarding`;
   `test/quick-chat`, `picker-prefs`, `onboarding`.
 
 ## First chat setup
@@ -76,8 +83,9 @@
   shows "Could not clone …" and "Try again" under "Needs you".
 - **Traps:** the clone uses gh's git setting (ssh on the laptop). A gh too
   old for `--json` (2.45 on Ubuntu 24.04) is read from plain `gh auth
-  status` words. A restart mid-clone offers "Try again" and first clears the
-  half-made folder this chat started.
+  status` words. A restart mid-clone starts the clone again by itself, like a
+  cut-off setup command, and first clears the half-made folder this chat
+  started. Waiting messages still go. If it cannot start, "Try again" stays.
 - **Tests:** `test/github-repos`, `test/clone-chat`.
 
 ## Accounts, models, defaults

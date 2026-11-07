@@ -1,8 +1,9 @@
 import { errorMessage } from '../errors';
+import { WindowedRow, useEarlierOnScroll } from './WindowedRow';
 import { useCopySelection } from '../useCopySelection';
 import type { Transcribe } from './voice';
 import { useDismiss } from '../useDismiss';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode, type SetStateAction } from 'react';
 import { Confirm, TextPrompt } from '../Modal';
 import { recacheWarning, type Recache } from '@helm/usage/recache';
 import { Markdown } from '../Markdown';
@@ -14,12 +15,12 @@ import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { nativeConversation } from './nativeView';
 import { CompactionLine, GoneImage } from './Transcript';
-import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader } from './VisualReply';
+import { CanvasContext, VisualReply, Visuals, type CanvasVisuals, type VisualReader, visualPart } from './VisualReply';
 import { useChatKeys, useDeleteKey } from './chatKeys';
 import { Canvas, chatPages, useCanvas } from './Canvas';
 import { isImageAttachment, numbered, prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
-import { loadDraft, saveDraft } from '../draftStore';
+import { useDraftStorage } from '../useDraftStorage';
 import { userMessage } from './userMessage';
 import { useGitStatus } from './gitStatus';
 import { ThreadDetails, type DetailsTab } from './ThreadDetails';
@@ -72,10 +73,16 @@ export function SessionView({ client, env, machines, session, terminals = [], on
 }) {
   const isShell = session.engine === 'shell';
   const isExternal = !!session.external;
-  const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...(page === undefined ? {} : { page }) }, 60_000), [client, env.id, session.id]);
+  const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...visualPart(page) }, 60_000), [client, env.id, session.id]);
   const [messages, setMessages] = useState<Message[] | null>(() => keptMessages.get(`${env.id}:${session.id}`) ?? null);
   // What is on screen stays in memory for the next visit (see keptMessages).
   useEffect(() => { if (messages?.length) keepMessages(`${env.id}:${session.id}`, messages); }, [messages, env.id, session.id]);
+  const currentMessages = useRef(messages);
+  currentMessages.current = messages;
+  const messageLimit = useRef(Math.max(40, messages?.length ?? 0));
+  const [moreMessages, setMoreMessages] = useState(!!messages?.length);
+  const historyRequested = useRef(false);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
   /** The messages last shown, as text: a read that brings back the same chat changes nothing. */
@@ -93,8 +100,23 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const [compacting, setCompacting] = useState(session.compacting || false);
   // When it entered the status it is in, for "working 14m" beside the word.
   const [statusAt, setStatusAt] = useState(session.updatedAt);
-  const [draft, setDraft] = useState(() => loadDraft(env.id, session.id));
-  useEffect(() => saveDraft(env.id, session.id, draft), [env.id, session.id, draft]);
+  const storage = useDraftStorage(env.id, session.id);
+  const [draft, setDraftValue] = useState(storage.initial);
+  const draftRef = useRef(draft);
+  const setDraft = (next: SetStateAction<string>) => {
+    const value = typeof next === 'function' ? next(draftRef.current) : next;
+    draftRef.current = value;
+    setDraftValue(value);
+    storage.save(value);
+  };
+  useEffect(() => {
+    const restore = (event: Event) => {
+      const { env: machine, id, text } = (event as CustomEvent).detail;
+      if (machine === env.id && id === session.id) setDraft(current => [text, current].filter(Boolean).join('\n\n'));
+    };
+    window.addEventListener('helm:restore-draft', restore);
+    return () => window.removeEventListener('helm:restore-draft', restore);
+  }, [env.id, session.id]);
   const [error, setError] = useState('');
   const [menu, setMenu] = useState(false);
   useDismiss(menu, useCallback(() => setMenu(false), []));
@@ -189,9 +211,11 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     try {
       // The machine answers `unchanged` when the version we hold is current,
       // so a quiet chat costs a few bytes, not the whole list.
+      const older = historyRequested.current;
+      const limit = older ? messageLimit.current : 40;
       const known = shown.current.id === session.id ? shown.current.version : '';
-      const r = await client.rpc<{ messages?: Message[]; unchanged?: boolean; version?: string; status?: Session['status'] }>(
-        env.id, 'session.messages', { id: session.id, ...(known ? { known } : {}) }, 15_000);
+      const r = await client.rpc<{ messages?: Message[]; unchanged?: boolean; version?: string; hasMore?: boolean; status?: Session['status'] }>(
+        env.id, 'session.messages', { id: session.id, limit, ...(older ? { pageBytes: (4 << 20) * Math.ceil(limit / 40) } : {}), ...(known ? { known } : {}) }, 15_000);
       if (!mounted.current) return;
       // Most reads repeat the chat on screen. A new list redrew every
       // message, rewrote the saved copy and, for a reader scrolled up,
@@ -201,14 +225,24 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         if (shown.current.id !== session.id || shown.current.text !== text) {
           const fresh = r.messages;
           // A message that did not change keeps its old copy, so only the new and changed ones draw again.
-          setMessages((now) => keepSameMessages(now, fresh));
-          saveMessages(env.id, session.id, r.messages);
+          const now = currentMessages.current;
+          const first = fresh.find(m => !m.visual);
+          const overlap = !older && now && first ? now.findIndex(m => !m.visual && messageKey(m) === messageKey(first)) : -1;
+          const prefix = overlap > 0 ? now!.slice(0, overlap) : [];
+          const visuals = new Set(prefix.flatMap(m => m.visual ? [m.visual.ref] : []));
+          const merged = keepSameMessages(now, [...prefix, ...fresh.filter(m => !m.visual || !visuals.has(m.visual.ref))]);
+          currentMessages.current = merged;
+          setMessages(merged);
+          if (overlap <= 0 || older) setMoreMessages(r.hasMore ?? fresh.length >= limit);
+          saveMessages(env.id, session.id, merged);
         }
         shown.current = { id: session.id, text, version: r.version ?? '' };
       }
+      if (older && limit === messageLimit.current) { historyRequested.current = false; setLoadingMessages(false); }
+      else if (!older && historyRequested.current) readAgain.current = true;
       if (r.status) setStatus(r.status);
       setReadError(''); success = true;
-    } catch (e: any) { if (mounted.current) setReadError(errorMessage(e)); }
+    } catch (e: any) { if (mounted.current) { setReadError(errorMessage(e)); historyRequested.current = false; setLoadingMessages(false); } }
     finally {
       reading.current = false;
       const again = readAgain.current; readAgain.current = false;
@@ -216,11 +250,24 @@ export function SessionView({ client, env, machines, session, terminals = [], on
     }
   }, [client, env.id, session.id, isShell]);
 
+  const readEarlierMessages = async () => {
+    if (loadingMessages || historyRequested.current) return;
+    messageLimit.current = Math.max(messageLimit.current, messages?.length ?? 0) + 40;
+    historyRequested.current = true;
+    shown.current.version = '';
+    setLoadingMessages(true);
+    await refresh();
+  };
+
   useEffect(() => {
     if (isShell || keptMessages.has(`${env.id}:${session.id}`)) return;
     let stale = false;
     loadMessages<Message>(env.id, session.id).then((cached) => {
-      if (!stale && cached?.length) setMessages((now) => now ?? cached);
+      if (!stale && cached?.length) {
+        messageLimit.current = Math.max(messageLimit.current, cached.length);
+        setMessages((now) => now ?? cached);
+        setMoreMessages(true);
+      }
     });
     return () => { stale = true; };
   }, [env.id, session.id, isShell]);
@@ -475,6 +522,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         />
       )}
       {(error || (!messages && readError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || readError}</div>}
+      {storage.error && <div className="error floating" role="alert">{storage.error}</div>}
     </Composer>
   );
 
@@ -584,7 +632,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         ? <Suspense fallback={<div className="xterm-host" />}>
             <Terminal client={client} env={env.id} sessionId={session.id} />
           </Suspense>
-        : <Chat messages={messages} status={status} compacting={compacting} readVisual={readVisual} canvas={canvasVisuals} />}
+        : <Chat messages={messages} earlier={moreMessages} loadingEarlier={loadingMessages} onEarlier={readEarlierMessages} status={status} compacting={compacting} readVisual={readVisual} canvas={canvasVisuals} />}
 
       {session.nativeChat && raw && !session.nativeCli && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
       {session.nativeChat && !raw && nativeNotice && (
@@ -600,6 +648,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         ? <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} handle={questionHandle}>{composer}</NativeClaudeApprovals>
         : composer())}
       {raw && !session.nativeCli && error && <div className="error floating" role="alert" onClick={() => setError('')}>{error}</div>}
+      {raw && !session.nativeCli && storage.error && <div className="error floating" role="alert">{storage.error}</div>}
     </>
   );
 }
@@ -638,54 +687,62 @@ function NativeClaudeApprovals({ client, env, sessionId, handle, children }: {
   </div></div>;
 }
 
-function keepSameMessages(was: Message[] | null, next: Message[]): Message[] {
-  if (!was?.length) return next;
-  return next.map((m, i) => was[i] && JSON.stringify(was[i]) === JSON.stringify(m) ? was[i] : m);
+function messageKey(m?: Message): string {
+  return m?.sourceId ?? JSON.stringify([m?.at, m?.role, m?.text, m?.tools]);
 }
 
-/** Messages drawn in a chat's first frame, then how many join per step. */
-const FIRST_MESSAGES = 12;
-const MORE_MESSAGES = 40;
+function keepSameMessages(was: Message[] | null, next: Message[]): Message[] {
+  if (!was?.length) return next;
+  const saved = new Map(was.map(m => [JSON.stringify(m), m]));
+  return next.map(m => saved.get(JSON.stringify(m)) ?? m);
+}
 
-const Chat = memo(function Chat({ messages, status, compacting = false, readVisual, canvas }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader; canvas?: CanvasVisuals }) {
+const Chat = memo(function Chat({ messages, earlier, loadingEarlier, onEarlier, status, compacting = false, readVisual, canvas }: {
+  messages: Message[] | null; earlier: boolean; loadingEarlier: boolean; onEarlier: () => Promise<void>;
+  status: string; compacting?: number | boolean; readVisual?: VisualReader; canvas?: CanvasVisuals;
+}) {
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
+  useEarlierOnScroll(box, earlier, loadingEarlier, onEarlier);
   const stuck = useRef(true);
   const [unread, setUnread] = useState(false);
-  // The newest messages draw in the first frame, the older ones join in
-  // steps right after, so a chat switch shows at once (owner, 2026-11-01).
-  const [tail, setTail] = useState<number | null>(FIRST_MESSAGES);
   const count = messages?.length ?? 0;
-  const start = tail === null || count <= tail ? 0 : count - tail;
-  useEffect(() => {
-    if (tail === null) return;
-    if (count <= tail) { if (count) setTail(null); return; }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const frame = requestAnimationFrame(() => { timer = setTimeout(() => setTail((n) => n === null || n + MORE_MESSAGES >= count ? null : n + MORE_MESSAGES), 0); });
-    return () => { cancelAnimationFrame(frame); clearTimeout(timer); };
-  }, [tail, count]);
-  // Older messages arriving above keep the reader where they were.
-  const height = useRef(0);
-  useLayoutEffect(() => {
+  const anchor = useRef<{ node: Element; top: number }>();
+  const mark = () => {
     const el = box.current;
     if (!el) return;
-    if (stuck.current) el.scrollTop = el.scrollHeight;
-    else if (height.current) el.scrollTop += el.scrollHeight - height.current;
-    height.current = el.scrollHeight;
-  }, [start]);
-
+    const top = el.getBoundingClientRect().top;
+    for (const node of el.querySelectorAll('.timeline-row')) {
+      if (node.getBoundingClientRect().bottom > top) {
+        anchor.current = { node, top: node.getBoundingClientRect().top - top }; break;
+      }
+    }
+  };
   const onScroll = () => {
     const el = box.current;
     if (!el) return;
     stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     if (stuck.current) setUnread(false);
+    else mark();
   };
-  useEffect(() => {
+  const last = useRef<Message | undefined>();
+  useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
     if (stuck.current) el.scrollTop = el.scrollHeight;
-    else setUnread(true);
+    else {
+      const held = anchor.current;
+      if (held?.node.isConnected) el.scrollTop += held.node.getBoundingClientRect().top - el.getBoundingClientRect().top - held.top;
+      if (last.current && messageKey(last.current) !== messageKey(messages?.at(-1))) setUnread(true);
+      mark();
+    }
+    last.current = messages?.at(-1);
   }, [messages, status]);
+  const occurrences = new Map<string, number>();
+  const keys = (messages ?? []).map(m => {
+    const key = m.sourceId ?? JSON.stringify([m.at, m.role]), n = occurrences.get(key) ?? 0;
+    occurrences.set(key, n + 1); return `${key}:${n}`;
+  });
 
   const jump = () => {
     const el = box.current;
@@ -696,6 +753,7 @@ const Chat = memo(function Chat({ messages, status, compacting = false, readVisu
     <div className="chat-wrap">
       <div className="chat" ref={box} onScroll={onScroll}>
         <div className="timeline">
+          {earlier && <button className="earlier" onClick={onEarlier} disabled={loadingEarlier}>{loadingEarlier ? 'Loading…' : 'Earlier in this chat'}</button>}
           {messages === null && <p className="placeholder">Loading chat…</p>}
           {messages?.length === 0 && (
             <p className="placeholder">
@@ -704,7 +762,7 @@ const Chat = memo(function Chat({ messages, status, compacting = false, readVisu
                 : 'Send a message to start the chat.'}
             </p>
           )}
-          <Visuals.Provider value={readVisual}><CanvasContext.Provider value={canvas}>{messages?.slice(start).map((m, i) => <Turn key={m.sourceId ?? start + i} m={m} />)}</CanvasContext.Provider></Visuals.Provider>
+          <Visuals.Provider value={readVisual}><CanvasContext.Provider value={canvas}>{messages?.map((m, i) => <WindowedRow key={keys[i]} enabled={count > 24} eager={i >= count - 8}><Turn m={m} /></WindowedRow>)}</CanvasContext.Provider></Visuals.Provider>
           {compacting ? <CompactionLine live />
             : status === 'working' && <div className="working"><span className="shine">Working…</span></div>}
         </div>

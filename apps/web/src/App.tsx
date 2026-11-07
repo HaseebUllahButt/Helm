@@ -36,7 +36,7 @@ import { engineOf } from './engines';
 import { useViewingReport } from './useViewingReport';
 import { ownTerminal, byRecent } from './screens/common';
 import { Gear } from './screens/icons';
-import { whereOf, HomeRow, StatusChip, Fold, NeedCard, NEVER_SNOOZE, when, PagedRows, SETTLED_FIRST, SETTLED_STEP } from './screens/ThreadRows';
+import { whereOf, HomeRow, StatusChip, Fold, NeedCard, PagedRows, SETTLED_FIRST, SETTLED_STEP } from './screens/ThreadRows';
 import { shareHopTarget, clearShareHop, ShareHop } from './screens/ShareHop';
 import { type Auth, Login } from './screens/Login';
 import { EnvView } from './screens/EnvView';
@@ -98,14 +98,15 @@ export function App() {
 
   useEffect(() => {
     if (!auth) return;
-    const c = new Client(auth.endpoints, auth.token);
+    const c = new Client(auth.endpoints, auth.token, auth.trust);
     const off = c.on((_e, kind, payload) => {
       if (kind === 'connection') setConn({ online: !!payload.online, reachable: payload.reachable ?? !!payload.online, error: payload.error });
-      if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints });
+      if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints, trust: c.auth.trust });
+      if (kind === 'trust') saveAuth({ ...auth, endpoints: c.endpoints, trust: payload.trust });
       if (kind === 'unauthorized') {
         forgetWorkspace(workspaceScope(auth.token));
         clearAuth();
-        setNotice('This device is no longer in the network. Pair it again with a new link from `helm link`.');
+        setNotice('Sign in again with a new pairing code from `helm login`.');
         setAuth(null); setClient(null);
       }
     });
@@ -203,7 +204,7 @@ function Shell({ client, conn, onSignOut }: {
   const sessionsNow = useRef(sessions);
   sessionsNow.current = sessions;
   const [savedSend] = useState(() => history.state?.helm && history.state.stack?.at(-1)?.kind === 'transfer'
-    && history.state.stack.at(-1).jobId ? history.state : null);
+    ? history.state : null);
   const [selected, setSelected] = useState<string | null>(savedSend?.selected ?? cached.view?.envId ?? null);
   const [stack, setStack] = useState<MainView[]>(() => savedSend ? supportedViews(savedSend.stack) : (cached.view
     ? [{ kind: 'env' }, { kind: 'session', session: cached.view.session }] : [{ kind: 'env' }]));
@@ -241,36 +242,10 @@ function Shell({ client, conn, onSignOut }: {
     setLastFolder(current => current?.envId === envId && current.folder === folder ? current : { envId, folder });
     try { localStorage.setItem(`helm.last-folder:${scope}`, JSON.stringify({ envId, folder })); } catch { /* full */ }
   }, [scope]);
-  /**
-   * Threads put off until later, on this device. A thread waiting on you that
-   * you cannot get to yet should stop being the loudest thing on Home and stop
-   * raising toasts - and come back on its own, because forgetting it would
-   * make snoozing the same as ignoring.
-   */
-  const [snoozed, setSnoozed] = useState<Record<string, number>>(() => {
-    try { return JSON.parse(localStorage.getItem('helm.snoozed') || '{}'); } catch { return {}; }
-  });
-  const snoozedRef = useRef(snoozed);
-  snoozedRef.current = snoozed;
+  // Snooze is gone (owner, 2026-11-03). Older builds kept snoozed chats in
+  // this browser value; forget it once, so no chat that needs you stays hidden.
+  useEffect(() => { try { localStorage.removeItem('helm.snoozed'); } catch { /* blocked */ } }, []);
   const tick = useNow(30_000);
-  const [snoozeUndo, setSnoozeUndo] = useState<{ key: string; title: string; until: number } | null>(null);
-  const setSnooze = (key: string, until: number | null) => {
-    setSnoozed((all) => {
-      const next = { ...all };
-      if (until == null) delete next[key]; else next[key] = until;
-      // Forget the ones whose time has passed, so the store does not grow for ever.
-      for (const k of Object.keys(next)) if (next[k] <= Date.now()) delete next[k];
-      try { localStorage.setItem('helm.snoozed', JSON.stringify(next)); } catch { /* full */ }
-      return next;
-    });
-  };
-  const snoozedNow = (envId: string, id: string) => (snoozed[`${envId}:${id}`] ?? 0) > tick;
-  const attentionOn = (envId: string, s: Session) => needsAttention(s) && !snoozedNow(envId, s.id);
-  useEffect(() => {
-    if (!snoozeUndo) return;
-    const timer = setTimeout(() => setSnoozeUndo(null), 7000);
-    return () => clearTimeout(timer);
-  }, [snoozeUndo]);
   /** The chat just archived from Home, for as long as taking it back is one tap. */
   const [archiveUndo, setArchiveUndo] = useState<{ envId: string; s: Session } | null>(null);
   const [moveChat, setMoveChat] = useState<{ envId: string; s: Session } | null>(null);
@@ -391,7 +366,9 @@ function Shell({ client, conn, onSignOut }: {
     const top = nav.current.stack.at(-1);
     const shown = top?.kind === 'session' ? top.session : null;
     if (!envId || !letGo.current.has(key) || (shown?.id ?? (top?.kind === 'starting' ? top.startId : null)) !== key) return;
-    const draft = shown ? loadDraft(envId, shown.id) : '';
+    let draft = '';
+    try { draft = shown ? loadDraft(envId, shown.id) : ''; }
+    catch (failure) { setError(errorMessage(failure)); return; }
     // A chat that cloned a repo starts again in that folder, without cloning it twice.
     const chat = (shown?.clone ? undefined : startAgain(client, key, draft)) ?? (shown ? startLike(envId, shown, draft) : undefined);
     if (!chat) return;
@@ -489,8 +466,7 @@ function Shell({ client, conn, onSignOut }: {
         if ((payload?.transition?.to === 'blocked' || payload?.asked) && s && listedThread(s)) {
           const top = nav.current.stack[nav.current.stack.length - 1];
           const looking = top?.kind === 'session' && top.session.id === s.id;
-          const asleep = (snoozedRef.current[`${e}:${s.id}`] ?? 0) > Date.now();
-          if (!looking && !asleep) {
+          if (!looking) {
             setIslandPing((cur) => {
               const same = cur?.envId === e && cur.id === s.id && Date.now() - cur.at < 3000;
               if (same) return cur;
@@ -531,9 +507,9 @@ function Shell({ client, conn, onSignOut }: {
       // A new chat from the start: machine first. "In this folder" is Ctrl+Shift+N.
       if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
       // Fold or unfold the sidebar (the owner's choice of key). A terminal
-      // keeps Ctrl+S: it pauses output there. The canvas keeps it to save
-      // the file you type in.
-      if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyS' && !el?.closest?.('.xterm, .canvas')) { e.preventDefault(); collapseSidebar((was) => !was); return; }
+      // keeps Ctrl+S: it pauses output there. A file in the canvas keeps it
+      // to save the file you type in; a page in the canvas does not.
+      if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyS' && !el?.closest?.('.xterm, .canvas-file:not(.canvas-page)')) { e.preventDefault(); collapseSidebar((was) => !was); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       // Settings and usage from anywhere. Letters with Ctrl/Cmd+Shift that
@@ -568,7 +544,7 @@ function Shell({ client, conn, onSignOut }: {
         if (s.brain) continue; // "Helm brain" below opens it the checked way
         items.push({
           id: `t:${e.id}:${s.id}`, group: 'thread', title: s.title, engine: s.engine, at: s.updatedAt,
-          sub: `${whereOf(s)} · ${e.name}${attentionOn(e.id, s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status, s.compacting)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
+          sub: `${whereOf(s)} · ${e.name}${needsAttention(s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status, s.compacting)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
           keywords: `${s.quick ? 'sketch' : s.cwd} ${engineOf(s.engine).label}`,
           run: () => openSession(e.id, s),
         });
@@ -715,7 +691,7 @@ function Shell({ client, conn, onSignOut }: {
    * session's name matters outside the app itself.
    */
   const blockedCount = envs.reduce((n, e) =>
-    n + (sessions[e.id] ?? []).filter((s) => listedThread(s) && s.engine !== 'shell' && !s.archived && attentionOn(e.id, s)).length, 0);
+    n + (sessions[e.id] ?? []).filter((s) => listedThread(s) && s.engine !== 'shell' && !s.archived && needsAttention(s)).length, 0);
   useEffect(() => {
     const parts: string[] = [];
     if (view?.kind === 'session') parts.push(view.session.title);
@@ -878,8 +854,8 @@ function Shell({ client, conn, onSignOut }: {
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => listedThread(s) && s.engine !== 'shell' && !s.archived);
   const workingThreadsOn = (machine: Environment) =>
-    machine.online ? agentsOf(machine.id).filter((thread) => !attentionOn(machine.id, thread) && runningThread(thread)) : [];
-  const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(s => attentionOn(machine.id, s)).length;
+    machine.online ? agentsOf(machine.id).filter((thread) => !needsAttention(thread) && runningThread(thread)) : [];
+  const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(s => needsAttention(s)).length;
 
   /**
    * Turning a recording into words, on whichever machine can.
@@ -1037,14 +1013,12 @@ function Shell({ client, conn, onSignOut }: {
     setRemembered((prev) => prev.filter((b) => b.envId !== envId));
   };
 
-  const blockedAll = envs.flatMap((e) => agentsOf(e.id).filter(needsAttention).map((s) => ({ env: e, s })));
-  const blocked = blockedAll.filter(({ env: e, s }) => !snoozedNow(e.id, s.id));
-  const asleep = blockedAll.filter(({ env: e, s }) => snoozedNow(e.id, s.id));
+  const blocked = envs.flatMap((e) => agentsOf(e.id).filter(needsAttention).map((s) => ({ env: e, s })));
   // Home is one list across every machine: what needs you, and what is
   // running. A brain has its own place under "brains".
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
-  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !attentionOn(machine.id, thread) && runningThread(thread)).sort(byNewest);
+  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !needsAttention(thread) && runningThread(thread)).sort(byNewest);
   // Ctrl/Cmd+Shift+E opens a terminal, next to Shift+B for the browser (T is
   // the browser's own "reopen tab" and cannot be taken). From a chat it is
   // that chat's folder; the same key in a terminal goes back to where you
@@ -1211,9 +1185,8 @@ function Shell({ client, conn, onSignOut }: {
   const needShelf = blocked.filter(unpinned);
   const finishedShelf = finishedNow.filter(unpinned);
   const runningShelf = runningNow.filter(unpinned);
-  const snoozedShelf = asleep.filter((x) => unpinned(x) && !runningThread(x.s));
   const settledShelf = settledNow.filter(unpinned);
-  const pinnedRow = (x: Row) => homeRow(x, !runningThread(x.s) || attentionOn(x.env.id, x.s));
+  const pinnedRow = (x: Row) => homeRow(x, !runningThread(x.s) || needsAttention(x.s));
   // Alt+1, Alt+2 and Alt+3 open the top chat of Finished, Running and
   // Settled, in sidebar order. The folded rail then shows the pinned chats
   // and the picked group: Needs you with Finished (the default), Running on
@@ -1306,10 +1279,6 @@ function Shell({ client, conn, onSignOut }: {
       client.rpc(machine.id, 'session.seen', { id: s.id }).catch(() => { /* an older machine: this device still knows */ });
     }
   }, [doneKey]);
-  const snoozeThread = (envId: string, s: Session, until: number) => {
-    setSnooze(`${envId}:${s.id}`, until);
-    setSnoozeUndo({ key: `${envId}:${s.id}`, title: s.title, until });
-  };
 
   // On a phone the two panes are one screen at a time: the main pane is shown
   // once a machine is selected, and every view - the brain included - belongs
@@ -1328,6 +1297,15 @@ function Shell({ client, conn, onSignOut }: {
   const downFor = downSince ? Date.now() - downSince : 0;
   const status = conn.online ? 'live' : conn.reachable ? 'reconnecting' : downFor > 12_000 ? 'offline' : 'connecting';
 
+  const phoneMachineRow = (e: Environment) => (
+    <button key={e.id} type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
+      <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+      <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
+      <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
+      <span className="chev"><Icon name="forward" size={15} /></span>
+    </button>
+  );
+
   return (
     <div className="shell">
       <aside className={`sidebar${!showMain ? ' showing' : ''}${wide && sidebarCollapsed ? ' collapsed' : ''}`}>
@@ -1337,7 +1315,7 @@ function Shell({ client, conn, onSignOut }: {
               on a phone this list. Nothing else leaves a machine. */}
           <div className="brand">
             <button type="button" className="brand-home" onClick={goHome} title="Home" aria-label="Home">
-              <img src="/favicon.svg?v=7" alt="" />
+              <img src="/favicon.svg?v=8" alt="" />
               <b className="wordmark">helm</b>
             </button>
           </div>
@@ -1424,15 +1402,11 @@ function Shell({ client, conn, onSignOut }: {
             </div>
 
             {!wide && envs.length > 0 && <div className="phone-machines">
-              <div className="section">Machines</div>
-              <div className="rows plain">
-                {envs.map((e) => <button key={e.id} type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
-                  <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-                  <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
-                  <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
-                  <span className="chev"><Icon name="forward" size={15} /></span>
-                </button>)}
-              </div>
+              <Fold shelf title="Machines" count={envs.length}
+                note={`${envs.filter((e) => e.online).length} online`}
+                peek={<div className="rows plain">{envs.filter((e) => e.online).map(phoneMachineRow)}</div>}>
+                <div className="rows plain">{envs.map(phoneMachineRow)}</div>
+              </Fold>
             </div>}
 
             {pinnedNow.length > 0 && (
@@ -1452,7 +1426,6 @@ function Shell({ client, conn, onSignOut }: {
                     key={s.id} s={s} machine={e.name} selected={isOpen({ env: e, s })}
                     onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
                     onPick={isOpen({ env: e, s }) ? undefined : () => setIslandPick({ envId: e.id, id: s.id, at: Date.now() })}
-                    onSnooze={(until) => snoozeThread(e.id, s, until)}
                     onDismiss={async () => { await client.rpc(e.id, 'session.dismiss-child-failures', { id: s.id }); }}
                   />
                 ))}
@@ -1475,20 +1448,6 @@ function Shell({ client, conn, onSignOut }: {
                 peek={runningShelf.some(isOpen) ? <div className="rows plain">{runningShelf.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
               >
                 <div className="rows plain">{runningShelf.map((x) => homeRow(x))}</div>
-              </Fold>
-            )}
-
-            {snoozedShelf.length > 0 && (
-              <Fold shelf title="Snoozed" count={snoozedShelf.length} remember="sidebar:snoozed">
-                <div className="rows plain">
-                  {snoozedShelf.map(({ env: e, s }) => (
-                    <HomeRow
-                      key={s.id} s={s} machine={e.name} onOpen={() => { setSnooze(`${e.id}:${s.id}`, null); openSession(e.id, s); }}
-                      note={snoozed[`${e.id}:${s.id}`] === NEVER_SNOOZE ? 'Snoozed \u00b7 Never' : `back ${when(snoozed[`${e.id}:${s.id}`])}`}
-                      actions={threadActions(e, s)}
-                    />
-                  ))}
-                </div>
               </Fold>
             )}
 
@@ -1610,7 +1569,6 @@ function Shell({ client, conn, onSignOut }: {
             client={client} env={env} wide={wide} onBack={back}
             sendJobs={sends.done} sendTarget={envs.find(e => e.id !== env.id && e.name.toLowerCase() === 'vm')?.name ?? envs.find(e => e.id !== env.id && e.online)?.name}
             sessions={(sessions[env.id] ?? []).filter(listedThread)} reload={reloadEnv}
-            isSnoozed={(s) => snoozedNow(env.id, s.id)}
             remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions.filter((s) => listedThread(s)
               && !(sessions[env.id] ?? []).some(known => known.id === s.id))}
             rememberedAt={env.online ? undefined : snap?.machines?.[env.id]?.at}
@@ -1754,18 +1712,12 @@ function Shell({ client, conn, onSignOut }: {
         onOpen={(envId, s) => openSession(envId, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
       />
 
-      {snoozeUndo && (
-        <div className="undo" role="status">
-          <span className="undo-text">Snoozed <b>{snoozeUndo.title}</b> {snoozeUndo.until === NEVER_SNOOZE ? 'until you restore it' : `until ${when(snoozeUndo.until)}`}</span>
-          <button onClick={() => { setSnooze(snoozeUndo.key, null); setSnoozeUndo(null); }}>Undo</button>
-        </div>
-      )}
       {moveChat && envs.some((e) => e.id === moveChat.envId) && (
         <MoveChat client={client} source={envs.find((e) => e.id === moveChat.envId)!} machines={envs}
           session={(sessions[moveChat.envId] ?? []).find((s) => s.id === moveChat.s.id) ?? moveChat.s}
           onClose={() => { loadSessions(moveChat.envId); setMoveChat(null); }} onOpen={openSession} />
       )}
-      {archiveUndo && !snoozeUndo && (
+      {archiveUndo && (
         <div className="undo" role="status">
           <span className="undo-text">Archived <b>{archiveUndo.s.title}</b></span>
           <button onClick={() => {

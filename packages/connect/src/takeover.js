@@ -1,4 +1,4 @@
-import { openSync, writeSync, closeSync, readFileSync, watch } from 'node:fs';
+import { openSync, writeSync, closeSync, readFileSync, statSync, watch } from 'node:fs';
 import { processArgv, processCwd, processTty } from './procinfo.js';
 import { execFileSync } from 'node:child_process';
 import { ENGINES } from './engines.js';
@@ -83,14 +83,39 @@ export function safePoint({ status, transcript, signal, pid }) {
     const now = status();
     if (now !== 'working') return finish({ wasWorking: false });
     if (!alive(pid)) return finish({ wasWorking: false });
-    // A step has landed when the newest record is a tool's result.
+    // Only records written after this wait began can end the current step.
+    let baseline = 0, inode = null, partial = false;
+    try {
+      const bytes = readFileSync(transcript);
+      baseline = bytes.length;
+      partial = baseline > 0 && bytes[baseline - 1] !== 10;
+      inode = statSync(transcript).ino;
+    } catch { /* the transcript may not exist yet */ }
     const stepLanded = () => {
       try {
-        const tail = readFileSync(transcript, 'utf8').slice(-65_536).trimEnd().split('\n').at(-1);
+        const stat = statSync(transcript);
+        const bytes = readFileSync(transcript);
+        if ((inode !== null && stat.ino !== inode) || bytes.length < baseline) {
+          inode = stat.ino; baseline = bytes.length;
+          partial = baseline > 0 && bytes[baseline - 1] !== 10;
+          return false;
+        }
+        inode = stat.ino;
+        let added = bytes.subarray(baseline).toString('utf8');
+        if (partial) {
+          const end = added.indexOf('\n');
+          if (end < 0) return false;
+          added = added.slice(end + 1);
+        }
+        const tail = added.slice(-65_536).trimEnd().split('\n').at(-1);
         const rec = JSON.parse(tail);
         const content = rec.message?.content ?? rec.payload?.content;
+        // A finished command or edit, however the CLI records one: Claude and
+        // Codex nest a tool_result in a user turn, Codex marks a `*_output`
+        // payload, and Pi (and opencode) write a whole `toolResult` message.
         return (rec.type === 'user' && Array.isArray(content) && content.some((b) => b?.type === 'tool_result'))
-          || /_output$/.test(rec.payload?.type ?? '');
+          || /_output$/.test(rec.payload?.type ?? '')
+          || rec.message?.role === 'toolResult';
       } catch { return false; }
     };
     const check = () => {

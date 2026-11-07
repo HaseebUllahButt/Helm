@@ -186,7 +186,7 @@ export const M = {
   SESSION_AGENT_ADDRESS: 'session.agent-address', // { id, callerThreadId? } -> { address }
   SESSION_AGENT_SEND: 'session.agent-send', // { id, to?, replyTo?, text, messageId, asUser? } -> { message }
   SESSION_AGENT_RECEIVE: 'session.agent-receive', // paired-machine delivery; { message } -> { ok }
-  SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task, worktree? } -> { session }; cwd beats the parent's folder; worktree: own checkout on a helm/ branch
+  SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task, attachments?, worktree? } -> { session }; cwd beats the parent's folder; worktree: own checkout on a helm/ branch; attachments as session.input
   SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id, consume?, parentId?, callerThreadId? } -> { session, status, complete, output, pending, messages? }; unread helper replies replace their waiting prompt copies
   SESSION_DELEGATION_MESSAGE: 'session.delegation-message', // { parentId, id, data } -> { ok }
   SESSION_NATIVE_AGENT: 'session.native-agent', // { id, agentId, full? } -> { agent, events? }  one of a CLI's own subagents
@@ -215,7 +215,7 @@ export const M = {
   SESSION_CANVAS: 'session.canvas', // { id, path, requestId } -> { canvas } select a project file beside chat
   SESSION_CANVAS_CLOSED: 'session.canvas-closed', // { id, requestId } -> { canvas }  the owner closed it; no device opens that ask again
   SESSION_RENDER: 'session.render',   // { id, html, title?, height?, renderId, placement?: 'canvas', url? } -> { visual } saved, never provider work
-  SESSION_VISUAL: 'session.visual',   // { id, ref, page? } -> { html } | PDF { total, pages } | { image } lazy authenticated snapshot read
+  SESSION_VISUAL: 'session.visual',   // { id, ref, page?, file? } -> { html } | PDF { total, pages, download? } | { image } | { file } lazy authenticated snapshot read
   SESSION_WATCH: 'session.watch',     // { id } -> { ok, last }   start/renew E.SESSION_EVENT pushes
   SESSION_UNWATCH: 'session.unwatch', // { id }
   SESSION_SEARCH: 'session.search',   // { query, limit? } -> { results[] }  chats here whose words (yours or the agent's) hold every word typed

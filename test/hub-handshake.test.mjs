@@ -66,6 +66,8 @@ test('an address that cannot prove itself is sent nothing', async (t) => {
   await new Promise((r) => impostor.listen(IMPOSTOR, '127.0.0.1', r));
   t.after(() => impostor.close());
   const base = `http://127.0.0.1:${IMPOSTOR}`;
+  // An address this machine lists, so the request is made at all.
+  net.machines[net.self] = { ...net.machines[net.self], endpoints: [base] };
 
   await assert.rejects(N.hubCredential(net, base), (err) => err.untrusted);
   // An older helm, or anything else without the route: no fallback.
@@ -141,7 +143,7 @@ test('a refused connection falls back to a reachable hub instead of aborting on 
     ws.send(JSON.stringify({ t: 'rpcResult', id, ok: true, result: { reached: true } }));
   }));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  net.machines = { peer: { endpoints: [`http://127.0.0.1:${server.address().port}`] } };
+  net.machines = { ...net.machines, peer: { endpoints: [`http://127.0.0.1:${server.address().port}`] } };
   t.after(() => { for (const ws of sockets.clients) ws.terminate(); sockets.close(); server.closeAllConnections(); server.close(); });
   assert.deepEqual(await hubRpc(net, 'peer', 'env.info', {}, { timeout: 2000, budget: 5000 }), { reached: true });
 });
@@ -154,7 +156,7 @@ test('every hub refusing marks the request as never sent, so asking again later 
   await new Promise(resolve => closed.listen(0, '127.0.0.1', resolve));
   net.port = closed.address().port;
   await new Promise(resolve => closed.close(resolve));
-  net.machines = { peer: { endpoints: [] } };
+  net.machines = { ...net.machines, peer: { endpoints: [] } };
   await assert.rejects(hubRpc(net, 'peer', 'session.input', { id: 's1', data: 'hi' }, { timeout: 2000, budget: 5000 }),
     err => err.code === 'unreachable' && !err.uncertain && /could not reach that machine/.test(err.message));
 });
@@ -168,7 +170,10 @@ async function fakeHub(t, net, { answer }) {
     for await (const chunk of req) raw += chunk;
     const { nonce } = JSON.parse(raw);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ net: net.id, challenge: 'once', proof: N.hubProof(net, nonce) }));
+    // On this machine's own port it is this machine's hub and signs as it.
+    // Elsewhere it stands for a peer on an older Helm, which does not sign.
+    res.end(JSON.stringify(Number(net.port) === hub.port ? N.hubHelloAnswer(N.loadNetwork(), nonce)
+      : { net: net.id, challenge: 'once', proof: N.hubProof(net, nonce) }));
   });
   const sockets = new WebSocketServer({ server });
   sockets.on('connection', ws => ws.on('message', raw => {
@@ -190,7 +195,7 @@ test('a repeatable RPC that timed out on one hub is asked again through the next
   const silent = await fakeHub(t, net, { answer: false });
   const live = await fakeHub(t, net, { answer: true });
   net.port = silent.port;
-  net.machines = { peer: { endpoints: [live.url] } };
+  net.machines = { ...net.machines, peer: { endpoints: [live.url] } };
   assert.deepEqual(await hubRpc(net, 'peer', 'session.list', {}, { timeout: 300 }), { reached: true });
   assert.ok(silent.calls.length >= 1);
   assert.deepEqual(live.calls, ['session.list']);
@@ -205,7 +210,7 @@ test('a stalled first address cannot consume the finite budget before a healthy 
   t.after(() => { stalled.closeAllConnections(); stalled.close(); });
   const live = await fakeHub(t, net, { answer: true });
   net.port = stalled.address().port;
-  net.machines = { peer: { endpoints: [live.url] } };
+  net.machines = { ...net.machines, peer: { endpoints: [live.url] } };
   assert.deepEqual(await hubRpc(net, 'peer', 'session.list', {}, { timeout: 5000, budget: 1000 }), { reached: true });
   assert.deepEqual(live.calls, ['session.list']);
 });
@@ -218,7 +223,7 @@ test('a message that went out and was never answered is not sent again through a
   const silent = await fakeHub(t, net, { answer: false });
   const live = await fakeHub(t, net, { answer: true });
   net.port = silent.port;
-  net.machines = { peer: { endpoints: [live.url] } };
+  net.machines = { ...net.machines, peer: { endpoints: [live.url] } };
   await assert.rejects(hubRpc(net, 'peer', M.SESSION_INPUT, { id: 's1', data: 'hello' }, { timeout: 300 }),
     (err) => err.uncertain && /may already have been delivered - check before retrying/.test(err.message));
   assert.deepEqual(silent.calls, [M.SESSION_INPUT], 'sent once, with no second try at the older address');
@@ -235,7 +240,7 @@ test('a message that never left still goes through the next hub', async (t) => {
   net.port = closed.address().port;
   await new Promise(resolve => closed.close(resolve));
   const live = await fakeHub(t, net, { answer: true });
-  net.machines = { peer: { endpoints: [live.url] } };
+  net.machines = { ...net.machines, peer: { endpoints: [live.url] } };
   assert.deepEqual(await hubRpc(net, 'peer', M.SESSION_INPUT, { id: 's1', data: 'hello' }, { timeout: 2000 }), { reached: true });
   assert.deepEqual(live.calls, [M.SESSION_INPUT]);
 });
@@ -249,7 +254,7 @@ test('uncertain key presses, process starts, forks and unknown writes never use 
   const silent = await fakeHub(t, net, { answer: false });
   const live = await fakeHub(t, net, { answer: true });
   net.port = silent.port;
-  net.machines = { peer: { endpoints: [live.url] } };
+  net.machines = { ...net.machines, peer: { endpoints: [live.url] } };
   for (const method of [M.SESSION_KEYS, M.EXEC_START, M.SESSION_FORK, 'future.write']) {
     await assert.rejects(hubRpc(net, 'peer', method, {}, { timeout: 30 }), err => err.uncertain);
   }

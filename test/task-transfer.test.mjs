@@ -4,10 +4,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 
-const root = mkdtempSync(join(process.cwd(), '.helm-task-send-state-'));
+const root = mkdtempSync(join(tmpdir(), 'helm-task-send-state-'));
+process.env.HOME = root;
 Object.assign(process.env, { HELM_DIR: root, HELM_DB: join(root, 'hub.sqlite'), HELM_SSH_DIR: join(root, 'ssh'), HELM_PROCS_SOCKET: join(root, 'procs.sock'), HELM_TERMINALS_SOCKET: join(root, 'terminals.sock') });
-const work = join(process.cwd(), `.helm-task-send-${process.pid}`);
+const work = join(root, 'work');
 mkdirSync(work, { recursive: true });
 test.after(() => { rmSync(root, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); });
 
@@ -172,6 +174,7 @@ function fixture() {
     if (method === M.AGENT_LIST) return { agents: [{ id: 'codex', engine: 'codex', available: true, defaultMode: 'full' }] };
     if (method === M.TASK_COLLECT) return handoffs.collect(params.handoffId, sourceId);
     if (method === M.TASK_RETURNED) return handoffs.returned(params, sourceId);
+    if (method === M.HANDOFF_STATUS) return handoffs.status(params.handoffId, sourceId);
     assert.equal(method, M.HANDOFF_ACCEPT);
     accepted.push(params);
     options.onRoute('direct');
@@ -235,6 +238,110 @@ test('transport failure queues the frozen encrypted request and retry reuses it 
   const result = await new TaskTransfers(options).send(params, 'phone');
   assert.equal(JSON.stringify(accepted[0]), JSON.stringify(queued));
   assert.equal(readFileSync(join(result.receipt.folder, 'app.js'), 'utf8'), 'finished-before-pause');
+});
+
+test('queued task delivery resumes from its saved request without an open screen', async () => {
+  const { options, params, source, accepted, handoffs, starts } = fixture();
+  const rpc = options.rpc;
+  let offline = true;
+  options.rpc = (...args) => {
+    if (args[1] === M.HANDOFF_ACCEPT && offline) throw new Error('socket closed');
+    return rpc(...args);
+  };
+  const first = await new TaskTransfers(options).send(params, 'phone');
+  assert.equal(first.status, 'queued');
+  assert.equal(source.taskTransfer.status, 'queued');
+  assert.equal(JSON.parse(readFileSync(join(options.directory, `${params.handoffId}.json`))).result.status, 'queued');
+  offline = false;
+  // The hub delivers the queued request while the source screen is closed.
+  const record = JSON.parse(readFileSync(join(options.directory, `${params.handoffId}.json`)));
+  await handoffs.accept(record.request, sourceId);
+  await new TaskTransfers(options).reconcile();
+  assert.equal(accepted.length, 0, 'recovery only reads the receiver receipt');
+  assert.equal(starts.length, 1);
+  assert.equal(source.taskTransfer.status, 'running');
+  await new TaskTransfers(options).reconcile();
+  assert.equal(accepted.length, 0, 'a running task is not dispatched again');
+});
+
+test('automatic queued recovery never restarts a failed destination prompt', async () => {
+  const { options, params, accepted, handoffs, inputs } = fixture();
+  const rpc = options.rpc;
+  options.rpc = async (...args) => {
+    const reply = await rpc(...args);
+    if (args[1] === M.HANDOFF_ACCEPT) throw new Error('socket closed after the task started');
+    return reply;
+  };
+  assert.equal((await new TaskTransfers(options).send(params, 'phone')).status, 'queued');
+  assert.equal(inputs.length, 1);
+  handoffs.sessions.turnState = () => 'failed';
+  await new TaskTransfers(options).reconcile();
+  assert.equal(accepted.length, 1);
+  assert.equal(inputs.length, 1, 'a failed turn needs an owner retry');
+});
+
+test('an unknown queued task stays queued without an automatic accept attempt', async () => {
+  const { options, params, accepted } = fixture();
+  const rpc = options.rpc;
+  options.rpc = (...args) => {
+    if (args[1] === M.HANDOFF_ACCEPT) throw new Error('socket closed');
+    return rpc(...args);
+  };
+  await new TaskTransfers(options).send(params, 'phone');
+  await new TaskTransfers(options).reconcile();
+  assert.equal(accepted.length, 0);
+  assert.equal(JSON.parse(readFileSync(join(options.directory, `${params.handoffId}.json`))).result.status, 'queued');
+});
+
+test('a failed receiver receipt ends automatic recovery and reports the failure', async () => {
+  const { options, params, source, accepted } = fixture();
+  const rpc = options.rpc;
+  let reads = 0;
+  options.rpc = (...args) => {
+    if (args[1] === M.HANDOFF_ACCEPT) throw new Error('socket closed');
+    if (args[1] === M.HANDOFF_STATUS) { reads++; return { status: 'failed', error: 'The account needs a login.' }; }
+    return rpc(...args);
+  };
+  await new TaskTransfers(options).send(params, 'phone');
+  const restarted = new TaskTransfers(options);
+  await restarted.reconcile();
+  assert.equal(source.taskTransfer.status, 'failed');
+  assert.equal(restarted.status(params, 'phone').send.status, 'failed');
+  assert.match(restarted.status(params, 'phone').send.error, /needs a login/);
+  await restarted.reconcile();
+  assert.equal(reads, 1, 'a known failure waits for an owner retry');
+  assert.equal(accepted.length, 0);
+});
+
+test('a refused task reports failure on its source and waits for an explicit retry', async () => {
+  const { options, params, source } = fixture();
+  const rpc = options.rpc;
+  let accepts = 0;
+  options.rpc = (...args) => {
+    if (args[1] === M.HANDOFF_ACCEPT) { accepts++; throw Object.assign(new Error('The account needs a login.'), { rpc: true }); }
+    return rpc(...args);
+  };
+  await assert.rejects(new TaskTransfers(options).send(params, 'phone'), /needs a login/);
+  assert.equal(source.taskTransfer.status, 'failed');
+  await new TaskTransfers(options).reconcile();
+  assert.equal(accepts, 1);
+});
+
+test('a successful explicit retry clears a failed source notice when no return was requested', async () => {
+  const { options, params, source } = fixture();
+  params.returnToSource = false;
+  const rpc = options.rpc;
+  options.rpc = (...args) => {
+    if (args[1] === M.HANDOFF_ACCEPT) throw new Error('socket closed');
+    if (args[1] === M.HANDOFF_STATUS) return { status: 'failed', error: 'Login required.' };
+    return rpc(...args);
+  };
+  await new TaskTransfers(options).send(params, 'phone');
+  await new TaskTransfers(options).reconcile();
+  assert.equal(source.taskTransfer.status, 'failed');
+  options.rpc = rpc;
+  assert.equal((await new TaskTransfers(options).send(params, 'phone')).status, 'running');
+  assert.equal(source.taskTransfer, null);
 });
 
 test('peer callers, unavailable accounts and target execution failures never become successful sends', async () => {

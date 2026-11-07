@@ -122,7 +122,7 @@ test('an offline remote VM cannot cause brain.open on a laptop to create a local
   const net = N.createNetwork({ name: 'Laptop' });
   N.describeSelf(net, { kind: 'pc' });
   N.mergeRoster(net, { id: net.id, machines: {
-    remotevm: { id: 'remotevm', name: 'VM', kind: 'vm', endpoints: ['http://127.0.0.1:1'], addedAt: Date.now(), updatedAt: Date.now() },
+    aabbccddeeff: N.signMachineRecord(net, { id: 'aabbccddeeff', name: 'VM', kind: 'vm', endpoints: ['http://127.0.0.1:1'], addedAt: Date.now(), updatedAt: Date.now() }),
   }, devices: {}, revoked: {} });
   const daemon = new Daemon();
   daemon.sessions = { start: () => assert.fail('must not start a laptop brain') };

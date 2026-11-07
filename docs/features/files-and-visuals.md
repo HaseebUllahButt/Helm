@@ -49,7 +49,11 @@
   Limits: 100 pages, 2 MiB a page, 24 MiB in all. Canvas shows the pages
   one under the other, read-only, and loads only those near the view
   (`session.visual` with `page`). No PDF reader is needed on the viewing
-  device. Without poppler-utils the command says what to install. Its
+  device. A PDF of 16 MiB or less also keeps the file itself; Download
+  reads it with `session.visual` `file: true`. Larger and older PDFs have
+  no Download. Without poppler-utils the command says what to install.
+  The head's Fullscreen button uses the browser's full screen where it
+  exists, else covers the window; Escape leaves full screen first. Its
   first screen also lists the chat's pictures and pages, so Back from a
   page never ends on an error. Saves go through
   `git.write` with the hash the file was read at: a file the agent changed
@@ -120,9 +124,17 @@
   width, never wider than its own size and at most 900 px high, with no
   scroll bar of its own (driven 2026-10-26); Expand and the canvas show it
   whole (driven 2026-10-22).
+- **Rule:** a page that has focus sends Ctrl/⌘ keys up to Helm, so
+  Ctrl/⌘ S folds the sidebar, not "save page as HTML". It keeps copy,
+  paste, undo, select all, find, zoom, reload and close, and keys the page
+  takes itself. A live site in the canvas is another site: it keeps its keys.
+- **Prove the keys (driven 2026-11-05):** render a page with a button, open
+  the copy with `open --desktop`, click the button through Playwright's
+  frame (CDP on the copy's browser), press Control+s twice. Proof: the
+  sidebar folds and opens again, and the frame's keydown is cancelled.
 - **Traps:** without `HELM_DIR` and `--session`, `render` posts into the
   owner's real chat.
-- **Tests:** `test/visual-replies`; `test/browser/visual-replies`. Design:
+- **Tests:** `test/visual-replies`, `visual-frame-keys`; `test/browser/visual-replies`. Design:
   [`docs/visual-replies.md`](../visual-replies.md).
 
 ## Markdown, code and diffs in replies
@@ -133,5 +145,13 @@
   Proof: the finished reply shows grey boxes and arrows, with
   Code and Copy in the block's head; Code shows the source; a tap opens it
   full size. Changing the theme draws it again in the new colours.
-- **Tests:** `test/browser/markdown-loading`, `diagrams`, `inline-diff`,
-  `copy-selection`.
+- **Prove math (driven 2026-11-06):** write a reply file with `$W_Q$`,
+  a `$$...$$` block and a price such as "$5", send `say-file: <file>` to
+  **fake**. Proof: the formulas are typeset, the price stays text, and
+  `errors` shows no blocked font.
+- **Prove math in a page (driven 2026-11-06):** write a page with `$W_Q$`
+  in its text and in a string its script writes into a table, then run
+  `$H canvas <file> --session <chat-id>`. Proof: both are typeset in the
+  canvas, and `$H preview <file>` shows the same.
+- **Tests:** `test/browser/markdown-loading`, `diagrams`, `math`, `visual-math`,
+  `inline-diff`, `copy-selection`.

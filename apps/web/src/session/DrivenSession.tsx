@@ -16,7 +16,7 @@ import { useGitStatus } from './gitStatus';
 import { changesOf } from './stepWords';
 import { expandPastes } from './pasteStore';
 import { Confirm, TextPrompt, Sheet } from '../Modal';
-import { loadDraft, saveDraft } from '../draftStore';
+import { useDraftStorage } from '../useDraftStorage';
 import { loadedChat, startedEmpty } from '../startingChats';
 import { useDraftImages } from './useDraftImages';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
@@ -42,13 +42,13 @@ import { ContextLimit } from './ContextLimit';
 import { useAccountLimits } from './useAccountLimits';
 import { useChatKeys, useDeleteKey } from './chatKeys';
 import { Canvas, chatPages, useCanvas } from './Canvas';
-import { CanvasContext, type VisualReader } from './VisualReply';
+import { CanvasContext, type VisualReader, visualPart } from './VisualReply';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
 import { MovedNotice } from './MoveChat';
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
-  grok: 'Grok', cursor: 'Cursor', pi: 'Pi', omp: 'OMP',
+  grok: 'Grok', cursor: 'Cursor', vibe: 'Mistral Vibe', pi: 'Pi', omp: 'OMP',
   agy: 'Antigravity CLI', antigravity: 'Antigravity', gemini: 'Gemini', kimi: 'Kimi', muse: 'Muse',
 };
 
@@ -108,12 +108,13 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [cameUpEmpty] = useState(() => startedEmpty(session.id));
   useEffect(() => { if (log.loaded) loadedChat(session.id); }, [log.loaded, session.id]);
   const loaded = log.loaded || cameUpEmpty;
-  const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...(page === undefined ? {} : { page }) }, 60_000), [client, env.id, session.id]);
+  const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...visualPart(page) }, 60_000), [client, env.id, session.id]);
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
   // Typing must not redraw the conversation, so the words live outside this
   // screen's state; only the composer listens to them.
-  const [live] = useState(() => createLiveDraft(loadDraft(env.id, session.id)));
+  const storage = useDraftStorage(env.id, session.id);
+  const [live] = useState(() => createLiveDraft(storage.initial));
   // Deleted here or on another device: leave the chat once, not twice.
   const closed = useRef(false);
   const closeOnce = useCallback(() => { if (closed.current) return; closed.current = true; onClosed(); }, [onClosed]);
@@ -122,8 +123,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const setDraft = useCallback((v: string) => {
     editRevision.current += 1;
     live.set(v);
-    saveDraft(env.id, session.id, v);
-  }, [live, env.id, session.id]);
+    storage.save(v);
+  }, [live, storage.save]);
   const [error, setError] = useState('');
   const { images: attachments, setImages: setAttachmentsRaw, loading: loadingImages, saving: savingImages } = useDraftImages<Attachment>(env.id, session.id, setError);
   const setAttachments = useCallback((next: SetStateAction<Attachment[]>) => {
@@ -898,6 +899,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       /></CanvasContext.Provider>
 
       <DeliveryStatus client={client} env={env.id} id={session.id} />
+      {storage.error && <div className="error floating" role="alert">{storage.error}</div>}
       {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
         <strong>Send not confirmed</strong>
         <p className="failed-send-text">{failed.body}</p>

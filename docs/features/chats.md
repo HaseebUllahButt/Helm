@@ -14,7 +14,9 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
 - **Delivery:** the browser saves the action number and content before sending.
   If live links fail, ordinary web requests send chat messages and approvals.
   A lost reply triggers a result check. Opening the chat checks saved actions
-  again. The chat shows "Checking delivery" while a result is unknown.
+  again. Returning to the app or restoring a connection checks again.
+  The owner can also press "Check again" without closing the chat.
+  Each check keeps the original action number. The chat shows "Checking delivery" while a result is unknown.
   A saved chat message with the same message number also confirms delivery.
   This proof ends the check without sending again. Live replies stay visible
   while a history read waits. A final failed receipt keeps the full request
@@ -24,7 +26,10 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   a receipt proves their result. `deliveryRetained` tells first-message recovery
   that the saved failure already holds its words.
   Approvals interrupted during delivery stay unknown after a restart. Never
-  replay them: the agent can already have acted.
+  replay them: the agent can already have acted. A closed request refused before
+  a driver writes its answer is a final failure. Older receipts with the exact
+  `no pending request <id>` error become final failures when read. Preserve their
+  request digest and never replay them. Other unknown errors stay held.
 - **Tests:** `test/action-delivery`, `input-delivery`, `http-read`;
   `test/browser/client-actions`, `client-reconnect`, `delivery-recovery`.
 - **Rule:** app errors use `apps/web/src/errors.ts`. Keep clear, short messages.
@@ -44,7 +49,11 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   $V click Approve; $V wait "TOOL APPROVAL"   # "second" was delivered and asks again
   ```
 - **Traps:** each CLI reads a mid-reply message at a different moment
-  (Codex after its next step, Claude after its current tools).
+  (Codex after its next step, Claude after its current tools). Save the send
+  boundary before calling a CLI. A lost reply does not prove delivery or
+  refusal, so do not send that message again. Hold later messages until a
+  receipt or the owner resolves the uncertainty. A confirmed Stop can put
+  back only messages the CLI says it drops; save that return before retrying.
 - **Tests:** `test/dispatch-queue`, `input-delivery`, `peer-input`,
   `upgrade-input`; `test/browser/composer-card`.
 
@@ -107,15 +116,25 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `native-claude-chat`.
 
 ## @ chats and / commands
-- **Not yet driven:** `$V type "@"` should list up to three chats; `/` lists
-  commands. The CLIs' own built-in slash commands are not listed.
+- **Trap:** a new Claude sends `init` only with the first message. The `/`
+  list comes from its answer to Helm's `initialize`, which also gives what
+  each command does. Waiting for `init` left the list empty in every chat
+  that was not running, which the owner saw first on the phone.
+- **Prove `/` (driven 2026-11-04):** `up --real`, a new Claude sketch with no
+  message, `$V type "/"`: the list shows with descriptions. `$V restart`,
+  reload, type `/` again: it still shows.
+- **Not yet driven:** `$V type "@"` should list up to three chats.
 - **Tests:** `test/commands`, `commands-devin`, `slash-title`,
-  `hidden-context`.
+  `hidden-context`, `driver-claude`.
 
 ## Long chats: folds, copy, selection
-- **Latest first:** opening a chat or returning to it reads its newest window.
-  Saved text can appear first when offline. Missed live events do not replay.
-  Older replies load with the earlier-history control.
+- **Latest first:** opening a chat reads its newest window. Saved text can
+  appear first when offline. Older replies load as the reader scrolls up,
+  or with the earlier-history control. Loaded pages stay on the device.
+- **Long views:** draw only nearby turns. Keep measured space for the rest.
+  Keep selected words, open tools and focused controls alive off screen.
+  Native chat polls read the latest window and keep older pages already
+  loaded; a live refresh must not replace them or move the reader.
 - **Live reading:** a hidden chat releases its live view. Only devices with
   an open view receive its text. Text redraws before repeated tool updates;
   events keep their original order. Repeated tool output sends its newest
@@ -141,6 +160,7 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   Helm used 5.3 s for the 32 s reply and PandaCode's own preview 10.7 s.
 - **Traps:** iPhone handles and Safari permissions still need a device.
 - **Tests:** `test/browser/activity-fold`, `chat-fold`,
-  `history-pagination`, `transcript-performance`, `copy-selection`,
+  `history-pagination`, `whole-chat`, `windowed-row`, `native-history-window`,
+  `transcript-performance`, `copy-selection`,
   `highlight-performance`, `markdown-loading`, `latest-first`, `chat-sync`;
   `test/event-stream`, `stream-routing`.

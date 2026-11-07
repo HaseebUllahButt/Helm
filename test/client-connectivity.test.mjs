@@ -10,7 +10,7 @@ const bundle = await build({ stdin: { contents: source, resolveDir: new URL('../
   loader: 'ts' }, bundle: true, write: false, format: 'cjs', target: 'node22' });
 const code = bundle.outputFiles[0].text;
 
-function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, machineIds = {}, socket = 'open', socketDelay = 1, pong = true, location, streams = false } = {}) {
+function harness({ endpoints = ['https://good'], delays = {}, statuses = {}, reaches = {}, machineIds = {}, socket = 'open', socketDelay = 1, pong = true, location, streams = false } = {}) {
   let now = 0, serial = 0, parses = 0;
   const timers = new Map(), sockets = [], peers = [], events = [], requests = [], windows = new Map(), documents = new Map(), connection = new Map();
   const timer = (fn, delay = 0, interval = 0) => {
@@ -68,7 +68,7 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
   };
   const storage = new Map();
   const context = {
-    crypto: webcrypto,
+    crypto: webcrypto, URL,
     localStorage: { get length() { return storage.size; }, key: i => [...storage.keys()][i],
       getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     module: { exports: {} }, exports: {},
@@ -95,7 +95,11 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     }),
   };
   vm.runInNewContext(code, context, { filename: 'client.ts' });
-  const client = new context.module.exports.Client(endpoints, 'test-token');
+  // Route tests use a transport stand-in. hub-auth tests use real signatures.
+  const auth = { headers: async () => ({}), protocols: async () => ['helm', 'test-token'],
+    offer: async (_target, payload) => ({ ...payload, credential: 'test-token' }),
+    allowed: () => true, acceptTrust() {} };
+  const client = new context.module.exports.Client(endpoints, 'test-token', undefined, auth);
   client.on((env, kind, payload) => events.push({ env, kind, payload }));
   const start = () => client.connect().catch(error => error.message);
   return { client, exports: context.module.exports, sockets, peers, events, requests, timers, document, advance, start, parses: () => parses,
@@ -197,7 +201,7 @@ test('non-object frames are ignored on both browser transports', async () => {
 });
 
 test('a fast hub opens promptly even when another remembered endpoint is unreachable', async () => {
-  const h = harness({ endpoints: ['http://good', 'http://asleep'], delays: { 'http://asleep': Infinity } });
+  const h = harness({ endpoints: ['https://good', 'https://asleep'], delays: { 'https://asleep': Infinity } });
   const connection = h.start(); await h.advance(200); await connection;
   assert.equal(h.client.connected, true); assert.equal(h.sockets.length, 1);
   h.client.close();
@@ -299,13 +303,13 @@ test('an offline response from one hub immediately recovers safe reads without r
 });
 
 test('a broader hub takes over as soon as it answers, without waiting for a sleeping address', async () => {
-  const h = harness({ endpoints: ['http://local', 'http://home', 'http://asleep'],
-    delays: { 'http://home': 1000, 'http://asleep': Infinity }, reaches: { 'http://local': 1, 'http://home': 4 } });
+  const h = harness({ endpoints: ['https://local', 'https://home', 'https://asleep'],
+    delays: { 'https://home': 1000, 'https://asleep': Infinity }, reaches: { 'https://local': 1, 'https://home': 4 } });
   h.start(); await h.advance(200);
-  assert.equal(h.client.relay, 'http://local');
+  assert.equal(h.client.relay, 'https://local');
   await h.advance(900);
   assert.equal(h.client.connected, true);
-  assert.equal(h.client.relay, 'http://home');
+  assert.equal(h.client.relay, 'https://home');
   assert.equal(h.sockets.length, 2);
   h.client.close();
 });
@@ -314,7 +318,7 @@ test('warm reconnect races the known WebSocket without waiting for slow HTTP dis
   const delays = {};
   const setup = harness({ delays });
   setup.start(); await setup.advance(10);
-  delays['http://good'] = 12000;
+  delays['https://good'] = 12000;
   setup.sockets[0].close();
   await setup.advance(510);
   assert.equal(setup.client.connected, true);
@@ -358,35 +362,35 @@ test('signout cancels an in-flight warm handshake and cannot resurrect its socke
 });
 
 test('a cached hub whose upgrade stalls cannot block another discovered hub', async () => {
-  const delays = { 'http://other': Infinity };
+  const delays = { 'https://other': Infinity };
   let stalled = false;
-  const setup = harness({ endpoints: ['http://good', 'http://other'], delays,
-    socket: url => stalled && url.startsWith('ws://good') ? 'hang' : 'open' });
+  const setup = harness({ endpoints: ['https://good', 'https://other'], delays,
+    socket: url => stalled && url.startsWith('wss://good') ? 'hang' : 'open' });
   setup.start(); await setup.advance(200);
   stalled = true;
-  delays['http://other'] = 1000;
+  delays['https://other'] = 1000;
   setup.window('offline'); setup.window('online');
   await setup.advance(1100);
   assert.equal(setup.client.connected, true);
-  assert.equal(setup.client.relay, 'http://other');
+  assert.equal(setup.client.relay, 'https://other');
   assert.equal(setup.sockets[1].readyState, 3);
   setup.client.close();
 });
 
 test('hub migration keeps the old route working and drains writes without replay', async () => {
-  const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 },
-    socketDelay: url => url.startsWith('ws://home') ? 5000 : 1 });
+  const setup = harness({ endpoints: ['https://local'], reaches: { 'https://home': 4 },
+    socketDelay: url => url.startsWith('wss://home') ? 5000 : 1 });
   setup.start(); await setup.advance(10);
   const original = setup.sockets[0];
   const connectionEvents = setup.events.filter(event => event.kind === 'connection').length;
-  setup.client.learn(['http://local', 'http://home']);
+  setup.client.learn(['https://local', 'https://home']);
   await setup.advance(100);
   assert.equal(setup.client.connected, true);
-  assert.equal(setup.client.relay, 'http://local');
+  assert.equal(setup.client.relay, 'https://local');
   const request = setup.client.rpc('vm', 'session.input', { data: 'once' });
   const frame = original.frames.at(-1);
   await setup.advance(5000);
-  assert.equal(setup.client.relay, 'http://home');
+  assert.equal(setup.client.relay, 'https://home');
   assert.equal(original.readyState, 1);
   original.message({ t: 'rpcResult', id: frame.id, ok: true, result: 'accepted' });
   assert.equal(await request, 'accepted');
@@ -397,16 +401,16 @@ test('hub migration keeps the old route working and drains writes without replay
 });
 
 test('losing the new hub preserves a write still waiting on the old hub', async () => {
-  const h = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 } });
+  const h = harness({ endpoints: ['https://local'], reaches: { 'https://home': 4 } });
   h.start(); await h.advance(10);
   const original = h.sockets[0];
   let settled = false;
   const request = h.client.rpc('vm', 'session.input', { data: 'once' });
   request.then(() => { settled = true; }, () => { settled = true; });
   const frame = original.frames.at(-1);
-  h.client.learn(['http://local', 'http://home']);
+  h.client.learn(['https://local', 'https://home']);
   await h.advance(20);
-  assert.equal(h.client.relay, 'http://home');
+  assert.equal(h.client.relay, 'https://home');
   h.sockets[1].close();
   await h.advance(1);
   assert.equal(settled, false, 'the old hub can still answer this write');
@@ -418,12 +422,12 @@ test('losing the new hub preserves a write still waiting on the old hub', async 
 });
 
 test('losing a draining hub fails only its own writes and never replays them', async () => {
-  const h = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 } });
+  const h = harness({ endpoints: ['https://local'], reaches: { 'https://home': 4 } });
   h.start(); await h.advance(10);
   const original = h.sockets[0];
   let failure;
   const lost = h.client.rpc('vm', 'session.input', { data: 'old' }).catch(error => { failure = error; });
-  h.client.learn(['http://local', 'http://home']);
+  h.client.learn(['https://local', 'https://home']);
   await h.advance(20);
   const replacement = h.sockets[1];
   const current = h.client.rpc('vm', 'session.input', { data: 'new' });
@@ -440,12 +444,12 @@ test('losing a draining hub fails only its own writes and never replays them', a
 });
 
 test('a drained hub closes when its own write ends while another hub still has work', async () => {
-  const h = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 } });
+  const h = harness({ endpoints: ['https://local'], reaches: { 'https://home': 4 } });
   h.start(); await h.advance(10);
   const original = h.sockets[0];
   const old = h.client.rpc('vm', 'session.input', { data: 'old' });
   const oldFrame = original.frames.at(-1);
-  h.client.learn(['http://local', 'http://home']);
+  h.client.learn(['https://local', 'https://home']);
   await h.advance(20);
   const replacement = h.sockets[1];
   const current = h.client.rpc('vm', 'session.input', { data: 'new' });
@@ -460,13 +464,13 @@ test('a drained hub closes when its own write ends while another hub still has w
 
 test('failed migration preserves the working hub and closing cancels a pending replacement', async () => {
   for (const behavior of ['error', 'hang']) {
-    const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 },
-      socket: url => url.startsWith('ws://home') ? behavior : 'open' });
+    const setup = harness({ endpoints: ['https://local'], reaches: { 'https://home': 4 },
+      socket: url => url.startsWith('wss://home') ? behavior : 'open' });
     setup.start(); await setup.advance(10);
-    setup.client.learn(['http://local', 'http://home']);
+    setup.client.learn(['https://local', 'https://home']);
     await setup.advance(100);
     assert.equal(setup.client.connected, true);
-    assert.equal(setup.client.relay, 'http://local');
+    assert.equal(setup.client.relay, 'https://local');
     setup.client.close();
     await setup.advance(25000);
     assert.ok(setup.sockets.every(socket => socket.readyState === 3));
@@ -475,40 +479,40 @@ test('failed migration preserves the working hub and closing cancels a pending r
 });
 
 test('losing the old hub during migration does not supersede the pending replacement', async () => {
-  const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 },
-    socketDelay: url => url.startsWith('ws://home') ? 2000 : 1 });
+  const setup = harness({ endpoints: ['https://local'], reaches: { 'https://home': 4 },
+    socketDelay: url => url.startsWith('wss://home') ? 2000 : 1 });
   setup.start(); await setup.advance(10);
-  setup.client.learn(['http://local', 'http://home']);
+  setup.client.learn(['https://local', 'https://home']);
   await setup.advance(100);
   setup.sockets[0].close();
   await setup.advance(2100);
   assert.equal(setup.client.connected, true);
-  assert.equal(setup.client.relay, 'http://home');
+  assert.equal(setup.client.relay, 'https://home');
   assert.equal(setup.sockets.length, 2);
   setup.client.close();
 });
 
 test('a replacement handshake timeout does not disconnect the original healthy hub', async () => {
-  const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 },
-    socket: url => url.startsWith('ws://home') ? 'hang' : 'open' });
+  const setup = harness({ endpoints: ['https://local'], reaches: { 'https://home': 4 },
+    socket: url => url.startsWith('wss://home') ? 'hang' : 'open' });
   setup.start(); await setup.advance(10);
-  setup.client.learn(['http://local', 'http://home']);
+  setup.client.learn(['https://local', 'https://home']);
   await setup.advance(20100);
   assert.equal(setup.client.connected, true);
-  assert.equal(setup.client.relay, 'http://local');
+  assert.equal(setup.client.relay, 'https://local');
   assert.equal(setup.sockets[0].readyState, 1);
   assert.equal(setup.sockets[1].readyState, 3);
   setup.client.close();
 });
 
 test('hub migration restarts unfinished direct negotiation but preserves live direct routes', async () => {
-  const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 } });
+  const setup = harness({ endpoints: ['https://local'], reaches: { 'https://home': 4 } });
   setup.start(); await setup.advance(10);
   await setup.client.openDirect('ready');
   setup.peers[0].open();
   await setup.client.openDirect('negotiating');
   const stale = setup.peers[1];
-  setup.client.learn(['http://local', 'http://home']);
+  setup.client.learn(['https://local', 'https://home']);
   await setup.advance(20);
   assert.equal(setup.client.directTo('ready'), true);
   assert.equal(stale.connectionState, 'closed');
@@ -518,67 +522,67 @@ test('hub migration restarts unfinished direct negotiation but preserves live di
 });
 
 test('a lossy distant hub remains eligible after twelve seconds while the local app opens immediately', async () => {
-  const setup = harness({ endpoints: ['http://local', 'http://home'],
-    delays: { 'http://home': 12000 }, reaches: { 'http://local': 1, 'http://home': 3 } });
+  const setup = harness({ endpoints: ['https://local', 'https://home'],
+    delays: { 'https://home': 12000 }, reaches: { 'https://local': 1, 'https://home': 3 } });
   setup.start(); await setup.advance(200);
   assert.equal(setup.client.connected, true);
-  assert.equal(setup.client.relay, 'http://local');
+  assert.equal(setup.client.relay, 'https://local');
   await setup.advance(12000);
   assert.equal(setup.client.connected, true);
-  assert.equal(setup.client.relay, 'http://home');
+  assert.equal(setup.client.relay, 'https://home');
   setup.client.close();
 });
 
 test('a connected local hub does not trap the browser when a broader hub returns later', async () => {
-  const statuses = { 'http://home': 503 };
-  const h = harness({ endpoints: ['http://local', 'http://home'], statuses, reaches: { 'http://home': 4 } });
+  const statuses = { 'https://home': 503 };
+  const h = harness({ endpoints: ['https://local', 'https://home'], statuses, reaches: { 'https://home': 4 } });
   h.start(); await h.advance(200);
-  assert.equal(h.client.relay, 'http://local');
-  statuses['http://home'] = 200;
+  assert.equal(h.client.relay, 'https://local');
+  statuses['https://home'] = 200;
   await h.advance(15000);
-  assert.equal(h.client.relay, 'http://home');
+  assert.equal(h.client.relay, 'https://home');
   assert.equal(h.client.connected, true);
   h.client.close();
 });
 
 test('learning a new hub checks its reach without waiting for a reconnect', async () => {
-  const h = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 } });
+  const h = harness({ endpoints: ['https://local'], reaches: { 'https://home': 4 } });
   h.start(); await h.advance(200);
-  h.client.learn(['http://local', 'http://home']);
+  h.client.learn(['https://local', 'https://home']);
   await h.advance(20);
-  assert.equal(h.client.relay, 'http://home');
+  assert.equal(h.client.relay, 'https://home');
   assert.equal(h.client.connected, true);
   h.client.close();
 });
 
 test('a dead previously broader hub cannot delay a healthy local reconnect', async () => {
-  const delays = { 'http://home': 1000 };
-  const h = harness({ endpoints: ['http://local', 'http://home'], delays, reaches: { 'http://home': 4 } });
+  const delays = { 'https://home': 1000 };
+  const h = harness({ endpoints: ['https://local', 'https://home'], delays, reaches: { 'https://home': 4 } });
   h.start(); await h.advance(1100);
-  assert.equal(h.client.relay, 'http://home');
-  delays['http://home'] = Infinity;
+  assert.equal(h.client.relay, 'https://home');
+  delays['https://home'] = Infinity;
   h.sockets.at(-1).close();
   await h.advance(700);
   assert.equal(h.client.connected, true);
-  assert.equal(h.client.relay, 'http://local');
+  assert.equal(h.client.relay, 'https://local');
   h.client.close();
 });
 
 test('a presence response from the old hub cannot overwrite the new hub after failover', async () => {
   const delays = {};
-  const h = harness({ endpoints: ['http://local'], delays, reaches: { 'http://home': 4 } });
+  const h = harness({ endpoints: ['https://local'], delays, reaches: { 'https://home': 4 } });
   h.start(); await h.advance(200);
-  delays['http://local/api/machines'] = 2000;
+  delays['https://local/api/machines'] = 2000;
   const presence = h.client.environments();
-  h.client.learn(['http://local', 'http://home']);
+  h.client.learn(['https://local', 'https://home']);
   await h.advance(2100);
-  assert.equal(h.client.relay, 'http://home');
+  assert.equal(h.client.relay, 'https://home');
   assert.equal((await presence).environments.length, 4);
   h.client.close();
 });
 
 test('equal reach stays on the current hub and closing stops periodic discovery', async () => {
-  const h = harness({ endpoints: ['http://local', 'http://home'] });
+  const h = harness({ endpoints: ['https://local', 'https://home'] });
   h.start(); await h.advance(46000);
   assert.equal(h.sockets.length, 1);
   h.client.close();
@@ -588,8 +592,8 @@ test('equal reach stays on the current hub and closing stops periodic discovery'
 });
 
 test('cold connection accepts slow healthy hubs and does not misclassify a slow success as revoked', async () => {
-  for (const statuses of [{}, { 'http://old': 401 }]) {
-    const h = harness({ endpoints: ['http://good', 'http://old'], delays: { 'http://good': 3500, 'http://old': statuses['http://old'] ? 0 : 3500 }, statuses });
+  for (const statuses of [{}, { 'https://old': 401 }]) {
+    const h = harness({ endpoints: ['https://good', 'https://old'], delays: { 'https://good': 3500, 'https://old': statuses['https://old'] ? 0 : 3500 }, statuses });
     const connection = h.start(); await h.advance(4000); await connection;
     assert.equal(h.client.connected, true);
     assert.equal(h.events.some(e => e.kind === 'unauthorized'), false);
@@ -617,15 +621,15 @@ test('a slow WebSocket handshake is allowed to complete without a reconnect loop
 });
 
 test('a hub with working HTTP but broken WebSocket cannot win every reconnect', async () => {
-  const h = harness({ endpoints: ['http://broken', 'http://good'], socket: url => url.startsWith('ws://broken') ? 'error' : 'open' });
+  const h = harness({ endpoints: ['https://broken', 'https://good'], socket: url => url.startsWith('wss://broken') ? 'error' : 'open' });
   const connection = h.start(); await h.advance(600); await connection;
   assert.equal(h.sockets.length, 2);
-  assert.equal(h.client.connected, true); assert.equal(h.client.relay, 'http://good');
+  assert.equal(h.client.connected, true); assert.equal(h.client.relay, 'https://good');
   h.client.close();
 });
 
 test('the first slow success opens without waiting for an unreachable endpoint to expire', async () => {
-  const h = harness({ endpoints: ['http://good', 'http://asleep'], delays: { 'http://good': 3500, 'http://asleep': Infinity } });
+  const h = harness({ endpoints: ['https://good', 'https://asleep'], delays: { 'https://good': 3500, 'https://asleep': Infinity } });
   const connection = h.start(); await h.advance(3600); await connection;
   assert.equal(h.client.connected, true);
   h.client.close();
@@ -772,7 +776,7 @@ test('an early hedge error does not reject the slower direct success', async () 
   const statuses = {};
   const h = harness({ statuses }); h.start(); await h.advance(10);
   await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
-  statuses['http://good'] = 503;
+  statuses['https://good'] = 503;
   const request = h.client.rpc('machine', 'session.events'); await h.advance(1510);
   const frame = peer.channel.frames.find(f => f.t === 'rpc');
   peer.message({ t: 'rpcResult', id: frame.id, ok: true, result: 'fresh' });
@@ -786,7 +790,7 @@ test('safe chat reads use authenticated HTTP when WebSocket upgrades are unavail
     const request = h.client.rpc('machine', method, { id: 'chat' }); await h.advance(1);
     assert.equal((await request).fresh, true);
     const sent = h.requests.at(-1);
-    assert.equal(sent.url, 'http://good/api/read');
+    assert.equal(sent.url, 'https://good/api/read');
     assert.equal(sent.init.headers.authorization, 'Bearer test-token');
     assert.deepEqual(JSON.parse(sent.init.body), { env: 'machine', method, params: { id: 'chat' }, timeoutMs: 30000 });
   }
@@ -795,7 +799,7 @@ test('safe chat reads use authenticated HTTP when WebSocket upgrades are unavail
 });
 
 test('HTTP read fallback never sends untracked writes and respects the read deadline', async () => {
-  const h = harness({ delays: { 'http://good': Infinity } });
+  const h = harness({ delays: { 'https://good': Infinity } });
   for (const method of ['session.input', 'session.archive', 'profile.defaults']) {
     await assert.rejects(h.client.rpc('machine', method), /not connected/);
   }
@@ -837,7 +841,7 @@ test('HTTP still recovers a chat read when both open socket routes are silent', 
 
 test('a socket read cancels its HTTP backup when it returns first', async () => {
   for (const route of ['direct', 'relay']) {
-    const h = harness({ delays: { 'http://good/api/read': Infinity } });
+    const h = harness({ delays: { 'https://good/api/read': Infinity } });
     h.start(); await h.advance(10);
     if (route === 'direct') { await h.client.openDirect('machine'); h.peers[0].open(); }
     const request = h.client.rpc('machine', 'session.events');
@@ -857,7 +861,7 @@ test('a socket read cancels its HTTP backup when it returns first', async () => 
 });
 
 test('the parent read deadline cancels a running HTTP backup', async () => {
-  const h = harness({ delays: { 'http://good/api/read': Infinity } });
+  const h = harness({ delays: { 'https://good/api/read': Infinity } });
   h.start(); await h.advance(10);
   const request = h.client.rpc('machine', 'session.events', {}, 4000).catch(e => e.message);
   await h.advance(4010);
@@ -867,7 +871,7 @@ test('the parent read deadline cancels a running HTTP backup', async () => {
 });
 
 test('HTTP reads fail over promptly from a dead remembered relay and cancel the losing request', async () => {
-  const h = harness({ endpoints: ['http://old', 'http://good'], delays: { 'http://old': Infinity, 'http://good': 10 } });
+  const h = harness({ endpoints: ['https://old', 'https://good'], delays: { 'https://old': Infinity, 'https://good': 10 } });
   const request = h.client.rpc('machine', 'session.events', {}, 20000);
   await h.advance(2999); assert.equal(h.requests.length, 1);
   await h.advance(20);
@@ -881,7 +885,7 @@ test('HTTP reads fail over promptly from a dead remembered relay and cancel the 
 
 test('an HTTP403 or503 advances endpoint failover immediately without defeating a slower success', async () => {
   for (const status of [403, 503]) {
-    const h = harness({ endpoints: ['http://old', 'http://good'], statuses: { 'http://old': status }, delays: { 'http://good': 1000 } });
+    const h = harness({ endpoints: ['https://old', 'https://good'], statuses: { 'https://old': status }, delays: { 'https://good': 1000 } });
     const request = h.client.rpc('machine', 'session.events', {}, 2000);
     await h.advance(1); assert.equal(h.requests.length, 2);
     await h.advance(1000);
@@ -891,7 +895,7 @@ test('an HTTP403 or503 advances endpoint failover immediately without defeating 
 });
 
 test('closing a client cancels HTTP reads and prevents staggered requests after signout', async () => {
-  const h = harness({ endpoints: ['http://old', 'http://good'], delays: { 'http://old': Infinity } });
+  const h = harness({ endpoints: ['https://old', 'https://good'], delays: { 'https://old': Infinity } });
   const request = h.client.rpc('machine', 'session.events').catch(error => error.message);
   await h.advance(100); h.client.close();
   assert.equal(await request, 'client closed');
@@ -912,30 +916,30 @@ test('HTTPS read failover never sends the token to a mixed-content HTTP endpoint
 
 
 test('a faster hub with equal reach must still reach the machines in the current hub', async () => {
-  const h = harness({ endpoints: ['http://local'], delays: { 'http://local': 100, 'http://other': 1 },
-    machineIds: { 'http://local': ['vm'], 'http://other': ['unrelated'] } });
+  const h = harness({ endpoints: ['https://local'], delays: { 'https://local': 100, 'https://other': 1 },
+    machineIds: { 'https://local': ['vm'], 'https://other': ['unrelated'] } });
   h.start(); await h.advance(200);
   h.client.subscribe('vm');
   await h.advance(30000);
-  h.client.learn(['http://local', 'http://other']);
+  h.client.learn(['https://local', 'https://other']);
   await h.advance(16000);
-  assert.equal(h.client.relay, 'http://local', 'equal counts must not hide the active terminal machine');
+  assert.equal(h.client.relay, 'https://local', 'equal counts must not hide the active terminal machine');
   h.client.close();
 });
 
 
 test('a faster hub with the same machines restores subscriptions and drains pending writes', async () => {
-  const delays = { 'http://local': 100, 'http://other': 1 };
-  const h = harness({ endpoints: ['http://local'], delays });
+  const delays = { 'https://local': 100, 'https://other': 1 };
+  const h = harness({ endpoints: ['https://local'], delays });
   h.start(); await h.advance(200);
   h.client.subscribe('vm');
   await h.advance(30100);
   const old = h.sockets[0];
   const write = h.client.rpc('vm', 'session.input', { data: 'once' });
   const frame = old.frames.at(-1);
-  h.client.learn(['http://local', 'http://other']);
+  h.client.learn(['https://local', 'https://other']);
   await h.advance(200);
-  assert.equal(h.client.relay, 'http://other');
+  assert.equal(h.client.relay, 'https://other');
   const replacement = h.sockets.at(-1);
   assert.ok(replacement.frames.some(f => f.t === 'subscribe' && f.env === 'vm'));
   assert.equal(old.readyState, 1);
@@ -947,12 +951,12 @@ test('a faster hub with the same machines restores subscriptions and drains pend
   assert.equal(h.sockets.flatMap(s => s.frames).filter(f => f.method === 'session.input').length, 1);
 
   // A reversal within thirty seconds must not flap the connection.
-  delays['http://local'] = 1;
-  delays['http://other'] = 100;
+  delays['https://local'] = 1;
+  delays['https://other'] = 100;
   await h.advance(15100);
-  assert.equal(h.client.relay, 'http://other');
+  assert.equal(h.client.relay, 'https://other');
   await h.advance(30000);
-  assert.equal(h.client.relay, 'http://local');
+  assert.equal(h.client.relay, 'https://local');
   h.client.close();
 });
 
@@ -1125,8 +1129,8 @@ test('just after waking, a read tries the web route after 0.5 s', async () => {
 });
 
 test('signing in gives up on a stalled network instead of waiting for ever', async () => {
-  const h = harness({ delays: { 'http://stalled': Infinity } });
-  void h.exports.login('http://stalled', 'secret').catch(() => {});
+  const h = harness({ delays: { 'https://stalled': Infinity } });
+  void h.exports.login('https://stalled', 'secret', undefined, 'fixture-key').catch(() => {});
   await h.advance(1);
   const request = h.requests.find(r => r.url.endsWith('/api/auth/login'));
   assert.ok(request?.init?.signal, 'the sign-in request has a deadline');
@@ -1201,7 +1205,7 @@ test('slow direct fragments do not start duplicate history downloads', async () 
 });
 
 test('a read waits while its pieces arrive and expires after they stop', async () => {
-  const h = harness({delays:{'http://good/api/read':Infinity}}); h.start(); await h.advance(200);
+  const h = harness({delays:{'https://good/api/read':Infinity}}); h.start(); await h.advance(200);
   await h.client.openDirect('machine'); const peer = h.peers[0]; peer.open();
   let ended = false;
   const read = h.client.rpc('machine', 'session.events', {}, 4000).catch(e => { ended = true; return e.message; });
@@ -1220,7 +1224,7 @@ test('a read waits while its pieces arrive and expires after they stop', async (
 });
 
 test('web reads give a slow healthy hub time before asking another hub', async () => {
-  const h = harness({ endpoints: ['http://one', 'http://two', 'http://three', 'http://four'], delays: { 'http://one': 2500 } });
+  const h = harness({ endpoints: ['https://one', 'https://two', 'https://three', 'https://four'], delays: { 'https://one': 2500 } });
   const read = h.client.rpc('machine', 'session.events', {}, 20000);
   await h.advance(2400);
   assert.equal(h.requests.length, 1);
@@ -1245,7 +1249,7 @@ test('unrelated live events cannot postpone recovery of a lost direct reply', as
 
 
 test('a received message confirms delivery while its receipt is still lost', async () => {
-  const h = harness({ delays: { 'http://good/api/action': Infinity } }); h.start(); await h.advance(200);
+  const h = harness({ delays: { 'https://good/api/action': Infinity } }); h.start(); await h.advance(200);
   const actionId = 'a'.repeat(32);
   let result;
   const done = h.client.input('pc', { id: 'chat', data: 'once' }, 120000, actionId).then(value => { result = value; });
@@ -1391,5 +1395,84 @@ test('a history reply can finish after its original deadline while its pieces ar
   }
   assert.equal((await read).text.length,400000);
   assert.equal(h.requests.filter(r=>r.url.endsWith('/api/read')).length,0);
+  h.client.close();
+});
+
+test('native helper messages retain a delivery number until the view confirms it', async () => {
+  const h=harness(); h.start(); await h.advance(200);
+  const sending=h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'once'},30000);
+  await h.advance(1);
+  const frame=h.sockets[0].frames.find(item=>item.method==='session.native-message-deliver');
+  assert.ok(frame);
+  assert.match(frame.params.actionId,/^[a-f0-9]{32}$/);
+  h.sockets[0].message({t:'rpcResult',id:frame.id,ok:true,result:{state:'done',result:{ok:true}}});
+  const result=await sending;
+  assert.equal(result.actionId,frame.params.actionId);
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper')[0].confirmed,true);
+  const repeated=await h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'once'},30000);
+  assert.equal(repeated.actionId,frame.params.actionId);
+  assert.equal(h.sockets[0].frames.filter(item=>item.method==='session.native-message-deliver').length,1);
+  await assert.rejects(h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'different'},30000),/previous message/i);
+  h.client.ackNativeMessage(frame.params.actionId);
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,0);
+  h.client.close();
+});
+
+test('a lost native helper reply checks the same receipt before any retry', async () => {
+  const h=harness({delays:{'https://good/api/action':Infinity}}); h.start(); await h.advance(200);
+  const sending=h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'once'},30000);
+  await h.advance(1);
+  const first=h.sockets[0].frames.find(item=>item.method==='session.native-message-deliver');
+  const blocked=h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'new'},30000);
+  await assert.rejects(blocked,/previous message/i);
+  await h.advance(10501);
+  const status=h.sockets[0].frames.find(item=>item.method==='session.action-status');
+  assert.equal(status.params.kind,'native');
+  assert.equal(status.params.actionId,first.params.actionId);
+  h.sockets[0].message({t:'rpcResult',id:status.id,ok:true,result:{state:'done',result:{ok:true}}});
+  assert.equal((await sending).actionId,first.params.actionId);
+  assert.equal(h.sockets[0].frames.filter(item=>item.method==='session.native-message-deliver').length,1);
+  h.client.close();
+});
+
+test('an older machine is asked to update without using an unsafe send', async () => {
+  const h=harness(); h.start(); await h.advance(200);
+  const sending=h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'once'},30000);
+  const rejected=assert.rejects(sending,/Update this machine/);
+  await h.advance(1);
+  const frame=h.sockets[0].frames.find(item=>item.method==='session.native-message-deliver');
+  h.sockets[0].message({t:'rpcResult',id:frame.id,ok:false,error:{code:'unknown_method',message:'unknown method'}});
+  await rejected;
+  assert.equal(h.sockets[0].frames.some(item=>item.method==='session.native-message'),false);
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,0);
+  h.client.close();
+});
+
+test('an uncertain native send can be cleared only for its own helper', async () => {
+  const h=harness(); h.start(); await h.advance(200);
+  const actionId='c'.repeat(32);
+  h.client.saveAction({env:'pc',method:'session.native-message-deliver',actionId,started:true,
+    params:{id:'parent',agentId:'helper',data:'earlier',actionId}});
+  assert.throws(()=>h.client.abandonNativeMessage('pc','parent','other',actionId),/message/i);
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,1);
+  h.client.delivering.set(actionId,Promise.resolve());
+  assert.throws(()=>h.client.abandonNativeMessage('pc','parent','helper',actionId),/still checking/i);
+  h.client.delivering.delete(actionId);
+  h.client.abandonNativeMessage('pc','parent','helper',actionId);
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,0);
+  assert.equal(h.sockets[0].frames.some(item=>item.method==='session.native-message-deliver'),false);
+  h.client.close();
+});
+
+test('a helper message refused before sending leaves no pending delivery', async () => {
+  const h=harness(); h.start(); await h.advance(200);
+  const sending=h.client.rpc('pc','session.native-message',{id:'parent',agentId:'helper',data:'once'},30000);
+  const rejected=assert.rejects(sending,/no such helper/i);
+  await h.advance(1);
+  const frame=h.sockets[0].frames.find(item=>item.method==='session.native-message-deliver');
+  h.sockets[0].message({t:'rpcResult',id:frame.id,ok:true,result:{state:'done',error:{code:'delivery_failed',message:'No such helper.'}}});
+  await rejected;
+  assert.equal(h.client.nativeMessageActions('pc','parent','helper').length,0);
+  assert.equal(h.client.savedActions().filter(item=>item.method==='session.native-message-deliver').length,0);
   h.client.close();
 });

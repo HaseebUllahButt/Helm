@@ -8,7 +8,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 
 const dir = mkdtempSync(join(tmpdir(), 'helm-link-reconnect-'));
 process.env.HELM_DIR = dir;
-const { createNetwork, hubProof, hubHello } = await import('@helm/protocol/network');
+const { createNetwork, hubHello, hubHelloAnswer, loadNetwork, saveNetwork } = await import('@helm/protocol/network');
 const { Link, Daemon, eventLinks } = await import('../packages/connect/src/agent.js');
 const { hubRpc } = await import('../packages/connect/src/hub-client.js');
 const net = createNetwork({ name: 'test' });
@@ -23,7 +23,7 @@ async function fixture(context, firstUpgrade, linkOptions = {}) {
     for await (const chunk of request) text += chunk;
     const { nonce } = JSON.parse(text);
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ net: net.id, challenge: 'test', proof: hubProof(net, nonce) }));
+    response.end(JSON.stringify(hubHelloAnswer(loadNetwork(), nonce)));
   });
   server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   server.on('upgrade', (request, socket, head) => {
@@ -34,6 +34,10 @@ async function fixture(context, firstUpgrade, linkOptions = {}) {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}`;
+  // The fake hub signs as this machine, so the address must be this machine's.
+  const stored = loadNetwork();
+  stored.machines[stored.self].endpoints = [url];
+  saveNetwork(stored);
   let connected;
   const ready = new Promise(resolve => { connected = resolve; });
   const daemon = { net, port: server.address().port, name: 'test', describe: async () => ({}), onLinkUp: connected, onFrame: async () => {} };

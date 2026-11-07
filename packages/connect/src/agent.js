@@ -11,7 +11,7 @@ import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import {
-  loadNetwork, mergeRoster, allEndpoints, describeSelf, hubCredential,
+  loadNetwork, mergeRoster, allEndpoints, describeSelf, hubCredential, secureHubAddress,
   roster as rosterOf, rosterHash, machineName, NAME_RULE, machineKind,
   MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
@@ -39,7 +39,6 @@ import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub, directCaller } from './peer.js';
 import { allowDirectSignal } from './direct-auth.js';
-import { lanAddresses } from './net-addr.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
@@ -83,6 +82,7 @@ import { useOwnerLogins } from './browser.js';
 import { webBuild } from './web-build.js';
 import { AgentMessages } from './agent-messages.js';
 import { ActionDelivery } from './action-delivery.js';
+import { NativeMessageDelivery } from './session-subagents.js';
 import { InputDelivery } from './input-delivery.js';
 import { ChatEventStream } from './event-stream.js';
 import { SessionUpdates } from './session-updates.js';
@@ -317,7 +317,9 @@ export class Link {
     try {
       info = await this.daemon.describe();
       if (!current()) return;
-      credential = await hubCredential(loadNetwork() ?? this.daemon.net, this.url, { signal: opening.signal });
+      const net = loadNetwork() ?? this.daemon.net;
+      // Our own hub can run on another port than the saved one.
+      credential = await hubCredential(net, this.url, { signal: opening.signal, machine: isSelf ? net.self : this.hintFor });
     } catch (err) {
       if (!current()) return;
       if (err.untrusted && !this.warned) {
@@ -502,7 +504,7 @@ export class Daemon {
         // ones it forwards: against who the hub introduced, never who the
         // request says it is from. Machine offers first prove that identity
         // with their pinned signing key in onFrame below.
-        authorize: (device, frame) => directCaller(loadNetwork() ?? this.net, device, frame.sub, loadSettings()?.directRoutes !== false),
+        authorize: (device, frame, credential) => directCaller(loadNetwork() ?? this.net, device, frame.sub, loadSettings()?.directRoutes !== false, credential),
         // Machines open channels to ask questions; they hear events through
         // their hubs. Only phones and browsers want them sent direct.
         events: (device) => !Object.hasOwn((loadNetwork() ?? this.net).machines ?? {}, device),
@@ -535,7 +537,7 @@ export class Daemon {
       publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     // A chat in its own worktree is also told where its work goes back to.
-    this.sessions.delegationBrief = (s) => [helmBrief(loadNetwork() ?? this.net, { parentId: s?.delegation?.parentId ?? null }), worktreeNote(s)].filter(Boolean).join('\n');
+    this.sessions.delegationBrief = (s) => [helmBrief(loadNetwork() ?? this.net, { parentId: s?.delegation?.parentId ?? null, engine: s?.engine ?? null }), worktreeNote(s)].filter(Boolean).join('\n');
     // What was said in every chat here, for the search box (search-index.js).
     this.search = new SearchIndex({ log: (line) => console.log(`[helm] ${line}`) });
     this.keeper = new OwnerKeeper({
@@ -596,11 +598,20 @@ export class Daemon {
     // are still running. Ask which before resuming: `resume` reads the
     // surviving-proc list to know which open turns are still live rather
     // than interrupted.
-    this.sessionRecovery = this.sessions.adoptTerminals()
+    //
+    // New chats and sends wait for the saved chats, not for their agents to
+    // reconnect. After a reboot one stuck reconnect held every new chat and
+    // every message for 13 minutes; each driver already waits for its own.
+    let restored;
+    const recordsRestored = new Promise((resolve) => { restored = resolve; });
+    const resumed = this.sessions.adoptTerminals()
       .catch(() => {})
-      .then(() => this.sessions.resume())
+      .then(() => this.sessions.resume({ onRestored: restored }))
+      // Logged here: it can fail after new chats were let through.
+      .catch((error) => { console.error(`[helm] session recovery: ${error.message}`); throw Object.assign(error, { logged: true }); });
+    this.sessionRecovery = Promise.race([resumed, recordsRestored])
       .then(() => { if (!this.#stopped) { this.inputDelivery.resume(); this.schedules?.start(); this.sessions.startLimitRecovery(); this.chatMoves.start(); } })
-      .catch((error) => console.error(`[helm] session recovery: ${error.message}`));
+      .catch((error) => { if (!error?.logged) console.error(`[helm] session recovery: ${error?.message}`); });
     // Caches worth having warm, none worth being late for: they start once
     // the links are up. Re-reading the shell's aliases blocks for a moment,
     // and that moment used to sit in front of this machine coming online.
@@ -819,6 +830,9 @@ export class Daemon {
   async stop() {
     if (this.#stopped) return;
     this.#stopped = true;
+    // Stop schedules first: a tick during the awaits below would send work
+    // into parts that are already stopping.
+    this.schedules?.stop();
     this.#eventStream.stop();
     this.#updates.stop();
     this.inputDelivery?.stop();
@@ -835,7 +849,6 @@ export class Daemon {
     this.taskTransfers?.stop();
     await this.forwards?.stop();
     await this.sendEngine?.stop();
-    this.schedules?.stop();
     this.search?.close();
     this.github?.stop();
     this.#stopWatch?.();
@@ -901,7 +914,7 @@ export class Daemon {
       ] : [],
     });
     this.#hintOwners = plan.owners;
-    return plan.urls;
+    return plan.urls.filter(secureHubAddress);
   }
 
   /** Hinted address -> the machine that announced it, for this round's links. */
@@ -990,12 +1003,7 @@ export class Daemon {
    */
   async #publishSelf() {
     const net = loadNetwork() ?? this.net;
-    const endpoints = [...new Set([
-      ...this.extra,
-      ...(this.advertiseLan
-        ? lanAddresses().map((a) => `http://${a.address}:${this.port}`)
-        : []),
-    ])];
+    const endpoints = [...new Set(this.extra)].filter(secureHubAddress);
     const ssh = await sshInfo().catch(() => ({}));
     const code = codeKeyInfo();
     const signing = codeSigningInfo();
@@ -1007,6 +1015,7 @@ export class Daemon {
       codePubkey: code.codePubkey,
       codeSignPubkey: signing.codeSignPubkey,
       sendV2: true,
+      signedHub: true,
     });
   }
 
@@ -1359,6 +1368,8 @@ export class Daemon {
       home: homedir(),
       precopiedHandoff: true,
       agentMessages: true,
+      // A new helper task can carry pasted pictures and files.
+      helperAttachments: true,
       sendV2: true,
       // Answers requests from other machines over a direct channel, checking
       // each one as a hub would (direct-mesh.js). Older machines leave this
@@ -1609,7 +1620,7 @@ export class Daemon {
       // Ports forwarded on purpose to another machine with `helm forward`.
       ...forwardedPorts(),
       ...(Array.isArray(extra) ? extra.map(Number) : []),
-    ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
+    ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536 && p !== this.port);
   }
 
   #directTunnel(link, frame, caller) {
@@ -1863,10 +1874,16 @@ export class Daemon {
         const shareNetwork = loadNetwork() ?? this.net;
         await assertShareNameAvailable(p.name, shareNetwork, env =>
           hubRpc(shareNetwork, env, M.SHARE_LIST, {}, { timeout: 4000, budget: 5000 }), this.sendPresence());
+        if (Number(p.port) === this.port) throw new Error('Do not share the Helm port. Share the app port instead.');
         await checkSharePort(Number(p.port));
         return { share: this.#shareView(addShare(p)) };
       }
       case M.SHARE_REMOVE:
+        // The webhook Spin is not in shares.json: stopping it pauses its tasks.
+        if (this.schedules?.shareName && String(p.name ?? '').toLowerCase() === this.schedules.shareName) {
+          const paused = this.schedules.closeWebhooks();
+          return { removed: paused.length > 0, paused };
+        }
         return { removed: removeShare(p.name) };
 
       case M.FORWARD_LIST:
@@ -2126,7 +2143,7 @@ export class Daemon {
         return result;
       }
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
-      case M.SESSION_NATIVE_AGENT: return this.sessions.nativeAgent(p.id, p.agentId, { full: p.full === true });
+      case M.SESSION_NATIVE_AGENT: return this.sessions.nativeAgent(p.id, p.agentId, { full: p.full === true, limit: p.limit });
       case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
@@ -2159,19 +2176,27 @@ export class Daemon {
           this.inputDelivery ??= new InputDelivery(this.sessions);
           return this.inputDelivery.status(p.actionId, caller);
         }
+        if (p.kind === 'native') {
+          this.nativeMessageDelivery ??= new NativeMessageDelivery(this.sessions);
+          return this.nativeMessageDelivery.status(p.actionId, caller);
+        }
         this.actionDelivery ??= new ActionDelivery(this.sessions);
         return this.actionDelivery.status(p.actionId, caller);
       case 'session.answer-deliver':
         await this.sessionRecovery;
         this.actionDelivery ??= new ActionDelivery(this.sessions);
         return this.actionDelivery.deliver(p, caller);
+      case 'session.native-message-deliver':
+        await this.sessionRecovery;
+        this.nativeMessageDelivery ??= new NativeMessageDelivery(this.sessions);
+        return this.nativeMessageDelivery.deliver(p, caller);
       case M.SESSION_DELIVER:
         await this.sessionRecovery;
         this.inputDelivery ??= new InputDelivery(this.sessions);
         return this.inputDelivery.deliver(p, caller);
       case M.SESSION_INPUT:   return this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments, delivery: p.delivery, references: p.references });
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
-      case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit, known: typeof p.known === 'string' ? p.known : null });
+      case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit, pageBytes: p.pageBytes, known: typeof p.known === 'string' ? p.known : null });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
       case M.SESSION_DISCARD_EMPTY: return this.sessions.discardEmpty(p.id);
       case M.SESSION_TITLE:   return this.sessions.rename(p.id, p.title);
@@ -2187,7 +2212,7 @@ export class Daemon {
       case M.SESSION_CANVAS: return this.sessions.openCanvas(p.id, p);
       case M.SESSION_CANVAS_CLOSED: return this.sessions.closeCanvas(p.id, p.requestId);
       case M.SESSION_RENDER: return this.sessions.renderVisual(p.id, p);
-      case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref, p.page);
+      case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref, p.file === true ? 'file' : p.page);
       case M.SESSION_EVENTS:
         await this.sessions.prepareHistory(p.id);
         return this.sessions.history(p.id, {

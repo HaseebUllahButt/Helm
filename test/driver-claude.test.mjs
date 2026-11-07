@@ -85,6 +85,51 @@ test('Claude starts one process when startup and the first send overlap', async 
   } finally { await driver.kill(); }
 });
 
+/** A hosted Claude pipe that answers only what the test sends. */
+function hostedClaude({ adopt = false } = {}) {
+  let receive, exited;
+  const writes = [];
+  const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; },
+    write(raw) { writes.push(JSON.parse(raw)); }, end() { exited({ code: 0 }); },
+    detach() {}, kill() { exited({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: 'unused', cwd: '/tmp', procId: 'hosted', procHost: {
+    hasProc: () => adopt, openProc: async () => {}, procPipe: () => pipe } });
+  const send = message => receive(JSON.stringify(message) + '\n');
+  const answerInitialize = response => send({ type: 'control_response', response: { subtype: 'success',
+    request_id: writes.find(w => w.request?.subtype === 'initialize').request_id, response } });
+  return { driver, writes, send, answerInitialize };
+}
+
+const LISTED = [{ name: 'compact', description: 'Clear history but keep a summary' }, { name: 'full-send', description: 'Finish a change alone' }];
+
+test('Claude lists its commands before the first message', { timeout: 5000 }, async t => {
+  // A new Claude sends `init` only with the first message. Its answer to
+  // `initialize` is the list a chat opened on a phone can show at once.
+  const { driver, writes, send, answerInitialize } = hostedClaude();
+  t.after(() => driver.kill());
+  const listed = driver.availableCommands();
+  await new Promise(setImmediate);
+  assert.ok(writes.some(w => w.request?.subtype === 'initialize'));
+  answerInitialize({ commands: [...LISTED, { description: 'no name' }] });
+  assert.deepEqual(await listed, LISTED.map(c => ({ ...c, source: 'Claude' })));
+  // The names `init` sends later keep what each one does.
+  send({ type: 'system', subtype: 'init', session_id: 's', slash_commands: ['compact', 'new-one'] });
+  assert.deepEqual(await driver.availableCommands(), [
+    { name: 'compact', description: 'Clear history but keep a summary', source: 'Claude' },
+    { name: 'new-one', source: 'Claude' },
+  ]);
+});
+
+test('Claude lists its commands again after Helm takes over a running process', { timeout: 5000 }, async t => {
+  const { driver, writes, answerInitialize } = hostedClaude({ adopt: true });
+  t.after(() => driver.kill());
+  const listed = driver.availableCommands();
+  await new Promise(setImmediate);
+  assert.ok(writes.some(w => w.request?.subtype === 'initialize'));
+  answerInitialize({ commands: LISTED });
+  assert.deepEqual((await listed).map(c => c.name), ['compact', 'full-send']);
+});
+
 async function modelControl(t, version = '2.1.302') {
   let receive, exited;
   const writes = [];
@@ -108,6 +153,19 @@ async function modelControl(t, version = '2.1.302') {
     reply: response => receive(JSON.stringify({ type: 'control_response',
       response: { ...response, request_id: writes.findLast(w => w.type === 'control_request').request_id } }) + '\n') };
 }
+
+test('answering one Claude approval keeps the next question blocked', async t => {
+  const { driver } = await modelControl(t);
+  driver.push('permission.request', { requestId: 'permission', kind: 'permission', raw: { input: {} } });
+  driver.push('permission.request', { requestId: 'question', kind: 'question', raw: { input: {} } });
+  driver.push('status', { status: 'blocked' });
+  await driver.setMode('bypassPermissions');
+  assert.equal(driver.pending.size, 1);
+  assert.ok(driver.pending.has('question'));
+  assert.equal(driver.status, 'blocked');
+  await driver.answer('question', { option: 'allow', answers: { Continue: 'Yes' } });
+  assert.equal(driver.status, 'working');
+});
 
 test('Claude releases control timers after replies and exit', async t => {
   const { driver, reply, exit } = await modelControl(t);

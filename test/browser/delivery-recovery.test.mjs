@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { chromium } from 'playwright';
 import { build } from 'esbuild';
 import { InputDelivery } from '../../packages/connect/src/input-delivery.js';
+import { ActionDelivery } from '../../packages/connect/src/action-delivery.js';
 
 let browser, script;
 before(async () => {
@@ -38,6 +39,7 @@ after(() => browser?.close());
 async function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'helm-delivery-ui-'));
   const state = { drop: false, reject: false, writeError: null, approvalError: null, inputs: 0, calls: [] };
+  const approvals = new ActionDelivery({ answer: async () => { throw new Error('no pending request closed-request'); } }, {dir:join(dir, 'answers')});
   const delivery = new InputDelivery({ get: () => ({ driver: 'fake' }), turnState: () => null,
     input: async () => { state.inputs++; if (state.reject) throw Object.assign(new Error('The service refused this message.'), { code: 'delivery_failed' }); return { ok: true }; },
   }, { dir });
@@ -51,7 +53,8 @@ async function fixture(t) {
       let result = {};
       if (req.url === '/api/action') {
         if (call.method === 'session.deliver' && state.writeError) throw Object.assign(new Error('Cannot accept this message.'), { code: state.writeError });
-        if (call.method === 'session.answer-deliver' || call.params.kind === 'answer') result = { state:'done', error:state.approvalError };
+        if (call.method === 'session.answer-deliver' || call.params.kind === 'answer') result = state.recoverApproval
+          ? approvals.status(call.params.actionId, 'phone') : { state:'done', error:state.approvalError };
         else result = call.method === 'session.deliver' ? await delivery.deliver(call.params, 'phone') : delivery.status(call.params.actionId, 'phone');
         if (state.drop) { res.destroy(); return; }
       } else if (call.method === 'session.events') result = { events: [], pending: [], last: 0, session: { status: 'idle' } };
@@ -75,7 +78,7 @@ async function fixture(t) {
   });
   const load = async () => { await page.goto('http://127.0.0.1:' + server.address().port); await page.addScriptTag({ content: script }); };
   await load();
-  return { page, state, load, delivery };
+  return { page, state, load, delivery, approvals };
 }
 
 const action = (id = 'a'.repeat(32)) => ({ env: 'pc', method: 'session.deliver', actionId: id, started: true,
@@ -263,4 +266,62 @@ test('a late turn clears a final failure held only in memory', async t => {
   await page.locator('.failed-delivery').waitFor({ state:'detached' });
   assert.equal(await page.evaluate(() => window.client.failedActions().length), 0);
   assert.equal(await page.evaluate(() => window.client.pendingActions().length), 0);
+});
+
+for (const recovery of ['button', 'connection', 'presence', 'transport', 'online', 'visible']) {
+  test(`an exhausted delivery check recovers through ${recovery} without reopening the chat`, async t => {
+    const { page, state, delivery } = await fixture(t);
+    const saved = action();
+    await delivery.deliver(saved.params, 'phone');
+    await page.evaluate(saved => {
+      window.saveAction(saved);
+      const resume = window.client.resumeActions.bind(window.client);
+      window.checks = 0;
+      window.client.resumeActions = (...args) => {
+        window.checks++;
+        // An earlier check used its whole connection budget. Keep its saved send.
+        if (window.checks === 1) return Promise.resolve([{status:'rejected'}]);
+        return resume(...args);
+      };
+      window.mount(true);
+    }, saved);
+    const retry = page.getByRole('button', { name:'Check again', exact:true });
+    await retry.waitFor();
+    await page.waitForFunction(() => !document.querySelector('button').disabled);
+    if (recovery === 'button') await retry.click();
+    else await page.evaluate(recovery => {
+      if (recovery === 'online') window.dispatchEvent(new Event('online'));
+      else if (recovery === 'visible') document.dispatchEvent(new Event('visibilitychange'));
+      else window.client.emit(recovery === 'connection' ? '' : 'pc', recovery,
+        recovery === 'transport' ? {direct:true} : {online:true});
+    }, recovery);
+    await retry.waitFor({ state:'detached' });
+    assert.equal(await page.evaluate(() => window.client.pendingActions().length), 0);
+    assert.equal(await page.evaluate(() => window.checks), 2);
+    assert.equal(state.inputs, 1, 'recovery reads the saved receipt without sending twice');
+    assert.equal(state.calls.filter(call => call.method === 'session.deliver').length, 0);
+  });
+}
+
+
+test('an old closed approval stops checking and can be dismissed after reload', async t => {
+  const { page, state, approvals, load } = await fixture(t);
+  state.recoverApproval = true;
+  const saved = { env:'pc', method:'session.answer-deliver', started:true, actionId:'d'.repeat(32),
+    params:{id:'chat', requestId:'closed-request', actionId:'d'.repeat(32), decision:{option:'allow'}} };
+  assert.equal((await approvals.deliver(saved.params, 'phone')).state, 'checking');
+  await page.evaluate(saved => { window.saveAction(saved); window.mount(true); }, saved);
+  const failure = page.locator('.failed-delivery');
+  await failure.waitFor();
+  assert.match(await failure.innerText(), /Answer failed/);
+  assert.match(await failure.innerText(), /This request is no longer open/);
+  assert.equal(await page.getByText('Checking delivery…', {exact:true}).count(), 0);
+  await load();
+  await page.evaluate(() => window.mount(true));
+  await failure.waitFor();
+  await page.getByRole('button', {name:'Dismiss', exact:true}).click();
+  await failure.waitFor({state:'detached'});
+  assert.equal(await page.evaluate(() => window.client.pendingActions().length), 0);
+  assert.equal(await page.evaluate(() => window.client.failedActions().length), 0);
+  assert.equal(state.calls.filter(call => call.method === 'session.answer-deliver').length, 0);
 });

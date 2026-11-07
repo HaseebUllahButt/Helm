@@ -11,11 +11,20 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
 - **Prove (driven 2026-10-15):** in a fake-ask chat:
   ```sh
   $V click Agents; sleep 3                  # wait past "Finding accounts…"
-  $V click "Task"; $V type "my child task"; $V click "Start subagent"
+  $V click "New task"; $V click "Describe one task"; $V type "my child task"; $V click "Start helper"
   $V wait "Needs approval"; $V click Allow; $V wait "FINISHED"
   ```
 - **Proof:** "ACTIVE 1" with "my child task · fake-ask · CLI default", then
   "FINISHED 1" and "working on it done.".
+- **Task box:** Enter starts the helper, Shift+Enter makes a new line (on a
+  phone Return makes a new line). Paste, drop or the paperclip adds pictures
+  and files; they go with the first message. A machine without
+  `helperAttachments` gets no paperclip. The helper card has no message box:
+  **Open chat** is the way to talk to a helper.
+- **Prove pictures (driven 2026-11-06):** pick "Fake agent (sees pictures)",
+  paste a picture into the task box, press Enter, then **Open chat**: the
+  first message shows the picture. `fake-slow` cannot see pictures and shows
+  "this agent cannot see images" instead.
 - **Traps:** the child's result starts a new parent turn, so fake-ask asks
   again. Close the sheet with "Close thread details"; Back may not.
 - **Tests:** `test/browser/subagents`, `orchestration`, `child-requests`,
@@ -37,8 +46,15 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   wakes by itself later (a background watcher timing out) never gives the
   parent another turn. Those relays were nearly all "stale watcher, nothing
   changed". Real news goes by `helm say`; the helper's brief says so.
-- **Codex context:** a local helper on the same account and in the same
-  folder can start from its parent's cached context. This needs a running
+- **Codex context:** a local helper on the same account, in the same
+  folder and on the parent's model can start from its parent's cached
+  context. Codex caches per model, so a copy on another model reuses
+  nothing and pays full price for the parent's history; that helper starts
+  a new chat, and the parent writes the context it needs in the task. A
+  model left unset keeps the parent's current model on the same CLI.
+  Explicit model choices and saved helper models take priority. Another
+  CLI uses its own account default. The driver checks the model before it
+  copies. This needs a running
   native Codex daemon. Helm keeps the parent's instructions and puts the
   helper note beside its first task. The helper view shows only its own
   turns. Other accounts, engines, folders and worktrees use a new chat.
@@ -48,7 +64,8 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   restart keeps that connection. When Codex loses the fork, Helm starts a
   saved Codex chat from that helper's own tasks, replies and tool results.
   The Helm chat and its visible history stay the same. This recovery can
-  need fresh input tokens.
+  need fresh input tokens. After a reboot only a fork with work in flight
+  reconnects; a finished one starts at its next message.
 - **Proof (driven 2026-10-27):** a private real helper reused cached input,
   kept its Codex chat through a Helm restart and a process-host restart,
   then recovered in the same Helm chat after a private Codex daemon restart.
@@ -57,14 +74,37 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   `session-driver`, `native-codex`, `spawn-cli`, `cli-subagents`.
 
 ## The CLIs' own subagents
+- **Which one an agent uses (`delegationNote`):** Claude chats use their own
+  Agent tool for work on the same account, short or long. Helpers keep
+  the parent's model unless the owner asks for another. A fork reuses
+  the parent's cached context, and a non-fork helper starts smaller than a
+  new chat (16.7k against 28k tokens in the 2026-11-06 run). Helpers run
+  in the foreground. Only when the owner asks for orchestrator mode do they
+  run in the background, so the parent stays free to talk. The owner
+  cannot stop one built-in helper alone, only
+  its parent, and accepts that: they step in by message. Another account,
+  tool or machine, and worktrees go to `helm delegate`. Codex and every
+  other tool keep `helm delegate`; Codex's own child had no cached input
+  (below), and the others are not measured.
+- **Claude proof (driven 2026-11-06, real Haiku chat in `verify-helm up
+  --real`):** asked for "a helper", the chat used Agent on Haiku. Agents
+  showed "Count .conf files in /etc · Finished". A message typed in its
+  view was passed on by the parent, and the helper answered, also after
+  `verify-helm restart`. Haiku sent `run_in_background` as the string
+  "false", so Claude ran it in the background; the parent still waited
+  and reported.
+- **Messages:** A helper message keeps its delivery number across reconnects.
+  The machine saves a receipt before it calls the CLI. A restart during that
+  call can leave delivery uncertain. Check the helper, then use **Check the
+  previous message** to clear that check. The message may already have arrived.
+  Older machines must update before the app can send a helper message.
 - **Codex proof (driven 2026-10-27):** a private real chat started one v2
   child with `fork_turns="all"`. Agents showed one finished child. Its
   view showed its own task and "OK" reply, including after a private
   daemon restart. The child's input had no cached tokens, so Helm leaves
   `multi_agent_v2` unchanged. Do not enable it merely because the child
   cards work.
-- **Claude not yet driven;** needs a real Claude chat that starts a Task.
-  A failed child puts the parent in "Needs you".
+- A failed child puts the parent in "Needs you".
 - **Tests:** `test/native-subagents`, `cli-subagents`;
   `driver-codex`; `test/browser/subagents`, `orchestration`.
 

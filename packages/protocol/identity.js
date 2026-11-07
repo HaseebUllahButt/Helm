@@ -1,27 +1,10 @@
-/**
- * Who is allowed in, decided without a central authority.
- *
- * The old model stored each device token as a random string in one relay's
- * SQLite file. That works, but it forces a centre: only the machine holding
- * that row can tell whether your phone is allowed in, so every connection has
- * to go through it, and losing it loses the network.
- *
- * Here a network has a shared secret instead. A token is a signed claim, so
- * any machine holding the network key can verify a device it has never seen,
- * offline, in microseconds. That is the whole reason any machine can act as
- * the meeting point.
- *
- * Tokens do not expire. A device stays in the network until it is explicitly
- * removed, which is the behaviour you want from something you carry around.
- * Removal works by id through a revocation list, which is small and only ever
- * grows when you actually revoke something.
- */
+/** Shared-key token envelopes. Network authentication also requires a machine signature. */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const PREFIX = 'helm1';
 const b64 = (buf) => Buffer.from(buf).toString('base64url');
 
-/** A fresh network secret. This is the only thing that must stay private. */
+/** A fresh network secret. Keep this secret and each machine signing key private. */
 export const newNetworkKey = () => randomBytes(32).toString('base64url');
 
 /** A stable public name for a network, safe to log and to show in a UI. */

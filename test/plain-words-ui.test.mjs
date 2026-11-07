@@ -33,6 +33,15 @@ test('an unknown failure uses a safe message', () => {
   assert.equal(p.raw, raw);
 });
 
+test('a safety block says so in the title and the text', () => {
+  const raw = 'This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. If you’re doing authorized security work that requires more cyber permissive safeguards, apply for Daybreak access via https://platform.openai.com/settings/organization/status-and-access before retrying.';
+  const p = plainProblem('error', raw);
+  assert.equal(p.title, 'Blocked for safety');
+  assert.match(p.text, /blocked this chat for safety/);
+  assert.equal(p.raw, raw);
+  assert.match(plainError('API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy'), /for safety/);
+});
+
 test('a limit says when it resets; a restart and a stop say what to do', () => {
   assert.match(plainProblem('limited', 'Claude AI usage limit reached|1791312600').text, /resets at/);
   assert.equal(plainProblem('restart', 'The agent stopped.').action, 'Continue');

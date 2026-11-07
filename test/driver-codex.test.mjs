@@ -228,8 +228,41 @@ function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false, r
     cwd: fake.dir, mode: 'ask', engineSessionId: 'recovered-thread',
     procHost: host, openTurn: () => 'stale-log-turn' });
   t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
-  return { driver, log: collect(driver), writes };
+  return { driver, log: collect(driver), writes, host };
 }
+
+test('releasing one idle Codex chat unloads only that chat while its sibling works', async t => {
+  const { driver, writes, host } = adoptedCodex(t, {
+    thread: { status: { type: 'idle' }, turns: [] },
+    reply: request => request.method === 'turn/start' ? { result: { turn: { id: 'sibling-turn' } } } : undefined,
+  });
+  const sibling = new CodexDriver({ cmd: driver.cmd, env: driver.env, cwd: driver.cwd,
+    procHost: host, engineSessionId: 'sibling' });
+  t.after(() => sibling.kill());
+  await driver.start();
+  await sibling.send('Keep working');
+  await driver.kill();
+  assert.equal(sibling.status, 'working');
+  assert.deepEqual(writes.filter(r => r.method === 'thread/unsubscribe').map(r => r.params.threadId), ['recovered-thread']);
+  assert.equal(writes.some(r => r.method === 'turn/interrupt'), false);
+  await sibling.steer('Continue');
+  assert.equal(writes.at(-1).params.threadId, 'sibling');
+});
+
+test('idle Codex release checks background commands and keeps unknown state running', async t => {
+  let work = { result: { data: [{ processId: 'background' }], nextCursor: null } };
+  const { driver, writes } = adoptedCodex(t, {
+    thread: { status: { type: 'idle' }, turns: [] },
+    reply: request => request.method === 'thread/backgroundTerminals/list' ? work : undefined,
+  });
+  await driver.start();
+  assert.equal(await driver.canRelease(), false);
+  work = { error: { code: -32601, message: 'Method not found' } };
+  assert.equal(await driver.canRelease(), false);
+  work = { result: { data: [], nextCursor: null } };
+  assert.equal(await driver.canRelease(), true);
+  assert.equal(writes.some(r => r.method === 'thread/unsubscribe'), false);
+});
 
 for (const [name, status, turns, expected] of [
   ['completed', { type: 'idle' }, [{ id: 'stale-log-turn', status: 'completed' }], 'idle'],
@@ -249,6 +282,18 @@ for (const [name, status, turns, expected] of [
   } else if (expected === 'idle') {
     await assert.rejects(driver.steer('Do not revive stale work'), /no active turn/);
   }
+});
+
+test('Codex preserves a saved steering identity and reports unmatched message identities', async t => {
+  const { driver, log, writes } = adoptedCodex(t, {
+    thread: { status: { type: 'active', activeFlags: [] }, turns: [{ id: 'actual-live-turn', status: 'inProgress' }] },
+  });
+  await driver.start();
+  await driver.steer('Check this', [], { inputId: 'ticket', clientId: 'saved-provider-id' });
+  assert.equal(writes.findLast(w => w.method === 'turn/steer').params.clientUserMessageId, 'saved-provider-id');
+  driver.onNotification('item/started', { threadId: 'recovered-thread', turnId: 'actual-live-turn',
+    item: { type: 'userMessage', id: 'other', clientUserMessageId: 'unmatched-provider-id', content: [{ type: 'text', text: 'Earlier' }] } });
+  assert.ok(log.of('input.observed').some(e => e.clientId === 'unmatched-provider-id'));
 });
 
 test('adopted Codex loads an unloaded thread when a message finds it missing', async (t) => {
@@ -374,8 +419,23 @@ function scriptedCodex(t, { openTurn = null, transcript, reply }) {
     cwd: fake.dir, mode: 'ask', engineSessionId: 'scripted-thread', transcript,
     procHost: host, openTurn: () => openTurn });
   t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
-  return { driver, log: collect(driver), writes, notify };
+  return { driver, log: collect(driver), writes, notify, emit };
 }
+
+test('answering one Codex approval keeps the next request blocked', async t => {
+  const { driver, emit } = scriptedCodex(t, { reply(request) {
+    if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+  } });
+  await driver.start();
+  for (const id of ['first', 'second']) emit({ id, method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'scripted-thread', turnId: 'turn', itemId: id, command: 'echo hi', cwd: '/tmp' } });
+  assert.equal(driver.pending.size, 2);
+  await driver.answer([...driver.pending.keys()][0], { option: 'allow' });
+  assert.equal(driver.pending.size, 1);
+  assert.equal(driver.status, 'blocked');
+  await driver.answer([...driver.pending.keys()][0], { option: 'deny' });
+  assert.equal(driver.status, 'working');
+});
 
 test('a late completion of an older turn does not mark the newer turn idle', async (t) => {
   const { driver, log, notify, writes } = scriptedCodex(t, {
@@ -577,7 +637,7 @@ test('plain: initialize, thread/start, turn/start; text streams as deltas', asyn
   assert.deepEqual(sent[0].params.clientInfo.name, 'helm');
   assert.equal(sent[1].method, 'initialized');
   assert.equal(sent[2].method, 'thread/start');
-  assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write', config: { 'features.apps': false } });
+  assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write', config: { 'features.apps': false, thread_unload_delay_secs: 0 } });
   assert.equal(sent[3].method, 'turn/start');
   assert.deepEqual(sent[3].params.input, [{ type: 'text', text: 'Reply with exactly the words: hello from helm', text_elements: [] }]);
   assert.equal(sent[3].params.effort, 'low');
@@ -623,22 +683,23 @@ test('Helm-managed Codex threads keep native multi-agent on start and resume', a
   }
 });
 
-test('each thread names its own session; the shared app-server names none', async () => {
+test('each thread names its own session; the shared app-server names none', async t => {
   // One app-server serves every thread on an account. Its environment once
   // carried the first thread's HELM_SESSION_ID, so `helm delegate` from any
   // other chat filed its subagents under that first chat.
   const fake = fakeCli('codex', 'plain');
   const envFile = join(fake.dir, 'server-env');
   const wrapper = join(fake.dir, 'codex-wrapped');
-  writeFileSync(wrapper, `#!/bin/sh\nenv > ${JSON.stringify(envFile)}\nexec ${JSON.stringify(fake.cmd)} "$@"\n`);
+  writeFileSync(wrapper, `#!/bin/sh\nif [ "$1" = app-server ]; then env > ${JSON.stringify(envFile)}; fi\nexec ${JSON.stringify(fake.cmd)} "$@"\n`);
   chmodSync(wrapper, 0o755);
   const ids = { HELM_SESSION_ID: 'sess-a', HELM_PROFILE_ID: 'codex', HELM_ENGINE: 'codex', HELM_CWD: fake.dir };
   const driver = new CodexDriver({ cmd: wrapper, env: { CODEX_HOME: join(fake.dir, 'home'), ...ids }, args: [], cwd: fake.dir, mode: 'ask' });
+  t.after(() => driver.kill());
   const log = collect(driver);
   await driver.send('Reply with exactly the words: hello from helm');
   await log.until((e) => e.type === 'turn.done');
   const start = fake.stdinLines().find((l) => l.method === 'thread/start');
-  assert.deepEqual(start.params.config, { 'features.apps': false, ...Object.fromEntries(Object.entries(ids).map(([k, v]) => [`shell_environment_policy.set.${k}`, v])) });
+  assert.deepEqual(start.params.config, { 'features.apps': false, thread_unload_delay_secs: 0, ...Object.fromEntries(Object.entries(ids).map(([k, v]) => [`shell_environment_policy.set.${k}`, v])) });
   const serverEnv = readFileSync(envFile, 'utf8');
   for (const k of Object.keys(ids)) assert.doesNotMatch(serverEnv, new RegExp(`^${k}=`, 'm'));
   await driver.kill();
@@ -1103,4 +1164,45 @@ test('a child review keeps its card under the helper and grants only that child 
   await driver.answer(card.requestId, { option: 'allow' });
   assert.equal(writes.at(-1).params.threadId, 'child-thread');
   assert.equal(writes.at(-1).params.event.id, 'review-1');
+});
+
+
+test('native Codex setup survives the discovery timeout while reads still time out', async t => {
+  let receive;
+  const pipe = { onData(fn) { receive = fn; }, onExit() {}, write() {}, end() {}, kill() {} };
+  const server = new CodexServer('unused', {}, () => {},
+    { hasProc: () => true, procPipe: () => pipe }, '/unused', true);
+  await server.ensure();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const method of ['thread/start', 'thread/resume', 'thread/fork']) {
+    let settled = false;
+    const setup = server.call(method, {}).then(r => { settled = true; return r; });
+    t.mock.timers.tick(5001);
+    await Promise.resolve();
+    assert.equal(settled, false, `${method} must outlive discovery reads`);
+    receive(JSON.stringify({ id: method === 'thread/start' ? 1 : method === 'thread/resume' ? 2 : 3, result: { thread: { id: 'ready' } } }) + '\n');
+    assert.equal((await setup).result.thread.id, 'ready');
+  }
+  const read = server.call('thread/loaded/list', {});
+  t.mock.timers.tick(5001);
+  assert.match((await read).error.message, /timed out/);
+  const hung = server.call('thread/start', {});
+  t.mock.timers.tick(90_001);
+  assert.match((await hung).error.message, /timed out/);
+});
+
+test("Helm's own Codex gives up on opening a chat that never answers, but lets turns run", async t => {
+  const pipe = { onData() {}, onExit() {}, write() {}, end() {}, kill() {} };
+  const server = new CodexServer('unused', {}, () => {}, { hasProc: () => true, procPipe: () => pipe });
+  await server.ensure();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let turnSettled = false;
+  void server.call('turn/start', {}).then(() => { turnSettled = true; });
+  for (const method of ['thread/start', 'thread/resume', 'thread/fork']) {
+    const hung = server.call(method, {});
+    t.mock.timers.tick(90_001);
+    assert.equal((await hung).error.message, `Codex ${method} timed out`);
+  }
+  await Promise.resolve();
+  assert.equal(turnSettled, false, 'a turn has no time limit');
 });

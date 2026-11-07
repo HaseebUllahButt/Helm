@@ -53,6 +53,9 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm forward <machine> <port>   Open another machine's port on this machine's localhost
   helm forward list | stop <id|port|all>
                                   List or stop forwards (a stop removes both sides)
+  helm schedule list | show <id>  List scheduled tasks on every machine, or show one
+  helm schedule pause | resume | remove <id>
+                                  Stop a task for a while, start it again, or delete it
   helm remove <id>                  Remove a device or machine permanently
   helm leave                        Remove this machine from its network
 
@@ -245,10 +248,13 @@ const DETAILS = {
   delegate: `
   Start a helper for this chat.
   The owner sees a card to open, message or stop the helper.
+  Claude chats use their Agent tool for work on the same account.
     <account>        Use same for this chat's account.
                      Run helm agents to list accounts on this machine.
                      Use helm spawn for another machine.
     --model <id>     Pick a model ID, or cheap for the account's small model.
+                     Without a choice, use the parent's model on the same CLI.
+                     A saved helper model takes priority.
     --wait --json    Wait for the result, then print it as JSON.
     --cwd <folder>   Run in another folder.
     --worktree       Use a separate project copy on a new helm/ branch.
@@ -259,6 +265,9 @@ const DETAILS = {
   Helm closes helper software after 30 seconds without work.
   A follow-up message resumes the same chat.
   Claude keeps its context for an hour.
+  A Codex helper on this chat's account, folder and model starts as a copy
+  of this chat and reuses its cache. Any other helper starts empty:
+  put the context it needs in the task.
   Read a helper with helm delegate-result <id>.
   Keep finished helpers. The owner reads them under this chat.`,
 
@@ -289,6 +298,19 @@ const DETAILS = {
   When the app is not running, the link shows a "not reachable" page.
   It ends after 3 hours. Use --for <hours>, or --keep only when the owner asks.
   Stop it with helm forward stop <id>. This removes both sides.`,
+
+  schedule: `
+  Scheduled tasks send a saved message to a chat at set times,
+  or when their webhook link gets a POST. The app no longer shows them.
+  Use this command to find and control the ones that still exist.
+    --on <machine>   Look only on that machine.
+    --json           Print the result as JSON.
+    --link           With show: print the full webhook link. It holds a password.
+  pause keeps the task and its webhook link. resume starts it again.
+  remove deletes the task for good, and its webhook link stops for good.
+  A restart of Helm does not pause a task.
+  Webhook tasks share one Spin per machine (helm-hooks-...).
+  Stop on that Spin pauses every webhook task there.`,
 
   spin: `
   This command runs helm share.
@@ -332,6 +354,8 @@ const DETAILS = {
   - Use a fluid width. Give each chart a fixed height in px. Do not use 100vh.
   - SVG text gets smaller with the drawing. Keep labels 12 px or larger at
     phone width.
+  Write math as $...$ or $$...$$, also in text your script writes. Helm
+  draws it with KaTeX. Never write W_Q or x^2 as plain text.
   Colours follow the owner's theme: --bg --card --raised --text --text-dim
   --mutedfg --line, and --radius --font-sans --font-mono.
 

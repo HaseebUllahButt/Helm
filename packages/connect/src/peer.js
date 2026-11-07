@@ -1,3 +1,4 @@
+import { authenticate } from '@helm/protocol/network';
 import { RTCPeerConnection } from 'node-datachannel/polyfill';
 import { constants, createDeflateRaw } from 'node:zlib';
 import { nativeDirectConfig } from './direct-config.js';
@@ -164,12 +165,16 @@ const forbidden = (message) => Object.assign(new Error(message), { code: 'forbid
  * for another machine this way at all, which is narrower than the hub; the
  * sending side never asks it to (hub-mesh.js keeps those calls on a hub).
  */
-export function directCaller(net, device, sub, enabled = true) {
+export function directCaller(net, device, sub, enabled = true, credential) {
   if (!net || typeof device !== 'string' || !device || net.revoked?.[device] || net.revoked?.[net.self]) {
     throw forbidden('this direct channel is no longer allowed');
   }
   if (!(Object.hasOwn(net.machines ?? {}, device) || Object.hasOwn(net.devices ?? {}, device))
       || (!enabled && Object.hasOwn(net.machines ?? {}, device))) throw forbidden('this direct channel is no longer allowed');
+  if (!Object.hasOwn(net.machines ?? {}, device)) {
+    const claims = authenticate(net, credential);
+    if (claims?.role !== 'device' || claims.sub !== device) throw forbidden('Sign in again to use this direct connection.');
+  }
   if (sub === undefined || sub === null || sub === device) return device;
   if (!Object.hasOwn(net.machines ?? {}, device)) throw forbidden('only a machine may pass on a request');
   if (typeof sub !== 'string' || Object.hasOwn(net.machines ?? {}, sub)
@@ -215,6 +220,7 @@ export class PeerHub {
       this.drop(peerId);
       peer = this.#create(peerId, link);
       peer.negotiation = payload.negotiation;
+      peer.credential = payload.credential;
     }
 
     if (!peer) return;
@@ -223,6 +229,12 @@ export class PeerHub {
     if (link) peer.link = link;
     // Which device this channel belongs to, so a revocation can find it.
     if (device) peer.device = device;
+    if (!this.authTimer) {
+      this.authTimer = setInterval(() => {
+        for (const peer of this.#peers.values()) this.#authorized(peer);
+      }, 1000);
+      this.authTimer.unref?.();
+    }
 
     const { pc } = peer;
     if (payload.type === 'offer') {
@@ -315,6 +327,11 @@ export class PeerHub {
     return peer;
   }
 
+  #authorized(peer, frame = {}) {
+    try { return { caller: this.authorize ? this.authorize(peer.device, frame, peer.credential) : peer.device }; }
+    catch { this.drop(peer.id, peer); return null; }
+  }
+
   #onRaw(peer, raw) {
     peer.heardAt = Date.now();
     let msg;
@@ -357,6 +374,8 @@ export class PeerHub {
    */
   async #onMessage(peer, msg) {
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+    const allowed = this.#authorized(peer);
+    if (!allowed) return;
     if (msg.t === 'hello') {
       // Only browsers, which hear events here, ask; machines never do.
       if (msg.zip === 'deflate-raw' && !peer.zip && peer.channel && (!this.events || this.events(peer.device))) {
@@ -392,7 +411,7 @@ export class PeerHub {
     };
 
     try {
-      const caller = this.authorize ? this.authorize(peer.device, msg) : peer.device;
+      const caller = this.authorize ? this.authorize(peer.device, msg, peer.credential) : allowed.caller;
       await reply({ id: msg.id, ok: true, result: await this.dispatch(msg.method, msg.params ?? {}, caller) });
     } catch (err) {
       await reply({
@@ -407,6 +426,7 @@ export class PeerHub {
     const frame = JSON.stringify({ t: 'event', kind, payload, eid });
     for (const peer of this.#peers.values()) {
       if (Array.isArray(to) && !to.includes(peer.device)) continue;
+      if (!this.#authorized(peer)) continue;
       if (this.events && !this.events(peer.device)) continue;
       if (peer.channel?.readyState !== 'open') continue;
       // The app stops the hub's copy while this link is up, so a lost frame
@@ -421,6 +441,7 @@ export class PeerHub {
     const peer = this.#peers.get(peerId);
     if (!peer || (expected && expected !== peer)) return;
     this.#peers.delete(peerId);
+    if (!this.#peers.size) { clearInterval(this.authTimer); this.authTimer = null; }
     clearTimeout(peer.deadline);
     clearTimeout(peer.disconnectedTimer);
     peer.fragments?.clear();
@@ -453,6 +474,7 @@ export class PeerHub {
   dropRevoked(revoked = {}) {
     for (const [id, peer] of this.#peers) {
       if (peer.device && revoked[peer.device]) this.drop(id);
+      else this.#authorized(peer);
     }
   }
 
