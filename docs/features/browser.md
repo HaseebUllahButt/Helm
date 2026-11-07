@@ -40,3 +40,15 @@ Design: [`docs/browser-use.md`](../browser-use.md).
   Keys an older Helm saved ("chrome:Default") map to that one folder or are
   refused. The system default browser is matched by its app id or name.
 - **Tests:** `test/browser-logins`, `test/browser-starting-logins`, `test/chromium-find`, `test/agent-browser`, and `test/browser-smarts`.
+
+## Extended mode (the owner's own browser)
+
+- **Reach:** `helm browser mode extended`, then, after the owner agrees,
+  `helm browser mode extended --restart`. `helm browser mode` shows the
+  state; `helm browser mode window` goes back. No Settings row yet.
+- **Prove:** a real Chromium with the add-on loaded, driven through
+  `BrowserManager`: open, look, type, click, check, screenshot, a Helm
+  restart that keeps the tab, and the way back to window mode.
+- **Traps:** never test on the owner's own browser profile. Tests start a
+  headless Chromium with its own profile and `--load-extension`.
+- **Tests:** `test/browser-extension`, `test/chromium-find`.

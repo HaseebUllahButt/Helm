@@ -8,7 +8,10 @@ import { normalizeAction, readOnlyAction, resolveTarget, scoreTargets } from './
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } from './browser-identity.js';
 import * as browserLogins from './browser-logins.js';
-import { canOpenWindow, systemChromium, launchTarget, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile } from './browser-window.js';
+import { canOpenWindow, systemChromium, launchTarget, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile, screenEnv } from './browser-window.js';
+import { ExtensionRelay } from './browser-relay.js';
+import { EXTENSION_ID, extensionFolder, linkFile, manualSteps, readMode, restartOwnBrowser, setFlags, syncExtension, writeMode, flagsFile } from './browser-extension.js';
+import { discoverBrowsers } from './chromium-find.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -59,6 +62,7 @@ const playwrightBrowsers = () => process.env.PLAYWRIGHT_BROWSERS_PATH
   || join(homedir(), process.platform === 'darwin' ? 'Library/Caches/ms-playwright' : process.platform === 'win32' ? 'AppData/Local/ms-playwright' : '.cache/ms-playwright');
 const hasPlaywrightChromium = () => { try { return readdirSync(playwrightBrowsers()).some(name => name.startsWith('chromium-')); } catch { return false; } };
 const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
+const OWN_BROWSER_OFF = 'Your browser is not connected to Helm. Ask the owner to open it. If it is open, run helm browser mode to see why. To use Helm\'s own window, run helm browser mode window.';
 const MAX_THREAD_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 const POINTER_WORDS = { click: 'Clicking', hover: 'Pointing at', type: 'Typing into', select: 'Choosing in', upload: 'Uploading into', drag: 'Dragging', scroll: 'Scrolling', point: '' };
 const POINTER_CLEARS = ['navigate', 'back', 'forward', 'reload', 'resize'];
@@ -175,13 +179,95 @@ let ownerLogins = false;
 export const useOwnerLogins = () => { ownerLogins = true; };
 
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = CALL_MS, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500 } = {}) {
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = CALL_MS, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500, extensionWaitMs = 4000, browsers = discoverBrowsers } = {}) {
+    this.extensionWaitMs = extensionWaitMs; this.browsers = browsers;
     this.launchWindow = launchWindow; this.windowCheck = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
     this.logins = logins; this.loginImports = new Map(); this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
     this.flows = new BrowserFlows(directory);
   }
   /** A screen can appear after Helm starts, when its service starts before the desktop. Once seen, windows stay on. */
   get canWindow() { return this.screenSeen ||= !!(typeof this.windowCheck === 'function' ? this.windowCheck() : this.windowCheck); }
+  /** Extended mode: agents use the owner's own browser through Helm's add-on. It needs a screen. */
+  get mode() { return this.modeChoice ||= readMode(this.directory); }
+  get extended() { return this.mode === 'extended' && this.canWindow; }
+  /** The link the add-on connects to. It runs whenever extended mode is on, so the add-on finds Helm. */
+  startRelay() {
+    if (this.relayStart) return this.relayStart;
+    const changed = syncExtension(this.directory);
+    this.relay ||= new ExtensionRelay({ linkFile: linkFile(this.directory), extensionId: EXTENSION_ID });
+    return this.relayStart = this.relay.start().then(relay => {
+      // A newer add-on came with this Helm: the browser loads it again.
+      if (changed) void relay.waitForExtension(60000).then(on => on && relay.call('reload', {}).catch(() => {}));
+      return relay;
+    }, error => { this.relayStart = null; throw error; });
+  }
+  /** At start: extended mode opens the link at once, so the browser reconnects after a restart. */
+  async prepare() { if (this.mode === 'extended') await this.startRelay(); }
+  /** The owner's own browser, driven through the add-on as if it were Helm's window. */
+  async ownBrowserContext() {
+    const relay = await this.startRelay();
+    if (!(await relay.waitForExtension(this.extensionWaitMs))) throw new Error(OWN_BROWSER_OFF);
+    const { chromium } = await import('patchright-core');
+    const browser = await chromium.connectOverCDP(relay.cdpUrl, { timeout: 15000 });
+    const context = browser.contexts()[0];
+    if (!context) { await browser.close().catch(() => {}); throw new Error(OWN_BROWSER_OFF); }
+    context.helmDetach = () => browser.close(); context.helmPatched = true; context.helmOwnBrowser = true;
+    // After a Helm restart the add-on still has the chats' tabs open.
+    context.helmAttached = context.pages().length > 0;
+    return context;
+  }
+  /** The owner's default browser: its program, the launcher that starts it, and its flags file. */
+  ownBrowser() {
+    const best = this.browsers()[0]; if (!best) return null;
+    return { name: best.name, program: best.program, launcher: best.launcher || best.program, flags: flagsFile(best.launcher || best.program) };
+  }
+  /** What `helm browser mode` shows. */
+  async modeInfo() {
+    const info = { mode: this.mode, screen: this.canWindow };
+    if (this.mode !== 'extended') return info;
+    const browser = this.ownBrowser(), relay = this.canWindow ? await this.startRelay().catch(() => null) : null;
+    return { ...info, connected: !!relay?.connected, browser: browser?.name || null, folder: extensionFolder(this.directory), flagsFile: browser?.flags || null,
+      ...(relay?.connected ? {} : { steps: browser?.flags ? ['Restart the browser to load the Helm add-on: ask the owner, then run helm browser mode extended --restart. Its tabs come back.'] : manualSteps(extensionFolder(this.directory)) }) };
+  }
+  /**
+   * Switch between Helm's own window and the owner's browser. The chats'
+   * tabs go to sleep and open again in the new place on their next step.
+   * `restart` closes and reopens the owner's browser so it loads the add-on:
+   * only after the owner agreed.
+   */
+  async setMode(mode, { restart = false } = {}) {
+    if (mode === 'extended' && !this.canWindow) throw new Error('Extended mode needs a screen. This machine uses its hidden browser.');
+    const before = this.mode; writeMode(this.directory, mode); this.modeChoice = mode;
+    if (before !== mode) await this.closeShared();
+    const browser = this.ownBrowser(), folder = extensionFolder(this.directory);
+    if (mode === 'window') {
+      if (browser) setFlags(browser.launcher, folder, false);
+      await this.relay?.stop().catch(() => {}); this.relay = null; this.relayStart = null;
+      return this.modeInfo();
+    }
+    const relay = await this.startRelay();
+    if (browser) setFlags(browser.launcher, folder, true);
+    if (restart && !relay.connected) {
+      if (!browser) throw new Error('Helm found no Chromium-based browser on this machine.');
+      await restartOwnBrowser({ program: browser.program, launcher: browser.launcher, screen: screenEnv() });
+      // A browser that ignores flags files (Google Chrome, Edge) never connects: the owner adds the folder by hand.
+      if (!(await relay.waitForExtension(20000))) return { ...(await this.modeInfo()), steps: manualSteps(folder), note: `${browser.name} did not load the add-on from its flags file. Add it by hand.` };
+    }
+    return this.modeInfo();
+  }
+  /** Close the shared window or browser link. Each chat's tabs are saved first and come back asleep. */
+  async closeShared() {
+    const context = this.shared; if (!context) return;
+    const sids = [...this.windowContexts].filter(([, value]) => value === context).map(([sid]) => sid);
+    for (const sid of sids) { await this.persistTabs(sid).catch(() => {}); this.suspending.add(sid); }
+    try {
+      for (const sid of sids) { this.windowContexts.delete(sid); this.contexts.delete(sid); this.recovered.delete(sid); }
+      this.shared = null; context.helmClosed = true;
+      for (const tab of [...this.tabs.values()]) if (tab.page?.context?.() === context) { this.tabs.delete(tab.id); await tab.page.close().catch(() => {}); }
+      if (!context.helmOwnBrowser) await stopWindow(sharedProfile(this.directory));
+      await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
+    } finally { for (const sid of sids) this.suspending.delete(sid); }
+  }
   async start() {
     if (!this.starting) this.starting = (async () => {
       if (this.browser?.isConnected()) return this.browser;
@@ -248,11 +334,13 @@ export class BrowserManager {
     const context = await this.sharedWindow();
     if (!context.helmJoined.has(sessionId)) {
       context.helmJoined.add(sessionId);
+      // The owner's own browser keeps its own logins: Helm never writes cookies there.
+      if (context.helmOwnBrowser) { this.windowContexts.set(sessionId, context); return context; }
       // Sign-ins this chat made in its own window, before the window was shared.
       let storage; try { storage = JSON.parse(await readFile(join(this.directory, sessionId, 'storage.json'), 'utf8')); } catch { /* nothing signed in yet */ }
       if (storage?.cookies?.length) await context.addCookies(storage.cookies).catch(() => {});
     }
-    if (loginSeed?.cookies?.length) await context.addCookies(loginSeed.cookies).catch(() => {});
+    if (loginSeed?.cookies?.length && !context.helmOwnBrowser) await context.addCookies(loginSeed.cookies).catch(() => {});
     this.windowContexts.set(sessionId, context);
     return context;
   }
@@ -264,11 +352,14 @@ export class BrowserManager {
   sharedWindow() {
     if (this.shared && !this.shared.helmClosed) return Promise.resolve(this.shared);
     return this.openingShared ||= (async () => {
-      const folder = sharedProfile(this.directory), fresh = !existsSync(folder); mkdirSync(folder, { recursive: true, mode: 0o700 });
-      let seed; if (fresh) { const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey, { saved: true }).catch(() => null); }
-      let context;
-      try { context = await this.launchWindow(folder, { name: 'helm-browser' }); }
-      catch (error) { throw new Error(`The browser could not open a window. ${String(error.message).split('\n')[0]}`); }
+      let context, seed;
+      if (this.extended) context = await this.ownBrowserContext();
+      else {
+        const folder = sharedProfile(this.directory), fresh = !existsSync(folder); mkdirSync(folder, { recursive: true, mode: 0o700 });
+        if (fresh) { const choice = await this.startingProfile(); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey, { saved: true }).catch(() => null); }
+        try { context = await this.launchWindow(folder, { name: 'helm-browser' }); }
+        catch (error) { throw new Error(`The browser could not open a window. ${String(error.message).split('\n')[0]}`); }
+      }
       context.helmWindow = true; context.helmJoined = new Set(); context.setDefaultTimeout(STEP_MS); context.setDefaultNavigationTimeout(NAV_MS);
       try {
         if (seed?.cookies?.length) await context.addCookies(seed.cookies).catch(() => {});
@@ -304,8 +395,9 @@ export class BrowserManager {
     const own = context.pages().filter(page => !page.isClosed() && ![NEW_TAB, 'about:blank', 'chrome://newtab/'].includes(page.url()));
     if (own.length) return;
     this.shared = null; context.helmClosed = true;
-    await stopWindow(sharedProfile(this.directory)); await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
-    await trimProfile(sharedProfile(this.directory));
+    if (!context.helmOwnBrowser) await stopWindow(sharedProfile(this.directory));
+    await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
+    if (!context.helmOwnBrowser) await trimProfile(sharedProfile(this.directory));
   }
   /**
    * A new tab. In a window it opens at its address: an empty tab sent
@@ -363,7 +455,7 @@ export class BrowserManager {
     throw new Error(`net::${/^DNS_PROBE/.test(code) ? 'ERR_NAME_NOT_RESOLVED' : /^ERR_[A-Z_]+$/.test(code) ? code : 'ERR_FAILED'} at ${url}`);
   }
   /** An empty tab in the window shows the New Tab page, as in any browser. */
-  async blank(page) { if (page.context?.().helmWindow) await page.goto(NEW_TAB).catch(() => {}); }
+  async blank(page) { const context = page.context?.(); if (context?.helmWindow && !context.helmOwnBrowser) await page.goto(NEW_TAB).catch(() => {}); }
   /** The owner clicked, typed or scrolled in the window; the agent's own input is not theirs. */
   ownerInput(page) {
     const tab = [...this.tabs.values()].find(t => t.page === page);
@@ -419,6 +511,7 @@ export class BrowserManager {
   }
   async importLogins(sessionId, profileKey) {
     this.owner(sessionId);
+    if (this.extended) return { cookies: 0, note: 'Extended mode uses the logins of your own browser. Nothing to copy.' };
     const pending = (this.loginImports.get(sessionId) || Promise.resolve()).catch(() => {}).then(async () => {
       const result = await this.logins.readLogins(profileKey, { refresh: true });
       if (!result.cookies.length && result.failed) throw new Error(result.warnings?.[0] || 'Could not copy logins from this profile.');
@@ -434,6 +527,8 @@ export class BrowserManager {
     finally { await rm(partial, { force: true }); }
   }
   async saveContext(sessionId, context) {
+    // Nothing from the owner's own browser is copied out.
+    if (context.helmOwnBrowser) return;
     const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); await chmod(this.directory, 0o700); await chmod(folder, 0o700);
     // A window keeps its own sign-ins in its profile folder; only its cookies
     // are copied here. Reading site storage visits every framed site in a
@@ -549,7 +644,7 @@ export class BrowserManager {
     const live = () => [...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t));
     const answer = tabs => ({ tabs, running: !!this.browser, canWindow: this.canWindow, open: this.windowContexts.has(sessionId) });
     // A window left open through a Helm restart is taken back, tabs as they are.
-    if (this.canWindow && !this.contexts.has(sessionId) && !this.stopping && (this.shared || windowOpen(sharedProfile(this.directory))) && (await this.savedRows(sessionId)).length) {
+    if (this.canWindow && !this.contexts.has(sessionId) && !this.stopping && (this.shared || (this.extended ? this.relay?.connected && this.relay.tabs.size : windowOpen(sharedProfile(this.directory)))) && (await this.savedRows(sessionId)).length) {
       try { await this.context(sessionId); await this.recover(sessionId); } catch { /* listed asleep below */ }
     }
     // Listing never opens a window: a closed window's tabs are listed asleep.
@@ -1084,7 +1179,8 @@ export class BrowserManager {
   async shutdownBrowser() { const browser = this.browser; this.browser = null; await browser?.close(); if (!this.tabs.size) { clearInterval(this.timer); this.timer = null; } }
   async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } // A window Helm can come back to stays open on the owner's screen.
     for (const context of new Set([...this.windowContexts.values(), this.shared].filter(Boolean))) await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
-    this.windowContexts.clear(); this.shared = null; await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
+    this.windowContexts.clear(); this.shared = null; await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null;
+    await this.relay?.stop().catch(() => {}); }
 }
 
 /** A machine with no browser to start gets no browser note: it would only steer the agent to a tool that fails. */
@@ -1096,4 +1192,8 @@ export function browserReady({ env = process.env, platform = process.platform, f
   return !!(window() && launchTarget(env, platform, find));
 }
 
-export function browserNote() { return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. For an owner step, point with helm browser point; do not click. Never ask for passwords. When a site needs a login, pick the fitting profile from helm browser profiles and run helm browser logins "<profile>". Respect the request on signed-in sites.]`; }
+export function browserNote(directory = join(HELM_DIR, 'browser')) {
+  // Extended mode: the owner's own browser already has their logins.
+  const logins = readMode(directory) === 'extended' ? 'Your tabs open in the owner\'s own browser, with their logins: do not copy logins.' : 'When a site needs a login, pick the fitting profile from helm browser profiles and run helm browser logins "<profile>".';
+  return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. For an owner step, point with helm browser point; do not click. Never ask for passwords. ${logins} Respect the request on signed-in sites.]`;
+}

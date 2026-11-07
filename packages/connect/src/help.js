@@ -383,7 +383,15 @@ const DETAILS = {
                       and note; replay it with run <tab> <name> key=value
     point <tab> <el>  show the owner where to click, without clicking
     screenshot        only when visuals matter; close <tab> releases it
-    profiles / logins copy the owner's browser logins into these tabs`,
+    profiles / logins copy the owner's browser logins into these tabs
+    mode              show where tabs open: window (Helm's own window) or
+                      extended (the owner's own browser, with its real logins,
+                      through Helm's add-on)
+    mode extended     use the owner's browser. Helm sets the add-on up.
+                      If the reply says to restart, ask the owner first, then
+                      add --restart: it closes and reopens their browser, and
+                      their tabs come back.
+    mode window       go back to Helm's own window`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.
