@@ -97,6 +97,51 @@ The owner uses the same browser window. Helm has no browser panel.
   navigate, wait and check; a batch holding any change is refused before
   its first step.
 
+## Extended mode: the owner's own browser
+
+`helm browser mode extended` makes agents use the owner's own browser, with
+its real logins, site data and add-ons, through Helm's add-on
+(`packages/connect/browser-extension`). `helm browser mode window` goes back.
+The idea comes from opencode's Browse (MIT).
+
+- **The same driver in both modes.** The add-on drives tabs through
+  `chrome.debugger`. `browser-relay.js` makes that look like a Chromium
+  debugging port, and Patchright connects to it as to Helm's window. So
+  look, act, point, checks and flows work the same.
+- **Only Helm's tabs.** The add-on attaches only to tabs it opened and to
+  popups from them. They open in the background, in a folded "Helm" tab
+  group. The owner's other tabs are never visible to Helm.
+- **Nothing leaves the owner's browser.** Helm never writes or reads its
+  cookies: login copying, cookie saving and browser-wide cookie, cache,
+  close and window-raise commands are refused or skipped.
+- **The add-on proves itself.** The link listens on 127.0.0.1 only. Helm
+  writes a new key and port to `helm-link.json` in the add-on folder at each
+  start. The add-on and Helm each sign a fresh challenge with the key, and
+  the page origin must be the add-on's fixed id. The driver end needs a
+  random token. One browser connects at a time.
+- **New tabs start blank.** A new tab goes to its address only after the
+  driver has set the page up (on `Runtime.runIfWaitingForDebugger`), so
+  Helm's page scripts run on the first page too.
+- **Background screenshots.** A hidden tab draws nothing, so a screenshot
+  can wait forever. The link sends small extra captures to release it.
+- **Setup by the agent.** Helm copies the add-on to
+  `~/.helm/browser/extension`. A launcher with a flags file (Arch
+  Chromium's `chromium-flags.conf`, found by the name inside the launcher)
+  gets the folder added to its `--load-extension` list; the owner's other
+  add-ons stay. `--restart` closes the owner's browser and opens it again
+  with `--restore-last-session`, only after the owner agreed. A running
+  browser does not load an add-on from a second start, so a restart is
+  needed. Google Chrome and Edge ignore `--load-extension`: if the add-on
+  does not connect after a restart, the reply gives the manual steps (Load
+  unpacked).
+- **Restarts.** The add-on keeps its tabs when Helm restarts and reconnects
+  every second for a minute, then every 30 s. Helm takes the tabs back by
+  address, as with its own window. When the add-on disconnects, the chats'
+  tabs go to sleep.
+- **Way back.** `mode window` takes Helm's folder out of the flags file,
+  closes the add-on's tabs and keeps them asleep. They open again in Helm's
+  window.
+
 ## Traps
 
 - On niri the window needs this rule (app id `helm-browser`):
