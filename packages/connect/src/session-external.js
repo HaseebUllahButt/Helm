@@ -1,5 +1,4 @@
 import { piChatArgs } from './pi-settings.js';
-import { existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { expand } from './paths.js';
@@ -14,7 +13,7 @@ import { inventory } from './inventory.js';
 import { opencodeServiceActive, opencodeServiceStatus, opencodeServiceSessions } from './opencode-service.js';
 import { claudeLiveSessions, claudeLiveStatus } from './external-process.js';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
-import { openFiles, processArgv, processCwd } from './procinfo.js';
+import { fileLocked, openFiles, processArgv, processCwd } from './procinfo.js';
 import { claudeChatArgs } from './claude-hooks.js';
 import { wire } from './session-wire.js';
 import { externalInput } from './session-transcript-events.js';
@@ -468,7 +467,7 @@ export class ExternalSessions {
     if (s.engine === 'opencode2' && opencodeServiceStatus(s.engineSessionId)) return true;
     if (s.engine === 'claude' && s.externalHome
       && claudeLiveSessions(s.externalHome).has(s.engineSessionId)) return true;
-    if (s.engine === 'codex' && s.externalLock && existsSync(s.externalLock)) return true;
+    if (s.engine === 'codex' && s.externalLock && fileLocked(s.externalLock)) return true;
     if (!s.externalPid) return false;
     try { process.kill(s.externalPid, 0); return this.#processOwnsTranscript(s); }
     catch { return false; }

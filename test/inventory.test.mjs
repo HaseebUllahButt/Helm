@@ -27,7 +27,7 @@ test('chats that ran under the temporary folder are tests, not the owner\'s hist
   assert.equal(scratchFolder(null), false);
 });
 
-test('Codex native subagent rollouts stay out of recent history without hiding user forks', async () => {
+test('Codex subagent and one-shot worker rollouts stay out of recent history without hiding user forks', async () => {
   const home = mkdtempSync(join(tmpdir(), 'helm-codex-inventory-'));
   const dir = join(home, 'sessions');
   mkdirSync(dir);
@@ -35,6 +35,7 @@ test('Codex native subagent rollouts stay out of recent history without hiding u
     { id: 'root', source: 'cli' },
     { id: 'child', source: { subagent: { thread_spawn: { parent_thread_id: 'root', depth: 1 } } } },
     { id: 'review', source: { subagent: 'review' } },
+    { id: 'worker', source: 'exec', originator: 'codex_exec' },
     { id: 'fork', source: 'vscode', forked_from_id: 'root' },
   ];
   for (const p of entries) writeFileSync(join(dir, `${p.id}.jsonl`), JSON.stringify({ type: 'session_meta', payload: { ...p, cwd: '/tmp/project' } }) + '\n');

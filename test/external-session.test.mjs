@@ -7,6 +7,7 @@ import { existsSync, appendFileSync, mkdtempSync, mkdirSync, writeFileSync, read
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { holdLock } from './helpers/hold-lock.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-external-'));
 const codexHome = join(root, 'codex-home');
@@ -178,6 +179,8 @@ test('an active external Codex thread is monitored, then managed after its owner
   `], { stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => { try { writer.kill('SIGKILL'); } catch {} });
   await once(writer.stdout, 'data');
+  const held = await holdLock(lock);
+  t.after(() => held.release());
 
   const { inventory } = await import('../packages/connect/src/inventory.js');
   const profiles = [{ id: 'codex', engine: 'codex', env: { CODEX_HOME: codexHome } }];
@@ -372,13 +375,15 @@ test('an inactive Devin history opens without starting a provider process', asyn
 });
 
 
-test('detected sessions enter working and done without opening or stopping the external CLI', async () => {
+test('detected sessions enter working and done without opening or stopping the external CLI', async (t) => {
   const id = '01a0cafe-0000-7000-8000-000000000002';
   const path = join(sessionsDir, `rollout-test-${id}.jsonl`);
   const writerLock = join(locksDir, `${id}.lock`);
   writeFileSync(path, JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/home/owner/external-work' } }) + '\n'
     + JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }) + '\n');
   writeFileSync(writerLock, '');
+  const held = await holdLock(writerLock);
+  t.after(() => held.release());
   writeFileSync(join(codexHome, 'session_index.jsonl'), JSON.stringify({ id, thread_name: 'Fix external status' }) + '\n');
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const sessions = new Sessions(new Runtime(), { makeDriver: () => { throw Error('must not launch'); } });
@@ -403,4 +408,22 @@ test('detected sessions enter working and done without opening or stopping the e
   rmSync(writerLock);
   assert.equal((await sessions.list()).find((s) => s.id === opened.id).status, 'done', 'a vanished writer cannot remain working');
   await sessions.archive(foundId, true);
+});
+
+test('a lock file that no program holds is not a running Codex chat', { skip: process.platform !== 'linux' }, async () => {
+  // A killed Codex leaves thread-writer-locks/<id>.lock behind, unlocked.
+  // Owner report 2026-11-08: such a chat stayed in Running for hours.
+  const id = '01a0cafe-0000-7000-8000-000000000003';
+  const path = join(sessionsDir, `rollout-test-${id}.jsonl`);
+  writeFileSync(path, JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/home/owner/dead-work' } }) + '\n'
+    + JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }) + '\n');
+  writeFileSync(join(locksDir, `${id}.lock`), '');
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const found = (await inventory([{ id: 'codex', engine: 'codex', env: { CODEX_HOME: codexHome } }])).find((x) => x.id === id);
+  assert.equal(found.active, false);
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new Runtime(), { makeDriver: () => { throw Error('must not launch'); } });
+  const row = (await sessions.list({ includeDetected: true })).find((s) => s.id === `found:codex:${id}`);
+  assert.notEqual(row?.status, 'working');
+  assert.notEqual(row?.alive, true);
 });
