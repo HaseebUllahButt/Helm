@@ -253,6 +253,8 @@ const DETAILS = {
                      Run helm agents to list accounts on this machine.
                      Use helm spawn for another machine.
     --model <id>     Pick a model ID, or cheap for the account's small model.
+                     Without a choice, use the parent's model on the same CLI.
+                     A saved helper model takes priority.
     --wait --json    Wait for the result, then print it as JSON.
     --cwd <folder>   Run in another folder.
     --worktree       Use a separate project copy on a new helm/ branch.
@@ -405,7 +407,15 @@ const DETAILS = {
                       and note; replay it with run <tab> <name> key=value
     point <tab> <el>  show the owner where to click, without clicking
     screenshot        only when visuals matter; close <tab> releases it
-    profiles / logins copy the owner's browser logins into these tabs`,
+    profiles / logins copy the owner's browser logins into these tabs
+    mode              show where tabs open: window (Helm's own window) or
+                      extended (the owner's own browser, with its real logins,
+                      through Helm's add-on)
+    mode extended     use the owner's browser. Helm sets the add-on up.
+                      If the reply says to restart, ask the owner first, then
+                      add --restart: it closes and reopens their browser, and
+                      their tabs come back.
+    mode window       go back to Helm's own window`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.

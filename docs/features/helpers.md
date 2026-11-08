@@ -51,7 +51,9 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   context. Codex caches per model, so a copy on another model reuses
   nothing and pays full price for the parent's history; that helper starts
   a new chat, and the parent writes the context it needs in the task. A
-  model left unset is the account default; the driver reads it before it
+  model left unset keeps the parent's current model on the same CLI.
+  Explicit model choices and saved helper models take priority. Another
+  CLI uses its own account default. The driver checks the model before it
   copies. This needs a running
   native Codex daemon. Helm keeps the parent's instructions and puts the
   helper note beside its first task. The helper view shows only its own
@@ -73,7 +75,8 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
 
 ## The CLIs' own subagents
 - **Which one an agent uses (`delegationNote`):** Claude chats use their own
-  Agent tool for work on the same account, short or long. A fork reuses
+  Agent tool for work on the same account, short or long. Helpers keep
+  the parent's model unless the owner asks for another. A fork reuses
   the parent's cached context, and a non-fork helper starts smaller than a
   new chat (16.7k against 28k tokens in the 2026-11-06 run). Helpers run
   in the foreground. Only when the owner asks for orchestrator mode do they

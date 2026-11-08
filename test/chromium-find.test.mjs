@@ -48,6 +48,19 @@ test('a start script is followed to the real Chromium program', () => {
   assert.deepEqual(found.map(b => b.program), [real], 'the wrapper is followed to the Chromium program');
 });
 
+test('a small launcher program is followed, and a web app shortcut never hides the default browser', () => {
+  const home = mkdtempSync(join(root, 'launcher-'));
+  const bin = join(home, 'bin'), lib = join(home, 'lib'), apps = join(home, 'apps'), own = join(home, 'own');
+  const real = chromiumProgram(lib, 'chromium');
+  // Arch starts Chromium through a small compiled program that names the real one.
+  make(bin, { chromium: `\x7fELF\0\0${real}\0chromium-flags.conf\0` });
+  make(apps, { 'chromium.desktop': `[Desktop Entry]\nName=Chromium\nExec=${join(bin, 'chromium')} %U\n` });
+  // A web app the owner installed starts the same program; it comes first in the menu folders.
+  make(own, { 'chrome-abc-Default.desktop': `[Desktop Entry]\nName=Some App\nExec=${join(bin, 'chromium')} --profile-directory=Default --app-id=abc\n` });
+  const found = discoverBrowsers({}, 'linux', { home, entryDirs: [own, apps], flatpakDirs: [], pathDirs: [bin], run: cmd => cmd === 'xdg-settings' ? 'chromium.desktop\n' : '' });
+  assert.deepEqual(found.map(b => [b.name, b.program, b.launcher, b.entry]), [['Chromium', real, join(bin, 'chromium'), 'chromium.desktop']]);
+});
+
 test('macOS finds any .app with Chromium framework resources, and rejects Electron and non-Chromium apps', () => {
   const home = mkdtempSync(join(root, 'mac-'));
   const apps = join(home, 'Applications');

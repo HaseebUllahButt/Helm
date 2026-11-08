@@ -55,9 +55,11 @@ function search(root, depth = 5) {
   for (const e of entries) if (e.isDirectory() && !e.name.startsWith('.')) { const hit = search(join(root, e.name), depth - 1); if (hit) return hit; }
   return null;
 }
-// Follow a start script to the first absolute path in it that is Chromium.
+// Follow a start script, or a small launcher program (Arch's chromium is
+// one), to the first absolute path in it that is Chromium.
 function followScript(path) {
-  const text = readText(path, 64 * 1024); if (!text.startsWith('#!')) return null;
+  let text = readText(path, 64 * 1024);
+  if (!text.startsWith('#!')) { if (!text.startsWith('\x7fELF')) return null; try { text = readFileSync(path).toString('latin1'); } catch { return null; } }
   for (const [cand] of text.matchAll(/\/[\w@.+-]+(?:\/[\w@.+-]+)+/g)) if (isFile(cand) && engineBeside(dirname(real(cand))) === 'chromium') return cand;
   return null;
 }
@@ -101,19 +103,22 @@ function linuxBrowsers({ env, home, run, entryDirs: entryOverride, flatpakDirs: 
     if (program.startsWith(snapBin)) return search(join(snapRoot, program.slice(snapBin.length), 'current')) ? { program, args: [] } : null;
     if (engineBeside(dirname(real(program))) === 'chromium') return { program, args: [] };
     const target = followScript(real(program));
-    return target ? { program: target, args: [] } : null;
+    return target ? { program: target, args: [], launcher: program } : null;
   };
-  const found = new Map();
+  // The default is asked only when there is a browser to order.
+  const found = new Map(); let known; const defaultEntry = () => known === undefined ? (known = linuxDefaultEntry(run)) : known;
   for (const entry of desktopEntries(entryDirs)) {
-    const spec = fromWords(execWords(entry.text));
+    // A web app shortcut (--app-id, --app) starts the browser, but it is not the browser.
+    const words = execWords(entry.text); if (words.some(word => /^--app(-id)?=/.test(word))) continue;
+    const spec = fromWords(words);
     if (!spec) continue;
     const key = `${real(spec.program)}\0${spec.args.join('\0')}`;
-    if (!found.has(key)) found.set(key, { ...spec, name: entryName(entry), entry: entry.file });
+    if (!found.has(key) || entry.file === defaultEntry()) found.set(key, { ...spec, name: entryName(entry), entry: entry.file });
   }
   if (!found.size) return [];
-  const defaultEntry = linuxDefaultEntry(run);
   // Order: the system default browser first, then the rest by name.
-  return [...found.values()].sort((a, b) => (b.entry === defaultEntry) - (a.entry === defaultEntry) || a.name.localeCompare(b.name));
+  const first = defaultEntry();
+  return [...found.values()].sort((a, b) => (b.entry === first) - (a.entry === first) || a.name.localeCompare(b.name));
 }
 function linuxDefaultEntry(run) {
   for (const [command, args] of [['xdg-settings', ['get', 'default-web-browser']], ['xdg-mime', ['query', 'default', 'x-scheme-handler/https']]]) {

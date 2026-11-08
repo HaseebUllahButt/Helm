@@ -20,6 +20,7 @@ export function createBrowserRoutes({ sessions, scanApps = discoverApps, manager
           || !(await apps(p.id)).some(app => app.port === +(url.port || (url.protocol === 'https:' ? 443 : 80)))) throw new Error('This app stopped or does not belong to this chat.');
         return manager.open(p.id, { url: url.href });
       }
+      if (method === 'browser.mode') { manager.owner(p.id); return p.mode ? manager.setMode(p.mode, { restart: !!p.restart }) : manager.modeInfo(); }
       if (method === 'browser.profiles') return manager.profiles(p.id);
       if (method === 'browser.importLogins') return manager.importLogins(p.id, p.profileKey);
       if (method === 'browser.loginDefault') return manager.loginDefault(p.id, p.profileKey);

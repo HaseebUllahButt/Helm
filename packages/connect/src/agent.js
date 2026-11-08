@@ -750,6 +750,8 @@ export class Daemon {
     // closed windows refill by themselves.
     const tidy = setTimeout(() => { if (!this.#stopped) void this.browsers.manager.tidy().catch(() => {}); }, 60_000);
     tidy.unref?.();
+    // Extended mode: open the link now, so the owner's browser reconnects after this restart.
+    void this.browsers.manager.prepare().catch(() => {});
     this.#wake = setInterval(() => { if (!this.#stopped) void this.#syncVersions(); }, SYNC_EVERY_MS);
     this.#wake.unref?.();
     // A version checked out here is taken at once, not on the next round.

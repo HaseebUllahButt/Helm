@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Helm",
+  "description": "Lets your Helm agents use tabs in this browser, with your own logins.",
+  "version": "1.0.0",
+  "minimum_chrome_version": "125",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxsw3fKARXBVBtF/rTNHvgvCqxiMcHG0XQH2RVh6D4tnbjJ2tgfZTPbooxk230PR5gN6/hQjmlHJAcXMa3HNAaqe8oIfxycc6yYHmuP5KFzBVCDXPvCIt68ZQGgIhAt1vzI92zuETo2/olHlTRGFLTvVaJxmW4PB58NMrFVwvcKHdQ9+qAIvmuoOra5jHNBLlA4D1T4zUnkDMtWy0QU3T2HnA2ojDBCD+yvS/ozcrv9n1arnGUIKeIlo/3oSEAxUUFtcj76QENTphsNpCFYeppzR1fvegol+t9IUxIgq4eClP4aBW/yZJKUUjHks7LSoGwbeofc1Gq+gn9l71U+NP6wIDAQAB",
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms"],
+  "action": { "default_title": "Helm" }
+}
