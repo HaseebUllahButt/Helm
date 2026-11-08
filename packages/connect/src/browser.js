@@ -223,7 +223,8 @@ export class BrowserManager {
     if (!browser) return ['Helm found no Chromium-based browser on this machine. Your tabs open in Helm\'s window.'];
     if (!browser.flags) return [`${browser.name} does not load add-ons from Helm. Ask the owner to add the Helm add-on once:`, ...manualSteps(extensionFolder(this.directory))];
     if (!ownBrowserPids(browser.program).length) return [`${browser.name} is closed. It connects to Helm when the owner opens it. Until then your tabs open in Helm's window.`];
-    return [`${browser.name} loads the Helm add-on when it starts again. Ask the owner once if you may restart it (its tabs come back), then run helm browser mode extended --restart. Until then your tabs open in Helm's window.`];
+    // Never interrupt the owner: the browser loads the add-on on its own next start.
+    return [`${browser.name} loads the Helm add-on the next time it starts. Until then your tabs open in Helm's window: if a site is not signed in, run helm browser logins "<profile>". Do not restart ${browser.name} unless the owner asks.`];
   }
   /** The owner's own browser, driven through the add-on as if it were Helm's window. */
   async ownBrowserContext() {

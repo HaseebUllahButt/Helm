@@ -46,7 +46,7 @@ Design: [`docs/browser-use.md`](../browser-use.md).
 - **Reach:** on by default on a machine with a screen. The Helm service
   names the add-on in the browser's flags file at each start, so the
   browser loads it on its next start. An agent runs
-  `helm browser mode extended --restart` only after the owner agrees.
+  `helm browser mode extended --restart` only when the owner asks.
   `helm browser mode` shows the state; `helm browser mode window` turns it
   off. No Settings row yet.
 - **Prove:** a real Chromium with the add-on loaded, driven through
