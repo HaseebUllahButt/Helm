@@ -138,10 +138,15 @@ The idea comes from opencode's Browse (MIT).
   Chromium's `chromium-flags.conf`, Brave's `brave-flags.conf`, found by the
   name inside the launcher) gets the folder added to its `--load-extension`
   list; the owner's other add-ons stay. The browser loads it on its next
-  start. A running browser does not load an add-on from a second start, so
-  an agent that needs it now asks the owner, then runs `--restart`: it
-  closes the owner's browser and opens it again with
+  start. A running browser does not load an add-on from a second start.
+  Agents never restart it on their own: that would interrupt the owner.
+  Until then they use Helm's window with copied logins. `--restart`, only
+  when the owner asks, closes the owner's browser and opens it again with
   `--restore-last-session`.
+- **Chromium writes its command line as one line.** `/proc/<pid>/cmdline`
+  of a running Chromium has spaces, not NULs, between its flags. Read
+  `--type=` and `--user-data-dir=` after a space too, or a restart closes
+  every Chromium on the machine, Helm's windows among them.
 - **Helm's app window loads no add-ons.** Its launcher starts the same
   browser launcher, which reads the flags file. Without
   `--disable-extensions` the add-on would connect from the app window first

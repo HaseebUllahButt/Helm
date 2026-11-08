@@ -83,6 +83,13 @@ export function setFlags(launcher, folder, add = true, env = process.env) {
 // ---------- The owner's running browser ----------
 const real = path => { try { return realpathSync(path); } catch { return path; } };
 /**
+ * True for the main process of the owner's browser: not a helper process
+ * (--type=) and not a browser with its own profile folder (Helm's window, the
+ * Helm app window, tests). Chromium rewrites its command line as one line
+ * with spaces, so the flags are found after a space or a NUL.
+ */
+export const ownBrowserCommand = text => !/(^|[\0 ])--(type|user-data-dir)=/.test(text);
+/**
  * The main process of the owner's own browser: the program runs with no
  * other profile folder named (Helm's window and tests name their own).
  */
@@ -93,9 +100,8 @@ export function ownBrowserPids(program) {
     if (!/^\d+$/.test(name)) continue;
     let exe; try { exe = readlinkSync(`/proc/${name}/exe`); } catch { continue; }
     if (exe !== want) continue;
-    let args; try { args = readFileSync(`/proc/${name}/cmdline`, 'utf8').split('\0'); } catch { continue; }
-    if (args.some(arg => arg.startsWith('--type=') || arg.startsWith('--user-data-dir='))) continue;
-    found.push(Number(name));
+    let text; try { text = readFileSync(`/proc/${name}/cmdline`, 'utf8'); } catch { continue; }
+    if (ownBrowserCommand(text)) found.push(Number(name));
   }
   return found;
 }

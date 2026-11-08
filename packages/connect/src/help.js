@@ -412,10 +412,10 @@ const DETAILS = {
                       owner's own browser, with its real logins, through
                       Helm's add-on. window: Helm's own window. Until the
                       owner's browser connects, tabs open in Helm's window.
-    mode extended     use the owner's browser. Helm sets the add-on up.
-                      If the reply says to restart, ask the owner first, then
-                      add --restart: it closes and reopens their browser, and
-                      their tabs come back.
+    mode extended     use the owner's browser. Helm sets the add-on up; the
+                      browser loads it on its next start. Add --restart only
+                      when the owner asks: it closes and reopens their
+                      browser, and their tabs come back.
     mode window       use only Helm's own window`,
 
   delete: `
