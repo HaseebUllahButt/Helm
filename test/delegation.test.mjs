@@ -1311,7 +1311,8 @@ test('the notes every agent gets match the committed size', async () => {
   const net = { self: 'a', machines: { a: { id: 'a', name: 'Laptop' }, b: { id: 'b', name: 'VM', kind: 'vm' }, c: { id: 'c', name: 'HomePC', kind: 'pc' } } };
   // Only machines that can start a browser get its note; count it once.
   const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:')).join('\n');
-  const notes = [brief, browserNote(), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
+  // A desktop machine: the note for the owner's own browser.
+  const notes = [brief, browserNote(undefined, { screen: true }), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
   // Claude chats get their own helper route (delegationNote).
   const claudeNotes = notes.replace(delegationNote(), delegationNote('claude'));
   assert.deepEqual(

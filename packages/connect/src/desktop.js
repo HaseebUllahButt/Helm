@@ -106,6 +106,9 @@ function installIcons() {
  * one. The setting is per browser profile, so the window needs its own; the
  * owner's everyday one is left alone. Helm signs this window in with the
  * machine's local key, so the separate profile costs nothing to sign into.
+ * The window loads no add-ons: a browser launcher reads the owner's flags
+ * file, and Helm's own add-on there must connect from the owner's browser
+ * only (browser-extension.js).
  */
 const windowProfile = () => join(HELM_DIR, 'app-window');
 
@@ -190,7 +193,7 @@ export function installApp({ url, browser, profile = 'Default' }) {
   const dir = windowProfile();
   if (bin) seedWindowProfile(dir);
   const exec = bin
-    ? `${bin} --user-data-dir=${dir} --profile-directory=${profile} --no-first-run --app=${url}`
+    ? `${bin} --user-data-dir=${dir} --profile-directory=${profile} --no-first-run --disable-extensions --app=${url}`
     : `xdg-open ${url}`;
 
   const entry = [
@@ -226,14 +229,15 @@ export function installApp({ url, browser, profile = 'Default' }) {
 /**
  * A launcher from an earlier Helm opens Chromium's bar or buttons across the
  * top: one without the window profile, or one that opens Helm installed as a
- * web app. Each start rewrites it as a plain window.
+ * web app. One without --disable-extensions loads the owner's add-ons. Each
+ * start rewrites it as a plain window.
  */
 export function refreshAppLauncher({ url }) {
   if (platform() !== 'linux') return { updated: false };
   let text;
   try { text = readFileSync(join(appsDir(), ENTRY), 'utf8'); } catch { return { updated: false }; }
   const exec = text.match(/^Exec=(.*)$/m)?.[1]?.trim() ?? '';
-  if (/(^|\s)--app=/.test(exec) && exec.includes(`--user-data-dir=${windowProfile()} `)) return { updated: false };
+  if (/(^|\s)--app=/.test(exec) && exec.includes(`--user-data-dir=${windowProfile()} `) && /(^|\s)--disable-extensions(\s|$)/.test(exec)) return { updated: false };
   // Only the Helm the launcher opens may rewrite it: a test copy on another
   // port or folder shares this desktop.
   const opens = text.match(/^X-Helm-Url=(.*)$/m)?.[1]?.trim() ?? exec.match(/--app=(\S+)/)?.[1];
