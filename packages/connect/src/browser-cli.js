@@ -5,7 +5,7 @@ import { parseAgentArgs } from './agent-args.js';
 export async function runBrowserCommand(args, { rpc, self, findSession, env = process.env, print = console.log } = {}) {
   const { words, options } = parseAgentArgs(args, { values: ['session', 'output', 'budget', 'note', 'within', 'frame'], switches: ['full-page', 'default', 'clear-default', 'restart'] });
   const [command = 'tabs', tabId, source] = words;
-  if (['help', '--help'].includes(command)) { print('helm browser open <url> | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | point <tab> <element # or CSS selector> [--note <text>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default | mode [window|extended] [--restart] [--session <chat-id>]'); return; }
+  if (['help', '--help'].includes(command)) { print('helm browser open <url> | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | point <tab> <element # or CSS selector> [--note <text>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default | mode [window|extended] [--restart] | setup [--session <chat-id>]'); return; }
   const sessionId = options.session || env.HELM_SESSION_ID || env.HELM_NATIVE_SESSION;
   if (!sessionId) throw new Error('run browser commands in a Helm chat, or pass --session <chat-id>');
   const target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
@@ -16,6 +16,8 @@ export async function runBrowserCommand(args, { rpc, self, findSession, env = pr
     if (options.restart && tabId !== 'extended') throw new Error('use --restart with helm browser mode extended');
     result = await rpc(target.env, 'browser.mode', { id, ...(tabId ? { mode: tabId, restart: !!options.restart } : {}) }, options.restart ? 60000 : 20000);
   }
+  // Only when the owner asks: it opens a page and uses the clipboard on their screen.
+  else if (command === 'setup') result = await rpc(target.env, 'browser.setup', { do: 'open' }, 30000);
   else if (command === 'profiles') result = await rpc(target.env, 'browser.profiles', { id });
   else if (command === 'logins') {
     if (options['clear-default']) { if (tabId || options.default) throw new Error('use --clear-default by itself'); result = await rpc(target.env, 'browser.loginDefault', { id, profileKey: null }); }

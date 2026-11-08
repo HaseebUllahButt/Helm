@@ -150,9 +150,19 @@ The idea comes from opencode's Browse (MIT).
 - **Helm's app window loads no add-ons.** Its launcher starts the same
   browser launcher, which reads the flags file. Without
   `--disable-extensions` the add-on would connect from the app window first
-  (one browser at a time) and agents would drive tabs there. Google Chrome and Edge ignore `--load-extension`: if the add-on
-  does not connect after a restart, the reply gives the manual steps (Load
-  unpacked).
+  (one browser at a time) and agents would drive tabs there.
+- **No debugging bar.** While the add-on drives a tab, Chromium shows
+  "Helm started debugging this browser" on every tab. Helm adds
+  `--silent-debugger-extension-api` to the flags file, with a marker line,
+  and the way back takes out only its own line.
+- **Google Chrome and Edge: one step from the owner.** Since Chrome 137
+  they ignore `--load-extension` (malware used it), and Helm must not
+  depend on the Chrome Web Store. Settings > Your browser > Set up opens
+  `chrome://extensions` in the owner's browser and copies the folder; the
+  owner turns on Developer mode, clicks Load unpacked and pastes. The
+  add-on connects at once, with no restart. Agents never stop a task for
+  it: they work in Helm's window and point the owner to Settings once.
+  These browsers have no flags file, so their debugging bar stays.
 - **Restarts.** The add-on keeps its tabs when Helm restarts and reconnects
   every second for a minute, then every 30 s. Helm takes the tabs back by
   address, as with its own window. When the add-on disconnects, the chats'

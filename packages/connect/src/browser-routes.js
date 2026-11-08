@@ -20,6 +20,13 @@ export function createBrowserRoutes({ sessions, scanApps = discoverApps, manager
           || !(await apps(p.id)).some(app => app.port === +(url.port || (url.protocol === 'https:' ? 443 : 80)))) throw new Error('This app stopped or does not belong to this chat.');
         return manager.open(p.id, { url: url.href });
       }
+      // Settings: the owner's browser on this machine, with no chat.
+      if (method === 'browser.setup') {
+        if (p.do === 'open') return manager.ownerSetup();
+        if (p.do === 'restart') return manager.setMode('extended', { restart: true });
+        if (p.do === 'mode') return manager.setMode(p.mode);
+        return manager.modeInfo();
+      }
       if (method === 'browser.mode') { manager.owner(p.id); return p.mode ? manager.setMode(p.mode, { restart: !!p.restart }) : manager.modeInfo(); }
       if (method === 'browser.profiles') return manager.profiles(p.id);
       if (method === 'browser.importLogins') return manager.importLogins(p.id, p.profileKey);

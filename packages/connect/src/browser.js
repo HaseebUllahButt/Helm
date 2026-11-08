@@ -10,7 +10,7 @@ import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } fro
 import * as browserLogins from './browser-logins.js';
 import { canOpenWindow, systemChromium, launchTarget, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile, screenEnv } from './browser-window.js';
 import { ExtensionRelay } from './browser-relay.js';
-import { EXTENSION_ID, extensionFolder, linkFile, manualSteps, ownBrowserPids, readMode, restartOwnBrowser, setFlags, syncExtension, writeMode, flagsFile } from './browser-extension.js';
+import { EXTENSION_ID, copyText, extensionFolder, linkFile, manualSteps, openExtensionsPage, ownBrowserPids, pasteSteps, readMode, restartOwnBrowser, setFlags, syncExtension, writeMode, flagsFile } from './browser-extension.js';
 import { discoverBrowsers } from './chromium-find.js';
 
 const id = () => randomBytes(8).toString('hex');
@@ -179,7 +179,8 @@ let ownerLogins = false;
 export const useOwnerLogins = () => { ownerLogins = true; };
 
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = CALL_MS, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500, extensionWaitMs = 4000, browsers = discoverBrowsers, mode = null } = {}) {
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = CALL_MS, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500, extensionWaitMs = 4000, browsers = discoverBrowsers, mode = null, setupTools = { copyText, openExtensionsPage } } = {}) {
+    this.setupTools = setupTools;
     // `mode` sets the browser mode for this run only (tests); else the saved choice counts.
     this.extensionWaitMs = extensionWaitMs; this.browsers = browsers; this.modeChoice = mode;
     this.launchWindow = launchWindow; this.windowCheck = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
@@ -221,7 +222,8 @@ export class BrowserManager {
   ownBrowserSteps() {
     const browser = this.ownBrowser();
     if (!browser) return ['Helm found no Chromium-based browser on this machine. Your tabs open in Helm\'s window.'];
-    if (!browser.flags) return [`${browser.name} does not load add-ons from Helm. Ask the owner to add the Helm add-on once:`, ...manualSteps(extensionFolder(this.directory))];
+    // The owner sets it up from Settings, when it suits them: never stop the task for it.
+    if (!browser.flags) return [`${browser.name} needs one step from the owner before you can use it. Do the task in Helm's window now. At the end, tell the owner once: in Helm, open Settings, choose this machine, and click Set up under Your browser.`];
     if (!ownBrowserPids(browser.program).length) return [`${browser.name} is closed. It connects to Helm when the owner opens it. Until then your tabs open in Helm's window.`];
     // Never interrupt the owner: the browser loads the add-on on its own next start.
     return [`${browser.name} loads the Helm add-on the next time it starts. Until then your tabs open in Helm's window: if a site is not signed in, run helm browser logins "<profile>". Do not restart ${browser.name} unless the owner asks.`];
@@ -245,13 +247,37 @@ export class BrowserManager {
     const best = this.browsers()[0]; if (!best) return null;
     return { name: best.name, program: best.program, launcher: best.launcher || best.program, flags: flagsFile(best.launcher || best.program) };
   }
-  /** What `helm browser mode` shows. */
+  /**
+   * What `helm browser mode` and Settings show. `state`: connected, off
+   * (Helm's window chosen), next-start (the browser loads the add-on when it
+   * starts again), closed, one-step (Chrome or Edge: the owner loads it once),
+   * none (no browser) or no-screen.
+   */
   async modeInfo() {
     const info = { mode: this.mode, screen: this.canWindow };
-    if (this.mode !== 'extended') return info;
-    const browser = this.ownBrowser(), relay = this.canWindow ? await this.startRelay().catch(() => null) : null;
-    return { ...info, connected: !!relay?.connected, browser: browser?.name || null, folder: extensionFolder(this.directory), flagsFile: browser?.flags || null,
+    if (!this.canWindow) return { ...info, state: 'no-screen' };
+    if (this.mode !== 'extended') return { ...info, state: 'off', browser: this.ownBrowser()?.name || null };
+    const browser = this.ownBrowser(), relay = await this.startRelay().catch(() => null);
+    const state = relay?.connected ? 'connected' : !browser ? 'none' : !browser.flags ? 'one-step' : ownBrowserPids(browser.program).length ? 'next-start' : 'closed';
+    return { ...info, state, connected: !!relay?.connected, browser: browser?.name || null, folder: extensionFolder(this.directory), flagsFile: browser?.flags || null,
       ...(relay?.connected ? {} : { steps: this.ownBrowserSteps() }) };
+  }
+  /**
+   * Settings' Set up, for a browser that loads no add-ons from Helm (Google
+   * Chrome, Edge): Helm opens its add-ons page and copies the add-on's folder,
+   * so the owner turns on Developer mode, clicks Load unpacked and pastes.
+   * The add-on then connects at once, with no restart.
+   */
+  async ownerSetup() {
+    if (!this.canWindow) throw new Error('This machine has no screen, so agents use Helm\'s hidden browser.');
+    const browser = this.ownBrowser(); if (!browser) throw new Error('Helm found no Chromium-based browser on this machine. Install one, for example Google Chrome or Brave.');
+    if (this.mode !== 'extended') await this.setMode('extended');
+    const relay = await this.startRelay();
+    if (relay.connected || browser.flags) return this.modeInfo();
+    const folder = extensionFolder(this.directory), screen = screenEnv();
+    const copied = await this.setupTools.copyText(folder, { env: { ...process.env, ...screen } });
+    const opened = this.setupTools.openExtensionsPage({ program: browser.program, launcher: browser.launcher, screen });
+    return { ...(await this.modeInfo()), copied, opened, steps: [...(opened ? [] : [`Open chrome://extensions in ${browser.name}.`]), ...pasteSteps(), ...(copied ? [] : [`Paste this folder: ${folder}`])] };
   }
   /**
    * Switch between Helm's own window and the owner's browser. The chats'

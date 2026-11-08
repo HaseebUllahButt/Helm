@@ -416,7 +416,11 @@ const DETAILS = {
                       browser loads it on its next start. Add --restart only
                       when the owner asks: it closes and reopens their
                       browser, and their tabs come back.
-    mode window       use only Helm's own window`,
+    mode window       use only Helm's own window
+    setup             only when the owner asks: open the add-ons page of
+                      Google Chrome or Edge and copy the add-on's folder.
+                      The owner turns on Developer mode, clicks Load
+                      unpacked and pastes. Settings has the same button.`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.

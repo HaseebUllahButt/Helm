@@ -3,6 +3,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { accountsFrom, type Account } from '../accounts';
 import { EngineMark } from '../EngineMark';
 import { PublicLinks } from '../PublicLinks';
+import { OwnBrowser } from '../OwnBrowser';
 import { BackIcon, Icon } from '../Icon';
 import { Client, validMachineName, MACHINE_NAME_RULE, type Environment } from '../client';
 import { engineOf } from '../engines';
@@ -176,6 +177,8 @@ export function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
 
         <div className="section">Machine type</div>
         <MachineKind client={client} env={env} onChanged={onRenamed} />
+
+        <OwnBrowser client={client} env={env} />
 
         <div className="section">Spins</div>
         <PublicLinks client={client} env={env} />
