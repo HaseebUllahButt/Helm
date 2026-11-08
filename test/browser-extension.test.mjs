@@ -47,11 +47,37 @@ test('the flags file is the one the launcher names, and a launcher without one h
   assert.equal(readFileSync(join(dir, 'config', 'chromium-flags.conf'), 'utf8'), '');
 });
 
-test('the mode is saved per machine and defaults to Helm\'s window', () => {
+test('the mode is saved per machine and defaults to the owner\'s own browser', () => {
   const dir = mkdtempSync(join(process.env.HELM_DIR, 'mode-'));
-  assert.equal(ext.readMode(dir), 'window');
+  assert.equal(ext.readMode(dir), 'extended');
+  // A file from the first add-on, written by a test, is not the owner's choice.
+  writeFileSync(join(dir, 'mode.json'), '{"mode":"window"}'); assert.equal(ext.readMode(dir), 'extended');
+  ext.writeMode(dir, 'window'); assert.equal(ext.readMode(dir), 'window');
   ext.writeMode(dir, 'extended'); assert.equal(ext.readMode(dir), 'extended');
   assert.throws(() => ext.writeMode(dir, 'other'), /window or extended/);
+});
+
+test('at start the Helm service names the add-on in the browser\'s flags file, and a test copy never does', async t => {
+  const dir = mkdtempSync(join(process.env.HELM_DIR, 'install-'));
+  const before = process.env.XDG_CONFIG_HOME; process.env.XDG_CONFIG_HOME = join(dir, 'config');
+  t.after(() => { if (before === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = before; });
+  const launcher = join(dir, 'brave'); writeFileSync(launcher, '#!/bin/sh\nCONF_FILE="${XDG_CONFIG_HOME}/brave-flags.conf"\n');
+  const flags = join(dir, 'config', 'brave-flags.conf');
+  mkdirSync(join(dir, 'config')); writeFileSync(flags, '--load-extension=/owner/add-on\n');
+  const browsers = () => [{ name: 'Brave', program: join(dir, 'brave-bin'), launcher }];
+  const quiet = new BrowserManager({ directory: join(dir, 'quiet'), canWindow: false, browsers });
+  await quiet.prepare(); await quiet.stop();
+  assert.equal(readFileSync(flags, 'utf8'), '--load-extension=/owner/add-on\n', 'tests leave the owner\'s browser alone');
+  const manager = new BrowserManager({ directory: join(dir, 'helm'), canWindow: false, browsers });
+  t.after(() => manager.stop());
+  await manager.prepare({ install: true });
+  assert.equal(readFileSync(flags, 'utf8'), `--load-extension=/owner/add-on,${ext.extensionFolder(join(dir, 'helm'))}\n`);
+  assert.ok(existsSync(join(ext.extensionFolder(join(dir, 'helm')), 'manifest.json')), 'the add-on is in Helm\'s folder');
+  assert.equal(manager.relay.connected, false);
+  assert.match(manager.ownBrowserSteps()[0], /Brave is closed/);
+  const chosen = new BrowserManager({ directory: join(dir, 'chosen'), canWindow: false, browsers, mode: 'window' });
+  writeFileSync(flags, ''); await chosen.prepare({ install: true }); await chosen.stop();
+  assert.equal(readFileSync(flags, 'utf8'), '', 'the owner chose Helm\'s window: nothing is added');
 });
 
 test('the link lets in only the add-on with the key, and the driver with the token', async t => {
@@ -128,6 +154,34 @@ test('extended mode drives tabs in the owner\'s own browser and keeps them throu
   assert.equal(ext.readMode(directory), 'window');
   const rows = JSON.parse(readFileSync(join(directory, 'chat-1', 'tabs.json'), 'utf8'));
   assert.equal(rows.length, 1, 'the tab is kept to open again');
+});
+
+test('until the owner\'s browser connects, tabs open in Helm\'s window, then move after the step', { skip: noChromium, timeout: 90000 }, async t => {
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Move</title><button>Ready</button>'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const directory = mkdtempSync(join(process.env.HELM_DIR, 'fallback-'));
+  const { chromium } = await import('patchright-core');
+  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }), canWindow: true, ownerQuietMs: 300, extensionWaitMs: 300, browsers: () => [],
+    launchWindow: dir => chromium.launchPersistentContext(dir, { headless: true, executablePath: chromiumPath }) });
+  t.after(() => manager.stop());
+  await manager.prepare({ install: false });
+  const opened = await manager.open('chat-1', { url });
+  assert.match(opened.note, /opened in Helm's window/);
+  assert.equal(manager.shared.helmOwnBrowser, undefined);
+  assert.match((await manager.run('chat-1', opened.tab.id, { kind: 'look' })).text, /Ready/);
+
+  await startBrowser(t, directory);
+  assert.equal(await manager.relay.waitForExtension(20000), true, 'the add-on connects to Helm');
+  // Helm's window closes once no step runs; the tab sleeps and opens again in the owner's browser.
+  for (const until = Date.now() + 20000; Date.now() < until && manager.shared;) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(manager.shared, null, 'Helm\'s window was put away');
+  const look = await manager.run('chat-1', opened.tab.id, { kind: 'look' });
+  assert.match(look.text, /Ready/);
+  assert.equal(manager.shared.helmOwnBrowser, true, 'the tab is in the owner\'s browser now');
+  const again = await manager.open('chat-1', { url });
+  assert.equal(again.note, undefined, 'no note once the owner\'s browser is in use');
 });
 
 test('a restart closes only the owner\'s browser and opens it again with its last tabs', { skip: process.platform !== 'linux' && 'reads /proc' }, async t => {

@@ -2,10 +2,11 @@
 // add-on, with the owner's real logins, instead of Helm's own window.
 //
 // The add-on ships with Helm and is copied to ~/.helm/browser/extension.
-// An agent sets it up itself where the browser allows it: a browser started
+// Helm sets it up itself where the browser allows it: a browser started
 // through a launcher with a flags file (Arch Chromium, Brave, Helium) loads
-// the folder on every start once it is named there. Google Chrome and Edge
-// ignore that flag, so there the owner adds the folder once by hand.
+// the folder on every start once it is named there. The Helm service names it
+// at each start. Google Chrome and Edge ignore that flag, so there the owner
+// adds the folder once by hand.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -35,13 +36,18 @@ export function syncExtension(directory) {
 }
 
 export const MODES = ['window', 'extended'];
+/**
+ * Extended mode is the default: agents use the owner's own browser. Only a
+ * choice the owner saved with `helm browser mode` (version 2) counts. An
+ * earlier file without a version came from a test of the first add-on.
+ */
 export function readMode(directory) {
-  try { const { mode } = JSON.parse(readFileSync(join(directory, 'mode.json'), 'utf8')); return MODES.includes(mode) ? mode : 'window'; } catch { return 'window'; }
+  try { const { mode, v } = JSON.parse(readFileSync(join(directory, 'mode.json'), 'utf8')); return v === 2 && MODES.includes(mode) ? mode : 'extended'; } catch { return 'extended'; }
 }
 export function writeMode(directory, mode) {
   if (!MODES.includes(mode)) throw new Error(`choose a browser mode: ${MODES.join(' or ')}`);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  writeFileSync(join(directory, 'mode.json'), JSON.stringify({ mode }), { mode: 0o600 });
+  writeFileSync(join(directory, 'mode.json'), JSON.stringify({ mode, v: 2 }), { mode: 0o600 });
 }
 
 // ---------- The browser's flags file ----------

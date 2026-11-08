@@ -99,10 +99,19 @@ The owner uses the same browser window. Helm has no browser panel.
 
 ## Extended mode: the owner's own browser
 
-`helm browser mode extended` makes agents use the owner's own browser, with
-its real logins, site data and add-ons, through Helm's add-on
-(`packages/connect/browser-extension`). `helm browser mode window` goes back.
+Extended mode is the default on a machine with a screen: agents use the
+owner's own browser, with its real logins, site data and add-ons, through
+Helm's add-on (`packages/connect/browser-extension`). The owner asks for a
+task on a signed-in site, and the agent does it with no login from the
+owner. `helm browser mode window` turns it off; only a choice saved with a
+version (`mode.json` `v: 2`) counts, so the first add-on's test files do not.
 The idea comes from opencode's Browse (MIT).
+
+- **Until the browser connects, Helm's window.** When the add-on is not
+  connected, the chats' tabs open in Helm's window, and `open` says why and
+  what to do. Only a link that just opened waits for the add-on (4 s). When
+  the add-on connects, Helm's window closes after the current step; the
+  tabs open again in the owner's browser by address.
 
 - **The same driver in both modes.** The add-on drives tabs through
   `chrome.debugger`. `browser-relay.js` makes that look like a Chromium
@@ -124,14 +133,19 @@ The idea comes from opencode's Browse (MIT).
   Helm's page scripts run on the first page too.
 - **Background screenshots.** A hidden tab draws nothing, so a screenshot
   can wait forever. The link sends small extra captures to release it.
-- **Setup by the agent.** Helm copies the add-on to
+- **Setup at each start.** The Helm service copies the add-on to
   `~/.helm/browser/extension`. A launcher with a flags file (Arch
-  Chromium's `chromium-flags.conf`, found by the name inside the launcher)
-  gets the folder added to its `--load-extension` list; the owner's other
-  add-ons stay. `--restart` closes the owner's browser and opens it again
-  with `--restore-last-session`, only after the owner agreed. A running
-  browser does not load an add-on from a second start, so a restart is
-  needed. Google Chrome and Edge ignore `--load-extension`: if the add-on
+  Chromium's `chromium-flags.conf`, Brave's `brave-flags.conf`, found by the
+  name inside the launcher) gets the folder added to its `--load-extension`
+  list; the owner's other add-ons stay. The browser loads it on its next
+  start. A running browser does not load an add-on from a second start, so
+  an agent that needs it now asks the owner, then runs `--restart`: it
+  closes the owner's browser and opens it again with
+  `--restore-last-session`.
+- **Helm's app window loads no add-ons.** Its launcher starts the same
+  browser launcher, which reads the flags file. Without
+  `--disable-extensions` the add-on would connect from the app window first
+  (one browser at a time) and agents would drive tabs there. Google Chrome and Edge ignore `--load-extension`: if the add-on
   does not connect after a restart, the reply gives the manual steps (Load
   unpacked).
 - **Restarts.** The add-on keeps its tabs when Helm restarts and reconnects
