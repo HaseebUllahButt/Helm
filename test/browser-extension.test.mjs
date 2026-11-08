@@ -15,6 +15,7 @@ const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { ExtensionRelay, extensionIdFromKey } = await import('../packages/connect/src/browser-relay.js');
 const ext = await import('../packages/connect/src/browser-extension.js');
 const { systemChromium } = await import('../packages/connect/src/browser-window.js');
+const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
 
 test('the add-on has one fixed id in every browser', () => {
   const manifest = JSON.parse(readFileSync(join(ext.EXTENSION_SOURCE, 'manifest.json'), 'utf8'));
@@ -42,9 +43,19 @@ test('the flags file is the one the launcher names, and a launcher without one h
   assert.equal(ext.flagsFile(join(dir, 'launcher'), env), join(dir, 'config', 'chromium-flags.conf'));
   assert.equal(ext.flagsFile(join(dir, 'plain'), env), null);
   assert.equal(ext.setFlags(join(dir, 'launcher'), '/x/extension', true, env), join(dir, 'config', 'chromium-flags.conf'));
-  assert.equal(readFileSync(join(dir, 'config', 'chromium-flags.conf'), 'utf8'), '--load-extension=/x/extension\n');
+  assert.equal(readFileSync(join(dir, 'config', 'chromium-flags.conf'), 'utf8'), `--load-extension=/x/extension\n# Added by Helm: no debugging bar while agents work in your browser.\n${ext.QUIET_FLAG}\n`);
   ext.setFlags(join(dir, 'launcher'), '/x/extension', false, env);
   assert.equal(readFileSync(join(dir, 'config', 'chromium-flags.conf'), 'utf8'), '');
+});
+
+test('the flags file hides the debugging bar, and the way back keeps the owner\'s own line', () => {
+  const quiet = ext.withQuiet('--ozone-platform=wayland\n');
+  assert.equal(quiet, `--ozone-platform=wayland\n# Added by Helm: no debugging bar while agents work in your browser.\n${ext.QUIET_FLAG}\n`);
+  assert.equal(ext.withQuiet(quiet), quiet, 'adding twice changes nothing');
+  assert.equal(ext.withQuiet(quiet, false), '--ozone-platform=wayland\n');
+  const owners = `${ext.QUIET_FLAG}\n`;
+  assert.equal(ext.withQuiet(owners), owners, 'the owner\'s own flag is enough');
+  assert.equal(ext.withQuiet(owners, false), owners, 'and it stays on the way back');
 });
 
 test('the mode is saved per machine and defaults to the owner\'s own browser', () => {
@@ -71,7 +82,7 @@ test('at start the Helm service names the add-on in the browser\'s flags file, a
   const manager = new BrowserManager({ directory: join(dir, 'helm'), canWindow: false, browsers });
   t.after(() => manager.stop());
   await manager.prepare({ install: true });
-  assert.equal(readFileSync(flags, 'utf8'), `--load-extension=/owner/add-on,${ext.extensionFolder(join(dir, 'helm'))}\n`);
+  assert.equal(readFileSync(flags, 'utf8'), `--load-extension=/owner/add-on,${ext.extensionFolder(join(dir, 'helm'))}\n# Added by Helm: no debugging bar while agents work in your browser.\n${ext.QUIET_FLAG}\n`);
   assert.ok(existsSync(join(ext.extensionFolder(join(dir, 'helm')), 'manifest.json')), 'the add-on is in Helm\'s folder');
   assert.equal(manager.relay.connected, false);
   assert.match(manager.ownBrowserSteps()[0], /Brave is closed/);
@@ -156,6 +167,31 @@ test('extended mode drives tabs in the owner\'s own browser and keeps them throu
   assert.equal(rows.length, 1, 'the tab is kept to open again');
 });
 
+test('Set up opens Chrome\'s add-ons page and copies the folder; Settings sees each state', async t => {
+  const dir = mkdtempSync(join(process.env.HELM_DIR, 'setup-'));
+  const calls = [];
+  const chrome = { name: 'Google Chrome', program: join(dir, 'chrome'), launcher: join(dir, 'chrome') };
+  writeFileSync(chrome.program, '#!/bin/sh\n');
+  const manager = new BrowserManager({ directory: join(dir, 'helm'), canWindow: true, mode: 'window', browsers: () => [chrome],
+    setupTools: { copyText: async text => { calls.push(['copy', text]); return true; }, openExtensionsPage: options => { calls.push(['open', options.launcher]); return true; } } });
+  t.after(() => manager.stop());
+  assert.equal((await manager.modeInfo()).state, 'off');
+  const done = await manager.ownerSetup();
+  assert.equal(ext.readMode(join(dir, 'helm')), 'extended', 'Set up turns the owner\'s browser on');
+  assert.equal(done.state, 'one-step');
+  assert.deepEqual(calls, [['copy', ext.extensionFolder(join(dir, 'helm'))], ['open', chrome.launcher]]);
+  assert.deepEqual(done.steps, ext.pasteSteps());
+  assert.match(manager.ownBrowserSteps()[0], /Do the task in Helm's window now/);
+  const routes = createBrowserRoutes({ sessions: { get: () => { throw new Error('no chat needed'); } }, manager });
+  assert.equal((await routes.dispatch('browser.setup', {})).state, 'one-step');
+  assert.equal((await routes.dispatch('browser.setup', { do: 'mode', mode: 'window' })).state, 'off');
+  const none = new BrowserManager({ directory: join(dir, 'none'), canWindow: true, browsers: () => [] });
+  t.after(() => none.stop());
+  assert.equal((await none.modeInfo()).state, 'none');
+  await assert.rejects(none.ownerSetup(), /no Chromium-based browser/);
+  assert.equal((await new BrowserManager({ directory: join(dir, 'vm'), canWindow: false }).modeInfo()).state, 'no-screen');
+});
+
 test('until the owner\'s browser connects, tabs open in Helm\'s window, then move after the step', { skip: noChromium, timeout: 90000 }, async t => {
   const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Move</title><button>Ready</button>'); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -219,7 +255,6 @@ test('helm browser mode asks the chat\'s machine, and --restart goes only with e
   assert.equal(calls[1].ms, 60000, 'a restart may take a while');
   await assert.rejects(run(['mode', 'other']), /window or extended/);
   await assert.rejects(run(['mode', 'window', '--restart']), /--restart/);
-  const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
   const seen = [];
   const manager = { owner: id => seen.push(['owner', id]), modeInfo: async () => ({ mode: 'window' }), setMode: async (mode, options) => { seen.push(['set', mode, options]); return { mode }; } };
   const routes = createBrowserRoutes({ sessions: { get: () => ({}) }, manager });

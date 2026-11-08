@@ -71,11 +71,32 @@ export function withExtension(text, folder, add = true) {
   const out = lines.join('\n');
   return out && !out.endsWith('\n') ? `${out}\n` : out;
 }
+/**
+ * Chromium shows a bar on every tab ("Helm started debugging this browser")
+ * while the add-on drives a tab. This flag hides it. Helm marks its own line,
+ * so the way back takes out only what Helm added.
+ */
+export const QUIET_FLAG = '--silent-debugger-extension-api';
+const QUIET_NOTE = '# Added by Helm: no debugging bar while agents work in your browser.';
+export function withQuiet(text, add = true) {
+  const lines = text ? text.split('\n') : [];
+  const at = lines.indexOf(QUIET_NOTE);
+  if (!add) {
+    if (at >= 0 && lines[at + 1]?.trim() === QUIET_FLAG) lines.splice(at, 2);
+    else if (at >= 0) lines.splice(at, 1);
+    return lines.join('\n');
+  }
+  if (lines.some(line => line.trim() === QUIET_FLAG)) return text;
+  const end = lines.length && lines.at(-1) === '' ? lines.length - 1 : lines.length;
+  lines.splice(end, 0, QUIET_NOTE, QUIET_FLAG);
+  const out = lines.join('\n');
+  return out.endsWith('\n') ? out : `${out}\n`;
+}
 /** Name Helm's add-on in the flags file (add) or take it out. Returns the file, or null when the browser has none. */
 export function setFlags(launcher, folder, add = true, env = process.env) {
   const file = flagsFile(launcher, env); if (!file) return null;
   let text = ''; try { text = readFileSync(file, 'utf8'); } catch { if (!add) return file; }
-  const next = withExtension(text, folder, add);
+  const next = withQuiet(withExtension(text, folder, add), add);
   if (next !== text) { mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, next); }
   return file;
 }
@@ -122,6 +143,43 @@ export async function restartOwnBrowser({ program, launcher, env = process.env, 
   child.on('error', () => {}); child.unref();
   return { closed: pids.length };
 }
+
+/**
+ * Open the add-ons page in the owner's browser, for the one step Google
+ * Chrome and Edge leave to the owner. Only when the owner asked.
+ */
+export function openExtensionsPage({ program, launcher, env = process.env, screen = {} }) {
+  const command = launcher || program; if (!command) return false;
+  const scoped = process.platform === 'linux' && !env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
+  const [file, list] = scoped ? [scoped, ['--user', '--scope', '--collect', '--quiet', command, 'chrome://extensions']] : [command, ['chrome://extensions']];
+  try { const child = spawn(file, list, { detached: true, stdio: 'ignore', env: { ...env, ...screen } }); child.on('error', () => {}); child.unref(); return true; } catch { return false; }
+}
+
+/** Put text on the owner's clipboard, so they paste the add-on's folder. True when it worked. */
+export async function copyText(text, { env = process.env, platform = process.platform } = {}) {
+  const tools = platform === 'darwin' ? [['pbcopy', []]] : platform === 'win32' ? [['clip', []]]
+    : [...(env.WAYLAND_DISPLAY ? [['wl-copy', []]] : []), ['xclip', ['-selection', 'clipboard']], ['xsel', ['--clipboard', '--input']]];
+  for (const [tool, args] of tools) {
+    const ok = await new Promise(resolve => {
+      let child; try { child = spawn(tool, args, { stdio: ['pipe', 'ignore', 'ignore'], env }); } catch { resolve(false); return; }
+      child.on('error', () => resolve(false));
+      // wl-copy stays to serve the clipboard: written is enough.
+      child.stdin.end(text, () => setTimeout(() => resolve(child.exitCode == null || child.exitCode === 0), 300));
+    });
+    if (ok) return true;
+  }
+  return false;
+}
+
+/** The keys that paste a folder into the browser's folder picker. */
+const pasteStep = (platform = process.platform) => platform === 'darwin' ? 'Press Cmd+Shift+G, then Cmd+V and Return.'
+  : platform === 'win32' ? 'Click the Folder box, press Ctrl+V, then click Select Folder.' : 'Press Ctrl+L, then Ctrl+V and Enter.';
+/** The owner's one step, after Helm opened the add-ons page and copied the folder. */
+export const pasteSteps = (platform = process.platform) => [
+  'Turn on Developer mode (top right).',
+  'Click Load unpacked.',
+  pasteStep(platform),
+];
 
 /** What the owner does by hand where the browser ignores flags files. */
 export const manualSteps = folder => [

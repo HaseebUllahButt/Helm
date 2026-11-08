@@ -48,12 +48,17 @@ Design: [`docs/browser-use.md`](../browser-use.md).
   browser loads it on its next start. An agent runs
   `helm browser mode extended --restart` only when the owner asks.
   `helm browser mode` shows the state; `helm browser mode window` turns it
-  off. No Settings row yet.
+  off. Settings > a machine > Your browser shows the same state, with
+  Restart now, Set up (Google Chrome, Edge), Use my browser and Turn off.
+  `helm browser setup` is Set up for an agent, only when the owner asks.
 - **Prove:** a real Chromium with the add-on loaded, driven through
   `BrowserManager`: open, look, type, click, check, screenshot, a Helm
   restart that keeps the tab, the way back to window mode, and a tab that
   opens in Helm's window first and moves to the owner's browser once it
   connects.
+- **Prove the row:** `verify-helm`, open the machine's settings, click
+  Use my browser. Never click Restart now in a private copy: it restarts
+  the owner's real browser.
 - **Traps:** never test on the owner's own browser profile or flags file.
   Tests start a headless Chromium with its own profile and
   `--load-extension`; only the service (no `HELM_NO_SERVICE`) writes the

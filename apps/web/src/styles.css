@@ -810,6 +810,12 @@ button.linkish:hover { color: var(--text); }
 .error.floating { margin: 0 14px 10px; }
 .note { color: var(--mutedfg); font-size: var(--t-meta); line-height: 1.6; }
 .note.mono { font-family: var(--mono); font-size: var(--t-micro); }
+.own-browser .row { gap: 8px; }
+.own-browser .row .grow { min-width: 0; }
+.own-browser .row .rm { white-space: normal; overflow: visible; }
+.own-browser .row button { flex: none; width: auto; margin: 0; min-height: 34px; padding: 4px 12px; font-size: var(--t-meta); }
+.own-browser .note { margin: 8px 2px 0; }
+.own-browser .note ol { margin: 6px 0; padding-left: 20px; }
 /* An empty state is a sentence and, when there is one, the next step - in
    sentence case whatever the call site wrote, because a lowercase whisper in
    the middle of a dark pane read as a dead end. */
