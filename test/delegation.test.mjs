@@ -25,7 +25,7 @@ const profiles = [
 ];
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ version: 1, profiles }));
 const { Sessions } = await import('../packages/connect/src/sessions.js');
-const { agentCatalog, parseAgentArgs, chooseAgent, delegationMode, delegationOutput, delegationNote, codexHelperFork, codexHelperHistory, readCodexHelperHistory } = await import('../packages/connect/src/delegation.js');
+const { agentCatalog, parseAgentArgs, chooseAgent, delegationMode, delegationOutput, delegationNote, resultNotice, codexHelperFork, codexHelperHistory, readCodexHelperHistory } = await import('../packages/connect/src/delegation.js');
 const { runAgentCommand } = await import('../packages/connect/src/agent-cli.js');
 const { M } = await import('@helm/protocol');
 
@@ -1034,6 +1034,73 @@ test('agents get the tool instructions as standing instructions, not in the owne
   assert.equal(drivers.get(parent.id).sent, `Continue\n\n${WRITING_REMINDER}`);
   const child = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
   assert.equal(drivers.get(child.session.id).instructions, `${drivers.get(parent.id).instructions} helper of ${parent.id}`);
+});
+
+test('the parent notice holds only the final message and the command for the full output', async (t) => {
+  // Interim notes, then a tool, then the answer: as every CLI writes them.
+  class Chatty extends FakeDriver {
+    async send(text) {
+      this.sent = text;
+      const turnId = this.engineSessionId;
+      this.push('status', { status: 'working' });
+      this.push('turn.start', { turnId, text });
+      this.push('item.start', { id: 'note', kind: 'text', turnId });
+      this.push('item.delta', { id: 'note', text: 'Let me look at the tests.' });
+      this.push('item.done', { id: 'note', status: 'ok' });
+      this.push('item.start', { id: 'run', kind: 'command', turnId, command: 'npm test' });
+      this.push('item.done', { id: 'run', status: 'ok' });
+      this.push('item.start', { id: 'reply', kind: 'text', turnId });
+      this.push('item.delta', { id: 'reply', text: 'All tests pass.' });
+    }
+  }
+  const { sessions, drivers } = setup(t, (opts) => opts.env.HELM_ENGINE === 'claude' ? new Chatty(opts) : new FakeDriver(opts));
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Run tests' });
+  drivers.get(child.id).finish();
+  await new Promise((resolve) => setImmediate(resolve));
+  const notice = drivers.get(parent.id).sent;
+  assert.match(notice, /\nResult:\nAll tests pass\.\nFull output: helm delegate-result [a-f0-9]+$/);
+  assert.ok(notice.endsWith(`Full output: helm delegate-result ${child.id}`));
+  assert.doesNotMatch(notice, /Let me look/, 'interim notes stay out of the parent');
+  const result = sessions.delegationResult(child.id);
+  assert.equal(result.output, 'Let me look at the tests.\n\nAll tests pass.', 'delegate-result keeps the full output');
+  assert.equal(result.final, 'All tests pass.');
+  // After a restart the final message comes from the saved reply.
+  const restarted = new Sessions(new EventEmitter());
+  t.after(() => restarted.stop());
+  assert.equal(restarted.delegationResult(child.id).final, 'All tests pass.');
+});
+
+test('the final message is the text after the last tool, read from the log too', () => {
+  const events = [
+    { type: 'turn.start', turnId: 't', text: 'Fix' },
+    { type: 'item.start', id: 'a', kind: 'text' }, { type: 'item.delta', id: 'a', text: 'Fixing...' },
+    { type: 'item.start', id: 'b', kind: 'tool', name: 'Edit' },
+    { type: 'item.start', id: 'c', kind: 'text' }, { type: 'item.delta', id: 'c', text: 'Fixed.' },
+    { type: 'item.start', id: 'k', kind: 'thinking' }, { type: 'item.delta', id: 'k', text: 'check' },
+    // A nested helper's tool is not this task's last step.
+    { type: 'item.start', id: 'n', kind: 'tool', name: 'Read', parentId: 'b' },
+    { type: 'item.start', id: 'd', kind: 'text' }, { type: 'item.delta', id: 'd', text: 'Tests pass.' },
+    { type: 'turn.done', turnId: 't', status: 'ok' },
+  ];
+  const result = delegationOutput({ status: 'idle', delegation: { status: 'done' } }, events);
+  assert.equal(result.final, 'Fixed.\n\nTests pass.');
+  assert.equal(result.output, 'Fixing...\n\nFixed.\n\nTests pass.');
+  const tool = delegationOutput({}, [...events.slice(0, -1), { type: 'item.start', id: 'e', kind: 'command' }, events.at(-1)]);
+  assert.equal(tool.final, '', 'a task that ends on a tool wrote no final message');
+});
+
+test('a long final message is cut at a line break, and an empty one says so', () => {
+  const line = 'x'.repeat(99);
+  const final = Array.from({ length: 40 }, () => line).join('\n');
+  const notice = resultNotice({ id: 'abc', title: 'Review', status: 'done', final });
+  const body = notice.split('\nResult:\n')[1];
+  assert.ok(body.length < 1600, `about 1500 characters, not ${body.length}`);
+  assert.match(body, /^(?:x{99}\n){15}\[\.\.\.\]\nFull output: helm delegate-result abc$/);
+  assert.equal(resultNotice({ id: 'abc', title: 'Review', status: 'done', final: '' }).split('\nResult:\n')[1],
+    'No written result.\nFull output: helm delegate-result abc');
+  assert.match(resultNotice({ id: 'abc', title: 'Review', status: 'error', final: '', error: 'provider failed' }), /Result:\nprovider failed\nFull output/);
+  assert.match(resultNotice({ id: 'abc', title: 'Review', machine: 'laptop', status: 'done', final: 'Ok.' }), /\nTask: Review\nMachine: laptop\nStatus: done\n/);
 });
 
 test('output distinguishes approval, interruption and provider failure', () => {

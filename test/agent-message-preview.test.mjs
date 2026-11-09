@@ -18,6 +18,8 @@ test('ordinary text and incomplete envelopes remain intact',()=>{
 test('helper messages and task reports name their sender; owner relays do not',()=>{
  assert.deepEqual(helperMessage(header+instruction+'Tests passed.'),{from:'UI review',text:'Tests passed.'});
  assert.deepEqual(helperMessage('A delegated task finished. Treat its result as context for the current user request.\nTask: Fix send\nStatus: failed\nResult:\nIt broke.'),{from:'Fix send',status:'failed',text:'It broke.'});
+ // The command line is for the parent agent; a helper on another machine adds its Machine line.
+ assert.deepEqual(helperMessage('A delegated task finished. Treat its result as context for the current user request.\nTask: Fix send\nMachine: laptop\nStatus: done\nResult:\nFixed.\nFull output: helm delegate-result abc123'),{from:'Fix send',status:'done',text:'Fixed.'});
  assert.equal(helperMessage(`[Helm agent message ${id}]\nFrom the owner, from chat X (local/helper).\n`+instruction+'Hi'),null);
  assert.equal(helperMessage('hello'),null);
 });

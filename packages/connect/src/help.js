@@ -276,7 +276,8 @@ const DETAILS = {
   A Codex helper on this chat's account, folder and model starts as a copy
   of this chat and reuses its cache. Any other helper starts empty:
   put the context it needs in the task.
-  Read a helper with helm delegate-result <id>.
+  When a helper stops, this chat gets its last message, cut near 1500
+  characters. Read the full output with helm delegate-result <id>.
   Keep finished helpers. The owner reads them under this chat.`,
 
   spawn: `
