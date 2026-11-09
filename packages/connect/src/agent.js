@@ -45,7 +45,7 @@ import { listShares, addShare, removeShare, removeChatShares, publicShare, asser
 import { Forwards, forwardedPorts } from './forwards.js';
 import { ownerSeenAt } from '@helm/protocol/owner-seen';
 import { publicHosts } from '@helm/protocol/share';
-import { brief, render, summaryLine, readThread, readSnapshot, snapshotReply, writeSnapshot, mergeSnapshot, fold } from './brain.js';
+import { brief, render, summaryLine, readThread, readSnapshot, sessionMatches, snapshotReply, writeSnapshot, mergeSnapshot, fold } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { HubMesh } from './hub-mesh.js';
@@ -2184,7 +2184,10 @@ export class Daemon {
       }
 
       case M.SESSION_LIST: {
-        const sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true, nested: p.nested === true });
+        let sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true, nested: p.nested === true });
+        // `helm thread <id>` and the like look for one chat on every machine.
+        // The whole list with every helper was megabytes on a slow link.
+        if (typeof p.find === 'string' && p.find) sessions = sessions.filter((s) => sessionMatches(s, p.find));
         if (p.projects !== true) return this.#listReply(sessions, p.have);
         // `helm pickup` from another machine: which project each chat's
         // folder holds, worked out here where the folder is.
