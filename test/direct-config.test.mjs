@@ -42,3 +42,43 @@ test('many native peers share a small loopback UDP range', { timeout: 15000 }, a
     assert.ok(new Set(addresses.map(address => address.match(/127\.0\.0\.1 (\d+)/)[1])).size <= 2);
   } finally { for (const pc of peers) pc.close(); }
 });
+
+test('two machines can each dial the other at once on their shared ports', { timeout: 30000 }, async () => {
+  const { dialConfig } = await import('../packages/connect/src/direct-rpc.js');
+  const free = async () => {
+    const socket = dgram.createSocket('udp4');
+    await new Promise(resolve => socket.bind(0, '127.0.0.1', resolve));
+    const port = socket.address().port;
+    await new Promise(resolve => socket.close(resolve));
+    return Math.min(port, 65530);
+  };
+  const machine = (begin) => ({ ...nativeDirectConfig({ directPorts: { begin, end: begin + 3 } }), iceServers: [], bindAddress: '127.0.0.1' });
+  const a = machine(await free()), b = machine(await free());
+  const peers = [];
+  const gathered = (pc) => new Promise(resolve => {
+    const candidates = [];
+    pc.onicecandidate = ({ candidate }) => { if (candidate) candidates.push(candidate); else resolve(candidates); };
+    pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') resolve(candidates); };
+  });
+  // The dialer uses dialConfig, the answerer the machine's shared port, as in Helm.
+  const link = async (dialer, answerer) => {
+    const from = new RTCPeerConnection(dialConfig(dialer)), to = new RTCPeerConnection(answerer);
+    peers.push(from, to);
+    const channel = from.createDataChannel('helm');
+    const open = new Promise((resolve, reject) => { channel.onopen = resolve; setTimeout(() => reject(new Error('link stayed closed')), 12000); });
+    const fromCandidates = gathered(from), toCandidates = gathered(to);
+    await from.setLocalDescription(await from.createOffer());
+    await to.setRemoteDescription(from.localDescription);
+    await to.setLocalDescription(await to.createAnswer());
+    await from.setRemoteDescription(to.localDescription);
+    for (const candidate of await fromCandidates) await to.addIceCandidate(candidate).catch(() => {});
+    for (const candidate of await toCandidates) await from.addIceCandidate(candidate).catch(() => {});
+    return open;
+  };
+  try {
+    await link(b, a);
+    await link(a, b);
+  } finally {
+    for (const pc of peers) pc.close();
+  }
+});
