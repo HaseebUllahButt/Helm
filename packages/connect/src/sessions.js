@@ -632,13 +632,16 @@ export class Sessions extends EventEmitter {
 
   // ------------------------------------------------------------------- verbs
 
-  async list({ includeDelegations = false, parentId = null, includeDetected = false } = {}) {
+  async list({ includeDelegations = false, parentId = null, includeDetected = false, nested = false } = {}) {
     // One chat's helpers are Helm-driven sessions in the index: answer them
     // straight from it, without the process and history scans a full list
-    // needs, so the Subagents panel opens at once.
-    if (parentId) {
-      const children = [...this.#index.values()].filter((s) => !s.archived && s.delegation?.parentId === parentId);
-      if (children.every((s) => s.driver && !s.external)) return this.#shape(children.map((s) => this.#drivenRow(s)), { parentId });
+    // needs, so the Subagents panel opens at once. `nested` adds their own
+    // helpers, for the team card: it read every helper the machine ever
+    // had before, megabytes on a slow link.
+    const team = parentId ? this.#team(parentId, nested) : null;
+    if (team) {
+      const children = [...this.#index.values()].filter((s) => team.has(s.id));
+      if (children.every((s) => s.driver && !s.external)) return this.#shape(children.map((s) => this.#drivenRow(s)), { parentId, team });
     }
     // The runtime is the authority on what is still alive; our index only
     // remembers which of those panes are ours.
@@ -795,7 +798,21 @@ export class Sessions extends EventEmitter {
     for (const s of this.#index.values()) {
       if (this.#subagents.hasNative(s) && !s.archived && !this.#subagents.native.has(s.id)) this.#subagents.firstNativeRead(s);
     }
-    return this.#shape(out, { parentId, includeDelegations });
+    return this.#shape(out, { parentId, includeDelegations, team });
+  }
+
+  /** The ids of a chat's helpers that are not archived, and with `nested` theirs too. */
+  #team(parentId, nested) {
+    const team = new Set();
+    const visit = (id) => {
+      for (const s of this.#index.values()) {
+        if (s.archived || s.delegation?.parentId !== id || team.has(s.id) || s.id === parentId) continue;
+        team.add(s.id);
+        if (nested) visit(s.id);
+      }
+    };
+    visit(parentId);
+    return team;
   }
 
   /** A Helm-driven session as a list row. */
@@ -804,11 +821,11 @@ export class Sessions extends EventEmitter {
   }
 
   /** Filter, decorate and order list rows. */
-  #shape(out, { parentId = null, includeDelegations = false } = {}) {
+  #shape(out, { parentId = null, includeDelegations = false, team = null } = {}) {
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
-    return dedupeNativeConversations(out.filter((s) => !s.delegation?.hidden && (parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation || this.#delegation.unhomedDelegation(s))))
+    return dedupeNativeConversations(out.filter((s) => !s.delegation?.hidden && (parentId ? !s.archived && (s.delegation?.parentId === parentId || !!team?.has(s.id)) : includeDelegations || !s.delegation || this.#delegation.unhomedDelegation(s))))
       .map((s) => s.delegations ? { ...s, delegations: this.#delegation.visibleDelegations(s) } : s)
       .map((s) => (s.delegation && this.#delegation.unhomedDelegation(s) ? { ...s, unhomed: true } : s))
       // The branch each thread's folder is on, for the sidebar's third line.

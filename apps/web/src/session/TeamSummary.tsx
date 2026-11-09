@@ -60,7 +60,9 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
     const load = () => {
       const requestedVersion = version;
       const requested = ++request;
-      return client.rpc<{ sessions: Session[] }>(envId, 'session.list', { includeDelegations: true })
+      // Only this chat's helpers and theirs. A machine on an older Helm
+      // sends the first level only.
+      return client.rpc<{ sessions: Session[] }>(envId, 'session.list', { parentId, nested: true })
       .then((result) => {
         if (!stale && requested === request) {
           const merged = new Map((result.sessions ?? []).map((session) => [session.id, session]));

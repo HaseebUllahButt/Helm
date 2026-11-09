@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -337,6 +338,18 @@ export function localDigest(sessions, events, now = Date.now()) {
  */
 export function readSnapshot(file = SNAPSHOT) {
   try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return { machines: {} }; }
+}
+
+/**
+ * The stored snapshot as a device asks for it: only the machines it names
+ * (the ones it cannot reach), and nothing when it already holds this one.
+ * The whole snapshot was 424 KB a minute on a slow link.
+ */
+export function snapshotReply(snap, { machines, have } = {}) {
+  const only = Array.isArray(machines) ? new Set(machines) : null;
+  const snapshot = only ? { ...snap, machines: Object.fromEntries(Object.entries(snap?.machines ?? {}).filter(([id]) => only.has(id))) } : snap;
+  const digest = createHash('sha256').update(JSON.stringify(snapshot)).digest('base64url').slice(0, 16);
+  return have === digest ? { digest, unchanged: true } : { snapshot, digest };
 }
 
 export function writeSnapshot(snap, file = SNAPSHOT) {
