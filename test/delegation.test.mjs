@@ -1388,6 +1388,18 @@ test('the notes every agent gets match the committed size', async () => {
   );
 });
 
+test('the team card lists a chat\'s helpers and theirs, and nothing else', async (t) => {
+  const { sessions } = setup(t);
+  const { session: lead } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'codex-main', task: 'Lead the night' });
+  const { session: helper } = await sessions.delegate({ id: lead.id, profileId: 'codex-main', task: 'Fix the mountains' });
+  const { session: deeper } = await sessions.delegate({ id: helper.id, profileId: 'codex-main', task: 'Check one peak' });
+  const { session: stranger } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'codex-main', task: 'Other work' });
+  assert.deepEqual((await sessions.list({ parentId: lead.id })).map((s) => s.id), [helper.id]);
+  const team = (await sessions.list({ parentId: lead.id, nested: true })).map((s) => s.id);
+  assert.deepEqual(team.sort(), [helper.id, deeper.id].sort());
+  assert.equal(team.includes(stranger.id), false);
+});
+
 test('a helper with no thread to sit under lists on its own, and its team nests under it', async (t) => {
   const { sessions, drivers } = setup(t);
   // `helm delegate` from a plain shell: no parent. Its own children have it as parent.

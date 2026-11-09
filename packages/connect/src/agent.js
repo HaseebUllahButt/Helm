@@ -45,7 +45,7 @@ import { listShares, addShare, removeShare, removeChatShares, publicShare, asser
 import { Forwards, forwardedPorts } from './forwards.js';
 import { ownerSeenAt } from '@helm/protocol/owner-seen';
 import { publicHosts } from '@helm/protocol/share';
-import { brief, render, summaryLine, readThread, readSnapshot, writeSnapshot, mergeSnapshot, fold } from './brain.js';
+import { brief, render, summaryLine, readThread, readSnapshot, snapshotReply, writeSnapshot, mergeSnapshot, fold } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { HubMesh } from './hub-mesh.js';
@@ -2184,7 +2184,7 @@ export class Daemon {
       }
 
       case M.SESSION_LIST: {
-        const sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true });
+        const sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true, nested: p.nested === true });
         if (p.projects !== true) return this.#listReply(sessions, p.have);
         // `helm pickup` from another machine: which project each chat's
         // folder holds, worked out here where the folder is.
@@ -2398,7 +2398,8 @@ export class Daemon {
         // for a refresh that only proves the machine is still down. Those
         // callers read only the snapshot: each open app asks once a minute
         // while a machine is down, and the text was 50 KB of every 265 KB.
-        if (p.cached) return { snapshot: readSnapshot() };
+        // A device names the machines it cannot reach and the copy it holds.
+        if (p.cached) return p.machines || p.have ? snapshotReply(readSnapshot(), p) : { snapshot: readSnapshot() };
         const snap = await this.refreshSnapshot();
         return { text: render(snap, { roster: this.rosterState(snap) }), snapshot: snap };
       }
