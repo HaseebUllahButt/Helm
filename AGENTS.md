@@ -109,6 +109,11 @@ and say which items applied:
 - Roster cleaning must leave a valid record exactly as it is, or machines
   re-send rosters forever. Validate and reject; normalise where it is used.
 - A latency number is only real after about 10 seconds of samples.
+- On a machine with ananicy (the owner's `why`), a program that starts as
+  `node` gets idle CPU and disk priority, and so does all it starts. Start
+  Helm's own Node programs with `ownNode()` (own-node.js), never with
+  `process.execPath`. A chat's shell is idle there too, so a private copy
+  is slower than the real Helm: compare speeds only on the real one.
 
 ## Docs
 

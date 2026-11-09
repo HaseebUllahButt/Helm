@@ -8,6 +8,7 @@ import { NativeHosts } from './terminals.js';
 import { ENGINES } from './engines.js';
 import { piChatArgs } from './pi-settings.js';
 import { claudeChatArgs } from './claude-hooks.js';
+import { ownNode } from './own-node.js';
 
 const marker = '# Helm native CLI integration';
 const manifestFile = join(HELM_DIR, 'native-cli.json');
@@ -145,6 +146,7 @@ function removePathLine(files) {
  * is ever replaced, and nothing can go stale.
  */
 function launcherScript(name, engine, dir) {
+  const node = ownNode();
   return `#!/bin/sh
 ${marker}
 here=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)
@@ -161,8 +163,8 @@ if [ -z "$real" ]; then echo "${name}: command not found" >&2; exit 127; fi
 if [ ! -t 0 ] || [ ! -t 1 ] || [ -n "$HELM_NATIVE_BYPASS$HELM_SESSION_ID$HELM_NATIVE_SESSION" ]; then
   exec "$real" "$@"
 fi
-if [ -f ${quote(launcher)} ] && [ -x ${quote(process.execPath)} ]; then
-  exec ${quote(process.execPath)} ${quote(launcher)} ${quote(engine)} "$real" "$@"
+if [ -f ${quote(launcher)} ] && [ -x ${quote(node)} ]; then
+  exec ${quote(node)} ${quote(launcher)} ${quote(engine)} "$real" "$@"
 fi
 exec "$real" "$@"
 `;

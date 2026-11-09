@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { HELM_DIR } from './paths.js';
+import { ownNode } from './own-node.js';
 
 /**
  * Where the host listens.
@@ -338,7 +339,7 @@ export class TerminalHost extends EventEmitter {
         '--user', '--quiet', '--collect',
         `--unit=${this.#unit}-${process.getuid?.() ?? 0}`,
         ...passed.map(([k, v]) => `--setenv=${k}=${v}`),
-        process.execPath, HOST_BIN,
+        ownNode(), HOST_BIN,
       ];
       const child = spawn('systemd-run', args, { stdio: ['ignore', hostLog(), hostLog()], detached: true });
       child.unref();
@@ -354,7 +355,7 @@ export class TerminalHost extends EventEmitter {
       }
     }
 
-    const child = spawn(process.execPath, [HOST_BIN], {
+    const child = spawn(ownNode(), [HOST_BIN], {
       stdio: ['ignore', hostLog(), hostLog()],
       detached: true,
       env: { ...process.env, ...Object.fromEntries(passed) },

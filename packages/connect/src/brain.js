@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HELM_DIR } from './paths.js';
+import { ownNode } from './own-node.js';
 import { M } from '@helm/protocol';
 import { stripBrief } from '@helm/protocol/brief';
 
@@ -540,7 +541,7 @@ export function ensureShim(dir = join(HELM_DIR, 'bin')) {
   const cli = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
   const shim = join(dir, 'helm');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(cli)} "$@"\n`, { mode: 0o700 });
+  writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(ownNode())} ${JSON.stringify(cli)} "$@"\n`, { mode: 0o700 });
   return dir;
 }
 

@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync, renameSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { delimiter } from 'node:path';
 import { HOME } from './paths.js';
 import { ensureFastTcp, ensureTcpRecovery } from './network-recovery.js';
+import { OWN_NAME } from './own-node.js';
 
 const exec = promisify(execFile);
 const AGENT_UNIT = 'helm-agent.service';
@@ -24,6 +25,59 @@ export function systemdArg(value) {
   const text = String(value);
   if (/[\0\r\n]/.test(text)) throw new Error('service arguments cannot contain newlines');
   return `"${text.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%')}"`;
+}
+
+/**
+ * The unit's start line. `@` makes the next word the program's own name, so
+ * Node starts as `helm`, not as `node` (own-node.js says why).
+ */
+export const execStart = (node, args) =>
+  `ExecStart=@${systemdArg(node)} ${[OWN_NAME, ...args].map(systemdArg).join(' ')}`;
+
+/**
+ * A unit written before Helm started Node under its own name still starts
+ * `node`. Only the program part of its start line changes: the arguments
+ * are the owner's. Returns the new text, or null when nothing changes.
+ */
+export function renamedUnit(text) {
+  const next = text.replace(/^ExecStart=("(?:[^"\\]|\\.)*") /m, (_, node) => `ExecStart=@${node} ${systemdArg(OWN_NAME)} `);
+  return next === text ? null : next;
+}
+
+/**
+ * Give an installed service the new start line, and start it again so it
+ * takes effect now. Only the unit that runs this process, and only once:
+ * the rewritten line no longer matches. systemd must read the new line as
+ * the same program under Helm's name, or the old file comes back: a unit
+ * that cannot start leaves a machine nobody can reach. True when a restart
+ * is on its way.
+ */
+export async function renameService({ dir = unitDir, run = exec, units = [SERVE_UNIT, AGENT_UNIT] } = {}) {
+  if (platform() !== 'linux' || process.env.HELM_NO_SERVICE === '1' || !process.env.INVOCATION_ID) return false;
+  const show = (unit, what) => run('systemctl', ['--user', 'show', unit, '-p', what, '--value']).then(({ stdout }) => stdout.trim());
+  const program = (line) => /\bpath=(.*?) ; argv\[\]=/.exec(line)?.[1] ?? null;
+  for (const unit of units) {
+    const file = join(dir, unit);
+    let text;
+    try { text = readFileSync(file, 'utf8'); } catch { continue; }
+    const next = renamedUnit(text);
+    if (!next) continue;
+    // A `helm up` run by hand must not restart the service under it.
+    if (Number(await show(unit, 'MainPID').catch(() => '')) !== process.pid) continue;
+    const before = program(await show(unit, 'ExecStart'));
+    const write = (body) => { writeFileSync(`${file}.tmp`, body); renameSync(`${file}.tmp`, file); };
+    write(next);
+    await run('systemctl', ['--user', 'daemon-reload']);
+    const after = await show(unit, 'ExecStart').catch(() => '');
+    if (!before || program(after) !== before || !after.includes(`argv[]=${OWN_NAME} `)) {
+      write(text);
+      await run('systemctl', ['--user', 'daemon-reload']);
+      throw new Error(`systemd did not accept the new start line in ${unit}; the old one is back`);
+    }
+    await run('systemctl', ['--user', '--no-block', 'restart', unit]);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -111,7 +165,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${[process.execPath, binPath, ...command].map(systemdArg).join(' ')}
+${execStart(process.execPath, [binPath, ...command])}
 # Session hosts normally run in their own transient unit. Keep a detached
 # fallback host alive across a daemon restart too; the host owns the long-lived
 # terminal and agent processes that the daemon reconnects to afterward.
