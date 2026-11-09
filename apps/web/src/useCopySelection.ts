@@ -21,6 +21,16 @@ export function useCopySelection(root: RefObject<HTMLElement>) {
     let last = '';
     let pending = '';
     let revision = 0;
+    // The selection that was on screen when the window lost focus. The owner
+    // may copy in another app; touching this old selection must not replace it.
+    let stale: Range | undefined;
+    const current = () => {
+      const selection = window.getSelection();
+      return selection?.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : undefined;
+    };
+    const same = (a: Range | undefined, b: Range | undefined) => !!a && !!b
+      && a.startContainer === b.startContainer && a.startOffset === b.startOffset
+      && a.endContainer === b.endContainer && a.endOffset === b.endOffset;
     const editable = (node: Node | null) => (node instanceof Element ? node : node?.parentElement)
       ?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
     const selected = () => {
@@ -30,9 +40,12 @@ export function useCopySelection(root: RefObject<HTMLElement>) {
       if (!node.contains(selection.anchorNode) || !node.contains(selection.focusNode)) return;
       if (editable(document.activeElement) || editable(selection.anchorNode) || editable(selection.focusNode)) return;
       if (!selection.toString().trim()) return;
-      return selectionClipboard(selection, node);
+      const data = selectionClipboard(selection, node);
+      // An empty copy would wipe what the owner copied before.
+      return data.text.trim() ? data : undefined;
     };
     const copy = () => {
+      if (same(stale, current())) return;
       const data = selected();
       if (!data) return;
       const key = JSON.stringify(data);
@@ -49,6 +62,7 @@ export function useCopySelection(root: RefObject<HTMLElement>) {
     };
     const changed = () => {
       clearTimeout(settle);
+      if (stale && !same(stale, current())) stale = undefined;
       // Native phone handles do not always send pointer events to the page.
       // Observe selection changes on every device, including hybrid laptops.
       if (!window.getSelection()?.toString().trim()) { last = ''; pending = ''; revision++; return; }
@@ -75,6 +89,7 @@ export function useCopySelection(root: RefObject<HTMLElement>) {
       if (selecting || (event.type === 'touchend' && (event.target === document || root.current?.contains(event.target as Node)))) copy();
       selecting = false;
     };
+    const left = () => { clearTimeout(settle); stale = current()?.cloneRange(); };
     const cancel = () => { selecting = false; dragging = false; changed(); };
     const key = (event: KeyboardEvent) => {
       if (event.key === 'Shift' || event.shiftKey || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a')) copy();
@@ -86,7 +101,9 @@ export function useCopySelection(root: RefObject<HTMLElement>) {
     document.addEventListener('copy', onCopy);
     document.addEventListener('selectionchange', changed);
     document.addEventListener('touchend', up);
+    window.addEventListener('blur', left);
     return () => {
+      window.removeEventListener('blur', left);
       revision++;
       clearTimeout(settle);
       document.removeEventListener('selectionchange', changed);
