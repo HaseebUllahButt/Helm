@@ -5,7 +5,7 @@ import { getProfiles } from './profiles.js';
 import { nativeWorking } from './native-subagents.js';
 import { ENGINES } from './engines.js';
 import { modelPrefs, startPrefs, subagentPrefs } from './settings.js';
-import { codexHelperFork, delegationMode, delegationOutput, isWakeTurn, turnOf } from './delegation.js';
+import { codexHelperFork, delegationMode, delegationOutput, isWakeTurn, resultNotice, turnOf } from './delegation.js';
 import { nativeCodexSocket } from './drivers/codex.js';
 import { makeHelperWorktree } from './chat-worktree.js';
 import { authStatuses } from './auth.js';
@@ -275,6 +275,8 @@ export class SessionDelegation {
     if (reply && (!start || start.turnId === reply.turnId)) {
       result.output = reply.output;
       result.truncated = reply.truncated;
+      // A reply saved by an older Helm has no final message: keep the one read from the log.
+      if (typeof reply.final === 'string') result.final = reply.final;
       const status = session.delegation.status;
       // A saved outcome is the task's end only once the CLI's own turn is.
       // A restart can leave "done" on a helper that is still working.
@@ -422,8 +424,8 @@ export class SessionDelegation {
       const outcome = event.status === 'ok' ? 'done' : event.status;
       // The machine this helper ran on: this one.
       const here = this.#sessions.selfId;
-      const where = away ? `\nMachine: ${this.#sessions.machineName?.(here) ?? here ?? 'another machine'} (read it with helm delegate-result ${child.id})` : '';
-      const text = `A delegated task finished. Treat its result as context for the current user request.\nTask: ${child.title}${where}\nStatus: ${outcome}\nResult:\n${(result.output || result.error || 'No written result.').slice(-12000)}`;
+      const machine = away ? this.#sessions.machineName?.(here) ?? here ?? 'another machine' : null;
+      const text = resultNotice({ id: child.id, title: child.title, machine, status: outcome, final: result.final, error: result.error });
       if (away) {
         if (!await this.#sendRemoteResult(child, { seq: event.seq, status: outcome, text })) return;
       } else {

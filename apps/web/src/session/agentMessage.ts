@@ -15,6 +15,8 @@ export function helperMessage(text?: string): { from: string; text: string; stat
   const body = stripBrief(text ?? '').replace(/^(?:\[helm [^\]\n]*\]\n\n)+/, '');
   const agent = body.match(/^\[Helm agent message [a-f0-9]{32}\]\nFrom \S+ agent (.+) \([^\n]*\)\.\n(?:Reply to [a-f0-9]{32}\.\n)?This is a message, not a transfer of their conversation\. Keep working in your own context\.\n[^\n]+\n\n([\s\S]*)$/);
   if (agent) return { from: agent[1], text: agent[2] };
-  const done = body.match(/^A delegated task finished\.[^\n]*\nTask: ([^\n]*)\nStatus: ([^\n]*)\nResult:\n([\s\S]*)$/);
+  // A helper on another machine adds its Machine line. The last line tells
+  // the parent agent how to read the full output; the owner opens the card.
+  const done = body.match(/^A delegated task finished\.[^\n]*\nTask: ([^\n]*)\n(?:Machine: [^\n]*\n)?Status: ([^\n]*)\nResult:\n([\s\S]*?)(?:\nFull output: helm delegate-result \S+)?$/);
   return done ? { from: done[1], status: done[2], text: done[3] } : null;
 }

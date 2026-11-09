@@ -43,6 +43,11 @@ and a project copy nobody kept. A helper can run on another machine
   follow-up. A Codex helper that shares its parent's context keeps the
   native connection open instead. The "no nested CLI" rule is a request,
   not a lock.
+- **Result notice:** the parent's notice holds only the helper's final
+  message (the text after its last tool), cut at a line break near 1,500
+  characters, and the line `Full output: helm delegate-result <id>`. The
+  interim notes ("Let me look...") filled the parent's context.
+  `delegate-result` still gives the full `output` and the `final` message.
 - **One result per task:** once the parent has the result, a helper that
   wakes by itself later (a background watcher timing out) never gives the
   parent another turn. Those relays were nearly all "stale watcher, nothing
