@@ -2234,11 +2234,17 @@ try {
     }
 
     case 'network-repair': {
-      const { ensureTcpRecovery } = await import('../src/network-recovery.js');
+      const { ensureFastTcp, ensureTcpRecovery } = await import('../src/network-recovery.js');
       const recovery = await ensureTcpRecovery({ interactive: true });
+      const fast = await ensureFastTcp({ interactive: true });
       if (!recovery.supported) console.log('TCP packet-size recovery is not available on this system.');
-      else if (recovery.repair) die(`Could not enable packet-size recovery: ${recovery.reason}`);
+      else if (recovery.repair) console.log(`Could not enable packet-size recovery: ${recovery.reason}`);
       else console.log('TCP packet-size recovery is enabled and saved for reboot.');
+      if (!fast.supported) console.log('Fast sending on lossy links (BBR) is not available on this system.');
+      else if (fast.chosen && fast.chosen !== 'bbr') console.log(`This system uses ${fast.chosen} by its own choice. Helm keeps it.`);
+      else if (fast.repair) console.log(`Could not turn on fast sending on lossy links: ${fast.reason}`);
+      else console.log('Fast sending on lossy links (BBR) is on and saved for reboot.');
+      if (recovery.repair || (fast.repair && !(fast.chosen && fast.chosen !== 'bbr'))) process.exitCode = 1;
       break;
     }
 

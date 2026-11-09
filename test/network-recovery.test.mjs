@@ -11,7 +11,8 @@ Object.assign(process.env, { HELM_DIR: join(root, 'state'), HELM_DB: join(root, 
   HELM_SSH_DIR: join(root, 'ssh'), HELM_PROCS_SOCKET: join(root, 'procs.sock'),
   HELM_TERMINALS_SOCKET: join(root, 'terminals.sock'), HELM_NATIVE_SOCKET: join(root, 'native.sock'),
   HERDR_SOCKET_PATH: join(root, 'herdr.sock'), HELM_NO_SERVICE: '1' });
-const { ensureTcpRecovery, configuredTcpRecovery, TCP_RECOVERY_FILE, TCP_RECOVERY_SCRIPT } = await import('../packages/connect/src/network-recovery.js');
+const { ensureTcpRecovery, configuredTcpRecovery, TCP_RECOVERY_FILE, TCP_RECOVERY_SCRIPT,
+  ensureFastTcp, configuredCongestion, FAST_TCP_FILE, FAST_TCP_SCRIPT } = await import('../packages/connect/src/network-recovery.js');
 const exec = promisify(execFile);
 test.after(() => rm(root, { recursive: true, force: true }));
 
@@ -137,4 +138,78 @@ test('tests, disabled services, unsupported OSes and missing kernel support neve
   await writeFile(f.liveFile, 'unavailable');
   assert.equal((await ensureTcpRecovery(f.options)).supported, false);
   assert.equal(f.calls(), 0);
+});
+
+async function fastFixture({ live = 'cubic', available = 'reno cubic bbr', saved } = {}) {
+  const dir = await mkdtemp(join(root, 'fast-'));
+  const files = { live: join(dir, 'live'), available: join(dir, 'available'), saved: join(dir, 'saved'), modules: join(dir, 'modules') };
+  await writeFile(files.live, `${live}\n`);
+  await writeFile(files.available, `${available}\n`);
+  if (saved !== undefined) await writeFile(files.saved, saved);
+  await mkdir(files.modules);
+  await mkdir(join(dir, 'bin'));
+  // The real script, with every system path in this folder and stand-ins
+  // for sysctl and modprobe. It never changes this computer.
+  await writeFile(join(dir, 'bin/sysctl'), `#!/bin/sh\n[ "$1" = -w ] || exit 1\ncase "$2" in net.ipv4.tcp_congestion_control=*) printf '%s\\n' "\${2##*=}" > '${files.live}' ;; esac\n`, { mode: 0o755 });
+  await writeFile(join(dir, 'bin/modprobe'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  let calls = 0;
+  const options = { os: 'linux', env: {}, uid: 0, configured: async () => null,
+    read: (path, encoding) => readFile(path === FAST_TCP_FILE ? files.saved : files.live, encoding),
+    run: async (command, args, opts) => {
+      assert.equal(command, '/bin/sh');
+      calls++;
+      const script = args[1].replaceAll(FAST_TCP_FILE, files.saved)
+        .replaceAll('/proc/sys/net/ipv4/tcp_available_congestion_control', files.available)
+        .replaceAll('/etc/sysctl.d/.helm-bbr.', join(dir, '.helm-bbr.'))
+        .replaceAll('/etc/modules-load.d', files.modules);
+      return exec('/bin/sh', ['-c', script, ...args.slice(2)], { ...opts, env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}` } });
+    },
+  };
+  return { options, files, calls: () => calls };
+}
+
+test('turns on BBR where Linux still uses its default, saves it, and then does nothing', async () => {
+  const f = await fastFixture();
+  const status = await ensureFastTcp(f.options);
+  assert.deepEqual([status.control, status.enabled, status.persistent, status.repair], ['bbr', true, true, undefined]);
+  assert.match(await readFile(f.files.saved, 'utf8'), /net\.ipv4\.tcp_congestion_control = bbr/);
+  assert.equal(await readFile(join(f.files.modules, 'helm-bbr.conf'), 'utf8'), 'tcp_bbr\n');
+  await ensureFastTcp(f.options);
+  assert.equal(f.calls(), 1);
+});
+
+test('keeps a congestion control someone chose, and asks no password from a service', async () => {
+  const chosen = await fastFixture();
+  const kept = await ensureFastTcp({ ...chosen.options, configured: async () => 'cubic' });
+  assert.deepEqual([kept.control, kept.repair, chosen.calls()], ['cubic', undefined, 0]);
+
+  const noBbr = await fastFixture({ available: 'reno cubic' });
+  assert.match((await ensureFastTcp(noBbr.options)).reason, /no BBR/);
+  assert.equal(await readFile(noBbr.files.live, 'utf8'), 'cubic\n');
+
+  const f = await fastFixture();
+  const status = await ensureFastTcp({ ...f.options, uid: 1000, run: async (command, args, opts) => {
+    assert.equal(command, 'sudo');
+    assert.deepEqual(args, ['-n', '/bin/sh', '-c', FAST_TCP_SCRIPT, 'helm-network-repair']);
+    assert.equal(opts.timeout, 5000);
+    throw Object.assign(new Error('failed'), { stderr: 'sudo: a password is required' });
+  } });
+  assert.equal(status.repair, 'helm network-repair');
+  assert.match(status.reason, /password is required/);
+
+  for (const override of [{ env: { NODE_TEST_CONTEXT: 'child-v8' } }, { os: 'darwin' }]) {
+    assert.equal((await ensureFastTcp({ ...f.options, ...override })).supported, false);
+  }
+});
+
+test('a congestion control chosen in sysctl files is found, but not Helm\'s own', async () => {
+  const contents = new Map([
+    ['/etc/sysctl.d/90-helm-bbr.conf', 'net.ipv4.tcp_congestion_control = bbr'],
+    ['/usr/lib/sysctl.d/50-default.conf', 'net.ipv4.ping_group_range = 0 0'],
+  ]);
+  const options = { list: async dir => [...contents.keys()].filter(path => path.startsWith(dir + '/')).map(path => path.slice(dir.length + 1)),
+    read: async path => contents.get(path) ?? '' };
+  assert.equal(await configuredCongestion(options), null);
+  contents.set('/etc/sysctl.d/99-admin.conf', 'net/ipv4/tcp_congestion_control=htcp # chosen');
+  assert.equal(await configuredCongestion(options), 'htcp');
 });

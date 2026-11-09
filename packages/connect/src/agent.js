@@ -73,7 +73,7 @@ import { SendEngine } from './send-engine.js';
 import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
-import { ensureTcpRecovery } from './network-recovery.js';
+import { ensureFastTcp, ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
@@ -940,6 +940,7 @@ export class Daemon {
 
   #networkRecoveryAt = -Infinity;
   networkRecovery = null;
+  fastTcp = null;
 
   async #checkNetworkRecovery() {
     if (Date.now() - this.#networkRecoveryAt < SYNC_EVERY_MS) return;
@@ -948,6 +949,11 @@ export class Daemon {
     this.networkRecovery = await ensureTcpRecovery();
     if (this.networkRecovery.repair && (!previous?.repair || previous.reason !== this.networkRecovery.reason)) {
       console.warn(`[helm] packet-size recovery needs setup: ${this.networkRecovery.reason} Run helm network-repair.`);
+    }
+    const fast = this.fastTcp;
+    this.fastTcp = await ensureFastTcp();
+    if (this.fastTcp.repair && (!fast?.repair || fast.reason !== this.fastTcp.reason)) {
+      console.warn(`[helm] fast sending needs setup: ${this.fastTcp.reason} Run helm network-repair.`);
     }
   }
 
