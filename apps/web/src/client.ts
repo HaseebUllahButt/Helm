@@ -664,6 +664,10 @@ const reachableFromHere = (base: string) => {
       && (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)));
   } catch { return false; }
 };
+/** This machine's own Helm: the page and its hub share one computer. */
+const onLoopback = (base: string) => {
+  try { return LOOPBACK_HOST.test(new URL(base).hostname); } catch { return false; }
+};
 
 /** A hub that answered: where it is, how much of the network it can see. */
 interface Reached { base: string; reach: number; elapsed: number; machines: Set<string> }
@@ -2074,7 +2078,10 @@ export class Client {
           if (next < bases.length) launch();
           else if (!active) done(lastError);
         });
-        if (next < bases.length) stagger = setTimeout(launch, Math.min(staggerAfter, Math.max(1, timeout / 2)));
+        // This machine's own Helm is never an old route, and the other hubs
+        // reach the same machine over the same slow link: racing them sent
+        // a big reply twice. Move on from it only when it fails.
+        if (next < bases.length && !onLoopback(base)) stagger = setTimeout(launch, Math.min(staggerAfter, Math.max(1, timeout / 2)));
       };
       deadline = setTimeout(() => done(new Error(`${method} timed out`)), timeout);
       launch();

@@ -883,6 +883,24 @@ test('HTTP reads fail over promptly from a dead remembered relay and cancel the 
   h.client.close();
 });
 
+test('an app on the machine itself reads only from its own Helm while that answers', async () => {
+  const own = 'http://127.0.0.1:8787';
+  const h = harness({ location: { origin: own, protocol: 'http:' }, endpoints: [own, 'https://vm'], delays: { [own]: 9000 } });
+  const request = h.client.rpc('machine', 'session.list', {}, 20000);
+  await h.advance(8000);
+  assert.deepEqual(h.requests.map(r => r.url), [`${own}/api/read`], 'the other hub would send the same big reply again');
+  await h.advance(1010);
+  assert.equal((await request).fresh, true);
+  h.client.close();
+
+  const down = harness({ location: { origin: own, protocol: 'http:' }, endpoints: [own, 'https://vm'], statuses: { [own]: 503 } });
+  const moved = down.client.rpc('machine', 'session.list', {}, 20000);
+  await down.advance(10);
+  assert.equal((await moved).fresh, true);
+  assert.deepEqual(down.requests.map(r => r.url), [`${own}/api/read`, 'https://vm/api/read']);
+  down.client.close();
+});
+
 test('an HTTP403 or503 advances endpoint failover immediately without defeating a slower success', async () => {
   for (const status of [403, 503]) {
     const h = harness({ endpoints: ['https://old', 'https://good'], statuses: { 'https://old': status }, delays: { 'https://good': 1000 } });
