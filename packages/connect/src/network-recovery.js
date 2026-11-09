@@ -93,3 +93,82 @@ export async function ensureTcpRecovery({
   }
   return status;
 }
+
+export const FAST_TCP_FILE = '/etc/sysctl.d/90-helm-bbr.conf';
+const LIVE_CONTROL = '/proc/sys/net/ipv4/tcp_congestion_control';
+const AVAILABLE_CONTROL = '/proc/sys/net/ipv4/tcp_available_congestion_control';
+
+// The Linux default (cubic) slows down at each lost packet. On a lossy link
+// it sent 21-33 KB/s from the VM to why; BBR sent 173-296 KB/s on the same
+// link (2026-11-09). It changes only how this machine sends. The script
+// takes nothing from a peer, persists before it applies, and leaves a
+// symlink or another file at Helm's path alone.
+export const FAST_TCP_SCRIPT = `set -eu
+file=${FAST_TCP_FILE}
+[ ! -L "$file" ] || { echo 'refusing a symlink at the Helm sysctl file' >&2; exit 1; }
+modprobe tcp_bbr 2>/dev/null || true
+grep -qw bbr ${AVAILABLE_CONTROL} || { echo 'this kernel has no BBR' >&2; exit 1; }
+temporary=$(mktemp /etc/sysctl.d/.helm-bbr.XXXXXX)
+trap 'rm -f "$temporary"' EXIT
+printf '# Helm: keep sending fast on links that lose packets.\\nnet.core.default_qdisc = fq\\nnet.ipv4.tcp_congestion_control = bbr\\n' > "$temporary"
+chmod 0644 "$temporary"
+mv "$temporary" "$file"
+if [ -d /etc/modules-load.d ]; then printf 'tcp_bbr\\n' > /etc/modules-load.d/helm-bbr.conf; fi
+sysctl -w net.core.default_qdisc=fq >/dev/null || true
+sysctl -w net.ipv4.tcp_congestion_control=bbr
+`;
+
+/** A congestion control an administrator chose in a file of their own, or null. */
+export async function configuredCongestion({ read = readFile, list = readdir } = {}) {
+  const files = new Map();
+  for (const directory of ['/lib/sysctl.d', '/usr/lib/sysctl.d', '/usr/local/lib/sysctl.d', '/run/sysctl.d', '/etc/sysctl.d']) {
+    for (const name of await list(directory).catch(() => [])) {
+      if (name.endsWith('.conf')) files.set(name, join(directory, name));
+    }
+  }
+  const paths = [...files].filter(([name]) => join('/etc/sysctl.d', name) !== FAST_TCP_FILE)
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, path]) => path);
+  const texts = await Promise.all([...paths, '/etc/sysctl.conf'].map(path => read(path, 'utf8').catch(() => '')));
+  let chosen = null;
+  for (const text of texts) for (const line of String(text).split('\n')) {
+    const match = /^\s*-?net[./]ipv4[./]tcp_congestion_control\s*=\s*([\w-]+)\s*(?:[#;].*)?$/.exec(line);
+    if (match) chosen = match[1];
+  }
+  return chosen;
+}
+
+/** Turn on BBR when Linux still uses its default. Best effort, as ensureTcpRecovery. */
+export async function ensureFastTcp({
+  os = platform(), env = process.env, uid = process.getuid?.(), interactive = false,
+  read = readFile, run = exec, configured = configuredCongestion,
+} = {}) {
+  if (os !== 'linux' || env.HELM_NO_SERVICE === '1' || env.NODE_TEST_CONTEXT) return { supported: false };
+  const inspect = async () => {
+    const [live, saved, chosen] = await Promise.all([
+      read(LIVE_CONTROL, 'utf8').catch(() => ''), read(FAST_TCP_FILE, 'utf8').catch(() => ''),
+      configured().catch(() => null),
+    ]);
+    const control = String(live).trim() || null;
+    return { supported: !!control, control, enabled: control === 'bbr',
+      persistent: /^\s*net\.ipv4\.tcp_congestion_control\s*=\s*bbr\s*$/m.test(String(saved)), chosen };
+  };
+  let status = await inspect();
+  // Someone chose a congestion control on purpose; that is theirs to keep.
+  if (!status.supported || (status.chosen && status.chosen !== 'bbr')) return status;
+  if (status.enabled && (status.persistent || status.chosen === 'bbr')) return status;
+  try {
+    const args = ['-c', FAST_TCP_SCRIPT, 'helm-network-repair'];
+    await run(uid === 0 ? '/bin/sh' : 'sudo',
+      uid === 0 ? args : [...(interactive ? [] : ['-n']), '/bin/sh', ...args],
+      { timeout: interactive ? 120_000 : 5000, maxBuffer: 16 * 1024 });
+    status = await inspect();
+  } catch (error) {
+    status = await inspect();
+    status.reason = String(error.stderr || error.message || error).trim().slice(0, 500);
+  }
+  if (!status.enabled || !(status.persistent || status.chosen === 'bbr')) {
+    status.repair = 'helm network-repair';
+    status.reason ||= 'Fast sending on lossy links (BBR) is not on and saved.';
+  }
+  return status;
+}

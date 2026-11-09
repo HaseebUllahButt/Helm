@@ -20,7 +20,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm start                         Start Helm in the background
 
   helm join <CODE> <home-url> --foreground   Run Helm in this terminal
-  helm network-repair                Keep connections working when large network packets fail on Linux
+  helm network-repair                Keep connections working and fast on Linux: large packets, lossy links
 
   helm up [--port N] [--tunnel]      Run Helm in this terminal
   helm up --tunnel --domain <d>     Make a fixed public link (needs a free ngrok account)
@@ -167,7 +167,7 @@ Set up this machine
   status           Show machines, links and agent software
   doctor           Check installation and connections
   backup           Save or inspect an offline encrypted backup
-  network-repair   Fix connections when large packets fail on Linux
+  network-repair   Fix slow or failing connections on Linux
   self-update      Get the newest Helm and restart it here
   ship             Merge, push and install a Helm change everywhere
   service          Install or remove the background service
