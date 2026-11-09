@@ -972,7 +972,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       {canvas.open && !session.brain && <Canvas client={client} env={env} cwd={canvasCwd} changed={canvasCwd === gitCwd ? changedPaths : []} path={canvas.path} onPath={canvas.setPath}
           visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)}
           pages={chatPages(log.turns.flatMap((turn) => turn.items.map((item) => item.visual && { visual: item.visual, at: item.startedAt })))} />}
-      {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} machines={machines} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
+      {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} machines={machines} team={team} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item, envId) => { setDetails(null); onOpenSession(item, envId); } : undefined}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
       {editingQueue && <QueueEdit turn={editingQueue} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSave={async (text, attachments) => {
