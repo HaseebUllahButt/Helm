@@ -2356,7 +2356,7 @@ try {
       const { runAgentCommand } = await import('../src/agent-cli.js');
       // Catalogs and JSON replies can exceed a pipe's buffer. Let stdout
       // drain naturally instead of truncating them with process.exit().
-      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self });
+      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self, machine: machineId });
       break;
     }
     case 'brain':

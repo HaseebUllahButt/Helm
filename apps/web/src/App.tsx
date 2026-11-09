@@ -1666,7 +1666,7 @@ function Shell({ client, conn, onSignOut }: {
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
-            onOpenSession={(s) => openRelatedSession(env.id, s)}
+            onOpenSession={(s, envId) => openRelatedSession(envId ?? env.id, s)}
             onOpenNative={(agent) => push({ kind: 'native-agent', parent: view.session, agent })}
             onOpenMachineSession={openSession}
             onClosed={() => { if (view.session.brain) dropBrain(env.id); loadSessions(env.id); back(); }}

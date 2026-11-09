@@ -4,7 +4,8 @@ import { Client, type Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { useNow } from '../useNow';
 
-type TeamMember = { session: Session; depth: number };
+/** `envId`: a helper that runs on another machine (helm delegate --machine). */
+type TeamMember = { session: Session; depth: number; envId?: string };
 
 /** The helpers under `parentId`, nested, as the team card lists them. */
 function teamOf(sessions: Iterable<Session>, parentId: string): TeamMember[] {
@@ -23,12 +24,20 @@ function teamOf(sessions: Iterable<Session>, parentId: string): TeamMember[] {
   return team;
 }
 
+/** This chat's helpers on other machines, each from its own machine. */
+function remoteTeam(lists: Map<string, Session[]>): TeamMember[] {
+  return [...lists].flatMap(([envId, sessions]) => sessions.filter((session) => !session.archived && session.status !== 'exited')
+    .map((session) => ({ session, depth: 0, envId })));
+}
+
 /**
  * Every chat on the machine reports here, so the whole inventory is kept
  * outside React: only a change to this chat's own helpers draws the screen
  * again. An unrelated chat's status used to redraw the open chat each time.
  */
-export function useThreadTeam(client: Client, envId: string, parentId: string) {
+export function useThreadTeam(client: Client, envId: string, parentId: string, remote: { machine: string; id: string; archived?: boolean }[] = []) {
+  // Reload the helpers on other machines when one starts or ends there.
+  const remoteKey = remote.filter((helper) => !helper.archived).map((helper) => `${helper.machine}/${helper.id}`).join(',');
   const [team, setTeam] = useState<TeamMember[]>([]);
   useEffect(() => {
     let stale = false;
@@ -37,9 +46,12 @@ export function useThreadTeam(client: Client, envId: string, parentId: string) {
     let request = 0;
     let all = new Map<string, Session>();
     let shown = '[]';
+    // Helpers on other machines: machine -> its helpers of this chat.
+    const away = new Map<string, Session[]>();
+    const wanted = new Map(remoteKey ? remoteKey.split(',').map((key) => [key.split('/')[1], key.split('/')[0]] as [string, string]) : []);
     setTeam([]);
     const publish = () => {
-      const next = teamOf(all.values(), parentId);
+      const next = [...teamOf(all.values(), parentId), ...remoteTeam(away)];
       const key = JSON.stringify(next);
       if (key === shown) return;
       shown = key;
@@ -58,9 +70,19 @@ export function useThreadTeam(client: Client, envId: string, parentId: string) {
         }
       }).catch(() => {});
     };
+    const loadAway = () => Promise.all([...new Set(wanted.values())].map((machine) =>
+      client.rpc<{ sessions: Session[] }>(machine, 'session.list', { parentId })
+        .then((result) => { if (!stale) away.set(machine, (result.sessions ?? []).filter((s) => s.delegation?.parentMachine === envId && wanted.get(s.id) === machine)); })
+        .catch(() => { /* that machine is offline: its helpers wait for it */ }))).then(() => { if (!stale) publish(); });
     void load();
+    void loadAway();
     const off = client.on((machine, kind, payload: any) => {
-      if (kind === 'connection' && payload?.online) void load();
+      if (kind === 'connection' && payload?.online) { void load(); void loadAway(); }
+      const helper = payload?.session as Session | undefined;
+      if (kind === 'session.update' && machine !== envId && helper && wanted.get(helper.id) === machine) {
+        away.set(machine, [...(away.get(machine) ?? []).filter((s) => s.id !== helper.id), helper]);
+        publish();
+      }
       if (machine === envId && kind === 'session.update' && payload?.session) {
         updates.set(payload.session.id, { version: ++version, session: payload.session });
         all.delete(payload.session.id);
@@ -70,7 +92,7 @@ export function useThreadTeam(client: Client, envId: string, parentId: string) {
       if (machine === envId && kind === 'session.exit') void load();
     });
     return () => { stale = true; off(); };
-  }, [client, envId, parentId]);
+  }, [client, envId, parentId, remoteKey]);
   return team;
 }
 

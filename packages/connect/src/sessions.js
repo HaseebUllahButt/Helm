@@ -829,6 +829,13 @@ export class Sessions extends EventEmitter {
   delegate(options) { return this.#delegation.delegate(options); }
   delegationResult(id, options) { return this.#delegation.delegationResult(id, options); }
   messageDelegation(parentId, id, data) { return this.#delegation.messageDelegation(parentId, id, data); }
+  // Helpers on other machines (`helm delegate --machine`). agent.js sets
+  // `remoteRpc(machine, method, params)` and `machineName(id)`.
+  addRemoteHelper(parentId, helper) { return this.#delegation.addRemoteHelper(parentId, helper); }
+  remoteHelper(id, options) { return this.#delegation.remoteHelper(id, options); }
+  remoteHelperState(machine, params) { return this.#delegation.remoteHelperState(machine, params); }
+  remoteHelperResult(machine, params) { return this.#delegation.remoteHelperResult(machine, params); }
+  remoteConsumed(parent, id, seq) { return this.#delegation.remoteConsumed(parent, id, seq); }
 
   // A CLI's own subagents (session-subagents.js)
   nativeAgent(id, agentId, options) { return this.#subagents.nativeAgent(id, agentId, options); }
@@ -1799,14 +1806,15 @@ export class Sessions extends EventEmitter {
     // A helper that already finished keeps its result: only those still at
     // work are stopped, and only they say so.
     const finished = (s) => ['done', 'error', 'interrupted'].includes(s.delegation?.status);
-    const running = [...this.#index.values()].filter((child) => child.delegation?.parentId === id && !finished(child));
+    const running = [...this.#index.values()].filter((child) => child.delegation?.parentId === id && !child.delegation.parentMachine && !finished(child));
+    const away = this.#delegation.runningRemote(session);
     if (session) {
       session.stoppedAt = Date.now();
       session.stopGeneration = (session.stopGeneration ?? 0) + 1;
       // Helpers are mentioned only when there were some to stop.
       session.recovery = {
         kind: 'interrupted', at: Date.now(),
-        message: running.length ? `You stopped this chat. Helm also stopped ${running.length === 1 ? 'its helper' : 'its helpers'}.` : 'Stopped by you.',
+        message: running.length + away.length ? `You stopped this chat. Helm also stopped ${running.length + away.length === 1 ? 'its helper' : 'its helpers'}.` : 'Stopped by you.',
       };
       if (session.delegation && !finished(session)) {
         session.delegation.status = 'interrupted';
@@ -1817,6 +1825,13 @@ export class Sessions extends EventEmitter {
       this.emit('session', session);
     }
     const stopping = running.map((child) => this.interrupt(child.id, visited));
+    // A helper on another machine is stopped there. One that cannot be
+    // reached works on, but this chat no longer takes its result.
+    for (const helper of away) {
+      if (!this.remoteRpc) break;
+      stopping.push(this.remoteRpc(helper.machine, 'session.interrupt', { id: helper.id })
+        .catch((e) => this.log(`[${id}] could not stop helper ${helper.id} on ${helper.machine}: ${e.message}`)));
+    }
     // "Stop" stops the queue too, and before the driver is asked: a settled
     // turn is what wakes the pump, so a stop that left the queue intact
     // would fire the next message the moment the interrupt landed. Each
