@@ -93,7 +93,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   /** Only on the brain: the way to what it is made of. */
   onSettings?: () => void;
   /** Open a branch, subagent, or its parent conversation. */
-  onOpenSession?: (s: Session) => void;
+  onOpenSession?: (s: Session, envId?: string) => void;
   /** Open one of Claude Code's own subagents as a read-only chat. */
   onOpenNative?: (agent: NativeAgent) => void;
   onSendTask?: () => void;
@@ -155,7 +155,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const failedSendSeq = useRef(0);
   const retryingSends = useRef(new Set<string>());
   const retryDeliveryIds = useRef(new Map<string, string>());
-  const team = useThreadTeam(client, env.id, session.id);
+  const team = useThreadTeam(client, env.id, session.id, session.remoteHelpers);
   // The CLI's own subagents have no Helm session, so they ride on this one.
   const agentCount = team.length + (session.nativeCards?.length ?? 0);
   // A spawn step in the chat opens the helper it started, by the tool call
@@ -305,9 +305,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const openParent = () => {
     const parentId = session.delegation?.parentId;
     if (!parentId || !onOpenSession) return;
+    // A helper for a chat on another machine goes back to that machine.
+    const home = session.delegation?.parentMachine ?? env.id;
     void call(async () => {
-      const r = await client.rpc<{ session: Session }>(env.id, 'session.events', { id: parentId, limit: 1 });
-      onOpenSession(r.session);
+      const r = await client.rpc<{ session: Session }>(home, 'session.events', { id: parentId, limit: 1 });
+      onOpenSession(r.session, home);
     });
   };
 
@@ -955,7 +957,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(errorMessage(e))); }} />
         )}
         {childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Helpers need your answer">
-          {childrenWaiting.map(({ session: child }) => <button key={child.id} disabled={!onOpenSession} onClick={() => onOpenSession?.(child)}>
+          {childrenWaiting.map(({ session: child, envId }) => <button key={child.id} disabled={!onOpenSession} onClick={() => onOpenSession?.(child, envId)}>
             <Icon name="subagents" size={15} /><span><b>{child.title}</b><small>{child.ask?.kind === 'question' ? 'Answer question' : 'Review request'}{child.ask?.text ? ` · ${child.ask.text}` : ''}</small></span><Icon name="forward" size={14} />
           </button>)}
         </div>}
@@ -969,8 +971,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       {canvas.open && !session.brain && <Canvas client={client} env={env} cwd={canvasCwd} changed={canvasCwd === gitCwd ? changedPaths : []} path={canvas.path} onPath={canvas.setPath}
           visual={canvas.visual} onVisual={canvas.setVisual} read={readVisual} onClose={() => canvas.setOpen(false)}
           pages={chatPages(log.turns.flatMap((turn) => turn.items.map((item) => item.visual && { visual: item.visual, at: item.startedAt })))} />}
-      {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
-        onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined}
+      {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} machines={machines} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
+        onOpen={onOpenSession ? (item, envId) => { setDetails(null); onOpenSession(item, envId); } : undefined}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
       {editingQueue && <QueueEdit turn={editingQueue} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSave={async (text, attachments) => {
         if (await queueAction(editingQueue, 'session.queue-edit', { text, attachments })) setEditingQueue(null);

@@ -42,6 +42,8 @@ export interface Environment {
     agentMessages?: boolean;
     /** A new helper task can carry pasted pictures and files. */
     helperAttachments?: boolean;
+    /** Runs helpers for chats on other machines (helm delegate --machine). */
+    remoteHelpers?: boolean;
     runtime?: { version: string };
     /** Which helm this machine runs; null where it is not a git checkout. */
     version?: { commit: string; full?: string; time?: number; dirty?: boolean; dir?: string; branch: string; subject: string; updatable: boolean } | null;
@@ -182,7 +184,11 @@ export interface Session {
   externalService?: boolean;
   /** This is a transcript monitor which can become driven after handoff. */
   external?: boolean;
-  delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string; summary?: string; finishedAt?: number };
+  delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string; summary?: string; finishedAt?: number;
+    /** The parent chat is on this other machine. */
+    parentMachine?: string };
+  /** This chat's helpers on other machines, with the state each one last sent. */
+  remoteHelpers?: { machine: string; id: string; title?: string; status?: string; startedAt?: number; finishedAt?: number; archived?: boolean }[];
   taskTransfer?: TaskReturnState & { handoffId: string; role: 'source' | 'destination'; machineId: string; machineName: string };
   parent?: { machineId: string; sessionId: string };
   /** Set while Helm moves this chat to another machine with its conversation. */

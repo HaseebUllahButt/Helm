@@ -68,7 +68,8 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm backup restore <file> <folder> --key-file <file>
                                     Restore to a new offline folder. Keep saved work blocked for review.
   helm profiles [--refresh]         List agent accounts on this machine
-  helm agents [--json] [--refresh]  List command line accounts, sign-in status and model IDs
+  helm agents [--machine <name>] [--json] [--refresh]
+                                    List command line accounts, sign-in status and model IDs
   helm run -- <command> [args]      Run a command here through Helm
   helm exec <machine> [--cwd <path>] -- <command> [args]
                                     Run a command on another machine through Helm
@@ -105,6 +106,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
     --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
   helm delegate <account> --model <id> --wait --json -- "<task>"
                                     Start a helper in this folder
+    --machine <name>                Start the helper on another machine
   helm delegate-result <id> [--wait] [--json]   Read the helper result or approval request
   helm handoff <machine> [text...]  Move code and this task to another machine
     --handoff-id <id>               Continue a stopped task move with the same ID
@@ -251,7 +253,13 @@ const DETAILS = {
   Claude chats use their Agent tool for work on the same account.
     <account>        Use same for this chat's account.
                      Run helm agents to list accounts on this machine.
-                     Use helm spawn for another machine.
+    --machine <name> Run the helper on another machine, with its accounts.
+                     Use it when an account is only there.
+                     Run helm agents --machine <name> to list them.
+                     The helper works in this chat's folder at the same
+                     place there, else in that machine's home.
+                     Use --cwd for another folder there.
+                     Its card and result come back to this chat.
     --model <id>     Pick a model ID, or cheap for the account's small model.
                      Without a choice, use the parent's model on the same CLI.
                      A saved helper model takes priority.
@@ -273,7 +281,8 @@ const DETAILS = {
 
   spawn: `
   Account names (<account>) differ between machines.
-  Run helm exec <machine> -- helm agents to list them.`,
+  Run helm agents --machine <machine> to list them.
+  For a helper of this chat on another machine, use helm delegate --machine.`,
 
   say: `
   Messages wait for the receiver's next turn.

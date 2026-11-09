@@ -4,16 +4,19 @@ import { parseAgentArgs, chooseAgent } from './delegation.js';
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Injected RPC keeps argument and result behavior testable without a live hub. */
-export async function runAgentCommand(command, args, { rpc, self,
+export async function runAgentCommand(command, args, { rpc, self, machine: findMachine = (name) => name,
   parentId = process.env.HELM_SESSION_ID, callerThreadId = process.env.CODEX_THREAD_ID,
   ownAccount = process.env.HELM_PROFILE_ID, write = console.log, sleep = pause } = {}) {
   const { options, words } = parseAgentArgs(args, {
-    values: command === 'delegate' ? ['model', 'mode', 'effort', 'parent', 'cwd', 'timeout'] : command === 'delegate-result' ? ['timeout'] : [],
+    values: command === 'delegate' ? ['model', 'mode', 'effort', 'parent', 'cwd', 'timeout', 'machine'] : command === 'delegate-result' ? ['timeout'] : ['machine'],
     switches: command === 'agents' ? ['json', 'refresh'] : command === 'delegate' ? ['wait', 'json', 'worktree'] : ['wait', 'json'],
   });
+  // `--machine`: the accounts, and the helper, of another machine.
+  const target = options.machine ? findMachine(options.machine) : self;
+  const away = target !== self;
   if (command === 'agents') {
-    if (words.length) throw new Error('helm agents [--json] [--refresh]');
-    const result = await rpc(self, M.AGENT_LIST, { refresh: !!options.refresh }, 60_000);
+    if (words.length) throw new Error('helm agents [--machine <name>] [--json] [--refresh]');
+    const result = await rpc(target, M.AGENT_LIST, { refresh: !!options.refresh }, 60_000);
     if (options.json) write(JSON.stringify(result));
     else {
       const { formatCredential } = await import('./credentials.js');
@@ -39,21 +42,22 @@ export async function runAgentCommand(command, args, { rpc, self,
     // A helper belongs to the chat that asked for it. One started from a
     // plain shell or through helm exec had no chat: no card, no result for
     // anyone, and a project copy nobody kept, so it broke once it was removed.
-    if (!(options.parent ?? parentId)) throw new Error('helm delegate works inside a Helm chat only. To start work on another machine, use helm spawn.');
+    if (!(options.parent ?? parentId)) throw new Error('helm delegate works inside a Helm chat only. To start a chat on another machine, use helm spawn.');
     // `same` is the account this chat runs as, so a helper needs no lookup.
     if (named === 'same' && !ownAccount) throw new Error('"same" works inside a Helm chat; name an account from helm agents');
+    if (named === 'same' && away) throw new Error(`Account names differ between machines. Run helm agents --machine ${options.machine} and name one.`);
     const account = named === 'same' ? ownAccount : named;
     // `cheap` names the account's small model (helm agents shows it), so a
     // helper never has to guess which id is the inexpensive one.
     const cheap = options.model === 'cheap';
-    let { agents } = await rpc(self, M.AGENT_LIST, { models: cheap }, cheap ? 60_000 : undefined);
+    let { agents } = await rpc(target, M.AGENT_LIST, { models: cheap }, cheap ? 60_000 : undefined);
     let agent = chooseAgent(agents, account);
     if (!agent.available) throw new Error(`${agent.id} is signed out; log in through its CLI first`);
     // A list still being refreshed from the public catalog may name last
     // season's small model; give the refresh a few seconds to land.
     for (let tries = 0; cheap && agent.refreshing && tries < 8; tries++) {
       await sleep(1000);
-      ({ agents } = await rpc(self, M.AGENT_LIST, { models: true }, 60_000));
+      ({ agents } = await rpc(target, M.AGENT_LIST, { models: true }, 60_000));
       agent = chooseAgent(agents, account);
     }
     if (cheap) {
@@ -65,15 +69,17 @@ export async function runAgentCommand(command, args, { rpc, self,
       id: options.parent ?? parentId, cwd: options.cwd, profileId: agent.id,
       model: options.model, mode: options.mode, effort: options.effort, task: task.join(' '),
       ...(options.worktree ? { worktree: true } : {}),
+      // This chat's machine starts it there and keeps its card here.
+      ...(away ? { machine: target } : {}),
       // Background/native Codex threads can inherit another thread's Helm
       // environment. Verify the actual caller before using that parent.
       ...(!options.parent && parentId && callerThreadId ? { callerThreadId } : {}),
-    }, 70_000);
+    }, away ? 120_000 : 70_000);
     id = session.id;
     if (!options.wait) {
       const where = session.delegation?.worktree;
       write(options.json ? JSON.stringify({ session, status: session.status })
-        : `Started ${id} (${session.engine}${session.model ? ` / ${session.model}` : ''})${where ? ` in ${where.path} on branch ${where.branch}` : ''}. Read with helm delegate-result ${id} --wait`);
+        : `Started ${id} (${session.engine}${session.model ? ` / ${session.model}` : ''})${away ? ` on ${options.machine}` : ''}${where ? ` in ${where.path} on branch ${where.branch}` : ''}. Read with helm delegate-result ${id} --wait`);
       return 0;
     }
   } else {

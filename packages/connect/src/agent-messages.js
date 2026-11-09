@@ -105,9 +105,11 @@ export class AgentMessages {
   }
 
   /** Return all unread helper replies with the result, not as extra turns. */
-  async collectResult({ id, parentId, consume, callerThreadId }) {
+  /** `machine`: the helper runs there, and its chat's machine checked that it is this chat's helper. */
+  async collectResult({ id, parentId, consume, callerThreadId, machine = null }) {
     if (!consume || !parentId) return [];
-    const child = this.sessions.get(id), parent = this.sessions.get(parentId);
+    const parent = this.sessions.get(parentId);
+    const child = machine ? { delegation: { parentId, parentGeneration: parent.stopGeneration ?? 0 } } : this.sessions.get(id);
     if (child.delegation?.parentId !== parentId
       || (child.delegation.parentGeneration ?? 0) !== (parent.stopGeneration ?? 0)
       || callerThreadId && (parent.engine !== 'codex' || parent.engineSessionId !== callerThreadId)) return [];
@@ -116,7 +118,7 @@ export class AgentMessages {
     let before;
     do {
       const page = await this.list(parentId, { consume: true, callerThreadId,
-        from: { env: this.self, id }, unread: true, limit: 50, before });
+        from: { env: machine ?? this.self, id }, unread: true, limit: 50, before });
       messages.push(...page.messages);
       before = page.next;
     } while (before);

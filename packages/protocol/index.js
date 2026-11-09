@@ -186,8 +186,10 @@ export const M = {
   SESSION_AGENT_ADDRESS: 'session.agent-address', // { id, callerThreadId? } -> { address }
   SESSION_AGENT_SEND: 'session.agent-send', // { id, to?, replyTo?, text, messageId, asUser? } -> { message }
   SESSION_AGENT_RECEIVE: 'session.agent-receive', // paired-machine delivery; { message } -> { ok }
-  SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task, attachments?, worktree? } -> { session }; cwd beats the parent's folder; worktree: own checkout on a helm/ branch; attachments as session.input
-  SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id, consume?, parentId?, callerThreadId? } -> { session, status, complete, output, pending, messages? }; unread helper replies replace their waiting prompt copies
+  SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task, attachments?, worktree?, machine? } -> { session }; cwd beats the parent's folder; worktree: own checkout on a helm/ branch; attachments as session.input; machine: run the helper there (its chat's machine forwards it with parentId, parentMachine, parent)
+  SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id, consume?, parentId?, callerThreadId?, parentMachine? } -> { session, status, complete, output, pending, messages?, consumedSeq?, machine? }; unread helper replies replace their waiting prompt copies; a helper on another machine is read there
+  SESSION_HELPER_STATE: 'session.helper-state', // paired machine -> the chat's machine; { parentId, helper: { id, title, status, team?, finishedAt?, archived? } } -> { ok }
+  SESSION_HELPER_RESULT: 'session.helper-result', // paired machine -> the chat's machine; { parentId, generation, helper, seq, status, text } -> { ok, skipped? }; starts a parent turn once per seq
   SESSION_DELEGATION_MESSAGE: 'session.delegation-message', // { parentId, id, data } -> { ok }
   SESSION_NATIVE_AGENT: 'session.native-agent', // { id, agentId, full? } -> { agent, events? }  one of a CLI's own subagents
   SESSION_NATIVE_MESSAGE: 'session.native-message', // { id, agentId, data } -> { ok }  passed on to it by its parent
