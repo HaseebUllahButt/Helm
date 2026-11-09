@@ -172,8 +172,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   }, [nativeCards, canOpenNative]);
   useEffect(() => {
     let stale = false;
-    // The sidebar's own list: this device holds it, so only changes travel.
-    client.rpc<{ sessions: Session[] }>(env.id, 'session.list', { includeDetected: true }).then((result) => {
+    // The sidebar's own list, as this device holds it: no request.
+    (client.sessionsHeld?.(env.id) ?? client.rpc<{ sessions: Session[] }>(env.id, 'session.list', { includeDetected: true })).then((result) => {
       if (!stale) setReferenceOptions((result.sessions ?? []).filter((item) => item.id !== session.id && !!item.driver && !item.archived).map(({ id, title }) => ({ id, title })));
     }).catch(() => {});
     return () => { stale = true; };

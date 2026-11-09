@@ -691,3 +691,93 @@ test('a fast review stays with its message when Codex echoes the turn after its 
   ev({ type: 'turn.start', turnId: 'other-turn', text: 'Check the project' });
   assert.equal(state.turns.length, 2, 'a different turn cannot claim these review items');
 });
+
+/** A finished chat, then usage readings that arrive while nobody uses it. */
+function idleChatWithReadings(log, readings) {
+  log.append('s', { type: 'turn.start', turnId: 't', text: 'What is 2 + 2?' });
+  log.append('s', { type: 'limits', claude: { unifiedWindows: { five_hour: { utilization: 0.1 } } } });
+  log.append('s', { type: 'item.start', id: 'a', turnId: 't', kind: 'text' });
+  log.append('s', { type: 'item.delta', id: 'a', text: 'It is 4.' });
+  log.append('s', { type: 'item.done', id: 'a' });
+  log.append('s', { type: 'turn.done', turnId: 't', status: 'ok' });
+  for (let n = 1; n <= readings; n++) log.append('s', { type: 'limits', codex: { primary: { usedPercent: n } } });
+}
+const shownText = (events) => {
+  const state = emptyLog();
+  for (const event of events) apply(state, event);
+  return { limits: state.limits, text: state.turns.flatMap(turn => turn.items).map(item => item.text).join('') };
+};
+
+test('usage readings do not push the conversation out of the page a chat opens with', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-limits-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = new EventLog(dir);
+  idleChatWithReadings(log, 462);
+  for (const reader of [log, new EventLog(dir)]) {
+    const page = reader.window('s', { tail: 200 });
+    // The answer is there, with one reading: the newest, and what only an older one said.
+    const shown = shownText(page.events);
+    assert.equal(shown.text, 'It is 4.');
+    assert.equal(page.events.filter(e => e.type === 'limits').length, 1);
+    assert.equal(shown.limits.codex.primary.usedPercent, 462);
+    assert.equal(shown.limits.claude.unifiedWindows.five_hour.utilization, 0.1);
+    assert.equal(page.events.at(-1).seq, reader.last('s'));
+    assert.ok(Buffer.byteLength(JSON.stringify(page.events)) < 2000);
+    // A reader that has the whole chat reads the same limits from it.
+    assert.deepEqual(shown.limits.codex, shownText(reader.window('s', { since: 0, maxBytes: 1e9 }).events).limits.codex);
+  }
+});
+
+test('catching up over usage readings takes one row that leaves no hole', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-limits-since-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = new EventLog(dir);
+  idleChatWithReadings(log, 300);
+  log.append('s', { type: 'turn.start', turnId: 'u', text: 'And 3 + 3?' });
+  for (const reader of [log, new EventLog(dir)]) {
+    // The app holds the chat up to its end (row 6) and asks for the rest.
+    const page = reader.window('s', { since: 6 });
+    assert.deepEqual(page.events.map(e => e.type), ['limits', 'turn.start']);
+    const [reading, question] = page.events;
+    // The app joins a page when its first row starts right after what it has.
+    assert.equal(reading.from, 7);
+    assert.equal(reading.seq, 306);
+    assert.equal(reading.codex.primary.usedPercent, 300);
+    assert.equal(question.seq, 307);
+    assert.equal(page.hasMore, false);
+    // A reading between two messages stays where it is.
+    assert.deepEqual(reader.window('s', { since: 0 }).events.map(e => e.type),
+      ['turn.start', 'limits', 'item.start', 'item.delta', 'item.done', 'turn.done', 'limits', 'turn.start']);
+  }
+});
+
+test('older pages skip usage readings a newer row of the page replaces', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-limits-before-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = new EventLog(dir);
+  idleChatWithReadings(log, 300);
+  const page = new EventLog(dir).window('s', { before: 250, tail: 20 });
+  assert.equal(page.events.filter(e => e.type === 'limits').length, 1);
+  assert.equal(shownText(page.events).text, 'It is 4.');
+  assert.equal(page.events.find(e => e.type === 'limits').codex.primary.usedPercent, 243);
+});
+
+test('compaction leaves one row for each run of usage readings', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-limits-compact-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = new EventLog(dir);
+  idleChatWithReadings(log, 300);
+  const before = shownText(log.window('s', { since: 0, maxBytes: 1e9 }).events);
+  assert.equal(log.compact('s'), 299);
+  const lines = readFileSync(join(dir, 's.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 7);
+  // The file index reads `from` from a row's first bytes.
+  assert.match(lines.at(-1), /^\{"seq":306,"from":7,/);
+  for (const reader of [log, new EventLog(dir)]) {
+    assert.equal(reader.last('s'), 306);
+    assert.deepEqual(shownText(reader.window('s', { tail: 200 }).events), before);
+    assert.equal(reader.window('s', { since: 6 }).events[0].from, 7);
+  }
+  // The next row takes the next number, as if nothing went.
+  assert.equal(new EventLog(dir).append('s', { type: 'status', status: 'idle' }).seq, 307);
+});
