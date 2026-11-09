@@ -123,7 +123,8 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
 - **Prove `/` (driven 2026-11-04):** `up --real`, a new Claude sketch with no
   message, `$V type "/"`: the list shows with descriptions. `$V restart`,
   reload, type `/` again: it still shows.
-- **Not yet driven:** `$V type "@"` should list up to three chats.
+- **Prove `@` (driven 2026-11-10):** two fake chats, open one,
+  `$V type "@Be"`: "@Beta plan" shows above the box.
 - **Tests:** `test/commands`, `commands-devin`, `slash-title`,
   `hidden-context`, `driver-claude`.
 
@@ -131,6 +132,15 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
 - **Latest first:** opening a chat reads its newest window. Saved text can
   appear first when offline. Older replies load as the reader scrolls up,
   or with the earlier-history control. Loaded pages stay on the device.
+- **Messages first (borrowed from T3 Code, 2026-11-10):** a chat's first
+  page goes on the link alone. Its helper list, models, commands, limits
+  and changed files wait for it, four seconds at most. A new read that a
+  chat screen sends on open must join that list in `client.ts`. The `@` list
+  uses the chat list the device holds; it sends no request.
+- **Usage readings:** a page holds one usage reading, the newest. A run of
+  readings is one row that says in `from` where the run began, in pages and
+  in compacted files. An idle Codex chat ended in 462 readings and opened
+  with no message.
 - **Long views:** draw only nearby turns. Keep measured space for the rest.
   Keep selected words, open tools and focused controls alive off screen.
   Native chat polls read the latest window and keep older pages already
@@ -163,4 +173,5 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `history-pagination`, `whole-chat`, `windowed-row`, `native-history-window`,
   `transcript-performance`, `copy-selection`,
   `highlight-performance`, `markdown-loading`, `latest-first`, `chat-sync`;
+  `test/events` (usage readings), `test/client-connectivity` (first page);
   `test/event-stream`, `stream-routing`.

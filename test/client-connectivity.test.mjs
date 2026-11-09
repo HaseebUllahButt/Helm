@@ -1494,3 +1494,61 @@ test('a helper message refused before sending leaves no pending delivery', async
   assert.equal(h.client.savedActions().filter(item=>item.method==='session.native-message-deliver').length,0);
   h.client.close();
 });
+
+test("a chat's first page goes alone; the reads beside it follow, and writes never wait", async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const sent = () => h.sockets[0].frames.filter(f => f.t === 'rpc').map(f => f.method);
+  const from = sent().length;
+  const page = h.client.rpc('vm', 'session.events', { id: 'chat', tail: 200 }, 20000);
+  const pageFrame = h.sockets[0].frames.at(-1);
+  const beside = ['session.list', 'session.commands', 'model.list', 'usage.limits', 'git.status']
+    .map(method => h.client.rpc('vm', method, { id: 'chat' }, 20000).catch(() => {}));
+  const write = h.client.rpc('vm', 'session.seen', { id: 'chat' }, 20000).catch(() => {});
+  const other = h.client.rpc('laptop', 'session.commands', { id: 'x' }, 20000).catch(() => {});
+  await h.advance(50);
+  // Only the page, the write and another machine's read are on the link.
+  assert.deepEqual(sent().slice(from), ['session.events', 'session.seen', 'session.commands']);
+  h.sockets[0].message({ t: 'rpcResult', id: pageFrame.id, ok: true, result: { events: [], last: 0 } });
+  await page; await h.advance(10);
+  assert.deepEqual(sent().slice(from + 3).sort(), ['git.status', 'model.list', 'session.commands', 'session.list', 'usage.limits']);
+  // With the page in, nothing waits any more.
+  const later = sent().length;
+  void h.client.rpc('vm', 'model.list', { id: 'chat' }, 20000).catch(() => {});
+  assert.equal(sent().length, later + 1);
+  void beside; void write; void other;
+  h.client.close();
+});
+
+test('on a link too slow for the first page, the reads beside it go after four seconds', async () => {
+  // The page arrives by no route at all here, also not the backup read.
+  const h = harness({ delays: { 'https://good/api/read': Infinity } }); h.start(); await h.advance(200);
+  const sent = () => h.sockets[0].frames.filter(f => f.t === 'rpc').map(f => f.method);
+  void h.client.rpc('vm', 'session.events', { id: 'chat', tail: 200 }, 20000).catch(() => {});
+  void h.client.rpc('vm', 'session.commands', { id: 'chat' }, 20000).catch(() => {});
+  await h.advance(3900);
+  assert.ok(!sent().includes('session.commands'));
+  await h.advance(200);
+  assert.ok(sent().includes('session.commands'));
+  // A page read that continues an open chat is not a first page.
+  const before = sent().length;
+  void h.client.rpc('vm', 'session.events', { id: 'chat', since: 5 }, 20000).catch(() => {});
+  void h.client.rpc('vm', 'model.list', { id: 'chat' }, 20000).catch(() => {});
+  assert.deepEqual(sent().slice(before), ['session.events', 'model.list']);
+  h.client.close();
+});
+
+test('the @ list comes from the chat list the device holds, with no request', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const lists = () => h.sockets[0].frames.filter(f => f.t === 'rpc' && f.method === 'session.list');
+  // Nothing held yet: ask once, as the sidebar does.
+  const first = h.client.sessionsHeld('vm');
+  await h.advance(5);
+  assert.equal(lists().length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(lists()[0].params)), { includeDetected: true });
+  h.sockets[0].message({ t: 'rpcResult', id: lists()[0].id, ok: true, result: { digest: 'd1', sessions: [{ id: 'a', title: 'One' }] } });
+  assert.deepEqual(JSON.parse(JSON.stringify((await first).sessions)), [{ id: 'a', title: 'One' }]);
+  const again = await h.client.sessionsHeld('vm');
+  assert.deepEqual(JSON.parse(JSON.stringify(again.sessions)), [{ id: 'a', title: 'One' }]);
+  assert.equal(lists().length, 1);
+  h.client.close();
+});
