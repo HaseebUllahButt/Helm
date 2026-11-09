@@ -108,6 +108,8 @@
   to refresh the account list. `app-server model/list` is a fallback because
   it can return old bundled rows before online discovery finishes.
   Do not pin `model_catalog_json` in Codex settings: it stops online refresh.
+  Claude reads Models.dev and Anthropic's own model page. Models.dev can be
+  days late on a launch; the page is not. Each rebuild waits for both lists.
   Prove with a private CLI stub: open Agent defaults with an old list,
   release a held model reply with a new name, and check that the new name
   appears without leaving the page. Check phone and desktop sizes.

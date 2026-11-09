@@ -36,12 +36,17 @@ const CODEX_MANIFEST_TTL_MS = 10 * 60_000;
 const CODEX_MANIFEST_URL = 'https://raw.githubusercontent.com/pingdotgg/t3code/main/apps/server/src/provider/model-manifest.json';
 const MODELS_DEV_TTL_MS = 10 * 60_000;
 const MODELS_DEV_URL = 'https://models.dev/api.json';
+// Anthropic's own model page shows a new model on launch day. Models.dev can
+// take days, so a new Claude model would be missing from the picker.
+const ANTHROPIC_MODELS_URL = 'https://platform.claude.com/docs/en/about-claude/models/overview.md';
 const PUBLIC_CATALOG_RETRY_MS = 30_000;
 const CODEX_RETRY_MS = 60_000;
 let codexManifestCache = { at: 0, checkedAt: 0, models: [] };
 let codexManifestInflight = null;
 let modelsDevCache = { at: 0, checkedAt: 0, catalog: null };
 let modelsDevInflight = null;
+let anthropicCache = { at: 0, checkedAt: 0, page: null };
+let anthropicInflight = null;
 const discoveries = new Map();
 const codexRetryAt = new Map();
 const codexRefreshes = new Map();
@@ -51,6 +56,7 @@ function pendingRefreshes(engine, key) {
   return [inflight.get(key), publicRefreshes.get(key),
     ...(engine === 'codex' ? [codexRefreshes.get(key), codexManifestInflight] : []),
     ...(['claude', 'gemini'].includes(engine) ? [modelsDevInflight] : []),
+    ...(engine === 'claude' ? [anthropicInflight] : []),
   ].filter(Boolean);
 }
 
@@ -168,6 +174,10 @@ function refreshDiscoveredModels(engines) {
     // Track this work before the public fetch ends. A waiting menu must not
     // receive the old account cache between the fetch and its rebuild.
     const job = (async () => {
+      // Wait for every public list, so the rebuild never runs with one of
+      // them half fetched and then gets skipped when it lands.
+      const lists = [modelsDevInflight, discovery.engine === 'claude' ? anthropicInflight : null];
+      await Promise.allSettled(lists.filter(Boolean));
       const current = inflight.get(key);
       if (current) await current.catch(() => {});
       const hit = cache.get(key);
@@ -540,7 +550,7 @@ async function codexCatalog(root, environment = {}) {
 
 // Only what the picker shows before Models.dev answers; newest first.
 const CLAUDE_FALLBACK_FAMILY = [
-  'claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5',
+  'claude-fable-5-2', 'claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5',
 ];
 
 /**
@@ -550,7 +560,13 @@ const CLAUDE_FALLBACK_FAMILY = [
  * still win when they know more about this account.
  */
 async function claudeModels(root, environment = {}) {
-  const published = await modelsDevProvider('anthropic');
+  const [listed, official] = await Promise.all([modelsDevProvider('anthropic'), anthropicPublishedModels()]);
+  const published = {
+    models: [...listed.models, ...official.models],
+    labels: { ...official.labels, ...listed.labels },
+    imagesByModel: listed.imagesByModel,
+    releasedAt: { ...official.releasedAt, ...listed.releasedAt },
+  };
   const seen = new Set([...CLAUDE_FALLBACK_FAMILY, ...published.models]);
   let def = null;
   try {
@@ -573,7 +589,7 @@ async function claudeModels(root, environment = {}) {
   const models = newestFirst([...seen], published.releasedAt);
   if (chosen) def = claudeAlias(chosen.trim(), models) ?? def;
   if (def && !models.includes(def)) models.unshift(def);
-  const labels = { 'claude-opus-5-5': 'Claude Opus 5.5', ...published.labels };
+  const labels = { 'claude-opus-5-5': 'Claude Opus 5.5', 'claude-fable-5-2': 'Claude Fable 5.2', ...published.labels };
   // `claude --effort`; without a saved level the default depends on the
   // model, so none is claimed. Every model in the family takes image input.
   const effort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(settings.effortLevel) ? settings.effortLevel : null;
@@ -634,7 +650,7 @@ export function newestFirst(ids, releasedAt = {}) {
 /** Resolves once catalog refreshes already in progress have ended. */
 export async function modelsSettled(engine, home, launcher = null) {
   const pending = () => engine ? pendingRefreshes(engine, modelsKey(engine, home, launcher)) : [
-    modelsDevInflight, codexManifestInflight, ...inflight.values(),
+    modelsDevInflight, anthropicInflight, codexManifestInflight, ...inflight.values(),
     ...codexRefreshes.values(), ...publicRefreshes.values(),
   ].filter(Boolean);
   // A public fetch can start an account rebuild. Follow that work too,
@@ -668,6 +684,78 @@ function modelsDevCatalog() {
 
 async function modelsDevProvider(provider) {
   return parseModelsDevProvider(await modelsDevCatalog(), provider);
+}
+
+const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july',
+  'august', 'september', 'october', 'november', 'december'];
+const stripLinks = (s) => s.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
+
+/**
+ * Read Anthropic's model page: the comparison table gives each current
+ * model's name and API id. Its retirement date is "not sooner than" one year
+ * after release, so a year back from it dates a model that Models.dev does
+ * not know yet. The "Legacy models" links add the older ids.
+ */
+export function parseAnthropicModelsPage(text) {
+  const out = { models: [], current: [], labels: {}, releasedAt: {} };
+  const page = String(text ?? '');
+  const rows = page.split('\n').filter((l) => l.trim().startsWith('|'))
+    .map((l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim()));
+  const first = (pattern) => rows.find((r) => pattern.test(stripLinks(r[0] ?? '')));
+  const header = first(/^Feature$/i);
+  const ids = first(/^Claude API ID$/i);
+  const retire = first(/^Retirement$/i);
+  const add = (id, label) => {
+    if (!out.models.includes(id)) out.models.push(id);
+    if (label && !out.labels[id]) out.labels[id] = label;
+  };
+  for (let i = 1; header && ids && i < ids.length; i++) {
+    const id = /`(claude-[a-z0-9-]+)`/.exec(ids[i])?.[1];
+    if (!id) continue;
+    add(id, stripLinks(header[i] ?? ''));
+    if (!out.current.includes(id)) out.current.push(id);
+    const when = /([A-Za-z]+) (\d{1,2}), (\d{4})/.exec(retire?.[i] ?? '');
+    const month = when ? MONTHS.indexOf(when[1].toLowerCase()) : -1;
+    if (month >= 0) {
+      out.releasedAt[id] = new Date(Date.UTC(Number(when[3]) - 1, month, Number(when[2]))).toISOString().slice(0, 10);
+    }
+  }
+  const legacy = /Legacy models[^\n]*/i.exec(page)?.[0] ?? '';
+  for (const m of legacy.matchAll(/\[(Claude [^\]]+)\]\([^)]*\/models\/([a-z]+-\d+(?:-\d+)?)\/overview\)/g)) {
+    add(`claude-${m[2]}`, m[1]);
+  }
+  return out;
+}
+
+/** Return the last good page at once and refresh it in the background. */
+function anthropicPublishedModels() {
+  const now = Date.now();
+  if (now - anthropicCache.at >= MODELS_DEV_TTL_MS
+      && now - anthropicCache.checkedAt >= PUBLIC_CATALOG_RETRY_MS
+      && !anthropicInflight) {
+    anthropicCache.checkedAt = now;
+    anthropicInflight = (async () => {
+      try {
+        const response = await fetch(process.env.HELM_ANTHROPIC_MODELS_URL || ANTHROPIC_MODELS_URL, {
+          headers: { accept: 'text/markdown, text/plain' },
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!response.ok) throw new Error(`Anthropic model page returned ${response.status}`);
+        const page = parseAnthropicModelsPage(await response.text());
+        if (!page.models.length) throw new Error('Anthropic model page lists no models');
+        anthropicCache = { at: Date.now(), checkedAt: Date.now(), page };
+        refreshDiscoveredModels(new Set(['claude']));
+      } catch { /* keep the last good page and back off before retrying */ }
+    })().finally(() => { anthropicInflight = null; });
+  }
+  return Promise.resolve(anthropicCache.page ?? { models: [], current: [], labels: {}, releasedAt: {} });
+}
+
+/** The current lineup on Anthropic's page (not the legacy ids), fetched now if needed. */
+export async function anthropicCurrentModels() {
+  void anthropicPublishedModels();
+  if (anthropicInflight) await anthropicInflight;
+  return anthropicCache.page?.current ?? [];
 }
 
 /** Only expose effort levels the provider actually advertises for a model. */

@@ -20,11 +20,12 @@
 // say which it was (`cacheWrite1h`), so claudeModelCost prices the two apart.
 export const CLAUDE_PRICING = {
   'claude-fable-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
-  // Fable 5.1 re-cut cache reads to $0.25. Whether Mythos 5.1 shares it was
-  // left open at launch, so it keeps the tier's standard 0.1x until it says.
+  // From 5.1 on, Fable and Mythos cache reads cost 0.025x input (checked 2026-11-10).
   'claude-fable-5-1': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 0.25 },
+  'claude-fable-5-2': { input: 8, output: 40, cacheWrite: 10, cacheRead: 0.2 },
   'claude-mythos-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
-  'claude-mythos-5-1': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
+  'claude-mythos-5-1': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 0.25 },
+  'claude-mythos-5-2': { input: 8, output: 40, cacheWrite: 10, cacheRead: 0.2 },
   'claude-opus-5-5': { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 },
   'claude-opus-5': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-8': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
