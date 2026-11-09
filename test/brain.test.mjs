@@ -26,6 +26,8 @@ test('CLI lookup finds standalone leads and child helpers omitted from the diges
     assert.deepEqual(await findNetworkSession(id, { machines, snapshot, rpc }), { env: 'vm', machine: 'VM', session });
   }
   assert.ok(calls.every(c => c.method === M.SESSION_LIST && c.params.includeDelegations === true));
+  // Each machine is asked for the matching chats only; these answer as an older Helm, in full.
+  assert.deepEqual([...new Set(calls.map(c => c.params.find))], [lead.id, '7159e7', 'f5383e']);
   assert.equal(JSON.stringify(snapshot), saved, 'helper lookup must not change the digest snapshot');
 });
 

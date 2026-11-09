@@ -20,7 +20,9 @@ export async function findNetworkSession(id, { machines, snapshot, rpc, waitMs =
   if (!id) throw new Error('which session? `helm digest` lists them');
   const ask = async (env, machine) => {
     try {
-      const result = await rpc(env, M.SESSION_LIST, { includeDelegations: true });
+      // Only the chats that match. A machine on an older Helm ignores
+      // `find` and sends its whole list, which the match below still reads.
+      const result = await rpc(env, M.SESSION_LIST, { includeDelegations: true, find: id });
       return { env, machine: machine.name ?? env, sessions: result.sessions ?? [], answered: true };
     } catch {
       // An offline machine can still own the ID. Keep that candidate so a
@@ -36,7 +38,7 @@ export async function findNetworkSession(id, { machines, snapshot, rpc, waitMs =
     const hits = [];
     for (const { env, machine, sessions } of inventories) {
       for (const session of sessions) {
-        if (session.id === id || shortId(session.id) === id || session.id.startsWith(id)) {
+        if (sessionMatches(session, id)) {
           hits.push({ env, machine, session });
         }
       }
@@ -122,6 +124,9 @@ export const shortId = (id) => {
   if (s.startsWith('pane:')) return s.slice(5);
   return s.slice(0, 6);
 };
+
+/** Whether a chat is the one a person named by its id, short id or start. */
+export const sessionMatches = (session, id) => session.id === id || shortId(session.id) === id || session.id.startsWith(id);
 
 const oneLine = (s, n = 90) => {
   const line = String(s ?? '').split('\n').map((x) => x.trim()).find(Boolean) ?? '';
