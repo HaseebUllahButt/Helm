@@ -198,6 +198,16 @@ async function up() {
       try { integrateNativeCommands(); } catch (err) { report(err); }
     } catch (err) { report(err); }
   }
+  // A service file from before Helm started Node under its own name: fix
+  // it, and let systemd start Helm again under that name (own-node.js).
+  if (process.env.INVOCATION_ID) {
+    const { renameService } = await import('../src/service.js');
+    if (await renameService().catch((err) => { console.error(`helm: service file: ${err.message}`); return false; })) {
+      console.log('helm: starting again so Helm keeps normal CPU priority');
+      // systemd stops this process; go on as before if it does not.
+      await new Promise((r) => setTimeout(r, 15_000));
+    }
+  }
   if (platform() === 'linux') {
     // A new logo reaches the launcher too, not only the app.
     import('../src/desktop.js').then((m) => m.refreshAppIcons())

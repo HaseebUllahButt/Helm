@@ -4,6 +4,7 @@ import { chmodSync, readFileSync, unlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HELM_DIR, HOME, expand } from './paths.js';
+import { ownNode } from './own-node.js';
 import { NATIVE_SOCKET_PATH } from './terminals.js';
 
 /**
@@ -37,7 +38,7 @@ export function hookSocketPath() {
 const ANSWER_WAIT_S = 6 * 3600;
 
 /** The `--settings` value that adds Helm's hooks to one Claude process. */
-export function hookSettings(node = process.execPath, script = hookScript) {
+export function hookSettings(node = ownNode(), script = hookScript) {
   const run = (timeout) => [{ type: 'command', command: `${quote(node)} ${quote(script)}`, ...(timeout ? { timeout } : {}) }];
   return JSON.stringify({ hooks: {
     SessionStart: [{ hooks: run() }],
@@ -96,7 +97,7 @@ function claudeStatusLine(args, settings, cwd) {
   if (Object.hasOwn(settings, 'statusLine')) statusLine = settings.statusLine;
   // A take-over may already contain Helm's override. Keep a single wrapper.
   if (statusLine?.command?.includes(statusScript)) return statusLine;
-  return { ...statusLine, type: 'command', command: `${quote(process.execPath)} ${quote(statusScript)} ${quote(statusLine?.command || '')}` };
+  return { ...statusLine, type: 'command', command: `${quote(ownNode())} ${quote(statusScript)} ${quote(statusLine?.command || '')}` };
 }
 
 /**
