@@ -5,7 +5,7 @@ import { EngineMark } from '../EngineMark';
 import { useNow } from '../useNow';
 
 /** `envId`: a helper that runs on another machine (helm delegate --machine). */
-type TeamMember = { session: Session; depth: number; envId?: string };
+export type TeamMember = { session: Session; depth: number; envId?: string };
 
 /** The helpers under `parentId`, nested, as the team card lists them. */
 function teamOf(sessions: Iterable<Session>, parentId: string): TeamMember[] {

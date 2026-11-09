@@ -12,6 +12,7 @@ import { clipboardFiles, isImageAttachment, prepareAttachment } from './image';
 import { AgentMessages } from './AgentMessages';
 import { PermissionSheet } from './PermissionSheet';
 import type { Permission, Decision } from './types';
+import type { TeamMember } from './TeamSummary';
 
 const STATUS: Record<string, string> = {
   blocked: 'Needs approval', working: 'Working', starting: 'Starting', done: 'Finished',
@@ -39,17 +40,20 @@ const offeredOf = (agents: CliAgent[], profileId?: string | null) => {
  * `nativeOnly` is for a terminal thread Helm cannot delegate from: just the
  * subagents its CLI ran, with no task form.
  */
-export function Subagents({ client, env, machines = [], parent, onClose, onOpen, onOpenNative, embedded = false, reviewAttention = false, onNativeAttention, nativeOnly = false }: {
+export function Subagents({ client, env, machines = [], parent, onClose, onOpen, onOpenNative, embedded = false, reviewAttention = false, onNativeAttention, nativeOnly = false, team }: {
   client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (session: Session, envId?: string) => void;
   /** Every machine: a helper can run on another one (helm delegate --machine). */
   machines?: Environment[];
   /** Open one of the CLI's own subagents as a chat. */
   onOpenNative?: (agent: NativeAgent) => void;
   embedded?: boolean; reviewAttention?: boolean; onNativeAttention?: () => void; nativeOnly?: boolean;
+  /** The helpers the chat already holds. They show at once; the machines' answers replace them. */
+  team?: TeamMember[];
 }) {
   const [agents, setAgents] = useState<CliAgent[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [listed, setListed] = useState(false);
+  const seed = (team ?? []).filter((member) => member.depth === 0).map((member) => member.session);
+  const [sessions, setSessions] = useState<Session[]>(seed);
+  const [listed, setListed] = useState(seed.length > 0);
   const [account, setAccount] = useState(parent.profileId ?? '');
   const [model, setModel] = useState<string | null>(null);
   const [mode, setMode] = useState('');
@@ -168,28 +172,38 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
         id: helper.id, title: helper.title ?? 'Helper', status: helper.status ?? 'idle', engine: '', profileId: '', offline: true,
         createdAt: helper.startedAt, delegation: { parentId: parent.id, parentMachine: env.id, status: helper.status, task: '', requestedModel: null, depth: 1 },
       }) as unknown as Session));
-    const load = () => Promise.all([
-      client.rpc<{ sessions: Session[] }>(env.id, 'session.list', { parentId: parent.id }),
-      ...[...new Set(remote.map((helper) => helper.machine))].map(away),
-    ])
-      .then(([listing, ...others]) => {
+    // Each machine's helpers show as soon as it answers. A slow or far
+    // machine used to hold back the whole list, this machine's included.
+    const load = () => {
+      const lists = new Map<string, Session[]>();
+      const machinesAway = [...new Set(remote.map((helper) => helper.machine))];
+      const show = (machine: string, list: Session[]) => {
         if (stale) return;
-        const all = [...listing.sessions.filter((s) => !s.delegation?.parentMachine), ...others.flat()];
-        setSessions(all);
-        if (!firstList.current) {
+        lists.set(machine, list);
+        // Until a machine answers, keep what the panel already shows for it.
+        setSessions((now) => [
+          ...(lists.get(env.id) ?? now.filter((s) => !s.delegation?.parentMachine)),
+          ...machinesAway.flatMap((away) => lists.get(away) ?? now.filter((s) => s.delegation?.parentMachine && remoteOn.get(s.id) === away)),
+        ]);
+      };
+      const here = client.rpc<{ sessions: Session[] }>(env.id, 'session.list', { parentId: parent.id })
+        .then((listing) => { show(env.id, listing.sessions.filter((s) => !s.delegation?.parentMachine)); if (!stale) setListed(true); });
+      const there = machinesAway.map((machine) => away(machine).then((list) => show(machine, list)));
+      return Promise.all([here, ...there])
+        .then(() => {
+          if (stale || firstList.current) return;
           firstList.current = true;
           if (reviewAttention) {
-            const tasks = all.filter(belongsHere);
+            const tasks = [...lists.values()].flat().filter(belongsHere);
             const attention = tasks.find((task) => stateOf(task) === 'blocked')
               ?? tasks.find((task) => stateOf(task) === 'error')
               ?? tasks.find((task) => task.team?.blocked || task.team?.failed);
             if (attention) { select(attention.id); setFocus(attention.id); }
             else onNativeAttention?.();
           }
-        }
-        setListed(true);
-      })
-      .catch((failure) => { if (!stale) { fail('')(failure); setListed(true); } });
+        })
+        .catch((failure) => { if (!stale) { fail('')(failure); setListed(true); } });
+    };
     void load();
     const off = client.on((envId, kind, payload: any) => {
       if (kind === 'session.update' && payload?.session?.delegation?.parentId === parent.id
