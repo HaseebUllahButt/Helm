@@ -70,6 +70,11 @@
   Native Windows has no automatic service replacement. Open apps reload at a quiet moment.
   Daemons restart immediately after an update. Agent hosts stay running;
   chats and open transfers never postpone replacement.
+- **Coding tools:** Helm runs each tool's own updater every six hours. On a
+  model launch, the Claude Code build that knows the model is often only on
+  the early channel. A build that does not know a model treats it as 200k
+  and compacts early. So when the program does not name a model on
+  Anthropic's page, Helm installs the newer early build.
 - **Prove restart:** start a private `fake-slow` chat, run `$V restart`,
   and confirm it finishes. Repeat with `fake-ask`: approve after restart
   and confirm the same request completes.

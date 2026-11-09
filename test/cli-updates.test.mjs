@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 // The state file lives under HELM_DIR; keep it out of the owner's.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-cli-updates-'));
-const { CliUpdater, classifyInstall, parseVersion, isNewer } = await import('../packages/connect/src/cli-updates.js');
+const { CliUpdater, classifyInstall, parseVersion, isNewer, missingModels } = await import('../packages/connect/src/cli-updates.js');
 const { cliAutoUpdate, saveCliAutoUpdate } = await import('../packages/connect/src/settings.js');
 
 const HOME = '/home/ada';
@@ -118,7 +118,7 @@ esac`);
   };
 
   const updater = (extra = {}) => new CliUpdater({
-    env: { PATH: bin }, home, log: () => {}, ...extra,
+    env: { PATH: bin }, home, log: () => {}, currentModels: async () => [], earlyVersion: async () => null, ...extra,
   });
   return { root, home, bin, calls, selfTool, npm, updater };
 }
@@ -208,6 +208,60 @@ case "$1" in --version) echo "2.1.0 (Claude Code)";; update) echo "network is do
   chmodSync(join(m.bin, 'claude'), 0o755);
   const [r] = await m.updater().update({ engine: 'claude' });
   assert.deepEqual([r.ok, r.changed, r.to, r.message], [false, false, '2.1.0', 'network is down']);
+});
+
+/** A fake Claude Code as large as the real program, which names the models it knows. */
+function bigClaude(m, from, knows) {
+  const vf = join(m.root, 'claude.version');
+  writeFileSync(vf, from);
+  const log = join(m.root, 'calls.log');
+  writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) read -r v < '${vf}'; echo "$v (Claude Code)";;
+  update) echo "claude update" >> '${log}'; echo "Claude Code is up to date";;
+  install) echo "claude install $2" >> '${log}'; echo "$2" > '${vf}'; echo "installed $2";;
+esac
+exit 0
+# ${knows.join(' ')} ${'x'.repeat(6 << 20)}
+`);
+  chmodSync(join(m.bin, 'claude'), 0o755);
+  return { version: () => readFileSync(vf, 'utf8').trim() };
+}
+
+test('the model check reads a large program and gives no answer for a launcher script', async () => {
+  const m = machine();
+  bigClaude(m, '2.1.0', ['claude-old-1']);
+  assert.deepEqual(await missingModels(join(m.bin, 'claude'), ['claude-old-1', 'claude-new-2']), ['claude-new-2']);
+  assert.deepEqual(await missingModels(join(m.bin, 'claude'), []), []);
+  m.selfTool('codex', 'codex', '1.0.0', '1.0.0');
+  assert.equal(await missingModels(join(m.bin, 'codex'), ['claude-new-2']), null);
+});
+
+test('Claude Code takes the early build when it does not know a model Anthropic lists', async () => {
+  const m = machine();
+  const claude = bigClaude(m, '2.1.0', ['claude-old-1']);
+  const updater = m.updater({ currentModels: async () => ['claude-old-1', 'claude-new-2'], earlyVersion: async () => '2.1.5' });
+  const [r] = await updater.update({ engine: 'claude' });
+  assert.deepEqual(m.calls(), ['claude update', 'claude install 2.1.5']);
+  assert.equal(claude.version(), '2.1.5');
+  assert.deepEqual([r.ok, r.from, r.to, r.changed], [true, '2.1.0', '2.1.5', true]);
+  assert.match(r.message, /early build 2\.1\.5.*claude-new-2/);
+});
+
+test('Claude Code stays on its channel when it knows every model or the early build is not newer', async () => {
+  const m = machine();
+  bigClaude(m, '2.1.0', ['claude-old-1', 'claude-new-2']);
+  let asked = 0;
+  await m.updater({ currentModels: async () => ['claude-old-1', 'claude-new-2'], earlyVersion: async () => { asked++; return '2.1.5'; } })
+    .update({ engine: 'claude' });
+  assert.deepEqual(m.calls(), ['claude update']);
+  assert.equal(asked, 0, 'the early channel is not asked when nothing is missing');
+
+  const n = machine();
+  const claude = bigClaude(n, '2.1.5', ['claude-old-1']);
+  await n.updater({ currentModels: async () => ['claude-new-2'], earlyVersion: async () => '2.1.5' }).update({ engine: 'claude' });
+  assert.deepEqual(n.calls(), ['claude update']);
+  assert.equal(claude.version(), '2.1.5');
 });
 
 test('the schedule does nothing while automatic updating is off, and runs when it is on', async () => {
