@@ -1309,6 +1309,15 @@ test('the prompt sample stays on the machine', async () => {
   await sessions.kill(s.id);
 });
 
+test('transcript digests stay on the machine', async () => {
+  const { wire } = await import('../packages/connect/src/sessions.js');
+  const kept = { externalTranscriptDigests: ['a'.repeat(64)], externalTranscriptDigestBase: 10,
+    externalTranscriptPrefixDigest: 'b'.repeat(64), externalTranscriptRevision: 'rev' };
+  const shown = wire({ id: 'chat', title: 'Fix the list', ...kept });
+  for (const key of Object.keys(kept)) assert.equal(shown[key], undefined, `${key} is not sent with every chat list`);
+  assert.equal(shown.title, 'Fix the list');
+});
+
 test('a name typed at start is never overwritten by a generated one', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');

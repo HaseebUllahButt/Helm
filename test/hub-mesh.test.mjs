@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { HubMesh } from '../packages/connect/src/hub-mesh.js';
-import { T } from '@helm/protocol';
+import { T, M } from '@helm/protocol';
 
 function fixture() {
   const network = { self: 'local', machines: { local: {}, remote: {}, revoked: {} }, revoked: { revoked: 1 } };
@@ -81,13 +81,57 @@ test('mesh timeouts release waiters and ignore late replies', async () => {
   advertise();
   const keepAlive = setTimeout(() => {}, 1000);
   try {
-    await assert.rejects(mesh.call('remote', 'session.events', {}, { timeout: 10 }), /timed out/);
+    await assert.rejects(mesh.call('remote', 'session.rename', {}, { timeout: 10 }), /timed out/);
     assert.equal(mesh.pending.size, 0);
     assert.equal(mesh.receive(link, { t: T.RPC_RESULT, id: link.sent.at(-1).id, ok: true }), false);
   } finally {
     clearTimeout(keepAlive);
     mesh.stop();
   }
+});
+
+test('a repeated read waits for the reply already on its way instead of asking again', async () => {
+  const { mesh, link, advertise } = fixture();
+  advertise();
+  const keepAlive = setTimeout(() => {}, 1000);
+  const asks = () => link.sent.filter(frame => frame.t === T.HUB_RPC && frame.method === 'session.list');
+  try {
+    // The device stops waiting, but the big reply is still on its way.
+    await assert.rejects(mesh.call('remote', 'session.list', { have: 'a' }, { sub: 'phone', timeout: 10 }), /timed out/);
+    const again = mesh.call('remote', 'session.list', { have: 'a' }, { sub: 'phone' });
+    const hedge = mesh.call('remote', 'session.list', { have: 'a' }, { sub: 'phone' });
+    // Another device, or other words, are other questions.
+    const other = mesh.call('remote', 'session.list', { have: 'a' }, { sub: 'laptop' });
+    const changed = mesh.call('remote', 'session.list', { have: 'b' }, { sub: 'phone' });
+    assert.equal(asks().length, 3);
+    mesh.receive(link, { t: T.RPC_RESULT, id: asks()[0].id, ok: true, result: 'list' });
+    assert.deepEqual(await Promise.all([again, hedge]), ['list', 'list']);
+    for (const frame of asks().slice(1)) mesh.receive(link, { t: T.RPC_RESULT, id: frame.id, ok: true, result: 'other' });
+    assert.deepEqual(await Promise.all([other, changed]), ['other', 'other']);
+    // With the reply in, the next read asks the machine again.
+    void mesh.call('remote', 'session.list', { have: 'a' }, { sub: 'phone' }).catch(() => {});
+    assert.equal(asks().length, 4);
+  } finally {
+    clearTimeout(keepAlive);
+    mesh.stop();
+  }
+});
+
+test('a change to a machine makes its next read ask again', async () => {
+  const { mesh, link, advertise } = fixture();
+  advertise();
+  const asks = () => link.sent.filter(frame => frame.t === T.HUB_RPC && frame.method === 'session.list');
+  const before = mesh.call('remote', 'session.list', {}, { sub: 'phone' });
+  void mesh.call('remote', M.PING, {}, { sub: 'phone' }).catch(() => {});
+  const joined = mesh.call('remote', 'session.list', {}, { sub: 'phone' });
+  assert.equal(asks().length, 1, 'a ping changes nothing');
+  void mesh.call('remote', 'session.rename', { id: 'a', title: 'new' }, { sub: 'phone' }).catch(() => {});
+  const after = mesh.call('remote', 'session.list', {}, { sub: 'phone' });
+  assert.equal(asks().length, 2);
+  mesh.receive(link, { t: T.RPC_RESULT, id: asks()[0].id, ok: true, result: 'old' });
+  mesh.receive(link, { t: T.RPC_RESULT, id: asks()[1].id, ok: true, result: 'new' });
+  assert.deepEqual(await Promise.all([before, joined, after]), ['old', 'old', 'new']);
+  mesh.stop();
 });
 
 test('mesh forwards direct negotiation only along its chosen route and releases browser state', () => {

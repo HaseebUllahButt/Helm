@@ -31,6 +31,27 @@ const SWITCH_HOLD_MS = 30_000;
 /** How much one new sample moves the running estimate. */
 const SMOOTHING = 0.3;
 
+/**
+ * Reads that an identical request still in flight may answer.
+ *
+ * On a slow link a big reply (a machine's chat list is hundreds of KB)
+ * takes longer than a device waits. The device then asked again, and its
+ * backup route asked a third time, while the machine kept sending every
+ * earlier reply in full. The copies filled the link for minutes, and a
+ * small notice such as "chat finished" waited behind them all. So a repeat
+ * now waits for the reply already on its way. Only pure reads join; any
+ * other call to that machine makes the next read go fresh, so a device
+ * never sees a list from before its own change.
+ */
+const SHARED_READS = new Set([
+  M.ENV_INFO, M.NET_ROUTES, M.PROJECT_LIST, M.MODEL_LIST,
+  M.SESSION_LIST, M.SESSION_MESSAGES, M.SESSION_EVENTS, M.SESSION_VISUAL,
+  M.SESSION_COMMANDS, M.SESSION_WATCH, M.BRAIN_SNAPSHOT, M.BRAIN_DIGEST,
+  M.USAGE_LIMITS, M.USAGE_REPORT, M.SEND_LIST, M.GIT_STATUS,
+]);
+/** How long a shared read waits for its reply, whatever its first asker allowed. */
+const SHARED_READ_MS = 130_000;
+
 
 export class HubMesh {
   constructor(network, changed, event, signalEvent, { now = () => performance.now(), probeEvery = PROBE_EVERY_MS, direct = null } = {}) {
@@ -64,6 +85,8 @@ export class HubMesh {
     }) : null;
     // machine id -> { on, since }: whether new requests take the channel.
     this.directUse = new Map();
+    // machine id -> request key -> the reply on its way (SHARED_READS).
+    this.reads = new Map();
   }
 
   up(link) {
@@ -358,6 +381,31 @@ export class HubMesh {
   }
 
   call(env, method, params, { sub, timeout = 130_000 } = {}) {
+    if (!SHARED_READS.has(method)) {
+      if (method !== M.PING) this.reads.delete(env);
+      return this.#send(env, method, params, { sub, timeout });
+    }
+    const key = `${sub ?? ''}\n${method}\n${JSON.stringify(params ?? {})}`;
+    let reads = this.reads.get(env);
+    let reply = reads?.get(key);
+    if (!reply) {
+      if (!reads) this.reads.set(env, reads = new Map());
+      reply = this.#send(env, method, params, { sub, timeout: Math.max(timeout, SHARED_READ_MS) });
+      reads.set(key, reply);
+      const forget = () => {
+        if (reads.get(key) === reply) reads.delete(key);
+        if (!reads.size && this.reads.get(env) === reads) this.reads.delete(env);
+      };
+      reply.then(forget, forget);
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(Object.assign(new Error('remote request timed out; delivery may be uncertain'), { code: 'timeout' })), timeout);
+      timer.unref?.();
+      reply.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+    });
+  }
+
+  #send(env, method, params, { sub, timeout }) {
     const network = this.network();
     if (!Object.hasOwn(network?.machines ?? {}, env) || network.revoked?.[env]) return Promise.reject(new Error('unknown machine'));
     const link = this.route(env);
