@@ -860,6 +860,7 @@ export class Sessions extends EventEmitter {
   // Helpers on other machines (`helm delegate --machine`). agent.js sets
   // `remoteRpc(machine, method, params)` and `machineName(id)`.
   addRemoteHelper(parentId, helper) { return this.#delegation.addRemoteHelper(parentId, helper); }
+  reconcileRemoteHelpers(id) { return this.#delegation.reconcileRemoteHelpers(id); }
   remoteHelper(id, options) { return this.#delegation.remoteHelper(id, options); }
   remoteHelperState(machine, params) { return this.#delegation.remoteHelperState(machine, params); }
   remoteHelperResult(machine, params) { return this.#delegation.remoteHelperResult(machine, params); }
@@ -2247,6 +2248,15 @@ export class Sessions extends EventEmitter {
       this.#save();
       this.emit('session', { ...s, status: 'exited', alive: false, deleted: true });
       return { ok: true };
+    }
+    if (s.delegation?.parentMachine && this.remoteRpc) {
+      const result = this.#delegation.delegationResult(id);
+      s.removed = true;
+      await this.remoteRpc(s.delegation.parentMachine, 'session.helper-state', {
+        parentId: s.delegation.parentId,
+        helper: { id, title: s.title, status: 'interrupted', removed: true,
+          result: { ...result, status: 'interrupted', complete: true, pending: null } },
+      }).catch(() => {});
     }
     if (s.driver) {
       this.#clones.get(id)?.cancel();

@@ -92,10 +92,27 @@ The owner uses the same browser window. Helm has no browser panel.
 - **A modal dialog stops page reads.** The input that opened it is held
   until it is answered. Reads and checks then report the dialog without
   reading the page, and a check of the dialog skips the tab's queue.
+- **A script runs in the agent's own process.** `helm browser script`
+  runs the agent's JavaScript, with ifs and loops, in its CLI process, never
+  in the Helm service. Each step is the same `browser.action` call as
+  `act`, so read-only chats, owner-quiet waits, step timeouts and extended
+  mode stay as they are, and agent code gets no new power. A script step
+  does not read the page after it (`"look": false`); a failed step or
+  script still answers with a page read. A script has no step count limit
+  and no time limit unless `--timeout`. The idea comes from Browser Use
+  (MIT), where the model writes Python cells.
 - **Show me** (`helm browser point`) highlights an element and changes
   nothing, so it works in read-only chats. Read-only agents can read,
   navigate, wait and check; a batch holding any change is refused before
   its first step.
+- **The owner solves a CAPTCHA; Helm never does.** No outside service
+  either: Browser Use's free code only waits for their paid cloud. Each read
+  names a visible CAPTCHA (`captcha` field and one line), found by frame
+  address and by element in the frames it already reads. `helm browser
+  captcha <tab>` points at it, sends the same notice as a question, and
+  reads until an answer field has a value or the CAPTCHA is gone twice in a
+  row. It skips the tab's queue. A hub call ends after 130 s, so the CLI
+  waits in calls of 100 s. Without a screen it stops at once.
 
 ## Extended mode: the owner's own browser
 

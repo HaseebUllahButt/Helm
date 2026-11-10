@@ -40,7 +40,7 @@ import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub, directCaller } from './peer.js';
 import { allowDirectSignal } from './direct-auth.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
-import { describe as describeAsk, describeDone, askPreview } from './notify.js';
+import { describe as describeAsk, describeDone, describeCaptcha, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
 import { Forwards, forwardedPorts } from './forwards.js';
 import { ownerSeenAt } from '@helm/protocol/owner-seen';
@@ -475,7 +475,13 @@ export class Daemon {
     this.executions = new ExecutionJobs();
     // Helm's service can start before the desktop; its browser windows find the screen later.
     useDesktopScreen(); useOwnerLogins();
-    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id), appProcessRoots: id => this.sessions.appProcessRoots(id) } });
+    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id), appProcessRoots: id => this.sessions.appProcessRoots(id) },
+      // A CAPTCHA waits for the owner: the same notice as a question, taken away when it is solved.
+      alert: ({ sessionId, tag, resolve }) => {
+        if (resolve) return this.broadcastFrame(T.NOTIFY, { payload: { tag, envId: this.id, sessionId, resolve: true } });
+        let session = null; try { session = this.sessions.get(sessionId); } catch { /* gone already */ }
+        this.broadcastFrame(T.NOTIFY, { payload: describeCaptcha({ ...session, id: sessionId, envId: this.id, machine: this.name }, tag) });
+      } });
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),
       // Only asked on Windows, where a running program can not be replaced.
@@ -1336,6 +1342,7 @@ export class Daemon {
     if (p.callerThreadId && (parent.engine !== 'codex' || parent.engineSessionId !== p.callerThreadId)) {
       throw new Error('the calling Codex thread does not match the inherited Helm parent; use --parent with the intended orchestrator ID');
     }
+    if (helper.removed) return { ...helper.result, id: helper.id, status: 'interrupted', complete: true, output: helper.result?.output ?? '', machine: helper.machine };
     const consume = p.consume === true && p.parentId === parent.id;
     const result = await hubRpc(loadNetwork() ?? this.net, helper.machine, M.SESSION_DELEGATION_RESULT,
       { id: p.id, ...(consume ? { consume: true, parentId: parent.id } : {}), parentMachine: this.id }, { timeout: 30_000 });
@@ -1343,7 +1350,7 @@ export class Daemon {
     if (child?.id === helper.id) {
       try {
         this.sessions.remoteHelperState(helper.machine, { parentId: parent.id, helper: { id: child.id, title: child.title,
-          status: child.delegation?.status ?? child.status, team: child.team, finishedAt: child.delegation?.finishedAt, archived: child.archived } });
+          result, status: child.delegation?.status ?? child.status, team: child.team, finishedAt: child.delegation?.finishedAt, archived: child.archived } });
       } catch { /* the record went away meanwhile */ }
     }
     if (consume && result.complete && Number.isInteger(result.consumedSeq)) this.sessions.remoteConsumed(parent, helper.id, result.consumedSeq);
@@ -2198,6 +2205,7 @@ export class Daemon {
       }
 
       case M.SESSION_LIST: {
+        if (p.parentId) await this.sessions.reconcileRemoteHelpers(p.parentId);
         let sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true, nested: p.nested === true });
         // `helm thread <id>` and the like look for one chat on every machine.
         // The whole list with every helper was megabytes on a slow link.

@@ -77,11 +77,12 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
             ...links.filter((h) => !h.archived).map(async (link) => {
             client.subscribe?.(link.machine);
             let found: Session[] = [];
-            try { found = await read(link.machine, owner); }
+            let answered = false;
+            try { found = await read(link.machine, owner); answered = true; }
             catch { /* The saved state remains visible offline. */ }
             const child = found.find((s) => s.id === link.id && s.delegation?.parentMachine === host);
-            await add(child ?? { id: link.id, title: link.title || 'Helper', status: link.status || 'idle', engine: '', cwd: '', profileId: '', offline: true,
-              team: link.team, delegation: { parentId: owner, parentMachine: host, status: link.status, task: '', depth: level + 1 } } as unknown as Session, link.machine, found);
+            await add(child ?? { ...link.result?.session, id: link.id, title: link.title || 'Helper', status: answered || link.removed ? 'interrupted' : link.status || 'idle', engine: link.result?.session?.engine || '', cwd: link.result?.session?.cwd || '', profileId: link.result?.session?.profileId || '', offline: !answered && !link.removed, removed: answered || link.removed,
+              team: answered || link.removed ? undefined : link.team, delegation: { parentId: owner, parentMachine: host, status: answered || link.removed ? 'interrupted' : link.status, task: '', depth: level + 1 } } as unknown as Session, link.machine, found);
           })]);
         };
         await walk(machine, id, depth, rows, hints);
