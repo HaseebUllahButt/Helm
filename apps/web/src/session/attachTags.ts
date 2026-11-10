@@ -75,3 +75,20 @@ export function renumberImages(text: string, gone: number[]): string {
     return `[Image #${at - gone.filter((g) => g < at).length}]${space}`;
   });
 }
+
+/**
+ * Where the caret goes so it never stops inside a live tag: a tag is one
+ * letter to the arrow keys. A one-step move into a tag goes on to its far
+ * edge; a click or a longer jump goes to the nearer edge. `prev` is where
+ * the caret was before this move.
+ */
+export function caretPastTag(text: string, at: number, prev: number, live: (tag: string) => boolean = () => true): number {
+  for (const m of text.matchAll(TAG)) {
+    const start = m.index!, end = start + m[0].length;
+    if (at <= start || at >= end || !live(m[0])) continue;
+    if (prev === start || (prev < at && at - prev === 1)) return end;
+    if (prev === end || (prev > at && prev - at === 1)) return start;
+    return at - start <= end - at ? start : end;
+  }
+  return at;
+}
