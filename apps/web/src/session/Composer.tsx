@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { createContext, memo, useContext, useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useNow } from '../useNow';
 import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
 import { useDictation, type Transcribe } from './voice';
@@ -8,6 +8,14 @@ import { renumberImages, splitTags, wholeTagEdit } from './attachTags';
 import { Icon } from '../Icon';
 
 const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+/** The caret of a box that left the page while you typed in it, for the box that replaces it. */
+let handoff: { text: string; start: number; end: number; at: number } | null = null;
+function takeHandoff(text: string) {
+  const held = handoff;
+  handoff = null;
+  return held && held.text === text && Date.now() - held.at < 2000 ? held : null;
+}
 
 /** A phone: no hardware keyboard to type into straight away, no Shift+Enter. */
 const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -338,6 +346,23 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
     if (touch) return;
     const frame = requestAnimationFrame(() => ref.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
+  }, []);
+  // A new chat swaps its "starting" box for the live chat's box while you
+  // type. The new box takes over the focus and the caret before the next
+  // key lands, so the caret does not jump to the start. Words the box
+  // opens with put the caret at their end.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el) {
+      const held = takeHandoff(el.value);
+      if (held) { el.focus({ preventScroll: true }); el.setSelectionRange(held.start, held.end); }
+      else if (el.value) el.setSelectionRange(el.value.length, el.value.length);
+    }
+    return () => {
+      // Runs before the box leaves the page, while it still has the focus.
+      const box = ref.current;
+      if (box && document.activeElement === box) handoff = { text: box.value, start: box.selectionStart, end: box.selectionEnd, at: Date.now() };
+    };
   }, []);
 
   /**

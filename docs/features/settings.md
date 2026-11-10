@@ -42,7 +42,8 @@
 ## Limits and context
 - **Not yet driven;** the fake agent reports tiny usage and no limits. The
   "Compact at" setting applies to every chat on the account, on every
-  machine.
+  machine. The meter uses a new size at once; Claude confirms it with its
+  next reply. Test: `test/browser/context-limit`.
 - **Codex banked resets:** only `account/rateLimits/read` names them, so
   `usage.limits` asks a private `codex app-server` at most every 15 minutes,
   and only for Codex accounts with chats. To drive it, add a codex profile

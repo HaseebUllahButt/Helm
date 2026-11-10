@@ -28,8 +28,8 @@ export function ContextLimit({ client, env, machines, session }: {
   const slot = useRef<HTMLSpanElement>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: string; warn?: string } | null>(null);
-  // The new size only shows in the numbers after the next reply, so what was
-  // just picked is what the check mark follows until then.
+  // Claude reports the new size only with its next reply. Until then the
+  // check mark and the meter use the size just picked.
   const [chosen, setChosen] = useState<number | null | undefined>(undefined);
   useEffect(() => setChosen(undefined), [ctx.window, session.id]);
   const close = useCallback(() => setOpen(false), []);
@@ -45,6 +45,7 @@ export function ContextLimit({ client, env, machines, session }: {
   const full = ctx.full && ctx.full >= ctx.window ? ctx.full : undefined;
   const isFull = full ? ctx.window >= full : false;
   const now: number | null = chosen !== undefined ? chosen : isFull ? null : ctx.window;
+  const shown = now ?? full ?? ctx.window;
   // A size set by hand (383k) shows up as its own row, so the check has somewhere to be.
   const sizes = [...new Set([...PRESETS, ...(typeof now === 'number' ? [now] : [])])]
     .filter((n) => !full || n < full).sort((a, b) => b - a);
@@ -90,7 +91,7 @@ export function ContextLimit({ client, env, machines, session }: {
   );
   return (
     <span className="ctx-slot" ref={slot}>
-      <ContextMeter used={ctx.used} window={ctx.window} compacted={ctx.compacted} open={open} onPress={() => { setDown((slot.current?.getBoundingClientRect().top ?? 999) < 360); setOpen((v) => !v); setNote(null); }} />
+      <ContextMeter used={ctx.used} window={shown} compacted={ctx.compacted} open={open} onPress={() => { setDown((slot.current?.getBoundingClientRect().top ?? 999) < 360); setOpen((v) => !v); setNote(null); }} />
       {open && (
         <div className={`menu ctx-menu${down ? ' down' : ''}`} role="menu" aria-label="Summarize at">
           <div className="ctx-menu-title">Summarize at</div>

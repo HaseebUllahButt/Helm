@@ -11,6 +11,8 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   fmap" became "from fmap"). The model chip shows real Devin model names even
   for the fake agent. Streamed replies must not redraw the message editor;
   approval cards and settings still update while a draft stays in the box.
+  A new chat swaps its "starting" box for the live box while the owner types;
+  the live box takes over the focus and the caret, or keys land at the start.
 - **Delivery:** the browser saves the action number and content before sending.
   If live links fail, ordinary web requests send chat messages and approvals.
   A lost reply triggers a result check. Opening the chat checks saved actions
@@ -37,7 +39,7 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   Retry an unconfirmed send with its original
   ID, text, images and chat references.
 - **Tests:** `test/web-errors`; `test/browser/chat-cycle`, `send-v2`, `send-entry-points`,
-  `failed-send`, `composer-card`, `composer-streaming`; `test/message-delivery`, `user-message`,
+  `failed-send`, `composer-card`, `composer-streaming`, `composer-handoff`; `test/message-delivery`, `user-message`,
   `stream`, `session-driver`.
 
 ## Queue a message while the agent works
