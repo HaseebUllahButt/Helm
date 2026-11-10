@@ -2,9 +2,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, rm, readdir, realpath } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile, realpath } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { copyDependencies } from '../../../scripts/linux-package.mjs';
+import { ownNode } from './own-node.js';
 const execute = promisify(execFile);
 
 async function prepareCandidate(source, candidate, tip) {
@@ -33,7 +35,25 @@ async function prepareCandidate(source, candidate, tip) {
     }
   };
   await checkLinks(candidate);
-  await execute('npm', ['--workspace', '@helm/web', 'run', 'build'], { cwd: candidate, timeout: 120000, maxBuffer: 2 << 20 });
+  await buildWeb(candidate);
+}
+
+/**
+ * Build the app as `npm run build` would, but start its Node program under
+ * Helm's own name. Through npm it starts as `node`, and on a machine with
+ * ananicy that gets idle CPU: there a busy machine took 13 minutes, not 40 s,
+ * and the check failed. Any other build command still goes through npm.
+ */
+async function buildWeb(candidate) {
+  const web = join(candidate, 'apps/web');
+  const bins = [join(web, 'node_modules/.bin'), join(candidate, 'node_modules/.bin')];
+  const script = JSON.parse(await readFile(join(web, 'package.json'), 'utf8')).scripts?.build ?? '';
+  const [first, ...rest] = script.trim().split(/\s+/);
+  const bin = bins.map((dir) => join(dir, first)).find((file) => existsSync(file));
+  const plain = /^[\w./=:@-]+$/.test(script.trim()) && (first === 'node' || bin);
+  const options = { cwd: plain ? web : candidate, timeout: 300000, maxBuffer: 2 << 20, env: { ...process.env, PATH: [...bins, process.env.PATH].join(':') } };
+  if (plain) await execute(ownNode(), [...(first === 'node' ? [] : [bin]), ...rest], options);
+  else await execute('npm', ['--workspace', '@helm/web', 'run', 'build'], options);
 }
 
 /** Check a private candidate first; check the installed release after rollout. */
