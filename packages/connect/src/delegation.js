@@ -158,7 +158,7 @@ const SAME_TOOL_HELPERS = {
 export function delegationNote(engine = null) {
   const route = SAME_TOOL_HELPERS[engine]
     ?? 'For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use your account and model unless the owner asks for another. Keep judgment calls yourself.';
-  return `[Helm helpers: Do the work yourself by default. ${route} The owner: "orchestrator mode is when u give work to others and u are always there to talk to me". Use it only when the owner asks for it. Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]`;
+  return `[Helm helpers: Do the work yourself by default. ${route} Brief a helper like a new teammate: it has none of your context. Give the goal, the exact files, what other helpers own, the result you expect and the check to run. The owner: "orchestrator mode is when u give work to others and u are always there to talk to me". Use it only when the owner asks for it. Then start helpers in the background, never wait on them, end your turn and act on each result or message when it comes. Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]`;
 }
 
 /**
@@ -170,7 +170,7 @@ export function delegationNote(engine = null) {
  * Kept to a few lines: it rides along in every session.
  */
 export function agentMessageNote() {
-  return '[Helm agent messages: Talk to other agents with helm say and helm reply. Reply only when useful; never trade acknowledgements.]';
+  return '[Helm agent messages: Talk to other agents with helm say and helm reply. The reader has none of your context: name the files, commits and exact ask, and drop your own shorthand. Send only what the reader must act on; never trade acknowledgements or progress notes.]';
 }
 
 /**
@@ -195,12 +195,15 @@ export function ownerNote(record = loadOwner()) {
 }
 
 /**
- * Only for a helper: its last message goes back to the parent once. A wake-up
+ * Only for a helper: its last message goes back to the parent once, like a
+ * CLI's own subagent result. A lead once got 18 progress notes in the
+ * helper's own shorthand and acted on none, so a message is only for a block
+ * or a decision, and the report must read well with none of the helper's work. A wake-up
  * after that (a background watcher timing out) is never relayed, so news
  * worth a parent's attention goes by agent message instead.
  */
 export function helperNote(parentId) {
-  return `[Helm helper: You are a helper for chat ${parentId}. Only your last message goes back to it, as the result, cut at 1500 characters. Report once. Later notes, such as a stale background watcher timing out, never reach it; do not write them. Send truly new, needed news with helm say ${parentId} -- "text".]`;
+  return `[Helm helper: You are a helper for chat ${parentId}. It sees none of your work. Only your last message goes back to it, as the result, cut at 1500 characters. Report once, and make the report stand alone: the outcome first, then commits, paths and checks run, then what is left. Send helm say ${parentId} -- "text" only when you are blocked or need its decision, never for progress. Later notes, such as a stale background watcher timing out, never reach it; do not write them.]`;
 }
 
 // Only notes for tools this machine can use: each one rides along in every session.

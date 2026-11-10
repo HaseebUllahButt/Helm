@@ -149,6 +149,16 @@ and a project copy nobody kept. A helper can run on another machine
   - Only the message travels, not history. It waits for the next turn and
     never interrupts. It does not also wake the parent with a result. No
     automatic replies.
+  - Like a CLI's own subagent, a helper talks back once: its final report,
+    written to stand alone. It sends `helm say` only when blocked or when it
+    needs a decision, never for progress. A lead once got 18 progress notes
+    in a helper's own shorthand and acted on none. Every message names its
+    files, commits and exact ask (`agentMessageNote`, `helperNote`).
+  - The lead briefs a helper like a new teammate: goal, exact files, what
+    other helpers own, expected result, check to run. This follows
+    Anthropic's multi-agent research lessons: vague briefs made helpers
+    repeat work or leave gaps. In orchestrator mode the lead starts helpers
+    in the background and ends its turn, so it can read messages.
   - Retry an unconfirmed send with the same `--message-id`, recipient and
     text; the receipt stops a duplicate. "Delivered" means accepted, not
     read. Stopped or archived agents are not woken.
