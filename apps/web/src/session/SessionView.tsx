@@ -588,7 +588,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         ))}
       </div>
 
-      {details && <ThreadDetails client={client} env={env} session={session} tab={details} nativeOnly={!session.nativeChat}
+      {details && <ThreadDetails client={client} env={env} team={team} session={session} tab={details} nativeOnly={!session.nativeChat}
         git={git.status} gitCwd={session.quick ? '' : session.cwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
       {!isShell && canvas.open && <Canvas client={client} env={env} cwd={session.quick ? '' : session.cwd} changed={changedPaths} path={canvas.path} onPath={canvas.setPath}

@@ -158,7 +158,7 @@ const SAME_TOOL_HELPERS = {
 export function delegationNote(engine = null) {
   const route = SAME_TOOL_HELPERS[engine]
     ?? 'For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use your account and model unless the owner asks for another. Keep judgment calls yourself.';
-  return `[Helm helpers: Do the work yourself by default. ${route} The owner: "orchestrator mode is when u give work to others and u are always there to talk to me". Use it only when the owner asks for it. Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]`;
+  return `[Helm helpers: Do the work yourself by default. ${route} Brief a helper like a new teammate: it has none of your context. Give the goal, the exact files, what other helpers own, the result you expect and the check to run. The owner: "orchestrator mode is when u give work to others and u are always there to talk to me". Use it only when the owner asks for it. Then start helpers in the background, never wait on them, end your turn and act on each result or message when it comes. Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]`;
 }
 
 /**
@@ -170,7 +170,7 @@ export function delegationNote(engine = null) {
  * Kept to a few lines: it rides along in every session.
  */
 export function agentMessageNote() {
-  return '[Helm agent messages: Talk to other agents with helm say and helm reply. Reply only when useful; never trade acknowledgements.]';
+  return '[Helm agent messages: Talk to other agents with helm say and helm reply. The reader has none of your context: name the files, commits and exact ask, and drop your own shorthand. Send only what the reader must act on; never trade acknowledgements or progress notes.]';
 }
 
 /**
@@ -195,12 +195,15 @@ export function ownerNote(record = loadOwner()) {
 }
 
 /**
- * Only for a helper: its final reply goes back to the parent once. A wake-up
+ * Only for a helper: its last message goes back to the parent once, like a
+ * CLI's own subagent result. A lead once got 18 progress notes in the
+ * helper's own shorthand and acted on none, so a message is only for a block
+ * or a decision, and the report must read well with none of the helper's work. A wake-up
  * after that (a background watcher timing out) is never relayed, so news
  * worth a parent's attention goes by agent message instead.
  */
 export function helperNote(parentId) {
-  return `[Helm helper: You are a helper for chat ${parentId}. Your final reply goes back to it once, as the result. Report once. Later notes, such as a stale background watcher timing out, never reach it; do not write them. Send truly new, needed news with helm say ${parentId} -- "text".]`;
+  return `[Helm helper: You are a helper for chat ${parentId}. It sees none of your work. Only your last message goes back to it, as the result, cut at 1500 characters. Report once, and make the report stand alone: the outcome first, then commits, paths and checks run, then what is left. Send helm say ${parentId} -- "text" only when you are blocked or need its decision, never for progress. Later notes, such as a stale background watcher timing out, never reach it; do not write them.]`;
 }
 
 // Only notes for tools this machine can use: each one rides along in every session.
@@ -214,7 +217,7 @@ export function helmBrief(net, { parentId = null, engine = null } = {}) {
     .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
   if (!self?.name || !others.length) return toolNotes(parentId, engine);
-  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}. Reach them through helm (helm exec, helm copy, helm spawn), not SSH: helm help lists every command and helm <command> --help explains one. Never rerun a helm exec that may have started; read it with helm exec-status. Links from helm share (spins) end after 3 hours; add --keep only when the owner asks. To show the owner a dev server, run helm forward <port> yourself; send only the localhost link it prints.]
+  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}. Reach them through helm (helm exec, helm copy, helm spawn), not SSH: helm help lists every command and helm <command> --help explains one. For an account that only another machine has, use helm delegate --machine <name>. Never rerun a helm exec that may have started; read it with helm exec-status. Links from helm share (spins) end after 3 hours; add --keep only when the owner asks. To show the owner a dev server, run helm forward <port> yourself; send only the localhost link it prints.]
 ${toolNotes(parentId, engine)}`;
 }
 
@@ -259,6 +262,9 @@ export function delegationMode(engine, parentMode, requested, configured = null,
  */
 export const isWakeTurn = (turn) => !!turn && (turn.wake === true || String(turn.turnId ?? '').startsWith('wake-'));
 
+/** Items that are the agent writing, not working. */
+const PROSE = ['text', 'thinking'];
+
 const turnTexts = (turn) => (turn?.items ?? []).filter((i) => i.kind === 'text').map((i) => i.text);
 
 /** One turn as the log folds it, or undefined when the log no longer holds it. */
@@ -274,7 +280,15 @@ export function delegationOutput(session, events, active = activeTurnFromEvents(
   // up afterwards, so a late wake-up doesn't replace the report.
   let from = turns.length - 1;
   while (from > 0 && isWakeTurn(turns[from])) from--;
-  const output = turns.slice(Math.max(from, 0)).flatMap(turnTexts).join('\n\n');
+  const answer = turns.slice(Math.max(from, 0));
+  const output = answer.flatMap(turnTexts).join('\n\n');
+  // The final message: the text after the task's last tool. Earlier notes
+  // ("Let me look...") stay in `output` for anyone who reads the result.
+  const nested = new Set(events.filter((e) => e.type === 'item.start' && e.parentId).map((e) => e.id));
+  const items = answer.flatMap((t) => t.items).filter((i) => !nested.has(i.id));
+  let last = items.length;
+  while (last > 0 && PROSE.includes(items[last - 1].kind)) last--;
+  const final = items.slice(last).filter((i) => i.kind === 'text').map((i) => i.text).join('\n\n');
   // A mid-turn steering message has its own optimistic turn.start but the
   // provider finishes the original turn. That trailing ticket must not make
   // a completed task look busy forever on another device.
@@ -288,7 +302,7 @@ export function delegationOutput(session, events, active = activeTurnFromEvents(
   const complete = !!settled || (!!turn?.status && !running);
   const status = !complete && (pending || session.status === 'blocked') ? 'blocked'
     : settled || (complete ? (turn.status === 'ok' ? 'done' : turn.status) : 'working');
-  return { session, status, complete, output: output.slice(-32_000), truncated: output.length > 32_000,
+  return { session, status, complete, output: output.slice(-32_000), truncated: output.length > 32_000, final: final.slice(-32_000),
     error: turn?.items.findLast((i) => i.error)?.error ?? events.findLast((e) => e.type === 'turn.done')?.error ?? null,
     pending: pending ? { requestId: pending.requestId, title: pending.title, kind: pending.kind } : null };
 }
@@ -299,21 +313,52 @@ export function trackDelegationReply(session, event) {
   if (event.type === 'turn.start') {
     // A wake-up continues the same reply rather than starting a new one.
     if (event.wake && session.delegationReply) session.delegationReply.turnId = event.turnId;
-    else session.delegationReply = { turnId: event.turnId, textIds: [], output: '', truncated: false };
+    else session.delegationReply = { turnId: event.turnId, textIds: [], output: '', truncated: false, finalIds: [], final: '' };
   }
   const reply = session.delegationReply;
   if (!reply) return;
+  // A reply saved before Helm kept the final message has none until its
+  // next item; until then the result reads it from the log.
+  if (event.type === 'item.start' && !event.parentId && !PROSE.includes(event.kind)) {
+    // A tool ran: what the agent wrote before it was not its final message.
+    reply.finalIds = []; reply.final = '';
+  }
   if (event.type === 'item.start' && event.kind === 'text' && !event.parentId) {
     reply.textIds = [...reply.textIds.slice(-63), event.id];
+    reply.finalIds = [...(reply.finalIds ?? []).slice(-63), event.id];
+    reply.final ??= '';
     if (reply.output) {
       reply.output += '\n\n';
       if (reply.output.length > 32_000) { reply.output = reply.output.slice(-32_000); reply.truncated = true; }
     }
+    if (reply.final) reply.final += '\n\n';
   }
   if (event.type === 'item.delta' && reply.textIds.includes(event.id)) {
     reply.output += event.text ?? '';
     if (reply.output.length > 32_000) { reply.output = reply.output.slice(-32_000); reply.truncated = true; }
   }
+  if (event.type === 'item.delta' && reply.finalIds?.includes(event.id)) {
+    reply.final = (reply.final + (event.text ?? '')).slice(-32_000);
+  }
+}
+
+/** How much of a helper's final message its parent gets. */
+export const RESULT_NOTICE_CHARS = 1500;
+
+/**
+ * The notice a finished helper sends its parent chat: the final message,
+ * cut at a line break near RESULT_NOTICE_CHARS, and the command for the
+ * rest. The interim notes ("Let me look...") would fill the parent's
+ * context, so they stay behind with `helm delegate-result`.
+ */
+export function resultNotice({ id, title, machine = null, status, final, error }) {
+  let body = String(final || '').trim() || String(error || '').trim() || 'No written result.';
+  if (body.length > RESULT_NOTICE_CHARS) {
+    const head = body.slice(0, RESULT_NOTICE_CHARS);
+    const cut = head.lastIndexOf('\n');
+    body = `${(cut > RESULT_NOTICE_CHARS / 3 ? head.slice(0, cut) : head).trimEnd()}\n[...]`;
+  }
+  return `A delegated task finished. Treat its result as context for the current user request.\nTask: ${title}${machine ? `\nMachine: ${machine}` : ''}\nStatus: ${status}\nResult:\n${body}\nFull output: helm delegate-result ${id}`;
 }
 
 export { parseAgentArgs } from './agent-args.js';

@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Keep Anthropic's model page offline: nothing listens on port 9.
+process.env.HELM_ANTHROPIC_MODELS_URL ??= 'http://127.0.0.1:9/models.md';
 
 async function until(predicate, timeoutMs = 2500) {
   const end = Date.now() + timeoutMs;
@@ -508,5 +510,38 @@ if (process.argv[2] === 'debug') {
     if (prior === undefined) delete process.env.HELM_CODEX_MODEL_MANIFEST_URL;
     else process.env.HELM_CODEX_MODEL_MANIFEST_URL = prior;
     rmSync(dir, {recursive:true, force:true});
+  }
+});
+
+test('a Claude model on Anthropic\'s page joins the list before Models.dev has it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-model-anthropic-'));
+  const catalog = await barrierServer('/catalog');
+  const page = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/markdown' });
+    res.end(['| Feature | Claude Brand New 9 |', '| Claude API ID | `claude-brand-new-9` |',
+      '| Retirement | Not sooner than November 9, 2099 |'].join('\n'));
+  });
+  await new Promise((resolve) => page.listen(0, '127.0.0.1', resolve));
+  const prior = [process.env.HELM_MODELS_DEV_URL, process.env.HELM_ANTHROPIC_MODELS_URL];
+  process.env.HELM_MODELS_DEV_URL = catalog.url;
+  process.env.HELM_ANTHROPIC_MODELS_URL = `http://127.0.0.1:${page.address().port}/models.md`;
+  try {
+    const { listModels } = await import('../packages/connect/src/models.js?anthropic-page');
+    await listModels('claude', join(dir, 'claude'));
+    const done = listModels('claude', join(dir, 'claude'), {}, null, { settled: true });
+    catalog.release({ anthropic: { models: {} } });
+    const list = await done;
+    assert.equal(list.models[0], 'claude-brand-new-9', 'the newest release sits first');
+    assert.equal(list.labels['claude-brand-new-9'], 'Claude Brand New 9');
+    assert.equal(list.refreshing, false);
+  } finally {
+    [process.env.HELM_MODELS_DEV_URL, process.env.HELM_ANTHROPIC_MODELS_URL] = prior;
+    if (prior[0] === undefined) delete process.env.HELM_MODELS_DEV_URL;
+    if (prior[1] === undefined) delete process.env.HELM_ANTHROPIC_MODELS_URL;
+    catalog.release({});
+    await catalog.close();
+    page.closeAllConnections();
+    await new Promise((resolve) => page.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
   }
 });

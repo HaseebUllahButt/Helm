@@ -31,7 +31,7 @@ const setup = async (t, extra = {}) => {
     directory: mkdtempSync(join(process.env.HELM_DIR, 'b-')), session: sid => ({ id: sid }),
     launch: () => chromium.launch({ headless: true, ...pinned }),
     launchWindow: async (dir, options) => { windows.push(options); return chromium.launchPersistentContext(dir, { headless: true, ...pinned }); },
-    canWindow: true, ownerQuietMs: 400, ...extra,
+    canWindow: true, mode: 'window', ownerQuietMs: 400, ...extra,
   });
   manager.closeGraceMs = 50;
   t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
@@ -71,7 +71,7 @@ test('a native browser starts at the requested page with copied logins already p
   let cookie;
   const server = createServer((req, res) => { cookie ??= req.headers.cookie || ''; res.setHeader('Content-Type', 'text/html'); res.end('<title>Signed in</title><button>Ready</button>'); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'first-')), session: id => ({ id }), canWindow: true, launchWindow });
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'first-')), session: id => ({ id }), canWindow: true, mode: 'window', launchWindow });
   const folder = sharedProfile(manager.directory);
   t.after(async () => { await manager.stop(); await stopWindow(folder); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   mkdirSync(join(manager.directory, 'one'), { recursive: true });
@@ -317,7 +317,7 @@ test('a Helm restart leaves the window open; the next Helm takes its tabs back w
   await manager.stop();
   assert.ok(windowOpen(folder), 'the window is still open after Helm stops');
 
-  const next = new BrowserManager({ directory: manager.directory, session: sid => ({ id: sid }), canWindow: true, launchWindow });
+  const next = new BrowserManager({ directory: manager.directory, session: sid => ({ id: sid }), canWindow: true, mode: 'window', launchWindow });
   t.after(async () => {
     const context = await next.contexts.get('one');
     await context?.helmDetach?.(); await next.stop();

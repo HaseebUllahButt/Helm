@@ -2,10 +2,11 @@
 // add-on, with the owner's real logins, instead of Helm's own window.
 //
 // The add-on ships with Helm and is copied to ~/.helm/browser/extension.
-// An agent sets it up itself where the browser allows it: a browser started
+// Helm sets it up itself where the browser allows it: a browser started
 // through a launcher with a flags file (Arch Chromium, Brave, Helium) loads
-// the folder on every start once it is named there. Google Chrome and Edge
-// ignore that flag, so there the owner adds the folder once by hand.
+// the folder on every start once it is named there. The Helm service names it
+// at each start. Google Chrome and Edge ignore that flag, so there the owner
+// adds the folder once by hand.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -35,13 +36,18 @@ export function syncExtension(directory) {
 }
 
 export const MODES = ['window', 'extended'];
+/**
+ * Extended mode is the default: agents use the owner's own browser. Only a
+ * choice the owner saved with `helm browser mode` (version 2) counts. An
+ * earlier file without a version came from a test of the first add-on.
+ */
 export function readMode(directory) {
-  try { const { mode } = JSON.parse(readFileSync(join(directory, 'mode.json'), 'utf8')); return MODES.includes(mode) ? mode : 'window'; } catch { return 'window'; }
+  try { const { mode, v } = JSON.parse(readFileSync(join(directory, 'mode.json'), 'utf8')); return v === 2 && MODES.includes(mode) ? mode : 'extended'; } catch { return 'extended'; }
 }
 export function writeMode(directory, mode) {
   if (!MODES.includes(mode)) throw new Error(`choose a browser mode: ${MODES.join(' or ')}`);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  writeFileSync(join(directory, 'mode.json'), JSON.stringify({ mode }), { mode: 0o600 });
+  writeFileSync(join(directory, 'mode.json'), JSON.stringify({ mode, v: 2 }), { mode: 0o600 });
 }
 
 // ---------- The browser's flags file ----------
@@ -65,17 +71,45 @@ export function withExtension(text, folder, add = true) {
   const out = lines.join('\n');
   return out && !out.endsWith('\n') ? `${out}\n` : out;
 }
+/**
+ * Chromium shows a bar on every tab ("Helm started debugging this browser")
+ * while the add-on drives a tab. This flag hides it. Helm marks its own line,
+ * so the way back takes out only what Helm added.
+ */
+export const QUIET_FLAG = '--silent-debugger-extension-api';
+const QUIET_NOTE = '# Added by Helm: no debugging bar while agents work in your browser.';
+export function withQuiet(text, add = true) {
+  const lines = text ? text.split('\n') : [];
+  const at = lines.indexOf(QUIET_NOTE);
+  if (!add) {
+    if (at >= 0 && lines[at + 1]?.trim() === QUIET_FLAG) lines.splice(at, 2);
+    else if (at >= 0) lines.splice(at, 1);
+    return lines.join('\n');
+  }
+  if (lines.some(line => line.trim() === QUIET_FLAG)) return text;
+  const end = lines.length && lines.at(-1) === '' ? lines.length - 1 : lines.length;
+  lines.splice(end, 0, QUIET_NOTE, QUIET_FLAG);
+  const out = lines.join('\n');
+  return out.endsWith('\n') ? out : `${out}\n`;
+}
 /** Name Helm's add-on in the flags file (add) or take it out. Returns the file, or null when the browser has none. */
 export function setFlags(launcher, folder, add = true, env = process.env) {
   const file = flagsFile(launcher, env); if (!file) return null;
   let text = ''; try { text = readFileSync(file, 'utf8'); } catch { if (!add) return file; }
-  const next = withExtension(text, folder, add);
+  const next = withQuiet(withExtension(text, folder, add), add);
   if (next !== text) { mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, next); }
   return file;
 }
 
 // ---------- The owner's running browser ----------
 const real = path => { try { return realpathSync(path); } catch { return path; } };
+/**
+ * True for the main process of the owner's browser: not a helper process
+ * (--type=) and not a browser with its own profile folder (Helm's window, the
+ * Helm app window, tests). Chromium rewrites its command line as one line
+ * with spaces, so the flags are found after a space or a NUL.
+ */
+export const ownBrowserCommand = text => !/(^|[\0 ])--(type|user-data-dir)=/.test(text);
 /**
  * The main process of the owner's own browser: the program runs with no
  * other profile folder named (Helm's window and tests name their own).
@@ -87,9 +121,8 @@ export function ownBrowserPids(program) {
     if (!/^\d+$/.test(name)) continue;
     let exe; try { exe = readlinkSync(`/proc/${name}/exe`); } catch { continue; }
     if (exe !== want) continue;
-    let args; try { args = readFileSync(`/proc/${name}/cmdline`, 'utf8').split('\0'); } catch { continue; }
-    if (args.some(arg => arg.startsWith('--type=') || arg.startsWith('--user-data-dir='))) continue;
-    found.push(Number(name));
+    let text; try { text = readFileSync(`/proc/${name}/cmdline`, 'utf8'); } catch { continue; }
+    if (ownBrowserCommand(text)) found.push(Number(name));
   }
   return found;
 }
@@ -110,6 +143,43 @@ export async function restartOwnBrowser({ program, launcher, env = process.env, 
   child.on('error', () => {}); child.unref();
   return { closed: pids.length };
 }
+
+/**
+ * Open the add-ons page in the owner's browser, for the one step Google
+ * Chrome and Edge leave to the owner. Only when the owner asked.
+ */
+export function openExtensionsPage({ program, launcher, env = process.env, screen = {} }) {
+  const command = launcher || program; if (!command) return false;
+  const scoped = process.platform === 'linux' && !env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
+  const [file, list] = scoped ? [scoped, ['--user', '--scope', '--collect', '--quiet', command, 'chrome://extensions']] : [command, ['chrome://extensions']];
+  try { const child = spawn(file, list, { detached: true, stdio: 'ignore', env: { ...env, ...screen } }); child.on('error', () => {}); child.unref(); return true; } catch { return false; }
+}
+
+/** Put text on the owner's clipboard, so they paste the add-on's folder. True when it worked. */
+export async function copyText(text, { env = process.env, platform = process.platform } = {}) {
+  const tools = platform === 'darwin' ? [['pbcopy', []]] : platform === 'win32' ? [['clip', []]]
+    : [...(env.WAYLAND_DISPLAY ? [['wl-copy', []]] : []), ['xclip', ['-selection', 'clipboard']], ['xsel', ['--clipboard', '--input']]];
+  for (const [tool, args] of tools) {
+    const ok = await new Promise(resolve => {
+      let child; try { child = spawn(tool, args, { stdio: ['pipe', 'ignore', 'ignore'], env }); } catch { resolve(false); return; }
+      child.on('error', () => resolve(false));
+      // wl-copy stays to serve the clipboard: written is enough.
+      child.stdin.end(text, () => setTimeout(() => resolve(child.exitCode == null || child.exitCode === 0), 300));
+    });
+    if (ok) return true;
+  }
+  return false;
+}
+
+/** The keys that paste a folder into the browser's folder picker. */
+const pasteStep = (platform = process.platform) => platform === 'darwin' ? 'Press Cmd+Shift+G, then Cmd+V and Return.'
+  : platform === 'win32' ? 'Click the Folder box, press Ctrl+V, then click Select Folder.' : 'Press Ctrl+L, then Ctrl+V and Enter.';
+/** The owner's one step, after Helm opened the add-ons page and copied the folder. */
+export const pasteSteps = (platform = process.platform) => [
+  'Turn on Developer mode (top right).',
+  'Click Load unpacked.',
+  pasteStep(platform),
+];
 
 /** What the owner does by hand where the browser ignores flags files. */
 export const manualSteps = folder => [

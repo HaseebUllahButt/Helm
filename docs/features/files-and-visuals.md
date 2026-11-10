@@ -17,6 +17,10 @@
   after one, removes all of it, and the picture or file behind it goes
   too; later image labels move up. Read from
   the text change, not the key: phone keyboards do not report Backspace.
+  The caret never stops inside a tag: an arrow key passes it in one step,
+  and a click puts the caret at its nearer edge. Chrome does not report
+  each caret move with `selectionchange`, so this runs after each key and
+  click (`caretPastTag`; `test/browser/composer-tag-caret`).
   Live tags get a tint from a see-through copy of the text behind the box
   (`.composer-marks`); its padding, font and wrapping must match the box.
 - **Prove the tag delete (driven 2026-10-22):** with **fake-pics** upload

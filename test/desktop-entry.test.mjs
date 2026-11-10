@@ -67,6 +67,12 @@ test('a start updates an old launcher, but only for the Helm it opens', async (t
   assert.match(readFileSync(entry(), 'utf8'), new RegExp(`^Exec=/usr/bin/chromium --user-data-dir=${join(HOME, 'helm', 'app-window')} .*--app=http://127\\.0\\.0\\.1:8787/$`, 'm'));
   assert.equal(refreshAppLauncher({ url: 'http://127.0.0.1:8787/' }).updated, false, 'once is enough');
 
+  // A launcher reads the owner's flags file: the window must load no add-ons, Helm's own among them.
+  assert.match(readFileSync(entry(), 'utf8'), /^Exec=.* --disable-extensions .*--app=/m);
+  writeFileSync(entry(), `[Desktop Entry]\nExec=/usr/bin/chromium --user-data-dir=${join(HOME, 'helm', 'app-window')} --profile-directory=Default --no-first-run --app=http://127.0.0.1:8787/\n`);
+  assert.equal(refreshAppLauncher({ url: 'http://127.0.0.1:8787/' }).updated, true, 'an entry without --disable-extensions is rewritten');
+  assert.match(readFileSync(entry(), 'utf8'), /--disable-extensions/);
+
   // The installed web app an earlier Helm opened, with Chromium's buttons.
   writeFileSync(entry(), `[Desktop Entry]\nExec=/usr/bin/chromium --user-data-dir=${join(HOME, 'helm', 'app-window')} --profile-directory=Default --no-first-run --enable-features=DesktopPWAsWindowControlsOverlayWithNoToggle --app-id=abcdef\nX-Helm-Url=http://127.0.0.1:8787/\n`);
   assert.equal(refreshAppLauncher({ url: 'http://127.0.0.1:8787/' }).updated, true);

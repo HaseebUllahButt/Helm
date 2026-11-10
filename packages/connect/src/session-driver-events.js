@@ -92,7 +92,8 @@ export class DriverEvents {
       let status = e.type === 'subagent.status' ? e.status : 'blocked';
       if (status === 'working' && this.#sessions.events.pending(s.id).some(p => p.parentId === id)) status = 'blocked';
       s.nativeAgents ??= {};
-      if (s.nativeAgents[id] !== status) {
+      // "idle" for a card with no state is a finish said again: nothing to save.
+      if (s.nativeAgents[id] !== status && !(status === 'idle' && !(id in s.nativeAgents))) {
         if (status === 'idle') delete s.nativeAgents[id];
         else s.nativeAgents[id] = status;
         this.#core.delegation.refreshTeam(s);

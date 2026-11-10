@@ -122,6 +122,27 @@ test('Claude and Gemini lists put the newest published model first and pinned sn
   ]);
 });
 
+test('Anthropic model page gives the current lineup, a release day and the legacy ids', async () => {
+  const { parseAnthropicModelsPage, newestFirst } = await import('../packages/connect/src/models.js');
+  const page = [
+    '| Feature | [Claude Fable 5.2](https://x/models/fable-5-2/overview) | Claude Opus 5.5 |',
+    '| :-- | :-- | :-- |',
+    '| Claude API ID | `claude-fable-5-2` | `claude-opus-5-5` |',
+    '| [Retirement](https://x/deprecations) | Not sooner than November 9, 2027 | Not sooner than September 22, 2027 |',
+    '| Claude API alias | `claude-fable-5-2` | `claude-opus-5-5` |',
+    '',
+    'Legacy models (still available): [Claude Fable 5.1](https://x/models/fable-5-1/overview), [Claude Haiku 4.5](https://x/models/haiku-4-5/overview).',
+  ].join('\n');
+  const found = parseAnthropicModelsPage(page);
+  assert.deepEqual(found.current, ['claude-fable-5-2', 'claude-opus-5-5']);
+  assert.deepEqual(found.models, ['claude-fable-5-2', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-4-5']);
+  assert.equal(found.labels['claude-fable-5-2'], 'Claude Fable 5.2');
+  assert.equal(found.labels['claude-haiku-4-5'], 'Claude Haiku 4.5');
+  assert.deepEqual(found.releasedAt, { 'claude-fable-5-2': '2026-11-09', 'claude-opus-5-5': '2026-09-22' });
+  assert.equal(newestFirst(['claude-opus-5-5', 'claude-fable-5-2'], found.releasedAt)[0], 'claude-fable-5-2');
+  assert.deepEqual(parseAnthropicModelsPage('<html>moved</html>').models, []);
+});
+
 test('Pi model list keeps only the table rows Pi can use', async () => {
   const { parsePiModelList } = await import('../packages/connect/src/models.js');
   const rows = parsePiModelList([

@@ -20,7 +20,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm start                         Start Helm in the background
 
   helm join <CODE> <home-url> --foreground   Run Helm in this terminal
-  helm network-repair                Keep connections working when large network packets fail on Linux
+  helm network-repair                Keep connections working and fast on Linux: large packets, lossy links
 
   helm up [--port N] [--tunnel]      Run Helm in this terminal
   helm up --tunnel --domain <d>     Make a fixed public link (needs a free ngrok account)
@@ -68,7 +68,8 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm backup restore <file> <folder> --key-file <file>
                                     Restore to a new offline folder. Keep saved work blocked for review.
   helm profiles [--refresh]         List agent accounts on this machine
-  helm agents [--json] [--refresh]  List command line accounts, sign-in status and model IDs
+  helm agents [--machine <name>] [--json] [--refresh]
+                                    List command line accounts, sign-in status and model IDs
   helm run -- <command> [args]      Run a command here through Helm
   helm exec <machine> [--cwd <path>] -- <command> [args]
                                     Run a command on another machine through Helm
@@ -105,6 +106,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
     --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
   helm delegate <account> --model <id> --wait --json -- "<task>"
                                     Start a helper in this folder
+    --machine <name>                Start the helper on another machine
   helm delegate-result <id> [--wait] [--json]   Read the helper result or approval request
   helm handoff <machine> [text...]  Move code and this task to another machine
     --handoff-id <id>               Continue a stopped task move with the same ID
@@ -165,7 +167,7 @@ Set up this machine
   status           Show machines, links and agent software
   doctor           Check installation and connections
   backup           Save or inspect an offline encrypted backup
-  network-repair   Fix connections when large packets fail on Linux
+  network-repair   Fix slow or failing connections on Linux
   self-update      Get the newest Helm and restart it here
   ship             Merge, push and install a Helm change everywhere
   service          Install or remove the background service
@@ -251,7 +253,13 @@ const DETAILS = {
   Claude chats use their Agent tool for work on the same account.
     <account>        Use same for this chat's account.
                      Run helm agents to list accounts on this machine.
-                     Use helm spawn for another machine.
+    --machine <name> Run the helper on another machine, with its accounts.
+                     Use it when an account is only there.
+                     Run helm agents --machine <name> to list them.
+                     The helper works in this chat's folder at the same
+                     place there, else in that machine's home.
+                     Use --cwd for another folder there.
+                     Its card and result come back to this chat.
     --model <id>     Pick a model ID, or cheap for the account's small model.
                      Without a choice, use the parent's model on the same CLI.
                      A saved helper model takes priority.
@@ -268,12 +276,14 @@ const DETAILS = {
   A Codex helper on this chat's account, folder and model starts as a copy
   of this chat and reuses its cache. Any other helper starts empty:
   put the context it needs in the task.
-  Read a helper with helm delegate-result <id>.
+  When a helper stops, this chat gets its last message, cut near 1500
+  characters. Read the full output with helm delegate-result <id>.
   Keep finished helpers. The owner reads them under this chat.`,
 
   spawn: `
   Account names (<account>) differ between machines.
-  Run helm exec <machine> -- helm agents to list them.`,
+  Run helm agents --machine <machine> to list them.
+  For a helper of this chat on another machine, use helm delegate --machine.`,
 
   say: `
   Messages wait for the receiver's next turn.
@@ -407,15 +417,20 @@ const DETAILS = {
                       and note; replay it with run <tab> <name> key=value
     point <tab> <el>  show the owner where to click, without clicking
     screenshot        only when visuals matter; close <tab> releases it
-    profiles / logins copy the owner's browser logins into these tabs
-    mode              show where tabs open: window (Helm's own window) or
-                      extended (the owner's own browser, with its real logins,
-                      through Helm's add-on)
-    mode extended     use the owner's browser. Helm sets the add-on up.
-                      If the reply says to restart, ask the owner first, then
-                      add --restart: it closes and reopens their browser, and
-                      their tabs come back.
-    mode window       go back to Helm's own window`,
+    profiles / logins copy the owner's browser logins into Helm's window
+    mode              show where tabs open. extended (the default): the
+                      owner's own browser, with its real logins, through
+                      Helm's add-on. window: Helm's own window. Until the
+                      owner's browser connects, tabs open in Helm's window.
+    mode extended     use the owner's browser. Helm sets the add-on up; the
+                      browser loads it on its next start. Add --restart only
+                      when the owner asks: it closes and reopens their
+                      browser, and their tabs come back.
+    mode window       use only Helm's own window
+    setup             only when the owner asks: open the add-ons page of
+                      Google Chrome or Edge and copy the add-on's folder.
+                      The owner turns on Developer mode, clicks Load
+                      unpacked and pastes. Settings has the same button.`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.

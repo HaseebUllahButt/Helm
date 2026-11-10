@@ -45,7 +45,7 @@ import { listShares, addShare, removeShare, removeChatShares, publicShare, asser
 import { Forwards, forwardedPorts } from './forwards.js';
 import { ownerSeenAt } from '@helm/protocol/owner-seen';
 import { publicHosts } from '@helm/protocol/share';
-import { brief, render, summaryLine, readThread, readSnapshot, writeSnapshot, mergeSnapshot, fold } from './brain.js';
+import { brief, render, summaryLine, readThread, readSnapshot, sessionMatches, snapshotReply, writeSnapshot, mergeSnapshot, fold } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { HubMesh } from './hub-mesh.js';
@@ -73,7 +73,7 @@ import { SendEngine } from './send-engine.js';
 import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
-import { ensureTcpRecovery } from './network-recovery.js';
+import { ensureFastTcp, ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
@@ -517,6 +517,10 @@ export class Daemon {
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
       emit: payload => this.#emit('agent.message', payload) });
     this.sessions.sentAgentMessage = (from, to, since) => this.agentMessages.sentSince(from, to, since);
+    // Helpers on other machines report to their chat's machine through these.
+    this.sessions.remoteRpc = (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 });
+    this.sessions.selfId = this.id;
+    this.sessions.machineName = (id) => (loadNetwork() ?? this.net).machines?.[id]?.name ?? null;
     if (brainHost((loadNetwork() ?? this.net).machines)?.id !== this.id) this.sessions.retireBrains();
     this.gitTours = new GitTours({ sessions: this.sessions, agents: async (id) => {
       const profiles = (await getProfiles()).filter(p => p.id === id);
@@ -936,6 +940,7 @@ export class Daemon {
 
   #networkRecoveryAt = -Infinity;
   networkRecovery = null;
+  fastTcp = null;
 
   async #checkNetworkRecovery() {
     if (Date.now() - this.#networkRecoveryAt < SYNC_EVERY_MS) return;
@@ -944,6 +949,11 @@ export class Daemon {
     this.networkRecovery = await ensureTcpRecovery();
     if (this.networkRecovery.repair && (!previous?.repair || previous.reason !== this.networkRecovery.reason)) {
       console.warn(`[helm] packet-size recovery needs setup: ${this.networkRecovery.reason} Run helm network-repair.`);
+    }
+    const fast = this.fastTcp;
+    this.fastTcp = await ensureFastTcp();
+    if (this.fastTcp.repair && (!fast?.repair || fast.reason !== this.fastTcp.reason)) {
+      console.warn(`[helm] fast sending needs setup: ${this.fastTcp.reason} Run helm network-repair.`);
     }
   }
 
@@ -1276,6 +1286,74 @@ export class Daemon {
    * revision changed. An unknown digest (this daemon restarted, or the list
    * aged out) gets the full list, which older apps always ask for.
    */
+  // ------------------------------------------- helpers on other machines
+
+  /** The paired machine a request came from. */
+  #pairedCaller(caller) {
+    if (!caller || !(loadNetwork() ?? this.net).machines?.[caller]) throw new Error('This request must come from a paired machine.');
+    return caller;
+  }
+
+  /** What a chat on another machine said about itself when it asked for a helper. */
+  #remoteParent(p, caller) {
+    const machine = this.#pairedCaller(caller);
+    if (p.parentMachine !== machine) throw new Error('A machine can ask for helpers only for its own chats.');
+    if (typeof p.parentId !== 'string' || !/^[A-Za-z0-9._:-]{1,120}$/.test(p.parentId)) throw new Error('A helper needs the chat that starts it.');
+    const about = p.parent && typeof p.parent === 'object' ? p.parent : {};
+    const text = (value) => typeof value === 'string' && value.length <= 4096 ? value : undefined;
+    return { machine, id: p.parentId, mode: text(about.mode), engine: text(about.engine), model: text(about.model),
+      cwd: text(about.cwd), home: text(about.home), generation: Number.isInteger(about.generation) ? about.generation : 0 };
+  }
+
+  /** `helm delegate --machine`: start the helper there and keep it under its chat here. */
+  async #delegateAway(p) {
+    const parent = this.sessions.get(p.id);
+    if (!parent.driver && !parent.nativeChat) throw new Error('the parent must be an agent session');
+    if (p.callerThreadId && (parent.engine !== 'codex' || parent.engineSessionId !== p.callerThreadId)) {
+      throw new Error('the calling Codex thread does not match the inherited Helm parent; use --parent with the intended orchestrator ID');
+    }
+    const net = loadNetwork() ?? this.net;
+    const target = net.machines?.[p.machine];
+    if (!target) throw new Error('Helm does not know that machine.');
+    const { id: _id, machine, callerThreadId: _thread, ...ask } = p;
+    let reply;
+    try {
+      reply = await hubRpc(net, machine, M.SESSION_DELEGATE, { ...ask, parentId: parent.id, parentMachine: this.id,
+        parent: { mode: parent.mode ?? undefined, engine: parent.engine, model: parent.engineModel || parent.model || undefined,
+          cwd: parent.cwd ?? undefined, home: homedir(), generation: parent.stopGeneration ?? 0 } }, { timeout: 65_000 });
+    } catch (error) {
+      if (/needs the chat that starts it|Unknown method/i.test(error.message)) throw new Error(`${target.name} runs an older Helm. Update it, then try again.`);
+      throw error;
+    }
+    const child = reply.session;
+    this.sessions.addRemoteHelper(parent.id, { machine, id: child.id, title: child.title,
+      status: child.delegation?.status ?? child.status, startedAt: Date.now() });
+    return { session: { ...child, machine } };
+  }
+
+  /** A helper on another machine: read its result there. */
+  async #remoteResult(p, { parent, helper }) {
+    if (p.callerThreadId && (parent.engine !== 'codex' || parent.engineSessionId !== p.callerThreadId)) {
+      throw new Error('the calling Codex thread does not match the inherited Helm parent; use --parent with the intended orchestrator ID');
+    }
+    const consume = p.consume === true && p.parentId === parent.id;
+    const result = await hubRpc(loadNetwork() ?? this.net, helper.machine, M.SESSION_DELEGATION_RESULT,
+      { id: p.id, ...(consume ? { consume: true, parentId: parent.id } : {}), parentMachine: this.id }, { timeout: 30_000 });
+    const child = result.session;
+    if (child?.id === helper.id) {
+      try {
+        this.sessions.remoteHelperState(helper.machine, { parentId: parent.id, helper: { id: child.id, title: child.title,
+          status: child.delegation?.status ?? child.status, team: child.team, finishedAt: child.delegation?.finishedAt, archived: child.archived } });
+      } catch { /* the record went away meanwhile */ }
+    }
+    if (consume && result.complete && Number.isInteger(result.consumedSeq)) this.sessions.remoteConsumed(parent, helper.id, result.consumedSeq);
+    if (consume && (result.complete || result.status === 'blocked')) {
+      const messages = await this.agentMessages.collectResult({ ...p, machine: helper.machine });
+      if (messages.length) result.messages = messages;
+    }
+    return { ...result, machine: helper.machine };
+  }
+
   #listReply(sessions, have) {
     const rev = (s) => createHash('sha1').update(JSON.stringify(s)).digest('base64url').slice(0, 12);
     const order = sessions.map((s) => [s.id, rev(s)]);
@@ -1370,6 +1448,8 @@ export class Daemon {
       agentMessages: true,
       // A new helper task can carry pasted pictures and files.
       helperAttachments: true,
+      // Runs helpers for chats on other machines (helm delegate --machine).
+      remoteHelpers: true,
       sendV2: true,
       // Answers requests from other machines over a direct channel, checking
       // each one as a hub would (direct-mesh.js). Older machines leave this
@@ -2111,7 +2191,10 @@ export class Daemon {
       }
 
       case M.SESSION_LIST: {
-        const sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true });
+        let sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true, nested: p.nested === true });
+        // `helm thread <id>` and the like look for one chat on every machine.
+        // The whole list with every helper was megabytes on a slow link.
+        if (typeof p.find === 'string' && p.find) sessions = sessions.filter((s) => sessionMatches(s, p.find));
         if (p.projects !== true) return this.#listReply(sessions, p.have);
         // `helm pickup` from another machine: which project each chat's
         // folder holds, worked out here where the folder is.
@@ -2130,11 +2213,35 @@ export class Daemon {
       // Only the keeper starts a hidden helper; one asked for from outside is
       // always a card in its chat, where the owner can see it. A helper with
       // no chat had no card and no one to read its result.
-      case M.SESSION_DELEGATE:
+      case M.SESSION_DELEGATE: {
+        // Another machine's chat asks for a helper here. The asking machine
+        // is the one the network says sent it, never one named in the request.
+        if (p?.parentMachine !== undefined) {
+          const remoteParent = this.#remoteParent(p, caller);
+          const { id: _id, machine: _machine, parent: _parent, parentMachine: _pm, ...ask } = p;
+          return this.sessions.delegate({ ...ask, remoteParent, hidden: false, tour: false });
+        }
         if (!p?.id) throw new Error('A helper needs the chat that starts it. To start work on another machine, use helm spawn.');
-        return this.sessions.delegate({ ...p, hidden: false, tour: false });
+        if (p.machine && p.machine !== this.id) return this.#delegateAway(p);
+        const { machine: _machine, ...ask } = p;
+        return this.sessions.delegate({ ...ask, hidden: false, tour: false });
+      }
+      case M.SESSION_HELPER_STATE:
+        await this.sessionRecovery;
+        return this.sessions.remoteHelperState(this.#pairedCaller(caller), p);
+      case M.SESSION_HELPER_RESULT:
+        await this.sessionRecovery;
+        return this.sessions.remoteHelperResult(this.#pairedCaller(caller), p);
       case M.SESSION_DELEGATION_RESULT: {
         await this.sessionRecovery;
+        if (p.parentMachine !== undefined) {
+          // The parent's machine reads for its chat. Helper replies wait
+          // there, so none are collected here.
+          if (p.parentMachine !== this.#pairedCaller(caller)) throw new Error('Only the chat\'s own machine can read this helper.');
+          return this.sessions.delegationResult(p.id, p);
+        }
+        const away = this.sessions.remoteHelper(p.id, { parentId: p.parentId });
+        if (away) return this.#remoteResult(p, away);
         const result = this.sessions.delegationResult(p.id, p);
         // Polls that are not returned to the CLI must not consume replies.
         if (result.complete || result.status === 'blocked') {
@@ -2302,7 +2409,8 @@ export class Daemon {
         // for a refresh that only proves the machine is still down. Those
         // callers read only the snapshot: each open app asks once a minute
         // while a machine is down, and the text was 50 KB of every 265 KB.
-        if (p.cached) return { snapshot: readSnapshot() };
+        // A device names the machines it cannot reach and the copy it holds.
+        if (p.cached) return p.machines || p.have ? snapshotReply(readSnapshot(), p) : { snapshot: readSnapshot() };
         const snap = await this.refreshSnapshot();
         return { text: render(snap, { roster: this.rosterState(snap) }), snapshot: snap };
       }

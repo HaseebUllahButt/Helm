@@ -61,6 +61,47 @@ test('chat copies completed text selections, not hover or outside text', async (
   assert.equal(await page.evaluate(() => window.copies.length), 4);
 });
 
+test('chat keeps a copy made in another app and never copies empty text', async (t) => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  await page.setContent('<div id="root"></div>');
+  await page.evaluate(() => {
+    window.copies = [];
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async text => { window.copies.push(text); } } });
+  });
+  await page.addScriptTag({ content: script });
+  await page.waitForSelector('#reply');
+  const press = () => page.evaluate(() => {
+    document.getElementById('reply').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    document.dispatchEvent(new PointerEvent('pointerup'));
+  });
+  const select = node => page.evaluate(node => {
+    const range = document.createRange(); range.selectNodeContents(document.querySelector(node));
+    const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+  }, node);
+  await select('#reply');
+  await press();
+  assert.deepEqual(await page.evaluate(() => window.copies), ['Copy just this reply']);
+  // The owner leaves Helm, copies in another app, and clicks the old selection.
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await page.evaluate(() => document.dispatchEvent(new Event('selectionchange')));
+  await press();
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' })));
+  assert.equal(await page.evaluate(() => window.copies.length), 1);
+  // A new selection of the same text copies again.
+  await page.evaluate(() => { window.getSelection().removeAllRanges(); document.dispatchEvent(new Event('selectionchange')); });
+  await page.waitForFunction(() => true);
+  await select('#reply');
+  await page.evaluate(() => document.dispatchEvent(new Event('selectionchange')));
+  await press();
+  assert.equal(await page.evaluate(() => window.copies.length), 2);
+  // Text that copies as nothing (only a button) never replaces the clipboard.
+  await page.evaluate(() => { document.getElementById('reply').innerHTML = '<button id="only">Open</button>'; });
+  await select('#only');
+  await press();
+  assert.equal(await page.evaluate(() => window.copies.length), 2);
+});
+
 async function fixture(t, html) {
   const page = await browser.newPage();
   t.after(() => page.close());

@@ -72,6 +72,8 @@ test('the context meter opens "Compact at"; a choice is saved on every machine w
       // A chat with some history keeps its composer at the bottom, so the menu opens upward; the bare test page has it near the top.
       if (width < 600) await view.evaluate(() => { document.querySelector('.composer-wrap').style.marginTop = '460px'; });
       assert.equal(await view.locator('.ctx-menu').count(), 0, 'closed until asked');
+      const pct = () => view.locator('.ctx-pct').textContent();
+      assert.equal(await pct(), '39%', '148.5k of 383k');
       await meter.click();
       const menu = view.locator('.ctx-menu');
       await menu.waitFor();
@@ -95,6 +97,8 @@ test('the context meter opens "Compact at"; a choice is saved on every machine w
         assert.deepEqual(c.params, { account: 'claude|~/.claude-personal|', model: 'claude-opus-5-5', window: 500_000 }, c.env);
       }
       assert.equal(await menu.locator('button[aria-checked="true"]').textContent(), '500k', 'the check follows the choice at once');
+      assert.equal(await pct(), '30%', 'the meter follows the choice at once, not after the next reply');
+      assert.equal(await meter.getAttribute('title'), '148.5k of 500k used · Change when Helm summarizes the chat');
       await capture(view, `context-limit-${label}-saved.png`);
 
       // Full takes the limit away.
@@ -102,12 +106,14 @@ test('the context meter opens "Compact at"; a choice is saved on every machine w
       await menu.getByRole('menuitemradio', { name: 'Full (1M)' }).click();
       await menu.locator('button[aria-checked="true"]', { hasText: 'Full' }).waitFor();
       assert.ok((await view.evaluate(() => window.calls)).every((c) => c.params.window === null));
+      assert.equal(await pct(), '15%', 'Full counts against the whole window');
 
       // A machine that cannot be reached is named, not hidden.
       await view.evaluate(() => { window.fail = 'vm'; });
       await menu.getByRole('menuitemradio', { name: '200k' }).click();
       await menu.getByText('Saved on 2 machines').waitFor();
       assert.match(await menu.locator('.warn').textContent(), /Helm cannot reach VM/);
+      assert.equal(await pct(), '74%');
 
       // Escape and a tap elsewhere close it.
       await view.keyboard.press('Escape');

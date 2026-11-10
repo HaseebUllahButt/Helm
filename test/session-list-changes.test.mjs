@@ -55,3 +55,10 @@ test('a request for project keys always gets the full list', async () => {
   assert.deepEqual(projects.sessions, chats);
   assert.ok(projects.projects);
 });
+
+test('a lookup by id gets only the chats that match it', async () => {
+  chats = [{ id: 'abcdef123456', title: 'one' }, { id: 'abc999', title: 'two' }, { id: 'zzz111', title: 'three' }];
+  assert.deepEqual((await d.dispatch(M.SESSION_LIST, { find: 'abcdef' })).sessions.map((s) => s.id), ['abcdef123456']);
+  assert.deepEqual((await d.dispatch(M.SESSION_LIST, { find: 'abc' })).sessions.map((s) => s.id), ['abcdef123456', 'abc999']);
+  assert.deepEqual((await d.dispatch(M.SESSION_LIST, { find: 'none' })).sessions, []);
+});

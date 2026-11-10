@@ -4,7 +4,8 @@ A helper (subagent) is a second chat started by a chat, on any account. It
 shows as a card inside its parent, never as its own row in Working.
 Every helper has a parent chat: `helm delegate` from a plain shell or through
 `helm exec` is refused. Such a helper had no card, no reader for its result,
-and a project copy nobody kept. Another machine gets `helm spawn`.
+and a project copy nobody kept. A helper can run on another machine
+(below); a separate chat there is `helm spawn`.
 
 ## Start a subagent from the app
 - **Reach:** **Agents** in the chat header, or Ctrl/⌘+Shift+A.
@@ -42,6 +43,11 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   follow-up. A Codex helper that shares its parent's context keeps the
   native connection open instead. The "no nested CLI" rule is a request,
   not a lock.
+- **Result notice:** the parent's notice holds only the helper's final
+  message (the text after its last tool), cut at a line break near 1,500
+  characters, and the line `Full output: helm delegate-result <id>`. The
+  interim notes ("Let me look...") filled the parent's context.
+  `delegate-result` still gives the full `output` and the `final` message.
 - **One result per task:** once the parent has the result, a helper that
   wakes by itself later (a background watcher timing out) never gives the
   parent another turn. Those relays were nearly all "stale watcher, nothing
@@ -72,6 +78,33 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   Its phone view showed its own three tasks and replies.
 - **Tests:** `test/delegation`, `codex-helper-fork`, `driver-codex`,
   `session-driver`, `native-codex`, `spawn-cli`, `cli-subagents`.
+
+## A helper on another machine
+- **Why:** an account is often on one machine only (Opus on the laptop, not
+  the VM). `helm delegate <account> --machine <name>` runs the helper there,
+  on that machine's accounts. `helm agents --machine <name>` lists them.
+  In the app: **New task** → the machine chip.
+- **Rules:** the helper lives on its machine with `delegation.parentMachine`;
+  it is no sidebar row there. The chat's machine keeps `remoteHelpers`
+  (id, machine, last state) for team counts, "Needs you", Stop and offline
+  cards. The helper sends `session.helper-state` on each change and
+  `session.helper-result` once per turn; the chat's machine checks the
+  sender against `remoteHelpers`. A result is retried for about ten
+  minutes, so a restart there does not lose it. `delegate-result` on the
+  chat's machine reads the helper there. Folder: `--cwd`, else the chat's
+  folder at the same place under that home, else that home. A machine
+  without `remoteHelpers` in its info gets "runs an older Helm".
+- **Prove (driven 2026-11-09):** pair two private copies (machines.md, "Send
+  a project": `describeSelf` an endpoint on A, `helm add pc`, then
+  `serve.js` `join` on B and `restart` both). On A run
+  `helm delegate fake-ask --machine <B> --parent <chat> --wait --json -- "x"`.
+- **Proof:** A's home said "1 needs you". The chat showed the helper with
+  "on verify-rh-b · Needs approval"; **Approve** on A finished it on B, and
+  the parent got "Machine: verify-rh-b … done". **New task** on B, **Open
+  chat** (opens on B) and **Back to main chat** (back on A) worked. B said
+  "Nothing is running".
+- **Not driven:** a parent machine offline while its helper finishes.
+- **Tests:** `test/remote-helpers`.
 
 ## The CLIs' own subagents
 - **Which one an agent uses (`delegationNote`):** Claude chats use their own
@@ -116,6 +149,16 @@ and a project copy nobody kept. Another machine gets `helm spawn`.
   - Only the message travels, not history. It waits for the next turn and
     never interrupts. It does not also wake the parent with a result. No
     automatic replies.
+  - Like a CLI's own subagent, a helper talks back once: its final report,
+    written to stand alone. It sends `helm say` only when blocked or when it
+    needs a decision, never for progress. A lead once got 18 progress notes
+    in a helper's own shorthand and acted on none. Every message names its
+    files, commits and exact ask (`agentMessageNote`, `helperNote`).
+  - The lead briefs a helper like a new teammate: goal, exact files, what
+    other helpers own, expected result, check to run. This follows
+    Anthropic's multi-agent research lessons: vague briefs made helpers
+    repeat work or leave gaps. In orchestrator mode the lead starts helpers
+    in the background and ends its turn, so it can read messages.
   - Retry an unconfirmed send with the same `--message-id`, recipient and
     text; the receipt stops a duplicate. "Delivered" means accepted, not
     read. Stopped or archived agents are not woken.

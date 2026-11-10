@@ -7,7 +7,7 @@ import { HOME, HELM_DIR, expand, collapse } from './paths.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { sessionActivity } from './transcript.js';
 import { claudeLiveSessions, claudeLiveStatus } from './external-process.js';
-import { processList, processCwd, openFiles } from './procinfo.js';
+import { processList, processCwd, openFiles, fileLocked, lockedInodes } from './procinfo.js';
 import { bareTitle } from './titles.js';
 import { opencodeServiceSessions } from './opencode-service.js';
 
@@ -191,8 +191,11 @@ async function codex(home, account, limit) {
     } catch { /* index is a nicety, not a requirement */ }
   }
 
+  // A lock file left by a crashed or killed program is not a live writer.
+  const held = lockedInodes();
+  const lockOf = (id) => join(codexHome, 'thread-writer-locks', `${id}.lock`);
   let locked = [];
-  try { locked = readdirSync(join(codexHome, 'thread-writer-locks')).filter(x => x.endsWith('.lock')).map(x => x.slice(0, -5)); } catch {}
+  try { locked = readdirSync(join(codexHome, 'thread-writer-locks')).filter(x => x.endsWith('.lock')).map(x => x.slice(0, -5)).filter(id => fileLocked(lockOf(id), held)); } catch {}
   const files = await newest(root, (n) => n.endsWith('.jsonl'), limit,
     path => procs().files.has(path) || locked.some(id => path.endsWith(`${id}.jsonl`)));
   const out = [];
@@ -206,8 +209,12 @@ async function codex(home, account, limit) {
       // task timeline, not another row in the owner's recent history.
       if ((p.source && typeof p.source === 'object' && Object.hasOwn(p.source, 'subagent'))
         || p.thread_source === 'subagent' || p.threadSource === 'subagent') continue;
+      // `codex exec` is a one-shot worker with no window. Other agents start
+      // it as a helper (a Pi chat runs several in parallel), so it is not a
+      // chat the owner started and must not appear in Running or Recent.
+      if (p.source === 'exec' || p.originator === 'codex_exec') continue;
       const pid = writerPid(f.path);
-      const active = !!pid || existsSync(join(codexHome, 'thread-writer-locks', `${p.session_id ?? p.id}.lock`));
+      const active = !!pid || locked.includes(p.session_id ?? p.id);
       out.push({
         engine: 'codex',
         account,

@@ -72,6 +72,29 @@ test('saved quick-chat artifact subscriptions are repaired without ending actual
 });
 
 
+test('a saved helper card that SendMessage took over, or TaskStop ended, no longer keeps the chat working', async (t) => {
+  const dir = process.env.HELM_DIR;
+  writeFileSync(join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions: [{
+    id: 'woken1', title: 'study posts', engine: 'claude', cwd: '/tmp', status: 'idle',
+    nativeAgents: { spawn7: 'working', spawn8: 'working', live9: 'working' },
+    team: { working: 3, blocked: 0, failed: 0 },
+  }] }));
+  writeFileSync(join(dir, 'events', 'woken1.jsonl'), [
+    { type: 'item.update', id: 'spawn7', agent: { id: 'agent7', status: 'running' } },
+    { type: 'item.update', id: 'send7', agent: { id: 'agent7', status: 'running' } },
+    { type: 'item.update', id: 'send7', agent: { id: 'agent7', status: 'completed' } },
+    { type: 'item.update', id: 'spawn8', agent: { id: 'agent8', status: 'running' } },
+    { type: 'item.done', id: 'stop8', status: 'ok', result: { message: 'Successfully stopped task: agent8 (batch 8)', task_id: 'agent8' } },
+    { type: 'item.update', id: 'live9', agent: { id: 'agent9', status: 'running' } },
+  ].map((e, i) => JSON.stringify({ seq: i + 1, at: i + 1, ...e })).join('\n') + '\n');
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new EventEmitter(), { makeDriver: () => { throw Error('history must not launch'); } });
+  t.after(() => sessions.stop());
+  const s = sessions.get('woken1');
+  assert.deepEqual(s.nativeAgents, { live9: 'working' }, 'the helper still running keeps its card');
+  assert.equal(s.team.working, 1);
+});
+
 test('dismissing a saved native and delegated failure survives daemon restart', async t => {
   const dir = process.env.HELM_DIR;
   writeFileSync(join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions: [{

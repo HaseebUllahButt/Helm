@@ -714,17 +714,24 @@ function Shell({ client, conn, onSignOut }: {
   const firstOnline = envs.find((e) => e.online)?.id;
   // Its only reader is the "last known" section on a machine that cannot be
   // asked - when nothing is down, the answer would arrive and be thrown away.
-  const hasOffline = envs.some((e) => !e.online);
+  const offlineIds = envs.filter((e) => !e.online).map((e) => e.id).sort().join(',');
   useEffect(() => {
-    if (!conn.online || !firstOnline || !hasOffline) { setSnap(null); return; }
+    if (!conn.online || !firstOnline || !offlineIds) { setSnap(null); return; }
     let stale = false;
-    const ask = () => client.rpc<any>(firstOnline, 'brain.snapshot', { cached: true }, 15_000)
-      .then((r) => { if (!stale && r?.snapshot) setSnap(r.snapshot); })
+    // Only the machines that cannot be asked, and only when that changed:
+    // the whole snapshot each minute filled a slow link (brain.js snapshotReply).
+    let have: string | undefined;
+    const ask = () => client.rpc<any>(firstOnline, 'brain.snapshot', { cached: true, machines: offlineIds.split(','), ...(have ? { have } : {}) }, 15_000)
+      .then((r) => {
+        if (stale || r?.unchanged) return;
+        if (typeof r?.digest === 'string') have = r.digest;
+        if (r?.snapshot) setSnap(r.snapshot);
+      })
       .catch(() => {});
     ask();
     const timer = setInterval(() => { if (!document.hidden) ask(); }, 60_000);
     return () => { stale = true; clearInterval(timer); };
-  }, [client, conn.online, firstOnline, hasOffline]);
+  }, [client, conn.online, firstOnline, offlineIds]);
 
   // Stable per machine. Handed to EnvView, which lists it as an effect
   // dependency: a fresh arrow on every render would repeatedly re-list the
@@ -1666,7 +1673,7 @@ function Shell({ client, conn, onSignOut }: {
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
-            onOpenSession={(s) => openRelatedSession(env.id, s)}
+            onOpenSession={(s, envId) => openRelatedSession(envId ?? env.id, s)}
             onOpenNative={(agent) => push({ kind: 'native-agent', parent: view.session, agent })}
             onOpenMachineSession={openSession}
             onClosed={() => { if (view.session.brain) dropBrain(env.id); loadSessions(env.id); back(); }}

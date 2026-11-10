@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { accessSync, constants, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, createReadStream, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join, relative, isAbsolute } from 'node:path';
 import { ENGINES } from './engines.js';
 import { HELM_DIR, HOME } from './paths.js';
@@ -48,6 +48,50 @@ export const UPDATERS = {
   gemini: { npm: ['@google/gemini-cli'] },
   pi: { npm: ['@earendil-works/pi-coding-agent', '@mariozechner/pi-coding-agent'] },
 };
+
+/**
+ * Claude Code knows each model's context size. A build older than the model
+ * treats it as 200k and compacts too early. On launch day the build that
+ * knows the model is often only on the early ("next") channel, so Helm takes
+ * that build when the normal channel does not have it yet.
+ */
+const CLAUDE_PACKAGE = '@anthropic-ai/claude-code';
+const CLAUDE_TAGS_URL = `https://registry.npmjs.org/-/package/${CLAUDE_PACKAGE}/dist-tags`;
+/** A smaller file is a launcher script, not the program, so it can not say which models it knows. */
+const PROGRAM_MIN_BYTES = 5 << 20;
+
+async function claudeEarlyVersion(env = process.env) {
+  const response = await fetch(env.HELM_CLAUDE_TAGS_URL || CLAUDE_TAGS_URL, { signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) return null;
+  const tags = await response.json();
+  return typeof tags?.next === 'string' ? tags.next : null;
+}
+
+async function anthropicModels() {
+  const { anthropicCurrentModels } = await import('./models.js');
+  return anthropicCurrentModels();
+}
+
+/**
+ * The ids that the program file does not contain, read in pieces so a large
+ * program never sits in memory. Null when the file is a launcher script.
+ */
+export async function missingModels(file, ids) {
+  if (!ids?.length) return [];
+  let size = 0;
+  try { size = statSync(file).size; } catch { return null; }
+  if (size < PROGRAM_MIN_BYTES) return null;
+  const left = new Set(ids);
+  const keep = Math.max(...ids.map((id) => id.length));
+  let tail = '';
+  for await (const chunk of createReadStream(file, { encoding: 'latin1', highWaterMark: 1 << 20 })) {
+    const text = tail + chunk;
+    for (const id of left) if (text.includes(id)) left.delete(id);
+    if (!left.size) return [];
+    tail = text.slice(-keep);
+  }
+  return [...left];
+}
 
 // ------------------------------------------------------------ small helpers
 
@@ -240,8 +284,9 @@ export class CliUpdater {
    */
   constructor({ auto = () => true, busy = async () => false, env = process.env, platform = process.platform,
     home = HOME, npmRoot, now = Date.now, firstRunMs = FIRST_RUN_MS, everyMs = EVERY_MS, retryMs = RETRY_BUSY_MS,
+    currentModels = anthropicModels, earlyVersion = () => claudeEarlyVersion(env),
     log = (m) => console.error(`[helm] ${m}`) } = {}) {
-    Object.assign(this, { auto, busy, env, platform, home, now, firstRunMs, everyMs, retryMs, log });
+    Object.assign(this, { auto, busy, env, platform, home, now, firstRunMs, everyMs, retryMs, currentModels, earlyVersion, log });
     this.#npmRoot = npmRoot;
   }
 
@@ -371,16 +416,53 @@ export class CliUpdater {
 
     const cmd = tool.command.cmd ?? tool.path;
     const r = await run(cmd, tool.command.args, { timeout: UPDATE_TIMEOUT_MS, env: this.env, platform: this.platform });
-    const to = r.ok ? await this.#version(tool.path) : tool.version;
+    let to = r.ok ? await this.#version(tool.path) : tool.version;
+    let message = r.timedOut ? 'the update took too long and was stopped' : tail(r.out);
+    let ms = r.ms;
+    if (r.ok && id === 'claude') {
+      const early = await this.#claudeEarly(tool, to).catch((err) => ({ ok: false, message: `early build check failed: ${err?.message || err}` }));
+      if (early) {
+        ms += early.ms ?? 0;
+        if (early.to) to = early.to;
+        message = early.message;
+      }
+    }
     const result = {
-      at: this.now(), ok: r.ok, from: tool.version, to, changed: !!(r.ok && to && to !== tool.version), ms: r.ms,
-      message: r.timedOut ? 'the update took too long and was stopped' : tail(r.out),
+      at: this.now(), ok: r.ok, from: tool.version, to, changed: !!(r.ok && to && to !== tool.version), ms,
+      message,
     };
     const state = loadState();
     state.engines[id] = { ...state.engines[id], lastResult: result };
     saveState(state);
     this.log(`${tool.label}: ${r.ok ? (result.changed ? `updated ${result.from} -> ${result.to}` : 'already up to date') : `update failed (${result.message})`}`);
     return { ...base, ...result };
+  }
+
+  /**
+   * After the normal update: if Anthropic lists a model that this Claude Code
+   * does not know, install the early build when it is newer. Null when
+   * nothing needed doing.
+   */
+  async #claudeEarly(tool, have) {
+    const real = (() => { try { return realpathSync(tool.path); } catch { return tool.path; } })();
+    // A launcher script can not tell; do not fetch the model page for it.
+    try { if (statSync(real).size < PROGRAM_MIN_BYTES) return null; } catch { return null; }
+    const missing = await missingModels(real, await this.currentModels());
+    if (!missing?.length) return null;
+    const next = await this.earlyVersion();
+    if (!next || !isNewer(next, have)) return null;
+    const command = tool.method === 'npm'
+      ? { cmd: 'npm', args: ['install', '-g', `${CLAUDE_PACKAGE}@${next}`] }
+      : { cmd: tool.path, args: ['install', next] };
+    const r = await run(command.cmd, command.args, { timeout: UPDATE_TIMEOUT_MS, env: this.env, platform: this.platform });
+    const to = r.ok ? await this.#version(tool.path) : null;
+    this.log(`Claude Code: ${r.ok ? `early build ${to} for ${missing.join(', ')}` : `early build failed (${tail(r.out)})`}`);
+    return {
+      ms: r.ms, to,
+      message: r.ok
+        ? `Installed early build ${to}, because this version did not know ${missing.join(', ')}`
+        : `Could not install early build ${next}: ${r.timedOut ? 'it took too long' : tail(r.out)}`,
+    };
   }
 
   // ---- schedule

@@ -26,6 +26,8 @@ test('CLI lookup finds standalone leads and child helpers omitted from the diges
     assert.deepEqual(await findNetworkSession(id, { machines, snapshot, rpc }), { env: 'vm', machine: 'VM', session });
   }
   assert.ok(calls.every(c => c.method === M.SESSION_LIST && c.params.includeDelegations === true));
+  // Each machine is asked for the matching chats only; these answer as an older Helm, in full.
+  assert.deepEqual([...new Set(calls.map(c => c.params.find))], [lead.id, '7159e7', 'f5383e']);
   assert.equal(JSON.stringify(snapshot), saved, 'helper lookup must not change the digest snapshot');
 });
 
@@ -366,4 +368,15 @@ test('the digest prints a standalone lead with its helpers nested beneath it', (
   assert.match(out, /7159e7 +working +devin \(swe-2-high\) "Lead" .*\[helper\]/);
   assert.match(out, /└ f5383e working +devin "Mountains"/);
   assert.match(out, /measuring ridge colour/);
+});
+
+test('a device gets only the machines it cannot reach, and nothing when it holds them', async () => {
+  const { snapshotReply } = await import('../packages/connect/src/brain.js');
+  const snap = { at: 1, machines: { up: { name: 'VM', sessions: [{ id: 'a' }] }, down: { name: 'Laptop', at: 5, sessions: [{ id: 'b' }] } } };
+  const first = snapshotReply(snap, { machines: ['down'] });
+  assert.deepEqual(Object.keys(first.snapshot.machines), ['down'], 'a machine that answers is asked itself');
+  assert.deepEqual(snapshotReply(snap, { machines: ['down'], have: first.digest }), { digest: first.digest, unchanged: true });
+  const moved = { ...snap, machines: { ...snap.machines, down: { ...snap.machines.down, at: 6 } } };
+  assert.equal(snapshotReply(moved, { machines: ['down'], have: first.digest }).snapshot.machines.down.at, 6);
+  assert.deepEqual(snapshotReply(snap, { have: 'old' }).snapshot, snap, 'without names, every machine as before');
 });

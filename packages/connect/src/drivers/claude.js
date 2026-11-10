@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
 import { modeFor } from '../modes.js';
-import { nonAgentClaudeTask } from '../claude-tasks.js';
+import { nonAgentClaudeTask, staleAgentCards, stoppedTask } from '../claude-tasks.js';
 import { bareModel, compactWindow, configDir } from '../context-limit.js';
 import { WORTH_SAYING } from '@helm/usage/recache';
 
@@ -139,6 +139,11 @@ export class ClaudeDriver extends Driver {
   #scopes = new Map();
   /** task_id -> tool_use_id, from task_started system frames */
   #tasks = new Map();
+  /**
+   * task_id -> every tool_use_id that ran it: the Agent call, then each
+   * SendMessage that woke it again. Its end must clear all of their cards.
+   */
+  #taskTools = new Map();
   /** task_ids started and not yet ended: helpers, background commands, watches. */
   #running = new Set();
   /** Background work that ended between turns: what the next wake-up is about. */
@@ -156,6 +161,8 @@ export class ClaudeDriver extends Driver {
    * or creating a child-task alarm.
    */
   #nonAgentTasks = new Set();
+  /** Top-level tool steps announced this turn, from the stream or the full message. */
+  #toolStarts = new Set();
   #turnId = null;
   /** A turn is running: a replayed user message now is one handed over mid-turn. */
   #inTurn = false;
@@ -334,9 +341,11 @@ export class ClaudeDriver extends Driver {
       for (const e of this.pendingEvents?.() ?? []) this.pending.set(e.requestId, e);
       // A restart can land between a block's start and its next delta. Recover
       // those stream ids so the remaining text still appends to the same item.
-      const agents = new Map();
-      for (const e of this.resumeEvents?.() ?? []) {
-        if (e.type === 'item.update' && e.agent?.id) this.#tasks.set(e.agent.id, e.id);
+      const agents = new Map(), replay = this.resumeEvents?.() ?? [];
+      for (const e of replay) {
+        if (e.type === 'item.update' && e.agent?.id) { this.#tasks.set(e.agent.id, e.id); this.#linkTask(e.agent.id, e.id); }
+        const stopped = e.type === 'item.done' && e.status === 'ok' && stoppedTask(e.result);
+        if (stopped) this.#running.delete(stopped);
         if ((e.type === 'item.start' && nonAgentClaudeTask(e))
           || (e.type === 'item.update' && nonAgentClaudeTask(e.agent))) this.#nonAgentTasks.add(e.id);
         if (e.type === 'item.update' && e.agent?.status) agents.set(e.id, e.agent.status);
@@ -351,7 +360,12 @@ export class ClaudeDriver extends Driver {
         scope.messageId = match[1];
         scope.blocks.set(Number(match[2]), e.id);
       }
-      for (const [id, status] of agents) if (status === 'running' && !this.#nonAgentTasks.has(id)) {
+      // A saved "working" for a card whose helper ended, or that a newer
+      // SendMessage call took over, is cleared here.
+      const stale = staleAgentCards(replay);
+      for (const [id, status] of agents) {
+        if (status !== 'running' || this.#nonAgentTasks.has(id)) continue;
+        if (stale.has(id)) { this.push('subagent.status', { id, status: 'idle' }); continue; }
         this.push('subagent.status', { id, status: [...this.pending.values()].some(p => p.parentId === id) ? 'blocked' : 'working' });
       }
       this.push('status', { status: this.pending.size ? 'blocked' : this.#turnId ? 'working' : 'idle' });
@@ -746,7 +760,7 @@ export class ClaudeDriver extends Driver {
     // Task lifecycle frames. `tool_use_id` is the spawn card; `task_id` is
     // what progress and completion frames key off.
     if (m.subtype === 'task_started') {
-      if (m.task_id && m.tool_use_id) this.#tasks.set(m.task_id, m.tool_use_id);
+      if (m.task_id && m.tool_use_id) { this.#tasks.set(m.task_id, m.tool_use_id); this.#linkTask(m.task_id, m.tool_use_id); }
       if (m.task_id) this.#running.add(m.task_id);
       if (m.tool_use_id) {
         const service = this.#nonAgentTasks.has(m.tool_use_id)
@@ -788,6 +802,7 @@ export class ClaudeDriver extends Driver {
       // too and overwrites this with the agent's own report.
       if (['completed', 'failed', 'stopped'].includes(m.status)) {
         if (!this.#nonAgentTasks.has(id)) this.push('subagent.status', { id, status: m.status === 'failed' ? 'error' : 'idle' });
+        this.#endTask(m.task_id, id);
         this.push('item.done', { id, status, output: clip(m.summary) });
       }
     }
@@ -874,6 +889,10 @@ export class ClaudeDriver extends Driver {
     }
     for (const block of m.message?.content ?? []) {
       if (block.type !== 'tool_result') continue;
+      // TaskStop on a helper sends no task_notification: its success is the
+      // only sign that the helper ended.
+      const stopped = !block.is_error && stoppedTask(m.tool_use_result);
+      if (stopped && this.#taskTools.has(stopped)) { this.#running.delete(stopped); this.#endTask(stopped); }
       const output = resultText(block.content);
       this.push('item.done', {
         id: block.tool_use_id,
@@ -896,6 +915,18 @@ export class ClaudeDriver extends Driver {
     return out;
   }
 
+  #linkTask(taskId, toolId) {
+    if (!taskId || !toolId) return;
+    this.#taskTools.set(taskId, (this.#taskTools.get(taskId) ?? new Set()).add(toolId));
+  }
+
+  /** A helper ended: clear every card that ran it, except `keep`, which its own notice set. */
+  #endTask(taskId, keep) {
+    for (const id of this.#taskTools.get(taskId) ?? []) {
+      if (id !== keep && !this.#nonAgentTasks.has(id)) this.push('subagent.status', { id, status: 'idle' });
+    }
+  }
+
   #scope(parentId) {
     const key = parentId ?? '';
     let s = this.#scopes.get(key);
@@ -913,6 +944,7 @@ export class ClaudeDriver extends Driver {
         const b = e.content_block;
         if (b.type === 'tool_use') {
           scope.blocks.set(e.index, b.id);
+          if (!parentId) this.#toolStarts.add(b.id);
           if (nonAgentClaudeTask(b)) this.#nonAgentTasks.add(b.id);
           // Task spawns a subagent: the card is the child, and what it runs
           // arrives tagged with this block's id as their parent.
@@ -960,10 +992,13 @@ export class ClaudeDriver extends Driver {
         if (nonAgentClaudeTask(block)) this.#nonAgentTasks.add(block.id);
         // A sidechain tool_use may never have streamed as a content_block;
         // item.start is deduped downstream, so announce it defensively.
-        if (parentId) {
+        // A wake-up turn streams no blocks at all: without this start the
+        // step is never open, and agent messages wait for the whole wake-up.
+        if (parentId || !this.#toolStarts.has(block.id)) {
+          if (!parentId) this.#toolStarts.add(block.id);
           this.push('item.start', {
             id: block.id, kind: block.name === 'Task' || block.name === 'Agent' ? 'subagent' : 'tool',
-            turnId: this.#turnId, name: block.name, input: block.input, parentId,
+            turnId: this.#turnId, name: block.name, input: block.input, parentId: parentId ?? undefined,
           });
         }
         // The complete input, after the partial JSON that streamed in.
@@ -1035,6 +1070,7 @@ export class ClaudeDriver extends Driver {
     if (!this.#inTurn && !m.is_error) return;
     const turnId = this.#inTurn ? this.#turnId : null;
     this.#inTurn = false;
+    this.#toolStarts.clear();
     const interrupted = this.#interrupting && m.is_error;
     this.#interrupting = false;
     // From here the thread stands on its own; a restart resumes it as usual.

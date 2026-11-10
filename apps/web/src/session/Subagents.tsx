@@ -12,6 +12,7 @@ import { clipboardFiles, isImageAttachment, prepareAttachment } from './image';
 import { AgentMessages } from './AgentMessages';
 import { PermissionSheet } from './PermissionSheet';
 import type { Permission, Decision } from './types';
+import type { TeamMember } from './TeamSummary';
 
 const STATUS: Record<string, string> = {
   blocked: 'Needs approval', working: 'Working', starting: 'Starting', done: 'Finished',
@@ -21,6 +22,8 @@ const ACTIVE = ['blocked', 'working', 'starting'];
 /** A phone: no Shift+Enter, so Return makes a new line there. */
 const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 const stateOf = (task: Session) => task.delegation?.status || task.status;
+/** A helper on a machine that did not answer: only its last state is known. */
+const offline = (task: Session) => (task as Session & { offline?: boolean }).offline === true;
 /**
  * The accounts new chats offer on this machine, plus the one this chat runs
  * as in place of its account's usual row. An older machine does not say
@@ -37,21 +40,29 @@ const offeredOf = (agents: CliAgent[], profileId?: string | null) => {
  * `nativeOnly` is for a terminal thread Helm cannot delegate from: just the
  * subagents its CLI ran, with no task form.
  */
-export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, embedded = false, reviewAttention = false, onNativeAttention, nativeOnly = false }: {
-  client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (session: Session) => void;
+export function Subagents({ client, env, machines = [], parent, onClose, onOpen, onOpenNative, embedded = false, reviewAttention = false, onNativeAttention, nativeOnly = false, team }: {
+  client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (session: Session, envId?: string) => void;
+  /** Every machine: a helper can run on another one (helm delegate --machine). */
+  machines?: Environment[];
   /** Open one of the CLI's own subagents as a chat. */
   onOpenNative?: (agent: NativeAgent) => void;
   embedded?: boolean; reviewAttention?: boolean; onNativeAttention?: () => void; nativeOnly?: boolean;
+  /** The helpers the chat already holds. They show at once; the machines' answers replace them. */
+  team?: TeamMember[];
 }) {
   const [agents, setAgents] = useState<CliAgent[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [listed, setListed] = useState(false);
+  const seed = (team ?? []).filter((member) => member.depth === 0).map((member) => member.session);
+  const [sessions, setSessions] = useState<Session[]>(seed);
+  const [listed, setListed] = useState(seed.length > 0);
   const [account, setAccount] = useState(parent.profileId ?? '');
   const [model, setModel] = useState<string | null>(null);
   const [mode, setMode] = useState('');
   const [effort, setEffort] = useState('');
   const [catalog, setCatalog] = useState<ModelList | null>(null);
   const [choosingAccount, setChoosingAccount] = useState(false);
+  // The machine whose accounts the new task form shows, and runs on.
+  const [target, setTarget] = useState(env.id);
+  const [choosingMachine, setChoosingMachine] = useState(false);
   const [task, setTask] = useState('');
   const [error, setError] = useState<{ text: string; at: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,7 +86,17 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   const ref = useDialog(() => { if (!busy) onClose(); }, !embedded);
   const fail = (at: string) => (failure: any) => setError({ text: errorMessage(failure), at });
   const bump = () => setRevision((count) => count + 1);
-  const offered = offeredOf(agents, parent.profileId);
+  // Helpers on other machines: where each one runs, and the record this
+  // machine keeps of it while that machine cannot be reached.
+  const remote = (parent.remoteHelpers ?? []).filter((helper) => !helper.archived);
+  const remoteOn = new Map(remote.map((helper) => [helper.id, helper.machine]));
+  const envOf = (id: string) => remoteOn.get(id) ?? env.id;
+  const nameOf = (id: string) => id === env.id ? env.name : machines.find((machine) => machine.id === id)?.name ?? 'another machine';
+  const remoteKey = remote.map((helper) => `${helper.machine}/${helper.id}/${helper.status}`).join(',');
+  const hosts = [env, ...machines.filter((machine) => machine.id !== env.id && machine.online && machine.info?.remoteHelpers === true)];
+  const targetEnv = hosts.find((machine) => machine.id === target) ?? env;
+  const away = targetEnv.id !== env.id;
+  const offered = offeredOf(agents, away ? null : parent.profileId);
   const agent = offered.find((candidate) => candidate.id === account);
   const savedDefaults = agent?.subagentDefaults ?? catalog?.subagentDefaults ?? {};
   // Match the server: keep the parent's model on the same CLI.
@@ -111,7 +132,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     speeds: [], speedByModel: {},
   } : null;
   const picked = { engine: agent?.engine ?? '', profileId: account, model: selectedModel, effort, mode } as Session;
-  const prefs = trayPrefs({ client, env: env.id, engine: agent?.engine ?? '', profileId: account || null,
+  const prefs = trayPrefs({ client, env: targetEnv.id, engine: agent?.engine ?? '', profileId: account || null,
     options, setOptions: (update) => setCatalog((now) => update(now ?? options)),
     setError: (text) => setError(text ? { text, at: 'form' } : null) });
   const pick = (kind: Kind, id: string) => {
@@ -126,7 +147,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   const onDefault = async (kind: Kind, value: string) => {
     if (!agent || kind === 'speed') return;
     setError(null);
-    const result = await client.rpc<{ subagentDefaults: SubagentDefaults }>(env.id, 'profile.defaults', {
+    const result = await client.rpc<{ subagentDefaults: SubagentDefaults }>(targetEnv.id, 'profile.defaults', {
       profileId: account, scope: 'subagent', [kind]: value || null,
     }, 15_000);
     setAgents((all) => all.map((candidate) => candidate.id === account || agent.account && candidate.account === agent.account
@@ -134,7 +155,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     setCatalog((now) => {
       if (!now) return now;
       const updated = { ...now, subagentDefaults: result.subagentDefaults };
-      void saveModels(env.id, account, updated);
+      void saveModels(targetEnv.id, account, updated);
       return updated;
     });
   };
@@ -143,27 +164,50 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
 
   useEffect(() => {
     let stale = false;
-    const load = () => client.rpc<{ sessions: Session[] }>(env.id, 'session.list', { parentId: parent.id })
-      .then((listing) => {
+    // A machine that does not answer still shows its helpers, from the
+    // state they last sent here.
+    const away = (machine: string) => client.rpc<{ sessions: Session[] }>(machine, 'session.list', { parentId: parent.id })
+      .then((listing) => listing.sessions.filter((s) => s.delegation?.parentMachine === env.id && remoteOn.get(s.id) === machine))
+      .catch(() => remote.filter((helper) => helper.machine === machine).map((helper) => ({
+        id: helper.id, title: helper.title ?? 'Helper', status: helper.status ?? 'idle', engine: '', profileId: '', offline: true,
+        createdAt: helper.startedAt, delegation: { parentId: parent.id, parentMachine: env.id, status: helper.status, task: '', requestedModel: null, depth: 1 },
+      }) as unknown as Session));
+    // Each machine's helpers show as soon as it answers. A slow or far
+    // machine used to hold back the whole list, this machine's included.
+    const load = () => {
+      const lists = new Map<string, Session[]>();
+      const machinesAway = [...new Set(remote.map((helper) => helper.machine))];
+      const show = (machine: string, list: Session[]) => {
         if (stale) return;
-        setSessions(listing.sessions);
-        if (!firstList.current) {
+        lists.set(machine, list);
+        // Until a machine answers, keep what the panel already shows for it.
+        setSessions((now) => [
+          ...(lists.get(env.id) ?? now.filter((s) => !s.delegation?.parentMachine)),
+          ...machinesAway.flatMap((away) => lists.get(away) ?? now.filter((s) => s.delegation?.parentMachine && remoteOn.get(s.id) === away)),
+        ]);
+      };
+      const here = client.rpc<{ sessions: Session[] }>(env.id, 'session.list', { parentId: parent.id })
+        .then((listing) => { show(env.id, listing.sessions.filter((s) => !s.delegation?.parentMachine)); if (!stale) setListed(true); });
+      const there = machinesAway.map((machine) => away(machine).then((list) => show(machine, list)));
+      return Promise.all([here, ...there])
+        .then(() => {
+          if (stale || firstList.current) return;
           firstList.current = true;
           if (reviewAttention) {
-            const tasks = listing.sessions.filter(belongsHere);
+            const tasks = [...lists.values()].flat().filter(belongsHere);
             const attention = tasks.find((task) => stateOf(task) === 'blocked')
               ?? tasks.find((task) => stateOf(task) === 'error')
               ?? tasks.find((task) => task.team?.blocked || task.team?.failed);
             if (attention) { select(attention.id); setFocus(attention.id); }
             else onNativeAttention?.();
           }
-        }
-        setListed(true);
-      })
-      .catch((failure) => { if (!stale) { fail('')(failure); setListed(true); } });
+        })
+        .catch((failure) => { if (!stale) { fail('')(failure); setListed(true); } });
+    };
     void load();
     const off = client.on((envId, kind, payload: any) => {
-      if (envId === env.id && kind === 'session.update' && payload?.session?.delegation?.parentId === parent.id) {
+      if (kind === 'session.update' && payload?.session?.delegation?.parentId === parent.id
+        && (envId === env.id ? !payload.session.delegation.parentMachine : payload.session.delegation.parentMachine === env.id && remoteOn.get(payload.session.id) === envId)) {
         const updated = payload.session as Session;
         const belongs = belongsHere(updated);
         setSessions((all) => [...all.filter((existing) => existing.id !== updated.id), ...(belongs ? [updated] : [])]);
@@ -173,16 +217,16 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
       if ((kind === 'connection' && payload?.online) || (envId === env.id && kind === 'session.exit')) void load();
     });
     return () => { stale = true; off(); };
-  }, [client, env.id, parent.id]);
+  }, [client, env.id, parent.id, remoteKey]);
 
   const loadAgents = async (refresh = false) => {
     setLoading(true); setError(null);
     try {
       // Account discovery must not enumerate every installed CLI's models.
       // Only the chosen account needs a catalog, loaded independently below.
-      const listing = await client.rpc<{ agents: CliAgent[] }>(env.id, 'agent.list', { refresh, models: false }, 60_000);
+      const listing = await client.rpc<{ agents: CliAgent[] }>(targetEnv.id, 'agent.list', { refresh, models: false }, 60_000);
       setAgents(listing.agents);
-      const offer = offeredOf(listing.agents, parent.profileId);
+      const offer = offeredOf(listing.agents, away ? null : parent.profileId);
       setAccount((current) => offer.some((candidate) => candidate.id === current && candidate.available)
         ? current : (offer.find((candidate) => candidate.id === parent.profileId && candidate.available)?.id
           ?? offer.find((candidate) => candidate.available && candidate.engine === parent.engine)?.id
@@ -190,24 +234,24 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     } catch (failure: any) { fail('form')(failure); }
     finally { setLoading(false); }
   };
-  useEffect(() => { if (!nativeOnly) void loadAgents(); }, [client, env.id, nativeOnly]);
+  useEffect(() => { if (!nativeOnly) { setAgents([]); void loadAgents(); } }, [client, targetEnv.id, nativeOnly]);
   useEffect(() => { setModel(null); setMode(''); setEffort(''); }, [account]);
   // The chosen account's catalogue, from this machine.
   useEffect(() => {
     setCatalog(null);
     if (!account || nativeOnly) return;
     let stale = false;
-    loadModels(env.id, account).then((cached) => { if (!stale && cached) setCatalog((now) => now ?? cached); });
+    loadModels(targetEnv.id, account).then((cached) => { if (!stale && cached) setCatalog((now) => now ?? cached); });
     const refresh = followModelRefresh(
-      (settled) => client.rpc<ModelList>(env.id, 'model.list', { profileId: account, ...(settled ? { settled } : {}) }, 30_000),
+      (settled) => client.rpc<ModelList>(targetEnv.id, 'model.list', { profileId: account, ...(settled ? { settled } : {}) }, 30_000),
       (list) => {
         if (!Array.isArray(list?.models)) return;
-        setCatalog(list); void saveModels(env.id, account, list);
+        setCatalog(list); void saveModels(targetEnv.id, account, list);
       },
       () => { /* the cached list or parent's model still shows */ },
     );
     return () => { stale = true; refresh.stop(); };
-  }, [client, env.id, account, nativeOnly]);
+  }, [client, targetEnv.id, account, nativeOnly]);
 
   useEffect(() => {
     if (!focus) return;
@@ -221,11 +265,11 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
       try {
-        const reply = await client.rpc<DelegationResult>(env.id, 'session.delegation-result', { id: selected });
+        const reply = await client.rpc<DelegationResult>(envOf(selected), 'session.delegation-result', { id: selected });
         if (stale) return;
         setResult(reply);
         if (reply.pending) {
-          const history = await client.rpc<{ pending: Permission[] }>(env.id, 'session.events', { id: selected, tail: 1 });
+          const history = await client.rpc<{ pending: Permission[] }>(envOf(selected), 'session.events', { id: selected, tail: 1 });
           if (!stale) setPermissions(history.pending ?? []);
         } else setPermissions([]);
         if (!reply.complete) timer = setTimeout(load, 2500);
@@ -233,7 +277,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     };
     void load();
     return () => { stale = true; clearTimeout(timer); };
-  }, [client, env.id, selected, revision]);
+  }, [client, env.id, selected, revision, remoteKey]);
 
   // Re-read when the card moves on (a new step, a final reply), not on a timer:
   // the session update that moved it is the signal.
@@ -254,7 +298,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     select(session.id); setFocus(session.id);
   };
   // An older machine drops what it does not know, so it is not offered there.
-  const canAttachFiles = env.info?.helperAttachments === true;
+  const canAttachFiles = env.info?.helperAttachments === true && targetEnv.info?.helperAttachments === true;
   const seesImages = options?.imagesByModel?.[selectedModel] ?? options?.images ?? true;
   const attach = async (chosen: File[]) => {
     if (!chosen.length) return;
@@ -294,6 +338,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
         id: parent.id, profileId: account, model: model || undefined,
         ...(effort ? { effort } : {}), mode: mode || undefined, task: task.trim(),
         ...(files.length ? { attachments: files.map((file) => ({ filename: file.name, mime: file.mime, data: file.data })) } : {}),
+        ...(away ? { machine: targetEnv.id } : {}),
       }, 120_000);
       setTask(''); setFiles([]); setComposing(false); setChoosingAccount(false); controls.close();
       added(session);
@@ -309,14 +354,14 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   const answer = async (permission: Permission, decision: Decision) => {
     setSending(true); setError(null);
     try {
-      await client.rpc(env.id, 'session.answer', { id: selected, requestId: permission.requestId, decision });
+      await client.rpc(envOf(selected), 'session.answer', { id: selected, requestId: permission.requestId, decision });
       setPermissions((all) => all.filter((item) => item.requestId !== permission.requestId));
       bump();
     } catch (failure: any) { fail(selected)(failure); }
     finally { setSending(false); }
   };
   const stop = (child: Session) => act('stop', async () => {
-    await client.rpc(env.id, 'session.interrupt', { id: child.id });
+    await client.rpc(envOf(child.id), 'session.interrupt', { id: child.id });
     setNotice('Helm sent the stop request.');
     bump();
   });
@@ -325,11 +370,12 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
       id: parent.id, profileId: child.profileId, model: child.delegation?.requestedModel || undefined,
       effort: child.effort || undefined,
       mode: child.mode && child.mode !== 'plan' ? child.mode : undefined, task: child.delegation?.task || child.title,
-    }, 70_000);
+      ...(remoteOn.has(child.id) ? { machine: envOf(child.id) } : {}),
+    }, 120_000);
     added(session);
   });
   const hide = (child: Session) => act('hide', async () => {
-    await client.rpc(env.id, 'session.archive', { id: child.id, archived: true });
+    await client.rpc(envOf(child.id), 'session.archive', { id: child.id, archived: true });
     setSessions((all) => all.filter((item) => item.id !== child.id));
     setSelected(''); setFocus('new');
   });
@@ -352,10 +398,10 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
       {!result ? <p className="note" role="status">Loading result…</p>
         : result.output ? <div className="delegation-output"><Markdown text={result.output} live={!result.complete} /></div>
         : !result.error && <p className="note">{result.complete ? 'The agent finished without a written reply.' : 'The agent has not replied yet.'}</p>}
-      {result?.error && <p className="error">{errorMessage(result.error, { machine: env.name })}</p>}
+      {result?.error && <p className="error">{errorMessage(result.error, { machine: nameOf(envOf(child.id)) })}</p>}
       {result?.truncated && <p className="note">Showing the most recent output.</p>}
       <div className="delegation-actions">
-        {onOpen && <button type="button" className="ghost" onClick={() => onOpen(child)}>Open chat</button>}
+        {onOpen && !offline(child) && <button type="button" className="ghost" onClick={() => onOpen(child, envOf(child.id))}>Open chat</button>}
         {complete ? <>
           {['error', 'interrupted'].includes(state) && <button type="button" className="ghost" disabled={!!acting} onClick={() => void retry(child)}>
             {acting === 'retry' ? 'Retrying…' : 'Retry task'}</button>}
@@ -370,15 +416,17 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
 
   const row = (child: Session) => {
     const state = stateOf(child);
+    const where = remoteOn.get(child.id);
     const open = selected === child.id;
     const label = STATUS[state] || state;
     const toggle = () => select(open ? '' : child.id);
     return <li key={child.id} className={`delegation-branch${open ? ' selected' : ''}`}>
       <div className="delegation-row">
-        <button type="button" className="delegation-task" title={onOpen ? 'Open helper chat' : undefined}
-          onClick={() => onOpen ? onOpen(child) : toggle()}>
+        <button type="button" className="delegation-task" title={onOpen && !offline(child) ? 'Open helper chat' : undefined}
+          onClick={() => onOpen && !offline(child) ? onOpen(child, envOf(child.id)) : toggle()}>
           <EngineMark engine={child.engine} />
-          <span className="grow"><b>{child.title}</b><small>{child.profileId} · {child.model || child.engineModel || 'Agent default'}</small></span>
+          <span className="grow"><b>{child.title}</b><small>{offline(child) ? `${nameOf(where ?? '')} is offline`
+            : [child.profileId, child.model || child.engineModel || 'Agent default', where && `on ${nameOf(where)}`].filter(Boolean).join(' · ')}</small></span>
         </button>
         <button type="button" className={`delegation-status state-${state}`} data-task={child.id} aria-label={`${label}, details`}
           aria-expanded={open} aria-controls={`task-detail-${child.id}`} onClick={toggle}>
@@ -459,16 +507,25 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
           </div>}
           <div className="delegation-chips">
             <span className="chips">
+              {hosts.length > 1 && <button type="button" className={`chip-pick machine${choosingMachine ? ' on' : ''}`} disabled={busy}
+                aria-label={`Machine: ${targetEnv.name}`}
+                onClick={() => { controls.close(); setChoosingAccount(false); setChoosingMachine(!choosingMachine); }}>
+                <span className="chip-label">{targetEnv.name}</span>
+              </button>}
               <button type="button" className={`chip-pick account${choosingAccount ? ' on' : ''}`} disabled={busy || (loading && !agents.length)}
                 aria-label={`Agent account: ${agent ? accountName(agent) : loading ? 'finding accounts' : 'none available'}`}
-                onClick={() => { controls.close(); setChoosingAccount(!choosingAccount); }}>
+                onClick={() => { controls.close(); setChoosingMachine(false); setChoosingAccount(!choosingAccount); }}>
                 {agent && <EngineMark engine={agent.engine} />}
                 <span className="chip-label">{agent ? accountName(agent) : loading ? 'Finding accounts…' : 'No account'}</span>
               </button>
               {agent?.available && <span className="delegation-chip-rest" onClickCapture={() => setChoosingAccount(false)}>{controls.chips}</span>}
             </span>
           </div>
-          {choosingAccount ? <ChoiceSheet title={`Agent account on ${env.name}`} current={account} busy={busy}
+          {choosingMachine ? <ChoiceSheet title="Run the helper on" current={targetEnv.id} busy={busy}
+            choices={hosts.map((machine) => ({ id: machine.id, label: machine.name, hint: machine.id === env.id ? 'this chat\'s machine' : 'uses its own accounts' }))}
+            onPick={(id) => { setChoosingMachine(false); if (id !== targetEnv.id) { setTarget(id); setAccount(''); } }}
+            onClose={() => setChoosingMachine(false)} />
+            : choosingAccount ? <ChoiceSheet title={`Agent account on ${targetEnv.name}`} current={account} busy={busy}
             choices={offered.map((candidate) => ({ id: candidate.id, label: `${accountName(candidate)} · ${candidate.engine}`,
               icon: <EngineMark engine={candidate.engine} />,
               hint: candidate.auth === 'authenticated' ? 'signed in' : candidate.auth === 'unauthenticated' ? 'signed out' : 'sign-in not checked' }))}

@@ -11,7 +11,7 @@ import { HELM_DIR, expand, quickDir, isQuickDir } from './paths.js';
 import { Checkpoints } from './checkpoints/store.js';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { nativeActive } from './native-subagents.js';
-import { nonAgentClaudeTask, claudeServiceTasks } from './claude-tasks.js';
+import { nonAgentClaudeTask, claudeServiceTasks, staleAgentCards } from './claude-tasks.js';
 import { ENGINES } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
@@ -470,7 +470,8 @@ export class Sessions extends EventEmitter {
   }
 
   /**
-   * Older daemons counted commands and passive watches as helpers. Repair
+   * Older daemons counted commands and passive watches as helpers, and kept
+   * a helper's first card working after SendMessage woke it again. Repair
    * their saved working/failed counts without dropping actual helper work.
    */
   #dropNonAgentTasks() {
@@ -481,7 +482,11 @@ export class Sessions extends EventEmitter {
       try { events = this.events.since(s.id, 0); } catch { continue; }
       const services = new Set(events.filter((e) => (e.type === 'item.start' && nonAgentClaudeTask(e))
         || (e.type === 'item.update' && nonAgentClaudeTask(e.agent))).map((e) => e.id));
-      const removed = Object.keys(s.nativeAgents).filter((id) => services.has(id));
+      // A helper card a later Helm knows has ended (woken again under a new
+      // call, or stopped) is also cleared, so the chat stops looking busy.
+      const stale = staleAgentCards(events);
+      const removed = Object.keys(s.nativeAgents).filter((id) => services.has(id)
+        || (stale.has(id) && ['working', 'blocked'].includes(s.nativeAgents[id])));
       for (const id of removed) delete s.nativeAgents[id];
       if (removed.length) { changed = true; this.#delegation.refreshTeam(s); }
       // A long-running shell can finish after its start was trimmed from
@@ -632,13 +637,16 @@ export class Sessions extends EventEmitter {
 
   // ------------------------------------------------------------------- verbs
 
-  async list({ includeDelegations = false, parentId = null, includeDetected = false } = {}) {
+  async list({ includeDelegations = false, parentId = null, includeDetected = false, nested = false } = {}) {
     // One chat's helpers are Helm-driven sessions in the index: answer them
     // straight from it, without the process and history scans a full list
-    // needs, so the Subagents panel opens at once.
-    if (parentId) {
-      const children = [...this.#index.values()].filter((s) => !s.archived && s.delegation?.parentId === parentId);
-      if (children.every((s) => s.driver && !s.external)) return this.#shape(children.map((s) => this.#drivenRow(s)), { parentId });
+    // needs, so the Subagents panel opens at once. `nested` adds their own
+    // helpers, for the team card: it read every helper the machine ever
+    // had before, megabytes on a slow link.
+    const team = parentId ? this.#team(parentId, nested) : null;
+    if (team) {
+      const children = [...this.#index.values()].filter((s) => team.has(s.id));
+      if (children.every((s) => s.driver && !s.external)) return this.#shape(children.map((s) => this.#drivenRow(s)), { parentId, team });
     }
     // The runtime is the authority on what is still alive; our index only
     // remembers which of those panes are ours.
@@ -795,7 +803,21 @@ export class Sessions extends EventEmitter {
     for (const s of this.#index.values()) {
       if (this.#subagents.hasNative(s) && !s.archived && !this.#subagents.native.has(s.id)) this.#subagents.firstNativeRead(s);
     }
-    return this.#shape(out, { parentId, includeDelegations });
+    return this.#shape(out, { parentId, includeDelegations, team });
+  }
+
+  /** The ids of a chat's helpers that are not archived, and with `nested` theirs too. */
+  #team(parentId, nested) {
+    const team = new Set();
+    const visit = (id) => {
+      for (const s of this.#index.values()) {
+        if (s.archived || s.delegation?.parentId !== id || team.has(s.id) || s.id === parentId) continue;
+        team.add(s.id);
+        if (nested) visit(s.id);
+      }
+    };
+    visit(parentId);
+    return team;
   }
 
   /** A Helm-driven session as a list row. */
@@ -804,11 +826,11 @@ export class Sessions extends EventEmitter {
   }
 
   /** Filter, decorate and order list rows. */
-  #shape(out, { parentId = null, includeDelegations = false } = {}) {
+  #shape(out, { parentId = null, includeDelegations = false, team = null } = {}) {
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
-    return dedupeNativeConversations(out.filter((s) => !s.delegation?.hidden && (parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation || this.#delegation.unhomedDelegation(s))))
+    return dedupeNativeConversations(out.filter((s) => !s.delegation?.hidden && (parentId ? !s.archived && (s.delegation?.parentId === parentId || !!team?.has(s.id)) : includeDelegations || !s.delegation || this.#delegation.unhomedDelegation(s))))
       .map((s) => s.delegations ? { ...s, delegations: this.#delegation.visibleDelegations(s) } : s)
       .map((s) => (s.delegation && this.#delegation.unhomedDelegation(s) ? { ...s, unhomed: true } : s))
       // The branch each thread's folder is on, for the sidebar's third line.
@@ -829,6 +851,13 @@ export class Sessions extends EventEmitter {
   delegate(options) { return this.#delegation.delegate(options); }
   delegationResult(id, options) { return this.#delegation.delegationResult(id, options); }
   messageDelegation(parentId, id, data) { return this.#delegation.messageDelegation(parentId, id, data); }
+  // Helpers on other machines (`helm delegate --machine`). agent.js sets
+  // `remoteRpc(machine, method, params)` and `machineName(id)`.
+  addRemoteHelper(parentId, helper) { return this.#delegation.addRemoteHelper(parentId, helper); }
+  remoteHelper(id, options) { return this.#delegation.remoteHelper(id, options); }
+  remoteHelperState(machine, params) { return this.#delegation.remoteHelperState(machine, params); }
+  remoteHelperResult(machine, params) { return this.#delegation.remoteHelperResult(machine, params); }
+  remoteConsumed(parent, id, seq) { return this.#delegation.remoteConsumed(parent, id, seq); }
 
   // A CLI's own subagents (session-subagents.js)
   nativeAgent(id, agentId, options) { return this.#subagents.nativeAgent(id, agentId, options); }
@@ -1844,14 +1873,15 @@ export class Sessions extends EventEmitter {
     // A helper that already finished keeps its result: only those still at
     // work are stopped, and only they say so.
     const finished = (s) => ['done', 'error', 'interrupted'].includes(s.delegation?.status);
-    const running = [...this.#index.values()].filter((child) => child.delegation?.parentId === id && !finished(child));
+    const running = [...this.#index.values()].filter((child) => child.delegation?.parentId === id && !child.delegation.parentMachine && !finished(child));
+    const away = this.#delegation.runningRemote(session);
     if (session) {
       session.stoppedAt = Date.now();
       session.stopGeneration = (session.stopGeneration ?? 0) + 1;
       // Helpers are mentioned only when there were some to stop.
       session.recovery = {
         kind: 'interrupted', at: Date.now(),
-        message: running.length ? `You stopped this chat. Helm also stopped ${running.length === 1 ? 'its helper' : 'its helpers'}.` : 'Stopped by you.',
+        message: running.length + away.length ? `You stopped this chat. Helm also stopped ${running.length + away.length === 1 ? 'its helper' : 'its helpers'}.` : 'Stopped by you.',
       };
       if (session.delegation && !finished(session)) {
         session.delegation.status = 'interrupted';
@@ -1862,6 +1892,13 @@ export class Sessions extends EventEmitter {
       this.emit('session', session);
     }
     const stopping = running.map((child) => this.interrupt(child.id, visited));
+    // A helper on another machine is stopped there. One that cannot be
+    // reached works on, but this chat no longer takes its result.
+    for (const helper of away) {
+      if (!this.remoteRpc) break;
+      stopping.push(this.remoteRpc(helper.machine, 'session.interrupt', { id: helper.id })
+        .catch((e) => this.log(`[${id}] could not stop helper ${helper.id} on ${helper.machine}: ${e.message}`)));
+    }
     // "Stop" stops the queue too, and before the driver is asked: a settled
     // turn is what wakes the pump, so a stop that left the queue intact
     // would fire the next message the moment the interrupt landed. Each

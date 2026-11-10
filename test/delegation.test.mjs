@@ -25,7 +25,7 @@ const profiles = [
 ];
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ version: 1, profiles }));
 const { Sessions } = await import('../packages/connect/src/sessions.js');
-const { agentCatalog, parseAgentArgs, chooseAgent, delegationMode, delegationOutput, delegationNote, codexHelperFork, codexHelperHistory, readCodexHelperHistory } = await import('../packages/connect/src/delegation.js');
+const { agentCatalog, parseAgentArgs, chooseAgent, delegationMode, delegationOutput, delegationNote, resultNotice, codexHelperFork, codexHelperHistory, readCodexHelperHistory } = await import('../packages/connect/src/delegation.js');
 const { runAgentCommand } = await import('../packages/connect/src/agent-cli.js');
 const { M } = await import('@helm/protocol');
 
@@ -928,7 +928,7 @@ test('helm delegate same runs the helper on the account this chat runs as', asyn
 test('delegation instructions keep only rules; the details live in helm delegate --help', async () => {
   const { commandHelp } = await import('../packages/connect/src/help.js');
   const note = delegationNote();
-  assert.ok(note.length < 800, 'it rides along in every session');
+  assert.ok(note.length < 1100, 'it rides along in every session');
   assert.equal(delegationNote('codex'), note, 'Helm\'s own Codex fork reuses the cache; Codex\'s own child did not');
   assert.equal(delegationNote('pi'), note, 'tools nobody measured keep helm delegate');
   assert.match(note, /Do the work yourself by default/);
@@ -936,7 +936,7 @@ test('delegation instructions keep only rules; the details live in helm delegate
   assert.match(note, /open, message and stop it/);
   // Claude's own Agent is cheaper for short work on the same account.
   const claude = delegationNote('claude');
-  assert.ok(claude.length < 800, 'it rides along in every session');
+  assert.ok(claude.length < 1100, 'it rides along in every session');
   assert.doesNotMatch(claude, /never your CLI's own subagent tool/);
   assert.match(claude, /on your account, short or long, use your Agent tool/);
   assert.match(claude, /a fork if it needs this chat, keep your model unless the owner asks for another, run_in_background false\./);
@@ -945,6 +945,11 @@ test('delegation instructions keep only rules; the details live in helm delegate
   for (const n of [note, claude]) {
     assert.ok(n.includes('The owner: "orchestrator mode is when u give work to others and u are always there to talk to me".'));
     assert.match(n, /to talk to me". Use it only when the owner asks for it\./);
+  }
+  // A helper starts with none of the parent's context; an orchestrator stays free.
+  for (const n of [note, claude]) {
+    assert.match(n, /it has none of your context\. Give the goal, the exact files, what other helpers own, the result you expect and the check to run\./);
+    assert.match(n, /Then start helpers in the background, never wait on them, end your turn/);
   }
   for (const shared of [/Do the work yourself by default/, /never unset HELM_SESSION_ID/, /judgment calls yourself/, /Keep your helpers/]) assert.match(claude, shared);
   assert.match(note, /never unset HELM_SESSION_ID/);
@@ -1034,6 +1039,73 @@ test('agents get the tool instructions as standing instructions, not in the owne
   assert.equal(drivers.get(parent.id).sent, `Continue\n\n${WRITING_REMINDER}`);
   const child = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
   assert.equal(drivers.get(child.session.id).instructions, `${drivers.get(parent.id).instructions} helper of ${parent.id}`);
+});
+
+test('the parent notice holds only the final message and the command for the full output', async (t) => {
+  // Interim notes, then a tool, then the answer: as every CLI writes them.
+  class Chatty extends FakeDriver {
+    async send(text) {
+      this.sent = text;
+      const turnId = this.engineSessionId;
+      this.push('status', { status: 'working' });
+      this.push('turn.start', { turnId, text });
+      this.push('item.start', { id: 'note', kind: 'text', turnId });
+      this.push('item.delta', { id: 'note', text: 'Let me look at the tests.' });
+      this.push('item.done', { id: 'note', status: 'ok' });
+      this.push('item.start', { id: 'run', kind: 'command', turnId, command: 'npm test' });
+      this.push('item.done', { id: 'run', status: 'ok' });
+      this.push('item.start', { id: 'reply', kind: 'text', turnId });
+      this.push('item.delta', { id: 'reply', text: 'All tests pass.' });
+    }
+  }
+  const { sessions, drivers } = setup(t, (opts) => opts.env.HELM_ENGINE === 'claude' ? new Chatty(opts) : new FakeDriver(opts));
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Run tests' });
+  drivers.get(child.id).finish();
+  await new Promise((resolve) => setImmediate(resolve));
+  const notice = drivers.get(parent.id).sent;
+  assert.match(notice, /\nResult:\nAll tests pass\.\nFull output: helm delegate-result [a-f0-9]+$/);
+  assert.ok(notice.endsWith(`Full output: helm delegate-result ${child.id}`));
+  assert.doesNotMatch(notice, /Let me look/, 'interim notes stay out of the parent');
+  const result = sessions.delegationResult(child.id);
+  assert.equal(result.output, 'Let me look at the tests.\n\nAll tests pass.', 'delegate-result keeps the full output');
+  assert.equal(result.final, 'All tests pass.');
+  // After a restart the final message comes from the saved reply.
+  const restarted = new Sessions(new EventEmitter());
+  t.after(() => restarted.stop());
+  assert.equal(restarted.delegationResult(child.id).final, 'All tests pass.');
+});
+
+test('the final message is the text after the last tool, read from the log too', () => {
+  const events = [
+    { type: 'turn.start', turnId: 't', text: 'Fix' },
+    { type: 'item.start', id: 'a', kind: 'text' }, { type: 'item.delta', id: 'a', text: 'Fixing...' },
+    { type: 'item.start', id: 'b', kind: 'tool', name: 'Edit' },
+    { type: 'item.start', id: 'c', kind: 'text' }, { type: 'item.delta', id: 'c', text: 'Fixed.' },
+    { type: 'item.start', id: 'k', kind: 'thinking' }, { type: 'item.delta', id: 'k', text: 'check' },
+    // A nested helper's tool is not this task's last step.
+    { type: 'item.start', id: 'n', kind: 'tool', name: 'Read', parentId: 'b' },
+    { type: 'item.start', id: 'd', kind: 'text' }, { type: 'item.delta', id: 'd', text: 'Tests pass.' },
+    { type: 'turn.done', turnId: 't', status: 'ok' },
+  ];
+  const result = delegationOutput({ status: 'idle', delegation: { status: 'done' } }, events);
+  assert.equal(result.final, 'Fixed.\n\nTests pass.');
+  assert.equal(result.output, 'Fixing...\n\nFixed.\n\nTests pass.');
+  const tool = delegationOutput({}, [...events.slice(0, -1), { type: 'item.start', id: 'e', kind: 'command' }, events.at(-1)]);
+  assert.equal(tool.final, '', 'a task that ends on a tool wrote no final message');
+});
+
+test('a long final message is cut at a line break, and an empty one says so', () => {
+  const line = 'x'.repeat(99);
+  const final = Array.from({ length: 40 }, () => line).join('\n');
+  const notice = resultNotice({ id: 'abc', title: 'Review', status: 'done', final });
+  const body = notice.split('\nResult:\n')[1];
+  assert.ok(body.length < 1600, `about 1500 characters, not ${body.length}`);
+  assert.match(body, /^(?:x{99}\n){15}\[\.\.\.\]\nFull output: helm delegate-result abc$/);
+  assert.equal(resultNotice({ id: 'abc', title: 'Review', status: 'done', final: '' }).split('\nResult:\n')[1],
+    'No written result.\nFull output: helm delegate-result abc');
+  assert.match(resultNotice({ id: 'abc', title: 'Review', status: 'error', final: '', error: 'provider failed' }), /Result:\nprovider failed\nFull output/);
+  assert.match(resultNotice({ id: 'abc', title: 'Review', machine: 'laptop', status: 'done', final: 'Ok.' }), /\nTask: Review\nMachine: laptop\nStatus: done\n/);
 });
 
 test('output distinguishes approval, interruption and provider failure', () => {
@@ -1287,9 +1359,13 @@ test('only a helper is told to report once and to use helm say afterwards', asyn
   assert.doesNotMatch(helmBrief({}), /\[Helm helper:/);
   const brief = helmBrief({}, { parentId: 'abc123def456' });
   assert.ok(brief.startsWith(helperNote('abc123def456')));
-  assert.match(brief, /Report once\./);
+  assert.match(brief, /Report once, and/);
   assert.match(brief, /stale background watcher/);
-  assert.match(brief, /helm say abc123def456 -- "text"/);
+  assert.match(brief, /helm say abc123def456 -- "text" only when you are blocked or need its decision, never for progress\./);
+  assert.match(brief, /make the report stand alone: the outcome first/);
+  // Every agent: a message carries what the reader needs, not the sender's shorthand.
+  assert.match(brief, /The reader has none of your context/);
+  assert.match(brief, /never trade acknowledgements or progress notes/);
 });
 
 test('the browser note rides along only where a browser can start', async () => {
@@ -1311,13 +1387,26 @@ test('the notes every agent gets match the committed size', async () => {
   const net = { self: 'a', machines: { a: { id: 'a', name: 'Laptop' }, b: { id: 'b', name: 'VM', kind: 'vm' }, c: { id: 'c', name: 'HomePC', kind: 'pc' } } };
   // Only machines that can start a browser get its note; count it once.
   const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:')).join('\n');
-  const notes = [brief, browserNote(), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
+  // A desktop machine: the note for the owner's own browser.
+  const notes = [brief, browserNote(undefined, { screen: true }), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
   // Claude chats get their own helper route (delegationNote).
   const claudeNotes = notes.replace(delegationNote(), delegationNote('claude'));
   assert.deepEqual(
     { notesBytes: Buffer.byteLength(notes), claudeNotesBytes: Buffer.byteLength(claudeNotes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
     { notesBytes: budget.notesBytes, claudeNotesBytes: budget.claudeNotesBytes, reminderBytes: budget.reminderBytes },
   );
+});
+
+test('the team card lists a chat\'s helpers and theirs, and nothing else', async (t) => {
+  const { sessions } = setup(t);
+  const { session: lead } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'codex-main', task: 'Lead the night' });
+  const { session: helper } = await sessions.delegate({ id: lead.id, profileId: 'codex-main', task: 'Fix the mountains' });
+  const { session: deeper } = await sessions.delegate({ id: helper.id, profileId: 'codex-main', task: 'Check one peak' });
+  const { session: stranger } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'codex-main', task: 'Other work' });
+  assert.deepEqual((await sessions.list({ parentId: lead.id })).map((s) => s.id), [helper.id]);
+  const team = (await sessions.list({ parentId: lead.id, nested: true })).map((s) => s.id);
+  assert.deepEqual(team.sort(), [helper.id, deeper.id].sort());
+  assert.equal(team.includes(stranger.id), false);
 });
 
 test('a helper with no thread to sit under lists on its own, and its team nests under it', async (t) => {

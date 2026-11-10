@@ -42,6 +42,8 @@ export interface Environment {
     agentMessages?: boolean;
     /** A new helper task can carry pasted pictures and files. */
     helperAttachments?: boolean;
+    /** Runs helpers for chats on other machines (helm delegate --machine). */
+    remoteHelpers?: boolean;
     runtime?: { version: string };
     /** Which helm this machine runs; null where it is not a git checkout. */
     version?: { commit: string; full?: string; time?: number; dirty?: boolean; dir?: string; branch: string; subject: string; updatable: boolean } | null;
@@ -182,7 +184,11 @@ export interface Session {
   externalService?: boolean;
   /** This is a transcript monitor which can become driven after handoff. */
   external?: boolean;
-  delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string; summary?: string; finishedAt?: number };
+  delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string; summary?: string; finishedAt?: number;
+    /** The parent chat is on this other machine. */
+    parentMachine?: string };
+  /** This chat's helpers on other machines, with the state each one last sent. */
+  remoteHelpers?: { machine: string; id: string; title?: string; status?: string; startedAt?: number; finishedAt?: number; archived?: boolean }[];
   taskTransfer?: TaskReturnState & { handoffId: string; role: 'source' | 'destination'; machineId: string; machineName: string };
   parent?: { machineId: string; sessionId: string };
   /** Set while Helm moves this chat to another machine with its conversation. */
@@ -581,6 +587,9 @@ const HTTP_READ_METHODS = new Set([
   'session.commands', 'env.info', 'session.watch', 'session.unwatch',
   'project.list', 'net.routes', 'session.action-status',
 ]);
+/** Reads a chat screen sends beside its first page; they wait for it. */
+const AFTER_FIRST_PAGE = new Set(['session.list', 'session.commands', 'model.list', 'usage.limits', 'git.status']);
+const FIRST_PAGE_WAIT_MS = 4000;
 
 /** A held chat list with a machine's changes applied, or null if they do not fit it. */
 function applyListChanges(held: Session[], r: any): Session[] | null {
@@ -657,6 +666,10 @@ const reachableFromHere = (base: string) => {
     return !url.username && !url.password && !url.search && !url.hash && url.pathname === '/'
       && (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)));
   } catch { return false; }
+};
+/** This machine's own Helm: the page and its hub share one computer. */
+const onLoopback = (base: string) => {
+  try { return LOOPBACK_HOST.test(new URL(base).hostname); } catch { return false; }
 };
 
 /** A hub that answered: where it is, how much of the network it can see. */
@@ -1849,8 +1862,55 @@ export class Client {
       return this.deliverAction(held ?? { env, method: 'session.answer-deliver', actionId,
         params: JSON.parse(JSON.stringify({ ...params, actionId })) }, timeout);
     }
+    // A chat's first page goes alone; the reads beside it follow (see firstPages).
+    if (method === 'session.events' && params?.tail) return this.firstPage<T>(env, this.call<T>(env, method, params, timeout));
+    const page = AFTER_FIRST_PAGE.has(method) ? this.firstPages.get(env) : undefined;
+    if (page) return page.then(() => this.read<T>(env, method, params, timeout));
+    return this.read<T>(env, method, params, timeout);
+  }
+
+  private read<T>(env: string, method: string, params: any, timeout: number): Promise<T> {
     if (method === 'session.list' && params?.projects !== true) return this.listSessions(env, params, timeout) as Promise<T>;
     return this.call<T>(env, method, params, timeout);
+  }
+
+  /**
+   * machine -> the first page of a chat on its way from there.
+   *
+   * Opening a chat asks for its messages and, in the same instant, for its
+   * helpers, models, commands, limits and changed files. They share one
+   * link, and the machine answers in the order it finishes: a 200 KB helper
+   * list ahead of the messages held them back four seconds on the owner's
+   * 50 KB/s link to the VM (2026-11-09). T3 Code opens a chat with its
+   * detail read alone; here the other reads wait for the page, or for
+   * FIRST_PAGE_WAIT_MS on a link too slow to wait longer. Writes never wait.
+   */
+  private firstPages = new Map<string, Promise<void>>();
+
+  private firstPage<T>(env: string, page: Promise<T>): Promise<T> {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const timer = setTimeout(release, FIRST_PAGE_WAIT_MS);
+    this.firstPages.set(env, gate);
+    const done = () => {
+      clearTimeout(timer); release();
+      if (this.firstPages.get(env) === gate) this.firstPages.delete(env);
+    };
+    page.then(done, done);
+    void gate.then(() => { if (this.firstPages.get(env) === gate) this.firstPages.delete(env); });
+    return page;
+  }
+
+  /**
+   * The chat list this device holds for a machine: the one the sidebar
+   * keeps fresh. The `@` picker asked the machine for it on every chat
+   * open, and building it there holds every other answer for 0.1 to 0.5 s.
+   * Asks only when the device holds none yet.
+   */
+  sessionsHeld(env: string): Promise<{ sessions: Session[] }> {
+    const params = { includeDetected: true };
+    const held = this.lists.get(`${env}|${JSON.stringify(params)}`);
+    return held ? Promise.resolve({ sessions: [...held.sessions] }) : this.rpc(env, 'session.list', params);
   }
 
   /** The last chat list each screen's filter got, by machine. */
@@ -2068,7 +2128,10 @@ export class Client {
           if (next < bases.length) launch();
           else if (!active) done(lastError);
         });
-        if (next < bases.length) stagger = setTimeout(launch, Math.min(staggerAfter, Math.max(1, timeout / 2)));
+        // This machine's own Helm is never an old route, and the other hubs
+        // reach the same machine over the same slow link: racing them sent
+        // a big reply twice. Move on from it only when it fails.
+        if (next < bases.length && !onLoopback(base)) stagger = setTimeout(launch, Math.min(staggerAfter, Math.max(1, timeout / 2)));
       };
       deadline = setTimeout(() => done(new Error(`${method} timed out`)), timeout);
       launch();

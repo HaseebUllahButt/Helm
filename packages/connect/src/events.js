@@ -159,6 +159,36 @@ export function compactEvents(events) {
 }
 
 /**
+ * Usage readings that follow each other, as one row.
+ *
+ * Codex reports its limits to every chat of the account, also to a chat
+ * nobody is using. On 2026-11-10 one idle chat on the owner's machine ended
+ * in 462 such rows: the 200 rows a chat opens with held no message at all,
+ * and each older page was 128 KB of the same. Only the newest reading says
+ * anything, so it stands for the run: it takes what only the older ones knew
+ * and, like a joined item, says in `from` where the run began, so a reader
+ * that counts sequence numbers sees no hole.
+ */
+function joinLimits(older, newer) {
+  const { seq: firstSeq, from: firstFrom, at: _at, type: _type, ...old } = older;
+  const { seq, from, at, type, ...rest } = newer;
+  // `from` goes second: the file index reads it from a row's first bytes.
+  return { seq, from: Math.min(firstFrom ?? firstSeq, from ?? seq), at, type, ...old, ...rest };
+}
+
+/** Every run of usage readings joined into its last row. */
+export function joinLimitRuns(events) {
+  const out = [];
+  let removed = 0;
+  for (const event of events) {
+    const last = out[out.length - 1];
+    if (event?.type === 'limits' && last?.type === 'limits') { out[out.length - 1] = joinLimits(last, event); removed++; }
+    else out.push(event);
+  }
+  return removed ? { events: out, removed } : { events, removed };
+}
+
+/**
  * The index of the `turn.start` the event at `from` belongs to, or -1.
  *
  * A window that begins in the middle of a turn has no question at the top of
@@ -570,10 +600,18 @@ export class EventLog {
       let bytes = 0;
       let front = list.length;
       const newer = new Map();
+      // The window's newest usage reading. Older ones add only what it does
+      // not say, and take no room: not a row of the count, not a byte.
+      let reading = null;
       for (let i = list.length - 1; i >= 0 && events.length < want; i--) {
         const raw = list.at(i);
         if (!raw) continue;
-        const e = shaped(tail > 0 ? latestToolEvent(raw, newer) : raw);
+        if (raw.type === 'limits' && reading) {
+          for (const [key, value] of Object.entries(raw)) if (!(key in reading)) reading[key] = value;
+          continue;
+        }
+        let e = shaped(tail > 0 ? latestToolEvent(raw, newer) : raw);
+        if (raw.type === 'limits') e = reading = { ...e };
         const n = sizeOf(e);
         // Always at least one: a single event over the budget still has to
         // move, or the client asks forever and never advances.
@@ -596,7 +634,7 @@ export class EventLog {
           let headBytes = 0;
           for (let i = at; i < front; i++) {
             const raw = list.at(i);
-            if (!raw) continue;
+            if (!raw || (raw.type === 'limits' && reading)) continue;
             const e = shaped(raw);
             head.push(e); headBytes += sizeOf(e);
             if (bytes + headBytes > maxBytes) break;
@@ -639,12 +677,22 @@ export class EventLog {
       if (context.length) events = [...context, ...events].sort((a, b) => a.seq - b.seq);
     } else {
       let bytes = 0;
-      for (const raw of list) {
+      const add = (raw) => {
         const e = shaped(raw);
         const n = sizeOf(e);
-        if (events.length && bytes + n > maxBytes) { hasMore = true; break; }
+        if (events.length && bytes + n > maxBytes) { hasMore = true; return false; }
         events.push(e); bytes += n;
+        return true;
+      };
+      // A usage reading waits for the next row: another reading replaces it.
+      let held = null;
+      for (const raw of list) {
+        if (raw.type === 'limits') { held = held ? joinLimits(held, raw) : raw; continue; }
+        if (held && !add(held)) { held = null; break; }
+        held = null;
+        if (!add(raw)) break;
       }
+      if (held && !hasMore) add(held);
     }
 
     return {
@@ -799,7 +847,8 @@ export class EventLog {
   last(id) { return this.#logs.get(id)?.seq ?? this.glance(id).seq; }
 
   /**
-   * Rewrite one chat's file with its finished items joined (compactEvents).
+   * Rewrite one chat's file with its finished items joined (compactEvents)
+   * and each run of usage readings as its last row (joinLimitRuns).
    * Returns how many rows went. A file with a row it cannot read is left
    * alone. Synchronous, so no append can land between the read and the rename.
    */
@@ -813,7 +862,9 @@ export class EventLog {
       if (!line) continue;
       try { events.push(JSON.parse(line)); } catch { return 0; }
     }
-    const { events: kept, removed } = compactEvents(events);
+    const readings = joinLimitRuns(events);
+    const pieces = compactEvents(readings.events);
+    const kept = pieces.events, removed = readings.removed + pieces.removed;
     if (removed < minRemoved) return 0;
     writeFileSync(`${file}.compact`, kept.map(e => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
     renameSync(`${file}.compact`, file);

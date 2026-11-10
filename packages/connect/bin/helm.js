@@ -198,6 +198,16 @@ async function up() {
       try { integrateNativeCommands(); } catch (err) { report(err); }
     } catch (err) { report(err); }
   }
+  // A service file from before Helm started Node under its own name: fix
+  // it, and let systemd start Helm again under that name (own-node.js).
+  if (process.env.INVOCATION_ID) {
+    const { renameService } = await import('../src/service.js');
+    if (await renameService().catch((err) => { console.error(`helm: service file: ${err.message}`); return false; })) {
+      console.log('helm: starting again so Helm keeps normal CPU priority');
+      // systemd stops this process; go on as before if it does not.
+      await new Promise((r) => setTimeout(r, 15_000));
+    }
+  }
   if (platform() === 'linux') {
     // A new logo reaches the launcher too, not only the app.
     import('../src/desktop.js').then((m) => m.refreshAppIcons())
@@ -2234,11 +2244,17 @@ try {
     }
 
     case 'network-repair': {
-      const { ensureTcpRecovery } = await import('../src/network-recovery.js');
+      const { ensureFastTcp, ensureTcpRecovery } = await import('../src/network-recovery.js');
       const recovery = await ensureTcpRecovery({ interactive: true });
+      const fast = await ensureFastTcp({ interactive: true });
       if (!recovery.supported) console.log('TCP packet-size recovery is not available on this system.');
-      else if (recovery.repair) die(`Could not enable packet-size recovery: ${recovery.reason}`);
+      else if (recovery.repair) console.log(`Could not enable packet-size recovery: ${recovery.reason}`);
       else console.log('TCP packet-size recovery is enabled and saved for reboot.');
+      if (!fast.supported) console.log('Fast sending on lossy links (BBR) is not available on this system.');
+      else if (fast.chosen && fast.chosen !== 'bbr') console.log(`This system uses ${fast.chosen} by its own choice. Helm keeps it.`);
+      else if (fast.repair) console.log(`Could not turn on fast sending on lossy links: ${fast.reason}`);
+      else console.log('Fast sending on lossy links (BBR) is on and saved for reboot.');
+      if (recovery.repair || (fast.repair && !(fast.chosen && fast.chosen !== 'bbr'))) process.exitCode = 1;
       break;
     }
 
@@ -2356,7 +2372,7 @@ try {
       const { runAgentCommand } = await import('../src/agent-cli.js');
       // Catalogs and JSON replies can exceed a pipe's buffer. Let stdout
       // drain naturally instead of truncating them with process.exit().
-      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self });
+      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self, machine: machineId });
       break;
     }
     case 'brain':

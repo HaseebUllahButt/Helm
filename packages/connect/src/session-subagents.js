@@ -60,6 +60,9 @@ export class NativeMessageDelivery {
 
 // How often one Claude session's own subagent folder is re-listed at most.
 const NATIVE_POLL_MS = 2_000;
+// A woken helper writes its new message within a second. A record that ended
+// this long ago belongs to a helper that is not running.
+const ENDED_MS = 60_000;
 // One reader per engine, so the event log can keep each one's answer until
 // the thread changes instead of re-reading the whole thread every poll.
 const LOG_SUBAGENTS = new Map();
@@ -218,12 +221,32 @@ export class SessionSubagents {
         }
       }
       agents.sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+      if (s.engine === 'claude') this.#dropEnded(s, agents);
       const sig = JSON.stringify(agents.map((a) => [a.id, a.status, a.title, a.model, a.last, a.branch, a.toolUseId]));
       if (sig === n.sig) return;
       n.sig = sig;
       n.cards = agents;
       this.#core.delegation.refreshTeam(s);
     } catch (err) { this.#sessions.log(`native subagents: ${err.message}`); }
+  }
+
+  /**
+   * A Claude helper whose own record ended a while ago is not running,
+   * whatever an older report said. Claude sends no end notice for some (a
+   * stopped helper, a helper woken again under a newer call). The trimmed
+   * log cannot tell, and that report kept the chat busy for hours.
+   */
+  #dropEnded(s, cards, now = Date.now()) {
+    let changed = false;
+    for (const card of cards) {
+      if (card.fromLog || card.status !== 'done' || now - card.updatedAt < ENDED_MS) continue;
+      for (const id of [card.toolUseId, card.id, ...(this.agentTools.get(s.id)?.get(card.id) ?? [])]) {
+        if (id && ['working', 'blocked'].includes(s.nativeAgents?.[id])) { delete s.nativeAgents[id]; changed = true; }
+      }
+    }
+    if (!changed) return;
+    this.#core.delegation.refreshTeam(s);
+    this.#core.save();
   }
 
   /** One of a session's own subagents, with its result and recent activity; `full` adds its whole conversation. */

@@ -1,5 +1,5 @@
 import { discoverProcesses } from './discovery-native.js';
-import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
@@ -108,4 +108,35 @@ export function processTty(pid) {
   }
   const tty = run('ps', ['-o', 'tty=', '-p', String(pid)]).trim();
   return tty && tty !== '??' ? `/dev/${tty}` : null;
+}
+
+/**
+ * Inodes of files that a program holds a lock on, or null where this OS
+ * cannot say. Linux lists held locks in /proc/locks. The match is by inode
+ * only: btrfs and overlay report a different device in stat than there.
+ */
+export function lockedInodes(procLocks = '/proc/locks') {
+  if (!LINUX) return null;
+  let text;
+  try { text = readFileSync(procLocks, 'utf8'); } catch { return null; }
+  const out = new Set();
+  // "1: FLOCK  ADVISORY  WRITE 706294 08:01:1310734 0 EOF"; a "->" line waits.
+  for (const line of text.split('\n')) {
+    const m = /\s[0-9a-f]+:[0-9a-f]+:(\d+)\s/.exec(line);
+    if (m && !line.includes('->')) out.add(Number(m[1]));
+  }
+  return out;
+}
+
+/**
+ * Whether a program still holds a lock on this file. Codex keeps
+ * thread-writer-locks/<id>.lock locked while a program writes a chat. A
+ * program that crashes or is killed leaves the file behind, unlocked, so
+ * the file alone does not prove a live writer. Where the OS cannot list
+ * locks, the file's existence is the best answer.
+ */
+export function fileLocked(path, held = lockedInodes()) {
+  let inode;
+  try { inode = statSync(path).ino; } catch { return false; }
+  return held ? held.has(inode) : true;
 }

@@ -432,6 +432,32 @@ test('a wake-up the CLI starts by itself is a turn of its own, not the last one 
   await driver.kill();
 });
 
+test('a wake-up step that never streamed still opens, once', async (t) => {
+  // Wake-up turns can come with no stream events at all. The step then only
+  // ended, never started, so agent messages waited for the whole wake-up.
+  const { driver, log } = make('wake-tool');
+  t.after(() => driver.kill());
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done' && String(e.turnId).startsWith('wake-'));
+  const starts = log.of('item.start').filter((e) => e.id === 'toolu_wake_bash');
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].parentId, undefined);
+  assert.equal(starts[0].kind, 'tool');
+  assert.ok(starts[0].turnId.startsWith('wake-'));
+  const order = log.events.filter((e) => e.id === 'toolu_wake_bash').map((e) => e.type);
+  assert.equal(order[0], 'item.start', 'the step opens before it ends');
+});
+
+test('a streamed tool step opens once, not again from its full message', async (t) => {
+  const { driver, log } = make('tool', { mode: 'auto' });
+  t.after(() => driver.kill());
+  await driver.send('Use the Bash tool…');
+  await log.until((e) => e.type === 'turn.done');
+  const top = log.of('item.start').filter((e) => !e.parentId && e.kind === 'tool');
+  assert.ok(top.length > 0);
+  assert.equal(new Set(top.map((e) => e.id)).size, top.length);
+});
+
 test('a task notice the CLI replays is a wake-up, never a message from the owner', async () => {
   // Background news queued behind the owner's message comes back marked as a
   // replay. Read as a sent message, the chat showed the raw notice as the
@@ -541,6 +567,44 @@ test('reattaching Claude restores a background task and routes its completion wi
   receive(JSON.stringify({ type: 'system', subtype: 'task_notification', task_id: 'background-task', status: 'completed', summary: 'Ready' }) + '\n');
   assert.deepEqual(log.of('subagent.status').map(e => [e.id, e.status]), [['spawn-card', 'working'], ['spawn-card', 'idle']]);
   await driver.suspend();
+});
+
+test('a Claude helper woken by SendMessage clears its first card when it ends, also after TaskStop and a reattach', async () => {
+  let receive;
+  const pipe = { onData: cb => { receive = cb; }, onExit: () => {}, detach: () => {} };
+  const { driver, log } = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => null, resumeEvents: () => [] });
+  await driver.start();
+  const frame = (m) => receive(JSON.stringify({ type: 'system', ...m }) + '\n');
+  frame({ subtype: 'task_started', task_id: 'agent-7', tool_use_id: 'toolu_spawn', task_type: 'local_agent' });
+  frame({ subtype: 'task_started', task_id: 'agent-7', tool_use_id: 'toolu_send', task_type: 'local_agent' });
+  frame({ subtype: 'task_notification', task_id: 'agent-7', status: 'completed', summary: 'done' });
+  const last = () => Object.fromEntries(log.of('subagent.status').map(e => [e.id, e.status]));
+  assert.deepEqual(last(), { toolu_spawn: 'idle', toolu_send: 'idle' });
+  // TaskStop sends no task_notification for a helper: its result ends it.
+  frame({ subtype: 'task_started', task_id: 'agent-8', tool_use_id: 'toolu_eight', task_type: 'local_agent' });
+  receive(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_stop', content: 'ok' }] },
+    tool_use_result: { message: 'Successfully stopped task: agent-8 (batch 8)', task_id: 'agent-8', task_type: 'local_agent' } }) + '\n');
+  assert.equal(last().toolu_eight, 'idle');
+  assert.equal(driver.backgroundTasks, 0);
+  await driver.suspend();
+
+  // A chat saved by an older Helm: the first card was never cleared.
+  const again = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe }, openTurn: () => null,
+    resumeEvents: () => [
+      { type: 'item.update', id: 'toolu_spawn', agent: { id: 'agent-7', status: 'running' } },
+      { type: 'item.done', id: 'toolu_stop', status: 'ok', result: { message: 'Successfully stopped task: agent-7', task_id: 'agent-7' } },
+      { type: 'item.update', id: 'toolu_send', agent: { id: 'agent-7', status: 'running' } },
+      { type: 'item.update', id: 'toolu_send', agent: { id: 'agent-7', status: 'completed' } },
+      { type: 'item.update', id: 'toolu_nine', agent: { id: 'agent-9', status: 'running' } },
+      { type: 'item.update', id: 'toolu_ten', agent: { id: 'agent-10', status: 'running' } },
+      { type: 'item.update', id: 'toolu_ten_send', agent: { id: 'agent-10', status: 'running' } },
+    ] });
+  await again.driver.start();
+  assert.deepEqual(Object.fromEntries(again.log.of('subagent.status').map(e => [e.id, e.status])),
+    { toolu_spawn: 'idle', toolu_nine: 'working', toolu_ten: 'idle', toolu_ten_send: 'working' });
+  assert.equal(again.driver.backgroundTasks, 2);
+  await again.driver.suspend();
 });
 
 test('a background shell command is not a child task, even when it fails', async () => {

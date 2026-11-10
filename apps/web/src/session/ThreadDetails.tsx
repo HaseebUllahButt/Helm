@@ -4,6 +4,7 @@ import { useDialog } from '../useDialog';
 import { BackIcon, Icon } from '../Icon';
 import { Subagents } from './Subagents';
 import type { GitStatus } from './gitStatus';
+import type { TeamMember } from './TeamSummary';
 
 // The Git panel (graph, diffs, pull requests, pipeline) is its own chunk: it
 // loads the first time the Git button is tapped, not with every chat.
@@ -12,14 +13,18 @@ const ChangesPanel = lazy(() => import('./Changes').then((m) => ({ default: m.Ch
 /** Git and the canvas have their own buttons in the chat header; this panel is the agents. */
 export type DetailsTab = 'agents' | 'changes';
 
-export function ThreadDetails({ client, env, session, tab, git, gitCwd = session.cwd, reloadGit, onClose, onOpen, onOpenNative, reviewAttention = false, onNativeAttention, nativeOnly = false }: {
+export function ThreadDetails({ client, env, machines, session, tab, git, gitCwd = session.cwd, reloadGit, onClose, onOpen, onOpenNative, reviewAttention = false, onNativeAttention, nativeOnly = false, team }: {
   client: Client; env: Environment; session: Session; tab: DetailsTab;
+  /** Every machine: helpers can run on another one. */
+  machines?: Environment[];
+  /** The helpers the chat already holds: the panel shows them at once, then reads them again. */
+  team?: TeamMember[];
   git: GitStatus | null; reloadGit: () => void; onClose: () => void;
   /** Where Git is read: the chat's folder, or the project it edited when its folder is not one. */
   gitCwd?: string;
   /** A terminal CLI Helm cannot start helpers for: only the helpers it ran itself. */
   nativeOnly?: boolean;
-  onOpen?: (session: Session) => void; onOpenNative?: (agent: NativeAgent) => void; reviewAttention?: boolean; onNativeAttention?: () => void;
+  onOpen?: (session: Session, envId?: string) => void; onOpenNative?: (agent: NativeAgent) => void; reviewAttention?: boolean; onNativeAttention?: () => void;
 }) {
   const ref = useDialog(onClose);
   if (tab === 'changes' && git?.repo) return <div className="thread-details-back" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -56,7 +61,7 @@ export function ThreadDetails({ client, env, session, tab, git, gitCwd = session
       }}>
       <div className="details-heading"><div><h2>Agents</h2><p>{env.name} · {session.title}</p></div><button className="iconbtn" aria-label="Close agents" onClick={onClose}><Icon name="close" size={18} /></button></div>
       <div className="details-content">
-        <Subagents embedded nativeOnly={nativeOnly} onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} onOpenNative={onOpenNative} />
+        <Subagents embedded team={team} nativeOnly={nativeOnly} onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} machines={machines} parent={session} onClose={onClose} onOpen={onOpen} onOpenNative={onOpenNative} />
       </div>
     </div>
   </div>;

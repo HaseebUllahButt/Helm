@@ -22,6 +22,17 @@ import { fileURLToPath } from 'node:url';
  */
 
 const ENTRY = 'helm-app.desktop';
+
+// The direct-link library opens its network sockets without close-on-exec,
+// so every program Helm starts got a copy. A notice waits for a click, and
+// one from before a restart kept Helm's direct-link ports for hours: on
+// 2026-11-09 stuck notices held 6 of the 32 on why. Close every inherited
+// descriptor past stdio before the program starts.
+const CLOSE_INHERITED = 'for f in /proc/$$/fd/*; do n=${f##*/}; [ "$n" -gt 2 ] 2>/dev/null && eval "exec $n>&-"; done; exec "$@"';
+export function spawnClean(command, args, options, { bash = '/bin/bash', linux = process.platform === 'linux' } = {}) {
+  if (linux && existsSync(bash)) return spawn(bash, ['-c', CLOSE_INHERITED, command, command, ...args], options);
+  return spawn(command, args, options);
+}
 const dataHome = () => process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
 
 const parseEntry = (text) => {
@@ -135,7 +146,7 @@ function launch(exec, hash, env) {
     .map((arg) => (arg.startsWith('--app=') && hash ? `${arg}${hash}` : arg));
   if (!parts.length) return;
   try {
-    spawn(parts[0], parts.slice(1), { env, detached: true, stdio: 'ignore' }).unref();
+    spawnClean(parts[0], parts.slice(1), { env, detached: true, stdio: 'ignore' }).unref();
   } catch { /* nothing to open it with */ }
 }
 
@@ -178,7 +189,7 @@ export function createDesktopNotifier({ onOpen = () => false } = {}) {
     ];
     let child;
     try {
-      child = spawn('notify-send', args, { env, stdio: ['ignore', 'pipe', 'ignore'] });
+      child = spawnClean('notify-send', args, { env, stdio: ['ignore', 'pipe', 'ignore'] });
     } catch { return false; }
     if (previous) try { previous.child?.kill(); } catch { /* gone */ }
     const record = { id: previous?.id ?? null, child };

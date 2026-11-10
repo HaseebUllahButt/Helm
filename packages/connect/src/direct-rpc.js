@@ -8,7 +8,17 @@ import { encodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../../prot
 const CHUNK = 16_000;
 const MAX_FRAME = 64 * 1024 * 1024;
 
-export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, env, rtcConfig = nativeDirectConfig() }) {
+/**
+ * The side that dials gets a port of its own. The answering side keeps the
+ * one shared port (peer.js). That port tells its links apart by the other
+ * side's address, so when two machines dialled each other, both links had
+ * the same two addresses and the second stayed in "checking" for good:
+ * on one wifi, why could never reach Laptop directly while Laptop's link
+ * to why was open (2026-11-09).
+ */
+export const dialConfig = (config = nativeDirectConfig()) => ({ ...config, enableIceUdpMux: false });
+
+export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, env, rtcConfig = dialConfig() }) {
   const pc = new RTCPeerConnection(rtcConfig);
   const channel = pc.createDataChannel('helm', { ordered: true });
   const HIGH_WATER = 512 * 1024;
