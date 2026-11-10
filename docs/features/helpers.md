@@ -48,6 +48,11 @@ and a project copy nobody kept. A helper can run on another machine
   characters, and the line `Full output: helm delegate-result <id>`. The
   interim notes ("Let me look...") filled the parent's context.
   `delegate-result` still gives the full `output` and the `final` message.
+- **Lost processes:** a helper that exits or loses its local process host shows a failure.
+  Helm keeps its history and tells its parent once. Startup checks also close
+  helpers marked working when their process is gone. Exit codes and signals
+  stay on the helper record when the process host reports them. A remote
+  network change does not stop local helpers.
 - **One result per task:** once the parent has the result, a helper that
   wakes by itself later (a background watcher timing out) never gives the
   parent another turn. Those relays were nearly all "stale watcher, nothing

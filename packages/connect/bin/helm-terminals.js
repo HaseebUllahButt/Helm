@@ -103,10 +103,10 @@ function procOpen(msg) {
       procs.delete(msg.id);
       armIdleExit();
     };
-    const reportExit = (code, stderr = null) => {
+    const reportExit = (code, stderr = null, signal = null) => {
       remove();
       broadcast({
-        t: 'proc.exit', id: msg.id, code,
+        t: 'proc.exit', id: msg.id, code, signal,
         stderr: stderr || proc.errTail.trim().split('\n').pop() || null,
       });
     };
@@ -122,9 +122,9 @@ function procOpen(msg) {
       spawned = true;
       resolve({ ok: true, pid: child.pid });
     });
-    child.on('exit', (code) => {
+    child.on('exit', (code, signal) => {
       if (!spawned) return failBeforeSpawn(new Error(`exited before spawn (code ${code})`));
-      reportExit(code);
+      reportExit(code, null, signal);
     });
     child.on('error', (err) => {
       if (!spawned) return failBeforeSpawn(err);

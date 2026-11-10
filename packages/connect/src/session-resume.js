@@ -67,17 +67,18 @@ export class SessionResume {
    * bound after a restart. The turns and questions it left open are
    * unanswerable now - close them the way `resume` does for a dead process.
    */
-  procGone(id) {
+  procGone(id, exit = {}, lost = false) {
     const profiles = loadProfiles()?.profiles ?? [];
     for (const s of this.#core.index.values()) {
-      if (!s.driver || s.nativeSocket || this.#core.drivers.has(s.id)) continue;
+      if (!s.driver || s.nativeSocket || (lost && !s.delegation) || (!lost && this.#core.drivers.has(s.id))) continue;
       const profile = s.driver === 'codex' ? profiles.find(p => p.id === s.profileId) : null;
       const procId = hostedProcId(s, profile ? materialize(profile) : null);
-      if (procId === id) this.#settleGone(s);
+      if (procId === id) this.#settleGone(s, exit);
     }
   }
 
-  #settleGone(s) {
+  #settleGone(s, exit) {
+    this.#core.delegation.processGone(s, exit);
     const id = s.id;
     const tail = this.#sessions.events.tail(id, 0);
     const closed = new Set(tail.filter((e) => ['turn.done', 'turn.remove', 'turn.accept'].includes(e.type)).map((e) => e.turnId));
@@ -290,6 +291,7 @@ export class SessionResume {
       // be running, and say so - but only when there is work to hold.
       s.status = 'idle';
       if (busy) {
+        this.#core.delegation.processGone(s, { reason: `${RECONNECT_FAILED} ${err.message}` });
         s.queuePaused = true;
         s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} ${err.message}`, at: Date.now() };
       } else if (this.unreachable(s)) {
@@ -358,6 +360,7 @@ export class SessionResume {
         if (this.#inFlight(s)) {
           s.queuePaused = true;
           s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} Codex did not answer, so this thread could not be checked.`, at: Date.now() };
+          this.#core.delegation.processGone(s, { reason: 'Helm cannot check the helper because Codex did not answer.' });
         } else if (this.unreachable(s)) {
           // A mark left by an earlier restart, on a thread with nothing to hold.
           delete s.recovery; s.queuePaused = false;
@@ -401,7 +404,8 @@ export class SessionResume {
       // The active turn died with the old daemon. Unsent queued tickets are
       // different: `#restoreOpenTurns` puts them back into the outbox rather
       // than closing them as though the agent had already seen them.
-      this.#restoreOpenTurns(s, seen.turns, false);
+      this.#core.delegation.processGone(s, { reason: 'Helm cannot find the helper process after restart.' });
+      this.#restoreOpenTurns(s, s.delegation ? this.#sessions.events.glance(s.id).turns : seen.turns, false);
       // The process a failed reconnect was about is gone; so is the mark.
       // Anything it was doing is settled just above, as "restart" if need be.
       if (this.unreachable(s)) { delete s.recovery; s.queuePaused = false; }

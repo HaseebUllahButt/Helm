@@ -207,7 +207,7 @@ export class AgyDriver extends Driver {
   #bindPipe(pipe) {
     this.#pipe = pipe;
     this.#exited = new Promise((resolve) => {
-      pipe.onExit(({ code, stderr }) => {
+      pipe.onExit(({ code, signal, stderr }) => {
         this.#pipe = null;
         this.#dead = true;
         // The stream died mid-turn: the live prompt is interrupted (helm
@@ -225,7 +225,7 @@ export class AgyDriver extends Driver {
         this.#interrupting = false;
         for (const id of this.#open.values()) this.push('item.done', { id, status: 'error' });
         this.#open.clear();
-        if (!this.#restarting) this.push('status', { status: 'exited' });
+        if (!this.#restarting) this.push('status', { status: 'exited', code, signal });
         resolve({ code });
         this.#pump();
       });
