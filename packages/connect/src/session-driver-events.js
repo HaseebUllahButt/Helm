@@ -149,6 +149,7 @@ export class DriverEvents {
       return;
     }
     if (e.type === 'status') {
+      if (e.status === 'exited' && current === d) this.#core.delegation.processGone(s, { code: e.code, signal: e.signal });
       // A closed process is not a closed conversation: the next message
       // resumes it. Only an explicit kill removes the session.
       const status = e.status === 'exited' ? 'idle' : e.status;

@@ -472,3 +472,15 @@ test.after(async () => {
   }
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('a hosted process reports its exit signal to the driver', async t => {
+  const host = procHost();
+  t.after(() => host.detach());
+  await host.ensure();
+  await host.openProc('exit-signal', { cmd: process.execPath, args: ['-e', 'process.stdin.resume()'], env: {} });
+  const pipe = host.procPipe('exit-signal');
+  const exit = new Promise(resolve => pipe.onExit(resolve));
+  pipe.kill('SIGTERM');
+  const result = await exit;
+  assert.equal(result.signal, 'SIGTERM');
+});

@@ -48,6 +48,9 @@
 
 - **Reach:** New chat, pick a machine, then “No folder · sketch”.
   Open “First chat help”. Follow the short question and reply check.
+- **Saved accounts:** discovery keeps saved accounts when a tool or shell alias is missing.
+  An installer can briefly remove a binary. Removing an account needs an explicit user action.
+  Test: `test/profiles-refresh.test.mjs`.
 - **Missing account:** install an agent on the chosen machine, open it in a
   terminal, and sign in. Press “Check agents again” without closing the picker.
   A failed machine check has a separate message and retry button. A search
