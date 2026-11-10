@@ -168,8 +168,12 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
     if (!liveTeam.length || firstList.current) return;
     firstList.current = true;
     if (reviewAttention) {
+      // Open the helper that needs the owner, at any depth: a failure two
+      // levels down shows that helper and its reason, not only its lead.
+      const all = liveTeam.map((m) => m.session);
+      const unseen = (s: Session) => s.delegation?.dismissedFailureAt !== (s.delegation?.finishedAt ?? 0);
       const tasks = liveTeam.filter((m) => m.depth === 0).map((m) => m.session);
-      const attention = tasks.find((s) => stateOf(s) === 'blocked') ?? tasks.find((s) => stateOf(s) === 'error')
+      const attention = all.find((s) => stateOf(s) === 'blocked') ?? all.find((s) => stateOf(s) === 'error' && unseen(s))
         ?? tasks.find((s) => s.team?.blocked || s.team?.failed);
       if (attention) { select(attention.id); setFocus(attention.id); }
       else onNativeAttention?.();
@@ -371,6 +375,13 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
     </div>;
   };
 
+  // The chosen helper's leads stay open, so a nested helper is in view.
+  const leads = new Set<string>();
+  for (let at = sessions.find((s) => s.id === selected); at?.delegation?.parentId && !leads.has(at.delegation.parentId);) {
+    leads.add(at.delegation.parentId);
+    const lead = at.delegation.parentId;
+    at = sessions.find((s) => s.id === lead);
+  }
   const row = (child: Session) => {
     const state = stateOf(child);
     const host = remoteOn.get(child.id);
@@ -392,7 +403,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
         </button>
       </div>
       {open && detail(child)}
-      {sessions.some((s) => !s.archived && s.delegation?.parentId === child.id) && <details>
+      {sessions.some((s) => !s.archived && s.delegation?.parentId === child.id) && <details open={leads.has(child.id) || undefined}>
         <summary>Helpers</summary><ul>{sessions.filter((s) => !s.archived && s.delegation?.parentId === child.id).map(row)}</ul>
       </details>}
     </li>;

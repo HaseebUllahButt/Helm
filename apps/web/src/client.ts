@@ -184,7 +184,7 @@ export interface Session {
   externalService?: boolean;
   /** This is a transcript monitor which can become driven after handoff. */
   external?: boolean;
-  delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string; summary?: string; finishedAt?: number;
+  delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string; summary?: string; finishedAt?: number; dismissedFailureAt?: number;
     /** The parent chat is on this other machine. */
     parentMachine?: string };
   /** This chat's helpers on other machines, with the state each one last sent. */
