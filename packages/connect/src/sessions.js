@@ -11,7 +11,7 @@ import { HELM_DIR, expand, quickDir, isQuickDir } from './paths.js';
 import { Checkpoints } from './checkpoints/store.js';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { nativeActive } from './native-subagents.js';
-import { nonAgentClaudeTask, claudeServiceTasks } from './claude-tasks.js';
+import { nonAgentClaudeTask, claudeServiceTasks, staleAgentCards } from './claude-tasks.js';
 import { ENGINES } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
@@ -470,7 +470,8 @@ export class Sessions extends EventEmitter {
   }
 
   /**
-   * Older daemons counted commands and passive watches as helpers. Repair
+   * Older daemons counted commands and passive watches as helpers, and kept
+   * a helper's first card working after SendMessage woke it again. Repair
    * their saved working/failed counts without dropping actual helper work.
    */
   #dropNonAgentTasks() {
@@ -481,7 +482,11 @@ export class Sessions extends EventEmitter {
       try { events = this.events.since(s.id, 0); } catch { continue; }
       const services = new Set(events.filter((e) => (e.type === 'item.start' && nonAgentClaudeTask(e))
         || (e.type === 'item.update' && nonAgentClaudeTask(e.agent))).map((e) => e.id));
-      const removed = Object.keys(s.nativeAgents).filter((id) => services.has(id));
+      // A helper card a later Helm knows has ended (woken again under a new
+      // call, or stopped) is also cleared, so the chat stops looking busy.
+      const stale = staleAgentCards(events);
+      const removed = Object.keys(s.nativeAgents).filter((id) => services.has(id)
+        || (stale.has(id) && ['working', 'blocked'].includes(s.nativeAgents[id])));
       for (const id of removed) delete s.nativeAgents[id];
       if (removed.length) { changed = true; this.#delegation.refreshTeam(s); }
       // A long-running shell can finish after its start was trimmed from
