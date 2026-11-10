@@ -48,6 +48,16 @@ export class SessionDelegation {
   #notifying = new Set();
   /** child id -> when its parent last asked for the result (`delegate-result --wait`). */
   #waiters = new Map();
+  #listStatuses = new WeakMap();
+
+  listStatus(session) {
+    const key = JSON.stringify([session.lastSeq, session.updatedAt, session.status, session.delegation, session.delegationReply]);
+    const cached = this.#listStatuses.get(session);
+    if (cached?.key === key) return cached.status;
+    const status = this.delegationResult(session.id).status;
+    this.#listStatuses.set(session, { key, status });
+    return status;
+  }
 
   forget(id) { this.#waiters.delete(id); }
 

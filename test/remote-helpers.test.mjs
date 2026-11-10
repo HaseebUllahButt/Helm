@@ -195,3 +195,21 @@ test('the list and remote state use the same result as the CLI while a process s
   const rows = await sessions.list({ parentId: parent.id });
   assert.equal(rows.find((s) => s.id === child.id).delegation.status, result.status);
 });
+
+test('repeated helper lists do not reread unchanged histories', async (t) => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const child = await delegateAway(sessions, parent);
+  drivers.get(child.id).finish();
+  let reads = 0;
+  const tail = sessions.events.tail.bind(sessions.events);
+  t.mock.method(sessions.events, 'tail', (...args) => { reads++; return tail(...args); });
+  await sessions.list({ parentId: parent.id });
+  const initial = reads;
+  assert.ok(initial > 0);
+  await sessions.list({ parentId: parent.id });
+  assert.equal(reads, initial);
+  sessions.get(child.id).delegation.status = 'error';
+  await sessions.list({ parentId: parent.id });
+  assert.ok(reads > initial, 'a changed state refreshes the result');
+});

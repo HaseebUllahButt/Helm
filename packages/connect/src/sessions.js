@@ -834,8 +834,8 @@ export class Sessions extends EventEmitter {
     return dedupeNativeConversations(out.filter((s) => !s.delegation?.hidden && (parentId ? !s.archived && (s.delegation?.parentId === parentId || !!team?.has(s.id)) : includeDelegations || !s.delegation || this.#delegation.unhomedDelegation(s))))
       .map((s) => {
         if (!s.delegation) return s;
-        const result = this.#delegation.delegationResult(s.id);
-        return { ...s, delegation: { ...s.delegation, status: result.status } };
+        const child = this.#index.get(s.id);
+        return { ...s, delegation: { ...s.delegation, status: this.#delegation.listStatus(child) } };
       })
       .map((s) => s.delegations ? { ...s, delegations: this.#delegation.visibleDelegations(s) } : s)
       .map((s) => (s.delegation && this.#delegation.unhomedDelegation(s) ? { ...s, unhomed: true } : s))
