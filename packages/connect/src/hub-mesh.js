@@ -293,13 +293,8 @@ export class HubMesh {
   }
 
   networkChanged() {
-    this.routes.clear();
-    this.directUse.clear();
-    for (const slots of this.timing.values()) for (const slot of slots.values()) {
-      slot.ms = null;
-      slot.probing = null;
-      slot.probe = null;
-    }
+    // Keep chosen routes, samples and pending probes until a path fails or
+    // another path answers faster. Checks must not move helper traffic.
     this.direct?.networkChanged();
     this.probeAll();
   }
