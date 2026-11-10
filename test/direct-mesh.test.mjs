@@ -127,8 +127,13 @@ test('a VPN change keeps healthy direct channels and never replays a write in fl
   mesh.networkChanged();
   assert.equal(peer.closed, false);
   assert.equal(peers.made.length, 1);
-  assert.equal(mesh.table()[0].direct.used, false);
-  assert.equal(peer.sent.filter(f => f.method === 'session.send').length, 1);
+  assert.equal(mesh.table()[0].direct.used, true);
+  const next = mesh.call('remote', 'session.send', { text: 'during check' });
+  const nextFrame = peer.sent.find(f => f.params?.text === 'during check');
+  assert.ok(nextFrame);
+  peer.answer(nextFrame.id, { accepted: true });
+  await next;
+  assert.equal(peer.sent.filter(f => f.method === 'session.send').length, 2);
   assert.equal(hub.sent.filter(f => f.method === 'session.send').length, 0);
   peer.answer(frame.id, { accepted: true });
   assert.deepEqual(await write, { accepted: true });
