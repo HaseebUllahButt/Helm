@@ -56,6 +56,10 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
             <span className="grow"><span className="rt">Usage & cost</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
+          <button className="row" onClick={() => onOpen({ kind: 'dashboard' })}>
+            <span className="grow"><span className="rt">Dashboard</span></span>
+            <span className="chev"><Icon name="forward" size={15} /></span>
+          </button>
           <button className="row" onClick={() => onOpen({ kind: 'updates' })}>
             <span className="grow"><span className="rt">Updates</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>

@@ -62,6 +62,7 @@ function useWide() {
 }
 
 const UsageView = deferredScreen('Usage', () => import('./Usage').then(m => ({ default: m.UsageView })));
+const DashboardView = deferredScreen('Dashboard', () => import('./screens/Dashboard').then(m => ({ default: m.DashboardView })));
 const UpdatesView = deferredScreen('Updates', () => import('./Updates').then(m => ({ default: m.UpdatesView })));
 const IntegrationsView = deferredScreen('Connectors & skills', () => import('./Integrations').then(m => ({ default: m.IntegrationsView })));
 const TransferView = deferredScreen('Send a project', () => import('./Transfer').then(m => ({ default: m.TransferView })));
@@ -142,6 +143,8 @@ export type MainView =
   // Every machine summed, or one machine's own scope. Same screen, same
   // facets - the question is the same, only the scope changes.
   | { kind: 'usage'; envId?: string }
+  // Every machine's load and every account's limit left, in one screen.
+  | { kind: 'dashboard' }
   | { kind: 'brain' }
   | { kind: 'new'; path?: string }
   | { kind: 'browse'; path?: string }
@@ -174,7 +177,7 @@ export type MainView =
   | { kind: 'terminal-opening'; openId: string };
 
 const VIEW_KINDS: Record<MainView['kind'], true> = {
-  env: true, integrations: true, usage: true, brain: true, new: true,
+  env: true, integrations: true, usage: true, dashboard: true, brain: true, new: true,
   browse: true, 'transfer-browse': true, transfer: true, verify: true,
   start: true, settings: true, 'network-settings': true, links: true,
   updates: true, owner: true, models: true, devices: true, 'app-settings': true,
@@ -520,6 +523,7 @@ function Shell({ client, conn, onSignOut }: {
         // The $ key (Shift+4), by position so any layout works; Ctrl+Shift+L
         // locked the owner's screen.
         if (e.code === 'Digit4' || e.key === '$') { e.preventDefault(); setPalette(false); navigate([{ kind: 'usage' }]); return; }
+        if (e.code === 'KeyD') { e.preventDefault(); setPalette(false); navigate([{ kind: 'dashboard' }]); return; }
       }
     };
     window.addEventListener('keydown', onKey);
@@ -575,6 +579,7 @@ function Shell({ client, conn, onSignOut }: {
     go('a:updates', 'Updates', 'version upgrade machines', [{ kind: 'app-settings' }, { kind: 'updates' }]);
     go('a:devices', 'Devices & pairing', 'phone key link', [{ kind: 'app-settings' }, { kind: 'devices' }]);
     go('a:cost', 'Cost', 'usage tokens spend', [{ kind: 'usage' }]);
+    go('a:dashboard', 'Dashboard', 'machines compute cpu memory gpu load limits balancer accounts', [{ kind: 'dashboard' }]);
     go('a:defaults', 'Agent defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
     go('a:links', 'Spins', 'share spin private forward port', [{ kind: 'app-settings' }, { kind: 'links' }]);
     for (const t of ['light', 'dark', 'system'] as Theme[]) {
@@ -1075,7 +1080,7 @@ function Shell({ client, conn, onSignOut }: {
   instantTerminal.current = () => {
     const online = envs.filter((e) => e.online);
     const current = nav.current.stack.at(-1);
-    const global = !current || ['usage', 'brain', 'links', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
+    const global = !current || ['usage', 'dashboard', 'brain', 'links', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
       && !(current.kind === 'usage' && current.envId);
     const chosen = !global && nav.current.selected !== autoPicked.current ? nav.current.selected : null;
     const lastUsed = (e: Environment) => Math.max(0, ...(sessions[e.id] ?? []).filter(ownTerminal).map((s) => s.updatedAt ?? 0));
@@ -1294,7 +1299,7 @@ function Shell({ client, conn, onSignOut }: {
   // so it has to open the main pane on a phone without one being selected -
   // and what devices hold keys, and the settings they live under, belong to
   // no machine either.
-  const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'devices'
+  const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'dashboard' || view.kind === 'devices'
     || view.kind === 'network-settings' || view.kind === 'app-settings' || view.kind === 'updates'
     || view.kind === 'links' || view.kind === 'owner';
 
@@ -1303,6 +1308,15 @@ function Shell({ client, conn, onSignOut }: {
   // deserves red.
   const downFor = downSince ? Date.now() - downSince : 0;
   const status = conn.online ? 'live' : conn.reachable ? 'reconnecting' : downFor > 12_000 ? 'offline' : 'connecting';
+
+  const dashboardRow = (
+    <button key="dashboard" type="button" className="row" onClick={() => navigate([{ kind: 'dashboard' }])}>
+      <span className="grow"><span className="rt"><span className="rt-text">Dashboard</span></span></span>
+      <span className="rm">Load and limits</span>
+      <span className="chev"><Icon name="forward" size={15} /></span>
+    </button>
+  );
+  const homeMachines = envs.map((e) => ({ env: e, running: workingThreadsOn(e).length, waiting: e.online ? waitingCountOn(e) : 0 }));
 
   const phoneMachineRow = (e: Environment) => (
     <button key={e.id} type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
@@ -1411,8 +1425,8 @@ function Shell({ client, conn, onSignOut }: {
             {!wide && envs.length > 0 && <div className="phone-machines">
               <Fold shelf title="Machines" count={envs.length}
                 note={`${envs.filter((e) => e.online).length} online`}
-                peek={<div className="rows plain">{envs.filter((e) => e.online).map(phoneMachineRow)}</div>}>
-                <div className="rows plain">{envs.map(phoneMachineRow)}</div>
+                peek={<div className="rows plain">{envs.filter((e) => e.online).map(phoneMachineRow)}{dashboardRow}</div>}>
+                <div className="rows plain">{envs.map(phoneMachineRow)}{dashboardRow}</div>
               </Fold>
             </div>}
 
@@ -1528,6 +1542,8 @@ function Shell({ client, conn, onSignOut }: {
           />
         ) : view.kind === 'usage' ? (
           <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
+        ) : view.kind === 'dashboard' ? (
+          <DashboardView client={client} envs={envs} machines={homeMachines} onBack={back} onOpenMachine={openEnv} />
         ) : view.kind === 'devices' ? (
           <DevicesView client={client} onBack={back} />
         ) : view.kind === 'updates' ? (
@@ -1547,7 +1563,8 @@ function Shell({ client, conn, onSignOut }: {
           // A wide screen with no machine open: Home, where the logo leads.
           <Home
             client={client} near={lastMachine.current}
-            machines={envs.map((e) => ({ env: e, running: workingThreadsOn(e).length, waiting: e.online ? waitingCountOn(e) : 0 }))}
+            machines={homeMachines}
+            onDashboard={() => push({ kind: 'dashboard' })}
             brain={brainRow()}
             onOpenMachine={openEnv}
             onStart={(info, run, message) => {

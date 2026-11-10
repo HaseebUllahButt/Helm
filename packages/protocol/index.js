@@ -112,6 +112,7 @@ export const CONTROLLER_REFUSAL =
 
 export const M = {
   ENV_INFO: 'env.info',            // {} -> { host, os, arch, uptime, engines }
+  MACHINE_STATS: 'machine.stats',  // {} -> { at, cpu{cores,model,used%}, load[], memory{total,used}, disk{total,free}, gpus[], uptime }
   // Renaming goes to the machine being renamed, never to the hub the phone
   // happened to reach: a machine's roster record has exactly one author.
   ENV_RENAME: 'env.rename',        // { name } -> { id, name }
