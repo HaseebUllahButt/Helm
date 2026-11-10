@@ -18,6 +18,9 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
     let version = 0;
     const updates = new Map<string, { version: number; session: Session }>();
     const known = new Set([`${envId}/${parentId}`]);
+    // Until the first full read, an update is kept for it and not shown alone:
+    // a list with one helper looks complete and hides the one that failed.
+    let published = false;
     const load = async () => {
       if (loading) { again = true; return; }
       loading = true;
@@ -44,6 +47,7 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
           }
         };
         visit(envId, parentId);
+        published = true;
         setTeam(ordered);
       };
       const reads = new Map<string, Promise<Session[]>>();
@@ -102,6 +106,7 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
         if (key === `${envId}/${parentId}`) void load();
         else if (known.has(key) || known.has(owner)) {
           known.add(key);
+          if (!published) return;
           setTeam((now) => {
             const previous = now.find((m) => m.envId === machine && m.session.id === session.id);
             const parent = now.find((m) => `${m.envId}/${m.session.id}` === owner);

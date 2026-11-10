@@ -1447,7 +1447,12 @@ function Shell({ client, conn, onSignOut }: {
                     key={s.id} s={s} machine={e.name} selected={isOpen({ env: e, s })}
                     onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
                     onPick={isOpen({ env: e, s }) ? undefined : () => setIslandPick({ envId: e.id, id: s.id, at: Date.now() })}
-                    onDismiss={async () => { await client.rpc(e.id, 'session.dismiss-child-failures', { id: s.id }); }}
+                    onDismiss={async () => {
+                      await client.rpc(e.id, 'session.dismiss-child-failures', { id: s.id });
+                      // A failure under a helper on another machine is cleared on that machine.
+                      await Promise.all((s.remoteHelpers ?? []).filter((h) => !h.archived && h.team?.failed)
+                        .map((h) => client.rpc(h.machine, 'session.dismiss-child-failures', { id: h.id }).catch(() => { /* offline: the count stays */ })));
+                    }}
                   />
                 ))}
               </Fold>

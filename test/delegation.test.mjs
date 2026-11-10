@@ -1462,6 +1462,22 @@ test('a helper with no thread to sit under lists on its own, and its team nests 
 });
 
 
+test('a message that never reaches a finished helper does not mark the helper failed', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Port one part' });
+  const driver = drivers.get(child.id);
+  driver.finish();
+  assert.equal(sessions.get(child.id).delegation.status, 'done');
+  // The lead removed the helper's folder, then sent it a last note.
+  driver.send = async () => { throw Object.assign(new Error('the folder /gone does not exist on this machine'), { deliveryNotSent: true }); };
+  await assert.rejects(sessions.input(child.id, 'No action needed', { source: 'agent' }), /does not exist/);
+  assert.equal(sessions.get(child.id).delegation.status, 'done');
+  assert.equal(parent.team.failed, 0);
+  const failed = sessions.events.tail(child.id, 20).findLast(e => e.type === 'turn.done');
+  assert.equal(failed.status, 'error', 'the message itself still shows why it was not delivered');
+});
+
 test('dismissed native failures stay in history and only a new failure alerts again', async t => {
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });

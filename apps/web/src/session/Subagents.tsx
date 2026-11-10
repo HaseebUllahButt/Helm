@@ -169,10 +169,24 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
     if (!liveTeam.length || firstList.current) return;
     firstList.current = true;
     if (reviewAttention) {
+      // Open the helper that needs the owner, at any depth: a failure two
+      // levels down shows that helper and its reason, not only its lead.
+      const all = liveTeam.map((m) => m.session);
+      const unseen = (s: Session) => s.delegation?.dismissedFailureAt !== (s.delegation?.finishedAt ?? 0);
       const tasks = liveTeam.filter((m) => m.depth === 0).map((m) => m.session);
-      const attention = tasks.find((s) => stateOf(s) === 'blocked') ?? tasks.find((s) => stateOf(s) === 'error')
+      const attention = all.find((s) => stateOf(s) === 'blocked') ?? all.find((s) => stateOf(s) === 'error' && unseen(s))
         ?? tasks.find((s) => s.team?.blocked || s.team?.failed);
-      if (attention) { select(attention.id); setFocus(attention.id); }
+      if (attention) {
+        // Unfold its leads, so a nested helper is in view.
+        const leads = new Set<string>();
+        for (let at: Session | undefined = attention; at?.delegation?.parentId && !leads.has(at.delegation.parentId);) {
+          const lead: string = at.delegation.parentId;
+          leads.add(lead);
+          at = all.find((s) => s.id === lead);
+        }
+        if (leads.size) setExpanded((now) => new Set([...now, ...leads]));
+        select(attention.id); setFocus(attention.id);
+      }
       else onNativeAttention?.();
     }
   }, [liveTeam]);
