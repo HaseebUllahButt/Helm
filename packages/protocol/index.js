@@ -135,6 +135,7 @@ export const M = {
   GIT_DIFF: 'git.diff',            // { cwd, path } -> { path, diff, truncated }
   GIT_FILES: 'git.files',          // { cwd } -> { root, start, files[], secret[], truncated }  for the read-only file viewer
   GIT_FILE: 'git.file',            // { cwd, path, since? } -> { path, size, text?, hash?, truncated?, binary?, hidden? } | { same }
+  GIT_DOWNLOAD: 'git.download',    // { cwd, path, offset } -> { data, offset, size, name }  one piece of a project file, for Download
   GIT_WRITE: 'git.write',          // { cwd, path, text, base: hash | null } -> { path, hash, size } | { conflict, gone? } | { exists }  the canvas saving a file
   GIT_COMMIT: 'git.commit',        // { cwd, hash } -> { hash, subject, body, author, date, parents[], files[] }
   GIT_WORKTREE: 'git.worktree',    // { cwd, name? } -> { path, branch, base }  a sibling checkout on a new branch
@@ -217,7 +218,8 @@ export const M = {
   SESSION_CANVAS: 'session.canvas', // { id, path, requestId } -> { canvas } select a project file beside chat
   SESSION_CANVAS_CLOSED: 'session.canvas-closed', // { id, requestId } -> { canvas }  the owner closed it; no device opens that ask again
   SESSION_RENDER: 'session.render',   // { id, html, title?, height?, renderId, placement?: 'canvas', url? } -> { visual } saved, never provider work
-  SESSION_VISUAL: 'session.visual',   // { id, ref, page?, file? } -> { html } | PDF { total, pages, download? } | { image } | { file } lazy authenticated snapshot read
+  SESSION_RENDER_FILE: 'session.visual-file', // { id, renderId, offset, data } -> { size }  one piece of the original file, before session.render with upload: true
+  SESSION_VISUAL: 'session.visual',   // { id, ref, page?, file?, offset? } -> { html } | PDF { total, pages, download? } | { image } | { file, offset, size, name?, mime } lazy authenticated snapshot read
   SESSION_WATCH: 'session.watch',     // { id } -> { ok, last }   start/renew E.SESSION_EVENT pushes
   SESSION_UNWATCH: 'session.unwatch', // { id }
   SESSION_SEARCH: 'session.search',   // { query, limit? } -> { results[] }  chats here whose words (yours or the agent's) hold every word typed
