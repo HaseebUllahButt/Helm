@@ -35,7 +35,7 @@ owner's home or network to bypass this check.
   must be greater than the beginning. Private tests must match their own
   firewall rules and never change the owner's network.
 - **Tests:** `test/machine-kind`, `device-presence`, `roster-watch`,
-  `gossip`, `lan-discovery`, `direct-mesh`, `auth`, `local-login`,
+  `gossip`, `lan-discovery`, `network-monitor`, `hub-mesh`, `direct-mesh`, `auth`, `local-login`,
   `hub-authz`, `roster-trust`, `security-transport`, `security-routes`; `test/browser/hub-auth`.
 
 ## Check installation and connections
@@ -50,6 +50,10 @@ owner's home or network to bypass this check.
   machine names. Reports omit addresses, keys, raw errors and chat data.
 - Run `helm doctor` on the affected machine. Use `--json` for a support report.
   It reads status only. It never starts a service or changes settings.
+- Network checks ignore container links, link-local addresses and Tailscale
+  address changes. Physical addresses, default routes, VPN rules and DNS still
+  trigger a check. Keep working hub and direct routes while probes run.
+  A failed path can use a backup. A faster measured path can replace it.
 - The live connection check stays on loopback. A healthy remote home must not
   hide a failed local service. A home health reply proves only its web response.
 - Reports omit addresses, keys, account data, and raw errors. A route count

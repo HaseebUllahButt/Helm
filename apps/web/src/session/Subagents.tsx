@@ -71,6 +71,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   const [busy, setBusy] = useState(false);
   const [composing, setComposing] = useState(false);
   const [selected, setSelected] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<DelegationResult | null>(null);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [sending, setSending] = useState(false);
@@ -222,7 +223,8 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
       try {
-        const reply = await client.rpc<DelegationResult>(envOf(selected), 'session.delegation-result', { id: selected });
+        const child = sessions.find((s) => s.id === selected);
+        const reply = await client.rpc<DelegationResult>(child?.removed ? child.delegation?.parentMachine || env.id : envOf(selected), 'session.delegation-result', { id: selected });
         if (stale) return;
         setResult(reply);
         if (reply.pending) {
@@ -358,12 +360,12 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
       {result?.error && <p className="error">{errorMessage(result.error, { machine: nameOf(envOf(child.id)) })}</p>}
       {result?.truncated && <p className="note">Showing the most recent output.</p>}
       <div className="delegation-actions">
-        {onOpen && !offline(child) && <button type="button" className="ghost" onClick={() => onOpen(child, envOf(child.id))}>Open chat</button>}
-        {complete ? <>
+        {onOpen && !child.removed && !offline(child) && <button type="button" className="ghost" onClick={() => onOpen(child, envOf(child.id))}>Open chat</button>}
+        {complete && !child.removed ? <>
           {['error', 'interrupted'].includes(state) && <button type="button" className="ghost" disabled={!!acting} onClick={() => void retry(child)}>
             {acting === 'retry' ? 'Retrying…' : 'Retry task'}</button>}
           <button type="button" className="ghost" disabled={!!acting} onClick={() => void hide(child)}>{acting === 'hide' ? 'Hiding…' : 'Hide task'}</button>
-        </> : <button type="button" className="ghost destructive" disabled={!!acting} onClick={() => void stop(child)}>
+        </> : !complete && <button type="button" className="ghost destructive" disabled={!!acting} onClick={() => void stop(child)}>
           {acting === 'stop' ? 'Stopping…' : 'Stop helper'}</button>}
       </div>
       {notice && <p className="note" role="status">{notice}</p>}
@@ -376,14 +378,17 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
     const host = remoteOn.get(child.id);
     const where = host === env.id ? undefined : host;
     const open = selected === child.id;
+    const nested = sessions.filter((s) => !s.archived && s.delegation?.parentId === child.id);
+    const unfolded = expanded.has(child.id);
     const label = STATUS[state] || state;
     const toggle = () => select(open ? '' : child.id);
     return <li key={child.id} className={`delegation-branch${open ? ' selected' : ''}`}>
       <div className="delegation-row">
-        <button type="button" className="delegation-task" title={onOpen && !offline(child) ? 'Open helper chat' : undefined}
-          onClick={() => onOpen && !offline(child) ? onOpen(child, envOf(child.id)) : toggle()}>
+        <button type="button" className="delegation-task" title={nested.length ? 'Show helpers' : onOpen && !child.removed && !offline(child) ? 'Open helper chat' : undefined}
+          onClick={() => nested.length ? setExpanded((now) => { const next = new Set(now); if (next.has(child.id)) next.delete(child.id); else next.add(child.id); return next; }) : child.removed ? toggle() : onOpen && !child.removed && !offline(child) ? onOpen(child, envOf(child.id)) : toggle()}
+          aria-expanded={nested.length ? unfolded : undefined}>
           <EngineMark engine={child.engine} />
-          <span className="grow"><b>{child.title}</b><small>{offline(child) ? `${nameOf(where ?? '')} is offline`
+          <span className="grow"><b>{child.title}</b>{nested.length > 0 && <small>{nested.length} {nested.length === 1 ? 'helper' : 'helpers'} <Icon name={unfolded ? 'up' : 'down'} size={12} /></small>}<small>{offline(child) ? `${nameOf(where ?? '')} is offline`
             : [child.profileId, child.model || child.engineModel || 'Agent default', where && `on ${nameOf(where)}`].filter(Boolean).join(' · ')}</small></span>
         </button>
         <button type="button" className={`delegation-status state-${state}`} data-task={child.id} aria-label={`${label}, details`}
@@ -392,9 +397,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
         </button>
       </div>
       {open && detail(child)}
-      {sessions.some((s) => !s.archived && s.delegation?.parentId === child.id) && <details>
-        <summary>Helpers</summary><ul>{sessions.filter((s) => !s.archived && s.delegation?.parentId === child.id).map(row)}</ul>
-      </details>}
+      {unfolded && nested.length > 0 && <ul>{nested.map(row)}</ul>}
     </li>;
   };
 

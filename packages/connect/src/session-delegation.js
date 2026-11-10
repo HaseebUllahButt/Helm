@@ -90,6 +90,7 @@ export class SessionDelegation {
   }
 
   updateTeam(child) {
+    if (child.removed) return;
     if (child.delegation?.parentMachine) { this.#pushState(child); return; }
     const parent = this.#core.index.get(child.delegation?.parentId);
     if (!parent) return;
@@ -531,6 +532,23 @@ export class SessionDelegation {
     this.#core.save();
   }
 
+  /** Repair saved helper states only after their machine answers a full list. */
+  async reconcileRemoteHelpers(parentId) {
+    const parent = this.#core.index.get(parentId);
+    if (!parent || !this.#sessions.remoteRpc) return;
+    const links = (parent.remoteHelpers ?? []).filter((h) => !h.removed && !h.archived);
+    await Promise.all([...new Set(links.map((h) => h.machine))].map(async (machine) => {
+      let reply;
+      try { reply = await this.#sessions.remoteRpc(machine, 'session.list', { parentId, nested: true }); }
+      catch { return; }
+      if (!Array.isArray(reply?.sessions)) return;
+      for (const helper of links.filter((h) => h.machine === machine)) {
+        if (reply.sessions.some((s) => s.id === helper.id)) continue;
+        this.remoteHelperState(machine, { parentId, helper: { id: helper.id, status: 'interrupted', removed: true } });
+      }
+    }));
+  }
+
   /** The parent and its record of a helper on `machine`, or null. */
   remoteHelper(id, { parentId, machine } = {}) {
     const parents = parentId ? [this.#core.index.get(parentId)].filter(Boolean) : [...this.#core.index.values()];
@@ -550,7 +568,9 @@ export class SessionDelegation {
   /** A helper on `machine` changed state. */
   remoteHelperState(machine, { parentId, helper: state }) {
     const { parent, helper } = this.#ownRemote(machine, parentId, state);
+    if (helper.removed && !state.removed) return { ok: true };
     Object.assign(helper, { title: state.title ?? helper.title, status: state.status, team: state.team,
+      removed: state.removed === true, ...(state.result ? { result: state.result } : {}),
       finishedAt: state.finishedAt, archived: state.archived === true });
     if (!state.team) delete helper.team;
     if (!state.archived) delete helper.archived;
@@ -562,6 +582,7 @@ export class SessionDelegation {
   /** A helper on `machine` finished: its result starts a parent turn, as a local one does. */
   async remoteHelperResult(machine, { parentId, generation = 0, helper: state, seq, text }) {
     const { parent, helper } = this.#ownRemote(machine, parentId, state);
+    if (helper.removed) return { ok: true, skipped: true };
     this.remoteHelperState(machine, { parentId, helper: state });
     if (!Number.isInteger(seq) || typeof text !== 'string' || text.length > 20_000) throw new Error('a helper result needs its number and text');
     // Stopped since, read already, or told before: nothing to say.

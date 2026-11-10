@@ -506,19 +506,21 @@ test('Shell back history leaves parent and child chats without cycling between t
     view.setDefaultTimeout(10_000);
     try {
       await view.route('http://helm-history-test/**',r=>r.fulfill({contentType:'text/html',body:'<div id="root"></div>'}));
-      await view.goto('http://helm-history-test/');
+      await view.goto('http://helm-history-test/#open=history-test/parent');
       await view.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
       await view.addScriptTag({content:bundle.outputFiles[0].text});
-      await view.locator('.sidebar').getByRole('button',{name:'Search chats, machines, and folders'}).click();
-      const palette = view.getByRole('dialog',{name:'Search and actions'});
-      await palette.getByRole('combobox').fill('Parent history chat');
-      await palette.getByRole('option',{name:/Parent history chat/}).click();
       const heading = title=>view.locator('.session-bar h1').filter({hasText:new RegExp('^'+title+'$')});
       await heading('Parent history chat').waitFor();
       const openChild = async title=>{
         await view.locator('.session-bar').getByRole('button',{name:'Agents',exact:true}).click();
         await view.getByRole('dialog',{name:'Agents',exact:true}).waitFor();
-        await view.getByRole('button',{name:new RegExp(title)}).click();
+        const task = view.getByRole('button',{name:new RegExp(title)});
+        const expands = await task.getAttribute('aria-expanded') !== null;
+        await task.click();
+        if (expands) {
+          await task.locator('..').getByRole('button',{name:'Done, details',exact:true}).click();
+          await view.getByRole('button',{name:'Open chat',exact:true}).click();
+        }
         await heading(title).waitFor();
       };
       const parentDepth = await view.evaluate(()=>history.state.depth);

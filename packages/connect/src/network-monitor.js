@@ -6,12 +6,19 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 const ordered = values => values.map(value => JSON.stringify(value)).sort();
 
-/** Exclude changing route-cache counters while retaining VPN policy and paths. */
+// These links cannot carry Helm's physical network connections.
+const containerLink = name => /^(docker|br-|veth|virbr|cni|flannel|cali|podman)/.test(name ?? '');
+const linkLocal = address => /^(169\.254\.|fe[89ab][0-9a-f]:)/i.test(address ?? '');
+const overlayLink = name => /^tailscale/.test(name ?? '');
+const defaultRoute = dst => ['default', '0.0.0.0/0', '::/0'].includes(dst);
+
+/** Keep physical addresses and usable routes; ignore container and overlay address churn. */
 export function networkSignature({ interfaces = {}, routes = [], rules = [], dns = '' }) {
   return JSON.stringify({
     interfaces: ordered(Object.entries(interfaces).flatMap(([name, addresses]) =>
-      addresses.filter(a => !a.internal).map(a => [name, a.family, a.address, a.netmask, a.scopeid ?? null]))),
-    routes: ordered(routes.map(({ dst, gateway, dev, table, type, metric, prefsrc, nexthops }) =>
+      addresses.filter(a => !a.internal && !containerLink(name) && !overlayLink(name) && !linkLocal(a.address)).map(a => [name, a.family, a.address, a.netmask, a.scopeid ?? null]))),
+    routes: ordered(routes.filter(r => !containerLink(r.dev) && !linkLocal(r.dst)
+      && (!overlayLink(r.dev) || defaultRoute(r.dst))).map(({ dst, gateway, dev, table, type, metric, prefsrc, nexthops }) =>
       ({ dst, gateway, dev, table, type, metric, prefsrc, nexthops }))),
     rules: ordered(rules), dns,
   });

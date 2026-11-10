@@ -1342,6 +1342,7 @@ export class Daemon {
     if (p.callerThreadId && (parent.engine !== 'codex' || parent.engineSessionId !== p.callerThreadId)) {
       throw new Error('the calling Codex thread does not match the inherited Helm parent; use --parent with the intended orchestrator ID');
     }
+    if (helper.removed) return { ...helper.result, id: helper.id, status: 'interrupted', complete: true, output: helper.result?.output ?? '', machine: helper.machine };
     const consume = p.consume === true && p.parentId === parent.id;
     const result = await hubRpc(loadNetwork() ?? this.net, helper.machine, M.SESSION_DELEGATION_RESULT,
       { id: p.id, ...(consume ? { consume: true, parentId: parent.id } : {}), parentMachine: this.id }, { timeout: 30_000 });
@@ -1349,7 +1350,7 @@ export class Daemon {
     if (child?.id === helper.id) {
       try {
         this.sessions.remoteHelperState(helper.machine, { parentId: parent.id, helper: { id: child.id, title: child.title,
-          status: child.delegation?.status ?? child.status, team: child.team, finishedAt: child.delegation?.finishedAt, archived: child.archived } });
+          result, status: child.delegation?.status ?? child.status, team: child.team, finishedAt: child.delegation?.finishedAt, archived: child.archived } });
       } catch { /* the record went away meanwhile */ }
     }
     if (consume && result.complete && Number.isInteger(result.consumedSeq)) this.sessions.remoteConsumed(parent, helper.id, result.consumedSeq);
@@ -2204,6 +2205,7 @@ export class Daemon {
       }
 
       case M.SESSION_LIST: {
+        if (p.parentId) await this.sessions.reconcileRemoteHelpers(p.parentId);
         let sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true, nested: p.nested === true });
         // `helm thread <id>` and the like look for one chat on every machine.
         // The whole list with every helper was megabytes on a slow link.

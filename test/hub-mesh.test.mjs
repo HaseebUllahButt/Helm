@@ -157,3 +157,18 @@ test('mesh forwards direct negotiation only along its chosen route and releases 
   assert.equal(signals.length, 1);
   mesh.stop();
 });
+
+
+test('network checks keep the chosen hub and its measurements while probes run', () => {
+  const { mesh, link, advertise } = fixture();
+  const other = { connected: true, sent: [], send(t, p) { this.sent.push({ t, ...p }); } };
+  mesh.up(other); advertise(); advertise(other);
+  mesh.routes.set('remote', { link: other, since: 0 });
+  mesh.timing.get(other).set('remote', { ms: 10, probing: null });
+  mesh.timing.get(link).set('remote', { ms: 100, probing: null });
+  mesh.networkChanged();
+  assert.equal(mesh.route('remote'), other);
+  assert.equal(mesh.timing.get(other).get('remote').ms, 10);
+  assert.equal(mesh.timing.get(link).get('remote').ms, 100);
+  mesh.stop();
+});
