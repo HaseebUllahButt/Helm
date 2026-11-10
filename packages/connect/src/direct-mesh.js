@@ -235,7 +235,6 @@ export class DirectMesh {
         this.#drop(env);
         this.waits.delete(env);
       } else {
-        channel.ms = null;
         this.ping(env);
       }
     }
