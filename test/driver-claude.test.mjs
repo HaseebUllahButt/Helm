@@ -543,6 +543,44 @@ test('reattaching Claude restores a background task and routes its completion wi
   await driver.suspend();
 });
 
+test('a Claude helper woken by SendMessage clears its first card when it ends, also after TaskStop and a reattach', async () => {
+  let receive;
+  const pipe = { onData: cb => { receive = cb; }, onExit: () => {}, detach: () => {} };
+  const { driver, log } = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => null, resumeEvents: () => [] });
+  await driver.start();
+  const frame = (m) => receive(JSON.stringify({ type: 'system', ...m }) + '\n');
+  frame({ subtype: 'task_started', task_id: 'agent-7', tool_use_id: 'toolu_spawn', task_type: 'local_agent' });
+  frame({ subtype: 'task_started', task_id: 'agent-7', tool_use_id: 'toolu_send', task_type: 'local_agent' });
+  frame({ subtype: 'task_notification', task_id: 'agent-7', status: 'completed', summary: 'done' });
+  const last = () => Object.fromEntries(log.of('subagent.status').map(e => [e.id, e.status]));
+  assert.deepEqual(last(), { toolu_spawn: 'idle', toolu_send: 'idle' });
+  // TaskStop sends no task_notification for a helper: its result ends it.
+  frame({ subtype: 'task_started', task_id: 'agent-8', tool_use_id: 'toolu_eight', task_type: 'local_agent' });
+  receive(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_stop', content: 'ok' }] },
+    tool_use_result: { message: 'Successfully stopped task: agent-8 (batch 8)', task_id: 'agent-8', task_type: 'local_agent' } }) + '\n');
+  assert.equal(last().toolu_eight, 'idle');
+  assert.equal(driver.backgroundTasks, 0);
+  await driver.suspend();
+
+  // A chat saved by an older Helm: the first card was never cleared.
+  const again = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe }, openTurn: () => null,
+    resumeEvents: () => [
+      { type: 'item.update', id: 'toolu_spawn', agent: { id: 'agent-7', status: 'running' } },
+      { type: 'item.done', id: 'toolu_stop', status: 'ok', result: { message: 'Successfully stopped task: agent-7', task_id: 'agent-7' } },
+      { type: 'item.update', id: 'toolu_send', agent: { id: 'agent-7', status: 'running' } },
+      { type: 'item.update', id: 'toolu_send', agent: { id: 'agent-7', status: 'completed' } },
+      { type: 'item.update', id: 'toolu_nine', agent: { id: 'agent-9', status: 'running' } },
+      { type: 'item.update', id: 'toolu_ten', agent: { id: 'agent-10', status: 'running' } },
+      { type: 'item.update', id: 'toolu_ten_send', agent: { id: 'agent-10', status: 'running' } },
+    ] });
+  await again.driver.start();
+  assert.deepEqual(Object.fromEntries(again.log.of('subagent.status').map(e => [e.id, e.status])),
+    { toolu_spawn: 'idle', toolu_nine: 'working', toolu_ten: 'idle', toolu_ten_send: 'working' });
+  assert.equal(again.driver.backgroundTasks, 2);
+  await again.driver.suspend();
+});
+
 test('a background shell command is not a child task, even when it fails', async () => {
   let receive;
   const pipe = { onData: cb => { receive = cb; }, onExit: () => {}, detach: () => {} };
