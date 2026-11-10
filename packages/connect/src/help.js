@@ -421,6 +421,15 @@ const DETAILS = {
                       A failed batch stops and lists candidate elements.
     flows / run       save a repeating batch with {{param}}, values, save_as
                       and note; replay it with run <tab> <name> key=value
+    script <tab> <file>
+                      Run a JavaScript file in one call, with ifs and loops.
+                      The file gets browser, log and args (key=value words).
+                      Use - to read it from input. browser has look, click,
+                      type, goto, key, select, scroll, point, evaluate, act,
+                      check (gives true or false), open, tab and tabs.
+                      A step does not read the page: add {look: true}.
+                      --timeout <ms> stops the whole script. Example:
+                      while (!(await browser.check('Under $50'))) await browser.click('Next')
     point <tab> <el>  show the owner where to click, without clicking
     screenshot        only when visuals matter; close <tab> releases it
     profiles / logins copy the owner's browser logins into Helm's window

@@ -720,7 +720,7 @@ export class BrowserManager {
     if (action?.kind === 'dialog' || action?.kind === 'check' && tab.dialog) {
       if (action.kind === 'dialog' && ['read', 'readonly', 'plan'].includes(this.owner(sessionId).mode)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
       tab.lastUsed = this.now();
-      try { return await this.perform(tab, action); } catch (error) { if (!error.check) throw error; return { error: error.message, check: error.check, tab: this.metadata(tab), ...(await this.snapshot(tab)) }; }
+      try { return await this.perform(tab, action); } catch (error) { if (!error.check) throw error; return { error: error.message, check: error.check, tab: this.metadata(tab), ...(action.look === false ? {} : await this.snapshot(tab)) }; }
     }
     const previous = this.serial.get(tab.id) || Promise.resolve();
     // What this call is doing now, so a timeout can say if a step reached the page.
@@ -753,7 +753,7 @@ export class BrowserManager {
       if (shared) tab.agentActing = true;
       (tab.working ||= new Set()).add(op); op.started = true; op.step = batch ? null : { kind: action.kind };
       try { result = await this.perform(tab, action, false, op); }
-      catch (error) { if (!error.candidates && !error.check) throw error; result = { error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await (error.check ? this.snapshot(tab) : this.look(tab))) }; }
+      catch (error) { if (!error.candidates && !error.check) throw error; result = { error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(error.check && action.look === false ? {} : await (error.check ? this.snapshot(tab) : this.look(tab))) }; }
       finally { tab.working.delete(op); op.step = null; if (shared) { tab.agentActing = false; tab.agentDoneAt = this.now(); } }
       if (!['look', 'console', 'network', 'screenshot', 'point'].includes(action?.kind)) { if (['navigate', 'back', 'forward', 'reload', 'batch'].includes(action?.kind)) await this.persistTabs(sessionId); else this.persistSoon(sessionId); }
       return result;
@@ -924,6 +924,7 @@ export class BrowserManager {
   }
   async listFlows(sessionId) { this.owner(sessionId); return this.flows.list(); }
   async runFlow(sessionId, tabId, name, values) { this.owner(sessionId); const flow = await this.flows.load(name); return this.run(sessionId, tabId, { actions: flow.actions, with: values }); }
+  // "look": false on a step or batch skips the page read after it (helm browser script). A step that fails still reads the page.
   async perform(tab, action, inBatch = false, op = null) {
     action = normalizeAction(action);
     const kind = action.kind;
@@ -940,7 +941,7 @@ export class BrowserManager {
         // The call timed out and its caller has the answer: deliver nothing more.
         if (op?.expired) return { results, stopped: true };
         try { const step = normalizeAction(raw); if (op) op.step = { index: index + 1, kind: step.kind }; results.push(await this.perform(tab, step, true, op)); if (op) { op.step = null; op.done = index + 1; } } catch (error) { return { results, failedAt: results.length, error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await (error.check ? this.snapshot(tab, action.budget ?? 6000) : this.look(tab, action.budget ?? 6000))) }; } }
-      const result = { results, ...(await this.look(tab, action.budget ?? 6000)) };
+      const result = { results, ...(action.look === false ? {} : await this.look(tab, action.budget ?? 6000)) };
       if (action.save_as != null) { try { if (await this.flows.save(action.save_as, action.actions, action.note, result)) result.saved = action.save_as; } catch (error) { result.saveError = `Steps succeeded, but the flow could not be saved: ${error.message}`; } }
       return result;
     }
@@ -959,7 +960,7 @@ export class BrowserManager {
       const check = { check: action.check, found, expect, pass: found === expect };
       if (!check.pass) { const error = new Error(`check failed: ${JSON.stringify(action.check)} ${found === null ? 'could not be checked: part of the page did not answer' : expect ? 'did not come' : 'did not go away'} in ${ms} ms`); error.check = check; throw error; }
       // While a dialog is open the page cannot be read: the tab says what the dialog shows.
-      return { ...check, ...(!inBatch ? { tab: this.metadata(tab), ...(await this.snapshot(tab, 20000)) } : {}) };
+      return { ...check, ...(!inBatch ? { tab: this.metadata(tab), ...(action.look === false ? {} : await this.snapshot(tab, 20000)) } : {}) };
     }
     const page = tab.page;
     // Resolve a plain target once. Both the pointer and the action use the
@@ -1010,7 +1011,7 @@ export class BrowserManager {
           if (field) await target.setInputFiles(files.paths, { timeout: left() });
           else { const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: left() }), target.click({ timeout: left() })]); live(); await chooser.setFiles(files.paths); }
         } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
-      } else if (kind === 'evaluate') { live(); const script = text(action.script, 20000), value = await (tab.patched ? page.evaluate(script, undefined, undefined, false) : page.evaluate(script)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
+      } else if (kind === 'evaluate') { live(); const script = text(action.script, 20000), value = await (tab.patched ? page.evaluate(script, undefined, undefined, false) : page.evaluate(script)); await this.settle(tab); return { value, ...(!inBatch && action.look !== false ? await this.look(tab) : {}) }; }
       else if (kind === 'wait') { if (action.selector) await page.locator(text(action.selector, 2000)).first().waitFor({ state: action.state || 'visible', timeout: left() }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: left() }); }
       else if (kind === 'resize') { live(); await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) }); }
       else if (kind === 'dialog') { if (!tab.dialog) throw new Error('no dialog is open'); const dialog = tab.dialog; tab.dialog = null; action.accept ? await dialog.accept(action.text ?? '') : await dialog.dismiss(); }
@@ -1027,7 +1028,7 @@ export class BrowserManager {
     if (['navigate', 'back', 'forward', 'reload', 'click', 'type', 'key', 'select', 'drag', 'resize', 'upload', 'dialog', 'wait'].includes(kind)) await this.settle(tab, { navigation: ['navigate', 'back', 'forward', 'reload'].includes(kind) });
     // Only actions that can change the title ask for it; page loads update it as they finish.
     if (!tab.dialog && !['hover', 'scroll', 'type', 'resize'].includes(kind)) tab.title = await page.title().catch(() => tab.title);
-    return { tab: this.metadata(tab), ...(!inBatch ? await this.look(tab) : {}) };
+    return { tab: this.metadata(tab), ...(!inBatch && action.look !== false ? await this.look(tab) : {}) };
   }
   /** Where the agent is about to act, drawn on the page in a window. Free in a hidden browser; point always draws. */
   async aim(tab, action, left = () => STEP_MS, live = () => {}) {
@@ -1254,5 +1255,5 @@ export function browserReady({ env = process.env, platform = process.platform, f
 export function browserNote(directory = join(HELM_DIR, 'browser'), { screen = canOpenWindow() } = {}) {
   // Extended mode: the owner's own browser already has their logins. It needs a screen.
   const logins = readMode(directory) === 'extended' && screen ? 'Your tabs open in the owner\'s own browser, signed in: never ask for logins. If a tab opens in Helm\'s window, follow the reply\'s note.' : 'When a site needs a login, pick the fitting profile from helm browser profiles and run helm browser logins "<profile>".';
-  return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. For an owner step, point with helm browser point; do not click. Never ask for passwords. ${logins} Respect the request on signed-in sites.]`;
+  return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. Use helm browser script for loops and ifs. For an owner step, point with helm browser point; do not click. Never ask for passwords. ${logins} Respect the request on signed-in sites.]`;
 }

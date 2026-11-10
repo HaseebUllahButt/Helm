@@ -8,11 +8,14 @@ Design: [`docs/browser-use.md`](../browser-use.md).
 ## Open the external browser
 
 - **Reach:** Run `helm browser open <url>` in a chat. Use `--session <chat-id>`
-  outside a chat. Run `helm browser tabs` to list tabs.
+  outside a chat. Run `helm browser tabs` to list tabs. Run
+  `helm browser script <tab> <file>` for steps with ifs and loops.
 - **Prove:** In a private Helm, open a chat with the fake agent. Check the
   header at phone and desktop sizes. Open a local test page with the CLI.
   Check that Helm keeps the chat visible and sends no browser requests.
-  Use `tabs`, `look`, `act`, `point`, `screenshot`, and `close` on that tab.
+  Use `tabs`, `look`, `act`, `point`, `script`, `screenshot`, and `close`
+  on that tab. A script loops over pages, stops at an if, and names the step
+  that failed; a read-only chat refuses its click.
 - **Traps:** Do not open private test tabs on the owner's screen. Use hidden
   Chromium for tests. On niri, the external window needs the `helm-browser`
   window rule. A machine without a screen cannot show the owner a window.
@@ -21,7 +24,7 @@ Design: [`docs/browser-use.md`](../browser-use.md).
   beside them (not Electron apps) and user-data folders by their "Local State"
   file, on Linux, macOS and Windows (`chromium-find.js`). No brand-name lists.
 - **Tests:** `test/chromium-find`, `test/agent-browser`, `browser-window`,
-  `browser-smarts`, `browser-queue`, `test/browser/agent-browser`, and
+  `browser-smarts`, `browser-script`, `browser-queue`, `test/browser/agent-browser`, and
   `test/browser/browser-smarts`.
 - **Speed checks:** The first native window opens only the requested page,
   with copied logins already present. Reopening a sleeping window reuses
