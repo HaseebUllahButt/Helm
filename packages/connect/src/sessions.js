@@ -832,6 +832,11 @@ export class Sessions extends EventEmitter {
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
     return dedupeNativeConversations(out.filter((s) => !s.delegation?.hidden && (parentId ? !s.archived && (s.delegation?.parentId === parentId || !!team?.has(s.id)) : includeDelegations || !s.delegation || this.#delegation.unhomedDelegation(s))))
+      .map((s) => {
+        if (!s.delegation) return s;
+        const child = this.#index.get(s.id);
+        return { ...s, delegation: { ...s.delegation, status: this.#delegation.listStatus(child) } };
+      })
       .map((s) => s.delegations ? { ...s, delegations: this.#delegation.visibleDelegations(s) } : s)
       .map((s) => (s.delegation && this.#delegation.unhomedDelegation(s) ? { ...s, unhomed: true } : s))
       // The branch each thread's folder is on, for the sidebar's third line.

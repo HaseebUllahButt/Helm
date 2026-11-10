@@ -48,6 +48,16 @@ export class SessionDelegation {
   #notifying = new Set();
   /** child id -> when its parent last asked for the result (`delegate-result --wait`). */
   #waiters = new Map();
+  #listStatuses = new WeakMap();
+
+  listStatus(session) {
+    const key = JSON.stringify([session.lastSeq, session.updatedAt, session.status, session.delegation, session.delegationReply]);
+    const cached = this.#listStatuses.get(session);
+    if (cached?.key === key) return cached.status;
+    const status = this.delegationResult(session.id).status;
+    this.#listStatuses.set(session, { key, status });
+    return status;
+  }
 
   forget(id) { this.#waiters.delete(id); }
 
@@ -486,7 +496,7 @@ export class SessionDelegation {
   }
 
   remoteState(child) {
-    return { id: child.id, title: child.title, status: child.delegation.status ?? child.status,
+    return { id: child.id, title: child.title, status: this.delegationResult(child.id).status,
       ...(child.team ? { team: child.team } : {}), ...(child.delegation.finishedAt ? { finishedAt: child.delegation.finishedAt } : {}),
       ...(child.archived ? { archived: true } : {}) };
   }
@@ -515,7 +525,7 @@ export class SessionDelegation {
   /** The parent's side: a helper started on another machine. */
   addRemoteHelper(parentId, helper) {
     const parent = this.#sessions.get(parentId);
-    parent.remoteHelpers = [...(parent.remoteHelpers ?? []).filter((h) => h.id !== helper.id), helper].slice(-100);
+    parent.remoteHelpers = [...(parent.remoteHelpers ?? []).filter((h) => h.id !== helper.id), helper];
     parent.updatedAt = Date.now();
     this.refreshTeam(parent);
     this.#core.save();

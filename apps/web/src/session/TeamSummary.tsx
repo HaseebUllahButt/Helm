@@ -7,99 +7,125 @@ import { useNow } from '../useNow';
 /** `envId`: a helper that runs on another machine (helm delegate --machine). */
 export type TeamMember = { session: Session; depth: number; envId?: string };
 
-/** The helpers under `parentId`, nested, as the team card lists them. */
-function teamOf(sessions: Iterable<Session>, parentId: string): TeamMember[] {
-  const list = [...sessions];
-  const team: TeamMember[] = [];
-  const visited = new Set([parentId]);
-  const collect = (id: string, depth: number) => {
-    for (const session of list.filter((candidate) => !candidate.archived && candidate.delegation?.parentId === id)) {
-      if (visited.has(session.id)) continue;
-      visited.add(session.id);
-      team.push({ session, depth });
-      collect(session.id, depth + 1);
-    }
-  };
-  collect(parentId, 0);
-  return team;
-}
-
-/** This chat's helpers on other machines, each from its own machine. */
-function remoteTeam(lists: Map<string, Session[]>): TeamMember[] {
-  return [...lists].flatMap(([envId, sessions]) => sessions.filter((session) => !session.archived && session.status !== 'exited')
-    .map((session) => ({ session, depth: 0, envId })));
-}
-
-/**
- * Every chat on the machine reports here, so the whole inventory is kept
- * outside React: only a change to this chat's own helpers draws the screen
- * again. An unrelated chat's status used to redraw the open chat each time.
- */
-export function useThreadTeam(client: Client, envId: string, parentId: string, remote: { machine: string; id: string; archived?: boolean }[] = []) {
-  // Reload the helpers on other machines when one starts or ends there.
-  const remoteKey = remote.filter((helper) => !helper.archived).map((helper) => `${helper.machine}/${helper.id}`).join(',');
+/** Read the tree by chat ID and machine. Account names and titles are not keys. */
+export function useThreadTeam(client: Client, envId: string, parentId: string, remote: NonNullable<Session['remoteHelpers']> = []) {
+  const remoteKey = JSON.stringify(remote);
   const [team, setTeam] = useState<TeamMember[]>([]);
   useEffect(() => {
     let stale = false;
-    const updates = new Map<string, { version: number; session: Session }>();
+    let loading = false;
+    let again = false;
     let version = 0;
-    let request = 0;
-    let all = new Map<string, Session>();
-    let shown = '[]';
-    // Helpers on other machines: machine -> its helpers of this chat.
-    const away = new Map<string, Session[]>();
-    const wanted = new Map(remoteKey ? remoteKey.split(',').map((key) => [key.split('/')[1], key.split('/')[0]] as [string, string]) : []);
-    setTeam([]);
-    const publish = () => {
-      const next = [...teamOf(all.values(), parentId), ...remoteTeam(away)];
-      const key = JSON.stringify(next);
-      if (key === shown) return;
-      shown = key;
-      setTeam(next);
+    const updates = new Map<string, { version: number; session: Session }>();
+    const known = new Set([`${envId}/${parentId}`]);
+    const load = async () => {
+      if (loading) { again = true; return; }
+      loading = true;
+      const loadVersion = version;
+      const next: TeamMember[] = [];
+      const publish = () => {
+        if (stale) return;
+        const extra = [...updates].filter(([key, update]) => update.version > loadVersion
+          && !next.some((m) => `${m.envId}/${m.session.id}` === key))
+          .map(([key, update]) => ({ session: update.session, envId: key.split('/')[0], depth: Math.max(0, (update.session.delegation?.depth ?? 1) - 1) }));
+        const rows = [...next, ...extra].map((m) => {
+          const update = updates.get(`${m.envId}/${m.session.id}`);
+          return update && update.version > loadVersion ? { ...m, session: update.session } : m;
+        }).filter((m) => !m.session.archived);
+        const ordered: TeamMember[] = [];
+        const used = new Set<string>();
+        const visit = (host: string, id: string) => {
+          for (const member of rows) {
+            const key = `${member.envId}/${member.session.id}`;
+            if (used.has(key) || member.session.delegation?.parentId !== id
+              || (member.session.delegation.parentMachine || member.envId) !== host) continue;
+            used.add(key); ordered.push(member);
+            visit(member.envId ?? envId, member.session.id);
+          }
+        };
+        visit(envId, parentId);
+        setTeam(ordered);
+      };
+      const reads = new Map<string, Promise<Session[]>>();
+      const read = (machine: string, id: string) => {
+        const key = `${machine}/${id}`;
+        if (!reads.has(key)) reads.set(key, client.rpc<{ sessions: Session[] }>(machine, 'session.list', { parentId: id, nested: true }).then((r) => r.sessions ?? []));
+        return reads.get(key)!;
+      };
+      const visited = new Set([`${envId}/${parentId}`]);
+      const collect = async (machine: string, id: string, depth: number, hints: NonNullable<Session['remoteHelpers']> = []) => {
+        client.subscribe?.(machine);
+        let rows: Session[] = [];
+        try { rows = await read(machine, id); }
+        catch { /* Keep the last known cards when a machine cannot answer. */ }
+        const walk = async (host: string, owner: string, level: number, list: Session[], links: NonNullable<Session['remoteHelpers']>) => {
+          const children = list.filter((s) => !s.archived && s.delegation?.parentId === owner
+            && (!s.delegation.parentMachine || s.delegation.parentMachine === host));
+          const add = async (session: Session, where: string, available: Session[]) => {
+            const key = `${where}/${session.id}`;
+            if (visited.has(key)) return;
+            visited.add(key); known.add(key);
+            next.push({ session, depth: level, envId: where });
+            await walk(where, session.id, level + 1, available, session.remoteHelpers ?? []);
+          };
+          await Promise.all([
+            ...children.map((child) => add(child, host, list)),
+            ...links.filter((h) => !h.archived).map(async (link) => {
+            client.subscribe?.(link.machine);
+            let found: Session[] = [];
+            try { found = await read(link.machine, owner); }
+            catch { /* The saved state remains visible offline. */ }
+            const child = found.find((s) => s.id === link.id && s.delegation?.parentMachine === host);
+            await add(child ?? { id: link.id, title: link.title || 'Helper', status: link.status || 'idle', engine: '', cwd: '', profileId: '', offline: true,
+              team: link.team, delegation: { parentId: owner, parentMachine: host, status: link.status, task: '', depth: level + 1 } } as unknown as Session, link.machine, found);
+          })]);
+        };
+        await walk(machine, id, depth, rows, hints);
+      };
+      try {
+        await collect(envId, parentId, 0, JSON.parse(remoteKey));
+        publish();
+      } finally {
+        loading = false;
+        if (again && !stale) { again = false; void load(); }
+      }
     };
-    const load = () => {
-      const requestedVersion = version;
-      const requested = ++request;
-      // Only this chat's helpers and theirs. A machine on an older Helm
-      // sends the first level only.
-      return client.rpc<{ sessions: Session[] }>(envId, 'session.list', { parentId, nested: true })
-      .then((result) => {
-        if (!stale && requested === request) {
-          const merged = new Map((result.sessions ?? []).map((session) => [session.id, session]));
-          for (const [id, update] of updates) if (update.version > requestedVersion) merged.set(id, update.session);
-          all = new Map([...merged].filter(([, session]) => session.status !== 'exited'));
-          publish();
-        }
-      }).catch(() => {});
-    };
-    const loadAway = () => Promise.all([...new Set(wanted.values())].map((machine) =>
-      client.rpc<{ sessions: Session[] }>(machine, 'session.list', { parentId })
-        .then((result) => { if (!stale) away.set(machine, (result.sessions ?? []).filter((s) => s.delegation?.parentMachine === envId && wanted.get(s.id) === machine)); })
-        .catch(() => { /* that machine is offline: its helpers wait for it */ }))).then(() => { if (!stale) publish(); });
     void load();
-    void loadAway();
     const off = client.on((machine, kind, payload: any) => {
-      if (kind === 'connection' && payload?.online) { void load(); void loadAway(); }
-      const helper = payload?.session as Session | undefined;
-      if (kind === 'session.update' && machine !== envId && helper && wanted.get(helper.id) === machine) {
-        away.set(machine, [...(away.get(machine) ?? []).filter((s) => s.id !== helper.id), helper]);
-        publish();
+      const session = payload?.session as Session | undefined;
+      if (kind === 'connection' && payload?.online || kind === 'session.exit') void load();
+      if (kind === 'session.update' && session) {
+        const key = `${machine}/${session.id}`;
+        updates.set(key, { version: ++version, session });
+        const owner = `${session.delegation?.parentMachine || machine}/${session.delegation?.parentId}`;
+        if (key === `${envId}/${parentId}`) void load();
+        else if (known.has(key) || known.has(owner)) {
+          known.add(key);
+          setTeam((now) => {
+            const previous = now.find((m) => m.envId === machine && m.session.id === session.id);
+            const parent = now.find((m) => `${m.envId}/${m.session.id}` === owner);
+            return [...now.filter((m) => !(m.envId === machine && m.session.id === session.id)),
+              ...(!session.archived ? [{ session, envId: machine, depth: previous?.depth ?? (parent ? parent.depth + 1 : 0) }] : [])];
+          });
+          if (session.remoteHelpers?.length) void load();
+        }
       }
-      if (machine === envId && kind === 'session.update' && payload?.session) {
-        updates.set(payload.session.id, { version: ++version, session: payload.session });
-        all.delete(payload.session.id);
-        if (payload.session.status !== 'exited') all.set(payload.session.id, payload.session);
-        publish();
-      }
-      if (machine === envId && kind === 'session.exit') void load();
     });
-    return () => { stale = true; off(); };
+    // Older machines and lost broadcasts must also converge to the CLI state.
+    const timer = setInterval(() => void load(), 5000);
+    return () => { stale = true; clearInterval(timer); off(); };
   }, [client, envId, parentId, remoteKey]);
   return team;
 }
 
-const stateOf = (session: Session) => session.delegation?.status ?? session.status;
-const names: Record<string, string> = { working: 'Working', starting: 'Starting', blocked: 'Needs approval', done: 'Finished', error: 'Failed', interrupted: 'Stopped', idle: 'Ready' };
+export const helperState = (session: Session) => {
+  const state = session.delegation?.status ?? session.status;
+  return ['done', 'idle'].includes(state) && !!(session.team?.working || session.team?.blocked)
+    ? 'waiting' : state;
+};
+
+const stateOf = helperState;
+const names: Record<string, string> = { working: 'Working', starting: 'Starting', blocked: 'Needs approval', waiting: 'Waiting for its helpers', done: 'Done', error: 'Failed', interrupted: 'Stopped', idle: 'Ready' };
 
 export function TeamSummary({ team, onManage, onOpen, onReview, onStop }: {
   team: { session: Session; depth: number }[]; onManage: () => void; onOpen?: (session: Session) => void;
@@ -107,7 +133,7 @@ export function TeamSummary({ team, onManage, onOpen, onReview, onStop }: {
 }) {
   const now = useNow();
   if (!team.length) return null;
-  const working = team.filter(({ session }) => ['working', 'starting'].includes(stateOf(session))).length;
+  const working = team.filter(({ session }) => ['working', 'starting', 'waiting'].includes(stateOf(session))).length;
   const blocked = team.filter(({ session }) => stateOf(session) === 'blocked').length;
   const failed = team.filter(({ session }) => stateOf(session) === 'error').length;
   const summary = [working && `${working} working`, blocked && `${blocked} need approval`, failed && `${failed} failed`, !working && !blocked && !failed && `${team.length} finished`].filter(Boolean).join(' · ');
