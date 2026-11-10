@@ -161,6 +161,8 @@ export class ClaudeDriver extends Driver {
    * or creating a child-task alarm.
    */
   #nonAgentTasks = new Set();
+  /** Top-level tool steps announced this turn, from the stream or the full message. */
+  #toolStarts = new Set();
   #turnId = null;
   /** A turn is running: a replayed user message now is one handed over mid-turn. */
   #inTurn = false;
@@ -942,6 +944,7 @@ export class ClaudeDriver extends Driver {
         const b = e.content_block;
         if (b.type === 'tool_use') {
           scope.blocks.set(e.index, b.id);
+          if (!parentId) this.#toolStarts.add(b.id);
           if (nonAgentClaudeTask(b)) this.#nonAgentTasks.add(b.id);
           // Task spawns a subagent: the card is the child, and what it runs
           // arrives tagged with this block's id as their parent.
@@ -989,10 +992,13 @@ export class ClaudeDriver extends Driver {
         if (nonAgentClaudeTask(block)) this.#nonAgentTasks.add(block.id);
         // A sidechain tool_use may never have streamed as a content_block;
         // item.start is deduped downstream, so announce it defensively.
-        if (parentId) {
+        // A wake-up turn streams no blocks at all: without this start the
+        // step is never open, and agent messages wait for the whole wake-up.
+        if (parentId || !this.#toolStarts.has(block.id)) {
+          if (!parentId) this.#toolStarts.add(block.id);
           this.push('item.start', {
             id: block.id, kind: block.name === 'Task' || block.name === 'Agent' ? 'subagent' : 'tool',
-            turnId: this.#turnId, name: block.name, input: block.input, parentId,
+            turnId: this.#turnId, name: block.name, input: block.input, parentId: parentId ?? undefined,
           });
         }
         // The complete input, after the partial JSON that streamed in.
@@ -1064,6 +1070,7 @@ export class ClaudeDriver extends Driver {
     if (!this.#inTurn && !m.is_error) return;
     const turnId = this.#inTurn ? this.#turnId : null;
     this.#inTurn = false;
+    this.#toolStarts.clear();
     const interrupted = this.#interrupting && m.is_error;
     this.#interrupting = false;
     // From here the thread stands on its own; a restart resumes it as usual.

@@ -57,7 +57,10 @@ A new tool, or a feature for "every tool", must look at each of these:
   take the difference per turn.
 - **Claude:** plan mode is blocked twice, on the command line and in the
   approval answer. In auto mode an approval is denied with no phone notice;
-  only questions reach the owner.
+  only questions reach the owner. A turn Claude starts by itself (a
+  background task ended) can arrive with no stream events. Each step then
+  opens from its full message; without that start, waiting messages sat
+  until the whole wake-up ended.
 - **Codex:** one app-server serves every chat on an account. Never put a
   chat's variables (`HELM_SESSION_ID` and others) in its environment; each
   thread sets them through Codex's shell policy. At the unchanged idle
