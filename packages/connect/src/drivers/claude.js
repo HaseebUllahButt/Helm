@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
 import { modeFor } from '../modes.js';
-import { nonAgentClaudeTask } from '../claude-tasks.js';
+import { nonAgentClaudeTask, staleAgentCards, stoppedTask } from '../claude-tasks.js';
 import { bareModel, compactWindow, configDir } from '../context-limit.js';
 import { WORTH_SAYING } from '@helm/usage/recache';
 
@@ -75,12 +75,6 @@ const automaticDecision = (mode, kind) => {
   if (mode === 'bypassPermissions') return { option: 'allow' };
   return null;
 };
-
-/** The task a successful TaskStop ended, from its structured result; null otherwise. */
-export function stoppedTask(result) {
-  if (!result || typeof result !== 'object' || typeof result.task_id !== 'string') return null;
-  return /^Successfully stopped task\b/.test(String(result.message ?? '')) ? result.task_id : null;
-}
 
 /** The text of a tool_result, whatever shape the CLI sent it in. */
 function resultText(content) {
@@ -345,12 +339,11 @@ export class ClaudeDriver extends Driver {
       for (const e of this.pendingEvents?.() ?? []) this.pending.set(e.requestId, e);
       // A restart can land between a block's start and its next delta. Recover
       // those stream ids so the remaining text still appends to the same item.
-      const agents = new Map(), ended = new Map();
-      for (const e of this.resumeEvents?.() ?? []) {
+      const agents = new Map(), replay = this.resumeEvents?.() ?? [];
+      for (const e of replay) {
         if (e.type === 'item.update' && e.agent?.id) { this.#tasks.set(e.agent.id, e.id); this.#linkTask(e.agent.id, e.id); }
-        if (e.type === 'item.update' && e.agent?.id && e.agent.status) ended.set(e.agent.id, e.agent.status !== 'running');
         const stopped = e.type === 'item.done' && e.status === 'ok' && stoppedTask(e.result);
-        if (stopped) { ended.set(stopped, true); this.#running.delete(stopped); }
+        if (stopped) this.#running.delete(stopped);
         if ((e.type === 'item.start' && nonAgentClaudeTask(e))
           || (e.type === 'item.update' && nonAgentClaudeTask(e.agent))) this.#nonAgentTasks.add(e.id);
         if (e.type === 'item.update' && e.agent?.status) agents.set(e.id, e.agent.status);
@@ -365,17 +358,12 @@ export class ClaudeDriver extends Driver {
         scope.messageId = match[1];
         scope.blocks.set(Number(match[2]), e.id);
       }
-      // A card is still running only when it is its helper's newest run and
-      // that helper has not ended since. An older card (the Agent call a
-      // SendMessage woke again) or a stopped helper is cleared: a saved
-      // "working" from an older Helm would keep the chat busy for ever.
-      const taskOf = new Map();
-      for (const [task, tools] of this.#taskTools) for (const tool of tools) taskOf.set(tool, task);
+      // A saved "working" for a card whose helper ended, or that a newer
+      // SendMessage call took over, is cleared here.
+      const stale = staleAgentCards(replay);
       for (const [id, status] of agents) {
         if (status !== 'running' || this.#nonAgentTasks.has(id)) continue;
-        const task = taskOf.get(id);
-        const live = !task || (!ended.get(task) && this.#tasks.get(task) === id);
-        if (!live) { this.push('subagent.status', { id, status: 'idle' }); continue; }
+        if (stale.has(id)) { this.push('subagent.status', { id, status: 'idle' }); continue; }
         this.push('subagent.status', { id, status: [...this.pending.values()].some(p => p.parentId === id) ? 'blocked' : 'working' });
       }
       this.push('status', { status: this.pending.size ? 'blocked' : this.#turnId ? 'working' : 'idle' });
