@@ -57,8 +57,9 @@ export async function refreshProfiles({ keepCustom = true } = {}) {
 
   const saved = loadProfiles();
   if (saved && keepCustom) {
-    // A profile the user wrote or edited by hand outlives rediscovery.
-    const custom = saved.profiles.filter((p) => p.source === 'custom');
+    // Discovery can run while an installer replaces a binary. Missing tools
+    // and shell aliases do not authorize deleting saved accounts.
+    const custom = saved.profiles.filter((p) => p.source === 'custom' || !found.some(next => next.id === p.id));
     const disabled = new Set(
       saved.profiles.filter((p) => p.disabled).map((p) => p.id)
     );
