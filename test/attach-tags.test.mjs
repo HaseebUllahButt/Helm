@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
  * that cuts into it takes all of it, so the composer can drop the picture
  * behind it with the same keystroke.
  */
-const { wholeTagEdit, renumberImages } = await import('../apps/web/src/session/attachTags.ts');
+const { wholeTagEdit, renumberImages, caretPastTag } = await import('../apps/web/src/session/attachTags.ts');
 
 test('one backspace at the end of a tag removes the whole tag', () => {
   const before = 'look [Image #1]';
@@ -56,4 +56,15 @@ test('the box is cut at live tags only, so only those get a tint', async () => {
     { text: 'see ', tag: false }, { text: '[Image #1]', tag: true }, { text: ' and [Image #9]', tag: false },
   ]);
   assert.deepEqual(splitTags(''), []);
+});
+
+test('the arrow keys pass a tag in one step, as one letter', () => {
+  const text = 'see [Image #1] now';
+  // "[Image #1]" runs from 4 to 14.
+  assert.equal(caretPastTag(text, 5, 4), 14, 'right arrow from its start goes to its end');
+  assert.equal(caretPastTag(text, 13, 14), 4, 'left arrow from its end goes to its start');
+  assert.equal(caretPastTag(text, 6, 18), 4, 'a click near the start lands at the start');
+  assert.equal(caretPastTag(text, 12, 0), 14, 'a click near the end lands at the end');
+  assert.equal(caretPastTag(text, 2, 1), 2, 'plain text is left alone');
+  assert.equal(caretPastTag(text, 5, 4, () => false), 5, 'a tag typed by hand is only letters');
 });

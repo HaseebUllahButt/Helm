@@ -4,7 +4,7 @@ import { useNow } from '../useNow';
 import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
 import { useDictation, type Transcribe } from './voice';
 import type { Turn } from './types';
-import { renumberImages, splitTags, wholeTagEdit } from './attachTags';
+import { caretPastTag, renumberImages, splitTags, wholeTagEdit } from './attachTags';
 import { Icon } from '../Icon';
 
 const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -286,6 +286,34 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
     requestAnimationFrame(() => el.setSelectionRange(edit.caret, edit.caret));
     return true;
   };
+  // A tag is one letter to the caret: the arrow keys, Shift+arrow and a
+  // click never leave it inside "[Image #1]".
+  const liveTagNow = useRef(liveTag);
+  liveTagNow.current = liveTag;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // After the browser moves the caret: a key moves it from where it was;
+    // a click or a tap puts it at the nearer edge.
+    const fix = (before?: { start: number; end: number }) => setTimeout(() => {
+      if (document.activeElement !== el) return;
+      const { selectionStart: start, selectionEnd: end, value } = el;
+      const live = liveTagNow.current;
+      const backward = el.selectionDirection === 'backward';
+      const next = start === end
+        ? Array(2).fill(caretPastTag(value, start, before ? (before.start === before.end ? before.start : backward ? before.start : before.end) : start, live))
+        : backward ? [caretPastTag(value, start, before?.start ?? start, live), caretPastTag(value, end, end, live)]
+        : [caretPastTag(value, start, start, live), caretPastTag(value, end, before?.end ?? end, live)];
+      if (next[0] !== start || next[1] !== end) el.setSelectionRange(next[0], next[1], el.selectionDirection);
+    });
+    const onKey = (e: KeyboardEvent) => {
+      if (/^(Arrow|Home|End|Page)/.test(e.key)) fix({ start: el.selectionStart, end: el.selectionEnd });
+    };
+    const onPointer = () => fix();
+    el.addEventListener('keydown', onKey);
+    el.addEventListener('pointerup', onPointer);
+    return () => { el.removeEventListener('keydown', onKey); el.removeEventListener('pointerup', onPointer); };
+  }, []);
   const fileRef = useRef<HTMLInputElement>(null);
 
   /**
