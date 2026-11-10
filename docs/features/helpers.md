@@ -109,7 +109,9 @@ and a project copy nobody kept. A helper can run on another machine
   chat** (opens on B) and **Back to main chat** (back on A) worked. B said
   "Nothing is running".
 - **Not driven:** a parent machine offline while its helper finishes.
-- Leads stay at the first level. Open **Helpers** under a lead to see its children.
+- Leads stay at the first level. Each lead shows its helper count. Click its row to open or close its children.
+  A removed remote helper shows **Stopped**. Its saved result stays on the parent.
+  Only a failed machine request can show a helper as offline.
   A lead that ended its turn with children still running shows **Waiting for its helpers**.
   The list reads the same task result as the CLI. It refreshes after remote
   updates and checks again when an older machine misses an update.
