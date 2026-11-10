@@ -35,12 +35,14 @@ const RETRY_BUSY_MS = 10 * 60_000;
  *         inside a folder of that exact package under `npm root -g`
  * A tool with neither (kimi, muse, ...) is only ever reported.
  * Pi's own `update` refreshes its add-ons, not pi, so pi goes through npm.
+ *   curl  the self command for a copy the install script put in ~/.opencode/bin;
+ *         OpenCode cannot always tell that by itself ("Pass --method")
  */
 export const UPDATERS = {
   claude: { self: ['update'], npm: ['@anthropic-ai/claude-code'] },
   codex: { self: ['update'], npm: ['@openai/codex'] },
-  opencode: { self: ['upgrade'], npm: ['opencode-ai'] },
-  opencode2: { self: ['upgrade'] },
+  opencode: { self: ['upgrade'], curl: ['upgrade', '--method', 'curl'], npm: ['opencode-ai'] },
+  opencode2: { self: ['upgrade'], curl: ['upgrade', '--method', 'curl'] },
   devin: { self: ['update'] },
   grok: { self: ['update'] },
   cursor: { self: ['update'] },
@@ -229,7 +231,8 @@ export function classifyInstall(engine, realPath, {
     const mine = platform === 'win32' ? path.toLowerCase().startsWith(h.toLowerCase() + '/') : path.startsWith(h + '/');
     if (!mine) return no('other', 'installed outside your home folder - update it where it was installed');
     if (!canWrite(dirname(realPath))) return no('self', 'its folder is not writable by this user');
-    return { method: 'self', canUpdate: true, command: { cmd: null, args: spec.self } };
+    const curl = spec.curl && path.startsWith(`${slash(home)}/.opencode/bin/`);
+    return { method: 'self', canUpdate: true, command: { cmd: null, args: curl ? spec.curl : spec.self } };
   }
   return no('other', 'no automatic updater is known for this install');
 }
