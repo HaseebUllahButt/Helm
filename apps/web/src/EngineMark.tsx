@@ -41,7 +41,8 @@ const common = {
 };
 
 export const EngineMark = memo(function EngineMark({ engine, className = '' }: { engine?: string; className?: string }) {
-  const label = shell[engine as keyof typeof shell] ?? engine ?? 'agent';
+  // A record from an older or broken machine can carry an empty engine name.
+  const label = shell[engine as keyof typeof shell] || (typeof engine === 'string' && engine) || 'agent';
   // A gradient is referenced by id, and a list renders many marks - some in
   // a hidden sidebar, where a shared id would leave the visible ones unfilled.
   const gradient = `mark${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
@@ -226,5 +227,5 @@ export const EngineMark = memo(function EngineMark({ engine, className = '' }: {
 
   // Engines without a drawn mark get their initial - recognisable without
   // pretending to be the vendor's logo.
-  return <span className={`mark other ${className}`} title={label}>{label === 'agent' ? '·' : label[0].toLowerCase()}</span>;
+  return <span className={`mark other ${className}`} title={label}>{label === 'agent' ? '·' : label.charAt(0).toLowerCase()}</span>;
 });
