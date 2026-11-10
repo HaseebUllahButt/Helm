@@ -40,7 +40,7 @@ import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub, directCaller } from './peer.js';
 import { allowDirectSignal } from './direct-auth.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
-import { describe as describeAsk, describeDone, askPreview } from './notify.js';
+import { describe as describeAsk, describeDone, describeCaptcha, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
 import { Forwards, forwardedPorts } from './forwards.js';
 import { ownerSeenAt } from '@helm/protocol/owner-seen';
@@ -475,7 +475,13 @@ export class Daemon {
     this.executions = new ExecutionJobs();
     // Helm's service can start before the desktop; its browser windows find the screen later.
     useDesktopScreen(); useOwnerLogins();
-    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id), appProcessRoots: id => this.sessions.appProcessRoots(id) } });
+    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id), appProcessRoots: id => this.sessions.appProcessRoots(id) },
+      // A CAPTCHA waits for the owner: the same notice as a question, taken away when it is solved.
+      alert: ({ sessionId, tag, resolve }) => {
+        if (resolve) return this.broadcastFrame(T.NOTIFY, { payload: { tag, envId: this.id, sessionId, resolve: true } });
+        let session = null; try { session = this.sessions.get(sessionId); } catch { /* gone already */ }
+        this.broadcastFrame(T.NOTIFY, { payload: describeCaptcha({ ...session, id: sessionId, envId: this.id, machine: this.name }, tag) });
+      } });
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),
       // Only asked on Windows, where a running program can not be replaced.

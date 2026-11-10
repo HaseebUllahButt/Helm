@@ -577,3 +577,51 @@ test('text in a frame that did not answer is not taken as gone', { timeout: 6000
   assert.match(result.error, /could not be checked: part of the page did not answer/);
   await ended();
 });
+
+test('a CAPTCHA shows in every read, and captcha waits for the owner without holding other reads', { timeout: 60000 }, async t => {
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    if (req.url === '/plain') return res.end('<title>Plain</title><p>No check here</p>');
+    res.end('<title>Sign up</title><form><div class="g-recaptcha" style="width:300px;height:78px;border:1px solid"><textarea name="g-recaptcha-response" style="display:none"></textarea></div><button>Send</button></form>');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const alerts = []; let alerted = () => {};
+  // A read-only chat: the CAPTCHA help only reads.
+  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'captcha-')), session: sid => ({ id: sid, mode: 'readonly' }), canWindow: false, alert: note => { alerts.push(note); alerted(); } });
+  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const opened = await manager.open('one', { url: `${base}/plain` }), id = opened.tab.id;
+  assert.equal(opened.captcha, undefined, 'a page with no CAPTCHA has no field');
+  assert.deepEqual(await manager.captcha('one', id), { captcha: null, note: 'No CAPTCHA shows on this tab. Continue your task.', tab: manager.metadata(manager.tabs.get(id)) });
+  const shown = await manager.run('one', id, { goto: base });
+  assert.deepEqual(shown.captcha, { vendor: 'recaptcha', solved: false });
+  assert.match(shown.text, new RegExp(`A CAPTCHA \\(reCAPTCHA\\) shows on this page\\. Do not solve it yourself\\. Run helm browser captcha ${id}`));
+  // A hidden browser: the owner cannot see the page, so it stops at once.
+  const hidden = await manager.captcha('one', id);
+  assert.equal(hidden.solved, false); assert.match(hidden.note, /no screen/); assert.equal(alerts.length, 0);
+  const tab = manager.tabs.get(id), page = tab.page; tab.window = true;
+  const told = new Promise(resolve => { alerted = resolve; });
+  const waiting = manager.captcha('one', id, { wait: 30000 });
+  await told;
+  assert.deepEqual(alerts[0], { sessionId: 'one', tabId: id, vendor: 'recaptcha', tag: alerts[0].tag });
+  assert.equal(tab.pointer.by, 'guide'); assert.equal(tab.pointer.note, 'Solve this check, then Helm continues.');
+  // Other reads do not wait behind it.
+  assert.deepEqual((await manager.run('one', id, { kind: 'look' })).captcha, { vendor: 'recaptcha', solved: false });
+  await page.evaluate(() => { document.querySelector('[name=g-recaptcha-response]').value = 'answer'; });
+  const solved = await waiting;
+  assert.equal(solved.solved, true); assert.equal(solved.vendor, 'recaptcha'); assert.ok(Number.isInteger(solved.seconds));
+  assert.deepEqual(solved.captcha, { vendor: 'recaptcha', solved: true }); assert.doesNotMatch(solved.text, /Do not solve it yourself/);
+  assert.deepEqual(alerts[1], { sessionId: 'one', tabId: id, vendor: 'recaptcha', tag: alerts[0].tag, resolve: true }, 'the notice goes away');
+  assert.equal(tab.pointer, null, 'the pointer goes away');
+  // A CAPTCHA that goes away counts as solved too.
+  await manager.run('one', id, { goto: base });
+  const again = new Promise(resolve => { alerted = resolve; }), gone = manager.captcha('one', id, { wait: 30000 });
+  await again;
+  await page.evaluate(() => document.querySelector('.g-recaptcha').remove());
+  assert.equal((await gone).solved, true);
+  // The last call of a wait ends it when the CAPTCHA is still there.
+  await manager.run('one', id, { goto: base });
+  const ended = await manager.captcha('one', id, { wait: 0, last: true });
+  assert.equal(ended.solved, false); assert.match(ended.note, /did not solve the CAPTCHA/); assert.equal(alerts.at(-1).resolve, true);
+});
