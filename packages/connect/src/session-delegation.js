@@ -260,6 +260,38 @@ export class SessionDelegation {
     return { session: wire(child) };
   }
 
+  /** Close lost work once. Keep the conversation and use the normal parent receipt. */
+  processGone(child, { code = null, signal = null, reason = null } = {}) {
+    if (!child.delegation) return;
+    if (!ACTIVE.includes(child.delegation.status)) {
+      if (code != null || signal) {
+        Object.assign(child.delegation, { exitCode: code, signal });
+        this.#core.save();
+        this.#sessions.emit('session', child);
+      }
+      return;
+    }
+    const error = reason || `The helper process exited${code != null ? ` with code ${code}` : ''}${signal ? ` (${signal})` : ''}.`;
+    const turn = this.#sessions.events.activeTurn(child.id);
+    const event = this.#sessions.events.append(child.id, {
+      type: 'turn.done', turnId: turn?.turnId || `process-exit-${randomBytes(6).toString('hex')}`,
+      status: 'error', error, exitCode: code, signal,
+    });
+    Object.assign(child.delegation, { status: 'error', settledStatus: 'error', summary: error,
+      finishedAt: Date.now(), exitCode: code, signal });
+    child.status = 'idle';
+    child.recovery = { kind: 'error', message: error, at: Date.now() };
+    const status = this.#sessions.events.append(child.id, { type: 'status', status: 'idle' });
+    child.lastSeq = status.seq;
+    delete child.nativeAgents;
+    this.#core.save();
+    this.updateTeam(child);
+    this.#sessions.emit('event', { id: child.id, event });
+    this.#sessions.emit('event', { id: child.id, event: status });
+    this.#sessions.emit('session', child);
+    void this.notifyParent(child, event);
+  }
+
   delegationResult(id, { consume = false, parentId, callerThreadId, parentMachine } = {}) {
     const session = this.#sessions.get(id);
     if (!session.delegation) throw new Error('that session is not a delegated CLI task');

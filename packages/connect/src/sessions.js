@@ -203,7 +203,8 @@ export class Sessions extends EventEmitter {
     });
     // An agent process that dies while no driver holds it still leaves the
     // record: close what it left open so the session stops reading as busy.
-    this.procs.on('proc.exit', ({ id }) => this.#resumer.procGone(id));
+    this.procs.on('proc.lost', ({ id }) => this.#resumer.procGone(id, { reason: 'Helm lost contact with the helper process.' }, true));
+    this.procs.on('proc.exit', ({ id, ...exit }) => this.#resumer.procGone(id, exit));
     const footers = new Map();
     this.nativeTerminals.on('data', (d) => {
       this.emit('data', d);

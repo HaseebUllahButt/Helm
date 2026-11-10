@@ -240,6 +240,7 @@ export class TerminalHost extends EventEmitter {
       // Every call in flight is now unanswerable.
       for (const p of this.#waiting.values()) p.reject(new Error('the terminal host went away'));
       this.#waiting.clear();
+      for (const id of this.#procs) this.emit('proc.lost', { id });
     };
     sock.on('close', lost);
     sock.on('error', lost);
@@ -280,10 +281,10 @@ export class TerminalHost extends EventEmitter {
       this.#procListeners.delete(msg.id);
       this.#procBacklog.get(msg.id)?.clear();
       this.#procBacklog.delete(msg.id);
-      if (l?.onExit) l.onExit({ code: msg.code, stderr: msg.stderr });
+      if (l?.onExit) l.onExit({ code: msg.code, signal: msg.signal, stderr: msg.stderr });
       // With no driver attached, the session itself has to close the turn
       // the dead process left open - it cannot wait for somebody to look.
-      else this.emit('proc.exit', { id: msg.id, code: msg.code });
+      else this.emit('proc.exit', { id: msg.id, code: msg.code, signal: msg.signal });
       return;
     }
     if (msg.t === 'native.open') {
