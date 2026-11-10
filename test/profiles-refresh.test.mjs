@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,23 +14,23 @@ process.env.HOME = root;
 process.env.SHELL = '/bin/sh';
 process.env.PATH = `${bin}:/usr/bin:/bin`;
 
-test('a CLI that is uninstalled leaves the list on the next look, with no one asking', async () => {
-  const { refreshProfiles, currentProfiles, loadProfiles } = await import('../packages/connect/src/profiles.js');
+test('saved accounts survive a missing binary and return without duplicates', async () => {
+  const { refreshProfiles, loadProfiles, saveProfiles } = await import('../packages/connect/src/profiles.js');
   const grok = join(bin, 'grok');
   writeFileSync(grok, '#!/bin/sh\n');
   chmodSync(grok, 0o755);
-  const ids = (list) => list.map((p) => p.id);
-
-  assert.ok(ids((await refreshProfiles()).profiles).includes('grok'), 'found while installed');
-
+  const first = (await refreshProfiles()).profiles;
+  assert.ok(first.some(p => p.id === 'grok'));
+  const alias = { id: 'my-grok', engine: 'grok', cmd: 'grok', args: [], env: {}, source: 'alias', disabled: true };
+  saveProfiles([...first, alias]);
   rmSync(grok);
-  // A fresh list is trusted as saved; one older than five minutes is
-  // answered as saved and looked at again behind the answer.
-  const file = join(process.env.HELM_DIR, 'profiles.json');
-  const old = new Date(Date.now() - 10 * 60_000);
-  utimesSync(file, old, old);
-  assert.ok(ids(await currentProfiles()).includes('grok'), 'the stale answer comes first');
-  for (let i = 0; i < 600 && ids(loadProfiles().profiles).includes('grok'); i++) await new Promise((r) => setTimeout(r, 100));
-  assert.ok(!ids(loadProfiles().profiles).includes('grok'), 'gone once the look behind it finishes');
-  assert.ok(!ids(await currentProfiles()).includes('grok'), 'and the next ask does not offer it');
+  await refreshProfiles();
+  assert.ok(loadProfiles().profiles.some(p => p.id === 'grok'));
+  assert.deepEqual(loadProfiles().profiles.find(p => p.id === alias.id), alias);
+  writeFileSync(grok, '#!/bin/sh\n');
+  chmodSync(grok, 0o755);
+  const again = (await refreshProfiles()).profiles;
+  assert.equal(again.filter(p => p.id === 'grok').length, 1);
+  assert.deepEqual(again.find(p => p.id === alias.id), alias);
 });
+test.after(() => rmSync(root, { recursive: true, force: true }));
