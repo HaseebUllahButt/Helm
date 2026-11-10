@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, writeFileSync, rmSync, renameSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
@@ -384,6 +384,49 @@ export class EventLog {
     const file = join(dir, `${ref}.bin`);
     if (!existsSync(file)) writeFileSync(file, bytes, { mode: 0o600 });
     return { filename, mime, bytes: bytes.length, ref };
+  }
+
+  /**
+   * A large file comes in pieces, in order, under a key of its own. A piece at
+   * offset 0 starts again. `finishUpload` parks it as an attachment.
+   */
+  appendUpload(id, key, offset, bytes) {
+    const dir = this.#attDir(id);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${key}.part`);
+    const size = offset === 0 ? 0 : (() => { try { return statSync(file).size; } catch { return -1; } })();
+    if (size !== offset) throw new Error('file pieces arrived out of order; send the file again');
+    if (offset === 0) writeFileSync(file, bytes, { mode: 0o600 });
+    else appendFileSync(file, bytes);
+    return size + bytes.length;
+  }
+
+  /** The uploaded file as an attachment, or null when no upload waits under `key`. */
+  finishUpload(id, key) {
+    const dir = this.#attDir(id), part = join(dir, `${key}.part`);
+    if (!existsSync(part)) return null;
+    const hash = createHash('sha256'), piece = Buffer.alloc(4 * 1024 * 1024);
+    const fd = openSync(part, 'r');
+    let bytes = 0;
+    try { for (let n; (n = readSync(fd, piece, 0, piece.length, null)) > 0; bytes += n) hash.update(piece.subarray(0, n)); }
+    finally { closeSync(fd); }
+    const ref = hash.digest('hex').slice(0, 32), file = join(dir, `${ref}.bin`);
+    if (existsSync(file)) rmSync(part, { force: true }); else renameSync(part, file);
+    return { ref, bytes };
+  }
+
+  dropUpload(id, key) { rmSync(join(this.#attDir(id), `${key}.part`), { force: true }); }
+
+  /** One piece of a parked attachment, and the whole size; null when it is gone. */
+  attachmentPiece(id, ref, offset, length) {
+    let fd;
+    try { fd = openSync(join(this.#attDir(id), `${ref}.bin`), 'r'); } catch { return null; }
+    try {
+      const size = statSync(join(this.#attDir(id), `${ref}.bin`)).size;
+      const buf = Buffer.alloc(Math.max(0, Math.min(length, size - offset)));
+      const n = buf.length ? readSync(fd, buf, 0, buf.length, offset) : 0;
+      return { data: buf.subarray(0, n), size };
+    } finally { closeSync(fd); }
   }
 
   /** Read a parked attachment for replaying a queued message after restart. */
