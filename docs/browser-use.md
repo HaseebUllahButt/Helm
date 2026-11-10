@@ -96,6 +96,14 @@ The owner uses the same browser window. Helm has no browser panel.
   nothing, so it works in read-only chats. Read-only agents can read,
   navigate, wait and check; a batch holding any change is refused before
   its first step.
+- **The owner solves a CAPTCHA; Helm never does.** No outside service
+  either: Browser Use's free code only waits for their paid cloud. Each read
+  names a visible CAPTCHA (`captcha` field and one line), found by frame
+  address and by element in the frames it already reads. `helm browser
+  captcha <tab>` points at it, sends the same notice as a question, and
+  reads until an answer field has a value or the CAPTCHA is gone twice in a
+  row. It skips the tab's queue. A hub call ends after 130 s, so the CLI
+  waits in calls of 100 s. Without a screen it stops at once.
 
 ## Extended mode: the owner's own browser
 

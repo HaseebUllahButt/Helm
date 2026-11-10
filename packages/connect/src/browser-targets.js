@@ -1,3 +1,5 @@
+// A CAPTCHA wait call lasts at most this long: a call through the hub ends after 130 s. The CLI calls again.
+export const CAPTCHA_SLICE_MS = 100000;
 const articles = new Set(['the', 'a', 'an']);
 const fields = ['textbox', 'input', 'textarea', 'searchbox', 'combobox', 'select'];
 const kinds = { button: ['button', 'summary'], link: ['link', 'a'], box: fields, field: fields, input: fields, textbox: fields, textarea: fields, checkbox: ['checkbox'], radio: ['radio'], tab: ['tab'], menu: ['menu', 'menuitem', 'button', 'combobox'], option: ['option', 'radio', 'menuitem'], dropdown: ['select', 'combobox'], switch: ['switch'] };

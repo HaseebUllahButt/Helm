@@ -422,6 +422,10 @@ const DETAILS = {
     flows / run       save a repeating batch with {{param}}, values, save_as
                       and note; replay it with run <tab> <name> key=value
     point <tab> <el>  show the owner where to click, without clicking
+    captcha <tab>     when a page shows a CAPTCHA, never solve it. This points
+                      at it, tells the owner, and waits until they solve it
+                      (10 minutes; --timeout <ms> changes it). It works in
+                      read-only chats. With no screen it stops at once.
     screenshot        only when visuals matter; close <tab> releases it
     profiles / logins copy the owner's browser logins into Helm's window
     mode              show where tabs open. extended (the default): the
