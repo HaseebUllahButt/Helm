@@ -41,6 +41,17 @@ test('install kind: what is ours to update, and how', () => {
   assert.equal(plan('pi', `${HOME}/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js`).pkg, '@earendil-works/pi-coding-agent');
   assert.equal(plan('gemini', `${HOME}/.local/lib/node_modules/@google/gemini-cli/dist/index.js`).command.args[2], '@google/gemini-cli@latest');
 
+  // npm with its own folder in the home (`--prefix ~/.local`) while npm's
+  // default folder needs sudo: the update goes to that same folder.
+  const sys = { npmRoot: '/usr/lib/node_modules' };
+  const local = plan('codex', `${HOME}/.local/lib/node_modules/@openai/codex/bin/codex.js`, sys);
+  assert.deepEqual([local.method, local.canUpdate, local.pkg, local.command], ['npm', true, '@openai/codex',
+    { cmd: 'npm', args: ['install', '-g', '--prefix', `${HOME}/.local`, '@openai/codex@latest'] }]);
+  assert.equal(plan('pi', `${HOME}/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js`, sys).command.args[3], `${HOME}/.local`);
+  assert.match(plan('codex', `${HOME}/.local/lib/node_modules/some-other-thing/bin/codex.js`, sys).reason, /another Node/);
+  assert.match(plan('codex', `${HOME}/.local/lib/node_modules/@openai/codex/bin/codex.js`, { ...sys, canWrite: () => false }).reason, /can not write/);
+  assert.match(plan('codex', '/srv/npm/lib/node_modules/@openai/codex/bin/codex.js', sys).reason, /another Node/, 'only a folder in the home');
+
   // A different package pretending to be a tool, or a folder we can not write.
   const wrong = plan('codex', `${HOME}/.local/lib/node_modules/some-other-thing/bin/codex.js`);
   assert.equal(wrong.canUpdate, false);

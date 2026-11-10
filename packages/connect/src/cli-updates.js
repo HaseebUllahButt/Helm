@@ -204,6 +204,19 @@ export function classifyInstall(engine, realPath, {
     if (pattern.test(path)) return no(method, reason);
   }
 
+  // 2b. npm with its own folder in this user's home (`npm i -g --prefix
+  // ~/.local`), used where npm's default folder needs sudo. That same
+  // folder is where the update goes.
+  const own = platform === 'win32' ? null : /^(.+)\/lib\/node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(path);
+  // A Node version manager's folder belongs to its own Node and npm.
+  const manager = /\/(\.nvm|\.fnm|\.volta|\.asdf|\.local\/share\/fnm|n\/versions)\//.test(path);
+  if (own && !manager && own[1].startsWith(slash(home) + '/') && spec.npm?.includes(own[2])) {
+    const pkgDir = join(own[1], 'lib', 'node_modules', ...own[2].split('/'));
+    if (pkgNameOf(pkgDir) !== own[2]) return no('npm', `installed with npm as ${own[2]}, which Helm does not recognise as this tool`);
+    if (!canWrite(join(own[1], 'lib', 'node_modules')) || !canWrite(pkgDir)) return no('npm', 'installed with npm in a folder this user can not write to');
+    return { method: 'npm', canUpdate: true, pkg: own[2], command: { cmd: 'npm', args: ['install', '-g', '--prefix', own[1], `${own[2]}@latest`] } };
+  }
+
   if (path.includes('/node_modules/')) {
     return no('npm', root
       ? 'installed with npm somewhere other than the npm Helm uses (another Node version?)'

@@ -71,7 +71,10 @@
   Native Windows has no automatic service replacement. Open apps reload at a quiet moment.
   Daemons restart immediately after an update. Agent hosts stay running;
   chats and open transfers never postpone replacement.
-- **Coding tools:** Helm runs each tool's own updater every six hours. On a
+- **Coding tools:** Helm runs each tool's own updater every six hours. An
+  npm tool in a folder in the home (`npm i -g --prefix ~/.local`, used where
+  npm's own folder needs sudo) updates into that same folder. Before this,
+  Codex and Pi on `why` stayed old with "another Node version?". On a
   model launch, the Claude Code build that knows the model is often only on
   the early channel. A build that does not know a model treats it as 200k
   and compacts early. So when the program does not name a model on
