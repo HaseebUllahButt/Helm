@@ -30,6 +30,19 @@ Design: [`docs/browser-use.md`](../browser-use.md).
   with copied logins already present. Reopening a sleeping window reuses
   cached site files. Pointer checks cover clipped controls and frame targets.
 
+## CAPTCHA help
+
+- **Reach:** a read names a visible CAPTCHA and tells the agent to run
+  `helm browser captcha <tab> [--timeout <ms>]`. The owner gets a notice
+  and a pointer on the CAPTCHA. The agent continues when it is solved or
+  gone (10 minutes at most by default).
+- **Prove:** a local page with a fake `.g-recaptcha` and a hidden
+  `g-recaptcha-response`: the read reports it, the wait points and alerts,
+  other reads still run, and a filled answer ends the wait.
+- **Not driven:** a real CAPTCHA, the phone notice, and a window on screen.
+- **Tests:** `test/agent-browser` (the page) and `test/browser-smarts`
+  (frame addresses, the CLI wait loop).
+
 ## Logins and saved flows
 
 - **Reach:** Run `helm browser profiles`, then `helm browser logins "<profile>"`.

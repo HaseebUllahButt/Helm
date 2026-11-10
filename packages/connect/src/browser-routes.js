@@ -1,7 +1,7 @@
 import { discoverApps } from './browser-apps.js';
 import { BrowserManager } from './browser.js';
 
-export function createBrowserRoutes({ sessions, scanApps = discoverApps, manager = new BrowserManager({ session: id => sessions.get(id) }) } = {}) {
+export function createBrowserRoutes({ sessions, scanApps = discoverApps, alert, manager = new BrowserManager({ session: id => sessions.get(id), alert }) } = {}) {
   const apps = async id => scanApps(sessions.get(id), { roots: await sessions.appProcessRoots?.(id) || [] });
   return {
     manager,
@@ -37,6 +37,7 @@ export function createBrowserRoutes({ sessions, scanApps = discoverApps, manager
       if (method === 'browser.open') return manager.open(p.id, p);
       if (method === 'browser.action') return manager.run(p.id, p.tabId, p.action);
       if (method === 'browser.close') return manager.close(p.id, p.tabId);
+      if (method === 'browser.captcha') return manager.captcha(p.id, p.tabId, { wait: p.wait, last: !!p.last });
       throw new Error(`unknown browser method: ${method}`);
     },
   };

@@ -60,6 +60,14 @@ export function askPreview(event) {
   return { kind, text, more: question ? Math.max(0, (event.questions?.length ?? 1) - 1) : 0, ...(whole ? { whole } : {}) };
 }
 
+/** A page in the chat's browser shows a CAPTCHA: the owner solves it, and the agent waits. */
+export function describeCaptcha(session, tag) {
+  return {
+    title: notificationContext(session), body: [whoWhere(session, 'needs you to solve a CAPTCHA'), 'Look for the pointer in the browser.'].join('\n'),
+    tag, envId: session?.envId ?? null, sessionId: session?.id ?? null,
+  };
+}
+
 /** A finished chat: its name, then the first line of what the agent said last. */
 export function describeDone(session, at = Date.now(), reply = '') {
   return {

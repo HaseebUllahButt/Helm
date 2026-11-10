@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { readFile, writeFile, rm, chmod, stat, rename } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { HELM_DIR } from './paths.js';
-import { normalizeAction, readOnlyAction, resolveTarget, scoreTargets } from './browser-targets.js';
+import { CAPTCHA_SLICE_MS, normalizeAction, readOnlyAction, resolveTarget, scoreTargets } from './browser-targets.js';
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } from './browser-identity.js';
 import * as browserLogins from './browser-logins.js';
@@ -116,9 +116,22 @@ const hasText = value => {
   return visit(document);
 };
 // In a frame: its text and visible controls. Each control keeps the local
-// number it first got in this document, which `doc` names.
-const readFrame = ({ limit, room, within, inView }) => {
+// number it first got in this document, which `doc` names. It also names a
+// CAPTCHA a person can see, by its element, and if its answer field has a
+// value; `captchaOnly` reads only that.
+const readFrame = ({ limit, room, within, inView, captchaOnly }) => {
   const visible = el => { const r = el.getBoundingClientRect(), s = el.ownerDocument.defaultView.getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert]'); };
+  const captcha = (() => {
+    const widgets = { recaptcha: '.g-recaptcha:not([data-size=invisible])', hcaptcha: '.h-captcha:not([data-size=invisible])', turnstile: '.cf-turnstile', cloudflare: '#challenge-form,#challenge-stage,#challenge-running,#cf-challenge-running', arkose: '#FunCaptcha,.funcaptcha,#arkose', geetest: '.geetest_holder,.geetest_panel,.geetest_box,.geetest_captcha,.geetest_widget', perimeterx: '#px-captcha', awswaf: 'awswaf-captcha' };
+    const found = []; window.__helmCaptcha = null;
+    for (const [vendor, css] of Object.entries(widgets)) { const el = [...document.querySelectorAll(css)].find(visible); if (el) { found.push(vendor); window.__helmCaptcha ||= el; } }
+    // Cloudflare's "Just a moment" page sets its options in a small inline script.
+    if (!found.includes('cloudflare') && window === window.top && [...document.scripts].some(s => !s.src && s.text.length < 20000 && s.text.includes('_cf_chl_opt'))) { found.push('cloudflare'); window.__helmCaptcha ||= document.body; }
+    const answers = {};
+    for (const [vendor, name] of [['recaptcha', 'g-recaptcha-response'], ['hcaptcha', 'h-captcha-response'], ['turnstile', 'cf-turnstile-response']]) { const fields = document.getElementsByName(name); if (fields.length) answers[vendor] = [...fields].some(field => String(field.value || '').trim() !== ''); }
+    return found.length || Object.keys(answers).length ? { found, answers } : null;
+  })();
+  if (captchaOnly) return { captcha };
   const selector = 'a[href],button,input:not([type=hidden]),textarea,select,option,summary,label[for],[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menu],[role=menuitem],[role=option],[role=combobox],[role=switch],[role=textbox],[role=searchbox],[contenteditable=true],[onclick]';
   let scopes = [document];
   if (within) { try { scopes = [...document.querySelectorAll(within)]; } catch { return { error: `within: ${JSON.stringify(within)} is not a CSS selector` }; } }
@@ -151,9 +164,34 @@ const readFrame = ({ limit, room, within, inView }) => {
     if (['input', 'textarea', 'select'].includes(tag) && type !== 'password' && type !== 'file') state.value = String(el.value ?? '').slice(0, 180);
     return { local, role, name, ...state, inViewport: inView && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth };
   });
-  return { title: document.title, url: location.href, text: prose.join('\n'), elements, total, doc: refs.doc };
+  return { title: document.title, url: location.href, text: prose.join('\n'), elements, total, doc: refs.doc, captcha };
+};
+/** Add one frame's CAPTCHA read to what the whole tab shows. */
+const noteCaptcha = (seen, answers, read, row) => {
+  for (const vendor of read?.found || []) seen.push({ vendor, row, element: true });
+  for (const [vendor, filled] of Object.entries(read?.answers || {})) answers[vendor] ||= filled;
 };
 const describe = e => `[${e.ref}] ${e.role} ${JSON.stringify(e.name)}${e.disabled ? ' disabled' : ''}${e.checked != null ? ` checked=${e.checked}` : ''}${e.expanded != null ? ` expanded=${e.expanded}` : ''}${e.selected != null ? ` selected=${e.selected}` : ''}${e.current ? ` current=${e.current}` : ''}${e.value != null ? ` value=${JSON.stringify(e.value)}` : ''}${!e.inViewport ? ' offscreen' : ''}`;
+// CAPTCHA frames, known by their address: [vendor, hosts (and their subdomains), path start].
+const CAPTCHA_FRAMES = [
+  ['recaptcha', ['google.com', 'recaptcha.net'], '/recaptcha/'], ['hcaptcha', ['hcaptcha.com']], ['turnstile', ['challenges.cloudflare.com']],
+  ['arkose', ['arkoselabs.com', 'funcaptcha.com']], ['geetest', ['geetest.com']], ['datadome', ['captcha-delivery.com']],
+  ['perimeterx', ['perimeterx.net', 'px-cdn.net', 'px-cloud.net']], ['awswaf', ['awswaf.com']],
+];
+export const CAPTCHA_NAMES = { recaptcha: 'reCAPTCHA', hcaptcha: 'hCaptcha', turnstile: 'Cloudflare Turnstile', cloudflare: 'Cloudflare check', arkose: 'Arkose', geetest: 'GeeTest', datadome: 'DataDome', perimeterx: 'PerimeterX', awswaf: 'AWS WAF' };
+/** The CAPTCHA a frame at this address shows, or null. A frame for an invisible check (no person solves it) is not one. */
+export const captchaVendor = address => {
+  let url; try { url = new URL(address); } catch { return null; }
+  if (!['http:', 'https:'].includes(url.protocol)) return null;
+  const host = url.hostname.toLowerCase();
+  const rule = CAPTCHA_FRAMES.find(([, hosts, path]) => hosts.some(name => host === name || host.endsWith(`.${name}`)) && (!path || url.pathname.startsWith(path)));
+  if (!rule || /size=invisible|checkbox-invisible/.test(url.search + url.hash)) return null;
+  return rule[0];
+};
+/** What a read saw: the first CAPTCHA, and if one of its answer fields has a value. */
+const captchaState = (seen, answers) => seen.length ? { vendor: seen[0].vendor, solved: seen.some(s => answers[s.vendor] === true) } : null;
+const captchaLine = (captcha, tabId) => `A CAPTCHA (${CAPTCHA_NAMES[captcha.vendor]}) shows on this page. Do not solve it yourself. Run helm browser captcha ${tabId}: the owner solves it, then you continue.`;
+const NO_SCREEN = 'This machine has no screen, so the owner cannot see this page or solve the CAPTCHA. Tell the owner the site asks for a CAPTCHA, or try another way.';
 // Steps that only read the page. Any other step can change it.
 const READS = ['look', 'console', 'network', 'screenshot', 'point', 'check', 'wait'];
 const changesPage = kind => !READS.includes(kind);
@@ -179,8 +217,9 @@ let ownerLogins = false;
 export const useOwnerLogins = () => { ownerLogins = true; };
 
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = CALL_MS, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500, extensionWaitMs = 4000, browsers = discoverBrowsers, mode = null, setupTools = { copyText, openExtensionsPage } } = {}) {
-    this.setupTools = setupTools;
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = CALL_MS, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500, extensionWaitMs = 4000, browsers = discoverBrowsers, mode = null, setupTools = { copyText, openExtensionsPage }, alert = () => {} } = {}) {
+    // Tells the owner a chat needs them, and takes the notice away when it does not.
+    this.setupTools = setupTools; this.alert = alert;
     // `mode` sets the browser mode for this run only (tests); else the saved choice counts.
     this.extensionWaitMs = extensionWaitMs; this.browsers = browsers; this.modeChoice = mode;
     this.launchWindow = launchWindow; this.windowCheck = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
@@ -796,15 +835,17 @@ export class BrowserManager {
     // overlapping read can never give two elements the same number.
     tab.refs ||= new Map(); tab.refKeys ||= new Map(); tab.nextRef ||= 1;
     for (const [ref, held] of tab.refs) if (held.frame.isDetached()) { tab.refs.delete(ref); tab.refKeys.delete(`${held.doc}:${held.local}`); }
-    const prose = [], lines = [], elements = [], quiet = []; let total = 0, page;
+    const prose = [], lines = [], elements = [], quiet = [], seen = [], answers = {}; let total = 0, page;
     for (const row of frames) {
       if (row.unknown) { quiet.push(row.number); continue; }
+      const framed = row.number > 0 && captchaVendor(row.frame.url()); if (framed) seen.push({ vendor: framed, row });
       const reading = row.frame.evaluate(readFrame, { limit: budget - prose.join('\n').length, room: 300 - elements.length, within: within ?? null, inView: row.inView });
       // A busy frame inside the page does not hold up the whole read.
       const read = row.number === 0 ? await reading : await frameAnswer(reading, wait);
       if (!read) { quiet.push(row.number); continue; }
       if (read.error) throw new Error(read.error);
       if (row.number === 0) page = read;
+      noteCaptcha(seen, answers, read.captcha, row);
       total += read.total ?? read.elements.length;
       if (read.text) prose.push(read.text);
       if (read.elements.length && (row.number > 0 || only != null)) lines.push(`Frame ${row.number} ${row.frame.url()}:`);
@@ -820,11 +861,83 @@ export class BrowserManager {
     if (quiet.length) lines.push(`Frame ${quiet.join(', ')} did not answer and is not listed.`);
     const cut = total > elements.length ? { shown: elements.length, total } : null;
     if (cut) lines.push(`Showing ${cut.shown} of ${cut.total} controls. Read the rest with a look that has "within" (a CSS selector) or "frame" (a frame number).`);
-    return { text: `${page.title}\n${page.url}\n${prose.join('\n').slice(0, budget)}\n\n${lines.join('\n')}`, elements, ...(cut ? { cut } : {}), ...(quiet.length ? { quiet } : {}) };
+    const captcha = captchaState(seen, answers), warn = captcha && !captcha.solved ? `${captchaLine(captcha, tab.id)}\n` : '';
+    return { text: `${page.title}\n${page.url}\n${warn}${prose.join('\n').slice(0, budget)}\n\n${lines.join('\n')}`, elements, ...(cut ? { cut } : {}), ...(quiet.length ? { quiet } : {}), ...(captcha ? { captcha } : {}) };
   }
   /** The page after a check, with its own time: a page that cannot answer does not hold the check's reply. */
   async snapshot(tab, budget = 6000) {
     return await frameAnswer(this.look(tab, budget), STEP_MS) || { text: `${tab.title}\n${tab.page.url()}\nThe page did not answer in ${STEP_MS} ms, so it is not shown.`, elements: [] };
+  }
+  /** The CAPTCHA a tab shows now, read cheaply. `unsure` when part of the page did not answer. */
+  async captchaNow(tab) {
+    const seen = [], answers = {}; let unsure = false;
+    for (const [number, row] of (await this.frames(tab, STEP_MS)).entries()) {
+      if (row.unknown) { unsure = true; continue; }
+      const framed = number > 0 && captchaVendor(row.frame.url()); if (framed) seen.push({ vendor: framed, row });
+      const read = await frameAnswer(row.frame.evaluate(readFrame, { captchaOnly: true }), STEP_MS);
+      if (!read) { unsure = true; continue; } noteCaptcha(seen, answers, read.captcha, row);
+    }
+    return { captcha: captchaState(seen, answers), seen, unsure };
+  }
+  /**
+   * The owner solves a CAPTCHA; Helm never does. The first call points at it
+   * and tells the owner. Each call reads the tab until the CAPTCHA is solved
+   * or gone, for at most `wait` ms, and then says it is still waiting. It only
+   * reads, so it skips the tab's queue and works in read-only chats. `last`
+   * ends the wait when the CAPTCHA is still there.
+   */
+  async captcha(sessionId, tabId, { wait = CAPTCHA_SLICE_MS, last = false } = {}) {
+    await this.recover(sessionId);
+    const tab = this.get(sessionId, tabId); wait = integer(wait, 0, CAPTCHA_SLICE_MS);
+    if (tab.dialog) throw new Error(`A dialog is open on this tab (${tab.dialog.type()}). Answer it first, then run helm browser captcha again.`);
+    if (tab.ready) { await tab.ready; tab.ready = null; }
+    let now = await this.captchaNow(tab), state = tab.captchaWait;
+    // A wait nobody asked about for a while (the agent stopped) starts again.
+    if (state && Date.now() - state.polled > 2 * CAPTCHA_SLICE_MS) { this.endCaptcha(tab); state = null; }
+    if (!state) {
+      if (!now.captcha) return { captcha: null, note: 'No CAPTCHA shows on this tab. Continue your task.', tab: this.metadata(tab) };
+      const { vendor } = now.captcha;
+      if (now.captcha.solved) return { solved: true, vendor, seconds: 0, tab: this.metadata(tab), ...(await this.snapshot(tab)) };
+      if (!tab.window) return { solved: false, vendor, seconds: 0, note: NO_SCREEN, tab: this.metadata(tab) };
+      state = tab.captchaWait = { vendor, started: this.now(), polled: Date.now(), tag: `helm-captcha-${sessionId}-${tab.id}-${Date.now().toString(36)}` };
+      await this.pointCaptcha(tab, now.seen).catch(() => {});
+      try { this.alert({ sessionId, tabId: tab.id, vendor, tag: state.tag }); } catch { /* the pointer still shows the owner */ }
+    }
+    const end = Date.now() + wait, seconds = () => Math.round((this.now() - state.started) / 1000);
+    const finish = async (solved, note) => {
+      this.endCaptcha(tab);
+      if (this.tabs.get(tab.id) !== tab) return { solved, vendor: state.vendor, seconds: seconds(), note };
+      if (solved) await this.settle(tab);
+      return { solved, vendor: state.vendor, seconds: seconds(), ...(note ? { note } : {}), tab: this.metadata(tab), ...(await this.snapshot(tab)) };
+    };
+    // Gone counts after two reads in a row, so a page that loads again does not end the wait.
+    for (let gone = 0; ;) {
+      tab.lastUsed = this.now(); state.polled = Date.now();
+      if (this.tabs.get(tab.id) !== tab) return finish(false, 'The tab closed before the CAPTCHA was solved.');
+      if (now.captcha?.solved) return finish(true);
+      gone = !now.captcha && !now.unsure ? gone + 1 : 0;
+      if (gone >= 2) return finish(true);
+      if (Date.now() >= end) break;
+      await pause(Math.min(500, end - Date.now()));
+      now = await this.captchaNow(tab);
+    }
+    if (last) return finish(false, `The owner did not solve the CAPTCHA in ${seconds()} s. Ask the owner what to do.`);
+    return { waiting: true, vendor: state.vendor, seconds: seconds() };
+  }
+  /** Point at the CAPTCHA for the owner: its element, or the frame it shows in. */
+  async pointCaptcha(tab, seen) {
+    for (const { row, element } of seen) {
+      const handle = element ? (await row.frame.evaluateHandle(() => window.__helmCaptcha?.isConnected ? window.__helmCaptcha : null)).asElement() : await row.frame.frameElement();
+      if (!handle) continue;
+      await handle.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
+      return this.aim(tab, { kind: 'point', handle, note: 'Solve this check, then Helm continues.' });
+    }
+  }
+  /** The wait ended: the pointer and the owner's notice go. */
+  endCaptcha(tab) {
+    const state = tab.captchaWait; if (!state) return; tab.captchaWait = null;
+    try { this.alert({ sessionId: tab.sessionId, tabId: tab.id, vendor: state.vendor, tag: state.tag, resolve: true }); } catch { /* already gone */ }
+    if (tab.pointer?.by === 'guide') { tab.pointer = null; void tab.page.evaluate(clearPointer).catch(() => {}); }
   }
   /** A control named in plain words. One that is not there yet gets until `ms` to appear; a tie fails at once. */
   async find(tab, target, purpose, ms) {
@@ -882,6 +995,7 @@ export class BrowserManager {
     return true;
   }
   async target(tab, action) {
+    if (action.handle) return action.handle;
     if (action.ref != null) {
       integer(action.ref, 1, Number.MAX_SAFE_INTEGER);
       const gone = () => new Error(`element ${action.ref} is not on the page now; look at the page again`);
@@ -1255,5 +1369,5 @@ export function browserReady({ env = process.env, platform = process.platform, f
 export function browserNote(directory = join(HELM_DIR, 'browser'), { screen = canOpenWindow() } = {}) {
   // Extended mode: the owner's own browser already has their logins. It needs a screen.
   const logins = readMode(directory) === 'extended' && screen ? 'Your tabs open in the owner\'s own browser, signed in: never ask for logins. If a tab opens in Helm\'s window, follow the reply\'s note.' : 'When a site needs a login, pick the fitting profile from helm browser profiles and run helm browser logins "<profile>".';
-  return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. Use helm browser script for loops and ifs. For an owner step, point with helm browser point; do not click. Never ask for passwords. ${logins} Respect the request on signed-in sites.]`;
+  return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. Use helm browser script for loops and ifs. For an owner step, point with helm browser point; do not click. For a CAPTCHA, run helm browser captcha <tab>; never solve it. Never ask for passwords. ${logins} Respect the request on signed-in sites.]`;
 }

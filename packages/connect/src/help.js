@@ -426,11 +426,16 @@ const DETAILS = {
                       The file gets browser, log and args (key=value words).
                       Use - to read it from input. browser has look, click,
                       type, goto, key, select, scroll, point, evaluate, act,
-                      check (gives true or false), open, tab and tabs.
+                      check (gives true or false), captcha (waits for the
+                      owner), open, tab and tabs.
                       A step does not read the page: add {look: true}.
                       --timeout <ms> stops the whole script. Example:
                       while (!(await browser.check('Under $50'))) await browser.click('Next')
     point <tab> <el>  show the owner where to click, without clicking
+    captcha <tab>     when a page shows a CAPTCHA, never solve it. This points
+                      at it, tells the owner, and waits until they solve it
+                      (10 minutes; --timeout <ms> changes it). It works in
+                      read-only chats. With no screen it stops at once.
     screenshot        only when visuals matter; close <tab> releases it
     profiles / logins copy the owner's browser logins into Helm's window
     mode              show where tabs open. extended (the default): the

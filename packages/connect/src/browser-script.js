@@ -6,6 +6,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { CAPTCHA_SLICE_MS } from './browser-targets.js';
 
 const AsyncFunction = (async () => {}).constructor;
 const show = value => typeof value === 'string' ? value : (() => { try { return JSON.stringify(value) ?? String(value); } catch { return String(value); } })();
@@ -64,6 +65,15 @@ export async function runBrowserScript({ source, file, tabId, args = {}, timeout
     check: async (spec, options) => (await act(id, quiet({ check: spec }, options), 'check', { checks: true })).pass === true,
     evaluate: async (script, options) => (await act(id, quiet({ evaluate: typeof script === 'function' ? `(${script})()` : script }, options), 'evaluate')).value,
     act: action => act(id, { look: false, ...action }, 'act'),
+    // The owner solves a CAPTCHA; this waits for them, in calls short enough for the hub (helm browser captcha).
+    captcha: async ({ timeout = 600000 } = {}) => {
+      const end = Date.now() + timeout;
+      for (;;) {
+        const left = Math.max(0, end - Date.now()), wait = Math.min(CAPTCHA_SLICE_MS, left);
+        const result = await send('browser.captcha', id, { wait, last: left <= CAPTCHA_SLICE_MS }, 'captcha', wait + 30000);
+        if (!result?.waiting) return result;
+      }
+    },
     close: () => send('browser.close', id, {}, 'close', 60000),
   });
   const browser = {

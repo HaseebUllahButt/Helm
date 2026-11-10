@@ -173,3 +173,12 @@ export default async function (browser, { log, args }) {
   await assert.rejects(runBrowserCommand(['script', 'first'], { env: { HELM_SESSION_ID: 'one' }, self: () => 'local', rpc: async () => ({}) }), /needs a tab and a file/);
   await assert.rejects(runBrowserCommand(['script', 'first', 'x.js', '--timeout', 'soon'], { env: { HELM_SESSION_ID: 'one' }, self: () => 'local', rpc: async () => ({}) }), /whole number/);
 });
+
+test('browser.captcha() in a script waits for the owner in short calls until the CAPTCHA is solved', async () => {
+  const calls = []; let polls = 0;
+  const routes = { dispatch: async (method, params) => { calls.push([method, params]); return ++polls < 3 ? { waiting: true, vendor: 'recaptcha', seconds: polls } : { solved: true, vendor: 'recaptcha', seconds: 3 }; } };
+  const { result } = await cli(routes, 'one')(['script', 'first', file('const answer = await browser.captcha({ timeout: 250000 }); return answer.solved;')]);
+  assert.equal(result.ok, true, result.error); assert.equal(result.value, true); assert.equal(result.steps, 3);
+  assert.deepEqual(calls.map(([method, params]) => [method, params.tabId, params.wait <= 100000, params.id]), Array(3).fill(['browser.captcha', 'first', true, 'one']));
+  assert.equal(calls.at(-1)[1].last, false, 'a later call is still to come while time is left');
+});
