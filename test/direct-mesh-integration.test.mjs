@@ -197,12 +197,13 @@ test('requests go direct when the channel is up and faster, and the hub takes ov
   assert.equal((await read).via, 'hub');
   assert.deepEqual(via(far, 'session.events'), ['direct', 'hub']);
 
-  // --- Revoked over there: refused on the next request, then cut off.
+  // --- Revoked over there: the request is refused or the channel closes first.
   skew += 120_000;
   await mesh.call(far, 'session.list', {});
   await until(() => mesh.direct.isOpen(far));
   await vm.command('revoke', { id: network.self });
-  await assert.rejects(mesh.direct.call(far, 'session.list', {}, { sub: network.self }), { code: 'forbidden' });
+  await assert.rejects(mesh.direct.call(far, 'session.list', {}, { sub: network.self }),
+    error => error.code === 'forbidden' || error.code === 'disconnected');
   const dropped = await vm.command('dropRevoked');
   assert.equal(dropped.peers, 0);
   await until(() => !mesh.direct.isOpen(far));
