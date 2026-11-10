@@ -35,7 +35,7 @@ before(async () => {
         onSend={()=>{window.sent={draft,references}}}
         referenceOptions={[{id:'design',title:'Design review'}]} references={references}
         onReference={id=>setReferences([{id,title:'Design review'}])} onRemoveReference={()=>setReferences([])}
-        queued={[{turn:{id:'one'},text:'First task',attachments:0},{turn:{id:'two'},text:'Second task',attachments:0}]}
+        queued={[{turn:{id:'one',text:'First task'},text:'First task',attachments:0},{turn:{id:'two',text:'Second task'},text:'Second task',attachments:0}]}
         onEditQueued={turn=>window.action=['edit',turn.id]} onRemoveQueued={turn=>window.action=['remove',turn.id]}
         onMoveQueued={(turn,direction)=>window.action=['move',turn.id,direction]}
         onSendQueued={turn=>window.action=['send',turn.id]} />;
@@ -61,9 +61,9 @@ before(async () => {
       return <Composer draft={draft} setDraft={setDraft} engine="Devin" keys={false} working onSend={()=>{}}
         pendingLabel="After current response"
         queued={[
-          {turn:{id:'sent',delivered:true},text:'Already with the CLI',attachments:0,delivered:true},
-          {turn:{id:'auto',delivery:'auto'},text:'Follows the CLI',attachments:0},
-          {turn:{id:'held',delivery:'queue'},text:'A scheduled prompt',attachments:0},
+          {turn:{id:'sent',text:'Already with the CLI',delivered:true},text:'Already with the CLI',attachments:0,delivered:true},
+          {turn:{id:'auto',text:'Follows the CLI',delivery:'auto'},text:'Follows the CLI',attachments:0},
+          {turn:{id:'held',text:'A scheduled prompt',delivery:'queue'},text:'A scheduled prompt',attachments:0},
         ]}
         onEditQueued={()=>{}} onRemoveQueued={()=>{}} onMoveQueued={()=>{}}
         onSendQueued={turn=>window.action=['send',turn.id]} />;
