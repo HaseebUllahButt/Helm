@@ -1,0 +1,1 @@
+{"type":"user","session_id":"","parent_tool_use_id":null,"uuid":"77e99853-ae28-4bdc-9837-f44bc4e6ba69","message":{"role":"user","content":[{"type":"text","text":"Reply with exactly the words: hello from helm"}]}}

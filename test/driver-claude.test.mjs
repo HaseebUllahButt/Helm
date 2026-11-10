@@ -432,6 +432,32 @@ test('a wake-up the CLI starts by itself is a turn of its own, not the last one 
   await driver.kill();
 });
 
+test('a wake-up step that never streamed still opens, once', async (t) => {
+  // Wake-up turns can come with no stream events at all. The step then only
+  // ended, never started, so agent messages waited for the whole wake-up.
+  const { driver, log } = make('wake-tool');
+  t.after(() => driver.kill());
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done' && String(e.turnId).startsWith('wake-'));
+  const starts = log.of('item.start').filter((e) => e.id === 'toolu_wake_bash');
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].parentId, undefined);
+  assert.equal(starts[0].kind, 'tool');
+  assert.ok(starts[0].turnId.startsWith('wake-'));
+  const order = log.events.filter((e) => e.id === 'toolu_wake_bash').map((e) => e.type);
+  assert.equal(order[0], 'item.start', 'the step opens before it ends');
+});
+
+test('a streamed tool step opens once, not again from its full message', async (t) => {
+  const { driver, log } = make('tool', { mode: 'auto' });
+  t.after(() => driver.kill());
+  await driver.send('Use the Bash tool…');
+  await log.until((e) => e.type === 'turn.done');
+  const top = log.of('item.start').filter((e) => !e.parentId && e.kind === 'tool');
+  assert.ok(top.length > 0);
+  assert.equal(new Set(top.map((e) => e.id)).size, top.length);
+});
+
 test('a task notice the CLI replays is a wake-up, never a message from the owner', async () => {
   // Background news queued behind the owner's message comes back marked as a
   // replay. Read as a sent message, the chat showed the raw notice as the
