@@ -928,7 +928,7 @@ test('helm delegate same runs the helper on the account this chat runs as', asyn
 test('delegation instructions keep only rules; the details live in helm delegate --help', async () => {
   const { commandHelp } = await import('../packages/connect/src/help.js');
   const note = delegationNote();
-  assert.ok(note.length < 800, 'it rides along in every session');
+  assert.ok(note.length < 1100, 'it rides along in every session');
   assert.equal(delegationNote('codex'), note, 'Helm\'s own Codex fork reuses the cache; Codex\'s own child did not');
   assert.equal(delegationNote('pi'), note, 'tools nobody measured keep helm delegate');
   assert.match(note, /Do the work yourself by default/);
@@ -936,7 +936,7 @@ test('delegation instructions keep only rules; the details live in helm delegate
   assert.match(note, /open, message and stop it/);
   // Claude's own Agent is cheaper for short work on the same account.
   const claude = delegationNote('claude');
-  assert.ok(claude.length < 800, 'it rides along in every session');
+  assert.ok(claude.length < 1100, 'it rides along in every session');
   assert.doesNotMatch(claude, /never your CLI's own subagent tool/);
   assert.match(claude, /on your account, short or long, use your Agent tool/);
   assert.match(claude, /a fork if it needs this chat, keep your model unless the owner asks for another, run_in_background false\./);
@@ -945,6 +945,11 @@ test('delegation instructions keep only rules; the details live in helm delegate
   for (const n of [note, claude]) {
     assert.ok(n.includes('The owner: "orchestrator mode is when u give work to others and u are always there to talk to me".'));
     assert.match(n, /to talk to me". Use it only when the owner asks for it\./);
+  }
+  // A helper starts with none of the parent's context; an orchestrator stays free.
+  for (const n of [note, claude]) {
+    assert.match(n, /it has none of your context\. Give the goal, the exact files, what other helpers own, the result you expect and the check to run\./);
+    assert.match(n, /Then start helpers in the background, never wait on them, end your turn/);
   }
   for (const shared of [/Do the work yourself by default/, /never unset HELM_SESSION_ID/, /judgment calls yourself/, /Keep your helpers/]) assert.match(claude, shared);
   assert.match(note, /never unset HELM_SESSION_ID/);
@@ -1354,9 +1359,13 @@ test('only a helper is told to report once and to use helm say afterwards', asyn
   assert.doesNotMatch(helmBrief({}), /\[Helm helper:/);
   const brief = helmBrief({}, { parentId: 'abc123def456' });
   assert.ok(brief.startsWith(helperNote('abc123def456')));
-  assert.match(brief, /Report once\./);
+  assert.match(brief, /Report once, and/);
   assert.match(brief, /stale background watcher/);
-  assert.match(brief, /helm say abc123def456 -- "text"/);
+  assert.match(brief, /helm say abc123def456 -- "text" only when you are blocked or need its decision, never for progress\./);
+  assert.match(brief, /make the report stand alone: the outcome first/);
+  // Every agent: a message carries what the reader needs, not the sender's shorthand.
+  assert.match(brief, /The reader has none of your context/);
+  assert.match(brief, /never trade acknowledgements or progress notes/);
 });
 
 test('the browser note rides along only where a browser can start', async () => {
