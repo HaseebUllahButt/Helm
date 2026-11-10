@@ -2062,6 +2062,13 @@ export class Daemon {
         const statuses = await authStatuses(profiles, { refresh: !!p.refresh });
         this.cliAgents = markShown(await agentCatalog(profiles, statuses, { models: p.models !== false, credentials: true }),
           profiles, pickerPrefs().hidden);
+        // The last limit readings, so helm delegate and helm spawn can move
+        // work off an account that is out (balance.js). No new reading here.
+        const limits = this.sessions.limits.report(profiles).accounts;
+        for (const row of this.cliAgents) {
+          const windows = limits.find((a) => a.aliases.includes(row.id))?.windows;
+          if (windows?.length) row.limits = windows.map(({ label, used, resetsAt }) => ({ label, used, resetsAt }));
+        }
         return { agents: this.cliAgents };
       }
 
@@ -2536,6 +2543,7 @@ export class Daemon {
         return this.transfers.accept(p, caller);
 
       case M.PING:            return { t: Date.now() };
+      case M.MACHINE_STATS:   return (await import('./machine-stats.js')).machineStats();
       case M.NET_ROUTES:      return this.routes();
 
       case M.SSH_INFO:        return sshInfo();

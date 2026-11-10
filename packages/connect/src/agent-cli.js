@@ -1,12 +1,17 @@
 import { M } from '@helm/protocol';
-import { parseAgentArgs, chooseAgent } from './delegation.js';
+import { parseAgentArgs, chooseAgent, balanceAgent } from './delegation.js';
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** "5h 40% · 7d 85%": percent left per window; a window past its reset is full again. */
+export function limitLine(windows, now = Date.now()) {
+  return windows.map((w) => `${w.label} ${w.resetsAt && w.resetsAt * 1000 <= now ? 100 : Math.max(0, Math.round(100 - w.used))}%`).join(' · ');
+}
 
 /** Injected RPC keeps argument and result behavior testable without a live hub. */
 export async function runAgentCommand(command, args, { rpc, self, machine: findMachine = (name) => name,
   parentId = process.env.HELM_SESSION_ID, callerThreadId = process.env.CODEX_THREAD_ID,
-  ownAccount = process.env.HELM_PROFILE_ID, write = console.log, sleep = pause } = {}) {
+  ownAccount = process.env.HELM_PROFILE_ID, write = console.log, warn = console.error, sleep = pause } = {}) {
   const { options, words } = parseAgentArgs(args, {
     values: command === 'delegate' ? ['model', 'mode', 'effort', 'parent', 'cwd', 'timeout', 'machine'] : command === 'delegate-result' ? ['timeout'] : ['machine'],
     switches: command === 'agents' ? ['json', 'refresh'] : command === 'delegate' ? ['wait', 'json', 'worktree'] : ['wait', 'json'],
@@ -22,6 +27,7 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
       const { formatCredential } = await import('./credentials.js');
       for (const a of result.agents) {
         write(`${a.id}  ${a.engine}  ${a.auth}${a.defaultModel ? `  default: ${a.defaultModel}` : ''}${a.cheapModel ? `  cheap: ${a.cheapModel}` : ''}`);
+        if (a.limits?.length) write(`  limit left: ${limitLine(a.limits)}`);
         if (a.models?.length) write(`  models: ${a.models.join(', ')}`);
         if (a.credentials?.length) write(`  credentials: ${a.credentials.map(formatCredential).join(', ')}`);
       }
@@ -53,12 +59,21 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     let { agents } = await rpc(target, M.AGENT_LIST, { models: cheap }, cheap ? 60_000 : undefined);
     let agent = chooseAgent(agents, account);
     if (!agent.available) throw new Error(`${agent.id} is signed out; log in through its CLI first`);
+    // `same` is not a hand pick: when this chat's account is out of limit,
+    // the helper goes to another account of the same tool with limit left.
+    if (named === 'same') {
+      const moved = balanceAgent(agents, agent);
+      if (moved.from) {
+        agent = moved.agent;
+        warn(`${moved.from.id} is out of limit${moved.until ? ` until ${new Date(moved.until * 1000).toLocaleTimeString()}` : ''}. The helper uses ${agent.id}, which has limit left. Name an account to override.`);
+      }
+    }
     // A list still being refreshed from the public catalog may name last
     // season's small model; give the refresh a few seconds to land.
     for (let tries = 0; cheap && agent.refreshing && tries < 8; tries++) {
       await sleep(1000);
       ({ agents } = await rpc(target, M.AGENT_LIST, { models: true }, 60_000));
-      agent = chooseAgent(agents, account);
+      agent = agents.find((a) => a.id === agent.id) ?? chooseAgent(agents, account);
     }
     if (cheap) {
       if (!agent.cheapModel) throw new Error(`${agent.id} has no small model; choose one from: ${(agent.models ?? []).join(', ') || 'helm agents'}`);

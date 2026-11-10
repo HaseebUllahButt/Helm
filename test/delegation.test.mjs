@@ -912,6 +912,28 @@ test('helpers nest as deep as the task needs, and empty tasks fail before starti
   assert.equal(parent.delegation.depth, 5);
 });
 
+test('helm delegate same moves off an account that is out of limit; a full name stays', async () => {
+  const soon = Date.now() / 1000 + 3600;
+  const agents = [
+    { id: 'codex-a', engine: 'codex', available: true, shown: true, limits: [{ label: '5h', used: 100, resetsAt: soon }] },
+    { id: 'codex-b', engine: 'codex', available: true, shown: true, limits: [{ label: '5h', used: 30, resetsAt: soon }] },
+    { id: 'codex-c', engine: 'codex', available: true, shown: true, limits: [{ label: '5h', used: 70, resetsAt: soon }] },
+  ];
+  const started = [], warned = [];
+  const rpc = async (_self, method, params) => {
+    if (method === M.AGENT_LIST) return { agents };
+    if (method === M.SESSION_DELEGATE) { started.push(params.profileId); return { session: { id: 'child', engine: 'codex', status: 'working' } }; }
+    throw new Error(method);
+  };
+  const run = (name) => runAgentCommand('delegate', [name, '--json', '--', 'Look'], { rpc, self: 'me', parentId: 'parent', ownAccount: 'codex-a', write: () => {}, warn: (l) => warned.push(l) });
+  await run('same');
+  await run('codex-a');
+  await run('codex');
+  assert.deepEqual(started, ['codex-b', 'codex-a', 'codex-b']);
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /codex-a is out of limit until .*uses codex-b/);
+});
+
 test('helm delegate same runs the helper on the account this chat runs as', async () => {
   const calls = [];
   const rpc = async (_self, method, params) => {
@@ -953,7 +975,7 @@ test('delegation instructions keep only rules; the details live in helm delegate
   }
   for (const shared of [/Do the work yourself by default/, /never unset HELM_SESSION_ID/, /judgment calls yourself/, /Keep your helpers/]) assert.match(claude, shared);
   assert.match(note, /never unset HELM_SESSION_ID/);
-  assert.match(note, /Use your account and model unless the owner asks for another/);
+  assert.match(note, /Use helm delegate same and your model unless the owner names another account/);
   assert.doesNotMatch(note + claude, /--model cheap|model haiku/);
   assert.match(note, /Keep your helpers/);
   assert.match(note, /only test chats that are not helpers/);
