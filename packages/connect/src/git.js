@@ -294,6 +294,34 @@ export async function file(cwd, path, since) {
   } finally { await handle.close(); }
 }
 
+/** One Download piece: the canvas reads a file of any size in these. */
+const PIECE = 4 * 1024 * 1024;
+
+/**
+ * One piece of a project file, as its bytes, for the canvas Download. The
+ * same rules as `file`: inside the folder, and never a password file.
+ */
+export async function download(cwd, path, offset = 0) {
+  if (!Number.isInteger(offset) || offset < 0) throw new Error('invalid file offset');
+  const dir = await folder(cwd);
+  const rel = inside(path);
+  const root = await canvasRoot(dir);
+  if (isSecretPath(rel)) throw new Error('this file may hold passwords or keys; Helm does not send it');
+  const realRoot = await realpath(root);
+  const full = await realpath(join(root, rel)).catch(() => null);
+  if (!full || !full.startsWith(realRoot + '/')) throw new Error('no such file in this folder');
+  if (isSecretPath(relative(realRoot, full))) throw new Error('this file may hold passwords or keys; Helm does not send it');
+  if (relative(realRoot, full).split('/')[0] === '.git') throw new Error('that is git’s own folder');
+  const handle = await open(full, 'r');
+  try {
+    const s = await handle.stat();
+    if (!s.isFile()) throw new Error('that is not a file');
+    const buf = Buffer.alloc(Math.max(0, Math.min(PIECE, s.size - offset)));
+    const { bytesRead } = buf.length ? await handle.read(buf, 0, buf.length, offset) : { bytesRead: 0 };
+    return { data: buf.subarray(0, bytesRead).toString('base64'), offset, size: s.size, name: basename(rel) };
+  } finally { await handle.close(); }
+}
+
 /**
  * Save one file the owner edited. `base` is the hash it was read at: if the
  * file changed since (the agent wrote to it), nothing is written and

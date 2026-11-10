@@ -8,10 +8,14 @@ import type { Visual } from './types';
 /** A saved page comes back as HTML. A PDF gives its page list, then one page picture per call. */
 /** `download`: the machine kept the PDF itself, so Download can save it. */
 export interface PdfPages { total: number; pages: { width: number; height: number }[]; download?: boolean }
-/** Reads a saved page, a PDF's page list, one page picture, or with 'file' the PDF itself. */
-export type VisualReader = (ref: string, page?: number | 'file') => Promise<{ html?: string; image?: string; file?: string } & Partial<PdfPages>>;
+/**
+ * Reads a saved page, a PDF's page list, one page picture, or with 'file' one
+ * piece of the original file from `offset`. An older machine sends the whole
+ * file and no `size`.
+ */
+export type VisualReader = (ref: string, page?: number | 'file', offset?: number) => Promise<{ html?: string; image?: string; file?: string; offset?: number; size?: number; name?: string; mime?: string } & Partial<PdfPages>>;
 /** The `session.visual` options for one read. */
-export const visualPart = (page?: number | 'file') => page === 'file' ? { file: true } : page === undefined ? {} : { page };
+export const visualPart = (page?: number | 'file', offset?: number) => page === 'file' ? { file: true, ...(offset === undefined ? {} : { offset }) } : page === undefined ? {} : { page };
 export const Visuals = createContext<VisualReader | undefined>(undefined);
 /** The chat's canvas, when it has one: which page it shows, and how to show another. */
 export interface CanvasVisuals { shown?: string; show: (visual: Visual) => void }
@@ -111,8 +115,59 @@ export function usePdfPages(read: VisualReader | undefined, ref: string) {
   return { list, error, retry: () => setRetry(value => value + 1) };
 }
 
-export function saveVisual(html: string, title: string) {
-  saveBlob(new Blob([visualDocument(html, { theme: currentTheme(), expanded: true })], { type: 'text/html;charset=utf-8' }), title, 'html');
+export function saveVisual(html: string, title: string, name?: string) {
+  const blob = new Blob([visualDocument(html, { theme: currentTheme(), expanded: true })], { type: 'text/html;charset=utf-8' });
+  if (name && /\.html?$/i.test(name)) saveNamed(blob, name); else saveBlob(blob, title, 'html');
+}
+
+/** A file's bytes from base64, for a Blob. */
+function bytesOf(data: string) {
+  const text = atob(data), bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * Reads a whole file in pieces: each call gives the piece at `offset` and
+ * the file's whole size. A reply with no size is the whole file at once.
+ */
+export async function readPieces(piece: (offset: number) => Promise<{ data?: string; size?: number }>, onProgress?: (done: number, size: number) => void) {
+  const parts: Uint8Array[] = [];
+  let offset = 0, size: number | undefined;
+  do {
+    const r = await piece(offset);
+    if (typeof r.data !== 'string') throw new Error('Update Helm on this machine to download files.');
+    const bytes = bytesOf(r.data);
+    parts.push(bytes);
+    offset += bytes.length;
+    if (typeof r.size !== 'number') return parts;
+    size = r.size;
+    onProgress?.(offset, size);
+    if (!bytes.length && offset < size) throw new Error('The file got shorter while Helm read it. Try again.');
+  } while (offset < size);
+  return parts;
+}
+
+/** Downloads a visual's original file, as the machine kept it. */
+export async function downloadOriginal(read: VisualReader, visual: Visual, fallback: { title: string; extension: string; mime: string }, onProgress?: (done: number, size: number) => void) {
+  let name = visual.name, mime = visual.file?.mime ?? fallback.mime;
+  const parts = await readPieces(async (offset) => {
+    const r = await read(visual.ref, 'file', offset);
+    if (r.name) name = r.name;
+    if (r.mime) mime = r.mime;
+    return { data: r.file, size: r.size };
+  }, onProgress);
+  const blob = new Blob(parts as BlobPart[], { type: mime });
+  if (name) saveNamed(blob, name); else saveBlob(blob, fallback.title, fallback.extension);
+}
+
+/** Saves a file to the device's downloads under its own name. */
+export function saveNamed(blob: Blob, name: string) {
+  const clean = name.replace(/[\\/\u0000-\u001f]/g, '').trim();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = clean || 'file';
+  link.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 /** Saves a file to the device's downloads, named after the page. */

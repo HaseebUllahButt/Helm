@@ -10,7 +10,8 @@ process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-visual-test-'));
 process.env.HELM_NO_SERVICE = '1';
 for (const [key, name] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(process.env.HELM_DIR, name);
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-const { prepareVisual, preparePdf, validateVisual, MAX_VISUAL_BYTES, MAX_PDF_PAGES, withVisualMessages } = await import('../packages/connect/src/visual.js');
+const { prepareVisual, preparePdf, validateVisual, MAX_VISUAL_BYTES, MAX_PDF_PAGES, FILE_PIECE_BYTES, withVisualMessages } = await import('../packages/connect/src/visual.js');
+const gitq = await import('../packages/connect/src/git.js');
 const { runVisualCommand } = await import('../packages/connect/src/visual-cli.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { EventLog, activeTurnFromEvents } = await import('../packages/connect/src/events.js');
@@ -172,7 +173,7 @@ test('a PDF becomes page pictures on the publishing machine; the canvas reads on
   assert.equal(made.total, 3);
   assert.deepEqual(made.pages.map(p => [p.width, p.height]), [[3, 2], [3, 2], [3, 2]]);
   assert.ok(runs[1].includes('-jpeg') && runs[1].includes('1600'), 'JPEG at 1600 px keeps text sharp');
-  assert.equal(made.file, pdf.toString('base64'), 'the PDF itself travels for Download');
+  assert.equal(made.size, pdf.length, 'the PDF itself goes up in pieces for Download, not in the page list');
   await assert.rejects(preparePdf(file('fake.pdf'), { run }), /not a PDF/);
   const none = async () => { throw Object.assign(new Error('spawn pdfinfo ENOENT'), { code: 'ENOENT' }); };
   await assert.rejects(preparePdf(file('doc.pdf'), { run: none }), /^Error: Install poppler-utils on this machine to show PDFs/);
@@ -199,7 +200,7 @@ test('a PDF becomes page pictures on the publishing machine; the canvas reads on
   assert.equal(sessions.get('pdf1').canvas.visual.ref, visual.ref);
   assert.deepEqual(sessions.readVisual('pdf1', visual.ref), { total: 3, pages: [{ width: 3, height: 2 }, { width: 3, height: 2 }, { width: 3, height: 2 }] });
   assert.throws(() => sessions.readVisual('pdf1', visual.ref, 'file'), /no saved file/, 'a PDF sent without its file has no Download');
-  const withFile = sessions.renderVisual('pdf1', { ...pdfParams, renderId: params(10).renderId, file: made.file }).visual;
+  const withFile = sessions.renderVisual('pdf1', { ...pdfParams, renderId: params(10).renderId, file: pdf.toString('base64') }).visual;
   assert.equal(sessions.readVisual('pdf1', withFile.ref).download, true);
   assert.deepEqual(sessions.readVisual('pdf1', withFile.ref, 'file'), { file: pdf.toString('base64') });
   assert.deepEqual(sessions.readVisual('pdf1', visual.ref, 2), { image: `data:image/jpeg;base64,${jpeg.toString('base64')}` });
@@ -257,4 +258,71 @@ test('agents open project files beside chat with guarded paths, saved selection 
   assert.equal(sessions.get('file1').canvas.closed, true);
   const again = await sessions.openCanvas('file1', { path: 'notes.md', requestId: params(11).renderId });
   assert.equal(again.canvas.closed, undefined, 'a new ask opens again');
+});
+
+test('Download saves the original file in pieces, with its own name, for PDFs, pictures and project files', async t => {
+  writeFileSync(file('sessions.json'), JSON.stringify({ version: 1, sessions: [{ id: 'dl1', engine: 'claude', nativeCli: true, status: 'idle', cwd: '/tmp', title: 'Download' }] }));
+  const sessions = new Sessions(new EventEmitter(), { makeDriver: () => { throw new Error('must not start a provider'); } });
+  t.after(() => sessions.stop());
+  const jpeg = Buffer.from('ffd8ffc0000b080002000301011100ffd9', 'hex');
+  const page = { data: jpeg.toString('base64'), width: 3, height: 2 };
+  // Larger than an older app can take in one read, and more than four pieces.
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(17 * 1024 * 1024, 7), Buffer.from('\n%%EOF\n')]);
+  const renderId = params(20).renderId;
+  for (let offset = 0; offset < pdf.length; offset += FILE_PIECE_BYTES) {
+    sessions.uploadVisualFile('dl1', { renderId, offset, data: pdf.subarray(offset, offset + FILE_PIECE_BYTES).toString('base64') });
+  }
+  assert.throws(() => sessions.uploadVisualFile('dl1', { renderId: params(21).renderId, offset: 5, data: 'AA==' }), /out of order/);
+  const pdfParams = { renderId, pages: [page], total: 37, title: 'Call notes', name: 'Riverside call.pdf', upload: true, placement: 'canvas' };
+  const { visual } = sessions.renderVisual('dl1', pdfParams);
+  assert.equal(visual.name, 'Riverside call.pdf');
+  assert.deepEqual(visual.file && { bytes: visual.file.bytes, mime: visual.file.mime }, { bytes: pdf.length, mime: 'application/pdf' });
+  assert.equal(sessions.readVisual('dl1', visual.ref).download, undefined, 'an older app sees no Download it cannot finish');
+  assert.throws(() => sessions.readVisual('dl1', visual.ref, 'file'), /Update Helm/);
+  const parts = [];
+  for (let offset = 0, size = Infinity; offset < size;) {
+    const piece = sessions.readVisual('dl1', visual.ref, 'file', offset);
+    assert.equal(piece.name, 'Riverside call.pdf');
+    assert.equal(piece.mime, 'application/pdf');
+    const bytes = Buffer.from(piece.file, 'base64');
+    assert.ok(bytes.length <= FILE_PIECE_BYTES);
+    parts.push(bytes); offset += bytes.length; size = piece.size;
+  }
+  assert.ok(Buffer.concat(parts).equals(pdf), 'the real PDF comes back byte for byte, not the page pictures');
+  assert.deepEqual(sessions.renderVisual('dl1', pdfParams), { visual }, 'a retry after the upload landed keeps one copy');
+  // A fake PDF upload is refused.
+  const fake = params(22).renderId;
+  sessions.uploadVisualFile('dl1', { renderId: fake, offset: 0, data: Buffer.from('PRIVATE').toString('base64') });
+  assert.throws(() => sessions.renderVisual('dl1', { ...pdfParams, renderId: fake }), /not a PDF/);
+  assert.throws(() => sessions.renderVisual('dl1', { ...pdfParams, renderId: params(23).renderId }), /did not arrive/);
+  assert.throws(() => validateVisual({ ...pdfParams, name: '../x.pdf' }), /invalid file name/);
+
+  // helm canvas picture.png: the picture goes up in pieces, then shows; Download gives the picture itself.
+  writeFileSync(file('Screen shot.png'), png);
+  const options = { print: () => {}, self: () => 'local', findSession: async () => ({}), env: { HELM_SESSION_ID: 'dl1' },
+    rpc: async (_env, method, p) => method === 'session.visual-file' ? sessions.uploadVisualFile(p.id, p) : sessions.renderVisual(p.id, p) };
+  const shown = await runVisualCommand('canvas', [file('Screen shot.png')], options);
+  assert.equal(shown.visual.name, 'Screen shot.png');
+  assert.equal(shown.visual.file.mime, 'image/png');
+  const picture = sessions.readVisual('dl1', shown.visual.ref, 'file', 0);
+  assert.ok(Buffer.from(picture.file, 'base64').equals(png));
+  assert.equal(picture.size, png.length);
+  // A machine with an older Helm takes no pieces: the picture still shows, without Download.
+  const older = await runVisualCommand('canvas', [file('Screen shot.png')], { ...options,
+    rpc: async (_env, method, p) => { if (method === 'session.visual-file') throw new Error('unknown method: session.visual-file'); return sessions.renderVisual(p.id, p); } });
+  assert.equal(older.visual.file, undefined);
+
+  // Markdown, text and code: the file as it is in the project, in pieces, never a password file.
+  const repo = file('download-repo');
+  mkdirSync(join(repo, 'docs'), { recursive: true });
+  execFileSync('git', ['init', '-q', repo]);
+  const notes = Buffer.concat([Buffer.from('# Notes\n'), Buffer.alloc(FILE_PIECE_BYTES + 10, 65)]);
+  writeFileSync(join(repo, 'docs', 'notes.md'), notes);
+  writeFileSync(join(repo, '.env'), 'SECRET=private');
+  const first = await gitq.download(repo, 'docs/notes.md', 0);
+  assert.deepEqual([first.size, first.name, Buffer.from(first.data, 'base64').length], [notes.length, 'notes.md', FILE_PIECE_BYTES]);
+  const rest = await gitq.download(repo, 'docs/notes.md', FILE_PIECE_BYTES);
+  assert.ok(Buffer.concat([Buffer.from(first.data, 'base64'), Buffer.from(rest.data, 'base64')]).equals(notes));
+  await assert.rejects(gitq.download(repo, '.env', 0), /passwords or keys/);
+  await assert.rejects(gitq.download(repo, '../outside.md', 0), /inside the folder/);
 });
