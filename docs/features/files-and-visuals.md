@@ -49,9 +49,16 @@
   Limits: 100 pages, 2 MiB a page, 24 MiB in all. Canvas shows the pages
   one under the other, read-only, and loads only those near the view
   (`session.visual` with `page`). No PDF reader is needed on the viewing
-  device. A PDF of 16 MiB or less also keeps the file itself; Download
-  reads it with `session.visual` `file: true`. Larger and older PDFs have
-  no Download. Without poppler-utils the command says what to install.
+  device. Without poppler-utils the command says what to install.
+  **Download** saves the original file under its own name. `helm canvas`
+  sends the original PDF or picture first, in 4 MiB pieces
+  (`session.visual-file`, up to 512 MiB), then renders with `upload: true`;
+  Download reads it back in pieces (`session.visual` `file: true, offset`).
+  A project file downloads in pieces through `git.download`, with the same
+  rules as `git.file` (no password files, nothing outside the folder). A
+  saved page downloads as the page. Old PDFs without a kept file, and
+  pictures sent by an older Helm, have no Download. An older app gets
+  Download only for a PDF of 16 MiB or less, in one read.
   The head's Fullscreen button uses the browser's full screen where it
   exists, else covers the window; Escape leaves full screen first. Its
   first screen also lists the chat's pictures and pages, so Back from a

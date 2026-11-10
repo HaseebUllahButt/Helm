@@ -1746,6 +1746,7 @@ export class Daemon {
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
       case M.GIT_FILES: return gitq.files(p.cwd);
       case M.GIT_FILE: return gitq.file(p.cwd, p.path, p.since);
+      case M.GIT_DOWNLOAD: return gitq.download(p.cwd, p.path, p.offset);
       case M.GIT_WRITE: return gitq.write(p.cwd, p.path, p.text, p.base);
       case M.GIT_COMMIT: return gitq.commit(p.cwd, p.hash, p.path);
       case M.GIT_WORKTREE: return gitq.addWorktree(p.cwd, p.name);
@@ -2212,7 +2213,8 @@ export class Daemon {
       case M.SESSION_CANVAS: return this.sessions.openCanvas(p.id, p);
       case M.SESSION_CANVAS_CLOSED: return this.sessions.closeCanvas(p.id, p.requestId);
       case M.SESSION_RENDER: return this.sessions.renderVisual(p.id, p);
-      case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref, p.file === true ? 'file' : p.page);
+      case M.SESSION_RENDER_FILE: return this.sessions.uploadVisualFile(p.id, p);
+      case M.SESSION_VISUAL: return this.sessions.readVisual(p.id, p.ref, p.file === true ? 'file' : p.page, p.file === true ? p.offset : undefined);
       case M.SESSION_EVENTS:
         await this.sessions.prepareHistory(p.id);
         return this.sessions.history(p.id, {

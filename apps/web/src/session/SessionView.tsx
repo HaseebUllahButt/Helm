@@ -73,7 +73,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
 }) {
   const isShell = session.engine === 'shell';
   const isExternal = !!session.external;
-  const readVisual = useCallback<VisualReader>((ref, page) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...visualPart(page) }, 60_000), [client, env.id, session.id]);
+  const readVisual = useCallback<VisualReader>((ref, page, offset) => client.rpc(env.id, 'session.visual', { id: session.id, ref, ...visualPart(page, offset) }, 60_000), [client, env.id, session.id]);
   const [messages, setMessages] = useState<Message[] | null>(() => keptMessages.get(`${env.id}:${session.id}`) ?? null);
   // What is on screen stays in memory for the next visit (see keptMessages).
   useEffect(() => { if (messages?.length) keepMessages(`${env.id}:${session.id}`, messages); }, [messages, env.id, session.id]);

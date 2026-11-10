@@ -6,7 +6,7 @@ import { Markdown } from '../Markdown';
 import { ago } from '../screens/common';
 import { FileView } from './CodeView';
 import { SideDock, readLocal, useWide, writeLocal } from './SideDock';
-import { liveUrl, saveBlob, saveVisual, usePdfPages, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
+import { downloadOriginal, liveUrl, readPieces, saveNamed, saveVisual, usePdfPages, useVisualHtml, VisualFrame, type VisualReader } from './VisualReply';
 import type { Visual } from './types';
 
 // The page editor is large; it loads the first time a note is edited.
@@ -250,12 +250,15 @@ function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: 
   const separateOrigin = url && new URL(url).origin !== location.origin;
   const { html, error, retry } = useVisualHtml(read, visual.ref, !live);
   const full = useContext(Fullscreen);
+  // A picture saves as the original picture; a page saves as the page.
+  const save = useDownload(visual.file && read ? (progress) => downloadOriginal(read, visual, { title: visual.title, extension: 'png', mime: visual.file!.mime }, progress) : html ? async () => saveVisual(html, visual.title, visual.name) : undefined);
   return <div className="canvas-file canvas-page">
     <div className="canvas-pad canvas-top">
-      <CanvasHead title={visual.title} sub={live ? url ?? visual.url ?? '' : 'Page from the agent'} onBack={onBack} onClose={onClose}>
+      <CanvasHead title={visual.title} sub={live ? url ?? visual.url ?? '' : visual.name ?? 'Page from the agent'} onBack={onBack} onClose={onClose}>
         {url && <a className="files-chip" href={url} target="_blank" rel="noopener noreferrer">Open in new tab</a>}
-        {html && <button className="files-chip" onClick={() => saveVisual(html, visual.title)}>Download</button>}
+        {!live && save.button}
       </CanvasHead>
+      {save.problem}
     </div>
     {live
       ? url && separateOrigin ? <iframe key={url} className="visual-frame canvas-live" title={visual.title} src={url} sandbox="allow-scripts allow-forms allow-popups allow-same-origin" referrerPolicy="no-referrer" />
@@ -274,26 +277,15 @@ function CanvasPage({ visual, read, onBack, onClose }: { visual: Visual; read?: 
  */
 function CanvasPdf({ visual, read, onBack, onClose }: { visual: Visual; read?: VisualReader; onBack: () => void; onClose: () => void }) {
   const { list, error, retry } = usePdfPages(read, visual.ref);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const download = async () => {
-    if (!read || saving) return;
-    setSaving(true); setSaveError('');
-    try {
-      const { file } = await read(visual.ref, 'file');
-      if (typeof file !== 'string') throw new Error('Update Helm on this machine to download PDFs.');
-      const bytes = Uint8Array.from(atob(file), (c) => c.charCodeAt(0));
-      saveBlob(new Blob([bytes], { type: 'application/pdf' }), visual.title, 'pdf');
-    } catch (err) { setSaveError(errorMessage(err, { fallback: 'Helm cannot download this PDF.' })); }
-    finally { setSaving(false); }
-  };
+  // The real PDF, never the page pictures. An older PDF kept no file: no Download.
+  const save = useDownload(read && (visual.file || list?.download) ? (progress) => downloadOriginal(read, visual, { title: visual.title, extension: 'pdf', mime: 'application/pdf' }, progress) : undefined);
   const count = list ? list.pages.length === list.total ? `${list.total} ${list.total === 1 ? 'page' : 'pages'}` : `First ${list.pages.length} of ${list.total} pages` : 'PDF';
   return <div className="canvas-file canvas-page">
     <div className="canvas-pad canvas-top">
-      <CanvasHead title={visual.title} sub={count} onBack={onBack} onClose={onClose}>
-        {list?.download && <button className="files-chip" disabled={saving} onClick={download}>{saving ? 'Downloading…' : 'Download'}</button>}
+      <CanvasHead title={visual.title} sub={visual.name ? `${visual.name} · ${count}` : count} onBack={onBack} onClose={onClose}>
+        {save.button}
       </CanvasHead>
-      {saveError && <div className="git-state bad" role="alert">{saveError}</div>}
+      {save.problem}
     </div>
     {list ? <div className="canvas-body canvas-pdf" role="document" aria-label={visual.title}>
         {list.pages.map((page, i) => <PdfPage key={i} read={read!} visualRef={visual.ref} index={i} width={page.width} height={page.height} />)}
@@ -302,6 +294,30 @@ function CanvasPdf({ visual, read, onBack, onClose }: { visual: Visual; read?: V
         {error ? <>{error} <button className="files-chip" onClick={retry}>Retry</button></> : 'Loading PDF…'}
       </div>}
   </div>;
+}
+
+/**
+ * The Download button and its error line. `start` saves the file; it gets a
+ * progress callback for a file that comes in pieces.
+ */
+function useDownload(start?: (progress: (done: number, size: number) => void) => Promise<void>, { icon = false } = {}) {
+  const [saving, setSaving] = useState<number | null>(null);
+  const [problem, setProblem] = useState('');
+  const run = async () => {
+    if (!start || saving !== null) return;
+    setSaving(0); setProblem('');
+    try { await start((done, size) => setSaving(size ? Math.floor((done / size) * 100) : 0)); }
+    catch (err) { setProblem(errorMessage(err, { fallback: 'Helm cannot download this file.' })); }
+    finally { setSaving(null); }
+  };
+  const label = saving === null ? 'Download' : saving ? `Downloading ${saving}%` : 'Downloading…';
+  return {
+    // A head with View and Edit has no room for words: the icon keeps the file name readable on a phone.
+    button: start && (icon
+      ? <button className="iconbtn" aria-label={label} title={label} disabled={saving !== null} onClick={() => void run()}><Icon name="download" size={17} /></button>
+      : <button className="files-chip" disabled={saving !== null} onClick={() => void run()}>{label}</button>),
+    problem: problem && <div className="git-state bad" role="alert">{problem}</div>,
+  };
 }
 
 /** How far outside the view a page starts to load, and keeps its picture. */
@@ -564,6 +580,14 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
   const slash = path.lastIndexOf('/');
   const canEdit = !!loaded && !loaded.truncated && !!loaded.hash;
   const text = draft ?? loaded?.text ?? '';
+  // The file as it is on the machine, in pieces, so a large file works too. Unsaved edits save first.
+  const ready = typeof file === 'object' && !('error' in file) && !file.hidden;
+  const download = useDownload(ready ? async (progress) => {
+    if (dirty) await save();
+    const parts = await readPieces((offset) => client.rpc<{ data: string; size: number }>(env.id, 'git.download', { cwd, path, offset }, 60_000)
+      .catch((e: any) => { throw /unknown|not supported/i.test(e?.message ?? '') ? new Error('Update Helm on this machine to download files.') : e; }), progress);
+    saveNamed(new Blob(parts as BlobPart[], { type: 'application/octet-stream' }), base(path));
+  } : undefined, { icon: canEdit && !md });
 
   useEffect(() => {
     const onSave = (e: KeyboardEvent) => {
@@ -584,7 +608,9 @@ function CanvasFile({ client, env, cwd, path, hidden, onBack, onClose }: {
           <button className={!editing ? 'on' : ''} aria-pressed={!editing} onClick={() => setEditing(false)}>View</button>
           <button className={editing ? 'on' : ''} aria-pressed={editing} onClick={startEdit}>Edit</button>
         </div>}
+        {download.button}
       </CanvasHead>
+      {download.problem}
       {problem && <div className="canvas-save" role="status">
         <span className="bad">{problem}</span>
         {dirty && <button className="files-chip canvas-save-btn" disabled={saving} onClick={() => void save()}>Try again</button>}

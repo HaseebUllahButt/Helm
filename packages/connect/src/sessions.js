@@ -31,7 +31,7 @@ import { gitBranch, worktreeHome } from './git-head.js';
 import { AccountLimits } from './account-limits.js';
 import { CLAUDE_NATIVE_COMMANDS } from './commands.js';
 import { canvasPath } from './git.js';
-import { validateVisual } from './visual.js';
+import { validateVisual, imageMime, MAX_ORIGINAL_BYTES, MAX_PDF_FILE_BYTES, FILE_PIECE_BYTES } from './visual.js';
 import { DeliveryState } from './delivery-state.js';
 import { DRIVERS, pendingSummary, wire } from './session-wire.js';
 import { driverTakesImages } from './session-attachments.js';
@@ -1644,28 +1644,61 @@ export class Sessions extends EventEmitter {
     return { canvas: s.canvas };
   }
 
+  /**
+   * One piece of the original file for a coming `helm canvas`, in order.
+   * The render call with `upload: true` and the same render ID keeps it.
+   */
+  uploadVisualFile(id, { renderId, offset, data }) {
+    const s = this.get(id);
+    if (!this.#index.has(id) || s.engine === 'shell') throw new Error('visual replies need a saved agent chat');
+    if (!/^[a-f0-9]{24}$/.test(renderId ?? '')) throw new Error('invalid render ID');
+    const bytes = typeof data === 'string' ? Buffer.from(data, 'base64') : Buffer.alloc(0);
+    if (!Number.isInteger(offset) || offset < 0 || !bytes.length || bytes.length > FILE_PIECE_BYTES) throw new Error(`a file piece must be 1 byte to ${FILE_PIECE_BYTES / 1024 / 1024} MiB`);
+    if (offset + bytes.length > MAX_ORIGINAL_BYTES) throw new Error(`the file is larger than ${MAX_ORIGINAL_BYTES / 1024 / 1024} MiB`);
+    return { size: this.events.appendUpload(id, `upload-${renderId}`, offset, bytes) };
+  }
+
   /** Save a page independently of provider lifetime or background tasks. */
   renderVisual(id, params) {
     const s = this.get(id);
     if (!this.#index.has(id) || s.engine === 'shell') throw new Error('visual replies need a saved agent chat');
-    const { html, pages, total, file, kind, title, height, renderId, placement, url } = validateVisual(params);
+    const { html, pages, total, file, name, upload, kind, title, height, renderId, placement, url } = validateVisual(params);
     const itemId = `visual-${renderId}`;
+    // The original file, sent in pieces before this call. A retry of a
+    // render that already landed finds no upload, or one it does not need.
+    let original;
+    if (upload) {
+      const earlier = this.events.tail(id, 0).find(e => e.type === 'item.start' && e.id === itemId);
+      if (earlier) this.events.dropUpload(id, `upload-${renderId}`);
+      else {
+        original = this.events.finishUpload(id, `upload-${renderId}`);
+        if (!original) throw new Error('the file to download did not arrive; send it again');
+        const head = this.events.attachmentPiece(id, original.ref, 0, kind === 'pdf' ? 5 : FILE_PIECE_BYTES)?.data ?? Buffer.alloc(0);
+        if (kind === 'pdf') { if (head.toString('latin1') !== '%PDF-') throw new Error('the file to download is not a PDF'); original.mime = 'application/pdf'; }
+        else if (original.bytes > FILE_PIECE_BYTES) throw new Error('a picture to download must be up to 4 MiB');
+        else original.mime = imageMime(head);
+      }
+    }
     // A PDF keeps each page picture on its own, and a short list of them as
     // its saved copy, so a device loads only the pages it shows.
     const parts = pages?.map(page => ({ ...this.events.putAttachment(id, { filename: `${renderId}.jpg`, mime: page.mime, data: page.data }), mime: page.mime, width: page.width, height: page.height }));
-    const whole = parts && file ? this.events.putAttachment(id, { filename: `${renderId}.pdf`, mime: 'application/pdf', data: file }) : undefined;
+    const whole = parts && file ? this.events.putAttachment(id, { filename: `${renderId}.pdf`, mime: 'application/pdf', data: file }) : parts && original;
     const data = parts
-      ? Buffer.from(JSON.stringify({ total, pages: parts.map(({ ref, mime, width, height }) => ({ ref, mime, width, height })), ...(whole ? { file: whole.ref } : {}) })).toString('base64')
+      ? Buffer.from(JSON.stringify({ total, pages: parts.map(({ ref, mime, width, height }) => ({ ref, mime, width, height })), ...(whole ? { file: whole.ref, fileBytes: whole.bytes } : {}) })).toString('base64')
       : Buffer.from(html).toString('base64');
     const ref = createHash('sha256').update(Buffer.from(data, 'base64')).digest('hex').slice(0, 32);
     const prior = this.events.tail(id, 0).find(e => e.type === 'item.start' && e.id === itemId);
     if (prior) {
+      if (upload) return { visual: prior.visual };
       if (prior.visual?.ref !== ref || prior.visual.title !== title || prior.visual.height !== height || prior.visual.placement !== placement || prior.visual.url !== url || prior.visual.kind !== kind) throw new Error('render ID already used for a different visual');
       return { visual: prior.visual };
     }
     const stored = this.events.putAttachment(id, parts ? { filename: `${renderId}.json`, mime: 'application/json', data } : { filename: `${renderId}.html`, mime: 'text/html', data });
     const bytes = parts ? parts.reduce((sum, part) => sum + part.bytes, 0) : stored.bytes;
-    const visual = { ref: stored.ref, title, height, bytes, ...(kind ? { kind, pages: parts.length, total } : {}), ...(placement ? { placement } : {}), ...(url ? { url } : {}) };
+    // `name` is the original file name; `file` says Download can save the original bytes.
+    const download = original ?? whole;
+    const visual = { ref: stored.ref, title, height, bytes, ...(kind ? { kind, pages: parts.length, total } : {}), ...(placement ? { placement } : {}), ...(url ? { url } : {}),
+      ...(name ? { name } : {}), ...(download ? { file: { ref: download.ref, bytes: download.bytes, mime: download.mime ?? 'application/pdf' } } : {}) };
     const active = s.driver && !s.external ? this.events.activeTurn(id) : null;
     const turnId = active?.turnId ?? `local-visual-${renderId}`;
     const append = event => {
@@ -1688,7 +1721,7 @@ export class Sessions extends EventEmitter {
    * A saved page, or for a PDF its page list, one page picture by number, or
    * with 'file' the PDF itself. An older PDF kept only its pictures.
    */
-  readVisual(id, ref, page) {
+  readVisual(id, ref, page, offset) {
     this.get(id);
     if (!this.#index.has(id)) throw new Error('no such saved agent chat');
     const found = /^[a-f0-9]{32}$/.test(ref ?? '') && this.events.tail(id, 0).find(e => e.visual?.ref === ref);
@@ -1696,14 +1729,26 @@ export class Sessions extends EventEmitter {
     const data = this.events.attachment(id, ref);
     if (!data) throw new Error('this visual is no longer stored');
     const text = Buffer.from(data, 'base64').toString('utf8');
-    if (found.visual.kind !== 'pdf') return { html: text };
-    const list = JSON.parse(text);
-    if (page === undefined) return { total: list.total, pages: list.pages.map(({ width, height }) => ({ width, height })), ...(list.file ? { download: true } : {}) };
+    const list = found.visual.kind === 'pdf' ? JSON.parse(text) : null;
     if (page === 'file') {
-      const whole = list.file && this.events.attachment(id, list.file);
-      if (!whole) throw new Error('this PDF has no saved file to download');
-      return { file: whole };
+      // With an offset, one piece and the whole size, so any file size works.
+      // Without one, as an older app asks, the whole file if it is small.
+      const fileRef = found.visual.file?.ref ?? list?.file;
+      if (!fileRef) throw new Error('this visual has no saved file to download');
+      if (offset === undefined) {
+        const whole = this.events.attachmentPiece(id, fileRef, 0, MAX_PDF_FILE_BYTES + 1);
+        if (!whole) throw new Error('this file is no longer stored');
+        if (whole.size > MAX_PDF_FILE_BYTES) throw new Error('Update Helm on this device to download large files.');
+        return { file: whole.data.toString('base64') };
+      }
+      if (!Number.isInteger(offset) || offset < 0) throw new Error('invalid file offset');
+      const piece = this.events.attachmentPiece(id, fileRef, offset, FILE_PIECE_BYTES);
+      if (!piece) throw new Error('this file is no longer stored');
+      return { file: piece.data.toString('base64'), offset, size: piece.size, ...(found.visual.name ? { name: found.visual.name } : {}), mime: found.visual.file?.mime ?? 'application/pdf' };
     }
+    if (!list) return { html: text };
+    // An older app downloads only a PDF it can fetch in one read.
+    if (page === undefined) return { total: list.total, pages: list.pages.map(({ width, height }) => ({ width, height })), ...(list.file && (list.fileBytes ?? 0) <= MAX_PDF_FILE_BYTES ? { download: true } : {}) };
     const part = Number.isInteger(page) ? list.pages[page] : undefined;
     if (!part) throw new Error('no such page in this PDF');
     const picture = this.events.attachment(id, part.ref);

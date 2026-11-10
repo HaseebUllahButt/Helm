@@ -20,8 +20,21 @@ const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
  */
 export const MAX_PDF_PAGES = 100;
 export const MAX_PDF_BYTES = 24 * 1024 * 1024;
-/** The PDF itself travels too, for Download, when it is this size or less. */
+/**
+ * An older helm sent the PDF inside the render call, up to this size. Now
+ * the original file travels in pieces before it (`session.visual-file`), up
+ * to MAX_ORIGINAL_BYTES, and Download reads it back in pieces.
+ */
 export const MAX_PDF_FILE_BYTES = 16 * 1024 * 1024;
+export const MAX_ORIGINAL_BYTES = 512 * 1024 * 1024;
+export const FILE_PIECE_BYTES = 4 * 1024 * 1024;
+
+/** The original file's own name, as Download saves it. */
+export function originalName(name) {
+  if (name === undefined) return undefined;
+  if (typeof name !== 'string' || !name.trim() || name.length > 200 || /[\\/\0-\x1f]/.test(name) || /^\.+$/.test(name)) throw new Error('invalid file name');
+  return name;
+}
 const PDF_WIDTH = 1600;
 const exec = promisify(execFile);
 
@@ -34,7 +47,10 @@ export function visualUrl(value) {
   return url.href;
 }
 
-export function validateVisual({ html, pages, total, file, title = 'Visual reply', height = 420, renderId, placement, url }) {
+export function validateVisual({ html, pages, total, file, name, upload, title = 'Visual reply', height = 420, renderId, placement, url }) {
+  name = originalName(name);
+  if (upload !== undefined && upload !== true) throw new Error('invalid upload flag');
+  const extra = { ...(name ? { name } : {}), ...(upload ? { upload } : {}) };
   if (pages !== undefined) {
     // A PDF is page pictures, shown read-only in the canvas, never as a page.
     if (url !== undefined || html !== undefined || !Array.isArray(pages) || !pages.length || pages.length > MAX_PDF_PAGES) throw new Error(`a PDF visual must have 1–${MAX_PDF_PAGES} page pictures`);
@@ -55,9 +71,10 @@ export function validateVisual({ html, pages, total, file, title = 'Visual reply
     if (typeof title !== 'string' || !title.trim() || title.length > 160) throw new Error('visual title must be 1–160 characters');
     if (!/^[a-f0-9]{24}$/.test(renderId ?? '')) throw new Error('invalid render ID');
     if (placement !== undefined && placement !== 'canvas') throw new Error('invalid visual placement');
-    return { pages: checked, total, ...(pdf ? { file: pdf.toString('base64') } : {}), kind: 'pdf', title: title.trim(), height: 420, renderId, ...(placement ? { placement } : {}) };
+    return { pages: checked, total, ...(pdf ? { file: pdf.toString('base64') } : {}), ...extra, kind: 'pdf', title: title.trim(), height: 420, renderId, ...(placement ? { placement } : {}) };
   }
   if (url !== undefined) {
+    if (upload) throw new Error('a live page has no file to download');
     url = visualUrl(url);
     if (placement !== 'canvas') throw new Error('live pages must open in canvas');
     const escaped = url.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -72,7 +89,7 @@ export function validateVisual({ html, pages, total, file, title = 'Visual reply
   if (placement !== undefined && placement !== 'canvas') throw new Error('invalid visual placement');
   const normalized = serialize(parse(html));
   if (Buffer.byteLength(normalized) > MAX_VISUAL_BYTES) throw new Error('visual exceeds 4 MiB');
-  return { html: normalized, title: title.trim(), height, renderId, ...(placement ? { placement } : {}), ...(url ? { url } : {}) };
+  return { html: normalized, ...extra, title: title.trim(), height, renderId, ...(placement ? { placement } : {}), ...(url ? { url } : {}) };
 }
 
 /** Only recognized image bytes may be copied into a page, never arbitrary files. */
@@ -149,9 +166,8 @@ export async function preparePdf(file, { run = exec } = {}) {
       if (bytes > MAX_PDF_BYTES) throw new Error(`${basename(path)} is too large to show: its pages pass 24 MiB as pictures`);
       pages.push({ data: data.toString('base64'), ...size });
     }
-    // A PDF too large to send whole still shows; it only has no Download.
-    const whole = source.size <= MAX_PDF_FILE_BYTES ? { file: (await readFile(path)).toString('base64') } : {};
-    return { pages, total: Math.max(total, pages.length), ...whole };
+    // The PDF itself goes up in pieces before the render call, for Download.
+    return { pages, total: Math.max(total, pages.length), size: source.size };
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
