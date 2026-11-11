@@ -27,10 +27,15 @@ const expand = (p) => (p?.startsWith('~') ? join(HOME, p.slice(1)) : p);
 const ENGINE_STORES = {
   claude: { kind: 'files', home: '~/.claude', env: 'CLAUDE_CONFIG_DIR' },
   codex: { kind: 'files', home: '~/.codex', env: 'CODEX_HOME' },
+  pi: { kind: 'files', home: '~/.pi/agent', env: 'PI_CODING_AGENT_DIR' },
+  omp: { kind: 'files', home: '~/.omp/agent' },
   opencode: { kind: 'db' },
   opencode2: { kind: 'db' },
   devin: { kind: 'db' },
 };
+
+/** Engines whose records carry the cost the CLI priced itself. */
+const SELF_PRICED = new Set(['pi', 'omp']);
 
 const dataHome = () => process.env.XDG_DATA_HOME || join(HOME, '.local', 'share');
 
@@ -166,9 +171,9 @@ export class UsageReader {
 
       try {
         const home = expand(p.env?.[store.env] ?? store.home);
-        const got = p.engine === 'claude'
-          ? await this.scanners.scanClaude(home, opts)
-          : await this.scanners.scanCodex(home, opts);
+        const got = p.engine === 'claude' ? await this.scanners.scanClaude(home, opts)
+          : p.engine === 'codex' ? await this.scanners.scanCodex(home, opts)
+            : await this.scanners.scanPi(home, opts);
         fold(got.buckets, account, p.engine);
         stats = addStats(stats, got.stats);
       } catch { /* one unreadable account must not lose the rest */ }
@@ -256,9 +261,12 @@ export function foldBuckets(buckets, {
     // counts once. The app does the same across machines with `estimates`.
     const estimateId = project === ESTIMATED_FOLDER ? `${model}|${utcDay}|${b.claudeDaily ?? ''}` : null;
     if (estimateId && estimates.has(estimateId)) continue;
+    // A CLI that prices its own calls (Pi, OMP) is believed for a model
+    // Helm has no rate for, a free one included: its zero is a price.
     const cost = b.billedUsd != null && b.billedUsd > 0
       ? { total: b.billedUsd, billed: true }
-      : priceBucket(b.engine, model, b, utcDay);
+      : priceBucket(b.engine, model, b, utcDay)
+        ?? (SELF_PRICED.has(b.engine) && b.billedUsd != null ? { total: b.billedUsd, billed: true } : null);
     const rates = cacheRatesFor(model, b.engine, utcDay);
 
     addInto(totals, b, cost, rates);

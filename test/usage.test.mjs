@@ -432,3 +432,56 @@ test('model drill-down filters totals, daily series and groups before folding', 
   assert.deepEqual(report.groups.map(g => g.model), ['claude-opus-5']);
   assert.equal(foldBuckets(rows, { model: '' }).totals.total, 0, 'unknown model is a filter too');
 });
+
+// ------------------------------------------------------------------ pi
+
+/** A Pi home: one session on a free model, one priced, and a failed call. */
+function piMachine() {
+  const dir = tmp();
+  const home = join(dir, 'pi');
+  const sess = join(home, 'sessions', '--work-game--');
+  mkdirSync(sess, { recursive: true });
+  const msg = (ts, model, u, cost) => JSON.stringify({
+    type: 'message', timestamp: ts,
+    message: { role: 'assistant', model, usage: { ...u, totalTokens: u.input + u.output + u.cacheRead, cost: { total: cost } } },
+  }) + '\n';
+  writeFileSync(join(sess, 'a.jsonl'),
+    JSON.stringify({ type: 'session', id: 's1', timestamp: '2026-11-10T19:30:02Z', cwd: '/work/game' }) + '\n'
+    + msg('2026-11-10T19:30:09Z', 'zai-glm-5-3-flash', { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, 0)
+    + msg('2026-11-10T19:31:00Z', 'zai-glm-5-3-flash', { input: 4000, output: 300, cacheRead: 20000, cacheWrite: 0 }, 0)
+    + msg('2026-11-10T19:32:00Z', 'pi-made-up-model', { input: 1000, output: 100, cacheRead: 0, cacheWrite: 0 }, 0.25));
+  return { dir, home, profiles: [{ id: 'pi', engine: 'pi', env: { PI_CODING_AGENT_DIR: home } }] };
+}
+
+test('Pi chats are counted, priced from what Pi wrote', async () => {
+  const m = piMachine();
+  const r = await new UsageReader().report(m.profiles, { by: ['engine', 'model', 'project'] });
+  assert.equal(r.totals.turns, 2, 'a failed call with no tokens is not a turn');
+  assert.equal(r.totals.cacheRead, 20000);
+  assert.equal(r.totals.unpriced, false, 'a free model Pi priced at zero is priced, not unknown');
+  assert.ok(Math.abs(r.totals.costUsd - 0.25) < 1e-9);
+  assert.deepEqual(r.groups.map((g) => g.project), ['/work/game', '/work/game']);
+  assert.ok(r.groups.every((g) => g.engine === 'pi'));
+  rmSync(m.dir, { recursive: true, force: true });
+});
+
+test('Pi usage survives a restart without reading the files again', async () => {
+  const m = piMachine();
+  const indexPath = join(m.dir, 'usage-index.json');
+  const saves = [];
+  const track = (reader) => {
+    const persist = reader.persist.bind(reader);
+    reader.persist = () => { const save = persist(); saves.push(save); return save; };
+    return reader;
+  };
+  const before = track(new UsageReader({ indexPath }));
+  const first = await before.report(m.profiles, {});
+  await before.persist();
+  const after = track(new UsageReader({ indexPath }));
+  const second = await after.report(m.profiles, {});
+  assert.equal(second.scan.parsed, 0, 'a restored index must not re-parse Pi sessions');
+  assert.equal(second.totals.turns, first.totals.turns);
+  assert.ok(Math.abs(second.totals.costUsd - first.totals.costUsd) < 1e-9);
+  await Promise.all(saves);
+  rmSync(m.dir, { recursive: true, force: true });
+});

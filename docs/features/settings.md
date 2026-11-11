@@ -39,7 +39,8 @@
   shows one bar a week.
 - **Traps:** an unpriced model shows "unpriced" or "–", never $0. With
   `up --real` this is the owner's real spend. Devin spend can be five
-  minutes late. Costs are API prices, not money spent.
+  minutes late. Costs are API prices, not money spent. Pi and OMP chats
+  carry the cost Pi wrote down, so a free model shows $0, not "unpriced".
 - **Tests:** `test/browser/usage`; `test/usage`, `usage-sync`,
   `cost-accounting`, `devin-usage`, `other-pricing`, `token-rate`.
 
