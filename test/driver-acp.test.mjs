@@ -223,6 +223,8 @@ test('opencode2: the separate v2 driver starts an ACP session and exposes comman
   });
   const log = collect(driver);
   assert.deepEqual(driver.args, ['acp'], 'v2 has no --cwd flag');
+  assert.deepEqual(new OpencodeDriver({ cmd: 'opencode', cwd: '/tmp' }).args, ['acp'],
+    'opencode 2.x installed as opencode refuses --cwd too; the folder comes from the process and session/new');
   await driver.send('Reply with exactly the words: hello from helm');
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');

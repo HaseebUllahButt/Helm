@@ -14,7 +14,7 @@ Protocol: JSON over stdin and stdout (`drivers/acp.js`).
 |---|---|---|---|---|---|---|---|
 | claude | `claude -p` stream-json | 4 modes; Helm answers `can_use_tool` | yes | changed while live | interrupt; `--resume` | yes | rate-limit events, limits page |
 | codex | `app-server`, one per account | 5 modes; command, file and permission requests | yes | applies next turn | `turn/interrupt`; `thread/resume` | yes | rate limits, limits page |
-| opencode | ACP `acp --cwd` | build/plan; Helm allows the rest itself | if the agent says so | changed while live | `session/cancel`; `session/load` | no | context only |
+| opencode | ACP `acp`; the folder comes from the process (2.x refuses `--cwd`) | build/plan; Helm allows the rest itself | if the agent says so | changed while live | `session/cancel`; `session/load` | no | context only |
 | opencode2 | ACP `acp`, no `--cwd` | as opencode | if the agent says so | as opencode | `session/resume` | no | context only |
 | devin | ACP | its own edit/read/bypass | if the agent says so | effort is `thought_level` | `session/load` replays | no | Helm answers `/usage` |
 | grok | ACP `agent --no-leader … stdio` | Claude's mode words | if the agent says so | effort is a start flag | `session/load` | no | context only |

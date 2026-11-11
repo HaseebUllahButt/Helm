@@ -14,7 +14,7 @@ import { modeFor, modesFor } from '../modes.js';
  * `session/request_permission` requests that we answer by id.
  *
  * Everything engine-specific lives in `spec`, set by the subclass:
- *   args()            argv after the binary ('acp', '--cwd', ...)
+ *   args()            argv after the binary ('acp', ...)
  *   min               the CLI version this driver was written against; null
  *                     skips the `--version` probe entirely (antigravity's
  *                     PyInstaller bundle unpacks ~1GB to answer it)
