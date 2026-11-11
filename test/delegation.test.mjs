@@ -510,6 +510,27 @@ test('stopping a parent leaves a helper that already finished as it was', async 
   assert.equal(parent.recovery.message, 'You stopped this chat. Helm also stopped its helper.');
 });
 
+test('a failure the parent agent already got does not ask for the owner', async (context) => {
+  // 2026-11-11: a lead on why got eight failed helpers, ran the work again
+  // on Pi, and the owner still saw "8 helper tasks failed" under Needs you.
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: lead } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Lead' });
+  const { session: child } = await sessions.delegate({ id: lead.id, profileId: 'claude-main', task: 'Batch' });
+  const { session: unread } = await sessions.delegate({ id: lead.id, profileId: 'claude-main', task: 'Batch two' });
+  sessions.get(unread.id).delegation.notifyParent = false;
+  drivers.get(child.id).finish('error');
+  drivers.get(unread.id).finish('error');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(sessions.get(child.id).delegation.notifiedSeq > 0, 'the lead got the result');
+  assert.equal(sessions.get(child.id).delegation.status, 'error', 'the helper still shows its failure');
+  assert.equal(sessions.get(lead.id).team.failed, 1, 'only the failure no agent got');
+  assert.equal(parent.team.failed, 1);
+  sessions.delegationResult(unread.id, { consume: true, parentId: lead.id });
+  assert.equal(sessions.get(lead.id).team.failed, 0, 'the lead read it');
+  assert.equal(parent.team.failed, 0, 'nothing reaches the owner');
+});
+
 test('a child completion wakes its idle parent once with a durable result ticket', async (context) => {
   const { sessions, drivers } = setup(context);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
@@ -1282,6 +1303,13 @@ test('CLI --wait waits past five minutes and marks a timed-out reply as unfinish
   assert.equal(late.timedOut, true);
   assert.equal(late.progress, 'Type check passes. Next I am adding tests.');
   assert.match(late.output, /^Not finished: child is still working/);
+  // A look without --wait says Helm will message the parent: leads checked
+  // a working helper every 30 s, each check re-reading a 220k chat.
+  reads = 0; written.length = 0;
+  assert.equal(await runAgentCommand('delegate-result', ['child'], {
+    rpc, self: 'self', parentId: 'parent', write: (s) => written.push(s), sleep: async () => {},
+  }), 0);
+  assert.match(written.join('\n'), /child is still working\. Helm messages this chat when it ends; do not check again\./);
 });
 
 test('the real CLI discovers accounts and delegates through an authenticated relay', async (t) => {
@@ -1373,7 +1401,7 @@ test('agents are told which machine they are on and how to reach the others', as
   const alone = helmBrief({ self: 'a', machines: { a: net.machines.a } });
   assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');
   assert.match(alone, /\[Helm pickup: .*run helm pickup\.\]/, 'every agent learns where its handover goes');
-  assert.match(alone, /\[Helm usage: .*helm thread.*\]/, 'every agent learns the habits that cut waste');
+  assert.match(alone, /\[Helm usage: .*Never check a running helper.*helm thread.*\]/, 'every agent learns the habits that cut waste');
   assert.match(alone, /helm render/, 'visual replies work even with one machine');
 });
 

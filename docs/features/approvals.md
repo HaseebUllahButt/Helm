@@ -53,6 +53,9 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
   motion redraws the window); its second line says what it wants.
   A row with a request opens the waiting box; a failure opens the chat.
   A row with a helper failure also has a ⋯ with "Dismiss failure".
+- **Helper failures (owner, 2026-11-11):** a failed helper asks for the owner
+  only while no agent has its result. Once Helm told the parent agent, or
+  the agent read it, the agent handles it; the card in the chat still shows it.
 - **No snooze (owner, 2026-11-03):** a chat that needs you always shows as
   needing you. On start the app deletes the old `helm.snoozed` browser value.
 - **Prove (driven 2026-10-28):** start two fake-ask chats with

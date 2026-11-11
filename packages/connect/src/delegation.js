@@ -183,7 +183,7 @@ export function agentMessageNote() {
  * touched: the owner wants no loss of quality.
  */
 export function usageNote() {
-  return '[Helm usage: Each step re-reads this whole chat, so a long chat makes every step cost more. Keep the same models and checks; cut only waste. Put independent reads and checks in one step: several tool calls at once, or one command. Give each new job a new helper; never give a finished helper an unrelated job. As a lead, keep your chat short: give long reading, builds and test runs to helpers. To see what another chat did, read it with helm thread; helm say wakes it, and a chat idle for over an hour re-reads its whole history at full price. When the task changes and this chat is very long, tell the owner that a new chat with helm pickup costs less.]';
+  return '[Helm usage: Each step re-reads this whole chat, so a long chat makes every step cost more. Keep the same models and checks; cut only waste. Put independent reads and checks in one step: several tool calls at once, or one command. Give each new job a new helper; never give a finished helper an unrelated job. As a lead, keep your chat short: give long reading, builds and test runs to helpers. Never check a running helper or job again and again: each check re-reads this chat. Helm messages you when a helper ends; for your own long run, use one command that waits until it ends. To see what another chat did, read it with helm thread; helm say wakes it, and a chat idle for over an hour re-reads its whole history at full price. When the task changes and this chat is very long, tell the owner that a new chat with helm pickup costs less.]';
 }
 
 /**
