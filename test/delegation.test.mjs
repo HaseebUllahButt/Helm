@@ -510,6 +510,27 @@ test('stopping a parent leaves a helper that already finished as it was', async 
   assert.equal(parent.recovery.message, 'You stopped this chat. Helm also stopped its helper.');
 });
 
+test('a failure the parent agent already got does not ask for the owner', async (context) => {
+  // 2026-11-11: a lead on why got eight failed helpers, ran the work again
+  // on Pi, and the owner still saw "8 helper tasks failed" under Needs you.
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: lead } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Lead' });
+  const { session: child } = await sessions.delegate({ id: lead.id, profileId: 'claude-main', task: 'Batch' });
+  const { session: unread } = await sessions.delegate({ id: lead.id, profileId: 'claude-main', task: 'Batch two' });
+  sessions.get(unread.id).delegation.notifyParent = false;
+  drivers.get(child.id).finish('error');
+  drivers.get(unread.id).finish('error');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(sessions.get(child.id).delegation.notifiedSeq > 0, 'the lead got the result');
+  assert.equal(sessions.get(child.id).delegation.status, 'error', 'the helper still shows its failure');
+  assert.equal(sessions.get(lead.id).team.failed, 1, 'only the failure no agent got');
+  assert.equal(parent.team.failed, 1);
+  sessions.delegationResult(unread.id, { consume: true, parentId: lead.id });
+  assert.equal(sessions.get(lead.id).team.failed, 0, 'the lead read it');
+  assert.equal(parent.team.failed, 0, 'nothing reaches the owner');
+});
+
 test('a child completion wakes its idle parent once with a durable result ticket', async (context) => {
   const { sessions, drivers } = setup(context);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
