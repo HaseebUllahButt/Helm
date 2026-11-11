@@ -159,7 +159,7 @@ export class Sessions extends EventEmitter {
   /** sessionId -> open command cards (turn.start with local: true). */
   #commandCards = new Map();
 
-  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, waiterGraceMs = 3000, delegationIdleMs = DELEGATION_IDLE_MS, reattachRetryMs = 90_000, reattachConcurrency = 4 } = {}) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, waiterGraceMs = 3000, delegationIdleMs = DELEGATION_IDLE_MS, reattachRetryMs = 90_000, reattachConcurrency = 4, nativeRetryMs = 2500 } = {}) {
     super();
     this.#makeParts();
     this.runtime = runtime;
@@ -167,6 +167,7 @@ export class Sessions extends EventEmitter {
     this.waiterGraceMs = waiterGraceMs;
     this.delegationIdleMs = delegationIdleMs;
     this.reattachRetryMs = reattachRetryMs;
+    this.nativeRetryMs = nativeRetryMs;
     this.reattachConcurrency = reattachConcurrency;
     this.events = events;
     this.limits = new AccountLimits();

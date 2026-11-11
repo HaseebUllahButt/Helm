@@ -631,16 +631,23 @@ export function nativeCodexSocket(profile) {
 /**
  * What a native daemon has open: `loaded`, every thread id it holds, and
  * `threads`, the ones Helm can show and drive. `null` means there is no
- * daemon - its socket is gone, so nothing is open. A daemon that is there
- * but does not answer, in full, throws: that is unknown, not "nothing is
- * running", and must not close a single turn or question.
+ * daemon - its socket is gone or nothing listens on it, so nothing is
+ * open. A daemon that is there but does not answer, in full, throws: that
+ * is unknown, not "nothing is running", and must not close a single turn
+ * or question.
  */
 export async function nativeCodexThreads(profile, log = () => {}) {
   const socket = nativeCodexSocket(profile);
   if (!socket) return null;
   const server = CodexServer.for(profile.cmd || 'codex', profile.env || {}, log, null, socket);
   try {
-    await server.ensure();
+    try { await server.ensure(); } catch (err) {
+      // Nothing listens on the socket: the daemon died (on 2026-11-11 the
+      // memory guard killed it) and left its file. That is proof it is gone,
+      // with every turn it ran - not a daemon that is slow to answer.
+      if (['ECONNREFUSED', 'ENOENT'].includes(err.code)) { log(`codex native discovery: no daemon listens (${err.code})`); return null; }
+      throw err;
+    }
     const loaded = await server.call('thread/loaded/list', {});
     if (loaded.error) throw new Error(loaded.error.message);
     const ids = loaded.result.data || [];
