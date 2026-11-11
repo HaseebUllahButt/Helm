@@ -80,6 +80,9 @@ A new tool, or a feature for "every tool", must look at each of these:
   (2026-11-11). The opencode driver asks `--version` and then uses the 2.x
   rules. Past messages of an opencode chat come from the 2.x tables when the
   1.x tables have none; both versions share one `opencode.db`.
+- **opencode, opencode2 free models:** each free model has its own limit.
+  A chat on a free model that hits it moves to the next free model with
+  limit left and goes on in the same turn. A paid model never moves.
 - **Grok:** flags go between `agent` and `stdio`, and `--no-leader` must
   stay. Without it Helm steers a shared Grok backend.
 - **Pi:** when the version sends `agent_settled`, `agent_end` is not the

@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync } from 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
-import { OpencodeDriver, Opencode2Driver } from '../packages/connect/src/drivers/opencode.js';
+import { OpencodeDriver, Opencode2Driver, forgetSpentFree } from '../packages/connect/src/drivers/opencode.js';
 import { DevinDriver } from '../packages/connect/src/drivers/devin.js';
 
 // Both ACP engines run the same turn against the same vocabulary; the only
@@ -540,4 +540,87 @@ test('devin: words the agent says outside a prompt close no turn, however long i
   assert.ok(!log.of('turn.start').some((e) => e.wake));
   assert.equal(driver.status, 'idle');
   await driver.kill();
+});
+
+// On 2026-11-11 OpenCode helpers on why failed with "Free usage limit
+// reached" on the free DeepSeek and GLM models while the free MiniMax model
+// kept working: each free model has its own limit.
+const FREE_AGENT = `
+if (process.argv.includes('--version')) { console.log('2.2.7'); process.exit(0); }
+const { appendFileSync } = await import('node:fs');
+const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
+const options = (current) => ({ configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: current,
+  options: [{ value: 'opencode/a-free', name: 'A Free' }, { value: 'opencode/paid', name: 'Paid' },
+    { value: 'opencode/b-free', name: 'B Free' }, { value: 'opencode/c-free', name: 'C Free' }] }] });
+let model = process.env.FAKE_MODEL;
+const spent = (process.env.FAKE_SPENT ?? '').split(',');
+let buf = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    if (!line.trim()) continue;
+    appendFileSync(process.env.FAKE_STDIN, line + '\\n');
+    const m = JSON.parse(line);
+    const reply = (result) => out({ jsonrpc: '2.0', id: m.id, result });
+    if (m.method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: {} });
+    else if (m.method === 'session/new') reply({ sessionId: 'free-1', ...options(model) });
+    else if (m.method === 'session/set_config_option') {
+      if (m.params.configId === 'model') model = m.params.value;
+      reply(options(model));
+    } else if (m.method === 'session/prompt') {
+      if (spent.includes(model)) out({ jsonrpc: '2.0', id: m.id, error: { code: -32603,
+        message: 'Internal error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.' } });
+      else reply({ stopReason: 'end_turn' });
+    } else if (m.id !== undefined) out({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'no ' + m.method } });
+  }
+});
+process.stdin.on('end', () => setTimeout(() => process.exit(0), 20));
+`;
+
+const freeAgent = (t, model, spent) => {
+  forgetSpentFree();
+  const dir = mkdtempSync(join(tmpdir(), 'helm-oc-free-'));
+  const script = join(dir, 'agent.mjs');
+  writeFileSync(script, FREE_AGENT);
+  const cmd = join(dir, 'opencode2');
+  writeFileSync(cmd, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)} "$@"\n`);
+  chmodSync(cmd, 0o755);
+  const stdin = join(dir, 'stdin.ndjson');
+  const driver = new Opencode2Driver({ cmd, args: [], cwd: dir, mode: 'ask', model,
+    env: { FAKE_STDIN: stdin, FAKE_MODEL: model, FAKE_SPENT: spent } });
+  t.after(() => driver.kill());
+  const sent = () => (existsSync(stdin) ? readFileSync(stdin, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  return { driver, log: collect(driver), sent };
+};
+
+test('opencode: a free model out of limit moves to the next free model and the turn goes on', async (t) => {
+  const { driver, log, sent } = freeAgent(t, 'opencode/a-free', 'opencode/a-free,opencode/b-free');
+  await driver.send('Do the task');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok', 'the helper does not fail');
+  assert.equal(log.of('turn.done').length, 1, 'one turn, not a failed one and a new one');
+  assert.equal(log.of('settings').at(-1).model, 'opencode/c-free', 'B was out too; the paid model is never picked');
+  const notes = log.of('error').map((e) => e.message);
+  assert.ok(notes.every((m) => /free limit\. Helm moved this chat to/.test(m)), notes.join('\n'));
+  assert.equal(log.of('error').at(-1).kind, 'retrying');
+  const prompts = sent().filter((l) => l.method === 'session/prompt');
+  assert.equal(prompts.length, 3);
+  assert.match(prompts[2].params.prompt[0].text, /Continue the task/);
+});
+
+test('opencode: a paid model, or no free model left, still fails with the provider words', async (t) => {
+  const all = 'opencode/a-free,opencode/b-free,opencode/c-free';
+  const { driver, log } = freeAgent(t, 'opencode/a-free', all);
+  await driver.send('Do the task');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'error');
+  assert.match(done.error, /Free usage limit reached/);
+  const paid = freeAgent(t, 'opencode/paid', 'opencode/paid');
+  await paid.driver.send('Do the task');
+  const failed = await paid.log.until((e) => e.type === 'turn.done');
+  assert.equal(failed.status, 'error');
+  assert.equal(paid.sent().filter((l) => l.method === 'session/prompt').length, 1, 'a paid model never moves');
 });

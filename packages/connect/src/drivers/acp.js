@@ -826,8 +826,27 @@ export class AcpDriver extends Driver {
     if (!this.pending.size) this.push('status', { status: 'working' });
     // The response only arrives when the turn ends - which may be a
     // permission answer away - so it cannot be awaited here.
-    this.#call('session/prompt', { sessionId: this.engineSessionId, prompt }, promptId)
-      .then((res) => this.#turnDone(turnId, res));
+    this.#awaitPrompt(turnId, promptId, prompt);
+  }
+
+  /**
+   * Wait for one prompt to answer. A spec `retry` hook can turn a failed
+   * answer into a next prompt in the same turn: OpenCode's free models
+   * each have their own limit, and a helper that hit one used to fail.
+   */
+  #awaitPrompt(turnId, promptId, prompt) {
+    this.#call('session/prompt', { sessionId: this.engineSessionId, prompt }, promptId).then(async (res) => {
+      if (res.error && this.spec.retry && this.#turnId === turnId && !this.#interrupting) {
+        const next = await this.spec.retry(this, res.error).catch(() => null);
+        if (next && this.#turnId === turnId && !this.#interrupting && this.#pipe) {
+          const again = this.#nextId();
+          this.#promptId = again;
+          this.#awaitPrompt(turnId, again, next);
+          return;
+        }
+      }
+      this.#turnDone(turnId, res);
+    });
   }
 
   /**

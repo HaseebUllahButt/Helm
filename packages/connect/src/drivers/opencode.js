@@ -17,6 +17,38 @@ import { modeFor } from '../modes.js';
  */
 export const OPENCODE_MIN_VERSION = '1.18.0';
 
+/**
+ * OpenCode's free models each have their own limit. On 2026-11-11 a lead on
+ * why started a dozen helpers on free models; the DeepSeek and GLM ones
+ * failed with "Free usage limit reached" while the MiniMax one kept working.
+ * A chat on a free model that hits its limit moves to another free model
+ * and goes on. A paid model never moves: that would change its quality.
+ */
+const spentFree = new Map();
+const SPENT_MS = 60 * 60 * 1000;
+const isFree = (model) => /-free$/.test(String(model ?? ''));
+
+export async function nextFreeModel(d, error, now = Date.now()) {
+  if (!/free usage limit/i.test(String(error?.message ?? ''))) return null;
+  const catalog = d.catalog();
+  const current = catalog?.current ?? d.model;
+  if (!isFree(current)) return null;
+  spentFree.set(current, now);
+  const fresh = (m) => !(now - (spentFree.get(m) ?? -Infinity) < SPENT_MS);
+  for (const next of catalog?.models ?? []) {
+    if (next === current || !isFree(next) || !fresh(next)) continue;
+    const r = await d.setModel(next);
+    if (r?.applied === false) { spentFree.set(next, now); continue; }
+    const name = (m) => catalog.labels?.[m] || m;
+    d.push('settings', { model: next });
+    d.push('error', { message: `${name(current)} reached its free limit. Helm moved this chat to ${name(next)}, and it goes on.`, kind: 'retrying' });
+    return [{ type: 'text', text: 'The last model reached its free usage limit and stopped. Continue the task from the point where it stopped.' }];
+  }
+  return null;
+}
+/** For tests: forget which free models ran out. */
+export function forgetSpentFree() { spentFree.clear(); }
+
 export class OpencodeDriver extends AcpDriver {
   constructor(opts) {
     super({
@@ -34,6 +66,7 @@ export class OpencodeDriver extends AcpDriver {
       // typing; both prompts answer when the loop ends.
       promptWhileBusy: true,
       prepare: (d) => d.matchVersion(),
+      retry: nextFreeModel,
     }, opts);
   }
 
@@ -77,6 +110,7 @@ export class Opencode2Driver extends AcpDriver {
       // resume picks the conversation up without the replay. Builds without
       // it fall back to session/load.
       resumeVerb: 'session/resume',
+      retry: nextFreeModel,
     }, opts);
   }
 }
