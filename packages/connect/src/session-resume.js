@@ -1,4 +1,5 @@
 import { loadProfiles, materialize } from './profiles.js';
+import { lastStop, describeStop } from './agent-stops.js';
 import { activeTurnFromEvents } from './events.js';
 import { existsSync } from 'node:fs';
 import { hostedProcId } from './hosted-process.js';
@@ -404,7 +405,10 @@ export class SessionResume {
       // The active turn died with the old daemon. Unsent queued tickets are
       // different: `#restoreOpenTurns` puts them back into the outbox rather
       // than closing them as though the agent had already seen them.
-      this.#core.delegation.processGone(s, { reason: 'Helm cannot find the helper process after restart.' });
+      // The process host's record says when and how it ended (agent-stops.js).
+      const stop = procId ? lastStop(procId) : null;
+      const recent = stop && Date.now() - stop.at < 7 * 24 * 3600_000 ? ` ${describeStop(stop)}` : '';
+      this.#core.delegation.processGone(s, { reason: `Helm cannot find the helper process after restart.${recent}` });
       this.#restoreOpenTurns(s, s.delegation ? this.#sessions.events.glance(s.id).turns : seen.turns, false);
       // The process a failed reconnect was about is gone; so is the mark.
       // Anything it was doing is settled just above, as "restart" if need be.

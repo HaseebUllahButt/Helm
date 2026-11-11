@@ -171,7 +171,7 @@ export function delegationNote(engine = null) {
  * Kept to a few lines: it rides along in every session.
  */
 export function agentMessageNote() {
-  return '[Helm agent messages: Talk to other agents with helm say and helm reply. The reader has none of your context: name the files, commits and exact ask, and drop your own shorthand. Send only what the reader must act on; never trade acknowledgements or progress notes.]';
+  return '[Helm agent messages: Talk to other agents with helm say and helm reply. The reader has none of your context: name the files, commits and exact ask, and drop your own shorthand. Send only what the reader must act on; never trade acknowledgements or progress notes. Never stop another chat\'s agent process (kill, pkill): it loses that chat\'s work. Ask that chat with helm say, or ask the owner.]';
 }
 
 /**

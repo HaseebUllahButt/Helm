@@ -1684,6 +1684,20 @@ test('restart fails a helper marked working even without an open turn', async t 
 });
 
 
+test('a helper lost in a restart names its recorded stop', async t => {
+  const { recordStop } = await import('../packages/connect/src/agent-stops.js');
+  const { sessions } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  recordStop({ at: Date.now() - 60_000, id: child.id, code: 143, signal: null, askedByHelm: false, daemonConnected: false, programs: [] });
+  sessions.flush();
+  const restarted = new Sessions(new EventEmitter(), { makeDriver: () => new FakeDriver({}) });
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  assert.match(restarted.get(child.id).recovery.message,
+    /cannot find the helper process after restart\. Its process stopped at .* with code 143\. Helm was restarting\./);
+});
+
 test('loss of the process host fails an active helper without deleting its chat', async t => {
   const host = new EventEmitter();
   host.detach = () => {};

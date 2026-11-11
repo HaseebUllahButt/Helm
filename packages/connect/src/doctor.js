@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { strayStops, describeStop, STOPS_FILE } from './agent-stops.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { platform } from 'node:os';
@@ -91,7 +92,7 @@ const validNetwork = net => net && typeof net.id === 'string' && typeof net.self
  */
 export async function diagnose({
   network = readNetwork, service = inspectService, web = findWebRoot,
-  health = probeHealth, rpc = hubRpc,
+  health = probeHealth, rpc = hubRpc, stops = () => strayStops(Date.now() - 7 * 24 * 3600_000),
 } = {}) {
   const checks = [];
   let net;
@@ -116,6 +117,14 @@ export async function diagnose({
         : check('background', 'warning', 'The background service could not be confirmed.', 'Run helm start if you want Helm to stay running.'));
   if (background.linger === 'no') checks.push(check('logout', 'warning', 'Helm may stop when you log out.',
     'Run loginctl enable-linger. Ask your administrator if it needs permission.'));
+  // Agents that ended without Helm asking (agent-stops.js): a helper lost
+  // its work this way and nothing said who stopped it.
+  const stray = (() => { try { return stops(); } catch { return []; } })();
+  checks.push(stray.length
+    ? check('agent-stops', 'warning',
+      `${stray.length === 1 ? '1 agent process' : `${stray.length} agent processes`} stopped in the last 7 days without Helm asking. Newest: ${describeStop(stray.at(-1))}`,
+      `Read ${STOPS_FILE()}: each line lists the programs that started just before the stop.`)
+    : check('agent-stops', 'ok', 'No agent process stopped without Helm asking in the last 7 days.'));
   if (!net) return finish(checks);
 
   const local = `http://127.0.0.1:${net.port ?? 8787}`;
