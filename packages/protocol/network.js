@@ -1025,6 +1025,19 @@ export function allEndpoints(net) {
   return out;
 }
 
+/**
+ * Hubs a command may sign in to, best first: this machine's own Helm on
+ * loopback, then the given addresses, then every roster address. A plain
+ * http address of another machine (a home network or VPN address) is left
+ * out, because hubCredential refuses it. Once a listed hub stopped the
+ * command while the hubs before it restarted.
+ */
+export function hubAddresses(net, first = []) {
+  return [...new Set([`http://127.0.0.1:${net.port ?? 8787}`, ...first, ...allEndpoints(net)]
+    .map((url) => String(url || '').trim().replace(/\/+$/, '')))]
+    .filter((url) => url && secureHubAddress(url));
+}
+
 /** How long the invitation address is used while its owner advertises nothing. */
 export const BOOTSTRAP_TTL_MS = 24 * 60 * 60_000;
 

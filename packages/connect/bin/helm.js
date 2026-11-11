@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { argv, exit } from 'node:process';
 import {
-  loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, hubCredential,
+  loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, hubCredential, secureHubAddress,
   localKey, describeSelf, saveNetwork, machineKind, MACHINE_KINDS,
   createNetwork,
 } from '@helm/protocol/network';
@@ -65,10 +65,9 @@ const port = () => Number(strFlag('port', loadNetwork()?.port ?? 8787));
 
 const cleanEndpoint = (value) => String(value || '').trim().replace(/\/$/, '');
 
-/** Stable HTTPS first, then whatever address the network currently knows. */
+/** The network's HTTPS addresses; hubCredential refuses plain http to another machine. */
 const orderedEndpoints = (net) => [...new Set(allEndpoints(net).map(cleanEndpoint))]
-  .filter(Boolean)
-  .sort((a, b) => Number(!a.startsWith('https://')) - Number(!b.startsWith('https://')));
+  .filter((url) => url && secureHubAddress(url));
 
 async function postToHome(net, path, body = {}) {
   let lastError = null;
@@ -2157,7 +2156,10 @@ try {
         }
         const r = await ship({ net: requireNetwork(), rpc: hubRpc, check: !rest.includes('--no-check'), waitMs: minutes * 60_000,
           verifyRelease: async ({ tip, net, rpc }) => {
-            const info = await rpc(net, net.self, M.ENV_INFO, {}, { timeout: 8000, budget: 8000 });
+            // This machine can restart again here, when a later machine's
+            // update reaches it. Wait for it instead of stopping the ship.
+            const info = await untilBack(net.self, () => rpc(net, net.self, M.ENV_INFO, {}, { timeout: 8000, budget: 8000 }))
+              .catch((err) => { throw new ShipError(`Helm on this machine does not answer: ${err.message}`); });
             if (!includes([directory, info.version?.dir].filter(Boolean), tip, info.version?.full)) {
               throw new ShipError('The installed release changed during the check. Run helm ship again.');
             }
