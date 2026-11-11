@@ -399,6 +399,8 @@ export class Daemon {
   #stopWatchCheckout = null;
   #syncing = false;
   #syncAgain = false;
+  /** Machines told about a version: "machine commit". */
+  #toldNewer = new Set();
   /** Set when this machine and another both have their own changes. */
   syncNote = null;
 
@@ -414,7 +416,7 @@ export class Daemon {
       const running = (await this.#versionP)?.full;
       const net = loadNetwork() ?? this.net;
       const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
-        rebuildStaleApp, syncFromBundle, net, id: this.id, rpc: hubRpc });
+        rebuildStaleApp, syncFromBundle, net, id: this.id, rpc: hubRpc, told: this.#toldNewer });
       this.syncNote = r.note ?? null;
       if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting now'); }
     } catch (err) {
@@ -1860,6 +1862,14 @@ export class Daemon {
       case M.CLI_AUTO_UPDATE: return { auto: saveCliAutoUpdate(p.on === true) };
 
       case M.ENV_BUNDLE: return makeBundle({ have: Array.isArray(p.have) ? p.have : [] });
+      // Another machine runs a newer version: check now. The round itself
+      // asks every machine, so a false notice costs one check.
+      case M.ENV_NEWER: {
+        const mine = await this.#versionP;
+        const checking = typeof p.full === 'string' && Number.isFinite(p.time) && p.full !== mine?.full && !(p.time <= (mine?.time ?? 0));
+        if (checking && !this.#stopped) void this.#syncVersions();
+        return { checking };
+      }
 
       // GitHub's version, only when the owner asks; `replace` keeps their
       // own changes on a backup branch and then uses GitHub's.
