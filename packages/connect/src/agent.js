@@ -1867,7 +1867,10 @@ export class Daemon {
       case M.ENV_NEWER: {
         const mine = await this.#versionP;
         const checking = typeof p.full === 'string' && Number.isFinite(p.time) && p.full !== mine?.full && !(p.time <= (mine?.time ?? 0));
-        if (checking && !this.#stopped) void this.#syncVersions();
+        if (checking && !this.#stopped) {
+          console.log(`[helm] another machine runs ${p.full.slice(0, 7)}; checking for it now`);
+          void this.#syncVersions();
+        }
         return { checking };
       }
 
