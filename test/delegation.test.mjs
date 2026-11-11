@@ -292,6 +292,12 @@ test('Codex delegates to Claude with the selected model, folder, lineage and dur
   assert.equal((await sessions.list({ parentId: parent.id })).some((s) => s.id === child.id), true);
   assert.equal((await sessions.list({ includeDelegations: true })).some((s) => s.id === child.id), true);
   assert.equal(sessions.isDelegatedConversation(child.engine, child.engineSessionId), true);
+  // A helper's OpenCode chat is found under the other OpenCode name; it is still the helper's.
+  const record = sessions.get(child.id);
+  const saved = { engine: record.engine, engineSessionId: record.engineSessionId };
+  Object.assign(record, { engine: 'opencode', engineSessionId: 'ses_helper' });
+  assert.equal(sessions.isDelegatedConversation('opencode2', 'ses_helper'), true);
+  Object.assign(record, saved);
   assert.equal(sessions.hasActiveDelegations(parent.id), true);
   assert.deepEqual(parent.delegations, [child.id]);
   assert.equal(drivers.get(child.id).env.HELM_SESSION_ID, child.id);
