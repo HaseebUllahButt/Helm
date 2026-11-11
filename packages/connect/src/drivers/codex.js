@@ -812,7 +812,7 @@ export class CodexDriver extends Driver {
   async #subscribeNative() {
     if (!this.nativeSocket || this.#nativeSubscribed) return;
     if (this.helperFork) return;
-    const res = await this.#server.call('thread/resume', { threadId: this.threadId, excludeTurns: true });
+    const res = await (await this.#link()).call('thread/resume', { threadId: this.threadId, excludeTurns: true });
     if (!res.error) this.#nativeSubscribed = true;
   }
 
@@ -828,6 +828,25 @@ export class CodexDriver extends Driver {
   }
 
   #starting = null;
+  #startAgains = 0;
+
+  /** The link dropped while this chat started: start once or twice more, then say so. */
+  #startAgain() {
+    if (++this.#startAgains > 2) {
+      this.#startAgains = 0;
+      throw new Error('Codex closed its connection to Helm while this chat started. Send the message again.');
+    }
+    this.#started = false;
+    this.#nativeSubscribed = false;
+    return this.#start();
+  }
+
+  /** The link for a call. One that dropped since the chat started is opened again. */
+  async #link() {
+    if (this.#server) return this.#server;
+    this.#nativeSubscribed = false;
+    return this.#connectOnly();
+  }
 
   async start() {
     if (this.#starting) return this.#starting;
@@ -880,6 +899,8 @@ export class CodexDriver extends Driver {
         sandbox: this.nativeSocket ? this.#rolloutState.settings?.sandboxPolicy : this.#policy().sandbox,
         cliVersion: this.#rolloutState.cliVersion,
       };
+      if (this.#server !== server) return this.#startAgain();
+      this.#startAgains = 0;
       this.#started = true;
       // Notifications delivered during the read are newer than its snapshot.
       const saved = revision === this.#turnStateRevision ? await this.#reconcileSavedTurn(thread.turns, revision) : null;
@@ -967,6 +988,11 @@ export class CodexDriver extends Driver {
       sandbox: res.result.sandbox ?? this.#rolloutState.settings?.sandboxPolicy ?? (this.nativeSocket ? undefined : sandbox),
       cliVersion: res.result.thread?.cliVersion ?? this.#rolloutState.cliVersion,
     };
+    // Codex's own service can drop the link while a chat starts. Counting the
+    // chat as started with no link failed its first message with "Cannot read
+    // properties of null" (2026-11-11). Start again on a new link instead.
+    if (this.#server !== server) return this.#startAgain();
+    this.#startAgains = 0;
     this.#started = true;
     if (this.nativeSocket) this.#nativeSubscribed = !nativeEmpty;
     if (this.nativeSocket) {
@@ -1057,7 +1083,7 @@ export class CodexDriver extends Driver {
    * it as "thread not found". The thread is loaded once and the call retried.
    */
   async #callThread(method, params) {
-    const res = await this.#server.call(method, params);
+    const res = await (await this.#link()).call(method, params);
     if (res.error && this.helperFork && method === 'turn/start' && this.#helperMissing(res.error)) {
       this.#started = false;
       await this.#start();
@@ -1302,7 +1328,7 @@ export class CodexDriver extends Driver {
   }
 
   async #call(method, params = {}) {
-    const res = await this.#server.call(method, params);
+    const res = await (await this.#link()).call(method, params);
     if (res.error) {
       // A proxy can occasionally return an HTML challenge page. Keep that
       // out of a chat transcript while retaining the useful first sentence.
