@@ -1446,6 +1446,8 @@ function Shell({ client, conn, onSignOut }: {
                   <NeedCard
                     key={s.id} s={s} machine={e.name} selected={isOpen({ env: e, s })}
                     onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
+                    onReview={() => openSession(e.id, s, true)}
+                    actions={rowCallsFor(e, s).actions}
                     onPick={isOpen({ env: e, s }) ? undefined : () => setIslandPick({ envId: e.id, id: s.id, at: Date.now() })}
                     onDismiss={async () => {
                       await client.rpc(e.id, 'session.dismiss-child-failures', { id: s.id });
