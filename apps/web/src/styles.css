@@ -1729,9 +1729,32 @@ pre.snippet {
    label every list wears. One hue (the hub's) draws every bar; red only
    when an allowance runs out early. The layout follows the pane's width,
    not the window's: the sidebar can take a third of the window. */
-.pad.usage { width: 100%; max-width: 820px; margin: 0 auto; container-type: inline-size; }
+.pad.usage {
+  width: 100%; max-width: 820px; margin: 0 auto; container-type: inline-size;
+  /* The dashboard look, for Usage and Dashboard. A block is a card: almost
+     the page's own black, a hairline edge, its title inside. Rows in a card
+     have a hairline between them. All data is one ink (white here, the
+     accent in the other themes); colour is kept for warnings. */
+  --dash-card: #0e0e0e; --dash-edge: rgb(255 255 255 / 8%); --dash-rule: rgb(255 255 255 / 6%);
+  --dash-track: rgb(255 255 255 / 9%); --dash-ink: var(--hi);
+}
+:root:is([data-theme="light"], [data-theme="navy"]) .pad.usage {
+  --dash-card: var(--card); --dash-edge: var(--edge); --dash-rule: var(--edge);
+  --dash-track: color-mix(in oklab, var(--primary) 14%, transparent); --dash-ink: var(--primary-t);
+}
+.usage-card, .usage-where, .usage-accounts {
+  margin-top: 14px; background: var(--dash-card); border: 1px solid var(--dash-edge); border-radius: 14px; overflow: hidden;
+}
+/* A card's title: a plain name, not the small capitals of a list. */
+.pad.usage .section {
+  margin: 0; padding: 0; min-height: 0; text-transform: none; letter-spacing: 0;
+  font-size: var(--t-body); font-weight: 600; color: var(--text);
+}
+.pad.usage > .section { margin: 4px 4px 12px; }
+.pad.usage button.linkish { color: var(--text-dim); }
+.pad.usage button.linkish:hover { color: var(--text); }
 @media (min-width: 900px) { .pad.usage { padding: 22px 24px 40px; } }
-.usage-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 20px; }
+.usage-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; margin: 0 0 16px; }
 .usage-controls select { width: auto; max-width: 220px; font-size: var(--t-meta); padding: 7px 34px 7px 12px; min-height: 38px; }
 .usage-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .usage-tabs::-webkit-scrollbar { display: none; }
@@ -1739,37 +1762,46 @@ pre.snippet {
 
 /* The one number the screen leads with. Proportional figures: tabular gives
    every digit the width of a zero, which reads loose at display sizes. */
-.usage-hero { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 24px; margin: 0 0 8px; }
-.usage-hero-main { min-width: 0; }
-.usage-hero-fig { padding: 0 4px; font: 650 48px/1 var(--display); letter-spacing: -0.02em; color: var(--text); }
-.usage-hero-cap { margin-top: 8px; padding: 0 4px; font-size: var(--t-meta); color: var(--mutedfg); }
+.usage-card.usage-spend { margin-top: 0; padding: 18px 18px 14px; }
+.usage-hero { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 24px; }
+/* What the number is, then the number: the order of a tile. */
+.usage-hero-main { min-width: 0; display: flex; flex-direction: column-reverse; gap: 10px; }
+.usage-hero-fig { font: 600 44px/1 var(--display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; color: var(--text); }
+.usage-hero-cap { font-size: var(--t-meta); color: var(--mutedfg); }
+/* Cost for each day. Thin bars from one baseline; the bar pointed at is at
+   full strength and the others step back. A day with no use is a stub. */
+.usage-days { margin-top: 22px; }
+.usage-days-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; font-size: var(--t-micro); color: var(--mutedfg); }
+.usage-days-head b { font-weight: 500; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.usage-days-bars { display: flex; align-items: stretch; gap: 3px; height: 92px; margin-top: 10px; border-bottom: 1px solid var(--dash-rule); }
+.usage-day { flex: 1 1 0; min-width: 0; padding: 0; display: flex; align-items: flex-end; justify-content: center; cursor: default; }
+.usage-day span { display: block; width: 100%; max-width: 30px; min-height: 2px; border-radius: 4px 4px 0 0; background: var(--dash-ink); opacity: 0.55; transition: opacity 0.12s var(--ease); }
+.usage-day.zero span { background: var(--dash-track); opacity: 1; }
+.usage-day.on span { opacity: 1; }
+.usage-day:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 1px; border-radius: 4px; }
+.usage-days-axis { display: flex; justify-content: space-between; gap: 3px; margin-top: 7px; font-size: var(--t-micro); color: var(--mutedfg); }
+.usage-days-axis.every span { flex: 1 1 0; min-width: 0; text-align: center; overflow: hidden; white-space: nowrap; }
 /* The three figures: plain pairs with a hairline between, no boxes. */
 .usage-stats { display: flex; min-width: 0; margin: 0; }
-.usage-stats > div { min-width: 0; padding: 0 18px; border-left: 1px solid var(--line); }
-.usage-stats > div:first-child { padding-left: 4px; border-left: 0; }
-.usage-stats > div:last-child { padding-right: 4px; }
+.usage-stats > div { min-width: 0; padding: 0 18px; border-left: 1px solid var(--dash-rule); }
+.usage-stats > div:first-child { padding-left: 0; border-left: 0; }
+.usage-stats > div:last-child { padding-right: 0; }
 .usage-stats dt { font-size: var(--t-micro); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .usage-stats dd { margin: 3px 0 0; font: 600 18px/1.2 var(--sans); color: var(--text); letter-spacing: -0.01em; white-space: nowrap; }
 .usage-stats small { margin-left: 3px; font-size: var(--t-micro); font-weight: 400; letter-spacing: 0; color: var(--mutedfg); }
 
 /* A block's label and its control share one line. */
-.usage-where { margin-top: 24px; }
-.usage-where-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin-bottom: 10px; }
-.usage-where-head .section { margin: 0; }
-.usage-accounts { margin-top: 26px; }
+.usage-where-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; padding: 11px 11px 8px 18px; }
 
 /* Where it went: one panel, a line per slice - name, bar, amount, share.
    Every column but the name has a fixed width, so the bars start and end
    in line down the panel, each measured against the biggest slice. In a
    narrow pane the bar goes under the name. */
-.usage-shares, .usage-panel {
-  list-style: none; margin: 0; padding: 3px;
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-xl);
-}
+.usage-shares, .usage-panel { list-style: none; margin: 0; padding: 0 6px 6px; }
 .usage-shares > li, .usage-panel > * { position: relative; }
 .usage-shares > li + li::before, .usage-panel > * + *::before {
   content: ''; position: absolute; top: 0; left: 12px; right: 12px; height: 1px;
-  background: var(--line); pointer-events: none;
+  background: var(--dash-rule); pointer-events: none;
 }
 .usage-shares > li:hover::before, .usage-shares > li:hover + li::before { opacity: 0; }
 .usage-share {
@@ -1788,8 +1820,8 @@ button.usage-share:hover { background: var(--hover); color: var(--text); }
 .usage-share-pct { color: var(--mutedfg); font-size: var(--t-meta); font-variant-numeric: tabular-nums; text-align: right; }
 .usage-share-go { color: var(--icon); }
 .usage-share-track {
-  grid-column: 1 / -1; height: 5px; border-radius: 999px;
-  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  grid-column: 1 / -1; height: 4px; border-radius: 999px;
+  background: var(--dash-track);
 }
 li.marked .usage-share-track { margin-left: 32px; }
 @container (min-width: 620px) {
@@ -1799,10 +1831,16 @@ li.marked .usage-share-track { margin-left: 32px; }
   .usage-share-track { grid-row: 1; grid-column: 2; }
   li.marked .usage-share-track { grid-column: 3; margin-left: 0; }
 }
-.usage-share-track > span { display: block; height: 100%; border-radius: 999px; background: var(--primary-t); }
-.usage-more { margin: 10px 4px 0; font-size: var(--t-meta); }
+.usage-share-track > span { display: block; height: 100%; border-radius: 999px; background: var(--dash-ink); }
+/* "Show more" closes a card: one quiet line across its foot. */
+.pad.usage .usage-more, .pad.usage .usage-accounts > .linkish {
+  display: flex; width: 100%; margin: 0; padding: 11px 18px; min-height: 42px;
+  border-top: 1px solid var(--dash-rule); border-radius: 0;
+  color: var(--mutedfg); font-size: var(--t-meta); font-weight: 500; text-align: left;
+}
+.pad.usage .usage-more:hover, .pad.usage .usage-accounts > .linkish:hover { color: var(--text); background: var(--hover); }
 
-.usage-note { margin: 22px 0 0; padding: 0 4px; font-size: var(--t-micro); line-height: 1.6; color: var(--mutedfg); }
+.usage-note { margin: 16px 0 0; padding: 0 4px; font-size: var(--t-micro); line-height: 1.6; color: var(--mutedfg); }
 .usage-note .linkish { font-size: inherit; }
 @container (max-width: 619px) {
   .usage-stats { flex: 1 1 100%; }
@@ -3190,19 +3228,19 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
    column and the weeks the next, so they compare down the panel. */
 .usage-limits-note { color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.55; margin: 8px 0; padding: 0 4px; }
 .usage-account .usage-limits-note { padding: 0; margin: 10px 0 0; }
+.pad.usage .usage-accounts > .section { padding: 15px 18px 12px; }
+.usage-accounts > .usage-limits-note { margin: -4px 0 10px; padding: 0 18px; }
+.usage-accounts > .usage-limits-note:last-child, .usage-accounts > .empty { margin: 0; padding: 0 18px 16px; }
+/* Column names over the account rows, where the rows have columns. */
+.usage-cols { display: none; }
 .usage-account { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px 24px; padding: 12px; }
 .usage-account-name { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-width: 0; font-size: var(--t-body); }
 .usage-account-name b { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .usage-account-name b span { font-weight: 400; color: var(--text-dim); }
 .usage-account-name small { color: var(--mutedfg); font-size: var(--t-micro); }
-.usage-meter {
-  height: 6px; border-radius: 999px;
-  background: color-mix(in oklab, var(--primary) 14%, transparent);
-  overflow: hidden;
-}
-.usage-meter span { display: block; height: 100%; border-radius: 999px; background: var(--hi); }
-:root:is([data-theme="light"], [data-theme="navy"]) .usage-meter span { background: var(--primary-t); }
-.usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 24px; min-width: 0; }
+.usage-meter { height: 4px; border-radius: 999px; background: var(--dash-track); overflow: hidden; }
+.usage-meter span { display: block; height: 100%; border-radius: 999px; background: var(--dash-ink); }
+.usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 10px 24px; min-width: 0; }
 .usage-allowance {
   display: grid; grid-template-columns: minmax(3.9em, auto) minmax(32px, 1fr) 4.6em; align-items: center; gap: 3px 10px;
   font-size: var(--t-meta); min-width: 0;
@@ -3226,7 +3264,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .usage-plan[open] summary { color: var(--text-dim); }
 .usage-plan-price { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--mutedfg); font-size: var(--t-micro); }
 .usage-plan-price input { width: 90px; padding: 4px 8px; font: inherit; color: var(--text); }
-.usage-accounts > .linkish { margin: 10px 4px 0; font-size: var(--t-meta); }
 .modal:has(.usage-model-detail) { max-width: 580px; max-height: calc(100dvh - 40px); overflow-y: auto; }
 .usage-model-detail .modal-title { overflow-wrap: anywhere; min-width: 0; }
 .usage-model-detail .modal-head button { flex: none; width: auto; margin: 0; }
@@ -3243,7 +3280,15 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   .usage-account { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
   .usage-account-windows { grid-template-columns: repeat(2, 228px); }
   .usage-account-name:only-child { grid-column: 1 / -1; }
-  .usage-account-windows > .usage-allowance:first-child:not([data-window="5h"]) { grid-column: 2; }
+  .usage-account:not(.dash-machine) .usage-account-windows > .usage-allowance:first-child:not([data-window="5h"]) { grid-column: 2; }
+  .usage-cols {
+    display: grid; grid-template-columns: minmax(0, 1fr) 228px 228px; gap: 24px; padding: 0 18px 9px;
+    border-bottom: 1px solid var(--dash-rule); font-size: var(--t-micro); color: var(--mutedfg);
+  }
+  /* Under a column name, a meter needs no label of its own. */
+  .usage-cols + .usage-panel .usage-allowance:is([data-window="5h"], [data-window="7d"]) { grid-template-columns: minmax(32px, 1fr) 4.6em; }
+  .usage-cols + .usage-panel .usage-allowance:is([data-window="5h"], [data-window="7d"]) .usage-window { display: none; }
+  .dash-balance { min-width: 340px; }
   .usage-account:not(.idle) .usage-account-name small { flex-basis: 100%; padding-left: 32px; }
   .usage-account-meta { grid-column: 1 / -1; padding-left: 32px; }
 }
@@ -4105,18 +4150,28 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
   .tour-header { flex-wrap: nowrap; }
 }
 
-/* Dashboard: compute online as tiles, a block per machine with its load as
-   labelled meters, then the limit balancer and the accounts. A meter turns
-   amber with the word "high" from 80% and red with "full" from 95%. */
-.dash .section:first-child { margin-top: 0; }
-.dash-stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 0 0 8px; }
-.dash .usage-panel { margin-bottom: 8px; }
+/* Dashboard: compute online as tiles, a card of machines with each one's
+   load as labelled meters, then the limit balancer and the accounts. A meter
+   turns amber with the word "high" from 80% and red with "full" from 95%. */
+.usage-stats.dash-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; flex: none; }
+.usage-stats.dash-stats > div {
+  padding: 14px 16px 15px; background: var(--dash-card); border: 1px solid var(--dash-edge); border-radius: 14px;
+}
+.usage-stats.dash-stats dd { margin-top: 8px; font-size: 24px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.usage-stats.dash-stats small { display: block; margin: 5px 0 0; }
+@container (max-width: 559px) {
+  .usage-stats.dash-stats { grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 8px; }
+  .usage-stats.dash-stats > div { padding: 12px 12px 13px; }
+  .usage-stats.dash-stats dd { font-size: 21px; }
+}
+.dash-meter.usage-allowance { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
+.dash-meter .usage-meter { grid-column: 1 / -1; grid-row: 2; }
 .dash-machine-name {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; border: 0;
   background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .dash-machine-name .mdot { margin: 0 2px; }
-.dash-machine-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dash-machine-text { flex: 0 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .dash-machine-text b { font-weight: 600; font-size: var(--t-body); overflow-wrap: anywhere; }
 .dash-machine-text small { color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.45; }
 .dash-machine-name .chev { flex: none; color: var(--icon); display: inline-flex; }
@@ -4127,7 +4182,7 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
 .dash-meter.high b em { color: var(--amber-text); }
 .dash-meter.full .usage-meter span { background: var(--red); }
 .dash-meter.full b em { color: var(--red); }
-.dash-balance { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; font-size: var(--t-meta); }
+.dash-balance { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: var(--t-meta); }
 .dash-balance li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--text-dim); }
 .dash-balance li span { min-width: 0; overflow-wrap: anywhere; }
 .dash-balance li small { color: var(--mutedfg); font-size: var(--t-micro); }

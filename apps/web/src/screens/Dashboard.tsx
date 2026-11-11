@@ -58,12 +58,14 @@ export function DashboardView({ client, envs, machines, onBack, onOpenMachine }:
         </dl>
         {unread.length > 0 && answered.length > 0 && <p className="usage-limits-note">These totals do not include {unread.join(', ')}.</p>}
 
-        <h2 className="section">Machines</h2>
-        {machines.length ? (
-          <div className="usage-panel">
-            {machines.map((m) => <MachineBlock key={m.env.id} machine={m} stats={stats[m.env.id]} onOpen={() => onOpenMachine(m.env.id)} />)}
-          </div>
-        ) : <div className="empty quiet">You have no machines yet.<div className="note">Run <code>helm add pc</code> on a machine in your network.</div></div>}
+        <section className="usage-accounts" aria-label="Machines">
+          <h2 className="section">Machines</h2>
+          {machines.length ? (
+            <div className="usage-panel">
+              {machines.map((m) => <MachineBlock key={m.env.id} machine={m} stats={stats[m.env.id]} onOpen={() => onOpenMachine(m.env.id)} />)}
+            </div>
+          ) : <div className="empty quiet">You have no machines yet.<div className="note">Run <code>helm add pc</code> on a machine in your network.</div></div>}
+        </section>
 
         <Balancer reports={limits.reports} envs={envs} now={limits.now} />
         <AccountLimits targets={envs} limits={limits} />

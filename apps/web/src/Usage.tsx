@@ -1,6 +1,6 @@
 import { errorMessage } from './errors';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Client, Environment, UsageReport, UsageGroup, UsageTotals } from './client';
+import type { Client, Environment, UsageDay, UsageReport, UsageGroup, UsageTotals } from './client';
 import { hitRate, cacheSaved } from './client';
 import { loadUsage, saveUsage, mergeReports, today, daysAgo } from './usageCache';
 import { BackIcon, Icon } from './Icon';
@@ -194,7 +194,10 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
           <p>{targets.length ? 'No machine has sent a usage report.' : 'No machines can report usage.'}</p>
           {!!targets.length && <button className="linkish" onClick={() => targets.forEach(e => fetchReport(e, false))}>Retry usage</button>}
         </div>}
-        {!loading && answered.length > 0 && <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />}
+        {!loading && answered.length > 0 && <section className="usage-card usage-spend" aria-label="Total">
+          <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />
+          <DailyBars daily={merged.daily} since={since} />
+        </section>}
         {!loading && missing.length > 0 && <p role="status" className="usage-limits-note">
           This total does not include {missing.join(', ')} yet.
         </p>}
@@ -276,6 +279,71 @@ function Tabs<T extends string>({ label, items, value, onChange }: {
     {items.map((item) => <button key={item.id} className={item.id === value ? 'on' : ''} aria-pressed={item.id === value}
       onClick={() => onChange(item.id)}>{item.label}</button>)}
   </div>;
+}
+
+const DAY_MS = 86_400_000;
+const dayLabel = (date: string, long = false) => new Date(`${date}T12:00:00`).toLocaleDateString(undefined,
+  long ? { weekday: 'short', month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric' });
+
+/**
+ * Cost for each day of the period, so a spike shows at a glance. One bar a
+ * day, a day with no use included; past two months, one bar a week. The
+ * line over the bars names the highest day until a bar is pointed at or
+ * tapped. Hidden for one day: a single bar compares with nothing. Tokens
+ * stand in when nothing in the period has a price.
+ */
+function DailyBars({ daily, since }: { daily: UsageDay[]; since: string }) {
+  const [active, setActive] = useState<number | null>(null);
+  const bars = useMemo(() => {
+    const first = since || daily[0]?.date;
+    if (!first) return [];
+    const priced = daily.some((d) => d.costUsd > 0);
+    const byDate = new Map(daily.map((d) => [d.date, priced ? d.costUsd : d.total]));
+    const days: { date: string; value: number }[] = [];
+    for (let t = Date.parse(first), end = Date.parse(today()); t <= end; t += DAY_MS) {
+      const date = new Date(t).toISOString().slice(0, 10);
+      days.push({ date, value: byDate.get(date) ?? 0 });
+    }
+    const weekly = days.length > 62;
+    const out: { label: string; short: string; value: number }[] = [];
+    for (let i = 0; i < days.length; i += weekly ? 7 : 1) {
+      const span = days.slice(i, i + (weekly ? 7 : 1));
+      out.push({
+        label: weekly ? `Week of ${dayLabel(span[0].date)}` : dayLabel(span[0].date, true),
+        short: days.length <= 10 ? new Date(`${span[0].date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' }) : dayLabel(span[0].date),
+        value: span.reduce((n, d) => n + d.value, 0),
+      });
+    }
+    return out.map((b) => ({ ...b, amount: priced ? money(b.value) : `${tokens(b.value)} tokens`, weekly, priced }));
+  }, [daily, since]);
+  if (bars.length < 2) return null;
+  const top = Math.max(...bars.map((b) => b.value));
+  if (!top) return null;
+  const peak = bars.findIndex((b) => b.value === top);
+  const shown = bars[active ?? peak];
+  const every = bars.length <= 10;
+  const ticks = every ? bars.map((_, i) => i) : [0, Math.floor((bars.length - 1) / 2), bars.length - 1];
+  const title = `${bars[0].priced ? 'Cost' : 'Tokens'} per ${bars[0].weekly ? 'week' : 'day'}`;
+  return (
+    <div className="usage-days">
+      <div className="usage-days-head">
+        <span>{title}</span>
+        <b>{active === null ? 'Highest: ' : ''}{shown.label} · {shown.amount}</b>
+      </div>
+      <div className="usage-days-bars" role="group" aria-label={title} onMouseLeave={() => setActive(null)}>
+        {bars.map((b, i) => (
+          <button key={i} type="button" className={`usage-day${i === (active ?? peak) ? ' on' : ''}${b.value ? '' : ' zero'}`}
+            aria-label={`${b.label}, ${b.amount}`} onMouseEnter={() => setActive(i)} onFocus={() => setActive(i)}
+            onBlur={() => setActive(null)} onClick={() => setActive(i)}>
+            <span style={{ height: `${b.value ? Math.max(3, (b.value / top) * 100) : 0}%` }} />
+          </button>
+        ))}
+      </div>
+      <div className={`usage-days-axis${every ? ' every' : ''}`} aria-hidden="true">
+        {ticks.map((i) => <span key={i}>{bars[i].short}</span>)}
+      </div>
+    </div>
+  );
 }
 
 /** "7 days" as the end of a sentence: "last 7 days". */

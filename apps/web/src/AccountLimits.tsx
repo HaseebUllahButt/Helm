@@ -167,6 +167,9 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
 
   return <section className="usage-accounts" aria-label="Accounts">
     <h2 className="section">Accounts</h2>
+    {/* Column names, drawn only where the pane is wide enough for columns. */}
+    {shown.some(row => row.windows.some(w => !w.resetsAt || w.resetsAt * 1000 > now))
+      && <div className="usage-cols" aria-hidden="true"><span>Account</span><span>5 hours</span><span>Week</span></div>}
     {shown.length > 0 && <div className="usage-panel">{shown.map(row => {
       const a = row.account;
       // A window past its reset says nothing true about now, so it is not
