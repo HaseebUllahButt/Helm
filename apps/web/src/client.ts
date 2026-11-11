@@ -189,7 +189,7 @@ export interface Session {
     parentMachine?: string };
   /** This chat's helpers on other machines, with the state each one last sent. */
   removed?: boolean;
-  remoteHelpers?: { result?: DelegationResult; removed?: boolean; team?: { working: number; blocked: number; failed: number }; machine: string; id: string; title?: string; status?: string; startedAt?: number; finishedAt?: number; archived?: boolean }[];
+  remoteHelpers?: { result?: DelegationResult; removed?: boolean; team?: { working: number; blocked: number; failed: number }; machine: string; id: string; title?: string; status?: string; startedAt?: number; finishedAt?: number; dismissedFailureAt?: number; archived?: boolean }[];
   taskTransfer?: TaskReturnState & { handoffId: string; role: 'source' | 'destination'; machineId: string; machineName: string };
   parent?: { machineId: string; sessionId: string };
   /** Set while Helm moves this chat to another machine with its conversation. */
