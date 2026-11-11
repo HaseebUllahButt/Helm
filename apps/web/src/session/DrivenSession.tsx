@@ -11,7 +11,7 @@ import { DeliveryStatus } from './DeliveryStatus';
 import { RecoveryCard } from './RecoveryCard';
 import { Controls, trayPrefs, type Kind } from './Controls';
 import { Transcript, splitNote, isCompaction } from './Transcript';
-import { helperMessage } from './agentMessage';
+import { helperMessage, helperMessages } from './agentMessage';
 import { useGitStatus } from './gitStatus';
 import { changesOf } from './stepWords';
 import { expandPastes } from './pasteStore';
@@ -928,7 +928,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         referenceOptions={referenceOptions} references={references}
         onReference={(id) => { const item = referenceOptions.find((option) => option.id === id); if (item) setReferences((current) => [...current, item].slice(0, 3)); }}
         onRemoveReference={(id) => setReferences((current) => current.filter((item) => item.id !== id))}
-        helpers={helperTurns.map((turn) => ({ id: turn.id, ...helperMessage(turn.text)! }))}
+        helpers={helperTurns.flatMap((turn) => helperMessages(turn.text).map((report, i) => ({ id: i ? `${turn.id}:${i}` : turn.id, ...report })))}
         queued={ownQueued.map((turn) => ({
           turn, text: splitNote(turn.text).text ?? turn.text,
           attachments: turn.attachments?.length ?? 0, delivered: turn.delivered,

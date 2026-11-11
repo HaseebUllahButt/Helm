@@ -367,7 +367,7 @@ export class SessionDelivery {
    */
   async #deliver(s, item, d = null) {
     this.#core.rewinder.assertRewindUnlocked(s.id);
-    if (this.#core.delegation.discardConsumedResult(s, item.turnId)) return;
+    if (this.#core.delegation.discardConsumedResult(s, item.turnId, item)) return;
     if (this.#core.retiring.has(s.id)) d = null;
     let echo = null, sending = false;
     try {
@@ -378,7 +378,7 @@ export class SessionDelivery {
         if (opencodeServiceActive(s.engineSessionId)) throw Object.assign(new Error('This OpenCode 2 chat is still running. Wait for its current step to finish, then send here.'), { code: 'external_busy' });
       }
       d ??= await this.#core.driver(s);
-      if (this.#core.delegation.discardConsumedResult(s, item.turnId)) return;
+      if (this.#core.delegation.discardConsumedResult(s, item.turnId, item)) return;
       if (s.stoppedAt || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0))) {
         throw new Error('message cancelled because the thread was stopped');
       }

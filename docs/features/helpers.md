@@ -48,6 +48,14 @@ and a project copy nobody kept. A helper can run on another machine
   characters, and the line `Full output: helm delegate-result <id>`. The
   interim notes ("Let me look...") filled the parent's context.
   `delegate-result` still gives the full `output` and the `final` message.
+- **Results join one turn:** a result that ends while an earlier result
+  still waits for the parent joins that waiting turn, local or remote. Each
+  parent turn reads the parent's whole history again, so four results were
+  four full reads. The ticket keeps its first result's id; its last
+  `turn.edit` lists each result's ticket id and length (`parts`). Reading one
+  result with `delegate-result` cuts only its block; reading all removes the
+  turn. Results never steer into a running turn. The chat shows one card per
+  result (`helperMessages`, agentMessage.ts).
 - **Lost processes:** a helper that exits or loses its local process host shows a failure.
   Helm keeps its history and tells its parent once. Startup checks also close
   helpers marked working when their process is gone. Exit codes and signals
