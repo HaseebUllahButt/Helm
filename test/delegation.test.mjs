@@ -912,6 +912,28 @@ test('helpers nest as deep as the task needs, and empty tasks fail before starti
   assert.equal(parent.delegation.depth, 5);
 });
 
+test('helm delegate same moves off an account that is out of limit; a full name stays', async () => {
+  const soon = Date.now() / 1000 + 3600;
+  const agents = [
+    { id: 'codex-a', engine: 'codex', available: true, shown: true, limits: [{ label: '5h', used: 100, resetsAt: soon }] },
+    { id: 'codex-b', engine: 'codex', available: true, shown: true, limits: [{ label: '5h', used: 30, resetsAt: soon }] },
+    { id: 'codex-c', engine: 'codex', available: true, shown: true, limits: [{ label: '5h', used: 70, resetsAt: soon }] },
+  ];
+  const started = [], warned = [];
+  const rpc = async (_self, method, params) => {
+    if (method === M.AGENT_LIST) return { agents };
+    if (method === M.SESSION_DELEGATE) { started.push(params.profileId); return { session: { id: 'child', engine: 'codex', status: 'working' } }; }
+    throw new Error(method);
+  };
+  const run = (name) => runAgentCommand('delegate', [name, '--json', '--', 'Look'], { rpc, self: 'me', parentId: 'parent', ownAccount: 'codex-a', write: () => {}, warn: (l) => warned.push(l) });
+  await run('same');
+  await run('codex-a');
+  await run('codex');
+  assert.deepEqual(started, ['codex-b', 'codex-a', 'codex-b']);
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /codex-a is out of limit until .*uses codex-b/);
+});
+
 test('helm delegate same runs the helper on the account this chat runs as', async () => {
   const calls = [];
   const rpc = async (_self, method, params) => {
@@ -953,7 +975,7 @@ test('delegation instructions keep only rules; the details live in helm delegate
   }
   for (const shared of [/Do the work yourself by default/, /never unset HELM_SESSION_ID/, /judgment calls yourself/, /Keep your helpers/]) assert.match(claude, shared);
   assert.match(note, /never unset HELM_SESSION_ID/);
-  assert.match(note, /Use your account and model unless the owner asks for another/);
+  assert.match(note, /Use helm delegate same and your model unless the owner names another account/);
   assert.doesNotMatch(note + claude, /--model cheap|model haiku/);
   assert.match(note, /Keep your helpers/);
   assert.match(note, /only test chats that are not helpers/);
@@ -1440,6 +1462,22 @@ test('a helper with no thread to sit under lists on its own, and its team nests 
 });
 
 
+test('a message that never reaches a finished helper does not mark the helper failed', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Port one part' });
+  const driver = drivers.get(child.id);
+  driver.finish();
+  assert.equal(sessions.get(child.id).delegation.status, 'done');
+  // The lead removed the helper's folder, then sent it a last note.
+  driver.send = async () => { throw Object.assign(new Error('the folder /gone does not exist on this machine'), { deliveryNotSent: true }); };
+  await assert.rejects(sessions.input(child.id, 'No action needed', { source: 'agent' }), /does not exist/);
+  assert.equal(sessions.get(child.id).delegation.status, 'done');
+  assert.equal(parent.team.failed, 0);
+  const failed = sessions.events.tail(child.id, 20).findLast(e => e.type === 'turn.done');
+  assert.equal(failed.status, 'error', 'the message itself still shows why it was not delivered');
+});
+
 test('dismissed native failures stay in history and only a new failure alerts again', async t => {
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
@@ -1606,4 +1644,75 @@ test('a Codex helper gets a copy of its parent only on the parent\'s model', asy
   assert.equal(await helper('gpt-terra'), undefined, 'another model starts a new chat');
   assert.equal((await helper('gpt-sol'))?.parentModel, 'gpt-sol');
   assert.equal((await helper())?.parentModel, 'gpt-sol', 'an unset model keeps the parent and its cache');
+});
+
+test('an exited helper fails once, keeps its history, and tells its parent', { timeout: 3000 }, async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Keep working');
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const kid = drivers.get(child.id);
+  const notice = new Promise(resolve => sessions.on('event', ({ id, event }) => {
+    if (id === parent.id && event.type === 'turn.start' && String(event.turnId).startsWith('local-result-')) resolve(event);
+  }));
+  kid.push('status', { status: 'exited', code: 143, signal: 'SIGTERM' });
+  await notice;
+  const result = sessions.delegationResult(child.id);
+  assert.equal(result.status, 'error');
+  assert.equal(result.complete, true);
+  assert.match(result.error, /143.*SIGTERM/);
+  assert.equal(sessions.get(child.id).delegation.exitCode, 143);
+  assert.ok(sessions.history(child.id).events.some(e => e.type === 'item.delta'));
+  kid.push('status', { status: 'exited', code: 143 });
+  assert.equal(sessions.history(child.id).events.filter(e => e.type === 'turn.done').length, 1);
+  assert.equal(sessions.history(parent.id).events.filter(e => e.type === 'turn.start' && String(e.turnId).startsWith('local-result-')).length, 1);
+});
+
+test('restart fails a helper marked working even without an open turn', async t => {
+  const { sessions } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  sessions.events.append(child.id, { type: 'turn.done', turnId: sessions.events.activeTurn(child.id).turnId, status: 'ok' });
+  sessions.flush();
+  const restarted = new Sessions(new EventEmitter(), { makeDriver: () => new FakeDriver({}) });
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  assert.equal(restarted.delegationResult(child.id).status, 'error');
+  assert.match(restarted.get(child.id).recovery.message, /cannot find.*after restart/);
+  assert.equal(restarted.get(child.id).delegation.status, 'error');
+});
+
+
+test('loss of the process host fails an active helper without deleting its chat', async t => {
+  const host = new EventEmitter();
+  host.detach = () => {};
+  const { sessions } = setup(t, undefined, { procHost: host });
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  host.emit('proc.lost', { id: child.id });
+  assert.equal(sessions.delegationResult(child.id).status, 'error');
+  assert.match(sessions.get(child.id).recovery.message, /lost contact/);
+  assert.ok(sessions.history(child.id).events.length > 0);
+});
+
+
+test('startup reports a helper whose native Codex process cannot be checked', async () => {
+  const { SessionResume } = await import('../packages/connect/src/session-resume.js');
+  const child = { id: 'unknown-helper', driver: 'codex', profileId: 'codex-main',
+    nativeSocket: '/missing.sock', engineSessionId: 'unknown-thread', status: 'working',
+    delegation: { status: 'working' } };
+  const failures = [];
+  const core = {
+    index: new Map([[child.id, child]]), drivers: new Map(),
+    natives: { nativeLoaded: new Set(), nativeUnknown: new Set(['codex-main']) },
+    delivery: { restoreUnconfirmed() {} }, deliveryState: { queue: () => [] },
+    delegation: { processGone(s, exit) { failures.push(exit.reason); s.delegation.status = 'error'; },
+      updateTeam() {} }, save() {},
+  };
+  const sessions = { events: { tail: () => [], last: () => 0, glance: () => ({ seq: 0, turns: [] }) },
+    emit() {}, nativeDiscovery: false };
+  await new SessionResume(sessions, core).resume();
+  assert.deepEqual(failures, ['Helm cannot check the helper because Codex did not answer.']);
+  assert.equal(child.delegation.status, 'error');
+  assert.equal(child.queuePaused, true);
 });

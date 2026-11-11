@@ -257,7 +257,7 @@ class PiRpcDriver extends Driver {
   #bindPipe(pipe) {
     this.#pipe = pipe;
     this.#exited = new Promise((resolve) => {
-      pipe.onExit(({ code, stderr }) => {
+      pipe.onExit(({ code, signal, stderr }) => {
         this.#pipe = null;
         for (const resolve of this.#calls.values()) resolve(null);
         this.#calls.clear();
@@ -283,7 +283,7 @@ class PiRpcDriver extends Driver {
         for (const turnId of open) {
           this.push('turn.done', { turnId, status: 'error', error: `${this.engine} exited` });
         }
-        this.push('status', { status: 'exited' });
+        this.push('status', { status: 'exited', code, signal });
         resolve({ code });
       });
     });

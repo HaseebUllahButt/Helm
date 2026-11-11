@@ -44,7 +44,7 @@ const SMOOTHING = 0.3;
  * never sees a list from before its own change.
  */
 const SHARED_READS = new Set([
-  M.ENV_INFO, M.NET_ROUTES, M.PROJECT_LIST, M.MODEL_LIST,
+  M.ENV_INFO, M.MACHINE_STATS, M.NET_ROUTES, M.PROJECT_LIST, M.MODEL_LIST,
   M.SESSION_LIST, M.SESSION_MESSAGES, M.SESSION_EVENTS, M.SESSION_VISUAL,
   M.SESSION_COMMANDS, M.SESSION_WATCH, M.BRAIN_SNAPSHOT, M.BRAIN_DIGEST,
   M.USAGE_LIMITS, M.USAGE_REPORT, M.SEND_LIST, M.GIT_STATUS,
@@ -293,13 +293,8 @@ export class HubMesh {
   }
 
   networkChanged() {
-    this.routes.clear();
-    this.directUse.clear();
-    for (const slots of this.timing.values()) for (const slot of slots.values()) {
-      slot.ms = null;
-      slot.probing = null;
-      slot.probe = null;
-    }
+    // Keep chosen routes, samples and pending probes until a path fails or
+    // another path answers faster. Checks must not move helper traffic.
     this.direct?.networkChanged();
     this.probeAll();
   }

@@ -4104,3 +4104,37 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
   .tour-launch { margin: 0; }
   .tour-header { flex-wrap: nowrap; }
 }
+
+/* Dashboard: compute online as tiles, a block per machine with its load as
+   labelled meters, then the limit balancer and the accounts. A meter turns
+   amber with the word "high" from 80% and red with "full" from 95%. */
+.dash .section:first-child { margin-top: 0; }
+.dash-stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 0 0 8px; }
+.dash .usage-panel { margin-bottom: 8px; }
+.dash-machine-name {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; border: 0;
+  background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.dash-machine-name .mdot { margin: 0 2px; }
+.dash-machine-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dash-machine-text b { font-weight: 600; font-size: var(--t-body); overflow-wrap: anywhere; }
+.dash-machine-text small { color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.45; }
+.dash-machine-name .chev { flex: none; color: var(--icon); display: inline-flex; }
+.dash-machine-name:hover b { text-decoration: underline; text-underline-offset: 3px; }
+.dash-machine-name:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 4px; border-radius: 6px; }
+.dash-meter b em { font-style: normal; font-weight: 600; }
+.dash-meter.high .usage-meter span { background: var(--amber); }
+.dash-meter.high b em { color: var(--amber-text); }
+.dash-meter.full .usage-meter span { background: var(--red); }
+.dash-meter.full b em { color: var(--red); }
+.dash-balance { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; font-size: var(--t-meta); }
+.dash-balance li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--text-dim); }
+.dash-balance li span { min-width: 0; overflow-wrap: anywhere; }
+.dash-balance li small { color: var(--mutedfg); font-size: var(--t-micro); }
+.dash-balance li b { flex: none; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }
+.dash-balance li.next span { color: var(--text); font-weight: 550; }
+.dash-balance li.out b { color: var(--red); }
+.home-machines-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.home-machines-head .linkish { text-transform: none; letter-spacing: 0; font-size: var(--t-meta); }
+.home-balance { margin: 8px 2px 0; font-size: var(--t-meta); color: var(--text-dim); line-height: 1.5; }
+.home-balance .linkish { font-size: inherit; }

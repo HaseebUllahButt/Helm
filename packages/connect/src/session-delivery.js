@@ -448,7 +448,10 @@ export class SessionDelivery {
         this.#unknownDelivery(s, item.turnId, err);
         throw err;
       }
-      if (s.delegation) {
+      // A message that never reached a finished helper is not the helper
+      // failing: it keeps the outcome it reported, and the failed bubble
+      // gives the reason. Only a task that never got going has failed.
+      if (s.delegation && !['done', 'interrupted', 'error'].includes(s.delegation.status)) {
         s.delegation.status = 'error';
         this.#core.delegation.updateTeam(s);
         this.#core.save();

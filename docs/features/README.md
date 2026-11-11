@@ -17,7 +17,7 @@ mark.
 | Terminal | [terminal.md](terminal.md) |
 | Browser for chats | [browser.md](browser.md) |
 | Spins: `helm share` public links | [spins.md](spins.md) |
-| Settings, usage, limits, updates, connectors | [settings.md](settings.md) |
+| Settings, usage, limits, dashboard, updates, connectors | [settings.md](settings.md) |
 | Rewind: Edit / Branch from here | [rewind.md](rewind.md) |
 | Files, images, voice, visuals | [files-and-visuals.md](files-and-visuals.md) |
 | Git and CI / CD | [git-and-schedules.md](git-and-schedules.md) |

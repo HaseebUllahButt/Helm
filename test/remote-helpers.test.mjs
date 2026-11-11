@@ -180,3 +180,64 @@ test('helm delegate --machine reads that machine\'s accounts and asks this chat\
   await runAgentCommand('agents', ['--machine', 'laptop', '--json'], { rpc, self: 'self', machine, write: () => {} });
   assert.equal(calls[0].env, 'laptop-id');
 });
+
+
+test('the list and remote state use the same result as the CLI while a process stays alive', async (t) => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const child = await delegateAway(sessions, parent);
+  drivers.get(child.id).finish();
+  const live = sessions.get(child.id);
+  // A late process status must not replace a completed task result.
+  live.delegation.status = 'working';
+  const result = sessions.delegationResult(child.id);
+  assert.equal(result.status, 'done');
+  const rows = await sessions.list({ parentId: parent.id });
+  assert.equal(rows.find((s) => s.id === child.id).delegation.status, result.status);
+});
+
+test('repeated helper lists do not reread unchanged histories', async (t) => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const child = await delegateAway(sessions, parent);
+  drivers.get(child.id).finish();
+  let reads = 0;
+  const tail = sessions.events.tail.bind(sessions.events);
+  t.mock.method(sessions.events, 'tail', (...args) => { reads++; return tail(...args); });
+  await sessions.list({ parentId: parent.id });
+  const initial = reads;
+  assert.ok(initial > 0);
+  await sessions.list({ parentId: parent.id });
+  assert.equal(reads, initial);
+  sessions.get(child.id).delegation.status = 'error';
+  await sessions.list({ parentId: parent.id });
+  assert.ok(reads > initial, 'a changed state refreshes the result');
+});
+
+
+test('a confirmed missing remote helper stops counting, but an unreachable helper keeps its state', async (t) => {
+  const { sessions } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  sessions.addRemoteHelper(parent.id, { id: 'missing', machine: 'laptop', status: 'working', team: { working: 3, blocked: 1, failed: 1 } });
+  sessions.remoteRpc = async () => { throw new Error('offline'); };
+  await sessions.reconcileRemoteHelpers(parent.id);
+  assert.equal(sessions.get(parent.id).team.working, 4);
+  sessions.remoteRpc = async () => ({ sessions: [] });
+  await sessions.reconcileRemoteHelpers(parent.id);
+  const helper = sessions.remoteHelper('missing').helper;
+  assert.equal(helper.status, 'interrupted');
+  assert.equal(helper.removed, true);
+  assert.deepEqual(sessions.get(parent.id).team, { working: 0, blocked: 0, failed: 0 });
+});
+
+test('deleting a remote helper saves its reply on the parent and clears its count', async (t) => {
+  const { sessions } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const child = await delegateAway(sessions, parent);
+  await sessions.kill(child.id);
+  const helper = sessions.remoteHelper(child.id).helper;
+  assert.equal(helper.removed, true);
+  assert.equal(helper.status, 'interrupted');
+  assert.match(helper.result.output, /Opus on the laptop reviewed it/);
+  assert.deepEqual(sessions.get(parent.id).team, { working: 0, blocked: 0, failed: 0 });
+});

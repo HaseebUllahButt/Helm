@@ -9,6 +9,7 @@ import { activeTurnFromEvents } from './events.js';
 import { createHash } from 'node:crypto';
 import { browserNote, browserReady } from './browser.js';
 import { loadOwner } from '../../protocol/owner.js';
+import { balance, pickRoomiest } from '../../protocol/balance.js';
 import { resolve } from 'node:path';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -157,7 +158,7 @@ const SAME_TOOL_HELPERS = {
 };
 export function delegationNote(engine = null) {
   const route = SAME_TOOL_HELPERS[engine]
-    ?? 'For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use your account and model unless the owner asks for another. Keep judgment calls yourself.';
+    ?? 'For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use helm delegate same and your model unless the owner names another account. Keep judgment calls yourself.';
   return `[Helm helpers: Do the work yourself by default. ${route} Brief a helper like a new teammate: it has none of your context. Give the goal, the exact files, what other helpers own, the result you expect and the check to run. The owner: "orchestrator mode is when u give work to others and u are always there to talk to me". Use it only when the owner asks for it. Then start helpers in the background, never wait on them, end your turn and act on each result or message when it comes. Keep your helpers: the owner reads them under this chat. When done, remove your scratch folders and worktrees; Helm removes helper copies. Delete (helm delete) only test chats that are not helpers.]`;
 }
 
@@ -363,13 +364,37 @@ export function resultNotice({ id, title, machine = null, status, final, error }
 
 export { parseAgentArgs } from './agent-args.js';
 
-export function chooseAgent(agents, account) {
+const limitRow = (a) => ({ key: a.id, engine: a.engine, windows: a.limits ?? [] });
+
+/**
+ * An exact account name is a hand pick and always wins. A tool name
+ * ("codex") that fits several accounts of that one tool picks the account
+ * with the most limit left (balance.js), not an error.
+ */
+export function chooseAgent(agents, account, now = Date.now()) {
   const exact = agents.find((p) => p.id === account);
   if (exact) return exact;
   const want = String(account).toLowerCase();
   const hits = agents.filter((p) => p.engine === want || p.id.toLowerCase().startsWith(want));
+  const accounts = hits.filter((p) => p.shown && p.available);
+  if (hits.length > 1 && accounts.length && new Set(hits.map((p) => p.engine)).size === 1) {
+    const key = pickRoomiest(accounts.map(limitRow), now)?.key;
+    return accounts.find((p) => p.id === key) ?? accounts[0];
+  }
   if (hits.length !== 1) throw new Error(hits.length
     ? `ambiguous account "${account}": ${hits.map((p) => p.id).join(', ')}`
     : `no CLI account "${account}" here; accounts: ${agents.map((p) => p.id).join(', ') || 'none'} (helm agents shows models)`);
   return hits[0];
+}
+
+/**
+ * `helm delegate same` when this chat's account is out of limit: the
+ * account of the same tool with the most limit left, if one has room.
+ * Returns { agent, from?, until? }: `from` is set when it moved.
+ */
+export function balanceAgent(agents, agent, now = Date.now()) {
+  const pool = agents.filter((a) => a === agent || (a.shown && a.available));
+  const result = balance(pool.map(limitRow), agent.id, now);
+  if (!result.switched) return { agent, until: result.until ?? null };
+  return { agent: agents.find((a) => a.id === result.key), from: agent, until: result.until ?? null };
 }

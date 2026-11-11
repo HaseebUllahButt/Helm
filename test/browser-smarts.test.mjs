@@ -107,3 +107,43 @@ test('flow CLI and RPC pass parameters and selected remote thread correctly', as
   assert.equal(await routes.dispatch('browser.flows', { id: 'one' }), 'one');
   assert.deepEqual(await routes.dispatch('browser.run', { id: 'one', tabId: 'tab', name: 'login', with: { name: 'Ada' } }), ['one', 'tab', 'login', { name: 'Ada' }]);
 });
+test('a CAPTCHA frame is known by its address, never an invisible check', async () => {
+  const { captchaVendor } = await import('../packages/connect/src/browser.js');
+  const cases = {
+    'https://www.google.com/recaptcha/api2/anchor?ar=1&k=key&size=normal': 'recaptcha',
+    'https://www.recaptcha.net/recaptcha/api2/bframe?k=key': 'recaptcha',
+    'https://www.google.com/recaptcha/api2/anchor?k=key&size=invisible': null,
+    'https://www.google.com/search?q=recaptcha': null,
+    'https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox&id=1': 'hcaptcha',
+    'https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox-invisible': null,
+    'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv/0/x': 'turnstile',
+    'https://client-api.arkoselabs.com/fc/gc/?token=1': 'arkose',
+    'https://static.geetest.com/static/js/fullpage.html': 'geetest',
+    'https://geo.captcha-delivery.com/captcha/?initialCid=1': 'datadome',
+    'https://captcha.px-cdn.net/PXabc/captcha.js': 'perimeterx',
+    'https://abc.us-east-1.captcha.awswaf.com/abc/challenge.js': 'awswaf',
+    'https://notgoogle.com/recaptcha/api2/anchor': null, 'https://hcaptcha.com.evil.test/': null, 'about:blank': null, 'not an address': null,
+  };
+  for (const [address, vendor] of Object.entries(cases)) assert.equal(captchaVendor(address), vendor, address);
+});
+test('captcha waits in calls short enough for the hub, asks again after a lost call, and ends on the last one', async () => {
+  const { waitForCaptcha } = await import('../packages/connect/src/browser-cli.js');
+  const calls = []; let lost = 1;
+  const rpc = async (env, method, params, timeout) => {
+    calls.push({ method, params, timeout });
+    if (calls.length === 2 && lost--) throw new Error('timed out');
+    return calls.length < 4 ? { waiting: true, vendor: 'hcaptcha', seconds: 1 } : { solved: true, vendor: 'hcaptcha', seconds: 2 };
+  };
+  assert.deepEqual(await waitForCaptcha({ rpc, env: 'me', id: 's1', tabId: 'tab', timeout: 300000, slice: 100000 }), { solved: true, vendor: 'hcaptcha', seconds: 2 });
+  assert.equal(calls.length, 4); assert.ok(calls.every(call => call.method === 'browser.captcha' && call.params.wait <= 100000 && call.timeout <= 130000));
+  assert.equal(calls[0].params.last, false);
+  const last = []; await waitForCaptcha({ rpc: async (env, method, params) => { last.push(params); return params.last ? { solved: false } : { waiting: true }; }, env: 'me', id: 's1', tabId: 'tab', timeout: 50, slice: 100000 });
+  assert.deepEqual(last, [{ id: 's1', tabId: 'tab', wait: last[0].wait, last: true }]);
+  await assert.rejects(waitForCaptcha({ rpc, env: 'me', id: 's1', tabId: 'tab', timeout: 'soon' }), /--timeout is milliseconds/);
+  await assert.rejects(waitForCaptcha({ rpc: async () => { throw new Error('browser tab not found in this thread'); }, env: 'me', id: 's1' , tabId: 'tab' }), /not found/);
+  const routed = []; const routes = createBrowserRoutes({ manager: { captcha: (...args) => { routed.push(args); return {}; } } });
+  await routes.dispatch('browser.captcha', { id: 's1', tabId: 'tab', wait: 5000, last: true });
+  assert.deepEqual(routed, [['s1', 'tab', { wait: 5000, last: true }]]);
+  const printed = []; await runBrowserCommand(['captcha', 'tab', '--timeout', '1000'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc: async (...args) => { printed.push(args); return { captcha: null }; }, print() {} });
+  assert.deepEqual(printed[0].slice(1, 3), ['browser.captcha', { id: 's1', tabId: 'tab', wait: 1000, last: true }]);
+});

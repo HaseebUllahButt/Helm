@@ -48,6 +48,11 @@ and a project copy nobody kept. A helper can run on another machine
   characters, and the line `Full output: helm delegate-result <id>`. The
   interim notes ("Let me look...") filled the parent's context.
   `delegate-result` still gives the full `output` and the `final` message.
+- **Lost processes:** a helper that exits or loses its local process host shows a failure.
+  Helm keeps its history and tells its parent once. Startup checks also close
+  helpers marked working when their process is gone. Exit codes and signals
+  stay on the helper record when the process host reports them. A remote
+  network change does not stop local helpers.
 - **One result per task:** once the parent has the result, a helper that
   wakes by itself later (a background watcher timing out) never gives the
   parent another turn. Those relays were nearly all "stale watcher, nothing
@@ -104,7 +109,13 @@ and a project copy nobody kept. A helper can run on another machine
   chat** (opens on B) and **Back to main chat** (back on A) worked. B said
   "Nothing is running".
 - **Not driven:** a parent machine offline while its helper finishes.
-- **Tests:** `test/remote-helpers`.
+- Leads stay at the first level. Each lead shows its helper count. Click its row to open or close its children.
+  A removed remote helper shows **Stopped**. Its saved result stays on the parent.
+  Only a failed machine request can show a helper as offline.
+  A lead that ended its turn with children still running shows **Waiting for its helpers**.
+  The list reads the same task result as the CLI. It refreshes after remote
+  updates and checks again when an older machine misses an update.
+- **Tests:** `test/remote-helpers`, `test/browser/helper-tree`.
 
 ## The CLIs' own subagents
 - **Which one an agent uses (`delegationNote`):** Claude chats use their own

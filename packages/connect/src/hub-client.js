@@ -105,7 +105,7 @@ export class HubConnection extends EventEmitter {
  * so adding a new mutation cannot silently acquire replay semantics.
  */
 export const REPEATABLE = new Set([
-  M.ENV_INFO, M.PING, M.NET_ROUTES, M.SSH_INFO,
+  M.ENV_INFO, M.PING, M.MACHINE_STATS, M.NET_ROUTES, M.SSH_INFO,
   M.FS_LIST, M.FS_ROOTS, M.FS_SEARCH, M.FS_INDEX, M.PROJECT_LIST,
   M.GIT_STATUS, M.GIT_GRAPH, M.GIT_DIFF, M.GIT_FILES, M.GIT_FILE, M.GIT_DOWNLOAD, M.GIT_COMMIT, M.GIT_PR,
   M.GIT_MONITOR, M.GIT_JOBS, M.GIT_ACCOUNTS,

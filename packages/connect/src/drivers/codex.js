@@ -576,12 +576,12 @@ export class CodexServer {
 
   #bindPipe(pipe) {
     this.#pipe = pipe;
-    pipe.onExit(({ code, stderr }) => {
+    pipe.onExit(({ code, signal, stderr }) => {
       this.#pipe = null;
       this.#forgetHeld();
       for (const resolve of this.#calls.values()) resolve({ error: { message: 'codex exited' } });
       this.#calls.clear();
-      for (const d of this.#drivers.values()) d.serverExited(code, stderr);
+      for (const d of this.#drivers.values()) d.serverExited(code, stderr, signal);
     });
     const lines = new LineBuffer();
     pipe.onData((chunk) => {
@@ -1125,7 +1125,7 @@ export class CodexDriver extends Driver {
   /** Called after Sessions has safely released the external writer. */
   enableWriting() { this.monitorOnly = false; }
 
-  serverExited(code, stderr) {
+  serverExited(code, stderr, signal = null) {
     this.#server = null;
     if (this.nativeSocket) {
       this.#started = false;
@@ -1136,7 +1136,7 @@ export class CodexDriver extends Driver {
     // Handed over mid-turn but never read: the process that had them is gone.
     for (const { text, inputId } of this.#steers.splice(0)) this.push('input.failed', { text, inputId, error: 'Codex exited before reading this message.' });
     if (!this.killed) this.push('error', { message: `codex exited with code ${code}${stderr ? `: ${stderr.trim().split('\n').pop()}` : ''}`, kind: 'exit' });
-    this.push('status', { status: 'exited' });
+    this.push('status', { status: 'exited', code, signal });
   }
 
   // ----------------------------------------------------------------- verbs

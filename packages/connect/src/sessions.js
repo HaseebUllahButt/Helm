@@ -203,7 +203,8 @@ export class Sessions extends EventEmitter {
     });
     // An agent process that dies while no driver holds it still leaves the
     // record: close what it left open so the session stops reading as busy.
-    this.procs.on('proc.exit', ({ id }) => this.#resumer.procGone(id));
+    this.procs.on('proc.lost', ({ id }) => this.#resumer.procGone(id, { reason: 'Helm lost contact with the helper process.' }, true));
+    this.procs.on('proc.exit', ({ id, ...exit }) => this.#resumer.procGone(id, exit));
     const footers = new Map();
     this.nativeTerminals.on('data', (d) => {
       this.emit('data', d);
@@ -831,6 +832,11 @@ export class Sessions extends EventEmitter {
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
     return dedupeNativeConversations(out.filter((s) => !s.delegation?.hidden && (parentId ? !s.archived && (s.delegation?.parentId === parentId || !!team?.has(s.id)) : includeDelegations || !s.delegation || this.#delegation.unhomedDelegation(s))))
+      .map((s) => {
+        if (!s.delegation) return s;
+        const child = this.#index.get(s.id);
+        return { ...s, delegation: { ...s.delegation, status: this.#delegation.listStatus(child) } };
+      })
       .map((s) => s.delegations ? { ...s, delegations: this.#delegation.visibleDelegations(s) } : s)
       .map((s) => (s.delegation && this.#delegation.unhomedDelegation(s) ? { ...s, unhomed: true } : s))
       // The branch each thread's folder is on, for the sidebar's third line.
@@ -854,6 +860,7 @@ export class Sessions extends EventEmitter {
   // Helpers on other machines (`helm delegate --machine`). agent.js sets
   // `remoteRpc(machine, method, params)` and `machineName(id)`.
   addRemoteHelper(parentId, helper) { return this.#delegation.addRemoteHelper(parentId, helper); }
+  reconcileRemoteHelpers(id) { return this.#delegation.reconcileRemoteHelpers(id); }
   remoteHelper(id, options) { return this.#delegation.remoteHelper(id, options); }
   remoteHelperState(machine, params) { return this.#delegation.remoteHelperState(machine, params); }
   remoteHelperResult(machine, params) { return this.#delegation.remoteHelperResult(machine, params); }
@@ -2241,6 +2248,15 @@ export class Sessions extends EventEmitter {
       this.#save();
       this.emit('session', { ...s, status: 'exited', alive: false, deleted: true });
       return { ok: true };
+    }
+    if (s.delegation?.parentMachine && this.remoteRpc) {
+      const result = this.#delegation.delegationResult(id);
+      s.removed = true;
+      await this.remoteRpc(s.delegation.parentMachine, 'session.helper-state', {
+        parentId: s.delegation.parentId,
+        helper: { id, title: s.title, status: 'interrupted', removed: true,
+          result: { ...result, status: 'interrupted', complete: true, pending: null } },
+      }).catch(() => {});
     }
     if (s.driver) {
       this.#clones.get(id)?.cancel();

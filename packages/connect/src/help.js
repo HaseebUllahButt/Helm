@@ -35,7 +35,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm devices                      controllers that can drive this network
   helm browser open <url>            browse with your agent in a Chromium-based browser
   helm browser tabs | look <id>      list tabs or read text and numbered controls
-  helm machines                     machines in this network
+  helm machines [--load]            machines in this network; --load adds CPU, memory and GPU use
   helm redesignate [machine] <kind> what a machine is for: pc or vm
   helm spin <port> [options]         same as helm share; make a public link
   helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
@@ -251,8 +251,13 @@ const DETAILS = {
   Start a helper for this chat.
   The owner sees a card to open, message or stop the helper.
   Claude chats use their Agent tool for work on the same account.
-    <account>        Use same for this chat's account.
-                     Run helm agents to list accounts on this machine.
+    <account>        Use same for this chat's account. If that account
+                     is out of limit, same uses another account of the
+                     same tool that has limit left.
+                     A tool name, such as codex, uses the account of that
+                     tool with the most limit left.
+                     A full account name always wins.
+                     Run helm agents to list accounts and limit left.
     --machine <name> Run the helper on another machine, with its accounts.
                      Use it when an account is only there.
                      Run helm agents --machine <name> to list them.
@@ -282,7 +287,8 @@ const DETAILS = {
 
   spawn: `
   Account names (<account>) differ between machines.
-  Run helm agents --machine <machine> to list them.
+  Run helm agents --machine <machine> to list them and their limit left.
+  A tool name, such as codex, uses the account with the most limit left.
   For a helper of this chat on another machine, use helm delegate --machine.`,
 
   say: `
@@ -415,7 +421,21 @@ const DETAILS = {
                       A failed batch stops and lists candidate elements.
     flows / run       save a repeating batch with {{param}}, values, save_as
                       and note; replay it with run <tab> <name> key=value
+    script <tab> <file>
+                      Run a JavaScript file in one call, with ifs and loops.
+                      The file gets browser, log and args (key=value words).
+                      Use - to read it from input. browser has look, click,
+                      type, goto, key, select, scroll, point, evaluate, act,
+                      check (gives true or false), captcha (waits for the
+                      owner), open, tab and tabs.
+                      A step does not read the page: add {look: true}.
+                      --timeout <ms> stops the whole script. Example:
+                      while (!(await browser.check('Under $50'))) await browser.click('Next')
     point <tab> <el>  show the owner where to click, without clicking
+    captcha <tab>     when a page shows a CAPTCHA, never solve it. This points
+                      at it, tells the owner, and waits until they solve it
+                      (10 minutes; --timeout <ms> changes it). It works in
+                      read-only chats. With no screen it stops at once.
     screenshot        only when visuals matter; close <tab> releases it
     profiles / logins copy the owner's browser logins into Helm's window
     mode              show where tabs open. extended (the default): the
