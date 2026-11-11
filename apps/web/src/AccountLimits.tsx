@@ -84,8 +84,9 @@ const sameReadings = (a: Reading[], b: Reading[]) => a.length === b.length
   && a.every(w => b.some(v => v.label === w.label && v.used === w.used && v.resetsAt === w.resetsAt));
 
 /**
- * One row per account: its allowance, how fast it is going, and what the
- * period's use is worth at API rates. The allowance used to be drawn twice -
+ * One row per account: the name on the left, each allowance as a meter on
+ * the right with the weeks in one column, then one quiet line for banked
+ * resets and what the period's use is worth at API rates. The allowance used to be drawn twice -
  * once here and again in a separate plan card - so the same weekly meter sat
  * on screen up to four times.
  *
@@ -198,7 +199,7 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
             const pace = elapsed ? w.used / elapsed : 0;
             // At that pace, when the rest is used up.
             const out = pace > 100 ? w.at + (100 - w.used) / w.used * elapsed * span : 0;
-            return <div className={`usage-allowance${pace > 100 ? ' dry' : ''}`} key={w.label}
+            return <div className={`usage-allowance${pace > 100 ? ' dry' : ''}`} key={w.label} data-window={w.label}
               title={pace > 0 ? `At this pace: ${Math.round(pace)}% used by the reset` : undefined}>
               <span className="usage-window">{WINDOW_NAMES[w.label] ?? w.label}</span>
               <div className="usage-meter" role="meter" aria-label={`${a.engine} ${nameOf(a)} ${w.label} remaining`}
@@ -206,11 +207,12 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
               <b>{left}% left</b>
               <small>
                 {resetPhrase(w.resetsAt, now) || 'Helm has no reset time.'}
-                {out > 0 && <> · <em>{out > now ? `Runs out ${whenPhrase(out, now)}` : 'Used up now at this pace'}</em></>}
+                {out > 0 && <em>{out > now ? `Runs out ${whenPhrase(out, now)}` : 'Used up now at this pace'}</em>}
               </small>
             </div>;
           })}
         </div>}
+        {(banked || spends.length > 0) && <div className="usage-account-meta">
         {banked && <p className="usage-resets" title="A banked reset sets your Codex limits back to full at once.">{banked}</p>}
         {spends.map(s => {
           const weekly = perWeek === null ? null : s.costUsd * perWeek;
@@ -234,6 +236,7 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
             </details>
           </div>;
         })}
+        </div>}
       </div>;
     })}</div>}
     {all.length > 5 && <button className="linkish" onClick={() => setExpanded(!expanded)}>{expanded ? 'Show fewer accounts' : `Show all ${all.length} accounts`}</button>}

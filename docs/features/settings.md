@@ -30,9 +30,10 @@
 - **Tests:** `test/owner-preferences`, `owner-sync`.
 
 ## Usage & cost
-- **Prove (driven):** `$V key Control+Shift+4; $V text | head -20` shows "At
-  API prices · last 7 days" and "WHERE IT WENT"; `$V rpc usage.report '{}'`
-  gives the same totals.
+- **Prove (driven 2026-11-11):** `$V key Control+Shift+4; $V text | head -20`
+  shows "At pay-per-use prices · last 7 days" and "USAGE BY GROUP";
+  `$V rpc usage.report '{}'` gives the same totals. The layout follows the
+  pane width, not the window: check 390, 960 and 1280 wide.
 - **Traps:** an unpriced model shows "unpriced" or "–", never $0. With
   `up --real` this is the owner's real spend. Devin spend can be five
   minutes late. Costs are API prices, not money spent.
