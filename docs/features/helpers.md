@@ -170,6 +170,10 @@ and a project copy nobody kept. A helper can run on another machine
     Anthropic's multi-agent research lessons: vague briefs made helpers
     repeat work or leave gaps. In orchestrator mode the lead starts helpers
     in the background and ends its turn, so it can read messages.
+  - Every agent gets cost habits (`usageNote`): one step for independent
+    reads, a new helper for each new job, short lead chats, and
+    `helm thread` instead of `helm say` to read another chat. A say to an
+    old chat that rested 15 hours re-read 510k at full price ($8).
   - Retry an unconfirmed send with the same `--message-id`, recipient and
     text; the receipt stops a duplicate. "Delivered" means accepted, not
     read. Stopped or archived agents are not woken.
