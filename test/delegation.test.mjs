@@ -1282,6 +1282,13 @@ test('CLI --wait waits past five minutes and marks a timed-out reply as unfinish
   assert.equal(late.timedOut, true);
   assert.equal(late.progress, 'Type check passes. Next I am adding tests.');
   assert.match(late.output, /^Not finished: child is still working/);
+  // A look without --wait says Helm will message the parent: leads checked
+  // a working helper every 30 s, each check re-reading a 220k chat.
+  reads = 0; written.length = 0;
+  assert.equal(await runAgentCommand('delegate-result', ['child'], {
+    rpc, self: 'self', parentId: 'parent', write: (s) => written.push(s), sleep: async () => {},
+  }), 0);
+  assert.match(written.join('\n'), /child is still working\. Helm messages this chat when it ends; do not check again\./);
 });
 
 test('the real CLI discovers accounts and delegates through an authenticated relay', async (t) => {
@@ -1373,7 +1380,7 @@ test('agents are told which machine they are on and how to reach the others', as
   const alone = helmBrief({ self: 'a', machines: { a: net.machines.a } });
   assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');
   assert.match(alone, /\[Helm pickup: .*run helm pickup\.\]/, 'every agent learns where its handover goes');
-  assert.match(alone, /\[Helm usage: .*helm thread.*\]/, 'every agent learns the habits that cut waste');
+  assert.match(alone, /\[Helm usage: .*Never check a running helper.*helm thread.*\]/, 'every agent learns the habits that cut waste');
   assert.match(alone, /helm render/, 'visual replies work even with one machine');
 });
 

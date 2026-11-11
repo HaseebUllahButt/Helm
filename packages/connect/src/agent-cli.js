@@ -120,6 +120,12 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     }
     await sleep(Math.min(1000, Math.max(1, deadline - Date.now())));
   } while (true);
+  // Lead chats checked a working helper every 30 s, and each check re-read
+  // a 220k chat: on 2026-11-11 a quarter to a third of their steps did only
+  // that. Helm already messages the parent when a helper ends.
+  if (!options.wait && !result.complete && ['working', 'starting'].includes(result.status)) {
+    result = { ...result, note: `${id} is still working. Helm messages this chat when it ends; do not check again. Do other work or end your turn.` };
+  }
   if (options.json) write(JSON.stringify(result));
   else {
     write(`${id}: ${result.status}${result.timedOut ? ' (wait timed out; task continues; this is not its result)' : ''}`);
@@ -130,6 +136,7 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     for (const message of result.messages ?? []) write(`Message from ${message.from.title}:\n${message.text}`);
     if (result.error) write(result.error);
     if (result.pending) write(`Needs approval in Helm: ${result.pending.title ?? result.pending.kind}`);
+    if (result.note) write(result.note);
   }
   return result.timedOut ? 3 : result.status === 'blocked' ? 2
     : ['error', 'interrupted'].includes(result.status) ? 1 : 0;
