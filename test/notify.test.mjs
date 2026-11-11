@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-notify-'));
 
-const { describe: describeAsk, describeDone } = await import('../packages/connect/src/notify.js');
+const { describe: describeAsk, describeDone, describeCaptcha } = await import('../packages/connect/src/notify.js');
 const { fanOut, isNew, forget } = await import('../apps/relay/src/notify.js');
 
 /** A stand-in for FCM or APNs: records what it was sent, answers as told. */
@@ -84,6 +84,7 @@ test('questions, plans and completions have distinct human labels', () => {
   assert.equal(describeAsk(session, { kind: 'command', detail: 'rm -rf build' }).body, 'Claude Code wants to run a command');
   assert.deepEqual(describeDone(session, 123), { title: 'Fix login', body: 'Claude Code finished', tag: 'helm-done-s1-123', envId: 'e1', sessionId: 's1' });
   assert.equal(describeDone({ ...session, machine: 'vm' }, 1, '## Done.\nThe login works again.').body, 'Claude Code finished · vm\nDone.');
+  assert.deepEqual(describeCaptcha({ ...session, machine: 'why' }, 'helm-captcha-s1-t-1'), { title: 'Fix login', body: 'Claude Code needs you to solve a CAPTCHA · why\nLook for the pointer in the browser.', tag: 'helm-captcha-s1-t-1', envId: 'e1', sessionId: 's1' });
 });
 
 test('notification context removes addresses and paths and bounds long session titles', () => {

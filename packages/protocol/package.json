@@ -13,6 +13,7 @@
     "./transfer-activity": "./transfer-activity.js",
     "./share": "./share.js",
     "./limits": "./limits.js",
+    "./balance": "./balance.js",
     "./message-delivery": "./message-delivery.js",
     "./reliable-input": "./reliable-input.js",
     "./visual": "./visual.js",

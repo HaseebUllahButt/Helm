@@ -23,6 +23,8 @@ function fixture() {
   const modules={
     react, 'react/jsx-runtime':jsx, './errors':{errorMessage:e=>e.message}, './useDialog':{useDialog:()=>{}},
     './EngineMark':{EngineMark(){}}, './Icon':{Icon(){}}, './accountsCache':{watchAccounts:()=>()=>{}},
+    './AccountLimits':{useAccountLimits:()=>({reports:{},failed:{},now:0})}, './balancer':{balanced:(_,usual)=>({account:usual}),windowsOf:()=>[]},
+    '@helm/protocol/balance':{isOut:()=>false,outUntil:()=>null},
     './accounts':{loadPrefs:()=>({}),accountsFrom:()=>[],rememberFolder(){},savePrefs(){}},
     './folderIndex':{knownInside:()=>null, loadFolders:async()=>null, fetchFolders:async()=>({folders:[],count:0,at:1}), searchFolders:()=>[], rememberFolderMade(){},
       listFolder:(_,env,path)=>{ if(path==='~') return Promise.resolve({entries:[common]}); const d=deferred(); pending.push({env,path,...d}); return d.promise; }},

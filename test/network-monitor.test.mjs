@@ -105,3 +105,24 @@ test('with the kernel feed running, ticks sample once a minute but still notice 
   const before = samples; now += 1000;
   await until(() => samples > before);
 });
+
+
+test('container and Tailscale address churn leaves the physical network unchanged', () => {
+  const wifi = { address: '192.168.1.20', family: 'IPv4', netmask: '255.255.255.0' };
+  const base = { interfaces: { wlp115s0: [wifi] }, routes: [{ dst: 'default', dev: 'wlp115s0', gateway: '192.168.1.1' }] };
+  const churn = { interfaces: { ...base.interfaces,
+    wlp115s0: [wifi, { address: 'fe80::1234', family: 'IPv6', scopeid: 2 }, { address: '169.254.2.3', family: 'IPv4' }],
+    docker0: [{ address: '172.17.0.1', family: 'IPv4' }],
+    'br-123': [{ address: '172.18.0.1', family: 'IPv4' }],
+    veth123: [{ address: 'fe80::abc', family: 'IPv6' }],
+    tailscale0: [{ address: '100.64.1.2', family: 'IPv4' }],
+  }, routes: [...base.routes,
+    { dst: '172.18.0.0/16', dev: 'br-123' }, { dst: '172.17.0.0/16', dev: 'docker0' },
+    { dst: 'fe80::/64', dev: 'veth123' }, { dst: '169.254.0.0/16', dev: 'wlp115s0' },
+    { dst: '100.64.1.2', dev: 'tailscale0', table: 52 },
+  ] };
+  assert.equal(networkSignature(churn), networkSignature(base));
+  assert.notEqual(networkSignature({ ...base, interfaces: { wlp115s0: [{ ...wifi, address: '192.168.1.21' }] } }), networkSignature(base));
+  assert.notEqual(networkSignature({ ...base, routes: [{ ...base.routes[0], gateway: '192.168.1.2' }] }), networkSignature(base));
+  assert.notEqual(networkSignature({ ...base, routes: [...base.routes, { dst: 'default', dev: 'tailscale0', table: 52 }] }), networkSignature(base));
+});

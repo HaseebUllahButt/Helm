@@ -12,16 +12,16 @@ import { clipboardFiles, isImageAttachment, prepareAttachment } from './image';
 import { AgentMessages } from './AgentMessages';
 import { PermissionSheet } from './PermissionSheet';
 import type { Permission, Decision } from './types';
-import type { TeamMember } from './TeamSummary';
+import { useThreadTeam, helperState, type TeamMember } from './TeamSummary';
 
 const STATUS: Record<string, string> = {
-  blocked: 'Needs approval', working: 'Working', starting: 'Starting', done: 'Finished',
+  blocked: 'Needs approval', working: 'Working', starting: 'Starting', waiting: 'Waiting for its helpers', done: 'Done',
   error: 'Failed', interrupted: 'Stopped', idle: 'Ready',
 };
-const ACTIVE = ['blocked', 'working', 'starting'];
+const ACTIVE = ['blocked', 'working', 'starting', 'waiting'];
 /** A phone: no Shift+Enter, so Return makes a new line there. */
 const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
-const stateOf = (task: Session) => task.delegation?.status || task.status;
+const stateOf = helperState;
 /** A helper on a machine that did not answer: only its last state is known. */
 const offline = (task: Session) => (task as Session & { offline?: boolean }).offline === true;
 /**
@@ -53,6 +53,8 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   const [agents, setAgents] = useState<CliAgent[]>([]);
   const seed = (team ?? []).filter((member) => member.depth === 0).map((member) => member.session);
   const [sessions, setSessions] = useState<Session[]>(seed);
+  const liveTeam = useThreadTeam(client, env.id, parent.id, parent.remoteHelpers);
+  useEffect(() => { setSessions(liveTeam.map((member) => member.session)); setListed(true); setRevision((n) => n + 1); }, [liveTeam]);
   const [listed, setListed] = useState(seed.length > 0);
   const [account, setAccount] = useState(parent.profileId ?? '');
   const [model, setModel] = useState<string | null>(null);
@@ -69,6 +71,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   const [busy, setBusy] = useState(false);
   const [composing, setComposing] = useState(false);
   const [selected, setSelected] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<DelegationResult | null>(null);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [sending, setSending] = useState(false);
@@ -89,7 +92,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   // Helpers on other machines: where each one runs, and the record this
   // machine keeps of it while that machine cannot be reached.
   const remote = (parent.remoteHelpers ?? []).filter((helper) => !helper.archived);
-  const remoteOn = new Map(remote.map((helper) => [helper.id, helper.machine]));
+  const remoteOn = new Map([...remote.map((helper) => [helper.id, helper.machine] as const), ...liveTeam.map((member) => [member.session.id, member.envId ?? env.id] as const)]);
   const envOf = (id: string) => remoteOn.get(id) ?? env.id;
   const nameOf = (id: string) => id === env.id ? env.name : machines.find((machine) => machine.id === id)?.name ?? 'another machine';
   const remoteKey = remote.map((helper) => `${helper.machine}/${helper.id}/${helper.status}`).join(',');
@@ -163,61 +166,30 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   const accountName = (candidate: CliAgent) => candidate.label || candidate.id;
 
   useEffect(() => {
-    let stale = false;
-    // A machine that does not answer still shows its helpers, from the
-    // state they last sent here.
-    const away = (machine: string) => client.rpc<{ sessions: Session[] }>(machine, 'session.list', { parentId: parent.id })
-      .then((listing) => listing.sessions.filter((s) => s.delegation?.parentMachine === env.id && remoteOn.get(s.id) === machine))
-      .catch(() => remote.filter((helper) => helper.machine === machine).map((helper) => ({
-        id: helper.id, title: helper.title ?? 'Helper', status: helper.status ?? 'idle', engine: '', profileId: '', offline: true,
-        createdAt: helper.startedAt, delegation: { parentId: parent.id, parentMachine: env.id, status: helper.status, task: '', requestedModel: null, depth: 1 },
-      }) as unknown as Session));
-    // Each machine's helpers show as soon as it answers. A slow or far
-    // machine used to hold back the whole list, this machine's included.
-    const load = () => {
-      const lists = new Map<string, Session[]>();
-      const machinesAway = [...new Set(remote.map((helper) => helper.machine))];
-      const show = (machine: string, list: Session[]) => {
-        if (stale) return;
-        lists.set(machine, list);
-        // Until a machine answers, keep what the panel already shows for it.
-        setSessions((now) => [
-          ...(lists.get(env.id) ?? now.filter((s) => !s.delegation?.parentMachine)),
-          ...machinesAway.flatMap((away) => lists.get(away) ?? now.filter((s) => s.delegation?.parentMachine && remoteOn.get(s.id) === away)),
-        ]);
-      };
-      const here = client.rpc<{ sessions: Session[] }>(env.id, 'session.list', { parentId: parent.id })
-        .then((listing) => { show(env.id, listing.sessions.filter((s) => !s.delegation?.parentMachine)); if (!stale) setListed(true); });
-      const there = machinesAway.map((machine) => away(machine).then((list) => show(machine, list)));
-      return Promise.all([here, ...there])
-        .then(() => {
-          if (stale || firstList.current) return;
-          firstList.current = true;
-          if (reviewAttention) {
-            const tasks = [...lists.values()].flat().filter(belongsHere);
-            const attention = tasks.find((task) => stateOf(task) === 'blocked')
-              ?? tasks.find((task) => stateOf(task) === 'error')
-              ?? tasks.find((task) => task.team?.blocked || task.team?.failed);
-            if (attention) { select(attention.id); setFocus(attention.id); }
-            else onNativeAttention?.();
-          }
-        })
-        .catch((failure) => { if (!stale) { fail('')(failure); setListed(true); } });
-    };
-    void load();
-    const off = client.on((envId, kind, payload: any) => {
-      if (kind === 'session.update' && payload?.session?.delegation?.parentId === parent.id
-        && (envId === env.id ? !payload.session.delegation.parentMachine : payload.session.delegation.parentMachine === env.id && remoteOn.get(payload.session.id) === envId)) {
-        const updated = payload.session as Session;
-        const belongs = belongsHere(updated);
-        setSessions((all) => [...all.filter((existing) => existing.id !== updated.id), ...(belongs ? [updated] : [])]);
-        if (!belongs) setSelected((id) => id === updated.id ? '' : id);
-        bump();
+    if (!liveTeam.length || firstList.current) return;
+    firstList.current = true;
+    if (reviewAttention) {
+      // Open the helper that needs the owner, at any depth: a failure two
+      // levels down shows that helper and its reason, not only its lead.
+      const all = liveTeam.map((m) => m.session);
+      const unseen = (s: Session) => s.delegation?.dismissedFailureAt !== (s.delegation?.finishedAt ?? 0);
+      const tasks = liveTeam.filter((m) => m.depth === 0).map((m) => m.session);
+      const attention = all.find((s) => stateOf(s) === 'blocked') ?? all.find((s) => stateOf(s) === 'error' && unseen(s))
+        ?? tasks.find((s) => s.team?.blocked || s.team?.failed);
+      if (attention) {
+        // Unfold its leads, so a nested helper is in view.
+        const leads = new Set<string>();
+        for (let at: Session | undefined = attention; at?.delegation?.parentId && !leads.has(at.delegation.parentId);) {
+          const lead: string = at.delegation.parentId;
+          leads.add(lead);
+          at = all.find((s) => s.id === lead);
+        }
+        if (leads.size) setExpanded((now) => new Set([...now, ...leads]));
+        select(attention.id); setFocus(attention.id);
       }
-      if ((kind === 'connection' && payload?.online) || (envId === env.id && kind === 'session.exit')) void load();
-    });
-    return () => { stale = true; off(); };
-  }, [client, env.id, parent.id, remoteKey]);
+      else onNativeAttention?.();
+    }
+  }, [liveTeam]);
 
   const loadAgents = async (refresh = false) => {
     setLoading(true); setError(null);
@@ -265,7 +237,8 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
       try {
-        const reply = await client.rpc<DelegationResult>(envOf(selected), 'session.delegation-result', { id: selected });
+        const child = sessions.find((s) => s.id === selected);
+        const reply = await client.rpc<DelegationResult>(child?.removed ? child.delegation?.parentMachine || env.id : envOf(selected), 'session.delegation-result', { id: selected });
         if (stale) return;
         setResult(reply);
         if (reply.pending) {
@@ -370,7 +343,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
       id: parent.id, profileId: child.profileId, model: child.delegation?.requestedModel || undefined,
       effort: child.effort || undefined,
       mode: child.mode && child.mode !== 'plan' ? child.mode : undefined, task: child.delegation?.task || child.title,
-      ...(remoteOn.has(child.id) ? { machine: envOf(child.id) } : {}),
+      ...(envOf(child.id) !== env.id ? { machine: envOf(child.id) } : {}),
     }, 120_000);
     added(session);
   });
@@ -401,12 +374,12 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
       {result?.error && <p className="error">{errorMessage(result.error, { machine: nameOf(envOf(child.id)) })}</p>}
       {result?.truncated && <p className="note">Showing the most recent output.</p>}
       <div className="delegation-actions">
-        {onOpen && !offline(child) && <button type="button" className="ghost" onClick={() => onOpen(child, envOf(child.id))}>Open chat</button>}
-        {complete ? <>
+        {onOpen && !child.removed && !offline(child) && <button type="button" className="ghost" onClick={() => onOpen(child, envOf(child.id))}>Open chat</button>}
+        {complete && !child.removed ? <>
           {['error', 'interrupted'].includes(state) && <button type="button" className="ghost" disabled={!!acting} onClick={() => void retry(child)}>
             {acting === 'retry' ? 'Retrying…' : 'Retry task'}</button>}
           <button type="button" className="ghost" disabled={!!acting} onClick={() => void hide(child)}>{acting === 'hide' ? 'Hiding…' : 'Hide task'}</button>
-        </> : <button type="button" className="ghost destructive" disabled={!!acting} onClick={() => void stop(child)}>
+        </> : !complete && <button type="button" className="ghost destructive" disabled={!!acting} onClick={() => void stop(child)}>
           {acting === 'stop' ? 'Stopping…' : 'Stop helper'}</button>}
       </div>
       {notice && <p className="note" role="status">{notice}</p>}
@@ -416,16 +389,20 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
 
   const row = (child: Session) => {
     const state = stateOf(child);
-    const where = remoteOn.get(child.id);
+    const host = remoteOn.get(child.id);
+    const where = host === env.id ? undefined : host;
     const open = selected === child.id;
+    const nested = sessions.filter((s) => !s.archived && s.delegation?.parentId === child.id);
+    const unfolded = expanded.has(child.id);
     const label = STATUS[state] || state;
     const toggle = () => select(open ? '' : child.id);
     return <li key={child.id} className={`delegation-branch${open ? ' selected' : ''}`}>
       <div className="delegation-row">
-        <button type="button" className="delegation-task" title={onOpen && !offline(child) ? 'Open helper chat' : undefined}
-          onClick={() => onOpen && !offline(child) ? onOpen(child, envOf(child.id)) : toggle()}>
+        <button type="button" className="delegation-task" title={nested.length ? 'Show helpers' : onOpen && !child.removed && !offline(child) ? 'Open helper chat' : undefined}
+          onClick={() => nested.length ? setExpanded((now) => { const next = new Set(now); if (next.has(child.id)) next.delete(child.id); else next.add(child.id); return next; }) : child.removed ? toggle() : onOpen && !child.removed && !offline(child) ? onOpen(child, envOf(child.id)) : toggle()}
+          aria-expanded={nested.length ? unfolded : undefined}>
           <EngineMark engine={child.engine} />
-          <span className="grow"><b>{child.title}</b><small>{offline(child) ? `${nameOf(where ?? '')} is offline`
+          <span className="grow"><b>{child.title}</b>{nested.length > 0 && <small>{nested.length} {nested.length === 1 ? 'helper' : 'helpers'} <Icon name={unfolded ? 'up' : 'down'} size={12} /></small>}<small>{offline(child) ? `${nameOf(where ?? '')} is offline`
             : [child.profileId, child.model || child.engineModel || 'Agent default', where && `on ${nameOf(where)}`].filter(Boolean).join(' · ')}</small></span>
         </button>
         <button type="button" className={`delegation-status state-${state}`} data-task={child.id} aria-label={`${label}, details`}
@@ -434,6 +411,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
         </button>
       </div>
       {open && detail(child)}
+      {unfolded && nested.length > 0 && <ul>{nested.map(row)}</ul>}
     </li>;
   };
 

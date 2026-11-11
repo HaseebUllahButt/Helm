@@ -33,7 +33,10 @@ test('install kind: what is ours to update, and how', () => {
   const claude = plan('claude', `${HOME}/.local/share/claude/versions/2.1.296`);
   assert.deepEqual([claude.method, claude.canUpdate, claude.command.args], ['self', true, ['update']]);
   assert.equal(plan('codex', `${HOME}/.codex/packages/standalone/releases/0.161.0/bin/codex`).command.args[0], 'update');
-  assert.equal(plan('opencode2', `${HOME}/.opencode/bin/opencode2`).command.args[0], 'upgrade');
+  // OpenCode cannot always tell its install script put it there.
+  assert.deepEqual(plan('opencode2', `${HOME}/.opencode/bin/opencode2`).command.args, ['upgrade', '--method', 'curl']);
+  assert.deepEqual(plan('opencode', `${HOME}/.opencode/bin/opencode`).command.args, ['upgrade', '--method', 'curl']);
+  assert.deepEqual(plan('opencode2', `${HOME}/tools/opencode2`).command.args, ['upgrade']);
 
   // npm: only the exact package, inside npm's own global folder.
   const codex = plan('codex', `${HOME}/.local/lib/node_modules/@openai/codex/bin/codex.js`);

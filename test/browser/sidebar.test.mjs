@@ -354,7 +354,7 @@ test('Running counts only working threads and excludes idle native sessions', as
   const homeRows = page.locator('.main .home .row.machine');
   assert.equal(await homeRows.filter({ hasText: 'laptop' }).locator('.rm').textContent(), '1 running');
   assert.equal(await homeRows.filter({ hasText: 'laptop' }).locator('.badge').textContent(), '1');
-  assert.equal(await homeRows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'Nothing is running.');
+  assert.match(await homeRows.filter({ hasText: 'vm' }).locator('.rm').textContent(), /^(Nothing is running\.|Idle · CPU \d+%)/);
   assert.match(await homeRows.filter({ hasText: 'old' }).locator('.rm').textContent(), /^Offline · seen 2d ago$/);
   const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Settled$/ }) });
   assert.equal(await done.locator('.tri-title').count(), 5);

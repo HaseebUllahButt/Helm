@@ -6,6 +6,9 @@ import { Icon } from './Icon';
 import type { Client, DirEntry, Environment, Session } from './client';
 import { watchAccounts } from './accountsCache';
 import { accountsFrom, loadPrefs, rememberFolder, savePrefs, type Account, type PickerPrefs } from './accounts';
+import { useAccountLimits } from './AccountLimits';
+import { balanced, windowsOf } from './balancer';
+import { isOut, outUntil } from '@helm/protocol/balance';
 import { fetchFolders, knownInside, listFolder, loadFolders, rememberFolderMade, searchFolders, type FolderIndex } from './folderIndex';
 import type { StartInfo } from './startingChats';
 
@@ -186,6 +189,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [picker, setPicker] = useState<(PickerPrefs & { onMachine: boolean }) | null>(null);
   const [viewHidden, setViewHidden] = useState(false);
+  const limits = useAccountLimits(client, machine ? [machine] : []);
 
   const go = (next: Step) => { setStep(next); setViewHidden(false); setQ(''); setAt(0); setError(''); input.current?.focus(); };
 
@@ -536,14 +540,25 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       const shown = (accounts ?? []).filter((a) => hidden.has(a.key) === hiddenView);
       const twins = new Set(shown.map((a) => `${a.engine}|${a.account}`).filter((k, i, all) => all.indexOf(k) !== i));
       // The machine's chosen default first, then the last one used, so Enter
-      // straight away starts what you would have picked.
-      const first = shown.find((a) => a.key === picker?.agent) ?? shown.find((a) => a.key === picker?.last);
+      // straight away starts what you would have picked - unless that one is
+      // out of limit and another account of the same tool has limit left.
+      const usual = shown.find((a) => a.key === picker?.agent) ?? shown.find((a) => a.key === picker?.last);
+      const readings = machine ? limits.reports[machine.id]?.accounts : [];
+      const moved = usual ? balanced(shown, usual, readings, limits.now) : null;
+      const first = moved?.account ?? usual;
       const ordered = first ? [first, ...shown.filter((a) => a !== first)] : shown;
+      const outTag = (a: Account) => {
+        const windows = windowsOf(a, readings);
+        if (!isOut(windows, limits.now)) return undefined;
+        const until = outUntil(windows, limits.now);
+        return until ? `out until ${new Date(until * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'out of limit';
+      };
       return ordered.map((a): Row => ({
         id: a.key, engine: a.engine, title: engineOf(a.engine).label,
         group: hiddenView ? 'Hidden agents' : undefined,
         sub: twins.has(`${a.engine}|${a.account}`) ? `${a.account} (${a.profile.id})` : a.account,
-        tag: a.key === picker?.agent ? 'default' : a.key === picker?.last ? 'last used' : undefined,
+        tag: outTag(a) ?? (moved?.from && a === moved.account ? 'limit left'
+          : a.key === picker?.agent ? 'default' : a.key === picker?.last ? 'last used' : undefined),
         hide: () => toggleHidden(a.key),
         pick: () => void start(a),
       })).filter((r) => matches(r, query));
@@ -558,7 +573,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       pick: () => { setViewHidden(value => !value); setAt(0); input.current?.focus(); },
     });
     return out;
-  }, [step, envs, machine, query, opened, inside, searching, hits, home, accounts, picker, viewHidden, folder, quick, anchor, busy, gh, ghMatches, finding, chosen, cloneParent]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, envs, machine, query, opened, inside, searching, hits, home, accounts, picker, limits, viewHidden, folder, quick, anchor, busy, gh, ghMatches, finding, chosen, cloneParent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Where "New folder" puts it: inside the folder the cursor is on when that
   // one is open, beside it otherwise.

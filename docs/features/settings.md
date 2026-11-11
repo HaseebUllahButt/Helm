@@ -1,4 +1,4 @@
-# Settings, usage, limits, updates and connectors
+# Settings, usage, limits, dashboard, updates and connectors
 
 ## Settings and appearance
 - **Reach:** Ctrl/⌘+Shift+S from anywhere except a terminal.
@@ -39,6 +39,28 @@
   minutes late. Costs are API prices, not money spent.
 - **Tests:** `test/browser/usage`; `test/usage`, `usage-sync`,
   `cost-accounting`, `devin-usage`, `other-pricing`, `token-rate`.
+
+## Dashboard and the limit balancer
+- **Reach:** Ctrl/⌘+Shift+D, the palette ("Dashboard"), Settings →
+  Dashboard, the Dashboard link over Home's machines, and the phone's
+  Machines list. `helm machines --load` and `helm agents` give the same
+  numbers to agents.
+- **What it shows:** compute online (machines, CPU, memory, GPUs), each
+  machine's load (`machine.stats`, read only while the screen is open; GPUs
+  from `nvidia-smi` only), the limit balancer per tool, then Accounts.
+- **Balancer rule (protocol/balance.js):** work stays on the usual account
+  until a window is 98% used, then goes to the account of the same tool with
+  the most limit left (10% at least). A hand pick always wins: an account
+  picked in Home or the new-chat list, or a full name in `helm delegate` /
+  `helm spawn`. `helm delegate same` and a tool name (`codex`) balance.
+- **Prove (driven 2026-11-11):** `up --real`, write readings into
+  `<copy>/helm/account-limits.json` for two Claude account keys (one at 100%),
+  `restart`, then `rpc picker.prefs '{"last":"<out key>"}'`. Home says
+  "… is out of limit, back in …. This chat uses …" and the new-chat list
+  puts "limit left" first. Fake accounts report no limits.
+- **Traps:** a machine on an older Helm shows "Update Helm on this machine to
+  see its load". Limits come only from Claude and Codex.
+- **Tests:** `test/balance`, `machine-stats`, `web-balancer`, `delegation`.
 
 ## Limits and context
 - **Not yet driven;** the fake agent reports tiny usage and no limits. The

@@ -194,6 +194,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['Ctrl/⌘ ]', 'Forward'],
     ['Ctrl/⌘ Shift S', 'Settings'],
     ['Ctrl/⌘ Shift 4', 'Show usage, limits, and cost (the $ key)'],
+    ['Ctrl/⌘ Shift D', 'Show the dashboard: machine load and account limits'],
     ['Ctrl/⌘ Shift E', 'Open a terminal in the chat folder, or go back'],
     ['Ctrl/⌘ Shift T', 'Pick a machine for a terminal'],
     ['Ctrl/⌘ Alt T', 'Open a terminal on the selected machine'],

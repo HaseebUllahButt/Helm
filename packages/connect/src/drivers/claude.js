@@ -397,7 +397,7 @@ export class ClaudeDriver extends Driver {
         if (code && code !== 0 && !this.killed) {
           this.push('error', { message: `claude exited with code ${code}${stderr ? `: ${stderr}` : ''}`, kind: 'exit' });
         }
-        this.push('status', { status: 'exited' });
+        this.push('status', { status: 'exited', code, signal });
         resolve({ code, signal });
       });
     });

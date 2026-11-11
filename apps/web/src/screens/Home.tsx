@@ -10,6 +10,10 @@ import { followModelRefresh } from '../modelRefresh';
 import { ChoiceSheet, Controls, trayPrefs, type Kind } from '../session/Controls';
 import type { StartInfo } from '../startingChats';
 import { ago } from './common';
+import { useAccountLimits } from '../AccountLimits';
+import { balanced } from '../balancer';
+import { loadPhrase, useMachineStats } from '../machineStats';
+import { whenPhrase } from '../session/limits';
 
 /** The Helm brain's row on Home, under the machines. */
 export interface HomeBrain {
@@ -40,13 +44,14 @@ type Picks = { model?: string; effort?: string; mode?: string; speed?: string };
  * thinking, permissions. Under it, one row per machine opens that machine.
  * Chats themselves stay in the sidebar.
  */
-export function Home({ client, machines, brain, near, onOpenMachine, onStart }: {
+export function Home({ client, machines, brain, near, onOpenMachine, onDashboard, onStart }: {
   client: Client;
   machines: HomeMachine[];
   brain: HomeBrain;
   /** The machine open before Home: the box starts there. */
   near: string | null;
   onOpenMachine: (envId: string) => void;
+  onDashboard: () => void;
   /** The chat opens now; `message` is sent once its agent is up. */
   onStart: (info: StartInfo, run: () => Promise<Session>, message: string) => void;
 }) {
@@ -77,9 +82,15 @@ export function Home({ client, machines, brain, near, onOpenMachine, onStart }: 
     return () => { stale = true; stop(); };
   }, [client, machine?.id]);
   const shown = (accounts ?? []).filter((a) => !picker?.hidden.includes(a.key));
-  // The one picked here, else the machine's default, else the last one used.
-  const agent = shown.find((a) => a.key === account) ?? shown.find((a) => a.key === picker?.agent)
-    ?? shown.find((a) => a.key === picker?.last) ?? shown[0] ?? null;
+  // The one picked here wins. Otherwise the machine's default, else the last
+  // one used - unless it is out of limit and another account of the same
+  // tool has limit left (the limit balancer).
+  const hand = shown.find((a) => a.key === account) ?? null;
+  const usual = shown.find((a) => a.key === picker?.agent) ?? shown.find((a) => a.key === picker?.last) ?? shown[0] ?? null;
+  const limits = useAccountLimits(client, machine ? [machine] : []);
+  const moved = !hand && usual ? balanced(shown, usual, machine ? limits.reports[machine.id]?.accounts : [], limits.now) : null;
+  const agent = hand ?? moved?.account ?? usual;
+  const loads = useMachineStats(client, machines.map((m) => m.env), 15_000);
 
   // The agent's models, thinking levels and permissions, as a chat asks for them.
   useEffect(() => {
@@ -150,7 +161,12 @@ export function Home({ client, machines, brain, near, onOpenMachine, onStart }: 
   const waiting = machines.reduce((n, m) => n + m.waiting, 0);
   const ready = !!machine && !!agent;
   // "Claude", or "Claude · work" when the agent has more than its default login.
-  const agentName = (a: Account) => a.account === 'default' ? engineOf(a.engine).label : `${engineOf(a.engine).label} · ${a.account}`;
+  // Two accounts with the same name also show the alias that starts each.
+  const agentName = (a: Account) => {
+    const twin = shown.some((b) => b !== a && b.engine === a.engine && b.account === a.account);
+    const name = a.account === 'default' ? engineOf(a.engine).label : `${engineOf(a.engine).label} · ${a.account}`;
+    return twin ? `${name} (${a.profile.id})` : name;
+  };
 
   return (
     <div className="scroll"><div className="pad column home">
@@ -211,8 +227,15 @@ export function Home({ client, machines, brain, near, onOpenMachine, onStart }: 
         </form>
       </div>
       {error && <p className="error" role="alert">{error}</p>}
+      {moved?.until !== undefined && <p className="home-balance" role="status">
+        {agentName(moved.from ?? moved.account)} is out of limit{moved.until ? `, back ${whenPhrase(moved.until * 1000, limits.now)}` : ''}.
+        {moved.from && <> This chat uses {agentName(moved.account)}. <button type="button" className="linkish"
+          onClick={() => { setAccount(moved.from!.key); box.current?.focus(); }}>Use {agentName(moved.from)} anyway</button></>}
+      </p>}
 
-      <div className="section">Machines</div>
+      <div className="section home-machines-head">Machines
+        <button type="button" className="linkish" onClick={onDashboard} title="Machine load and account limits (Ctrl+Shift+D)">Dashboard</button>
+      </div>
       {machines.length ? (
         <div className="rows plain">
           {machines.map(({ env: e, running: run, waiting: wait }) => (
@@ -222,6 +245,7 @@ export function Home({ client, machines, brain, near, onOpenMachine, onStart }: 
                 <span className="rt"><span className="rt-text">{e.name}</span></span>
                 <span className="rm">
                   {!e.online ? (e.lastSeen ? `Offline · seen ${ago(e.lastSeen)}` : 'Never connected')
+                    : loadPhrase(loads[e.id]) ? `${run ? `${run} running` : 'Idle'} · ${loadPhrase(loads[e.id])}`
                     : run ? `${run} running` : 'Nothing is running.'}
                 </span>
               </span>

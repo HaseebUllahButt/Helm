@@ -1602,14 +1602,24 @@ async function redesignateLocally(net, kind, { from, home }) {
   console.log('  every machine in the network sees the new kind as it syncs.\n');
 }
 
-function listMachines() {
+async function listMachines() {
   const net = requireNetwork();
-  for (const m of Object.values(net.machines)) {
+  const machines = Object.values(net.machines);
+  // `--load`: ask every machine at once; one that does not answer soon is shown as such.
+  const load = rest.includes('--load') ? await import('../src/machine-stats.js').then(({ statsLine }) => Promise.all(machines.map((m) =>
+    Promise.race([
+      hubRpc(net, m.id, M.MACHINE_STATS, {}, { timeout: 4000 }).then(statsLine,
+        (e) => /unknown method|not supported/i.test(e.message) ? 'update Helm on this machine to see its load' : 'no answer'),
+      new Promise((done) => setTimeout(() => done('no answer'), 5000)),
+    ])))) : [];
+  machines.forEach((m, i) => {
     const self = m.id === net.self ? ' (this machine)' : '';
     const kind = m.kind ?? '?';
     const where = (m.endpoints ?? []).join(' ') || 'no address advertised';
     console.log(`${short(m.id)}  ${m.name.padEnd(16)} ${kind.padEnd(3)}  ${where}${self}`);
-  }
+    if (load[i]) console.log(`          ${load[i]}`);
+  });
+  if (load.length) process.stdout.write('', () => exit(0));
 }
 
 /**
@@ -2038,7 +2048,7 @@ try {
       break;
 
     case 'machines':
-      listMachines();
+      await listMachines();
       break;
 
     case 'redesignate':

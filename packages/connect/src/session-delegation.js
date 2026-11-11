@@ -48,6 +48,16 @@ export class SessionDelegation {
   #notifying = new Set();
   /** child id -> when its parent last asked for the result (`delegate-result --wait`). */
   #waiters = new Map();
+  #listStatuses = new WeakMap();
+
+  listStatus(session) {
+    const key = JSON.stringify([session.lastSeq, session.updatedAt, session.status, session.delegation, session.delegationReply]);
+    const cached = this.#listStatuses.get(session);
+    if (cached?.key === key) return cached.status;
+    const status = this.delegationResult(session.id).status;
+    this.#listStatuses.set(session, { key, status });
+    return status;
+  }
 
   forget(id) { this.#waiters.delete(id); }
 
@@ -80,6 +90,7 @@ export class SessionDelegation {
   }
 
   updateTeam(child) {
+    if (child.removed) return;
     if (child.delegation?.parentMachine) { this.#pushState(child); return; }
     const parent = this.#core.index.get(child.delegation?.parentId);
     if (!parent) return;
@@ -258,6 +269,38 @@ export class SessionDelegation {
       throw new Error(`subagent ${child.id} could not receive its task: ${error.message}; read it with helm delegate-result ${child.id}`);
     }
     return { session: wire(child) };
+  }
+
+  /** Close lost work once. Keep the conversation and use the normal parent receipt. */
+  processGone(child, { code = null, signal = null, reason = null } = {}) {
+    if (!child.delegation) return;
+    if (!ACTIVE.includes(child.delegation.status)) {
+      if (code != null || signal) {
+        Object.assign(child.delegation, { exitCode: code, signal });
+        this.#core.save();
+        this.#sessions.emit('session', child);
+      }
+      return;
+    }
+    const error = reason || `The helper process exited${code != null ? ` with code ${code}` : ''}${signal ? ` (${signal})` : ''}.`;
+    const turn = this.#sessions.events.activeTurn(child.id);
+    const event = this.#sessions.events.append(child.id, {
+      type: 'turn.done', turnId: turn?.turnId || `process-exit-${randomBytes(6).toString('hex')}`,
+      status: 'error', error, exitCode: code, signal,
+    });
+    Object.assign(child.delegation, { status: 'error', settledStatus: 'error', summary: error,
+      finishedAt: Date.now(), exitCode: code, signal });
+    child.status = 'idle';
+    child.recovery = { kind: 'error', message: error, at: Date.now() };
+    const status = this.#sessions.events.append(child.id, { type: 'status', status: 'idle' });
+    child.lastSeq = status.seq;
+    delete child.nativeAgents;
+    this.#core.save();
+    this.updateTeam(child);
+    this.#sessions.emit('event', { id: child.id, event });
+    this.#sessions.emit('event', { id: child.id, event: status });
+    this.#sessions.emit('session', child);
+    void this.notifyParent(child, event);
   }
 
   delegationResult(id, { consume = false, parentId, callerThreadId, parentMachine } = {}) {
@@ -454,7 +497,7 @@ export class SessionDelegation {
   }
 
   remoteState(child) {
-    return { id: child.id, title: child.title, status: child.delegation.status ?? child.status,
+    return { id: child.id, title: child.title, status: this.delegationResult(child.id).status,
       ...(child.team ? { team: child.team } : {}), ...(child.delegation.finishedAt ? { finishedAt: child.delegation.finishedAt } : {}),
       ...(child.archived ? { archived: true } : {}) };
   }
@@ -483,10 +526,27 @@ export class SessionDelegation {
   /** The parent's side: a helper started on another machine. */
   addRemoteHelper(parentId, helper) {
     const parent = this.#sessions.get(parentId);
-    parent.remoteHelpers = [...(parent.remoteHelpers ?? []).filter((h) => h.id !== helper.id), helper].slice(-100);
+    parent.remoteHelpers = [...(parent.remoteHelpers ?? []).filter((h) => h.id !== helper.id), helper];
     parent.updatedAt = Date.now();
     this.refreshTeam(parent);
     this.#core.save();
+  }
+
+  /** Repair saved helper states only after their machine answers a full list. */
+  async reconcileRemoteHelpers(parentId) {
+    const parent = this.#core.index.get(parentId);
+    if (!parent || !this.#sessions.remoteRpc) return;
+    const links = (parent.remoteHelpers ?? []).filter((h) => !h.removed && !h.archived);
+    await Promise.all([...new Set(links.map((h) => h.machine))].map(async (machine) => {
+      let reply;
+      try { reply = await this.#sessions.remoteRpc(machine, 'session.list', { parentId, nested: true }); }
+      catch { return; }
+      if (!Array.isArray(reply?.sessions)) return;
+      for (const helper of links.filter((h) => h.machine === machine)) {
+        if (reply.sessions.some((s) => s.id === helper.id)) continue;
+        this.remoteHelperState(machine, { parentId, helper: { id: helper.id, status: 'interrupted', removed: true } });
+      }
+    }));
   }
 
   /** The parent and its record of a helper on `machine`, or null. */
@@ -508,7 +568,9 @@ export class SessionDelegation {
   /** A helper on `machine` changed state. */
   remoteHelperState(machine, { parentId, helper: state }) {
     const { parent, helper } = this.#ownRemote(machine, parentId, state);
+    if (helper.removed && !state.removed) return { ok: true };
     Object.assign(helper, { title: state.title ?? helper.title, status: state.status, team: state.team,
+      removed: state.removed === true, ...(state.result ? { result: state.result } : {}),
       finishedAt: state.finishedAt, archived: state.archived === true });
     if (!state.team) delete helper.team;
     if (!state.archived) delete helper.archived;
@@ -520,6 +582,7 @@ export class SessionDelegation {
   /** A helper on `machine` finished: its result starts a parent turn, as a local one does. */
   async remoteHelperResult(machine, { parentId, generation = 0, helper: state, seq, text }) {
     const { parent, helper } = this.#ownRemote(machine, parentId, state);
+    if (helper.removed) return { ok: true, skipped: true };
     this.remoteHelperState(machine, { parentId, helper: state });
     if (!Number.isInteger(seq) || typeof text !== 'string' || text.length > 20_000) throw new Error('a helper result needs its number and text');
     // Stopped since, read already, or told before: nothing to say.
