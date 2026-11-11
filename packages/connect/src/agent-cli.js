@@ -94,7 +94,7 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     if (!options.wait) {
       const where = session.delegation?.worktree;
       write(options.json ? JSON.stringify({ session, status: session.status })
-        : `Started ${id} (${session.engine}${session.model ? ` / ${session.model}` : ''})${away ? ` on ${options.machine}` : ''}${where ? ` in ${where.path} on branch ${where.branch}` : ''}. Read with helm delegate-result ${id} --wait`);
+        : `Started ${id} (${session.engine}${session.model ? ` / ${session.model}` : ''})${away ? ` on ${options.machine}` : ''}${where ? ` in ${where.path} on branch ${where.branch}` : ''}. Helm messages this chat when it ends: end your turn or do other work, and do not check it. If you cannot go on without it, run helm delegate-result ${id} --wait once.`);
       return 0;
     }
   } else {
@@ -115,7 +115,7 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     if (Date.now() >= deadline) {
       // Progress is not the result: say so where a reader looks for it.
       result = { ...result, timedOut: true, progress: result.output ?? '',
-        output: `Not finished: ${id} is still working; the text so far is under "progress". Wait for the result with: helm delegate-result ${id} --wait --json` };
+        output: `Not finished: ${id} is still working; the text so far is under "progress". Helm messages this chat when it ends: end your turn and do not check it again.` };
       break;
     }
     await sleep(Math.min(1000, Math.max(1, deadline - Date.now())));
