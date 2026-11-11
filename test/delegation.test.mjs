@@ -1373,6 +1373,7 @@ test('agents are told which machine they are on and how to reach the others', as
   const alone = helmBrief({ self: 'a', machines: { a: net.machines.a } });
   assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');
   assert.match(alone, /\[Helm pickup: .*run helm pickup\.\]/, 'every agent learns where its handover goes');
+  assert.match(alone, /\[Helm usage: .*helm thread.*\]/, 'every agent learns the habits that cut waste');
   assert.match(alone, /helm render/, 'visual replies work even with one machine');
 });
 
