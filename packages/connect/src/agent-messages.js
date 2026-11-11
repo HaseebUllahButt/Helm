@@ -125,7 +125,7 @@ export class AgentMessages {
     return messages.reverse();
   }
 
-  async send({ id, to, text, messageId, replyTo, callerThreadId, asUser = false }) {
+  async send({ id, to, text, messageId, replyTo, callerThreadId, asUser = false, fullHistory = false }) {
     const from = this.address(id, callerThreadId);
     if (typeof asUser !== 'boolean') throw fail('Invalid message author.');
     if (!validId(messageId)) throw fail('Supply a 32-character message ID for safe retries.');
@@ -158,7 +158,7 @@ export class AgentMessages {
         if (same(priorReply.from, from) && same(priorReply.to, target)
           && priorReply.replyTo === replyTo && priorReply.text === text.trim() && priorReply.asUser === asUser) {
           if (priorReply.status === 'delivered') return { message: priorReply, duplicate: true };
-          if (priorReply.id !== messageId) return this.send({ id, to, text, messageId: priorReply.id, replyTo, callerThreadId, asUser });
+          if (priorReply.id !== messageId) return this.send({ id, to, text, messageId: priorReply.id, replyTo, callerThreadId, asUser, fullHistory });
         }
       }
     }
@@ -166,7 +166,7 @@ export class AgentMessages {
       const recipient = old?.to ?? (target.env === this.self ? this.address(target.id)
         : (await this.rpc(target.env, 'session.agent-address', { id: target.id })).address);
       const record = old ?? { id: messageId, from, to: recipient, text: text.trim(), replyTo: replyTo || null, asUser,
-        at: Date.now(), status: 'unconfirmed' };
+        at: Date.now(), status: 'unconfirmed', ...(fullHistory === true ? { fullHistory: true } : {}) };
       this.#save(record);
       try {
         const result = recipient.env === this.self ? await this.receive(record, this.self)
@@ -198,15 +198,19 @@ export class AgentMessages {
     if (!message.asUser && (target.stoppedAt || target.archived)) throw fail('The recipient is stopped or archived; it was not woken.', 'delivery_cancelled');
     // A remote sender cannot claim that the recipient has read its message.
     const { id, from, to, text, replyTo, asUser, at } = message;
-    const record = { id, from, to, text, replyTo, asUser, at, status: 'sending' };
+    // The sender asked to keep a big history whole instead of compacting it.
+    const fullHistory = message.fullHistory === true;
+    const record = { id, from, to, text, replyTo, asUser, at, status: 'sending', ...(fullHistory ? { fullHistory } : {}) };
     this.#save(record);
     const author = record.asUser ? `the owner, from chat ${record.from.title}`
       : `${record.from.engine} agent ${record.from.title}`;
     // Like a teammate in Claude Code: read after the step in flight, not
     // held until the recipient's whole task ends.
     const prompt = `[Helm agent message ${record.id}]\nFrom ${author} (${record.from.env}/${record.from.id}).${record.replyTo ? `\nReply to ${record.replyTo}.` : ''}\nThis is a message, not a transfer of their conversation. Keep working in your own context.\n${record.asUser ? 'Answer the owner in this conversation.' : `If a reply is needed, send it with: helm reply ${record.id} "your reply". Do not send an acknowledgement just to end an exchange.`}\n\n${record.text}`;
-    await this.delivery.deliver({ id: record.to.id, messageId: record.id, data: prompt, delivery: 'auto', source: record.asUser ? 'user' : 'agent' }, `agent:${record.from.env}:${record.from.id}`);
+    const result = await this.delivery.deliver({ id: record.to.id, messageId: record.id, data: prompt, delivery: 'auto', source: record.asUser ? 'user' : 'agent',
+      ...(fullHistory ? { history: 'full' } : {}) }, `agent:${record.from.env}:${record.from.id}`);
     this.#save({ ...record, status: 'delivered', error: undefined });
-    return { ok: true };
+    // How much old history the receiver compacted before it read this.
+    return { ok: true, ...(result?.compacted > 0 ? { compacted: result.compacted } : {}) };
   }
 }

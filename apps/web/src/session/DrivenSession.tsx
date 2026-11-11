@@ -27,6 +27,7 @@ import { money, busyStatus, shownTitle } from '../format';
 import { loadModels, peekModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
+import { HistoryChoice, historySendLabel, useStaleHistory } from './HistoryChoice';
 import type { Decision, Item, Turn } from './types';
 import { useThreadTeam } from './TeamSummary';
 import { ThreadDetails, type DetailsTab } from './ThreadDetails';
@@ -54,7 +55,7 @@ const ENGINE_LABEL: Record<string, string> = {
 
 type Attachment = { name: string; mime: string; data: string; url: string };
 /** Words whose send failed after the composer had moved on, kept until sent or dismissed. */
-type FailedSend = { id: string; messageId: string; body: string; references: string[]; attachments: Attachment[]; error: string; retrying?: boolean; restoredRevision?: number };
+type FailedSend = { id: string; messageId: string; body: string; references: string[]; attachments: Attachment[]; history?: 'compact' | 'full'; error: string; retrying?: boolean; restoredRevision?: number };
 const rejectedDelivery = (error: { code?: string; deliveryRejected?: boolean }) => error.deliveryRejected || (!!error.code && !retryableDelivery(error));
 
 /**
@@ -198,6 +199,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [reviewingRequest, setReviewingRequest] = useState(() => session.ask?.requestId ?? '');
   useEffect(() => { setReviewingRequest(session.ask?.requestId ?? ''); }, [session.id]);
   const pending = log.pending.find(request => request.requestId === reviewingRequest) ?? log.pending[0];
+  // An idle Claude chat with a big history whose cache expired: the next
+  // send compacts it first unless the owner keeps it (HistoryChoice.tsx).
+  const staleHistoryNow = useStaleHistory(session, working || !!pending || preparing);
+  const [keepFullHistory, setKeepFullHistory] = useState(false);
   const permissionBox = useRef<HTMLDivElement>(null);
   // A question in the composer takes its free-text answer from the box you type in.
   const questionHandle = useRef<QuestionHandle | null>(null);
@@ -369,7 +374,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     } catch (error) { setError(errorMessage(error)); }
   }, [client, env.id, session.id, log.last]);
   const sendText = async (body: string, atts: Attachment[], sentReferences = references) => {
-    const fingerprint = JSON.stringify([env.id, session.id, body, atts.map(a => [a.name, a.mime, a.data]), sentReferences.map(item => item.id)]);
+    // A big, cold history: compact it first, or keep it as the owner chose.
+    const history = staleHistoryNow && !body.startsWith('/') ? (keepFullHistory ? 'full' as const : 'compact' as const) : undefined;
+    const fingerprint = JSON.stringify([env.id, session.id, body, atts.map(a => [a.name, a.mime, a.data]), sentReferences.map(item => item.id), history ?? null]);
     const messageId = retryDeliveryIds.current.get(fingerprint) ?? newMessageId();
     setSentFirst(true);
     setReferences([]);
@@ -377,7 +384,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     if (atts.length) setSendingImages(true);
     const clearedAt = editRevision.current;
     try {
-      await client.input(env.id, { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 120_000, messageId);
+      await client.input(env.id, { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })), ...(history ? { history } : {}) }, 120_000, messageId);
+      if (history) setKeepFullHistory(false);
       retryDeliveryIds.current.delete(fingerprint);
       setFailedSends(current => current.filter(item => item.messageId !== messageId));
       if (atts.length) {
@@ -414,7 +422,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         // Keep the complete request, even if the owner edits the restored
         // draft. Retrying an unknown result must use the same identity.
         failedSendSeq.current += 1;
-        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), attachments: atts, error: problem, ...(restore ? { restoredRevision: editRevision.current } : {}) };
+        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), attachments: atts, ...(history ? { history } : {}), error: problem, ...(restore ? { restoredRevision: editRevision.current } : {}) };
         setFailedSends((current) => [...current.filter(item => item.messageId !== messageId), failed]);
       }
     } finally { if (atts.length) setSendingImages(false); }
@@ -449,7 +457,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         && references.length === failed.references.length
         && references.every((item, i) => item.id === failed.references[i]);
       await client.input(env.id, { id: session.id, data: failed.body, references: failed.references,
-        attachments: failed.attachments.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 120_000, failed.messageId);
+        attachments: failed.attachments.map(a => ({ filename: a.name, mime: a.mime, data: a.data })), ...(failed.history ? { history: failed.history } : {}) }, 120_000, failed.messageId);
       if (restoredDraft && editRevision.current === revision) { setDraft(''); setReferences([]); }
       if (failed.attachments.length) await setAttachments(current => current.filter(image => !failed.attachments.includes(image)));
       for (const [fingerprint, messageId] of retryDeliveryIds.current) {
@@ -921,6 +929,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         shoulder={taskList && <TodoStrip todos={taskList} />}
         banner={pending && <div ref={permissionBox} className="ask-box"><PermissionSheet key={pending.requestId} variant="banner" permission={pending} onAnswer={answer} busy={busy} onHandle={holdQuestion} /></div>}
         danger={mode?.danger} compacting={compacting || undefined}
+        beforeSend={staleHistoryNow && <HistoryChoice stale={staleHistoryNow} keepFull={keepFullHistory} onToggle={() => setKeepFullHistory((v) => !v)} />}
+        sendLabel={staleHistoryNow ? historySendLabel(keepFullHistory) : undefined}
         foot={controls.chips} statusLine={account || limits.length > 0 || session.context ? <LimitsLine windows={limits} account={account} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages} shrinking={preparingImages > 0}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot receive images in this chat.`)}

@@ -145,7 +145,7 @@ export class DriverEvents {
     // in it: kept on the record (written out when the turn ends, with the
     // rest) and sent to clients as a session update.
     if (e.type === 'context') {
-      this.#core.setContext(s, e.used, e.window, e.model, e.full, e.compacted === true);
+      this.#core.setContext(s, e.used, e.window, e.model, e.full, e.compacted === true, e.ttl);
       return;
     }
     if (e.type === 'status') {

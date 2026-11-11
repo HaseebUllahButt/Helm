@@ -62,8 +62,10 @@ function CompactingBar({ since }: { since?: number }) {
   );
 }
 
-function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop, stopping, waiting, working, engine, keys: withKeys = true, danger, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, shrinking = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After this response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop, stopping, waiting, working, engine, keys: withKeys = true, danger, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, shrinking = false, onAttachUnsupported, commands, history = [], queued = [], helpers = [], onWithdrawQueued, pendingLabel = 'After this response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference, sendLabel = 'send' }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
+  /** What the send button does, when it does more than send ("Compact and send"). */
+  sendLabel?: string;
   /** The agent's pending question or approval, as the top of the card. */
   banner?: React.ReactNode;
   /** A tab tucked behind the card's top edge, such as the task list. */
@@ -75,6 +77,8 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   stopping?: boolean;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
   foot?: React.ReactNode; statusLine?: React.ReactNode; danger?: boolean;
+  /** Beside the send button: what the next send does with a big, cold history. */
+  beforeSend?: React.ReactNode;
   /** The agent is compacting, since this time (or true when unknown). */
   compacting?: number | boolean;
   children?: React.ReactNode;
@@ -711,13 +715,14 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
             {/* Beside the pickers on a wide box, its own line inside it on a narrow
                 one: a line under the card cost the chat a row on every screen. */}
             <ComposerSlot name="statusLine" />
+            <ComposerSlot name="beforeSend" />
             {working && onStop && (
               <button className={`stop${stopping ? ' stopping' : ''}`} onClick={onStop} disabled={stopping}
                 title={stopping ? 'Stopping the agent' : 'stop the agent'} aria-label={stopping ? 'Stopping the agent' : 'stop the agent'}>
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>
               </button>
             )}
-            <button className="send" onClick={submit} disabled={preparing || (!draft.trim() && !attachments?.length)} title="send" aria-label="send">
+            <button className="send" onClick={submit} disabled={preparing || (!draft.trim() && !attachments?.length)} title={sendLabel} aria-label={sendLabel}>
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </div>
@@ -732,7 +737,7 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
   );
 }
 
-type SlotName = 'banner' | 'shoulder' | 'foot' | 'statusLine' | 'children';
+type SlotName = 'banner' | 'shoulder' | 'foot' | 'statusLine' | 'beforeSend' | 'children';
 const ComposerSlots = createContext<Partial<Record<SlotName, ReactNode>>>({});
 
 /** Incoming status cards can change without redrawing the message editor. */
@@ -744,8 +749,8 @@ function ComposerSlot({ name }: { name: SlotName }) {
 }
 
 const MessageEditor = memo(ComposerBody);
-export function Composer({ banner, shoulder, foot, statusLine, children, ...editor }: ComponentProps<typeof ComposerBody>) {
-  return <ComposerSlots.Provider value={{ banner, shoulder, foot, statusLine, children }}>
+export function Composer({ banner, shoulder, foot, statusLine, beforeSend, children, ...editor }: ComponentProps<typeof ComposerBody>) {
+  return <ComposerSlots.Provider value={{ banner, shoulder, foot, statusLine, beforeSend, children }}>
     <MessageEditor {...editor} />
   </ComposerSlots.Provider>;
 }

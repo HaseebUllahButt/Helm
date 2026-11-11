@@ -124,7 +124,9 @@ export interface Session {
   autoResumeLimited?: boolean;
   recovery?: { kind: 'limited' | 'error' | 'interrupted' | 'restart'; message: string; at: number; resetAt?: number | null; autoResumeError?: string; autoResumeCancelled?: boolean };
   /** How full the conversation's context is after its latest reply (Claude, Codex). */
-  context?: { used: number; window: number; at: number; /** The model that replied (`claude-opus-5-5`). */ model?: string; /** The model's whole window, before the account's "compact at" size cuts it down. */ full?: number; /** Just compacted; the new size comes with the next reply. */ compacted?: boolean };
+  context?: { used: number; window: number; at: number; /** The model that replied (`claude-opus-5-5`). */ model?: string; /** The model's whole window, before the account's "compact at" size cuts it down. */ full?: number; /** Just compacted; the new size comes with the next reply. */ compacted?: boolean; /** How long Claude keeps it cached, in ms. */ ttl?: number };
+  /** The machine can compact a big, cold Claude history before a send. */
+  compactFirst?: boolean;
   lastUsage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputIncludesCache?: boolean; at: number; model?: string };
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;

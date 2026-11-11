@@ -294,7 +294,11 @@ const DETAILS = {
   say: `
   Messages wait for the receiver's next turn.
   Messages do not interrupt work.
-  In a chat, the message shows you as the sender.`,
+  In a chat, the message shows you as the sender.
+  A Claude chat with more than 200k tokens of history and an expired cache
+  compacts its history first, so it does not read all of it again at full price.
+  A chat whose helpers still work keeps its full history.
+  Add --full-history to keep all of the history.`,
 
   share: `
   Spins are public links.
