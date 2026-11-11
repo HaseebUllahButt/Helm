@@ -346,7 +346,7 @@ export class Sessions extends EventEmitter {
   recover(id, options) { return this.#limitRecovery.recover(id, options); }
 
   /** How full a conversation is: kept on its record, sent to clients as a session update. */
-  #setContext(s, used, window, model, full, compacted = false) {
+  #setContext(s, used, window, model, full, compacted = false, ttl) {
     if (!(window > 0)) return false;
     // Compacted with the new size not yet known: the ring empties and says so.
     if (compacted && !(used > 0)) {
@@ -359,9 +359,12 @@ export class Sessions extends EventEmitter {
     // `full` is the model's whole window: the menu's "Full" option, and what "Compact at" can never exceed.
     full = full > 0 ? full : undefined;
     model = typeof model === 'string' && model ? model : undefined;
+    // `ttl` is how long Claude keeps the conversation cached (idle-history.js);
+    // a reply that wrote nothing new to the cache leaves the last one.
+    ttl = ttl > 0 ? ttl : s.context?.ttl;
     const was = s.context;
-    if (was?.used === used && was?.window === window && was?.model === model && was?.full === full) return false;
-    s.context = { used, window, ...(model && { model }), ...(full && { full }), at: Date.now() };
+    if (was?.used === used && was?.window === window && was?.model === model && was?.full === full && was?.ttl === ttl) return false;
+    s.context = { used, window, ...(model && { model }), ...(full && { full }), ...(ttl > 0 && { ttl }), at: Date.now() };
     if (this.#index.has(s.id)) this.emit('session', s);
     return true;
   }

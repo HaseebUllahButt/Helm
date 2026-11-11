@@ -30,6 +30,12 @@ through extension dialogs. Todo cards: Codex (`turn/plan`) and the ACP
 tools. Not checked: Claude and Pi todos, ACP questions beyond approvals,
 Grok effort in a live chat, Cursor effort, the Antigravity model list.
 
+Compact and send (a big history whose cache ran out, `idle-history.js`):
+Claude only. Codex: not supported; OpenAI's cache has no write premium,
+so a cold re-read costs normal input price, Codex compacts by itself near
+its limit, and its cache time is not reported. The ACP tools, Pi and OMP
+report no cache time either. Native terminal Claude chats: not offered.
+
 ## Places that list tools by name
 
 A new tool, or a feature for "every tool", must look at each of these:

@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { parseAgentArgs } from './delegation.js';
+import { historySize } from '@helm/usage/idle-history';
 
 /** CLI messages inherit a real sender; ordinary owner prompts keep the old say path. */
 export async function runMessageCommand(command, args, { rpc, self, findSession,
   senderId = process.env.HELM_SESSION_ID, callerThreadId = process.env.CODEX_THREAD_ID, write = console.log } = {}) {
-  const { options, words } = parseAgentArgs(args, { values: ['message-id'], switches: ['json'] });
+  const { options, words } = parseAgentArgs(args, { values: ['message-id'], switches: ['json', 'full-history'] });
   if (command === 'messages') {
     if (words.length > 1 || (!words[0] && !senderId)) throw new Error('helm messages <chat-id> [--json]');
     const target = words[0] ? await findSession(words[0]) : { env: self, session: { id: senderId } };
@@ -22,7 +23,7 @@ export async function runMessageCommand(command, args, { rpc, self, findSession,
   if (!senderId) throw new Error('Agent replies run inside a Helm chat. Use helm say <chat-id> <text> for an owner prompt.');
   const [target, ...parts] = words;
   const text = parts.join(' ');
-  if (!target || !text.trim()) throw new Error(`helm ${command} <${command === 'reply' ? 'message' : 'chat'}-id> [--message-id <id>] -- "text"`);
+  if (!target || !text.trim()) throw new Error(`helm ${command} <${command === 'reply' ? 'message' : 'chat'}-id> [--message-id <id>] [--full-history] -- "text"`);
   const messageId = options['message-id'] ?? randomBytes(16).toString('hex');
   let to;
   if (command !== 'reply') {
@@ -31,7 +32,12 @@ export async function runMessageCommand(command, args, { rpc, self, findSession,
   }
   let result;
   try { result = await rpc(self, 'session.agent-send', { id: senderId, to, text, messageId,
-    ...(command === 'reply' ? { replyTo: target } : {}), ...(callerThreadId ? { callerThreadId } : {}) }, 70_000); }
+    ...(command === 'reply' ? { replyTo: target } : {}), ...(callerThreadId ? { callerThreadId } : {}),
+    ...(options['full-history'] ? { fullHistory: true } : {}) }, 70_000); }
   catch (error) { throw new Error(`${error.message}\nRetry this same message with: helm ${command} ${target} --message-id ${messageId} -- <same text>`); }
-  write(options.json ? JSON.stringify(result) : `Message ${result.message.id ?? messageId} ${result.duplicate ? 'already delivered' : 'delivered'} to ${result.message.to.title}. The receiving agent reads it after its current step.`);
+  // A big history whose cache expired: the receiver compacted it first.
+  const compacted = result.compacted > 0
+    ? ` Its chat was idle with ${historySize(result.compacted)} tokens of history, so Claude compacts that history first. Add --full-history to keep all of it.`
+    : '';
+  write(options.json ? JSON.stringify(result) : `Message ${result.message.id ?? messageId} ${result.duplicate ? 'already delivered' : 'delivered'} to ${result.message.to.title}. The receiving agent reads it after its current step.${compacted}`);
 }

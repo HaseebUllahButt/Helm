@@ -5,6 +5,7 @@ import { modeFor } from '../modes.js';
 import { nonAgentClaudeTask, staleAgentCards, stoppedTask } from '../claude-tasks.js';
 import { bareModel, compactWindow, configDir } from '../context-limit.js';
 import { WORTH_SAYING } from '@helm/usage/recache';
+import { cacheTtlOf } from '@helm/usage/idle-history';
 
 // Messages that mean the CLI is working: outside a turn, a turn it began itself.
 // A bare `result` is not one: a result with no work before it is the last
@@ -185,6 +186,8 @@ export class ClaudeDriver extends Driver {
   #contextWindow = null;
   /** The model's whole window, before the account's compaction size cuts it down. */
   #contextFull = null;
+  /** How long Claude keeps this conversation cached, as its last cache write said. */
+  #cacheTtl = undefined;
   #contextModel = null;
   /** The last message sent as a new turn, for an answer that never echoes it. */
   #lastSent = '';
@@ -984,6 +987,7 @@ export class ClaudeDriver extends Driver {
       this.#contextUsed = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
         + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0);
       this.#contextModel = m.message.model;
+      this.#cacheTtl = cacheTtlOf(u) ?? this.#cacheTtl;
       this.#pushContext();
     }
     if (m.error) this.push('error', { message: resultText(m.message?.content) || m.error, kind: m.error });
@@ -1009,7 +1013,7 @@ export class ClaudeDriver extends Driver {
 
   /** Tell the thread how full its context is, once the size is known. */
   #pushContext() {
-    if (this.#contextUsed && this.#contextWindow) this.push('context', { used: this.#contextUsed, window: this.#contextWindow, full: this.#contextFull, model: bareModel(this.#contextModel ?? '') || undefined });
+    if (this.#contextUsed && this.#contextWindow) this.push('context', { used: this.#contextUsed, window: this.#contextWindow, full: this.#contextFull, model: bareModel(this.#contextModel ?? '') || undefined, ...(this.#cacheTtl && { ttl: this.#cacheTtl }) });
   }
 
   /**

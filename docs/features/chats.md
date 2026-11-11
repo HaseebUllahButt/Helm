@@ -117,6 +117,26 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `modes`, `session-settings`, `recache`, `driver-claude`,
   `native-claude-chat`.
 
+## Compact and send (big, idle Claude chats)
+- **What the owner sees:** a Claude chat over 200k tokens whose prompt cache
+  ran out (an hour on a subscription, five minutes on an API key) shows a
+  "Compact 510k" chip beside send. Send then means "Compact and send":
+  Claude shortens the history to a summary, then reads the message. A tap
+  turns the chip to "Full 510k" ("Send with full history") for one send.
+  The chat shows the `/compact` step, then the message.
+- **Rules:** one rule for app and machine (`packages/usage/src/idle-history.js`).
+  Claude's own `resume_return` question is behind Anthropic's flags, so
+  Helm does not rely on it. Not offered while the chat works, waits on a
+  prompt, or has helpers at work, nor for a slash command. An app with no
+  choice keeps the full history; so does a machine without `compactFirst`.
+  `helm say` compacts a cold big chat unless its helpers work or the sender
+  adds `--full-history`, and says so in its output.
+- **Prove (driven 2026-11-11):** `up`, add a profile with engine `claude`
+  whose command is a stand-in that reports 510k tokens and a 5-minute cache
+  (`cache_creation.ephemeral_5m_input_tokens`). Send once, wait 5 minutes:
+  the chip reads "Compact 512k"; send: a `/compact` turn, then the message.
+- **Tests:** `test/idle-history`, `driver-claude`, `agent-messages`.
+
 ## @ chats and / commands
 - **Trap:** a new Claude sends `init` only with the first message. The `/`
   list comes from its answer to Helm's `initialize`, which also gives what

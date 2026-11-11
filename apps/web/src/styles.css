@@ -4193,3 +4193,17 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
 .home-machines-head .linkish { text-transform: none; letter-spacing: 0; font-size: var(--t-meta); }
 .home-balance { margin: 8px 2px 0; font-size: var(--t-meta); color: var(--text-dim); line-height: 1.5; }
 .home-balance .linkish { font-size: inherit; }
+
+/* "Compact 510k" beside send (HistoryChoice.tsx): the next send compacts a
+   big, cold Claude history first. On, it reads as a choice made, not a
+   warning; off, it is a plain chip like the others in the row. */
+.ctl.history-choice { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ctl.history-choice.on { color: var(--text); background: var(--accent); }
+/* Narrow: its own line above usage, so the setting chips keep their room. */
+.ctl.history-choice { order: 9; flex: 1 0 100%; height: auto; min-height: 28px; text-align: left; white-space: normal; padding: 4px 10px; }
+.ctl.history-choice .history-short { display: none; }
+@container slab (min-width: 760px) {
+  .ctl.history-choice { order: 0; flex: none; text-align: center; white-space: nowrap; padding: 0 10px; }
+  .ctl.history-choice .history-short { display: inline; }
+  .ctl.history-choice .history-long { display: none; }
+}

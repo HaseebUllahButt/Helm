@@ -13,6 +13,7 @@ import { hostedProcId } from './hosted-process.js';
 import { messageDelivery } from '@helm/protocol/message-delivery';
 import { stripBrief, withReminder } from '@helm/protocol/brief';
 import { DRIVERS, wire } from './session-wire.js';
+import { staleHistory } from '@helm/usage/idle-history';
 import { acceptAttachments, acceptImages, driverTakesImages, saveUploads } from './session-attachments.js';
 
 /**
@@ -36,7 +37,7 @@ export class SessionDelivery {
    * a bare newline - has to reach the pane untouched, whereas the chat view
    * wants a whole message handed to the agent as a prompt.
    */
-  async input(id, text, { raw = false, attachments = [], turnId: requestedTurnId = null, messageId, delivery = 'auto', references = [], source = 'user' } = {}) {
+  async input(id, text, { raw = false, attachments = [], turnId: requestedTurnId = null, messageId, delivery = 'auto', references = [], source = 'user', history } = {}) {
     this.#core.rewinder.assertRewindUnlocked(id);
     const s = this.#sessions.get(id);
     const stopGeneration = s.stopGeneration ?? 0;
@@ -233,6 +234,11 @@ export class SessionDelivery {
         && !DRIVERS[s.driver]?.takesInstructions && !s.delegation?.hidden;
       if (brainLine) clean = `${brainLine}\n\n${clean}`;
 
+      // A big Claude history whose cache has expired is re-read at full
+      // price. Shorten it first when the sender chose that (idle-history.js).
+      const shorten = !raw && compact == null && !clean.trimStart().startsWith('/') && this.#shortensFirst(s, history, source);
+      if (shorten) await this.input(id, '/compact', { source });
+
       const turnId = requestedTurnId
         ?? `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       // Sideband commands are app-server or local reads that run beside an
@@ -309,7 +315,7 @@ export class SessionDelivery {
           try { await this.#sessions.sendNow(s.id, turnId); }
           catch (err) { this.#sessions.log(`[${s.id}] could not send a message now: ${err.message}`); }
         } else if (delivery === 'auto') void this.handOver(s);
-        return { ok: true };
+        return { ok: true, ...(shorten ? { compacted: shorten.tokens } : {}) };
       }
       this.#core.deliveryState.setSending(s.id);
       try {
@@ -317,7 +323,7 @@ export class SessionDelivery {
       } finally {
         this.#releaseSending(s);
       }
-      return { ok: true };
+      return { ok: true, ...(shorten ? { compacted: shorten.tokens } : {}) };
     }
     if (s.pty) {
       if (attachments.length) throw new Error('paste or attach files in the native CLI');
@@ -331,6 +337,22 @@ export class SessionDelivery {
       return this.#sessions.runtime.sendPrompt(handle, text);
     }
     return this.#sessions.runtime.sendText(handle, text);
+  }
+
+  /**
+   * Whether this send compacts a big, cold Claude history first, and its
+   * size. `history` is the sender's choice: 'compact' or 'full'. With no
+   * choice, an agent's message compacts unless the chat's own helpers still
+   * work (it is in the middle of a job); the owner's keeps the history, as
+   * an app that offers no choice did before.
+   */
+  #shortensFirst(s, history, source) {
+    if (s.driver !== 'claude' || s.nativeSocket || s.external || s.nativeCli || history === 'full') return null;
+    const stale = staleHistory(s);
+    if (!stale) return null;
+    if (history === 'compact') return stale;
+    if (source !== 'agent' || s.team?.working || s.team?.blocked) return null;
+    return stale;
   }
 
   /**
