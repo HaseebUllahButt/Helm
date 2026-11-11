@@ -236,6 +236,26 @@ test('opencode2: the separate v2 driver starts an ACP session and exposes comman
   await driver.kill();
 });
 
+test('opencode: a v2 program under the opencode name gets the OpenCode 2 rules', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-oc-version-'));
+  const fake = (version) => {
+    const cmd = join(dir, `opencode-${version}`);
+    writeFileSync(cmd, `#!/bin/sh\necho "${version}"\n`);
+    chmodSync(cmd, 0o755);
+    return new OpencodeDriver({ cmd, env: {}, cwd: dir });
+  };
+  const v2 = fake('2.2.7');
+  await v2.matchVersion();
+  assert.equal(v2.spec.resumeVerb, 'session/resume');
+  assert.equal(v2.spec.promptWhileBusy, false, 'v2 does not read a prompt sent mid-turn');
+  assert.equal(typeof v2.steer, 'undefined');
+  const v1 = fake('1.19.5');
+  await v1.matchVersion();
+  assert.equal(v1.spec.promptWhileBusy, true, 'the VM still runs 1.19');
+  assert.equal(typeof v1.steer, 'function');
+  assert.notEqual(v1.spec.resumeVerb, 'session/resume');
+});
+
 test('a missing folder is named, not reported as a missing CLI', async () => {
   // Node says `spawn devin ENOENT` for a cwd that is not there, which read as
   // "devin is not installed" while devin sat on PATH.
