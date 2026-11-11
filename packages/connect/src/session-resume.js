@@ -191,11 +191,13 @@ export class SessionResume {
         continue;
       }
       if (local && e.queued === true && !echoed) {
-        if (this.#core.delegation.discardConsumedResult(s, e.turnId)) continue;
+        // A result ticket drops the results the parent read since.
+        const kept = { text: e.text ?? '' };
+        if (this.#core.delegation.discardConsumedResult(s, e.turnId, kept)) continue;
         // The event log is the queue. Recover the text, compact command, and
         // image bytes from it in sequence order; the small attachment refs
         // themselves are deliberately not enough to send to a driver.
-        let text = e.text ?? '';
+        let text = kept.text;
         if (s.brain) {
           const body = text.replace(/^\[helm [^\]\n]*\]\n\n/, '');
           const line = this.#sessions.brief?.();

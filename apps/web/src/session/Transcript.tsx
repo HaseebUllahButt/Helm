@@ -6,7 +6,7 @@ import type { Change, Item, Turn, Permission } from './types';
 import { seconds } from '../format';
 import { Icon, toolKind, type IconName } from '../Icon';
 import { userMessage } from './userMessage';
-import { splitAgentMessage, helperMessage } from './agentMessage';
+import { splitAgentMessage, helperMessages } from './agentMessage';
 import { stripBrief } from '@helm/protocol/brief';
 import { plainError } from './problem';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
@@ -680,7 +680,9 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   onRewind?: (turn: Turn) => void;
 }) {
   const said = splitNote(turn.text);
-  const helper = helperMessage(turn.text);
+  // Helpers that ended together reach the agent as one turn: one card each.
+  const reports = helperMessages(turn.text);
+  const helper = reports[0];
   const display = userMessage(said.text, turn.attachments);
   said.text = display.text;
   // A prompt that is itself a command means the turn's text is that
@@ -775,19 +777,19 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
       {head && display.printed && !!said.text && <div className="turn assistant command-note"><Markdown text={said.text} className="prose" /></div>}
       {/* Another agent talking, the way Claude Code shows a teammate: its
           name and first line, the rest a tap away. Never the owner's bubble. */}
-      {head && helper && (
-        <details className="turn helper-msg">
+      {head && reports.map((report, i) => (
+        <details key={i} className="turn helper-msg">
           {/* One quiet line of text: the helper's short name, its words cut
               to fit, the time. A tap shows the whole message. */}
           <summary>
-            <span className="helper-name" ref={fadeWhenCut}>{helperName(helper.from)}</span>
-            {helper.status && helper.status !== 'done' && <span className="helper-status">{helper.status}</span>}
-            <span className="helper-line">{helper.text.trim()}</span>
+            <span className="helper-name" ref={fadeWhenCut}>{helperName(report.from)}</span>
+            {report.status && report.status !== 'done' && <span className="helper-status">{report.status}</span>}
+            <span className="helper-line">{report.text.trim()}</span>
             <span className="helper-time">{clock(turn.at)}</span>
           </summary>
-          <Markdown text={helper.text} className="prose" />
+          <Markdown text={report.text} className="prose" />
         </details>
-      )}
+      ))}
       {/* The agent started again by itself: say what ended, so the new
           work does not seem to come from nowhere. */}
       {head && !!turn.cause?.length && (

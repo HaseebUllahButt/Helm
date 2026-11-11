@@ -1759,3 +1759,69 @@ test('startup reports a helper whose native Codex process cannot be checked', as
   assert.equal(child.delegation.status, 'error');
   assert.equal(child.queuePaused, true);
 });
+
+test('helpers that end while their chat works reach it in one turn, and a restart loses none', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Lead the work');
+  const children = [];
+  for (const task of ['First part', 'Second part', 'Third part']) children.push((await sessions.delegate({ id: parent.id, profileId: 'claude-main', task })).session);
+  const results = () => sessions.history(parent.id).events.filter((e) => e.type === 'turn.start' && String(e.turnId).startsWith('local-result-'));
+  for (const [n, child] of children.entries()) {
+    drivers.get(child.id).push('item.delta', { id: 'reply', text: ` Report ${n + 1}.` });
+    drivers.get(child.id).finish();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(results().length, 1, 'the three results wait as one parent turn');
+  assert.ok(children.every((child) => sessions.get(child.id).delegation.notifiedSeq > 0));
+  // Helm stops after the results joined the ticket but before it saved
+  // that it told the parent: the restart reports those turns again.
+  for (const child of children.slice(1)) {
+    for (const key of ['notifiedSeq', 'notifiedTurns', 'toldFor']) delete sessions.get(child.id).delegation[key];
+  }
+  sessions.flush();
+  await sessions.stop();
+  const made = new Map();
+  const restarted = new Sessions(new EventEmitter(), { makeDriver: (_engine, opts) => {
+    const d = new FakeDriver(opts); made.set(opts.env.HELM_SESSION_ID, d); return d;
+  } });
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  const deadline = Date.now() + 2000;
+  while (!made.get(parent.id)?.sent && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  const sent = made.get(parent.id)?.sent ?? '';
+  assert.equal(sent.match(/A delegated task finished\./g)?.length, 3, 'one parent turn holds all three results');
+  for (const n of [1, 2, 3]) assert.match(sent, new RegExp(`Report ${n}\\.`));
+  for (const child of children) assert.match(sent, new RegExp(`helm delegate-result ${child.id}`));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(restarted.history(parent.id).events.filter((e) => e.type === 'turn.start' && String(e.turnId).startsWith('local-result-')).length, 1,
+    'reporting a joined result again adds no second parent turn');
+});
+
+test('reading one of several waiting results keeps the others in their turn', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Lead the work');
+  const children = [];
+  for (const task of ['Alpha', 'Beta', 'Gamma']) children.push((await sessions.delegate({ id: parent.id, profileId: 'claude-main', task })).session);
+  for (const child of children) {
+    drivers.get(child.id).finish();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const [ticket] = sessions.history(parent.id).events.filter((e) => e.type === 'turn.start' && String(e.turnId).startsWith('local-result-'));
+  // The parent reads the first and the second result itself.
+  sessions.delegationResult(children[0].id, { consume: true, parentId: parent.id });
+  sessions.delegationResult(children[1].id, { consume: true, parentId: parent.id });
+  assert.equal(sessions.turnState(parent.id, ticket.turnId), 'open');
+  const edit = sessions.history(parent.id).events.findLast((e) => e.type === 'turn.edit' && e.turnId === ticket.turnId);
+  assert.deepEqual(edit.parts.map((part) => part.turnId.split('-')[2]), [children[2].id]);
+  assert.match(edit.text, /^A delegated task finished\.[^]*Task: Gamma/);
+  assert.doesNotMatch(edit.text, /Task: (Alpha|Beta)/);
+  drivers.get(parent.id).finish();
+  const deadline = Date.now() + 2000;
+  while (!/Gamma/.test(drivers.get(parent.id).sent) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(drivers.get(parent.id).sent.match(/A delegated task finished\./g)?.length, 1);
+  assert.match(drivers.get(parent.id).sent, /Task: Gamma/);
+  // Reading the last one too leaves nothing to deliver.
+  sessions.delegationResult(children[2].id, { consume: true, parentId: parent.id });
+});
