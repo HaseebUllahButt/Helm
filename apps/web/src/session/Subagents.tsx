@@ -4,6 +4,7 @@ import { Client, type CliAgent, type Environment, type ModelList, type Session, 
 import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
 import { ChoiceSheet, Controls, trayPrefs, type Kind } from './Controls';
+import { failureUnseen } from './helperFailures';
 import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
@@ -172,7 +173,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
       // Open the helper that needs the owner, at any depth: a failure two
       // levels down shows that helper and its reason, not only its lead.
       const all = liveTeam.map((m) => m.session);
-      const unseen = (s: Session) => s.delegation?.dismissedFailureAt !== (s.delegation?.finishedAt ?? 0);
+      const unseen = (s: Session) => failureUnseen(s, remote);
       const tasks = liveTeam.filter((m) => m.depth === 0).map((m) => m.session);
       const attention = all.find((s) => stateOf(s) === 'blocked') ?? all.find((s) => stateOf(s) === 'error' && unseen(s))
         ?? tasks.find((s) => s.team?.blocked || s.team?.failed);
