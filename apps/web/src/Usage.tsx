@@ -5,6 +5,7 @@ import { hitRate, cacheSaved } from './client';
 import { loadUsage, saveUsage, mergeReports, today, daysAgo } from './usageCache';
 import { BackIcon, Icon } from './Icon';
 import { EngineMark } from './EngineMark';
+import { engineOf } from './engines';
 import { AccountLimits, useAccountLimits } from './AccountLimits';
 import type { PlanSpend } from './AccountLimits';
 import { Sheet } from './Modal';
@@ -447,7 +448,8 @@ function Breakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: Fa
   const name = (g: ChartGroup) =>
     facet === 'project' ? shortFolder(g.project || '')
       : facet === 'machine' ? g.machine || 'unknown'
-        : String((g as any)[facet] || 'unknown');
+        : facet === 'engine' ? engineOf(g.engine).label
+          : String((g as any)[facet] || 'unknown');
   // A model with no published rate still used tokens; say how many rather
   // than showing it as free.
   const amount = (g: ChartGroup) => (priced ? (g.unpriced && !g.costUsd ? `${tokens(g.total)} tokens` : money(g.costUsd)) : tokens(g.total));
