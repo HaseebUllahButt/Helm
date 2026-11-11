@@ -1739,25 +1739,45 @@ test('loss of the process host fails an active helper without deleting its chat'
 });
 
 
-test('startup reports a helper whose native Codex process cannot be checked', async () => {
+test('a Codex daemon that does not answer at restart keeps its helper working until it answers', async t => {
   const { SessionResume } = await import('../packages/connect/src/session-resume.js');
   const child = { id: 'unknown-helper', driver: 'codex', profileId: 'codex-main',
     nativeSocket: '/missing.sock', engineSessionId: 'unknown-thread', status: 'working',
     delegation: { status: 'working' } };
   const failures = [];
+  const reapers = new Map();
+  t.after(() => { for (const timer of reapers.values()) clearTimeout(timer); });
+  let checks = 0;
+  let answered;
+  const answer = new Promise((resolve) => { answered = resolve; });
+  const natives = { nativeLoaded: new Set(), nativeUnknown: new Set(['codex-main']),
+    // The daemon is busy for the first check after the restart, then answers
+    // and still holds the thread.
+    async discoverNativeCodex() {
+      if (++checks < 2) return;
+      natives.nativeUnknown.clear(); natives.nativeLoaded.add('unknown-thread');
+    } };
   const core = {
-    index: new Map([[child.id, child]]), drivers: new Map(),
-    natives: { nativeLoaded: new Set(), nativeUnknown: new Set(['codex-main']) },
-    delivery: { restoreUnconfirmed() {} }, deliveryState: { queue: () => [] },
+    index: new Map([[child.id, child]]), drivers: new Map(), reapers, natives,
+    delivery: { restoreUnconfirmed() {}, pump(s) { if (s === child) answered(); } }, deliveryState: { queue: () => [] },
     delegation: { processGone(s, exit) { failures.push(exit.reason); s.delegation.status = 'error'; },
-      updateTeam() {} }, save() {},
+      updateTeam() {} }, save() {}, reap() {},
+    async driver() { return { nativeConnected: false, async start() {} }; },
   };
-  const sessions = { events: { tail: () => [], last: () => 0, glance: () => ({ seq: 0, turns: [] }) },
-    emit() {}, nativeDiscovery: false };
+  const sessions = { events: { tail: () => [], last: () => 0, glance: () => ({ seq: 0, turns: [] }), append: () => ({ seq: 1 }) },
+    emit() {}, log() {}, nativeDiscovery: false, nativeRetryMs: 1 };
   await new SessionResume(sessions, core).resume();
-  assert.deepEqual(failures, ['Helm cannot check the helper because Codex did not answer.']);
-  assert.equal(child.delegation.status, 'error');
+  // Unknown is not gone: still working, its queue held, its lead not told.
+  assert.deepEqual(failures, []);
+  assert.equal(child.delegation.status, 'working');
+  assert.equal(child.status, 'working');
   assert.equal(child.queuePaused, true);
+  await answer;
+  assert.ok(checks >= 2);
+  assert.deepEqual(failures, []);
+  assert.equal(child.delegation.status, 'working');
+  assert.equal(child.queuePaused, false);
+  assert.equal(child.recovery, undefined);
 });
 
 test('helpers that end while their chat works reach it in one turn, and a restart loses none', async t => {

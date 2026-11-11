@@ -516,3 +516,17 @@ test.after(async () => {
   await new Promise((resolve) => http.close(resolve));
   rmSync(root, { recursive: true, force: true });
 });
+
+test('a Codex socket file with no daemon behind it reads as no daemon, not as one that did not answer', async () => {
+  const { nativeCodexThreads } = await import('../packages/connect/src/drivers/codex.js');
+  // A short home: a socket path has a length limit. The daemon that
+  // listened here exited without removing its socket, as when the memory
+  // guard kills it, so nothing listens there now.
+  const dead = mkdtempSync('/tmp/hc-');
+  const left = join(dead, 'app-server-control/app-server-control.sock');
+  mkdirSync(join(dead, 'app-server-control'));
+  execFileSync(process.execPath, ['-e', `require('net').createServer().listen(${JSON.stringify(left)}, () => process.exit(0))`]);
+  try {
+    assert.equal(await nativeCodexThreads({ id: 'dead', engine: 'codex', env: { CODEX_HOME: dead } }), null);
+  } finally { rmSync(dead, { recursive: true, force: true }); }
+});

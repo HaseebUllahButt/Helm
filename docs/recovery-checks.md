@@ -18,6 +18,12 @@ Use named files through `npm run test:smart -- <file>...`.
   `test/update-recovery.test.mjs` and `test/release.test.mjs`.
 - Lost message replies and daemon replacement: `test/restart-delivery.test.mjs`
   and `test/input-delivery.test.mjs`.
+- A Codex daemon that does not answer at a restart: `test/delegation.test.mjs`
+  and `test/native-codex.test.mjs`. "Did not answer" is unknown, never lost:
+  the helper keeps working, its queue waits, and Helm checks again (2.5 s,
+  doubling to one minute, with no end). A socket with nothing listening is a
+  dead daemon; only that, or a daemon that answers without the thread, ends
+  the helper and tells its lead once.
 - Blocked live links, lost approval replies, and browser reloads:
   `test/browser/client-actions.test.mjs` and `test/action-delivery.test.mjs`.
 - Transfer interruption and completion receipts: `test/send-recovery.test.mjs`.
