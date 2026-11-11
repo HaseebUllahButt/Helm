@@ -22,7 +22,10 @@ export class OpencodeDriver extends AcpDriver {
       engine: 'opencode',
       label: 'opencode',
       min: OPENCODE_MIN_VERSION,
-      args: (d) => ['acp', '--cwd', d.cwd],
+      // No --cwd: the process starts in the chat's folder and session/new
+      // names it too. OpenCode 2.x installed as `opencode` refuses the flag,
+      // and every OpenCode helper died at start on 2026-11-11.
+      args: () => ['acp'],
       acpMode: (m) => modeFor('opencode', m)?.acp ?? null,
       effortId: 'effort',
       // A prompt sent while a run is going is added to that session and
