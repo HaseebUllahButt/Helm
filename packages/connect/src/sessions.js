@@ -21,7 +21,7 @@ import { EventLog } from './events.js';
 import { nativeCodexSocket } from './drivers/codex.js';
 import { defaultMode, modeFromAuto } from './modes.js';
 import { ModeFooter, MODE_FROM_LABEL } from './native-mode.js';
-import { TerminalHost, NativeHosts, PROC_SOCKET_PATH } from './terminals.js';
+import { TerminalHost, NativeHosts, PROC_SOCKET_PATH, watchTerminalMemory } from './terminals.js';
 import { inventory, scratchFolder } from './inventory.js';
 import { opencodeServiceSessions } from './opencode-service.js';
 import { claudeLiveSessions, claudeLiveStatus, descendsFrom, dedupeNativeConversations } from './external-process.js';
@@ -201,6 +201,12 @@ export class Sessions extends EventEmitter {
       this.emit('exit', { id, code });
       this.emit('session', { ...s, status: 'exited', alive: false });
     });
+    // Read from the journal after the end: the terminal says the memory
+    // guard stopped it (cgroup-scope.js).
+    watchTerminalMemory();
+    for (const host of [this.terminals, this.nativeTerminals]) {
+      host.on?.('memory.stop', ({ id }) => this.emit('exit', { id, code: null, memory: true }));
+    }
     // An agent process that dies while no driver holds it still leaves the
     // record: close what it left open so the session stops reading as busy.
     this.procs.on('proc.lost', ({ id }) => this.#resumer.procGone(id, { reason: 'Helm lost contact with the helper process.' }, true));

@@ -1,3 +1,4 @@
+import { MEMORY_STOP, CODEX_SCOPE_PREFIX, stoppedForMemory } from '../cgroup-scope.js';
 import { execFile, spawn } from 'node:child_process';
 import { LineBuffer } from '../line-buffer.js';
 import { mkdirSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -450,7 +451,13 @@ export class CodexServer {
           this.#socket = null;
           for (const resolve of this.#calls.values()) resolve({ error: { message: 'Codex native connection closed' } });
           this.#calls.clear();
-          for (const d of this.#drivers.values()) d.serverExited(null, 'local daemon connection closed');
+          const drivers = [...this.#drivers.values()];
+          for (const d of drivers) d.serverExited(null, 'local daemon connection closed');
+          // The daemon may have been stopped by the memory guard; the
+          // journal says, a moment later.
+          void stoppedForMemory([CODEX_SCOPE_PREFIX], { since: Date.now() - 30_000, waits: [1000] }).then((memory) => {
+            if (memory) for (const d of drivers) d.serverExited(null, 'local daemon connection closed', null, true);
+          });
         });
         await new Promise((resolve, reject) => {
           const timer = setTimeout(() => { ws.terminate(); reject(new Error('Codex native daemon connection timed out')); }, 3000);
@@ -576,12 +583,12 @@ export class CodexServer {
 
   #bindPipe(pipe) {
     this.#pipe = pipe;
-    pipe.onExit(({ code, signal, stderr }) => {
+    pipe.onExit(({ code, signal, stderr, memory }) => {
       this.#pipe = null;
       this.#forgetHeld();
       for (const resolve of this.#calls.values()) resolve({ error: { message: 'codex exited' } });
       this.#calls.clear();
-      for (const d of this.#drivers.values()) d.serverExited(code, stderr, signal);
+      for (const d of this.#drivers.values()) d.serverExited(code, stderr, signal, memory);
     });
     const lines = new LineBuffer();
     pipe.onData((chunk) => {
@@ -1151,8 +1158,18 @@ export class CodexDriver extends Driver {
   /** Called after Sessions has safely released the external writer. */
   enableWriting() { this.monitorOnly = false; }
 
-  serverExited(code, stderr, signal = null) {
+  serverExited(code, stderr, signal = null, memory = false) {
     this.#server = null;
+    // The memory guard stopped the Codex daemon or this connection: say so,
+    // and end the run even on a shared daemon, so a helper's lead is told.
+    if (memory) {
+      if (this.nativeSocket) { this.#started = false; this.#nativeSubscribed = false; }
+      for (const requestId of [...this.pending.keys()]) this.push('permission.resolved', { requestId, decision: 'cancelled' });
+      for (const { text, inputId } of this.#steers.splice(0)) this.push('input.failed', { text, inputId, error: 'Codex exited before reading this message.' });
+      this.push('error', { message: MEMORY_STOP, kind: 'exit' });
+      this.push('status', { status: 'exited', code, signal, memory: true });
+      return;
+    }
     if (this.nativeSocket) {
       this.#started = false;
       this.#nativeSubscribed = false;

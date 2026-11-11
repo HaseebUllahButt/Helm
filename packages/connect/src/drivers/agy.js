@@ -1,3 +1,4 @@
+import { MEMORY_STOP } from '../cgroup-scope.js';
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -207,7 +208,7 @@ export class AgyDriver extends Driver {
   #bindPipe(pipe) {
     this.#pipe = pipe;
     this.#exited = new Promise((resolve) => {
-      pipe.onExit(({ code, signal, stderr }) => {
+      pipe.onExit(({ code, signal, stderr, memory }) => {
         this.#pipe = null;
         this.#dead = true;
         // The stream died mid-turn: the live prompt is interrupted (helm
@@ -218,14 +219,14 @@ export class AgyDriver extends Driver {
           const status = this.#interrupting ? 'interrupted' : 'error';
           const error = this.#interrupting
             ? undefined
-            : (this.#initError ?? `${this.engine} exited${stderr ? `: ${stderr}` : ''}`);
+            : memory ? MEMORY_STOP : (this.#initError ?? `${this.engine} exited${stderr ? `: ${stderr}` : ''}`);
           if (error) this.push('error', { message: error, kind: 'exit' });
           this.#settleTurn(turnId, status, error);
         }
         this.#interrupting = false;
         for (const id of this.#open.values()) this.push('item.done', { id, status: 'error' });
         this.#open.clear();
-        if (!this.#restarting) this.push('status', { status: 'exited', code, signal });
+        if (!this.#restarting) this.push('status', { status: 'exited', code, signal, ...(memory ? { memory: true } : {}) });
         resolve({ code });
         this.#pump();
       });

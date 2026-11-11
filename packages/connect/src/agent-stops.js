@@ -73,6 +73,7 @@ export function describeStop(e) {
   if (!e) return '';
   const d = new Date(e.at);
   const when = `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} ${d.toLocaleTimeString('en-GB', { hour12: false })}`;
+  if (e.memory) return `The memory guard stopped its process at ${when}, because the computer ran out of memory.`;
   const how = e.signal ? `signal ${e.signal}` : `code ${e.code}`;
   const why = e.askedByHelm ? 'Helm asked it to stop'
     : e.daemonConnected ? 'Helm did not ask it to stop'

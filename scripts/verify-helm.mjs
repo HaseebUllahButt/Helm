@@ -63,6 +63,9 @@ function sandboxEnv(dir, real) {
     // as plain children: `systemd-run --unit=helm-terminals-<uid>` would
     // collide with the real laptop's host.
     HELM_NO_SERVICE: '1', HELM_NO_UPDATE: '1', HELM_NATIVE_BYPASS: '1', HELM_NO_SYSTEMD_RUN: '1',
+    // Each terminal and agent still gets its own memory group: those names
+    // carry this copy's own tag, so they never meet the real ones.
+    HELM_SCOPES: '1',
   };
 }
 

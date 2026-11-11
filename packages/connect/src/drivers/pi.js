@@ -1,3 +1,4 @@
+import { MEMORY_STOP } from '../cgroup-scope.js';
 import { piChatArgs, BASH_GUARD_MODES } from '../pi-settings.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -257,14 +258,15 @@ class PiRpcDriver extends Driver {
   #bindPipe(pipe) {
     this.#pipe = pipe;
     this.#exited = new Promise((resolve) => {
-      pipe.onExit(({ code, signal, stderr }) => {
+      pipe.onExit(({ code, signal, stderr, memory }) => {
         this.#pipe = null;
         for (const resolve of this.#calls.values()) resolve(null);
         this.#calls.clear();
         for (const requestId of [...this.pending.keys()]) {
           this.push('permission.resolved', { requestId, decision: 'cancelled' });
         }
-        if (code && code !== 0 && !this.killed) {
+        if (memory) this.push('error', { message: MEMORY_STOP, kind: 'exit' });
+        else if (code && code !== 0 && !this.killed) {
           this.push('error', { message: `${this.engine} exited with code ${code}${stderr ? `: ${stderr}` : ''}`, kind: 'exit' });
         }
         // Every turn still open dies with the process - a queued followUp
@@ -283,7 +285,7 @@ class PiRpcDriver extends Driver {
         for (const turnId of open) {
           this.push('turn.done', { turnId, status: 'error', error: `${this.engine} exited` });
         }
-        this.push('status', { status: 'exited', code, signal });
+        this.push('status', { status: 'exited', code, signal, ...(memory ? { memory: true } : {}) });
         resolve({ code });
       });
     });
