@@ -116,3 +116,42 @@ test('a machine that runs its checkout also repairs an app built from another co
   await synchronizeVersion(moving);
   assert.deepEqual(stale, ['new'], 'a checkout that moved is rebuilt by the update, not here');
 });
+
+test('a machine that runs a newer version tells older machines once', async () => {
+  const sent = [];
+  const told = new Set();
+  const { opts } = fixture({
+    running: 'new', told,
+    net: { machines: { self: {}, older: {}, same: {}, newer: {}, oldHelm: {} } },
+    currentVersion: async () => ({ full: 'new', time: 5 }),
+    rebuildStaleApp: async () => {},
+    rpc: async (_, id, method, params) => {
+      if (method === 'env.info') return { name: id, version: { full: id === 'same' ? 'new' : id, time: { older: 1, same: 5, newer: 9, oldHelm: 2 }[id] } };
+      if (method === 'env.newer') {
+        sent.push([id, params]);
+        if (id === 'oldHelm') throw Object.assign(new Error('unknown method: env.newer'), { code: 'unknown_method' });
+        return { checking: true };
+      }
+      return { bundle: null };
+    },
+  });
+  await synchronizeVersion(opts);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sent, [['older', { full: 'new', time: 5 }], ['oldHelm', { full: 'new', time: 5 }]]);
+  await synchronizeVersion(opts);
+  assert.equal(sent.length, 2, 'once per version');
+});
+
+test('a machine that does not run its checkout yet tells no one', async () => {
+  const sent = [];
+  const { opts } = fixture({
+    running: 'old', currentVersion: async () => ({ full: 'new', time: 5 }),
+    rebuildIfCommitted: async () => ({ updated: false, reason: 'nothing new' }),
+    rpc: async (_, id, method) => {
+      if (method === 'env.newer') sent.push(id);
+      return method === 'env.info' ? { version: { full: 'old', time: 1 } } : { bundle: null };
+    },
+  });
+  await synchronizeVersion(opts);
+  assert.deepEqual(sent, []);
+});

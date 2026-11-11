@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, watch, symlinkSync, readlinkSync, utimesSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, watch, symlinkSync, readlinkSync, utimesSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -287,4 +287,72 @@ fs.writeFileSync('native/log-index/log-index.new.node', 'new reader');`);
   assert.equal(readFileSync(join(f.installed, 'native/log-index/log-index.old.node'), 'utf8'), 'old reader');
   assert.equal(existsSync(join(f.installed, 'native/log-index/log-index.new.node')), false);
   assertRestored(f.installed);
+});
+
+// Only a source file changes: same packages, same app sources.
+function sameDependencyFixture(t, { webChange = false } = {}) {
+  const f = fixture(t);
+  const lock = JSON.stringify({ packages: { '': {}, 'node_modules/old': { version: '1.0.0' }, 'node_modules/other-os': { version: '1.0.0', optional: true } } });
+  put(f.remote, 'package-lock.json', lock);
+  git(f.remote, 'commit', '-qam', 'lock');
+  git(f.installed, 'pull', '-q');
+  const previous = git(f.installed, 'rev-parse', 'HEAD');
+  put(f.installed, 'node_modules/.package-lock.json', JSON.stringify({ packages: { 'node_modules/old': { version: '1.0.0' } } }));
+  put(f.installed, 'apps/web/dist/build.json', JSON.stringify({ commit: previous, dirty: false, builtAt: 1 }));
+  put(f.remote, 'v', 'newer source');
+  if (webChange) put(f.remote, 'apps/web/src/app.js', 'new app source');
+  git(f.remote, 'add', '.'); git(f.remote, 'commit', '-qm', 'source only');
+  const calls = join(f.installed, '..', 'npm-calls');
+  f.npm(`fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args: process.argv.slice(2), linked: fs.existsSync('node_modules/old/index.js') }) + '\\n');
+if (process.argv.includes('build')) {
+  const commit = require('node:child_process').execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  fs.mkdirSync('apps/web/dist', { recursive: true });
+  fs.writeFileSync('apps/web/dist/index.html', 'new app');
+  fs.writeFileSync('apps/web/dist/build.json', JSON.stringify({ commit }));
+}`);
+  const npmCalls = () => existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse) : [];
+  return { ...f, previous, target: git(f.remote, 'rev-parse', 'HEAD'), npmCalls };
+}
+
+test('an update with the same packages and app sources keeps both and stamps the new commit', async t => {
+  const f = sameDependencyFixture(t);
+  const before = statSync(join(f.installed, 'node_modules/old/index.js')).ino;
+  assert.equal((await selfUpdate(f.installed, { restart: false })).updated, true);
+  assert.deepEqual(f.npmCalls(), [], 'no install and no build');
+  assert.equal(git(f.installed, 'rev-parse', 'HEAD'), f.target);
+  assert.equal(statSync(join(f.installed, 'node_modules/old/index.js')).ino, before, 'the installed packages stay in place');
+  assert.equal(readFileSync(join(f.installed, 'apps/web/dist/index.html'), 'utf8'), 'old app');
+  assert.deepEqual(JSON.parse(readFileSync(join(f.installed, 'apps/web/dist/build.json'))),
+    { commit: f.target, dirty: false, builtAt: 1, sameAs: f.previous });
+  // The kept app is still a saved release: rollback restores its old stamp.
+  const checkpoint = JSON.parse(readFileSync(join(process.env.HELM_DIR, 'previous-release.json')));
+  assert.deepEqual(checkpoint.artifacts.paths.map(entry => entry.path), ['apps/web/dist']);
+});
+
+test('an update that changes the app builds it with the kept packages', async t => {
+  const f = sameDependencyFixture(t, { webChange: true });
+  assert.equal((await selfUpdate(f.installed, { restart: false })).updated, true);
+  assert.deepEqual(f.npmCalls(), [{ args: ['--workspace', '@helm/web', 'run', 'build', '--silent'], linked: true }]);
+  assert.equal(readFileSync(join(f.installed, 'apps/web/dist/index.html'), 'utf8'), 'new app');
+  assert.equal(JSON.parse(readFileSync(join(f.installed, 'apps/web/dist/build.json'))).commit, f.target);
+  assert.equal(readFileSync(join(f.installed, 'node_modules/old/index.js'), 'utf8'), oldDependency);
+});
+
+test('packages that differ from the lock file are installed again', async t => {
+  const f = sameDependencyFixture(t);
+  put(f.installed, 'node_modules/.package-lock.json', JSON.stringify({ packages: { 'node_modules/old': { version: '0.9.0' } } }));
+  const ran = join(f.installed, '..', 'npm-ran');
+  f.npm(`fs.appendFileSync(${JSON.stringify(ran)}, process.argv.slice(2).join(' ') + '\\n'); process.exit(1);`);
+  await assert.rejects(selfUpdate(f.installed, { restart: false }), /Command failed/);
+  assert.match(readFileSync(ran, 'utf8'), /^ci /);
+  assert.equal(git(f.installed, 'rev-parse', 'HEAD'), f.previous);
+});
+
+test('a stale app stamp is corrected without a build when the app sources match', async t => {
+  const f = sameDependencyFixture(t);
+  git(f.installed, 'pull', '-q');
+  let builds = 0;
+  assert.deepEqual(await rebuildStaleApp(f.target, f.installed, { build: async () => { builds++; } }), { rebuilt: true });
+  assert.equal(builds, 0);
+  assert.equal(JSON.parse(readFileSync(join(f.installed, 'apps/web/dist/build.json'))).commit, f.target);
 });

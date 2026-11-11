@@ -126,6 +126,9 @@ export const M = {
   CLI_UPDATE: 'cli.update',        // { engine? } -> { started, busy?, results[] }  now, one tool or all
   CLI_AUTO_UPDATE: 'cli.autoUpdate', // { on } -> { auto }  this machine's setting, on by default
   ENV_BUNDLE: 'env.bundle',        // { have } -> { head, bundle }  this machine's saved version, for another to take
+  // A machine runs a newer version: the one told checks at once, not on its
+  // next two-minute round. Older machines refuse the method, which is fine.
+  ENV_NEWER: 'env.newer',          // { full, time } -> { checking }
   // What a machine is for ('pc' | 'vm'), asked of the machine itself
   // for the same reason as a rename: `kind` lives on its own roster record.
   MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }
