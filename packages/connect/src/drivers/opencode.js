@@ -1,4 +1,5 @@
 import { AcpDriver } from './acp.js';
+import { cliVersion } from './index.js';
 import { modeFor } from '../modes.js';
 
 /**
@@ -32,7 +33,24 @@ export class OpencodeDriver extends AcpDriver {
       // read by the running loop at its next step, the way the TUI queues
       // typing; both prompts answer when the loop ends.
       promptWhileBusy: true,
+      prepare: (d) => d.matchVersion(),
     }, opts);
+  }
+
+  /**
+   * `opencode` can be OpenCode 2: on the Laptop and why the v2 install took
+   * over the name (2026-11-11), while the VM still runs 1.19. A v2 program
+   * gets the OpenCode 2 rules: resume without a replay, and a message typed
+   * mid-turn waits for the reply (Opencode2Driver).
+   */
+  async matchVersion() {
+    const have = await cliVersion(this.cmd, this.env).catch(() => null);
+    this.v2 = !!have && Number(have.split('.')[0]) >= 2;
+    if (!this.v2) return;
+    this.spec.resumeVerb = 'session/resume';
+    this.spec.promptWhileBusy = false;
+    // Delivery steers only when the driver has a steer method.
+    this.steer = undefined;
   }
 
   /** A waiting message joins the running loop at its next step. */

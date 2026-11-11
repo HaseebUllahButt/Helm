@@ -90,6 +90,34 @@ test('OpenCode 2 native session history renders from session_message', async () 
   assert.match(status, /\*\*Input:\*\* 240/);
 });
 
+test('an opencode chat run by OpenCode 2 reads its v2 tables', async () => {
+  // On the Laptop and why, OpenCode 2 took over the `opencode` name
+  // (2026-11-11) and writes session_v2 rows into the same opencode.db.
+  const path = join(root, 'opencode-v2-under-v1-name.db');
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE session (id TEXT PRIMARY KEY, tokens_input INTEGER, tokens_output INTEGER, tokens_cache_read INTEGER, cost REAL, model TEXT);
+    CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+    CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, time_created INTEGER, data TEXT);
+    CREATE TABLE session_v2 (id TEXT PRIMARY KEY, model TEXT, tokens_input INTEGER, tokens_output INTEGER, tokens_cache_read INTEGER, cost REAL);
+    CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, data TEXT);
+  `);
+  db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?)').run('ses-2', '{"id":"model-v2"}', 70, 30, 10, 0.05);
+  const put = db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?)');
+  put.run('u', 'ses-2', 'user', 1, 1, JSON.stringify({ content: [{ type: 'text', text: 'hi' }] }));
+  put.run('a', 'ses-2', 'assistant', 2, 2, JSON.stringify({ content: [{ type: 'text', text: 'hello' }] }));
+  put.run('e', 'ses-2', 'idle', 3, 3, JSON.stringify({ outcome: 'succeeded' }));
+  db.close();
+
+  const history = await messages({ engine: 'opencode', path, sessionId: 'ses-2', all: true });
+  assert.deepEqual(history.map((m) => [m.role, m.text]), [['user', 'hi'], ['assistant', 'hello']]);
+  const status = await sessionSnapshot({ engine: 'opencode', path, sessionId: 'ses-2', cwd: '/work' });
+  assert.match(status, /\*\*Model:\*\* model-v2/);
+  assert.match(status, /\*\*Input:\*\* 70/);
+  const v2 = await sessionActivity({ engine: 'opencode2', path, sessionId: 'ses-2', active: true });
+  assert.deepEqual(await sessionActivity({ engine: 'opencode', path, sessionId: 'ses-2', active: true }), v2);
+});
+
 test('Devin history keeps the final streaming snapshot and session statistics', async () => {
   const path = join(root, 'sessions.db');
   const db = new DatabaseSync(path);
