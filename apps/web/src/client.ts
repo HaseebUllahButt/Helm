@@ -244,6 +244,8 @@ export interface CliAgent {
 export interface DelegationResult {
   session: Session; status: string; complete: boolean; output: string;
   truncated?: boolean; error?: string | null;
+  /** The helper's last message, without the notes before it. */
+  final?: string;
   pending?: { requestId: string; title?: string; kind: string } | null;
 }
 

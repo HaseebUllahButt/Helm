@@ -2081,17 +2081,18 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .need-what { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .need-m { flex: 0 4 auto; min-width: 24px; margin-left: auto; padding-left: 6px; color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* The ⋯ holds no column of its own: it shows over the row's right end. */
+/* The ⋯ takes the machine name's place on the second line, so it never
+   covers the title or the count. */
 .need-more {
-  position: absolute; right: 5px; top: 6px; width: 26px; height: 24px; border-radius: 7px; color: var(--mutedfg);
-  display: inline-flex; align-items: center; justify-content: center; opacity: 0; background: var(--sidebar);
+  position: absolute; right: 6px; bottom: 6px; width: 26px; height: 22px; border-radius: 7px; color: var(--mutedfg);
+  display: inline-flex; align-items: center; justify-content: center; opacity: 0; background: none;
 }
 .need:hover .need-more, .need-more[aria-expanded="true"], .need-more:focus-visible { opacity: 1; }
-.need-more:hover { background: var(--hover); color: var(--text); }
-@media (pointer: coarse) { .need-more { opacity: .6; } .need-t { padding-right: 26px; } }
-.need-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 10px 8px 26px; }
-.need-foot button { height: 28px; padding: 0 10px; border-radius: 8px; font-size: var(--t-meta); background: var(--accent); color: var(--text); }
-.need-foot button:hover:not(:disabled) { background: var(--hover); }
-.need-foot .need-dismiss { color: var(--text-dim); }
+.need:is(:hover, :has(.need-more[aria-expanded="true"]), :has(.need-more:focus-visible)) .need-m { visibility: hidden; }
+.need-more:hover, .need-more[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+@media (pointer: coarse) { .need-more { opacity: .6; } .need-m { padding-right: 26px; } }
+.need .row-menu { top: 100%; right: 4px; }
+.menu .menu-line { border: 0; height: 1px; margin: 4px 6px; background: var(--line); }
 @media (prefers-reduced-motion: reduce) { .need-dot { animation: none; } }
 
 /* A run of finished tool calls, folded into what it did. */
@@ -2830,7 +2831,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-task .grow { flex: 1; min-width: 0; }
 .delegation-task b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-weight: 500; font-size: var(--t-body); overflow: hidden; overflow-wrap: anywhere; }
 .delegation-task small { display: block; font: var(--t-micro) var(--mono); color: var(--mutedfg); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.delegation-group.finished .delegation-task b { color: var(--text-dim); }
+.delegation-group.group-finished .delegation-task b { color: var(--text-dim); }
 .delegation-status {
   display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 44px; padding: 0 8px;
   border-radius: var(--radius); color: var(--mutedfg); font-size: var(--t-micro); font-weight: 550; white-space: nowrap;
@@ -2846,6 +2847,29 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-detail .note, .delegation-detail .error { margin: 0; }
 .delegation-request { margin: 0; color: var(--mutedfg); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-meta); }
 .delegation-output { max-height: 40dvh; overflow-y: auto; padding: 10px 12px; border-radius: var(--radius); background: var(--bg); }
+.delegation-output.full { max-height: 60dvh; }
+.delegation-label { margin: 0 0 -6px; font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--mutedfg); }
+.delegation-task-text { display: grid; gap: 10px; justify-items: start; }
+.delegation-request.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.delegation-detail > .linkish, .delegation-task-text > .linkish { justify-self: start; margin-top: -6px; }
+/* A failed helper says why first, in the colours of every Helm error. */
+.delegation-failure { display: grid; gap: 4px; padding: 10px 12px; border-radius: var(--radius); color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, transparent); border: 1px solid color-mix(in srgb, var(--red) 32%, transparent); }
+.delegation-failure b { font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.delegation-failure p { margin: 0; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
+.delegation-actions .primary { padding: 6px 14px; }
+.delegation-actions:has(.primary) { margin-left: 0; }
+.delegation-more { width: 100%; min-height: 36px; margin-top: 4px; border-radius: var(--radius); color: var(--text-dim); font-size: var(--t-meta); font-weight: 550; }
+.delegation-more:hover { background: var(--hover); color: var(--text); }
+.delegation-search { width: 100%; margin: 0; min-height: 36px; padding: 6px 12px; border: 1px solid var(--edge); border-radius: var(--radius); background: var(--card); }
+.delegation-counts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: -6px 0 -4px; font-size: var(--t-meta); }
+.delegation-counts a { color: var(--text-dim); text-decoration: none; }
+.delegation-counts a:hover { color: var(--text); text-decoration: underline; }
+.delegation-counts a.state-needs { color: var(--need-text); }
+.delegation-counts a.state-working { color: var(--sky); }
+.delegation-counts a.state-failed { color: var(--red); }
+.delegation-group { scroll-margin-top: 8px; }
+.delegation-group.group-failed .delegation-task b { color: var(--text-dim); }
 .delegation-detail .sheet {
   margin: 0; padding: 12px 14px; max-height: none; box-shadow: none;
   border-radius: var(--radius-xl); background: var(--bg);

@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { getProfiles } from './profiles.js';
 import { nativeWorking } from './native-subagents.js';
-import { ENGINES } from './engines.js';
+import { ENGINES, conversationKey } from './engines.js';
 import { modelPrefs, startPrefs, subagentPrefs } from './settings.js';
 import { codexHelperFork, delegationMode, delegationOutput, isWakeTurn, resultNotice, turnOf } from './delegation.js';
 import { nativeCodexSocket } from './drivers/codex.js';
@@ -180,7 +180,8 @@ export class SessionDelegation {
 
   /** Provider history must not rediscover a hidden task as an ordinary chat. */
   isDelegatedConversation(engine, id) {
-    return [...this.#core.index.values()].some((s) => s.delegation && s.engine === engine && s.engineSessionId === id);
+    const key = conversationKey(engine, id);
+    return [...this.#core.index.values()].some((s) => s.delegation && s.engineSessionId && conversationKey(s.engine, s.engineSessionId) === key);
   }
 
   hasActiveDelegations(id) {

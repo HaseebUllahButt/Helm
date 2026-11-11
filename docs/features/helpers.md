@@ -15,8 +15,27 @@ and a project copy nobody kept. A helper can run on another machine
   $V click "New task"; $V click "Describe one task"; $V type "my child task"; $V click "Start helper"
   $V wait "Needs approval"; $V click Allow; $V wait "FINISHED"
   ```
-- **Proof:** "ACTIVE 1" with "my child task · fake-ask · CLI default", then
-  "FINISHED 1" and "working on it done.".
+- **Proof:** "NEEDS APPROVAL 1" with "my child task · fake-ask · CLI default",
+  then "FINISHED 1" and "working on it done.".
+- **Order (owner, 2026-11-11):** Needs approval, Working, Waiting for its
+  helpers, Finished, Failed. Live ones oldest first, ended ones newest
+  first. Finished and Failed show 5, then "Show N more"; over 8 helpers a
+  "Find a helper" box and a count line with links to each group show.
+- **A failed helper:** "Why it failed" comes first, then **Ask the chat to
+  fix it** (sends the reason and `helm delegate-result <id>` to the chat;
+  the owner presses it, Helm never sends it alone), **Retry task** and
+  **Open chat**. Output shows the helper's last message, not the notes
+  before it ("Let me look…"): those made a 200-helper lead a wall of text.
+  **Show all output** has the rest. A long task folds to 4 lines.
+- **Sidebar:** a "Needs you" row has the same ⋯ as every row, with **See
+  why the helper failed**, **Answer the helper** and **Dismiss failure**
+  first. The ⋯ takes the machine name's place, never the title's.
+- **Prove the order (driven 2026-11-11):** `rpc session.delegate` 18 `fake`,
+  4 `fake-slow` and 1 `fake-ask` helpers on one fake chat, then stop 3
+  `fake-slow` processes of the copy (by `HELM_DIR` and `HELM_SESSION_ID`
+  in `/proc/<pid>/environ`). Agents shows the groups in order; open a
+  failed one. The copy tells the chat at once, so "helper failed" never
+  reaches Needs you there: use `fake-ask` for the sidebar ⋯.
 - **Task box:** Enter starts the helper, Shift+Enter makes a new line (on a
   phone Return makes a new line). Paste, drop or the paperclip adds pictures
   and files; they go with the first message. A machine without
@@ -28,8 +47,9 @@ and a project copy nobody kept. A helper can run on another machine
   "this agent cannot see images" instead.
 - **Traps:** the child's result starts a new parent turn, so fake-ask asks
   again. Close the sheet with "Close thread details"; Back may not.
-- **Tests:** `test/browser/subagents`, `orchestration`, `child-requests`,
-  `todos`; `test/delegation`, `task-return`, `subagent-usage`.
+- **Tests:** `test/browser/subagents`, `sidebar`, `orchestration`,
+  `child-requests`, `todos`; `test/delegation`, `task-return`,
+  `subagent-usage`.
 
 ## `helm delegate`
 - **Prove:** run against the private copy:
@@ -37,7 +57,9 @@ and a project copy nobody kept. A helper can run on another machine
   packages/connect/bin/helm.js delegate fake --wait --json -- "hi"`: JSON
   with `"status": "done"` and the reply in `"output"`.
 - **Traps:** never unset `HELM_SESSION_ID` for real helpers (they would show
-  as separate chats). Helpers sharing a folder can clash; use `--worktree` (its copy ends as
+  as separate chats). The `opencode` command can be OpenCode 2: the finder
+  lists such a helper as `opencode2`, so matching uses `conversationKey`
+  (engines.js), never the tool name. Helpers sharing a folder can clash; use `--worktree` (its copy ends as
   in git-and-schedules.md, "A worktree per chat").
   A finished helper releases its process after 30 s idle and resumes on a
   follow-up. A Codex helper that shares its parent's context keeps the

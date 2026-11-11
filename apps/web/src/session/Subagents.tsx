@@ -1,5 +1,5 @@
 import { errorMessage } from '../errors';
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
 import { Client, type CliAgent, type Environment, type ModelList, type Session, type DelegationResult, type NativeAgent, type NativeAgentDetail, type SubagentDefaults } from '../client';
 import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
@@ -20,6 +20,12 @@ const STATUS: Record<string, string> = {
   error: 'Failed', interrupted: 'Stopped', idle: 'Ready',
 };
 const ACTIVE = ['blocked', 'working', 'starting', 'waiting'];
+/** Finished and failed show this many before "Show more". */
+const FIRST = 5;
+/** A search box shows above this many helpers. */
+const SEARCH_FROM = 8;
+/** A live helper's output shows about this many last characters at first. */
+const TAIL = 1500;
 /** A phone: no Shift+Enter, so Return makes a new line there. */
 const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 const stateOf = helperState;
@@ -84,6 +90,12 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   const [notice, setNotice] = useState('');
   const [revision, setRevision] = useState(0);
   const [focus, setFocus] = useState('');
+  const [query, setQuery] = useState('');
+  // Ended groups show their newest few; the rest wait behind "Show all".
+  const [unfolded, setUnfolded] = useState<Set<string>>(new Set());
+  // A long reply shows its end first; the whole output is one tap away.
+  const [fullOutput, setFullOutput] = useState(false);
+  const [fullTask, setFullTask] = useState(false);
   const [nativeOpen, setNativeOpen] = useState('');
   const [nativeDetail, setNativeDetail] = useState<NativeAgentDetail | null>(null);
   const firstList = useRef(false);
@@ -109,15 +121,33 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   const selectedModel = model || savedDefaults.model || fallbackModel;
   const belongsHere = (session: Session) => !session.archived && session.delegation?.parentId === parent.id;
   const children = sessions.filter(belongsHere);
-  const active = children.filter((child) => ACTIVE.includes(stateOf(child))).sort((left, right) =>
-    Number(stateOf(right) === 'blocked') - Number(stateOf(left) === 'blocked') || (left.createdAt ?? 0) - (right.createdAt ?? 0));
-  const finished = children.filter((child) => !ACTIVE.includes(stateOf(child)))
-    .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
+  // With many helpers a word finds one: its title, task, account or model.
+  const words = query.trim().toLowerCase();
+  const matches = (...fields: (string | null | undefined)[]) => !words || fields.some((field) => field?.toLowerCase().includes(words));
+  const shown = children.filter((child) => matches(child.title, child.delegation?.task, child.profileId, child.model, child.engineModel));
+  // Owner order (2026-11-11): what needs you, what works, what waits for its
+  // own helpers, then finished, then failed. Live ones oldest first, ended
+  // ones newest first.
+  const ended = (child: Session) => child.delegation?.finishedAt ?? child.updatedAt ?? child.createdAt ?? 0;
+  const live = (states: string[]) => shown.filter((child) => states.includes(stateOf(child)))
+    .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
+  const over = (states: string[]) => shown.filter((child) => states.includes(stateOf(child)))
+    .sort((left, right) => ended(right) - ended(left));
   // The CLI's own subagents: read from its records, opened as chats.
-  const natives = parent.nativeCards ?? [];
-  const nativeActive = natives.filter((agent) => ACTIVE.includes(agent.status))
-    .sort((left, right) => Number(right.status === 'blocked') - Number(left.status === 'blocked'));
-  const nativeFinished = natives.filter((agent) => !ACTIVE.includes(agent.status)).sort((left, right) => right.startedAt - left.startedAt);
+  const natives = (parent.nativeCards ?? []).filter((agent) => matches(agent.title, agent.agentType, agent.model));
+  const nativeIn = (states: string[]) => natives.filter((agent) => states.includes(agent.status)).sort((left, right) => right.startedAt - left.startedAt);
+  const GROUPS = [
+    { id: 'needs', title: 'Needs approval', states: ['blocked'] },
+    { id: 'working', title: 'Working', states: ['working', 'starting'] },
+    { id: 'waiting', title: 'Waiting for its helpers', states: ['waiting'] },
+    { id: 'finished', title: 'Finished', states: ['done', 'idle', 'interrupted'] },
+    { id: 'failed', title: 'Failed', states: ['error'] },
+  ];
+  const known = GROUPS.flatMap((g) => g.states);
+  const groups = GROUPS.map((g) => ({ ...g,
+    // A state Helm does not know yet goes with the finished ones.
+    items: g.id === 'finished' ? over([...g.states, ...shown.map(stateOf).filter((state) => !known.includes(state))]) : g.id === 'failed' ? over(g.states) : live(g.states),
+    native: nativeIn(g.id === 'finished' ? [...g.states, ...natives.map((a) => a.status).filter((state) => !known.includes(state))] : g.states) }));
   const openNative = natives.find((agent) => agent.id === nativeOpen);
   const readOnly = ['plan', 'readonly', 'read'].includes(parent.mode ?? '');
   const modes = agent?.modes.filter((option) => option.id !== 'plan' && (!readOnly || ['readonly', 'read'].includes(option.id))) ?? [];
@@ -265,7 +295,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   }, [client, env.id, parent.id, nativeOpen, openNative?.status, openNative?.last]);
 
   const select = (id: string) => {
-    setSelected(id); setResult(null); setPermissions([]); setNotice(''); setError(null);
+    setSelected(id); setResult(null); setPermissions([]); setNotice(''); setError(null); setFullOutput(false); setFullTask(false);
   };
   const added = (session: Session) => {
     setSessions((all) => [...all.filter((existing) => existing.id !== session.id), session]);
@@ -348,6 +378,16 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
     }, 120_000);
     added(session);
   });
+  // The quickest way to a fix: the chat that started the helper reads its
+  // whole output and acts. The owner presses it; Helm never sends it alone.
+  const askLead = (child: Session, reason: string) => act('ask', async () => {
+    const where = envOf(child.id) !== env.id ? ` on ${nameOf(envOf(child.id))}` : '';
+    await client.rpc(env.id, 'session.input', { id: parent.id, data: [
+      `Your helper "${child.title}" (${child.id}${where}) failed: ${reason}`,
+      `Read its output with \`helm delegate-result ${child.id}\`. Find the cause. Then fix it and run the task again, or tell me what you need.`,
+    ].join('\n') }, 30_000);
+    setNotice('Sent to this chat. Its reply shows in the chat.');
+  });
   const hide = (child: Session) => act('hide', async () => {
     await client.rpc(envOf(child.id), 'session.archive', { id: child.id, archived: true });
     setSessions((all) => all.filter((item) => item.id !== child.id));
@@ -364,20 +404,56 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   const detail = (child: Session) => {
     const state = result?.status || stateOf(child);
     const complete = result ? result.complete : !ACTIVE.includes(stateOf(child));
-    return <div className="delegation-detail" id={`task-detail-${child.id}`}>
-      {child.delegation?.task && child.delegation.task !== child.title && <p className="delegation-request">{child.delegation.task}</p>}
+    const failed = state === 'error';
+    const reason = result?.error || (failed ? child.recovery?.message || child.delegation?.summary : '') || '';
+    const reasonText = reason ? errorMessage(reason, { machine: nameOf(envOf(child.id)) }) : '';
+    // The last message is the helper's answer; the notes before it ("Let me
+    // look…") made a failed helper a wall of text. The whole output stays
+    // behind "Show all output", and a live one shows its newest part.
+    const output = result?.output ?? '';
+    const final = complete && typeof result?.final === 'string' && result.final.trim() ? result.final : '';
+    const tail = output.length > TAIL ? output.slice(output.lastIndexOf('\n', output.length - TAIL) + 1 || output.length - TAIL) : output;
+    const short = final || tail;
+    const cut = !fullOutput && short.length < output.length;
+    const text = fullOutput ? output : short;
+    const task = child.delegation?.task && child.delegation.task !== child.title ? child.delegation.task : '';
+    const canOpen = onOpen && !child.removed && !offline(child);
+    const canAsk = failed && !child.removed && !!parent.driver && !nativeOnly;
+    return <div className={`delegation-detail${failed ? ' failed' : ''}`} id={`task-detail-${child.id}`}>
+      {failed && <div className="delegation-failure" role="alert">
+        <b>Why it failed</b>
+        <p>{reasonText || 'The helper stopped with an error and gave no reason. Open its chat to see its last steps.'}</p>
+      </div>}
       {permissions.map((permission) => <PermissionSheet key={permission.requestId} permission={permission} busy={sending}
         onAnswer={(decision) => void answer(permission, decision)} />)}
       {result?.pending && !permissions.length && <p className="note">Needs approval: {result.pending.title || result.pending.kind}</p>}
+      {failed && <div className="delegation-actions">
+        {canAsk && <button type="button" className="primary" disabled={!!acting} onClick={() => void askLead(child, reasonText || 'no reason given')}
+          title="Send this failure to the chat. It reads the helper's output and fixes the cause.">{acting === 'ask' ? 'Sending…' : 'Ask the chat to fix it'}</button>}
+        {complete && !child.removed && <button type="button" className="ghost" disabled={!!acting} onClick={() => void retry(child)}>
+          {acting === 'retry' ? 'Retrying…' : 'Retry task'}</button>}
+        {canOpen && <button type="button" className="ghost" onClick={() => onOpen!(child, envOf(child.id))}>Open chat</button>}
+      </div>}
       {!result ? <p className="note" role="status">Loading result…</p>
-        : result.output ? <div className="delegation-output"><Markdown text={result.output} live={!result.complete} /></div>
-        : !result.error && <p className="note">{result.complete ? 'The agent finished without a written reply.' : 'The agent has not replied yet.'}</p>}
-      {result?.error && <p className="error">{errorMessage(result.error, { machine: nameOf(envOf(child.id)) })}</p>}
-      {result?.truncated && <p className="note">Showing the most recent output.</p>}
+        : text ? <>
+          {failed && <h4 className="delegation-label">{fullOutput ? 'All output' : 'Its last message'}</h4>}
+          {cut && !final && <p className="note">Showing the end of the output.</p>}
+          <div className={`delegation-output${fullOutput ? ' full' : ''}`}><Markdown text={text} live={!result.complete} /></div>
+          {(cut || fullOutput) && <button type="button" className="linkish" onClick={() => setFullOutput(!fullOutput)}>
+            {fullOutput ? 'Show less' : 'Show all output'}</button>}
+        </>
+        : !result.error && !failed && <p className="note">{result.complete ? 'The agent finished without a written reply.' : 'The agent has not replied yet.'}</p>}
+      {!failed && reasonText && <p className="error">{reasonText}</p>}
+      {result?.truncated && fullOutput && <p className="note">Showing the most recent output.</p>}
+      {task && <div className="delegation-task-text">
+        <h4 className="delegation-label">Task</h4>
+        <p className={`delegation-request${fullTask ? '' : ' clamp'}`}>{task}</p>
+        {task.length > 240 && <button type="button" className="linkish" onClick={() => setFullTask(!fullTask)}>{fullTask ? 'Show less' : 'Show the whole task'}</button>}
+      </div>}
       <div className="delegation-actions">
-        {onOpen && !child.removed && !offline(child) && <button type="button" className="ghost" onClick={() => onOpen(child, envOf(child.id))}>Open chat</button>}
+        {!failed && canOpen && <button type="button" className="ghost" onClick={() => onOpen!(child, envOf(child.id))}>Open chat</button>}
         {complete && !child.removed ? <>
-          {['error', 'interrupted'].includes(state) && <button type="button" className="ghost" disabled={!!acting} onClick={() => void retry(child)}>
+          {state === 'interrupted' && <button type="button" className="ghost" disabled={!!acting} onClick={() => void retry(child)}>
             {acting === 'retry' ? 'Retrying…' : 'Retry task'}</button>}
           <button type="button" className="ghost" disabled={!!acting} onClick={() => void hide(child)}>{acting === 'hide' ? 'Hiding…' : 'Hide task'}</button>
         </> : !complete && <button type="button" className="ghost destructive" disabled={!!acting} onClick={() => void stop(child)}>
@@ -454,11 +530,24 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
     </li>;
   };
 
-  const group = (id: string, title: string, items: Session[], native: NativeAgent[] = []) => !!(items.length + native.length) &&
-    <section className={`delegation-group ${id}`} aria-labelledby={`delegation-${id}`}>
-      <h3 id={`delegation-${id}`}>{title} <span>{items.length + native.length}</span></h3>
-      <ul>{items.map(row)}{native.map(nativeRow)}</ul>
+  // Ended groups show their newest few, so 200 finished helpers do not push
+  // the failed ones off the screen. The open one always shows.
+  const group = (id: string, title: string, items: Session[], native: NativeAgent[] = []) => {
+    const total = items.length + native.length;
+    if (!total) return false;
+    const folds = (id === 'finished' || id === 'failed') && !words && !unfolded.has(id) && total > FIRST;
+    const keep = (index: number, key: string) => !folds || index < FIRST || key === selected || key === nativeOpen;
+    const rows = items.filter((child, index) => keep(index, child.id));
+    const nativeRows = native.filter((agent, index) => keep(items.length + index, agent.id));
+    const left = total - rows.length - nativeRows.length;
+    return <section className={`delegation-group group-${id}`} aria-labelledby={`delegation-${id}`}>
+      <h3 id={`delegation-${id}`}>{title} <span>{total}</span></h3>
+      <ul>{rows.map(row)}{nativeRows.map(nativeRow)}</ul>
+      {left > 0 && <button type="button" className="delegation-more" onClick={() => setUnfolded((now) => new Set([...now, id]))}>
+        Show {left} more</button>}
     </section>;
+  };
+  const total = children.length + (parent.nativeCards?.length ?? 0);
 
   return <div className={embedded ? 'embedded-agents' : 'modal-back'} onClick={(event) => { if (!embedded && event.target === event.currentTarget && !busy) onClose(); }}>
     <div className={`${embedded ? '' : 'modal '}delegation-panel`} ref={ref} role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : true} aria-label="Helpers" tabIndex={-1}>
@@ -535,8 +624,15 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
         <div className="delegation-branches" aria-label="Helper tasks">
           {!listed ? <p className="note" role="status">Loading tasks…</p>
             : !children.length && !natives.length && !composing && <p className="note">This chat has no helper tasks.</p>}
-          {group('active', 'Active', active, nativeActive)}
-          {group('finished', 'Finished', finished, nativeFinished)}
+          {total > SEARCH_FROM && <input className="delegation-search" type="search" placeholder={`Find a helper (${total})`}
+            aria-label="Find a helper" value={query} onChange={(event) => setQuery(event.target.value)} />}
+          {total > 0 && <p className="delegation-counts" aria-label="Helper counts">
+            {groups.filter((g) => g.items.length + g.native.length).map((g) => <a key={g.id} href={`#delegation-${g.id}`} className={`state-${g.id}`}
+              onClick={(event) => { event.preventDefault(); ref.current?.querySelector(`#delegation-${g.id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); }}>
+              {g.items.length + g.native.length} {g.title.toLowerCase()}</a>)}
+          </p>}
+          {words && !shown.length && !natives.length && <p className="note">No helper matches "{query.trim()}".</p>}
+          {groups.map((g) => <Fragment key={g.id}>{group(g.id, g.title, g.items, g.native)}</Fragment>)}
         </div>
       </div>
     </div>

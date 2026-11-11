@@ -12,7 +12,7 @@ import { Checkpoints } from './checkpoints/store.js';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { nativeActive } from './native-subagents.js';
 import { nonAgentClaudeTask, claudeServiceTasks, staleAgentCards } from './claude-tasks.js';
-import { ENGINES } from './engines.js';
+import { ENGINES, conversationKey } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
 import { optionArgs, peekModels, listModels, followNewModels } from './models.js';
@@ -788,7 +788,7 @@ export class Sessions extends EventEmitter {
       out.push({ ...wire(s), archived: !!s.archived, alive: !!pane, status, cwd: pane?.cwd ?? s.cwd, adopted: false });
     }
     if (!parentId) {
-      const known = new Set(out.filter((s) => s.engineSessionId).map((s) => `${s.engine}:${s.engineSessionId}`));
+      const known = new Set(out.filter((s) => s.engineSessionId).map((s) => conversationKey(s.engine, s.engineSessionId)));
       for (const x of detected) {
         // V2 service chats have no terminal for the native discovery path.
         if (!includeDetected && !x.serviceActive) continue;
@@ -796,7 +796,7 @@ export class Sessions extends EventEmitter {
         const mark = this.#marks.get(id);
         // Removed stays removed - unless it was used again in a terminal since.
         const reused = mark === 'removed' && this.#removedAt.get(id) && x.updatedAt > this.#removedAt.get(id) + 60_000;
-        if ((mark === 'removed' && !reused) || known.has(`${x.engine}:${x.id}`) || this.isDelegatedConversation(x.engine, x.id)) continue;
+        if ((mark === 'removed' && !reused) || known.has(conversationKey(x.engine, x.id)) || this.isDelegatedConversation(x.engine, x.id)) continue;
         // A test's chat under /tmp is not one the owner had.
         if (scratchFolder(x.cwd)) continue;
         // A shared V2 service can own several exact IDs in the same folder.
