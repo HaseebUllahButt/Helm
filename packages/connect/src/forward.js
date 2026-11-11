@@ -1,5 +1,5 @@
 import { createServer } from 'node:net';
-import { hubCredential, allEndpoints } from '@helm/protocol/network';
+import { hubCredential, hubAddresses } from '@helm/protocol/network';
 import { bridge } from './proxy.js';
 
 /**
@@ -19,7 +19,7 @@ import { bridge } from './proxy.js';
  */
 
 /** Hubs to try: this machine's own first, then every address the roster knows. */
-export const forwardHubs = (net) => [...new Set([`http://127.0.0.1:${net.port ?? 8787}`, ...allEndpoints(net)])];
+export const forwardHubs = (net) => hubAddresses(net);
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 

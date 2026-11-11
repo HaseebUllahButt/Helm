@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { T, M } from '@helm/protocol';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { hubCredential, allEndpoints } from '@helm/protocol/network';
+import { hubCredential, hubAddresses, secureHubAddress } from '@helm/protocol/network';
 
 /**
  * The CLI talking to machines: one RPC through whichever hub answers.
@@ -14,7 +14,7 @@ import { hubCredential, allEndpoints } from '@helm/protocol/network';
  */
 export function hubUrls(net, env) {
   const own = env && env !== net.self ? net.machines?.[env]?.endpoints ?? [] : [];
-  return [...new Set([`http://127.0.0.1:${net.port ?? 8787}`, ...own, ...allEndpoints(net)])];
+  return hubAddresses(net, own);
 }
 
 /** A controller connection, sharing the daemon's provider rather than spawning one. */
@@ -173,7 +173,7 @@ export async function hubBroadcastRpc(net, env, method, params = {}, { timeout =
   const own = new Set(net.machines[net.self]?.endpoints ?? []);
   const urls = remoteOnly
     ? Object.values(net.machines).filter((machine) => machine.id !== net.self && !net.revoked?.[machine.id])
-      .flatMap((machine) => machine.endpoints ?? []).filter((url) => !own.has(url))
+      .flatMap((machine) => machine.endpoints ?? []).filter((url) => !own.has(url) && secureHubAddress(url))
     : hubUrls(net);
   if (!urls.length) throw new Error('no independent hub is available; keep the source online and retry');
   await Promise.all([...new Set(urls)].map(async (hub) => {
