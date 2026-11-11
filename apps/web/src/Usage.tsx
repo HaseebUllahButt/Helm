@@ -284,17 +284,19 @@ const spanPhrase = (window: string) =>
 
 /**
  * The one number the screen leads with, what it covers, and the three
- * figures behind it as small tiles: how much was read and written, how many
- * turns, and what the prompt cache took off.
+ * figures behind it as one plain row: how much was read and written, how
+ * many turns, and what the prompt cache took off.
  */
 function Headline({ totals, window, tiles = true }: { totals: UsageTotals; window: string; tiles?: boolean }) {
   const rate = hitRate(totals);
   const saved = cacheSaved(totals);
   return (
     <div className="usage-hero">
-      <div className="usage-hero-fig">{money(totals.costUsd)}</div>
-      <div className="usage-hero-cap" title="Published pay-per-use prices × recorded tokens (pieces of text)">
-        At pay-per-use prices · {spanPhrase(window)}
+      <div className="usage-hero-main">
+        <div className="usage-hero-fig">{money(totals.costUsd)}</div>
+        <div className="usage-hero-cap" title="Published pay-per-use prices × recorded tokens (pieces of text)">
+          At pay-per-use prices · {spanPhrase(window)}
+        </div>
       </div>
       {tiles && <dl className="usage-stats">
         <div><dt>Tokens</dt><dd>{tokens(totals.total)}</dd></div>
@@ -302,8 +304,7 @@ function Headline({ totals, window, tiles = true }: { totals: UsageTotals; windo
         {(totals.cacheRead > 0 || totals.input > 0) && (
           <div className="usage-cache" title={`${totals.cacheRead.toLocaleString()} cached · ${totals.input.toLocaleString()} new input tokens`}>
             <dt>Saved by reusing input</dt>
-            <dd>{saved > 0 ? money(saved) : '$0'}</dd>
-            <small>{cachePercent(rate)} cached</small>
+            <dd>{saved > 0 ? money(saved) : '$0'} <small>{cachePercent(rate)} cached</small></dd>
           </div>
         )}
       </dl>}
@@ -348,7 +349,8 @@ function planSpend(groups: ChartGroup[], accounts: UsageReport['accounts']): Pla
 }
 
 /**
- * One bar per slice, longest first. Bars, not a ring: lengths on a shared
+ * One line per slice, longest first, the bar between name and amount (under
+ * them on a phone). Bars, not a ring: lengths on a shared
  * start compare at a glance where ring slices do not. One hue, because the
  * row's name already says what it is; the engine's own mark sits beside a
  * model or CLI so Claude and Codex rows tell apart without reading. The

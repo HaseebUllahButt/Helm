@@ -1722,14 +1722,16 @@ pre.snippet {
 
 
 /* ------------------------------------------------------------------ usage */
-/* The usage screen reads top to bottom: controls, the total and three
-   tiles behind it, where it went, then each account's allowance. Every block
-   is the app's own panel, with the small-capitals label every list wears,
-   so it looks like the rest of helm rather than a report. One hue (the hub's)
-   draws every bar; red only when an allowance runs out early. */
-.pad.usage { width: 100%; max-width: 820px; margin: 0 auto; }
+/* The usage screen reads top to bottom: controls, the total with its three
+   figures beside it, where it went, then each account's allowance. A row is
+   one line where the pane is wide enough, so the whole screen fits without
+   a scroll. Every block is the app's own panel, with the small-capitals
+   label every list wears. One hue (the hub's) draws every bar; red only
+   when an allowance runs out early. The layout follows the pane's width,
+   not the window's: the sidebar can take a third of the window. */
+.pad.usage { width: 100%; max-width: 820px; margin: 0 auto; container-type: inline-size; }
 @media (min-width: 900px) { .pad.usage { padding: 22px 24px 40px; } }
-.usage-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 22px; }
+.usage-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 20px; }
 .usage-controls select { width: auto; max-width: 220px; font-size: var(--t-meta); padding: 7px 34px 7px 12px; min-height: 38px; }
 .usage-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .usage-tabs::-webkit-scrollbar { display: none; }
@@ -1737,30 +1739,29 @@ pre.snippet {
 
 /* The one number the screen leads with. Proportional figures: tabular gives
    every digit the width of a zero, which reads loose at display sizes. */
-.usage-hero { margin: 0 0 8px; }
+.usage-hero { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 24px; margin: 0 0 8px; }
+.usage-hero-main { min-width: 0; }
 .usage-hero-fig { padding: 0 4px; font: 650 48px/1 var(--display); letter-spacing: -0.02em; color: var(--text); }
 .usage-hero-cap { margin-top: 8px; padding: 0 4px; font-size: var(--t-meta); color: var(--mutedfg); }
-.usage-stats {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
-  margin: 20px 0 0;
-}
-.usage-stats > div {
-  min-width: 0; padding: 12px 14px; border-radius: var(--radius-xl);
-  background: var(--card); border: 1px solid var(--line);
-}
+/* The three figures: plain pairs with a hairline between, no boxes. */
+.usage-stats { display: flex; min-width: 0; margin: 0; }
+.usage-stats > div { min-width: 0; padding: 0 18px; border-left: 1px solid var(--line); }
+.usage-stats > div:first-child { padding-left: 4px; border-left: 0; }
+.usage-stats > div:last-child { padding-right: 4px; }
 .usage-stats dt { font-size: var(--t-micro); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.usage-stats dd { margin: 4px 0 0; font: 600 20px/1.2 var(--sans); color: var(--text); letter-spacing: -0.01em; }
-.usage-stats small { display: block; margin-top: 2px; font-size: var(--t-micro); color: var(--mutedfg); }
+.usage-stats dd { margin: 3px 0 0; font: 600 18px/1.2 var(--sans); color: var(--text); letter-spacing: -0.01em; white-space: nowrap; }
+.usage-stats small { margin-left: 3px; font-size: var(--t-micro); font-weight: 400; letter-spacing: 0; color: var(--mutedfg); }
 
 /* A block's label and its control share one line. */
-.usage-where { margin-top: 26px; }
+.usage-where { margin-top: 24px; }
 .usage-where-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin-bottom: 10px; }
 .usage-where-head .section { margin: 0; }
 .usage-accounts { margin-top: 26px; }
 
-/* Where it went: one panel, a row per slice - name and amount on one line,
-   the bar under them, every bar measured from the same start against the
-   biggest slice so the longest is the full width. */
+/* Where it went: one panel, a line per slice - name, bar, amount, share.
+   Every column but the name has a fixed width, so the bars start and end
+   in line down the panel, each measured against the biggest slice. In a
+   narrow pane the bar goes under the name. */
 .usage-shares, .usage-panel {
   list-style: none; margin: 0; padding: 3px;
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-xl);
@@ -1772,12 +1773,12 @@ pre.snippet {
 }
 .usage-shares > li:hover::before, .usage-shares > li:hover + li::before { opacity: 0; }
 .usage-share {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto 3.4em; align-items: center; gap: 8px 10px;
-  width: 100%; padding: 11px 12px 12px; border-radius: var(--radius); text-align: left;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto 3.4em; align-items: center; gap: 7px 10px;
+  width: 100%; padding: 10px 12px 11px; border-radius: var(--radius); text-align: left;
   font-size: var(--t-body); color: var(--text-80);
 }
-li.marked > .usage-share { grid-template-columns: auto minmax(0, 1fr) auto 3.4em; }
-li.marked > button.usage-share { grid-template-columns: auto minmax(0, 1fr) auto 3.4em auto; }
+li.marked > .usage-share { grid-template-columns: 22px minmax(0, 1fr) auto 3.4em; }
+li.marked > button.usage-share { grid-template-columns: 22px minmax(0, 1fr) auto 3.4em 14px; }
 button.usage-share { transition: background 0.12s var(--ease); }
 button.usage-share:hover { background: var(--hover); color: var(--text); }
 .usage-share-mark.mark { width: 22px; height: 22px; border-radius: 6px; }
@@ -1787,18 +1788,26 @@ button.usage-share:hover { background: var(--hover); color: var(--text); }
 .usage-share-pct { color: var(--mutedfg); font-size: var(--t-meta); font-variant-numeric: tabular-nums; text-align: right; }
 .usage-share-go { color: var(--icon); }
 .usage-share-track {
-  grid-column: 1 / -1; height: 6px; border-radius: 999px;
+  grid-column: 1 / -1; height: 5px; border-radius: 999px;
   background: color-mix(in oklab, var(--primary) 12%, transparent);
 }
 li.marked .usage-share-track { margin-left: 32px; }
+@container (min-width: 620px) {
+  .usage-share { grid-template-columns: minmax(0, 1fr) 36% 6.5em 3.4em; padding-block: 10px; }
+  li.marked > .usage-share { grid-template-columns: 22px minmax(0, 1fr) 36% 6.5em 3.4em; }
+  li.marked > button.usage-share { grid-template-columns: 22px minmax(0, 1fr) 36% 6.5em 3.4em 14px; }
+  .usage-share-track { grid-row: 1; grid-column: 2; }
+  li.marked .usage-share-track { grid-column: 3; margin-left: 0; }
+}
 .usage-share-track > span { display: block; height: 100%; border-radius: 999px; background: var(--primary-t); }
 .usage-more { margin: 10px 4px 0; font-size: var(--t-meta); }
 
 .usage-note { margin: 22px 0 0; padding: 0 4px; font-size: var(--t-micro); line-height: 1.6; color: var(--mutedfg); }
 .usage-note .linkish { font-size: inherit; }
-@media (max-width: 420px) {
-  .usage-stats > div { padding: 10px 12px; }
-  .usage-stats dd { font-size: 17px; }
+@container (max-width: 619px) {
+  .usage-stats { flex: 1 1 100%; }
+  .usage-stats > div { padding: 0 14px; }
+  .usage-stats > div:last-child { flex: 1; }
 }
 
 /* ------------------------------------------------------------ new in this pass */
@@ -3174,13 +3183,15 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .sidebar .row.machine .rm { flex: none; font-size: var(--t-micro); }
 .sidebar .row.machine .mdot { margin: 0 2px; }
 
-/* Accounts: one panel, a block per account with hairlines between - the
-   name with its engine's mark and where it was read, each allowance as a
-   labelled meter, then what the period was worth. */
+/* Accounts: one panel, a row per account with hairlines between - the name
+   with its engine's mark and the age of the reading on the left, each
+   allowance as a one-line meter on the right, then one quiet line for
+   banked resets and what the period was worth. The 5-hour meters share one
+   column and the weeks the next, so they compare down the panel. */
 .usage-limits-note { color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.55; margin: 8px 0; padding: 0 4px; }
 .usage-account .usage-limits-note { padding: 0; margin: 10px 0 0; }
-.usage-account { padding: 13px 12px 14px; }
-.usage-account-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: var(--t-body); }
+.usage-account { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px 24px; padding: 12px; }
+.usage-account-name { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-width: 0; font-size: var(--t-body); }
 .usage-account-name b { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .usage-account-name b span { font-weight: 400; color: var(--text-dim); }
 .usage-account-name small { color: var(--mutedfg); font-size: var(--t-micro); }
@@ -3191,26 +3202,22 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 }
 .usage-meter span { display: block; height: 100%; border-radius: 999px; background: var(--hi); }
 :root:is([data-theme="light"], [data-theme="navy"]) .usage-meter span { background: var(--primary-t); }
-.usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 28px; margin-top: 14px; }
+.usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 24px; min-width: 0; }
 .usage-allowance {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 6px 10px;
+  display: grid; grid-template-columns: minmax(3.9em, auto) minmax(32px, 1fr) 4.6em; align-items: center; gap: 3px 10px;
   font-size: var(--t-meta); min-width: 0;
 }
-.usage-window { color: var(--text-dim); }
-.usage-allowance b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); text-align: right; }
-.usage-allowance .usage-meter { grid-column: 1 / -1; grid-row: 2; }
+.usage-window { color: var(--text-dim); white-space: nowrap; }
+.usage-allowance b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); text-align: right; white-space: nowrap; }
 .usage-allowance small { grid-column: 1 / -1; color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.45; }
-.usage-allowance small em { font-style: normal; color: var(--red); font-weight: 550; }
+.usage-allowance small em { display: block; font-style: normal; color: var(--red); font-weight: 550; }
 .usage-allowance.dry .usage-meter span { background: var(--red); }
 .usage-account.idle { padding-block: 10px; }
-.usage-resets { margin: 12px 0 0; font-size: var(--t-meta); color: var(--mutedfg); }
+.usage-account-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; min-width: 0; font-size: var(--t-meta); color: var(--mutedfg); }
+.usage-resets { margin: 0; }
 .usage-resets b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .usage-account.idle .usage-account-name b { font-weight: 500; color: var(--text-dim); }
-.usage-value {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
-  margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line);
-  font-size: var(--t-meta); color: var(--mutedfg);
-}
+.usage-value { flex: 1 1 auto; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
 .usage-value b { color: var(--text); font-weight: 600; }
 .usage-plan { margin-left: auto; }
 .usage-plan summary { cursor: pointer; color: var(--mutedfg); list-style: none; font-size: var(--t-micro); }
@@ -3228,9 +3235,17 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .usage-token-detail > div { display: flex; justify-content: space-between; gap: 12px; margin: 6px 0; }
 .usage-token-detail dt { color: var(--text-dim); }
 .usage-token-detail dd { margin: 0; font-variant-numeric: tabular-nums; }
-@media (max-width: 600px) {
-  .usage-account-windows { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  .usage-account-name small { flex-basis: 100%; padding-left: 32px; margin-top: -4px; }
+@container (max-width: 559px) {
+  .usage-account-windows { grid-template-columns: minmax(0, 1fr); }
+  .usage-account-name small { flex-basis: 100%; padding-left: 32px; }
+}
+@container (min-width: 700px) {
+  .usage-account { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+  .usage-account-windows { grid-template-columns: repeat(2, 228px); }
+  .usage-account-name:only-child { grid-column: 1 / -1; }
+  .usage-account-windows > .usage-allowance:first-child:not([data-window="5h"]) { grid-column: 2; }
+  .usage-account:not(.idle) .usage-account-name small { flex-basis: 100%; padding-left: 32px; }
+  .usage-account-meta { grid-column: 1 / -1; padding-left: 32px; }
 }
 
 /* GitHub pipeline: the same quiet rows as Git, with explicit outcome labels. */
