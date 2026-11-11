@@ -174,6 +174,13 @@ and a project copy nobody kept. A helper can run on another machine
     reads, a new helper for each new job, short lead chats, and
     `helm thread` instead of `helm say` to read another chat. A say to an
     old chat that rested 15 hours re-read 510k at full price ($8).
+  - Agents never stop another chat's process with `kill`: on 2026-11-10 a
+    chat did that twice to a neighbour (`agentMessageNote`). Every agent
+    stop Helm did not ask for is saved in `~/.helm/agent-stops.jsonl` by the
+    process host, with the programs started just before; `helm doctor`
+    counts them, and a helper lost in a restart names its stop. The host
+    only loads new code when it starts again (a reboot), so a change there
+    reaches a machine late.
   - Retry an unconfirmed send with the same `--message-id`, recipient and
     text; the receipt stops a duplicate. "Delivered" means accepted, not
     read. Stopped or archived agents are not woken.
