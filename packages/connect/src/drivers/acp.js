@@ -1,3 +1,4 @@
+import { MEMORY_STOP } from '../cgroup-scope.js';
 import { spawn } from 'node:child_process';
 import { LineBuffer } from '../line-buffer.js';
 import { randomUUID } from 'node:crypto';
@@ -647,7 +648,7 @@ export class AcpDriver extends Driver {
   #bindPipe(pipe) {
     this.#pipe = pipe;
     this.#exited = new Promise((resolve) => {
-      pipe.onExit(({ code, signal, stderr }) => {
+      pipe.onExit(({ code, signal, stderr, memory }) => {
         this.#pipe = null;
         // A turn adopted from a previous daemon has no call here to fail;
         // the process dying is its end all the same.
@@ -665,10 +666,11 @@ export class AcpDriver extends Driver {
           this.push('permission.resolved', { requestId, decision: 'cancelled' });
         }
         if (adopted) this.#turnDone(adopted, { error: { message: `${this.engine} exited` } });
-        if (code && code !== 0 && !this.killed) {
+        if (memory) this.push('error', { message: MEMORY_STOP, kind: 'exit' });
+        else if (code && code !== 0 && !this.killed) {
           this.push('error', { message: `${this.engine} exited with code ${code}${stderr ? `: ${stderr}` : ''}`, kind: 'exit' });
         }
-        this.push('status', { status: 'exited', code, signal });
+        this.push('status', { status: 'exited', code, signal, ...(memory ? { memory: true } : {}) });
         try { this.spec.onExit?.(this); } catch { /* cleanup is best effort */ }
         resolve({ code });
       });

@@ -121,8 +121,9 @@ function fakeTerminal(t) {
   const child = { pid: 1, onData(fn) { output = fn; }, onExit() {}, resize() {}, kill() {} };
   const source = readFileSync(new URL('../packages/connect/src/pty.js', import.meta.url), 'utf8')
     .replace(/^import .*;$/gm, '').replace(/export /g, '').replace('let ptyModule;', 'let ptyModule = suppliedPty;');
-  const Host = new Function('suppliedPty', 'EventEmitter', 'createReplayBuffer', 'homedir', source + '; return Terminals;')(
-    { spawn: () => child }, EventEmitter, createReplayBuffer, () => '/unused');
+  // No memory group here: cgroup-scope has its own test.
+  const Host = new Function('suppliedPty', 'EventEmitter', 'createReplayBuffer', 'homedir', 'scopeCommand', 'scopeEnv', source + '; return Terminals;')(
+    { spawn: () => child }, EventEmitter, createReplayBuffer, () => '/unused', async () => null, (env) => env);
   const terms = new Host();
   t.after(() => terms.closeAll());
   return { terms, output: text => output(text) };

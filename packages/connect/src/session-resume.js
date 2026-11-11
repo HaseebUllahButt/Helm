@@ -1,3 +1,4 @@
+import { MEMORY_STOP } from './cgroup-scope.js';
 import { loadProfiles, materialize } from './profiles.js';
 import { lastStop, describeStop } from './agent-stops.js';
 import { activeTurnFromEvents } from './events.js';
@@ -97,7 +98,7 @@ export class SessionResume {
       closed.add(e.turnId);
       const uncertain = attempt && !attempt.requeued;
       this.#sessions.events.append(id, { type: 'turn.done', turnId: e.turnId, status: uncertain ? 'error' : 'interrupted',
-        error: uncertain ? 'Helm could not confirm delivery. Check the agent\'s work before sending this again.' : 'agent exited' });
+        error: exit.memory ? MEMORY_STOP : uncertain ? 'Helm could not confirm delivery. Check the agent\'s work before sending this again.' : 'agent exited' });
     }
     for (const p of this.#sessions.events.pending(id)) {
       this.#sessions.events.append(id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });

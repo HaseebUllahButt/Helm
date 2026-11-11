@@ -1,3 +1,4 @@
+import { MEMORY_STOP } from '../cgroup-scope.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
@@ -379,7 +380,7 @@ export class ClaudeDriver extends Driver {
     }
     this.#initialized = this.#initialize();
     this.#exited = new Promise((resolve) => {
-      pipe.onExit(({ code, signal, stderr }) => {
+      pipe.onExit(({ code, signal, stderr, memory }) => {
         this.#pipe = null;
         this.#inTurn = false;
         // No process, no hook: a model picked now starts the next process.
@@ -397,10 +398,11 @@ export class ClaudeDriver extends Driver {
         for (const requestId of [...this.pending.keys()]) {
           this.push('permission.resolved', { requestId, decision: 'cancelled' });
         }
-        if (code && code !== 0 && !this.killed) {
+        if (memory) this.push('error', { message: MEMORY_STOP, kind: 'exit' });
+        else if (code && code !== 0 && !this.killed) {
           this.push('error', { message: `claude exited with code ${code}${stderr ? `: ${stderr}` : ''}`, kind: 'exit' });
         }
-        this.push('status', { status: 'exited', code, signal });
+        this.push('status', { status: 'exited', code, signal, ...(memory ? { memory: true } : {}) });
         resolve({ code, signal });
       });
     });

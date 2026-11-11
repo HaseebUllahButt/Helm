@@ -1,3 +1,4 @@
+import { MEMORY_STOP } from './cgroup-scope.js';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -284,7 +285,9 @@ export class SessionDelegation {
   }
 
   /** Close lost work once. Keep the conversation and use the normal parent receipt. */
-  processGone(child, { code = null, signal = null, reason = null } = {}) {
+  processGone(child, { code = null, signal = null, reason = null, memory = false } = {}) {
+    // The lead hears the plain cause, once, through notifyParent below.
+    if (memory) reason = MEMORY_STOP;
     if (!child.delegation) return;
     if (!ACTIVE.includes(child.delegation.status)) {
       if (code != null || signal) {

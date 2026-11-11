@@ -10,6 +10,7 @@ import {
 import { Daemon } from './agent.js';
 import { HELM_DIR } from './paths.js';
 import { findWebRoot } from './web-build.js';
+import { watchCodexDaemons } from './cgroup-scope.js';
 
 /**
  * Bring this machine up as a member of a network.
@@ -93,6 +94,8 @@ export async function up({
   });
   daemon.attachHub(hub);
   await daemon.start();
+  // A Codex daemon gets a memory group of its own, wherever Codex started it.
+  watchCodexDaemons();
 
   // systemd sends SIGTERM before replacing the daemon during an update. Do
   // the same orderly detach as an explicit stop and wait for it to finish;
