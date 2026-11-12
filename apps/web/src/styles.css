@@ -4231,3 +4231,104 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
   .ctl.history-choice .history-short { display: inline; }
   .ctl.history-choice .history-long { display: none; }
 }
+
+/* ------------------------------------------------------------------ finish
+   The premium pass (owner, 12 Nov 2026: "more premium looking"). On a
+   computer the work sits on one framed panel inside the window: the
+   sidebar is the frame, the panel is the page. Depth comes from light,
+   not lines (no outlines, 26 Oct 2026): a lit top edge, a faint sheen
+   down the top of a card, and a ring of light too weak to read as a
+   border. Each theme answers the tokens. */
+:root {
+  --frame: #070708;
+  --panel: #0e0e0f;
+  --ring: rgb(255 255 255 / 5.5%);
+  --ring-2: rgb(255 255 255 / 9%);
+  --ring-focus: rgb(255 255 255 / 17%);
+  --lit: inset 0 1px 0 rgb(255 255 255 / 4.5%);
+  --sheen: linear-gradient(180deg, rgb(255 255 255 / 2.4%), rgb(255 255 255 / 0) 64px);
+  --panel-shadow: 0 0 0 1px var(--ring), 0 30px 80px -40px rgb(0 0 0 / 90%);
+  --lift: 0 18px 44px -22px rgb(0 0 0 / 80%), 0 2px 6px rgb(0 0 0 / 30%);
+  --card: #141415;
+  --raised: #19191a;
+  --shadow: 0 0 0 1px rgb(255 255 255 / 7%), inset 0 1px 0 rgb(255 255 255 / 5%), 0 24px 56px -20px rgb(0 0 0 / 80%), 0 2px 8px rgb(0 0 0 / 35%);
+}
+:root[data-theme="navy"] {
+  --frame: #05141c;
+  --panel: #0a1f2a;
+  --ring: rgb(134 214 219 / 7%);
+  --ring-2: rgb(134 214 219 / 12%);
+  --ring-focus: rgb(134 214 219 / 22%);
+  --lit: inset 0 1px 0 rgb(200 240 240 / 5%);
+  --sheen: linear-gradient(180deg, rgb(200 240 240 / 2.4%), rgb(200 240 240 / 0) 64px);
+  --panel-shadow: 0 0 0 1px var(--ring), 0 30px 80px -40px rgb(0 0 0 / 80%);
+  --lift: 0 18px 44px -22px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 25%);
+}
+:root[data-theme="light"] {
+  --frame: #e9ebef;
+  --panel: #f8f9fb;
+  --ring: rgb(26 29 36 / 7%);
+  --ring-2: rgb(26 29 36 / 11%);
+  --ring-focus: rgb(26 29 36 / 20%);
+  --lit: inset 0 1px 0 rgb(255 255 255 / 80%);
+  --sheen: none;
+  --panel-shadow: 0 0 0 1px var(--ring), 0 1px 3px rgb(26 29 36 / 5%), 0 16px 40px -28px rgb(26 29 36 / 22%);
+  --lift: 0 12px 32px -18px rgb(26 29 36 / 26%), 0 1px 3px rgb(26 29 36 / 8%);
+  --sidebar: var(--frame);
+}
+
+@media (min-width: 900px) {
+  html, body, .shell { background: var(--frame); }
+  .sidebar, .sidebar .bar.side { background: var(--frame); }
+  /* The panel. It names its own colour as the page colour, so every bar,
+     composer and control inside it that sits "on the page" matches it. */
+  .main {
+    --bg: var(--panel);
+    height: auto; margin: 8px 8px 8px 0; position: relative; overflow: hidden;
+    background: var(--panel); border-radius: 12px; box-shadow: var(--panel-shadow);
+  }
+}
+
+/* Cards and lists on the page: lit from above. */
+:root:not([data-theme="light"]) :is(.rows.plain, .pad .rows, .card) {
+  background-image: var(--sheen);
+  box-shadow: var(--lit), 0 0 0 1px var(--ring);
+}
+:root:not([data-theme="light"]) .modal .rows { box-shadow: none; background-image: none; }
+.pad.usage { --dash-card: var(--card); --dash-edge: transparent; }
+.usage-card, .usage-where, .usage-accounts { background-image: var(--sheen); box-shadow: var(--lit), 0 0 0 1px var(--ring); }
+
+/* The composer floats: a ring of light, a soft fall of shadow, and a
+   brighter ring while you type in it. */
+.slab {
+  background-image: var(--sheen);
+  box-shadow: 0 0 0 1px var(--ring-2), var(--lift);
+  transition: box-shadow 0.18s var(--ease);
+}
+.slab::after { box-shadow: var(--lit); }
+.slab:focus-within { box-shadow: 0 0 0 1px var(--ring-focus), 0 0 0 5px var(--ring), var(--lift); }
+:root[data-theme="light"] .slab { box-shadow: 0 0 0 1px var(--ring-2), var(--lift); }
+:root[data-theme="light"] .slab:focus-within { box-shadow: 0 0 0 1px var(--ring-focus), 0 0 0 5px var(--ring), var(--lift); }
+:root[data-theme="light"] .slab::after { box-shadow: none; }
+
+/* Search and New chat on the frame: small lit keys. */
+@media (min-width: 900px) {
+  .sidebar .home-search { background: var(--panel); box-shadow: var(--lit), 0 0 0 1px var(--ring); }
+  .sidebar .home-search:hover { background: color-mix(in srgb, var(--panel) 88%, var(--text)); color: var(--text-dim); }
+}
+
+/* The open chat in the sidebar: a lit tile, not a white outline. */
+.sidebar .thread-row.active,
+.sidebar .rowx .rowmain.thread-row.active {
+  background: var(--select);
+  box-shadow: var(--lit), inset 0 0 0 1px var(--ring);
+}
+
+/* The chosen tab of a set: a raised key. */
+.segmented button.on { box-shadow: var(--lit), 0 0 0 1px var(--ring), 0 1px 2px rgb(0 0 0 / 25%); }
+
+/* Big headings set tight, as display type is. */
+.screen-title { letter-spacing: -0.022em; }
+.bar:not(.session-bar) h1 { letter-spacing: -0.022em; }
+
+@media (prefers-reduced-motion: reduce) { .slab { transition: none; } }

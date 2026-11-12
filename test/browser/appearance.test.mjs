@@ -32,6 +32,11 @@ for (const width of [1440, 390]) test(`navy is optional, persistent, and indepen
     await page.addScriptTag({ content: script });
     await page.getByRole('button', { name: 'Navy', exact: true }).waitFor();
   };
+  // On a computer the page behind the framed panel is the frame colour.
+  const wide = width >= 900;
+  const BG = wide
+    ? { dark: 'rgb(7, 7, 8)', navy: 'rgb(5, 20, 28)', light: 'rgb(233, 235, 239)' }
+    : { dark: 'rgb(10, 10, 10)', navy: 'rgb(8, 27, 38)', light: 'rgb(243, 244, 247)' };
   const state = () => page.evaluate(() => ({
     theme: document.documentElement.dataset.theme,
     bg: getComputedStyle(document.body).backgroundColor,
@@ -39,13 +44,13 @@ for (const width of [1440, 390]) test(`navy is optional, persistent, and indepen
     prefs: window.loadAppearance(),
   }));
   await open();
-  assert.equal((await state()).bg, 'rgb(10, 10, 10)');
+  assert.equal((await state()).bg, BG.dark);
   await page.getByRole('button', { name: 'Compact', exact: true }).click();
   const bounds = await page.locator('#sample').boundingBox();
   await page.getByRole('button', { name: 'Navy', exact: true }).click();
   const navy = await state();
   assert.equal(navy.theme, 'navy');
-  assert.equal(navy.bg, 'rgb(8, 27, 38)');
+  assert.equal(navy.bg, BG.navy);
   assert.equal(navy.bar, '#081b26');
   assert.equal(navy.prefs.density, 'compact');
   assert.deepEqual(await page.locator('#sample').boundingBox(), bounds);
@@ -53,17 +58,17 @@ for (const width of [1440, 390]) test(`navy is optional, persistent, and indepen
   assert.equal((await state()).theme, 'navy');
   await open();
   assert.equal(await page.getByRole('button', { name: 'Navy', exact: true }).getAttribute('aria-pressed'), 'true');
-  assert.equal((await state()).bg, 'rgb(8, 27, 38)');
+  assert.equal((await state()).bg, BG.navy);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.screenshot({ path: `/tmp/helm-navy-theme-${width}.png` });
   await page.getByRole('button', { name: 'Dark', exact: true }).click();
-  assert.equal((await state()).bg, 'rgb(10, 10, 10)');
+  assert.equal((await state()).bg, BG.dark);
   await page.getByRole('button', { name: 'Light', exact: true }).click();
-  assert.equal((await state()).bg, 'rgb(243, 244, 247)');
+  assert.equal((await state()).bg, BG.light);
   assert.equal((await state()).bar, '#f3f4f7');
   await page.getByRole('button', { name: 'Auto', exact: true }).click();
   assert.equal((await state()).theme, 'light');
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
-  assert.equal((await state()).bg, 'rgb(10, 10, 10)');
+  assert.equal((await state()).bg, BG.dark);
 });
