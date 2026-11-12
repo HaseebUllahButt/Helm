@@ -14,7 +14,7 @@ The owner uses the same browser window. Helm has no browser panel.
   Linux, app bundles on macOS and the registry on Windows (`chromium-find.js`).
   A packaged browser keeps its launcher: a Snap starts through its
   `/snap/bin` wrapper, a Flatpak through `flatpak run <id>`, so it runs inside
-  its own runtime. The system default browser is preferred, then the rest by name. They all
+  its own runtime. The saved main browser is preferred, then the system default, then the rest by name. They all
   speak Chromium's own channel, so the same code drives each one. Helm reads
   pages as text and numbered controls first; screenshots are the last resort. The goal is
   computer use, not one browser: Bowser was removed so the browser path has
@@ -125,8 +125,8 @@ version (`mode.json` `v: 2`) counts, so the first add-on's test files do not.
 The idea comes from opencode's Browse (MIT).
 
 - **A closed browser is started.** When the owner's browser is closed and
-  has the add-on in its flags file, Helm starts it with
-  `--no-startup-window` and waits up to 20 s for the add-on. Agents then
+  supports command-line add-ons, Helm starts it with
+  `--no-startup-window`, the add-on folder and the flag that hides the debugging bar and waits up to 20 s for the add-on. Agents then
   work in the owner's real profile, never in a copy of its logins.
 - **Until the browser connects, Helm's window.** When the add-on is still
   not connected, the chats' tabs open in Helm's window, and `open` says why
@@ -154,16 +154,27 @@ The idea comes from opencode's Browse (MIT).
   Helm's page scripts run on the first page too.
 - **Background screenshots.** A hidden tab draws nothing, so a screenshot
   can wait forever. The link sends small extra captures to release it.
-- **Setup at each start.** The Helm service copies the add-on to
-  `~/.helm/browser/extension`. A launcher with a flags file (Arch
-  Chromium's `chromium-flags.conf`, Brave's `brave-flags.conf`, found by the
-  name inside the launcher) gets the folder added to its `--load-extension`
-  list; the owner's other add-ons stay. The browser loads it on its next
-  start. A running browser does not load an add-on from a second start.
-  Agents never restart it on their own: that would interrupt the owner.
-  Until then they use Helm's window with copied logins. `--restart`, only
-  when the owner asks, closes the owner's browser and opens it again with
-  `--restore-last-session`.
+- **Main browser.** `helm browser main` lists the installed browsers and marks
+  the browser in use. `helm browser main <name>` saves a choice, without regard
+  to letter case. Settings > this machine > Your browser has the same choice.
+  A saved, installed browser wins over the system default. If it is absent,
+  Helm uses the system default, then the first found. Without a saved choice
+  or a readable default, `open` asks the agent to ask the owner once, while
+  continuing the task. Choices use `mode.json` version 2 and survive mode changes.
+- **Setup at each start.** The service copies the add-on into Helm's browser
+  folder. A launcher with a flags file gets the folder added to its existing
+  `--load-extension` list. On Linux, a browser without a flags file gets a
+  user menu entry with the same file name. Its Exec lines keep the package
+  launcher (including Flatpak), other add-ons and owner flags. A marker saves
+  the original entry for removal. Helm also passes the add-on folder and
+  `--silent-debugger-extension-api` whenever it starts a supported browser,
+  on Linux, Windows and macOS. A running browser loads no new add-on from a
+  second start. Agents never restart it unless the owner asks. Until then,
+  agents use Helm's window. An owner restart restores the browser's last tabs.
+- **Changing browsers.** Helm removes its old flags or menu change, saves
+  agent tabs asleep, and stops the old link. Each chosen browser has its own
+  add-on folder and link, so the old browser cannot take the new link. The
+  next agent step opens its tabs through the chosen browser when it connects.
 - **Chromium writes its command line as one line.** `/proc/<pid>/cmdline`
   of a running Chromium has spaces, not NULs, between its flags. Read
   `--type=` and `--user-data-dir=` after a space too, or a restart closes
@@ -183,12 +194,12 @@ The idea comes from opencode's Browse (MIT).
   owner turns on Developer mode, clicks Load unpacked and pastes. The
   add-on connects at once, with no restart. Agents never stop a task for
   it: they work in Helm's window and point the owner to Settings once.
-  These browsers have no flags file, so their debugging bar stays.
+  Helm does not add launch flags or menu changes to these browsers; their debugging bar stays.
 - **Restarts.** The add-on keeps its tabs when Helm restarts and reconnects
   every second for a minute, then every 30 s. Helm takes the tabs back by
   address, as with its own window. When the add-on disconnects, the chats'
   tabs go to sleep.
-- **Way back.** `mode window` takes Helm's folder out of the flags file,
+- **Way back.** `mode window` takes Helm's folder out of the flags file or menu entry,
   closes the add-on's tabs and keeps them asleep. They open again in Helm's
   window.
 

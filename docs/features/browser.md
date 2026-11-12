@@ -60,10 +60,11 @@ Design: [`docs/browser-use.md`](../browser-use.md).
 ## Extended mode (the owner's own browser)
 
 - **Reach:** on by default on a machine with a screen. The Helm service
-  names the add-on in the browser's flags file at each start, so the
+  adds the add-on through the browser's flags file or Linux menu entry, so the
   browser loads it on its next start. An agent runs
   `helm browser mode extended --restart` only when the owner asks.
-  `helm browser mode` shows the state; `helm browser mode window` turns it
+  `helm browser main` lists browsers; add a name to save the main browser.
+  Settings has the same main browser list. `helm browser mode` shows the state; `helm browser mode window` turns it
   off. Settings > a machine > Your browser shows the same state, with
   Restart now, Set up (Google Chrome, Edge), Use my browser and Turn off.
   `helm browser setup` is Set up for an agent, only when the owner asks.

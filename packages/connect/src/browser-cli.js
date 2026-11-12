@@ -7,9 +7,9 @@ import { CAPTCHA_SLICE_MS } from './browser-targets.js';
 export async function runBrowserCommand(args, { rpc, self, findSession, env = process.env, print = console.log, readInput = readStdin, exit = setExit } = {}) {
   const { words, options } = parseAgentArgs(args, { values: ['session', 'output', 'budget', 'note', 'within', 'frame', 'timeout'], switches: ['full-page', 'default', 'clear-default', 'restart'] });
   const [command = 'tabs', tabId, source] = words;
-  if (['help', '--help'].includes(command)) { print('helm browser open <url> | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | script <tab> <file or -> [key=value ...] [--timeout <ms>] | point <tab> <element # or CSS selector> [--note <text>] | captcha <tab> [--timeout <ms>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default | mode [window|extended] [--restart] | setup [--session <chat-id>]'); return; }
+  if (['help', '--help'].includes(command)) { print('helm browser open <url> | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | script <tab> <file or -> [key=value ...] [--timeout <ms>] | point <tab> <element # or CSS selector> [--note <text>] | captcha <tab> [--timeout <ms>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default | mode [window|extended] [--restart] | main [name] | setup [--session <chat-id>]'); return; }
   const sessionId = options.session || env.HELM_SESSION_ID || env.HELM_NATIVE_SESSION;
-  if (!sessionId) throw new Error('run browser commands in a Helm chat, or pass --session <chat-id>');
+  if (!sessionId && command !== 'main') throw new Error('run browser commands in a Helm chat, or pass --session <chat-id>');
   const target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
   const id = target.session.id;
   let result;
@@ -19,6 +19,7 @@ export async function runBrowserCommand(args, { rpc, self, findSession, env = pr
     result = await rpc(target.env, 'browser.mode', { id, ...(tabId ? { mode: tabId, restart: !!options.restart } : {}) }, options.restart ? 60000 : 20000);
   }
   // Only when the owner asks: it opens a page and uses the clipboard on their screen.
+  else if (command === 'main') result = await rpc(target.env, 'browser.main', { id, ...(tabId ? { name: words.slice(1).join(' ') } : {}) });
   else if (command === 'setup') result = await rpc(target.env, 'browser.setup', { do: 'open' }, 30000);
   else if (command === 'profiles') result = await rpc(target.env, 'browser.profiles', { id });
   else if (command === 'logins') {
