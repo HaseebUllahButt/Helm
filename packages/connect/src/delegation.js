@@ -177,12 +177,13 @@ export function agentMessageNote() {
 /**
  * Codex lead chats waited on their own long commands by calling write_stdin
  * with no input and a 1 s wait: 1267 such checks on the laptop on 2026-11-10
- * and 11, each one re-reading a chat of about 200k. One empty write_stdin
- * with a long wait returns as soon as the command ends, so it costs one
- * step instead of dozens. The general line in usageNote did not stop it.
+ * and 11, each one re-reading a chat of about 200k. An empty write_stdin
+ * with a long wait returns as soon as the command ends. No number is given:
+ * Codex sets the allowed range, and some chats must report to the owner
+ * sooner. The general line in usageNote did not stop it.
  */
 const ENGINE_WAITS = {
-  codex: ' To wait for a running command, call write_stdin once with empty chars and yield_time_ms 300000: it returns as soon as the command ends. Do not check it again and again with short waits. Send real input to a command as usual.',
+  codex: ' To wait for a running command, call write_stdin with empty chars and one long yield_time_ms that the tool allows and this chat\'s rules permit: it returns as soon as the command ends. Do not check it again and again with short waits. Send real input to a command as usual.',
 };
 
 /**

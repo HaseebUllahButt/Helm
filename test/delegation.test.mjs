@@ -1408,8 +1408,9 @@ test('agents are told which machine they are on and how to reach the others', as
   assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');
   assert.match(alone, /\[Helm pickup: .*run helm pickup\.\]/, 'every agent learns where its handover goes');
   assert.match(alone, /\[Helm usage: .*Never check a running helper.*helm thread.*\]/, 'every agent learns the habits that cut waste');
-  assert.match(alone, /helm render/, 'visual replies work even with one machine');  const codex = helmBrief(net, { engine: 'codex' });
-  assert.match(codex, /\[Helm usage: .*call write_stdin once with empty chars and yield_time_ms 300000.*\]/,
+  assert.match(alone, /helm render/, 'visual replies work even with one machine');
+  const codex = helmBrief(net, { engine: 'codex' });
+  assert.match(codex, /\[Helm usage: .*call write_stdin with empty chars and one long yield_time_ms that the tool allows.*\]/,
     'Codex waits for its own command in one step, not with 1 s checks');
   assert.doesNotMatch(helmBrief(net, { engine: 'claude' }), /write_stdin/, 'only Codex has write_stdin');
 });
