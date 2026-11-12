@@ -131,6 +131,18 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
  * Close the owner's browser and open it again with its last tabs, so it
  * loads the add-on named in its flags file. Only when the owner agreed.
  */
+/**
+ * Start the owner's closed browser with no window, so the add-on connects
+ * and agents work in the owner's real profile, not in a copy. The first
+ * agent tab opens a background window there.
+ */
+export function startOwnBrowser({ program, launcher, env = process.env, screen = {} }) {
+  const command = launcher || program; if (!command) return false;
+  const scoped = process.platform === 'linux' && !env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
+  const [file, list] = scoped ? [scoped, ['--user', '--scope', '--collect', '--quiet', command, '--no-startup-window']] : [command, ['--no-startup-window']];
+  try { const child = spawn(file, list, { detached: true, stdio: 'ignore', env: { ...env, ...screen } }); child.on('error', () => {}); child.unref(); return true; } catch { return false; }
+}
+
 export async function restartOwnBrowser({ program, launcher, env = process.env, screen = {} }) {
   const pids = ownBrowserPids(program);
   for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } }
