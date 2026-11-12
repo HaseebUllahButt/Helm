@@ -220,6 +220,29 @@ test('until the owner\'s browser connects, tabs open in Helm\'s window, then mov
   assert.equal(again.note, undefined, 'no note once the owner\'s browser is in use');
 });
 
+test('a closed browser is started with no window, so agents use the owner\'s real profile, never a copy', { skip: noChromium, timeout: 90000 }, async t => {
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Started</title><button>Ready</button>'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const directory = mkdtempSync(join(process.env.HELM_DIR, 'start-'));
+  ext.writeMode(directory, 'extended');
+  // A launcher with a flags file, whose program is not running: the owner closed the browser.
+  const launcher = join(directory, 'brave'); writeFileSync(launcher, '#!/bin/sh\nCONF_FILE="${XDG_CONFIG_HOME}/brave-flags.conf"\n');
+  const started = [];
+  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }), canWindow: true, ownerQuietMs: 300, extensionWaitMs: 300,
+    browsers: () => [{ name: 'Brave', program: join(directory, 'brave-bin'), launcher }],
+    startOwn: browser => { started.push(browser); void startBrowser(t, directory); return true; },
+    launchWindow: () => { throw new Error('Helm\'s own window must not open'); } });
+  t.after(() => manager.stop());
+  await manager.prepare({ install: false });
+  const opened = await manager.open('chat-1', { url });
+  assert.equal(opened.note, undefined, 'the tab is in the owner\'s browser, not in Helm\'s window');
+  assert.equal(manager.shared.helmOwnBrowser, true);
+  assert.deepEqual(started.map(browser => [browser.program, browser.launcher]), [[join(directory, 'brave-bin'), launcher]], 'Helm started the owner\'s browser once');
+  assert.match((await manager.run('chat-1', opened.tab.id, { kind: 'look' })).text, /Ready/);
+});
+
 test('the owner\'s browser is found also when Chromium writes its command as one line', () => {
   assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave\0--password-store=basic\0'), true);
   assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave --password-store=basic --load-extension=/a,/b'), true);

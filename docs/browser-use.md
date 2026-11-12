@@ -124,9 +124,13 @@ owner. `helm browser mode window` turns it off; only a choice saved with a
 version (`mode.json` `v: 2`) counts, so the first add-on's test files do not.
 The idea comes from opencode's Browse (MIT).
 
-- **Until the browser connects, Helm's window.** When the add-on is not
-  connected, the chats' tabs open in Helm's window, and `open` says why and
-  what to do. Only a link that just opened waits for the add-on (4 s). When
+- **A closed browser is started.** When the owner's browser is closed and
+  has the add-on in its flags file, Helm starts it with
+  `--no-startup-window` and waits up to 20 s for the add-on. Agents then
+  work in the owner's real profile, never in a copy of its logins.
+- **Until the browser connects, Helm's window.** When the add-on is still
+  not connected, the chats' tabs open in Helm's window, and `open` says why
+  and what to do. Only a link that just opened waits for the add-on (4 s). When
   the add-on connects, Helm's window closes after the current step; the
   tabs open again in the owner's browser by address.
 

@@ -10,7 +10,7 @@ import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } fro
 import * as browserLogins from './browser-logins.js';
 import { canOpenWindow, systemChromium, launchTarget, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile, screenEnv } from './browser-window.js';
 import { ExtensionRelay } from './browser-relay.js';
-import { EXTENSION_ID, copyText, extensionFolder, linkFile, manualSteps, openExtensionsPage, ownBrowserPids, pasteSteps, readMode, restartOwnBrowser, setFlags, syncExtension, writeMode, flagsFile } from './browser-extension.js';
+import { EXTENSION_ID, copyText, extensionFolder, linkFile, manualSteps, openExtensionsPage, ownBrowserPids, pasteSteps, readMode, restartOwnBrowser, startOwnBrowser, setFlags, syncExtension, writeMode, flagsFile } from './browser-extension.js';
 import { discoverBrowsers } from './chromium-find.js';
 
 const id = () => randomBytes(8).toString('hex');
@@ -62,6 +62,8 @@ const playwrightBrowsers = () => process.env.PLAYWRIGHT_BROWSERS_PATH
   || join(homedir(), process.platform === 'darwin' ? 'Library/Caches/ms-playwright' : process.platform === 'win32' ? 'AppData/Local/ms-playwright' : '.cache/ms-playwright');
 const hasPlaywrightChromium = () => { try { return readdirSync(playwrightBrowsers()).some(name => name.startsWith('chromium-')); } catch { return false; } };
 const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
+/** How long a browser Helm started gets to load the add-on and connect. */
+const OWN_START_MS = 20000;
 const OWN_BROWSER_OFF = 'Your browser is not connected to Helm. Ask the owner to open it. If it is open, run helm browser mode to see why. To use Helm\'s own window, run helm browser mode window.';
 const MAX_THREAD_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 const POINTER_WORDS = { click: 'Clicking', hover: 'Pointing at', type: 'Typing into', select: 'Choosing in', upload: 'Uploading into', drag: 'Dragging', scroll: 'Scrolling', point: '' };
@@ -234,9 +236,9 @@ async function keepDrawing(page) {
 }
 
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = CALL_MS, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500, extensionWaitMs = 4000, browsers = discoverBrowsers, mode = null, setupTools = { copyText, openExtensionsPage }, alert = () => {} } = {}) {
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = CALL_MS, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500, extensionWaitMs = 4000, browsers = discoverBrowsers, mode = null, setupTools = { copyText, openExtensionsPage }, startOwn = startOwnBrowser, alert = () => {} } = {}) {
     // Tells the owner a chat needs them, and takes the notice away when it does not.
-    this.setupTools = setupTools; this.alert = alert;
+    this.setupTools = setupTools; this.startOwn = startOwn; this.alert = alert;
     // `mode` sets the browser mode for this run only (tests); else the saved choice counts.
     this.extensionWaitMs = extensionWaitMs; this.browsers = browsers; this.modeChoice = mode;
     this.launchWindow = launchWindow; this.windowCheck = canWindow; this.ownerQuietMs = ownerQuietMs; this.windowContexts = new Map(); this.windowIdleMs = windowIdleMs;
@@ -280,7 +282,7 @@ export class BrowserManager {
     if (!browser) return ['Helm found no Chromium-based browser on this machine. Your tabs open in Helm\'s window.'];
     // The owner sets it up from Settings, when it suits them: never stop the task for it.
     if (!browser.flags) return [`${browser.name} needs one step from the owner before you can use it. Do the task in Helm's window now. At the end, tell the owner once: in Helm, open Settings, choose this machine, and click Set up under Your browser.`];
-    if (!ownBrowserPids(browser.program).length) return [`${browser.name} is closed. It connects to Helm when the owner opens it. Until then your tabs open in Helm's window.`];
+    if (!ownBrowserPids(browser.program).length) return [`${browser.name} is closed, and Helm could not start it. Your tabs open in Helm's window until ${browser.name} runs. If a site is not signed in, ask the owner to open ${browser.name}.`];
     // Never interrupt the owner: the browser loads the add-on on its own next start.
     return [`${browser.name} loads the Helm add-on the next time it starts. Until then your tabs open in Helm's window: if a site is not signed in, run helm browser logins "<profile>". Do not restart ${browser.name} unless the owner asks.`];
   }
@@ -288,7 +290,17 @@ export class BrowserManager {
   async ownBrowserContext() {
     const relay = await this.startRelay();
     // Only a link that just opened waits for the add-on: later, Helm's window opens at once.
-    if (!(await relay.waitForExtension(Math.max(0, this.relayAt + this.extensionWaitMs - Date.now())))) throw new Error(OWN_BROWSER_OFF);
+    let wait = Math.max(0, this.relayAt + this.extensionWaitMs - Date.now());
+    // A closed browser is started with no window: agents use the owner's real
+    // profile, never a copy of its logins. One start at a time.
+    if (!relay.connected) {
+      const browser = this.ownBrowser();
+      if (browser?.flags && !ownBrowserPids(browser.program).length && !(Date.now() - (this.ownStartedAt || 0) < OWN_START_MS)) {
+        if (this.startOwn({ program: browser.program, launcher: browser.launcher, screen: screenEnv() })) this.ownStartedAt = Date.now();
+      }
+      if (Date.now() - (this.ownStartedAt || 0) < OWN_START_MS) wait = Math.max(wait, this.ownStartedAt + OWN_START_MS - Date.now());
+    }
+    if (!(await relay.waitForExtension(wait))) throw new Error(OWN_BROWSER_OFF);
     const { chromium } = await import('patchright-core');
     const browser = await chromium.connectOverCDP(relay.cdpUrl, { timeout: 15000 });
     const context = browser.contexts()[0];
