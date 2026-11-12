@@ -6,6 +6,7 @@ import { useLiveInterval } from './useLiveInterval';
 /** What the machine says about the owner's browser (browser.setup). */
 interface BrowserState {
   state: 'connected' | 'off' | 'next-start' | 'closed' | 'one-step' | 'none' | 'no-screen';
+  browsers?: { name: string; selected: boolean }[];
   browser?: string | null;
   steps?: string[];
   copied?: boolean;
@@ -38,6 +39,7 @@ export function OwnBrowser({ client, env }: { client: Client; env: Environment }
     try {
       const r = await client.rpc<BrowserState>(env.id, 'browser.setup', params, 60_000);
       setInfo(r);
+      if (what === 'main') setSteps(null);
       if (what === 'open' && r.state !== 'connected') setSteps(r.steps ?? []);
     } catch (e: any) { setError(errorMessage(e)); }
     finally { setBusy(''); }
@@ -49,7 +51,7 @@ export function OwnBrowser({ client, env }: { client: Client; env: Environment }
     connected: [name, 'Agents use your browser, signed in as you.'],
     off: ['Helm\'s window', 'Agents use Helm\'s own browser window.'],
     'next-start': [name, `Agents can use ${name} after it starts again. Until then they use Helm's window.`],
-    closed: [name, `Agents use ${name} when you open it.`],
+    closed: [name, `Helm starts ${name} when an agent needs it.`],
     'one-step': [name, `${name} needs one step from you. Until then agents use Helm's window.`],
     none: ['No browser', 'Helm found no Chromium-based browser on this machine.'],
     'no-screen': ['', ''],
@@ -59,6 +61,15 @@ export function OwnBrowser({ client, env }: { client: Client; env: Environment }
   return (
     <div className="own-browser">
       <div className="section">Your browser</div>
+      {!!info.browsers?.length && (
+        <label className="row">
+          <span style={{ whiteSpace: 'nowrap' }}>Main browser</span>
+          <select style={{ width: '65%', minWidth: 0 }} aria-label="Main browser" disabled={!!busy} value={info.browser || ''}
+            onChange={event => void act('main', { do: 'main', name: event.target.value })}>
+            {info.browsers.map(browser => <option key={browser.name} value={browser.name}>{browser.name}</option>)}
+          </select>
+        </label>
+      )}
       <div className="rows">
         <div className="row tall">
           <span className="grow">

@@ -67,7 +67,7 @@ function followScript(path) {
 function desktopEntries(dirs) {
   const seen = new Map();
   for (const dir of dirs) for (const file of listDir(dir)) {
-    if (file.name.endsWith('.desktop') && !seen.has(file.name)) seen.set(file.name, { file: file.name, text: readText(join(dir, file.name)) });
+    if (file.name.endsWith('.desktop') && !seen.has(file.name)) seen.set(file.name, { file: file.name, path: join(dir, file.name), text: readText(join(dir, file.name)) });
   }
   return [...seen.values()];
 }
@@ -95,7 +95,7 @@ function linuxBrowsers({ env, home, run, entryDirs: entryOverride, flatpakDirs: 
   // inside its runtime: Snap through its /snap/bin wrapper, Flatpak through
   // `flatpak run <id>`. A plain install runs its own binary with no prefix.
   const flatpakBin = () => which('flatpak', pathDirs) || '/usr/bin/flatpak';
-  const flatpak = id => { for (const dir of flatpakDirs) { if (search(join(dir, id, 'current/active/files'))) return { program: flatpakBin(), args: ['run', id] }; } return null; };
+  const flatpak = id => { for (const dir of flatpakDirs) { const processProgram = search(join(dir, id, 'current/active/files')); if (processProgram) return { program: flatpakBin(), processProgram, args: ['run', id] }; } return null; };
   const fromWords = words => {
     if (!words.length) return null;
     if (/(^|\/)flatpak$/.test(words[0])) { const id = words.find(w => /^[\w-]+(\.[\w-]+){2,}$/.test(w)); return id ? flatpak(id) : null; }
@@ -113,7 +113,7 @@ function linuxBrowsers({ env, home, run, entryDirs: entryOverride, flatpakDirs: 
     const spec = fromWords(words);
     if (!spec) continue;
     const key = `${real(spec.program)}\0${spec.args.join('\0')}`;
-    if (!found.has(key) || entry.file === defaultEntry()) found.set(key, { ...spec, name: entryName(entry), entry: entry.file });
+    if (!found.has(key) || entry.file === defaultEntry()) found.set(key, { ...spec, name: entryName(entry), entry: entry.file, desktopFile: entry.path, systemDefault: entry.file === defaultEntry() });
   }
   if (!found.size) return [];
   // Order: the system default browser first, then the rest by name.
@@ -219,7 +219,7 @@ function windowsBrowsers({ run }) {
     }
   }
   const def = windowsDefault(run);
-  const found = [...exes.values()].filter(c => isChromiumWindows(c.exe)).map(c => ({ program: c.exe, name: c.name, args: [] }));
+  const found = [...exes.values()].filter(c => isChromiumWindows(c.exe)).map(c => ({ program: c.exe, name: c.name, args: [], systemDefault: c.exe.toLowerCase() === def }));
   // Order: the default browser first, then the rest by name.
   return found.sort((a, b) => (b.program.toLowerCase() === def) - (a.program.toLowerCase() === def) || a.name.localeCompare(b.name));
 }

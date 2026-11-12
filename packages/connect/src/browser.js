@@ -10,7 +10,7 @@ import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } fro
 import * as browserLogins from './browser-logins.js';
 import { canOpenWindow, systemChromium, launchTarget, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile, screenEnv } from './browser-window.js';
 import { ExtensionRelay } from './browser-relay.js';
-import { EXTENSION_ID, copyText, extensionFolder, linkFile, manualSteps, openExtensionsPage, ownBrowserPids, pasteSteps, readMode, restartOwnBrowser, startOwnBrowser, setFlags, syncExtension, writeMode, flagsFile } from './browser-extension.js';
+import { EXTENSION_ID, copyText, extensionFolder, linkFile, manualSteps, openExtensionsPage, ownBrowserPids, pasteSteps, readMode, restartOwnBrowser, startOwnBrowser, syncExtension, writeMode, flagsFile, readChoice, writeMain, manualBrowser, setBrowserExtension } from './browser-extension.js';
 import { discoverBrowsers } from './chromium-find.js';
 
 const id = () => randomBytes(8).toString('hex');
@@ -253,8 +253,8 @@ export class BrowserManager {
   /** The link the add-on connects to. It runs whenever extended mode is on, so the add-on finds Helm. */
   startRelay() {
     if (this.relayStart) return this.relayStart;
-    const changed = syncExtension(this.directory);
-    this.relay ||= new ExtensionRelay({ linkFile: linkFile(this.directory), extensionId: EXTENSION_ID });
+    const changed = syncExtension(this.extensionDirectory());
+    this.relay ||= new ExtensionRelay({ linkFile: linkFile(this.extensionDirectory()), extensionId: EXTENSION_ID });
     this.relayAt = Date.now();
     return this.relayStart = this.relay.start().then(relay => {
       // A newer add-on came with this Helm: the browser loads it again.
@@ -271,7 +271,7 @@ export class BrowserManager {
   async prepare({ install = !process.env.HELM_NO_SERVICE && !process.env.NODE_TEST_CONTEXT } = {}) {
     if (this.mode !== 'extended') return;
     await this.startRelay();
-    if (install) { try { const browser = this.ownBrowser(); if (browser?.flags) setFlags(browser.launcher, extensionFolder(this.directory), true); } catch { /* the browser stays as it is */ } }
+    if (install) { try { const browser = this.ownBrowser(); if (browser) setBrowserExtension(browser, extensionFolder(this.extensionDirectory()), true); } catch { /* the browser stays as it is */ } }
   }
   /**
    * Why the owner's browser is not connected, and what the agent does. Until
@@ -281,8 +281,8 @@ export class BrowserManager {
     const browser = this.ownBrowser();
     if (!browser) return ['Helm found no Chromium-based browser on this machine. Your tabs open in Helm\'s window.'];
     // The owner sets it up from Settings, when it suits them: never stop the task for it.
-    if (!browser.flags) return [`${browser.name} needs one step from the owner before you can use it. Do the task in Helm's window now. At the end, tell the owner once: in Helm, open Settings, choose this machine, and click Set up under Your browser.`];
-    if (!ownBrowserPids(browser.program).length) return [`${browser.name} is closed, and Helm could not start it. Your tabs open in Helm's window until ${browser.name} runs. If a site is not signed in, ask the owner to open ${browser.name}.`];
+    if (browser.manual) return [`${browser.name} needs one step from the owner before you can use it. Do the task in Helm's window now. At the end, tell the owner once: in Helm, open Settings, choose this machine, and click Set up under Your browser.`];
+    if (!ownBrowserPids(browser.processProgram || browser.program).length) return [`${browser.name} is closed, and Helm could not start it. Your tabs open in Helm's window until ${browser.name} runs. If a site is not signed in, ask the owner to open ${browser.name}.`];
     // Never interrupt the owner: the browser loads the add-on on its own next start.
     return [`${browser.name} loads the Helm add-on the next time it starts. Until then your tabs open in Helm's window: if a site is not signed in, run helm browser logins "<profile>". Do not restart ${browser.name} unless the owner asks.`];
   }
@@ -295,8 +295,8 @@ export class BrowserManager {
     // profile, never a copy of its logins. One start at a time.
     if (!relay.connected) {
       const browser = this.ownBrowser();
-      if (browser?.flags && !ownBrowserPids(browser.program).length && !(Date.now() - (this.ownStartedAt || 0) < OWN_START_MS)) {
-        if (this.startOwn({ program: browser.program, launcher: browser.launcher, screen: screenEnv() })) this.ownStartedAt = Date.now();
+      if (browser && !browser.manual && !ownBrowserPids(browser.processProgram || browser.program).length && !(Date.now() - (this.ownStartedAt || 0) < OWN_START_MS)) {
+        if (this.startOwn({ ...browser, folder: extensionFolder(this.extensionDirectory()), screen: screenEnv() })) this.ownStartedAt = Date.now();
       }
       if (Date.now() - (this.ownStartedAt || 0) < OWN_START_MS) wait = Math.max(wait, this.ownStartedAt + OWN_START_MS - Date.now());
     }
@@ -312,8 +312,44 @@ export class BrowserManager {
   }
   /** The owner's default browser: its program, the launcher that starts it, and its flags file. */
   ownBrowser() {
-    const best = this.browsers()[0]; if (!best) return null;
-    return { name: best.name, program: best.program, launcher: best.launcher || best.program, flags: flagsFile(best.launcher || best.program) };
+    const found = this.browsers(), choice = readChoice(this.directory).main;
+    const best = found.find(b => b.name.toLowerCase() === choice?.toLowerCase()) || found.find(b => b.systemDefault) || found[0];
+    if (!best) return null;
+    return { ...best, launcher: best.launcher || best.program, flags: flagsFile(best.launcher || best.program), manual: manualBrowser(best) };
+  }
+  extensionDirectory() {
+    const choice = readChoice(this.directory);
+    const main = choice.extensionMain === null ? null : choice.extensionMain || choice.main;
+    return main ? join(this.directory, 'main', Buffer.from(main.toLowerCase()).toString('hex')) : this.directory;
+  }
+  mainInfo() {
+    const selected = this.ownBrowser()?.name;
+    return { browser: selected || null, browsers: this.browsers().map(b => ({ name: b.name, selected: b.name === selected, systemDefault: !!b.systemDefault })) };
+  }
+  async setMain(name) {
+    const next = this.browsers().find(b => b.name.toLowerCase() === String(name).toLowerCase());
+    if (!next) throw new Error('Choose a browser from helm browser main.');
+    const old = this.ownBrowser();
+    if (old?.name === next.name) {
+      if (!readChoice(this.directory).main) writeMain(this.directory, next.name, readChoice(this.directory).extensionMain ?? null);
+      return this.modeInfo();
+    }
+    if (this.mode === 'extended') {
+      await this.closeShared();
+      setBrowserExtension(old, extensionFolder(this.extensionDirectory()), false);
+      await this.relay?.stop(); this.relay = null; this.relayStart = null; this.ownStartedAt = 0;
+    }
+    writeMain(this.directory, next.name);
+    if (this.mode === 'extended') {
+      await this.startRelay();
+      setBrowserExtension(this.ownBrowser(), extensionFolder(this.extensionDirectory()), true);
+    }
+    return this.modeInfo();
+  }
+  mainNote() {
+    const found = this.browsers();
+    return found.length > 1 && !readChoice(this.directory).main && !found.some(b => b.systemDefault)
+      ? 'Ask the owner once for their main browser. Save it with helm browser main <name>. Continue the task.' : '';
   }
   /**
    * What `helm browser mode` and Settings show. `state`: connected, off
@@ -322,12 +358,12 @@ export class BrowserManager {
    * none (no browser) or no-screen.
    */
   async modeInfo() {
-    const info = { mode: this.mode, screen: this.canWindow };
+    const info = { mode: this.mode, screen: this.canWindow, browsers: this.mainInfo().browsers };
     if (!this.canWindow) return { ...info, state: 'no-screen' };
     if (this.mode !== 'extended') return { ...info, state: 'off', browser: this.ownBrowser()?.name || null };
     const browser = this.ownBrowser(), relay = await this.startRelay().catch(() => null);
-    const state = relay?.connected ? 'connected' : !browser ? 'none' : !browser.flags ? 'one-step' : ownBrowserPids(browser.program).length ? 'next-start' : 'closed';
-    return { ...info, state, connected: !!relay?.connected, browser: browser?.name || null, folder: extensionFolder(this.directory), flagsFile: browser?.flags || null,
+    const state = relay?.connected ? 'connected' : !browser ? 'none' : browser.manual ? 'one-step' : ownBrowserPids(browser.processProgram || browser.program).length ? 'next-start' : 'closed';
+    return { ...info, state, connected: !!relay?.connected, browser: browser?.name || null, folder: extensionFolder(this.extensionDirectory()), flagsFile: browser?.flags || null,
       ...(relay?.connected ? {} : { steps: this.ownBrowserSteps() }) };
   }
   /**
@@ -341,10 +377,10 @@ export class BrowserManager {
     const browser = this.ownBrowser(); if (!browser) throw new Error('Helm found no Chromium-based browser on this machine. Install one, for example Google Chrome or Brave.');
     if (this.mode !== 'extended') await this.setMode('extended');
     const relay = await this.startRelay();
-    if (relay.connected || browser.flags) return this.modeInfo();
-    const folder = extensionFolder(this.directory), screen = screenEnv();
+    if (relay.connected || !browser.manual) return this.modeInfo();
+    const folder = extensionFolder(this.extensionDirectory()), screen = screenEnv();
     const copied = await this.setupTools.copyText(folder, { env: { ...process.env, ...screen } });
-    const opened = this.setupTools.openExtensionsPage({ program: browser.program, launcher: browser.launcher, screen });
+    const opened = this.setupTools.openExtensionsPage({ ...browser, screen });
     return { ...(await this.modeInfo()), copied, opened, steps: [...(opened ? [] : [`Open chrome://extensions in ${browser.name}.`]), ...pasteSteps(), ...(copied ? [] : [`Paste this folder: ${folder}`])] };
   }
   /**
@@ -357,17 +393,17 @@ export class BrowserManager {
     if (mode === 'extended' && !this.canWindow) throw new Error('Extended mode needs a screen. This machine uses its hidden browser.');
     const before = this.mode; writeMode(this.directory, mode); this.modeChoice = mode;
     if (before !== mode) await this.closeShared();
-    const browser = this.ownBrowser(), folder = extensionFolder(this.directory);
+    const browser = this.ownBrowser(), folder = extensionFolder(this.extensionDirectory());
     if (mode === 'window') {
-      if (browser) setFlags(browser.launcher, folder, false);
+      if (browser) setBrowserExtension(browser, folder, false);
       await this.relay?.stop().catch(() => {}); this.relay = null; this.relayStart = null;
       return this.modeInfo();
     }
     const relay = await this.startRelay();
-    if (browser) setFlags(browser.launcher, folder, true);
+    if (browser) setBrowserExtension(browser, folder, true);
     if (restart && !relay.connected) {
       if (!browser) throw new Error('Helm found no Chromium-based browser on this machine.');
-      await restartOwnBrowser({ program: browser.program, launcher: browser.launcher, screen: screenEnv() });
+      await restartOwnBrowser({ ...browser, folder, screen: screenEnv() });
       // A browser that ignores flags files (Google Chrome, Edge) never connects: the owner adds the folder by hand.
       if (!(await relay.waitForExtension(20000))) return { ...(await this.modeInfo()), steps: manualSteps(folder), note: `${browser.name} did not load the add-on from its flags file. Add it by hand.` };
     }
@@ -782,7 +818,7 @@ export class BrowserManager {
     const context = await this.context(sessionId);
     const page = await this.newPage(context, url);
     const tab = this.register(sessionId, page);
-    try { if (url !== 'about:blank') await (page.helmGoing ? this.arrive(page, url) : page.goto(url, { waitUntil: 'domcontentloaded' })); else await this.blank(page); await this.settle(tab, { navigation: true }); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(context.helmFallback ? { note: `This tab opened in Helm's window, not in the owner's browser. ${this.ownBrowserSteps().join(' ')}` } : {}), ...(await this.look(tab)) }; }
+    try { if (url !== 'about:blank') await (page.helmGoing ? this.arrive(page, url) : page.goto(url, { waitUntil: 'domcontentloaded' })); else await this.blank(page); await this.settle(tab, { navigation: true }); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(this.mainNote() ? { mainBrowserNote: this.mainNote() } : {}), ...(context.helmFallback ? { note: `This tab opened in Helm's window, not in the owner's browser. ${this.ownBrowserSteps().join(' ')}` } : {}), ...(await this.look(tab)) }; }
     catch (error) { tab.explicitClose = true; await page.close(); throw /net::ERR_|Timeout \d+ms/.test(error.message) ? new Error(plainNavError(error, url)) : error; }
   }
   get(sessionId, tabId) { this.owner(sessionId); const tab = this.tabs.get(tabId); if (!tab || tab.sessionId !== sessionId) throw new Error('browser tab not found in this thread'); return tab; }
