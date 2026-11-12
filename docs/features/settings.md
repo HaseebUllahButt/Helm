@@ -83,8 +83,8 @@
   `usage-recovery`.
 
 ## Updates
-- `helm ship` checks a free private chat before merging and after the machines
-  update. It restarts the private daemon, checks the same approval, then uses it
+- `helm ship --check` checks a free private chat before merging and after the
+  machines update (plain `helm ship` skips it). It restarts the private daemon, checks the same approval, then uses it
   and checks that one provider turn completes. It never creates owner chats.
   A failed proof prevents a successful ship result. The local check needs
   Playwright and its Chromium browser. Run `node scripts/release-proof.mjs`

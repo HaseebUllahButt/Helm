@@ -3,11 +3,13 @@
 Release checks run on private Helm data. Never change the owner's network,
 fill the owner's disk, reboot a working machine, or use owner chats as test data.
 
-`helm ship` checks the exact source and built app version in a private chat.
-It checks before merging and again from the installed version after connected
-machines update. The same approval must survive a private daemon restart and
-complete once. The check always removes its private copy, including on timeout.
-Version agreement alone does not pass this release check.
+`helm ship` goes straight out: merge, push, install. The owner chose this on
+12 Nov 2026, because the checks made every ship slow. `helm ship --check`
+adds them back: `npm run check`, then a private chat with an approval, before
+the merge and again from the installed version after connected machines
+update. The same approval must survive a private daemon restart and complete
+once. The check always removes its private copy, including on timeout. Use
+`--check` for a change to restarts, approvals or updates.
 
 ## Private failure checks
 

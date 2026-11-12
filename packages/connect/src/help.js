@@ -135,8 +135,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm self-update                  Get the newest Helm and restart it on this machine
   helm self-update --rollback       Restore the saved previous release. Keep later edits and saved changes.
   helm ship                         Merge this branch into main, push it and install it on every online machine
-                                    Check a private chat and its approval before and after installation.
-    --no-check                      Skip npm run check before the merge
+    --check                         Also run the tests and check a private chat before and after installation
     --wait <minutes>                Wait this long for the machines to restart (default: 10)
   helm service install|uninstall    Install or remove the background service
 

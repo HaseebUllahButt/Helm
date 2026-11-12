@@ -83,8 +83,8 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   await page.evaluate(mount);
   const sidebar = page.locator('.sidebar');
   await shelf(page, 'Settled').waitFor();
-  // An inbox: what needs you, what runs, what finished; Settled last. No machines.
-  assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), ['Needs you', 'Finished', 'Running', 'Settled']);
+  // Phone Home also lists machines; the chat shelves keep their inbox order.
+  assert.deepEqual(await sidebar.locator('.fold-title').allTextContents(), [...(width < 800 ? ['Machines'] : []), 'Needs you', 'Finished', 'Running', 'Settled']);
   // Folded Settled sits at the foot of the sidebar, not under the last shelf.
   const foot = await page.evaluate(() => {
     const scroll = document.querySelector('.sidebar > .scroll').getBoundingClientRect();
@@ -282,6 +282,36 @@ test('archiving from Home says so, and Undo brings the chat back', async t => {
   await page.waitForFunction(() => window.archived.length === 2);
   assert.deepEqual(await page.evaluate(() => window.archived), [{ id: 'notes', archived: true }, { id: 'notes', archived: false }]);
   await notice.waitFor({ state: 'detached' });
+});
+
+for (const width of [390, 1280]) test(`pinning a hidden helper adds it to the sidebar at ${width}px`, async t => {
+  const { page, boot } = await pageFor(t, { width, height: 900 });
+  await boot();
+  await page.evaluate(() => {
+    const base = { cwd: '/project', engine: 'codex', driver: 'codex', turns: 1, status: 'working', alive: true, updatedAt: Date.now() };
+    const parent = { ...base, id: 'parent', title: 'RA2 project' };
+    const helper = { ...base, id: 'helper', title: 'RA2 verification', delegation: { parentId: parent.id, status: 'working' } };
+    const listeners = new Set();
+    const client = window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], {});
+    const rpc = client.rpc;
+    client.on = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+    client.rpc = (env, method, params) => method === 'session.list'
+      ? Promise.resolve({ sessions: structuredClone(helper.pinnedAt ? [parent, helper] : [parent]) })
+      : rpc(env, method, params);
+    window.pinHelper = pinned => {
+      helper.pinnedAt = pinned ? Date.now() : null;
+      for (const listener of listeners) listener('laptop', 'session.update', { session: structuredClone(helper) });
+    };
+    window.mount(client);
+  });
+  const side = page.locator('.sidebar');
+  await side.getByText('RA2 project', { exact: true }).waitFor();
+  assert.equal(await side.getByText('RA2 verification', { exact: true }).count(), 0);
+  await page.evaluate(() => window.pinHelper(true));
+  await shelf(page, 'Pinned').getByText('RA2 verification', { exact: true }).waitFor();
+  await page.evaluate(() => window.pinHelper(false));
+  await side.getByText('RA2 verification', { exact: true }).waitFor({ state: 'detached' });
+  await side.getByText('RA2 project', { exact: true }).waitFor();
 });
 
 test('a pinned chat sits above every shelf and leaves its own; Unpin puts it back', async t => {

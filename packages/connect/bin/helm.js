@@ -2150,12 +2150,15 @@ try {
       try {
         const directory = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
         const tip = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-        await proveRelease({ directory, tip, prepare: true });
+        // The owner (12 Nov 2026): ship goes straight out. The private chat
+        // check and the tests run only when asked for with --check.
+        const full = rest.includes('--check');
+        if (full) await proveRelease({ directory, tip, prepare: true });
         if (execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== tip) {
           throw new ShipError('The source changed during its private check. Run helm ship again.');
         }
-        const r = await ship({ net: requireNetwork(), rpc: hubRpc, check: !rest.includes('--no-check'), waitMs: minutes * 60_000,
-          verifyRelease: async ({ tip, net, rpc }) => {
+        const r = await ship({ net: requireNetwork(), rpc: hubRpc, check: full, waitMs: minutes * 60_000,
+          verifyRelease: !full ? undefined : async ({ tip, net, rpc }) => {
             // This machine can restart again here, when a later machine's
             // update reaches it. Wait for it instead of stopping the ship.
             const info = await untilBack(net.self, () => rpc(net, net.self, M.ENV_INFO, {}, { timeout: 8000, budget: 8000 }))
