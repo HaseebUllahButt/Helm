@@ -243,6 +243,22 @@ test('a new tab opens at its address, so it never sits on about:blank while the 
   assert.equal((await manager.list('one')).tabs.length, 3, 'a tab that could not open is closed');
 });
 
+test('new tabs open in the background, so the window never takes the owner’s focus, and they still draw', { timeout: 60000, skip: noChromium }, async t => {
+  const { manager, url } = await setup(t);
+  await manager.open('one', { url });
+  const context = await manager.contexts.get('one'), browser = context.browser(), sent = [];
+  const make = browser.newBrowserCDPSession.bind(browser);
+  browser.newBrowserCDPSession = async () => { const cdp = await make(), send = cdp.send.bind(cdp); cdp.send = (method, params) => { sent.push([method, params]); return send(method, params); }; return cdp; };
+  const second = await manager.open('one', { url: `${url}/second` }), blank = await manager.open('one');
+  const made = sent.filter(([method]) => method === 'Target.createTarget').map(([, params]) => params);
+  assert.equal(made.length, 2, 'both tabs were made through Chromium');
+  assert.ok(made.every(params => params.background === true), 'no tab asks for the foreground');
+  for (const tab of [second.tab, blank.tab]) {
+    const frames = await manager.run('one', tab.id, { kind: 'evaluate', script: 'new Promise(done => { let n = 0; const step = () => ++n < 10 ? requestAnimationFrame(step) : done("drawing"); requestAnimationFrame(step); })' });
+    assert.equal(frames.value, 'drawing');
+  }
+});
+
 test('a window nobody used for a while is put away; its tabs sleep and come back', { timeout: 60000, skip: noChromium }, async t => {
   const { manager, url, windows } = await setup(t, { windowIdleMs: 60000 });
   const a = await manager.open('one', { url });

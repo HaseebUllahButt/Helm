@@ -199,6 +199,12 @@ The idea comes from opencode's Browse (MIT).
   }
   ```
 
+  That rule covers only the window opening. A foreground tab makes Chromium
+  ask the desktop for focus, and a desktop that honours any request (niri's
+  `honor-xdg-activation-with-invalid-serial`) gives it. So Helm opens every
+  tab in its window in the background and keeps it drawing with a tiny
+  screen feed. Only owner steps (`point`, CAPTCHA) bring a tab to the front.
+
 - A Chromium-based browser must already be installed (any one, found by
   evidence, `HELM_CHROMIUM_PATH`, or Playwright's). Helm never downloads one at
   daemon start, and loads no browser driver until a browser is needed. On
