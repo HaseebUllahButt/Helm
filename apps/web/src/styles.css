@@ -4234,14 +4234,15 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
 
 /* ------------------------------------------------------------------ finish
    The premium pass (owner, 12 Nov 2026: "more premium looking"). On a
-   computer the work sits on one framed panel inside the window: the
-   sidebar is the frame, the panel is the page. Depth comes from light,
+   computer the work sits on one framed panel inside the window. The
+   sidebar stays exactly as it was (owner: "dont touch sidebar"); the
+   frame round the panel is the sidebar's colour. Depth comes from light,
    not lines (no outlines, 26 Oct 2026): a lit top edge, a faint sheen
    down the top of a card, and a ring of light too weak to read as a
    border. Each theme answers the tokens. */
 :root {
-  --frame: #030303;
-  --panel: #111113;
+  --frame: var(--sidebar);
+  --panel: #0b0b0c;
   --ring: rgb(255 255 255 / 7%);
   --ring-2: rgb(255 255 255 / 11%);
   --glow: radial-gradient(ellipse 70% 45% at 50% -6%, rgb(255 255 255 / 6.5%), rgb(255 255 255 / 0) 70%);
@@ -4255,8 +4256,7 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
   --shadow: 0 0 0 1px rgb(255 255 255 / 7%), inset 0 1px 0 rgb(255 255 255 / 5%), 0 24px 56px -20px rgb(0 0 0 / 80%), 0 2px 8px rgb(0 0 0 / 35%);
 }
 :root[data-theme="navy"] {
-  --frame: #031017;
-  --panel: #0b2230;
+  --panel: #081b26;
   --glow: radial-gradient(ellipse 70% 45% at 50% -6%, rgb(200 240 240 / 6%), rgb(200 240 240 / 0) 70%);
   --ring: rgb(134 214 219 / 7%);
   --ring-2: rgb(134 214 219 / 12%);
@@ -4267,8 +4267,7 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
   --lift: 0 18px 44px -22px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 25%);
 }
 :root[data-theme="light"] {
-  --frame: #e6e8ed;
-  --panel: #f8f9fb;
+  --panel: #f7f8fa;
   --glow: none;
   --ring: rgb(26 29 36 / 7%);
   --ring-2: rgb(26 29 36 / 11%);
@@ -4277,12 +4276,10 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
   --sheen: none;
   --panel-shadow: 0 0 0 1px var(--ring), 0 1px 3px rgb(26 29 36 / 5%), 0 16px 40px -28px rgb(26 29 36 / 22%);
   --lift: 0 12px 32px -18px rgb(26 29 36 / 26%), 0 1px 3px rgb(26 29 36 / 8%);
-  --sidebar: var(--frame);
 }
 
 @media (min-width: 900px) {
   html, body, .shell { background: var(--frame); }
-  .sidebar, .sidebar .bar.side { background: var(--frame); }
   /* The panel. It names its own colour as the page colour, so every bar,
      composer and control inside it that sits "on the page" matches it. */
   .main {
@@ -4323,19 +4320,6 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
 :root[data-theme="light"] .slab:focus-within { box-shadow: 0 0 0 1px var(--ring-focus), 0 0 0 5px var(--ring), var(--lift); }
 :root[data-theme="light"] .slab::after { box-shadow: none; }
 
-/* Search and New chat on the frame: small lit keys. */
-@media (min-width: 900px) {
-  .sidebar .home-search { background: var(--panel); box-shadow: var(--lit), 0 0 0 1px var(--ring); }
-  .sidebar .home-search:hover { background: color-mix(in srgb, var(--panel) 88%, var(--text)); color: var(--text-dim); }
-}
-
-/* The open chat in the sidebar: a lit tile, not a white outline. */
-.sidebar .thread-row.active,
-.sidebar .rowx .rowmain.thread-row.active {
-  background: var(--select);
-  box-shadow: var(--lit), inset 0 0 0 1px var(--ring);
-}
-
 /* The chosen tab of a set: a raised key. */
 .segmented button.on { box-shadow: var(--lit), 0 0 0 1px var(--ring), 0 1px 2px rgb(0 0 0 / 25%); }
 
@@ -4345,32 +4329,16 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
 
 @media (prefers-reduced-motion: reduce) { .slab { transition: none; } }
 
-/* Round 2 of the finish (owner: "cant feel the difference"). Bolder marks
-   that a person sees at once: the hub colour where you act, glass where
-   things float, a lit message bubble. */
+/* Round 2 of the finish (owner: "cant feel the difference"). Glass where
+   things float and a lit message bubble. No hub colour: the owner turned
+   down the violet send button and violet glow (12 Nov 2026). */
 .slab {
   background-color: color-mix(in srgb, var(--raised) 82%, transparent);
   -webkit-backdrop-filter: blur(18px) saturate(140%); backdrop-filter: blur(18px) saturate(140%);
-}
-.slab:focus-within,
-:root[data-theme="light"] .slab:focus-within {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-q) 55%, transparent),
-    0 0 0 5px color-mix(in srgb, var(--primary-q) 13%, transparent),
-    0 18px 50px -20px color-mix(in srgb, var(--primary) 45%, transparent), var(--lift);
-}
-.send:not(:disabled) {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--primary-q) 88%, #fff), var(--primary));
-  color: #fff;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 28%), 0 6px 18px -6px color-mix(in srgb, var(--primary) 80%, transparent);
 }
 :root:not([data-theme="light"]) .turn.user .bubble {
   background: linear-gradient(180deg, color-mix(in srgb, var(--raised) 100%, #fff 4%), var(--raised));
   box-shadow: var(--lit), 0 0 0 1px var(--ring), 0 8px 24px -16px rgb(0 0 0 / 70%);
 }
-.sidebar .thread-row.active,
-.sidebar .rowx .rowmain.thread-row.active {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--primary-q) 17%, transparent), color-mix(in srgb, var(--primary-q) 3%, transparent) 75%), var(--select);
-  box-shadow: var(--lit), inset 0 0 0 1px color-mix(in srgb, var(--primary-q) 22%, transparent);
-}
-.row, .home-search, .iconbtn, .segmented button { transition: background-color .14s var(--ease), color .14s var(--ease), box-shadow .14s var(--ease); }
-@media (prefers-reduced-motion: reduce) { .row, .home-search, .iconbtn, .segmented button { transition: none; } }
+.main :is(.row, .iconbtn, .segmented button) { transition: background-color .14s var(--ease), color .14s var(--ease), box-shadow .14s var(--ease); }
+@media (prefers-reduced-motion: reduce) { .main :is(.row, .iconbtn, .segmented button) { transition: none; } }

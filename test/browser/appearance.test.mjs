@@ -32,10 +32,10 @@ for (const width of [1440, 390]) test(`navy is optional, persistent, and indepen
     await page.addScriptTag({ content: script });
     await page.getByRole('button', { name: 'Navy', exact: true }).waitFor();
   };
-  // On a computer the page behind the framed panel is the frame colour.
+  // On a computer the page behind the framed panel is the sidebar colour.
   const wide = width >= 900;
   const BG = wide
-    ? { dark: 'rgb(3, 3, 3)', navy: 'rgb(3, 16, 23)', light: 'rgb(230, 232, 237)' }
+    ? { dark: 'rgb(19, 19, 19)', navy: 'rgb(16, 44, 56)', light: 'rgb(233, 235, 240)' }
     : { dark: 'rgb(10, 10, 10)', navy: 'rgb(8, 27, 38)', light: 'rgb(243, 244, 247)' };
   const state = () => page.evaluate(() => ({
     theme: document.documentElement.dataset.theme,
