@@ -204,6 +204,9 @@ and a project copy nobody kept. A helper can run on another machine
     reads, a new helper for each new job, short lead chats, and
     `helm thread` instead of `helm say` to read another chat. A say to an
     old chat that rested 15 hours re-read 510k at full price ($8).
+    Codex also learns to wait for its own command with one empty
+    `write_stdin` and a 300 s wait: it checked with 1 s waits 1267 times
+    in two days, each re-reading about 200k.
   - Agents never stop another chat's process with `kill`: on 2026-11-10 a
     chat did that twice to a neighbour (`agentMessageNote`). Every agent
     stop Helm did not ask for is saved in `~/.helm/agent-stops.jsonl` by the

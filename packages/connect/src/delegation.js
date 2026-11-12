@@ -175,6 +175,17 @@ export function agentMessageNote() {
 }
 
 /**
+ * Codex lead chats waited on their own long commands by calling write_stdin
+ * with no input and a 1 s wait: 1267 such checks on the laptop on 2026-11-10
+ * and 11, each one re-reading a chat of about 200k. One empty write_stdin
+ * with a long wait returns as soon as the command ends, so it costs one
+ * step instead of dozens. The general line in usageNote did not stop it.
+ */
+const ENGINE_WAITS = {
+  codex: ' To wait for a running command, call write_stdin once with empty chars and yield_time_ms 300000: it returns as soon as the command ends. Do not check it again and again with short waits. Send real input to a command as usual.',
+};
+
+/**
  * Cost habits that keep the work the same. Measured on 2026-11-10 (about
  * $507 in one day): two thirds of the spend was each step re-reading its
  * whole chat, Claude ran one command per step, a helper got four unrelated
@@ -182,8 +193,8 @@ export function agentMessageNote() {
  * rested 15 hours re-read it all at full price. Models and checks are not
  * touched: the owner wants no loss of quality.
  */
-export function usageNote() {
-  return '[Helm usage: Each step re-reads this whole chat, so a long chat makes every step cost more. Keep the same models and checks; cut only waste. Put independent reads and checks in one step: several tool calls at once, or one command. Give each new job a new helper; never give a finished helper an unrelated job. As a lead, keep your chat short: give long reading, builds and test runs to helpers. Never check a running helper or job again and again (sleep loops, watch, Monitor, ScheduleWakeup, repeated helm delegate-result or tail): each check re-reads this chat. Helm messages you when a helper ends; for your own long run, use one command that waits until it ends. To see what another chat did, read it with helm thread; helm say wakes it, and a chat idle for over an hour re-reads its whole history at full price. When the task changes and this chat is very long, tell the owner that a new chat with helm pickup costs less.]';
+export function usageNote(engine = null) {
+  return '[Helm usage: Each step re-reads this whole chat, so a long chat makes every step cost more. Keep the same models and checks; cut only waste. Put independent reads and checks in one step: several tool calls at once, or one command. Give each new job a new helper; never give a finished helper an unrelated job. As a lead, keep your chat short: give long reading, builds and test runs to helpers. Never check a running helper or job again and again (sleep loops, watch, Monitor, ScheduleWakeup, repeated helm delegate-result or tail): each check re-reads this chat. Helm messages you when a helper ends; for your own long run, use one command that waits until it ends. To see what another chat did, read it with helm thread; helm say wakes it, and a chat idle for over an hour re-reads its whole history at full price. When the task changes and this chat is very long, tell the owner that a new chat with helm pickup costs less.' + (ENGINE_WAITS[engine] ?? '') + ']';
 }
 
 /**
@@ -220,7 +231,7 @@ export function helperNote(parentId) {
 }
 
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});
