@@ -216,6 +216,23 @@ let ownerLogins = false;
 /** Only the Helm service starts browsers with the owner's own logins; tests never read real profiles. */
 export const useOwnerLogins = () => { ownerLogins = true; };
 
+/**
+ * Agent tabs in Helm's window sit in the background, where Chromium stops
+ * drawing and slows timers. A tiny screen feed keeps frames coming, so
+ * animations, games and Playwright's "is it still moving" checks still run.
+ * Each new document drops the feed, so it starts again after each page load.
+ */
+async function keepDrawing(page) {
+  let cdp; try { cdp = await page.context().newCDPSession(page); } catch { return; }
+  cdp.on('Page.screencastFrame', ({ sessionId }) => void cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {}));
+  const start = () => Promise.all([
+    cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }),
+    cdp.send('Page.startScreencast', { format: 'jpeg', quality: 1, maxWidth: 16, maxHeight: 16, everyNthFrame: 60 }),
+  ]).catch(() => {});
+  page.on('framenavigated', frame => { if (frame === page.mainFrame()) void start(); });
+  await start();
+}
+
 export class BrowserManager {
   constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, idleMs = 10 * 60000, windowIdleMs = 10 * 60000, actionTimeoutMs = CALL_MS, logins = browserLogins, launchWindow = openWindow, canWindow = canOpenWindow, ownerQuietMs = 2500, extensionWaitMs = 4000, browsers = discoverBrowsers, mode = null, setupTools = { copyText, openExtensionsPage }, alert = () => {} } = {}) {
     // Tells the owner a chat needs them, and takes the notice away when it does not.
@@ -504,7 +521,9 @@ export class BrowserManager {
     const going = context.helmWindow && url && url !== 'about:blank';
     if (spare && !spare.isClosed() && !going) return spare;
     if (!going) {
-      const page = await context.newPage();
+      // In Helm's window a new tab opens in the background: a foreground tab
+      // makes Chromium ask the desktop for focus, and that takes it from the owner.
+      const page = context.helmWindow && !context.helmOwnBrowser ? await this.windowTab(context, 'about:blank', 5000).catch(() => null) || await context.newPage() : await context.newPage();
       try { await [...this.tabs.values()].find(tab => tab.page === page)?.prepared; return page; }
       catch (error) { await page.close().catch(() => {}); throw error; }
     }
@@ -513,7 +532,11 @@ export class BrowserManager {
     if (spare && !spare.isClosed()) await spare.close().catch(() => {});
     page.helmGoing = url; return page;
   }
-  /** Chromium opens the tab at `url`; Playwright hands the page over once the site first answers. Null when Chromium cannot be asked or the site is slow. */
+  /**
+   * Chromium opens the tab at `url` in the background, so the window never
+   * takes the owner's focus; Playwright hands the page over once the site
+   * first answers. Null when Chromium cannot be asked or the site is slow.
+   */
   async windowTab(context, url, wait) {
     const browser = context.browser?.(), first = context.pages().find(page => !page.isClosed());
     const cdp = browser ? await browser.newBrowserCDPSession() : first ? await context.newCDPSession(first) : null;
@@ -526,7 +549,7 @@ export class BrowserManager {
     context.on('page', check);
     let timer;
     try {
-      ({ targetId: want } = await cdp.send('Target.createTarget', { url }));
+      ({ targetId: want } = await cdp.send('Target.createTarget', { url, background: true }));
       if (seen.has(want)) return seen.get(want);
       const page = await Promise.race([arrived, new Promise(resolve => { timer = setTimeout(resolve, wait); timer.unref?.(); })]);
       if (page) return page;
@@ -630,6 +653,7 @@ export class BrowserManager {
     const existing = [...this.tabs.values()].find(t => t.page === page); if (existing) return existing;
     const tab = { id: id(), sessionId, engine: 'chromium', page, title: '', console: [], network: [], downloads: [], lastUsed: this.now(), dialog: null, window: !!page.context?.().helmWindow, patched: !!page.context?.().helmPatched };
     this.tabs.set(tab.id, tab);
+    if (tab.window && !page.context?.().helmOwnBrowser) void keepDrawing(page);
     tab.fetching = new Set(); tab.quietAt = 0;
     const changed = () => { tab.quietAt = Date.now(); for (const wake of tab.settleWaiters || []) wake(); };
     page.on('request', request => { if (['fetch', 'xhr'].includes(request.resourceType())) { tab.fetching.add(request); changed(); } });
@@ -1149,6 +1173,8 @@ export class BrowserManager {
     const kind = action.kind;
     if (POINTER_CLEARS.includes(kind)) { if (tab.pointer) { tab.pointer = null; void tab.page.evaluate(clearPointer).catch(() => {}); } return; }
     if (!Object.hasOwn(POINTER_WORDS, kind) || kind !== 'point' && !tab.window) return;
+    // The owner must act in this tab, so only here does Helm bring it to the front.
+    if (kind === 'point' && tab.window) await tab.page.bringToFront().catch(() => {});
     let size = tab.page.viewportSize();
     const view = async () => size ||= await this.viewSize(tab);
     let x = kind === 'drag' ? action.toX : action.x, y = kind === 'drag' ? action.toY : action.y, box, name = '';
