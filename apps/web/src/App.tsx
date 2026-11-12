@@ -438,9 +438,9 @@ function Shell({ client, conn, onSignOut }: {
     const found = (sessions[want.envId] ?? []).find((x) => x.id === want.sessionId);
     if (!found) return;
     wanted.current = null;
-    const orchestrator = found.delegation?.parentId
+    const orchestrator = !listedThread(found) && found.delegation?.parentId
       ? (sessions[want.envId] ?? []).find((s) => s.id === found.delegation?.parentId) : null;
-    if (found.delegation && !orchestrator && !found.unhomed) return;
+    if (!listedThread(found) && !orchestrator) return;
     navigate([{ kind: 'env' }, { kind: 'session', session: orchestrator ?? found }], want.envId);
   }, [sessions]);
 

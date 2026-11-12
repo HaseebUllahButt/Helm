@@ -878,7 +878,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
               {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
             </button>
             {parentThread && onOpenSession && <button onClick={openParent}>Open main chat</button>}
-            {!session.brain && !session.delegation && <button onClick={pin}>{session.pinnedAt ? 'Unpin chat' : 'Pin chat'}</button>}
+            {!session.brain && <button onClick={pin}>{session.pinnedAt ? 'Unpin chat' : 'Pin chat'}</button>}
             <button onClick={archive}>{session.archived ? 'Restore chat' : 'Archive chat'}</button>
             <button className="destructive" onClick={kill}>{session.nativeCodex ? 'Remove from Helm' : 'Delete chat'}</button>
             <p className="menu-facts">{where}</p>
