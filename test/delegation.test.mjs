@@ -291,6 +291,13 @@ test('Codex delegates to Claude with the selected model, folder, lineage and dur
   assert.equal((await sessions.list()).some((s) => s.id === child.id), false);
   assert.equal((await sessions.list({ parentId: parent.id })).some((s) => s.id === child.id), true);
   assert.equal((await sessions.list({ includeDelegations: true })).some((s) => s.id === child.id), true);
+  sessions.pin(child.id);
+  assert.equal((await sessions.list()).find((s) => s.id === child.id)?.delegation.parentId, parent.id,
+    'pinning lists the helper without detaching it from its parent');
+  assert.equal((await sessions.list({ parentId: parent.id })).some((s) => s.id === child.id), true);
+  sessions.pin(child.id, false);
+  assert.equal((await sessions.list()).some((s) => s.id === child.id), false,
+    'unpinning returns the helper to its parent only');
   assert.equal(sessions.isDelegatedConversation(child.engine, child.engineSessionId), true);
   // A helper's OpenCode chat is found under the other OpenCode name; it is still the helper's.
   const record = sessions.get(child.id);

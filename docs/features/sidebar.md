@@ -45,7 +45,9 @@ until `text` starts with "helm / Search anything".
   leaves the other shelves but keeps its status; the waiting box sees it, and
   the folded rail and Ctrl+Tab always show it first. The machine keeps the pin (`pinnedAt`,
   `session.pin`), so it shows on every device. A found CLI chat or a
-  terminal pane has no Helm record and cannot be pinned.
+  terminal pane has no Helm record and cannot be pinned. Pin a helper from
+  its chat's menu to show it in the sidebar. It stays linked to its parent.
+  Unpin it to return it to the parent's helper list only.
 - **Shelf keys (owner, 2026-10-31):** Alt+1, Alt+2, Alt+3 open the top chat
   of Finished, Running, Settled (sidebar order). The folded rail shows the
   pinned chats, then the picked group, in one even column: Needs you and

@@ -198,10 +198,10 @@ export function useWorkspaceData(client: Client, connected: boolean) {
       if (update?.id) {
         recordSession(envId, update);
         const known = sessionsRef.current[envId]?.find((session) => session.id === update.id);
-        const helper = !!update.delegation?.parentId && !update.unhomed;
+        const helper = !!update.delegation?.parentId && !update.unhomed && !update.pinnedAt;
         const changesList = !liveListsSeen.current.has(envId) || !update.id || !!update.movedTo
           || update.status === 'exited'
-          || (known ? !!known.archived !== !!update.archived : !helper);
+          || (known ? !!known.archived !== !!update.archived || !!known.pinnedAt !== !!update.pinnedAt : !helper);
         if (changesList) scheduleSessionReload(envId, 400);
       } else scheduleSessionReload(envId, 400);
     });
