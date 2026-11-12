@@ -172,7 +172,7 @@ const real = path => { try { return realpathSync(path); } catch { return path; }
  * Helm app window, tests). Chromium rewrites its command line as one line
  * with spaces, so the flags are found after a space or a NUL.
  */
-export const ownBrowserCommand = text => !/(^|[\0 ])--(type|user-data-dir)=/.test(text);
+export const ownBrowserCommand = text => !/(^|[\0\s"])--(type|user-data-dir)(?:=|[\0\s"])/.test(text);
 /**
  * The main process of the owner's own browser: the program runs with no
  * other profile folder named (Helm's window and tests name their own).

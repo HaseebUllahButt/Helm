@@ -249,6 +249,8 @@ test('the owner\'s browser is found also when Chromium writes its command as one
   assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave --password-store=basic --user-data-dir=/home/me/.helm/app-window --app=http://127.0.0.1:8787/'), false, 'the Helm app window');
   assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave --type=renderer --lang=en-US'), false, 'a helper process');
   assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave\0--user-data-dir=/tmp/helm-window\0'), false);
+  assert.equal(ext.ownBrowserCommand('browser.exe "--user-data-dir=C:/User Name/.helm/app-window"'), false);
+  assert.equal(ext.ownBrowserCommand('browser.exe --user-data-dir "C:/User Name/.helm/app-window"'), false);
 });
 
 test('a restart closes only the owner\'s browser and opens it again with its last tabs', { skip: process.platform !== 'linux' && 'reads /proc' }, async t => {
