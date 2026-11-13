@@ -440,15 +440,21 @@ const DETAILS = {
                       (10 minutes; --timeout <ms> changes it). It works in
                       read-only chats. With no screen it stops at once.
     screenshot        only when visuals matter; close <tab> releases it
-    profiles / logins copy the owner's browser logins into Helm's window
+    open <url> --profile <name>
+                      open the tab in this profile of the owner's browser,
+                      in its folded Helm tab group. Later tabs of the chat
+                      use it too. A profile with no open window loads in
+                      the running browser, with no restart. In Helm's
+                      window, it copies that profile's logins first.
+    profiles / logins list the owner's browser profiles; copy logins into
+                      Helm's window
     mode              show where tabs open. extended (the default): the
                       owner's own browser, with its real logins, through
                       Helm's add-on. window: Helm's own window. Until the
                       owner's browser connects, tabs open in Helm's window.
     mode extended     use the owner's browser. Helm sets the add-on up; the
-                      browser loads it on its next start. Add --restart only
-                      when the owner asks: it closes and reopens their
-                      browser, and their tabs come back.
+                      browser loads it on its next start. Never close,
+                      restart or start the owner's browser yourself.
     mode window       use only Helm's own window
     setup             only when the owner asks: open the add-ons page of
                       Google Chrome or Edge and copy the add-on's folder.

@@ -137,6 +137,18 @@ The idea comes from opencode's Browse (MIT).
 - **Only Helm's tabs.** The add-on attaches only to tabs it opened and to
   popups from them. They open in the background, in a folded "Helm" tab
   group. The owner's other tabs are never visible to Helm.
+- **The profile the owner names.** Each open profile runs its own copy of
+  the add-on, and each copy connects with its own mark. Helm finds the
+  profile folder by that mark in the add-on's storage files there
+  (`Local Extension Settings/<id>`); no four letters repeat in a mark, so
+  the storage never compresses it. `helm browser open <url> --profile
+  <name>` opens the tab in that profile, and the chat keeps it (also in
+  `<chat>/profile.json`). With no name: the chat's profile, the owner's
+  default login profile when it is open, the profile used last, then the
+  first that connected. A profile with no open window loads in the running
+  browser (`--profile-directory=<dir> --no-startup-window`): no restart,
+  and one window that does not take the focus. A named profile never falls
+  back to another one. All copies must come from one browser.
 - **Nothing leaves the owner's browser.** Helm never writes or reads its
   cookies: login copying, cookie saving and browser-wide cookie, cache,
   close and window-raise commands are refused or skipped.
@@ -144,7 +156,7 @@ The idea comes from opencode's Browse (MIT).
   writes a new key and port to `helm-link.json` in the add-on folder at each
   start. The add-on and Helm each sign a fresh challenge with the key, and
   the page origin must be the add-on's fixed id. The driver end needs a
-  random token. One browser connects at a time.
+  random token. One browser connects at a time, one link per profile.
 - **New tabs start blank.** A new tab goes to its address only after the
   driver has set the page up (on `Runtime.runIfWaitingForDebugger`), so
   Helm's page scripts run on the first page too.
@@ -156,10 +168,12 @@ The idea comes from opencode's Browse (MIT).
   name inside the launcher) gets the folder added to its `--load-extension`
   list; the owner's other add-ons stay. The browser loads it on its next
   start. A running browser does not load an add-on from a second start.
-  Agents never restart it on their own: that would interrupt the owner.
-  Until then they use Helm's window with copied logins. `--restart`, only
-  when the owner asks, closes the owner's browser and opens it again with
-  `--restore-last-session`.
+  Agents never close, restart or start the owner's browser, and never give
+  it a debugging port: on 2026-11-13 a chat did that to reach a profile,
+  and the owner called it unacceptable. `helm browser mode` has no restart
+  switch. Until the next start agents use Helm's window with copied logins.
+  Only the owner's Restart now button in Settings closes the browser and
+  opens it again with `--restore-last-session`.
 - **Chromium writes its command line as one line.** `/proc/<pid>/cmdline`
   of a running Chromium has spaces, not NULs, between its flags. Read
   `--type=` and `--user-data-dir=` after a space too, or a restart closes
@@ -180,7 +194,8 @@ The idea comes from opencode's Browse (MIT).
   add-on connects at once, with no restart. Agents never stop a task for
   it: they work in Helm's window and point the owner to Settings once.
   These browsers have no flags file, so their debugging bar stays.
-- **Restarts.** The add-on keeps its tabs when Helm restarts and reconnects
+- **Restarts.** An add-on of another version loads Helm's copy when it
+  connects. The add-on keeps its tabs when Helm restarts and reconnects
   every second for a minute, then every 30 s. Helm takes the tabs back by
   address, as with its own window. When the add-on disconnects, the chats'
   tabs go to sleep.

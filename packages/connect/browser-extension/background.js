@@ -9,13 +9,29 @@
 
 const GROUP = 'Helm';
 const STORE = 'helmTabs';
+const PROFILE = 'helmProfile';
 const enc = new TextEncoder();
 /** Tabs Helm drives: tabId -> { targetId }. Kept in session storage, so a worker restart keeps them. */
 const tabs = new Map();
-let socket = null, ready = false, key = null, retryAt = 0, quickUntil = 0, timer = null;
+let socket = null, ready = false, key = null, retryAt = 0, quickUntil = 0, timer = null, profile = null;
 
 const hex = bytes => [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('');
 const nonce = () => hex(crypto.getRandomValues(new Uint8Array(16)));
+/**
+ * This profile's own mark. Each profile of the browser runs its own copy of
+ * the add-on; Helm finds the profile folder by this mark in the add-on's
+ * storage files there. No four letters repeat, so the storage never
+ * compresses it and Helm reads it as it is.
+ */
+async function profileMark() {
+  if (profile) return profile;
+  const stored = (await chrome.storage.local.get(PROFILE).catch(() => ({})))[PROFILE];
+  if (/^[0-9a-f]{32}$/.test(stored || '')) return profile = stored;
+  let mark;
+  do mark = nonce(); while ([...mark].some((_, i) => i + 4 <= mark.length && mark.indexOf(mark.slice(i, i + 4), i + 1) >= 0));
+  await chrome.storage.local.set({ [PROFILE]: mark });
+  return profile = mark;
+}
 async function sign(text) {
   const raw = new Uint8Array(key.match(/../g).map(pair => parseInt(pair, 16)));
   const secret = await crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -68,6 +84,7 @@ const commands = {
     const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
     let tab;
     if (win?.id != null) tab = await chrome.tabs.create({ windowId: win.id, url: 'about:blank', active: false });
+    // A profile Helm loaded with no window: one window, not focused.
     else tab = (await chrome.windows.create({ url: 'about:blank', focused: false, state: 'normal' })).tabs[0];
     return adopt(tab);
   },
@@ -92,7 +109,7 @@ async function hello(challenge) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (tab) known.push({ tabId, targetId: value.targetId, url: tab.url || 'about:blank', title: tab.title || '' });
   }
-  send({ type: 'hello', proof: await sign(`helm-extension:${challenge}`), nonce: answer, version: chrome.runtime.getManifest().version, userAgent: navigator.userAgent, tabs: known });
+  send({ type: 'hello', proof: await sign(`helm-extension:${challenge}`), nonce: answer, version: chrome.runtime.getManifest().version, userAgent: navigator.userAgent, profile: await profileMark().catch(() => null), tabs: known });
   return answer;
 }
 

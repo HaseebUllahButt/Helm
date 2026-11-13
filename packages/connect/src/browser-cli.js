@@ -5,9 +5,9 @@ import { runBrowserScript } from './browser-script.js';
 import { CAPTCHA_SLICE_MS } from './browser-targets.js';
 
 export async function runBrowserCommand(args, { rpc, self, findSession, env = process.env, print = console.log, readInput = readStdin, exit = setExit } = {}) {
-  const { words, options } = parseAgentArgs(args, { values: ['session', 'output', 'budget', 'note', 'within', 'frame', 'timeout'], switches: ['full-page', 'default', 'clear-default', 'restart'] });
+  const { words, options } = parseAgentArgs(args, { values: ['session', 'output', 'budget', 'note', 'within', 'frame', 'timeout', 'profile'], switches: ['full-page', 'default', 'clear-default', 'restart'] });
   const [command = 'tabs', tabId, source] = words;
-  if (['help', '--help'].includes(command)) { print('helm browser open <url> | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | script <tab> <file or -> [key=value ...] [--timeout <ms>] | point <tab> <element # or CSS selector> [--note <text>] | captcha <tab> [--timeout <ms>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default | mode [window|extended] [--restart] | setup [--session <chat-id>]'); return; }
+  if (['help', '--help'].includes(command)) { print('helm browser open <url> [--profile <name>] | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | script <tab> <file or -> [key=value ...] [--timeout <ms>] | point <tab> <element # or CSS selector> [--note <text>] | captcha <tab> [--timeout <ms>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default | mode [window|extended] | setup [--session <chat-id>]'); return; }
   const sessionId = options.session || env.HELM_SESSION_ID || env.HELM_NATIVE_SESSION;
   if (!sessionId) throw new Error('run browser commands in a Helm chat, or pass --session <chat-id>');
   const target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
@@ -15,8 +15,9 @@ export async function runBrowserCommand(args, { rpc, self, findSession, env = pr
   let result;
   if (command === 'mode') {
     if (tabId && !['window', 'extended'].includes(tabId)) throw new Error('choose a browser mode: window or extended');
-    if (options.restart && tabId !== 'extended') throw new Error('use --restart with helm browser mode extended');
-    result = await rpc(target.env, 'browser.mode', { id, ...(tabId ? { mode: tabId, restart: !!options.restart } : {}) }, options.restart ? 60000 : 20000);
+    // Only the owner restarts their browser, from Settings: an agent never does.
+    if (options.restart) throw new Error('Agents never restart the owner\'s browser. The owner can do it in Settings, under Your browser.');
+    result = await rpc(target.env, 'browser.mode', { id, ...(tabId ? { mode: tabId } : {}) }, 20000);
   }
   // Only when the owner asks: it opens a page and uses the clipboard on their screen.
   else if (command === 'setup') result = await rpc(target.env, 'browser.setup', { do: 'open' }, 30000);
@@ -41,7 +42,8 @@ export async function runBrowserCommand(args, { rpc, self, findSession, env = pr
     result = await runBrowserScript({ source: source === '-' ? await readInput() : await readFile(resolve(source), 'utf8'), file: source, tabId, args: keyValues(words.slice(3)), timeout, call: (method, params, ms) => rpc(target.env, method, { id, ...params }, ms) });
     print(JSON.stringify(result, null, 2)); exit(result.ok ? 0 : 1, !!timeout && !result.ok); return result;
   }
-  else if (command === 'open') result = await rpc(target.env, 'browser.open', { id, url: tabId || 'about:blank' }, 30000);
+  // A profile that is not open yet takes up to 15 s to load.
+  else if (command === 'open') result = await rpc(target.env, 'browser.open', { id, url: tabId || 'about:blank', ...(options.profile ? { profile: options.profile } : {}) }, options.profile ? 50000 : 30000);
   else if (command === 'close') result = await rpc(target.env, 'browser.close', { id, tabId });
   else if (command === 'captcha') result = await waitForCaptcha({ rpc, env: target.env, id, tabId, timeout: options.timeout });
   else if (['look', 'act', 'screenshot', 'point'].includes(command)) {

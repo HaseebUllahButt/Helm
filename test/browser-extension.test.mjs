@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { createHmac } from 'node:crypto';
 import WebSocket from 'ws';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-browser-extension-'));
@@ -108,6 +109,69 @@ test('the link lets in only the add-on with the key, and the driver with the tok
   assert.equal(relay.connected, false);
 });
 
+// A stand-in for one profile's copy of the add-on: it proves the key and opens tabs.
+const fakeAddOn = (dir, { profile, userAgent = 'Chrome/150', firstTab = 100 }) => new Promise((resolve, reject) => {
+  const { port, key } = JSON.parse(readFileSync(join(dir, 'helm-link.json'), 'utf8'));
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/extension`, { origin: `chrome-extension://${ext.EXTENSION_ID}` });
+  const addOn = { ws, calls: [], closedWith: null }; let next = firstTab;
+  ws.on('message', raw => {
+    const message = JSON.parse(raw);
+    if (message.type === 'challenge') { ws.send(JSON.stringify({ type: 'hello', proof: createHmac('sha256', Buffer.from(key, 'hex')).update(`helm-extension:${message.nonce}`).digest('hex'), nonce: 'n1', userAgent, version: ext.EXTENSION_VERSION, profile, tabs: [] })); return; }
+    if (message.type === 'welcome') { resolve(addOn); return; }
+    addOn.calls.push(message.method);
+    const tabId = next++;
+    ws.send(JSON.stringify({ id: message.id, result: message.method === 'tabs.create' ? { tabId, targetId: `T${tabId}` } : { from: profile } }));
+  });
+  ws.on('close', code => { addOn.closedWith = code; resolve(addOn); });
+  ws.on('error', reject);
+});
+
+test('each profile of the owner\'s browser has its own link, and a tab\'s steps go to its profile', async t => {
+  const dir = mkdtempSync(join(process.env.HELM_DIR, 'profiles-'));
+  const relay = await new ExtensionRelay({ linkFile: join(dir, 'helm-link.json'), extensionId: ext.EXTENSION_ID, version: ext.EXTENSION_VERSION }).start();
+  t.after(() => relay.stop());
+  const personal = 'a'.repeat(32), work = 'b'.repeat(32);
+  const one = await fakeAddOn(dir, { profile: personal, firstTab: 100 });
+  const two = await fakeAddOn(dir, { profile: work, firstTab: 200 });
+  assert.deepEqual(relay.profiles, [personal, work], 'both profiles are connected');
+  const again = await fakeAddOn(dir, { profile: work });
+  assert.equal(again.closedWith, 4001, 'one link per profile');
+  const other = await fakeAddOn(dir, { profile: 'c'.repeat(32), userAgent: 'Other/1' });
+  assert.equal(other.closedWith, 4001, 'one browser at a time');
+
+  const driver = new WebSocket(relay.cdpUrl); await new Promise(resolve => driver.on('open', resolve));
+  t.after(() => driver.close());
+  let id = 0; const ask = (method, params = {}, sessionId) => new Promise(resolve => {
+    const mine = ++id; const on = raw => { const m = JSON.parse(raw); if (m.id === mine) { driver.off('message', on); resolve(m); } };
+    driver.on('message', on); driver.send(JSON.stringify({ id: mine, method, params, ...(sessionId ? { sessionId } : {}) }));
+  });
+  assert.equal((await ask('Target.createTarget', { url: 'about:blank', helmProfile: work })).result.targetId, 'T200', 'the tab opens in the named profile');
+  assert.equal((await ask('Target.createTarget', { url: 'about:blank' })).result.targetId, 'T100', 'with no name, in the first profile');
+  assert.match((await ask('Target.createTarget', { url: 'about:blank', helmProfile: 'd'.repeat(32) })).error.message, /not connected/, 'never in another profile than the one named');
+  await ask('Target.setAutoAttach', { autoAttach: true });
+  const session = [...relay.tabs.values()].find(tab => tab.tabId === 200).sessionId;
+  assert.deepEqual((await ask('Runtime.evaluate', {}, session)).result, { from: work }, 'a step goes to the profile that holds the tab');
+  // One profile closes: only its tabs go, the other profile stays.
+  one.ws.close();
+  for (const until = Date.now() + 5000; Date.now() < until && relay.tabs.has(100);) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(relay.tabs.has(100), false); assert.equal(relay.tabs.has(200), true);
+  assert.deepEqual(relay.profiles, [work]);
+  two.ws.close();
+});
+
+test('Helm finds a profile folder by the mark its add-on stored there', () => {
+  const dir = mkdtempSync(join(process.env.HELM_DIR, 'marks-'));
+  const store = name => { const folder = join(dir, name, 'Local Extension Settings', ext.EXTENSION_ID); mkdirSync(folder, { recursive: true }); return folder; };
+  writeFileSync(join(store('Default'), '000003.log'), Buffer.concat([Buffer.from([1, 2, 3]), Buffer.from(`helmProfile"${'1'.repeat(32)}"`)]));
+  writeFileSync(join(store('Profile 3'), '000005.ldb'), `x"${'2'.repeat(32)}"`);
+  writeFileSync(join(store('Profile 4'), 'LOG'), `"${'3'.repeat(32)}"`);
+  const profiles = ['Default', 'Profile 3', 'Profile 4', 'Missing'].map(directory => ({ dataDir: dir, directory }));
+  assert.equal(ext.profileOfMark('1'.repeat(32), profiles).directory, 'Default');
+  assert.equal(ext.profileOfMark('2'.repeat(32), profiles).directory, 'Profile 3');
+  assert.equal(ext.profileOfMark('3'.repeat(32), profiles), null, 'only the storage files count');
+  assert.equal(ext.profileOfMark('not a mark', profiles), null);
+});
+
 // A real Chromium with the add-on loaded, driven through Helm's own browser code.
 const chromiumPath = process.env.HELM_TEST_CHROMIUM || systemChromium();
 const noChromium = !chromiumPath && 'no Chromium-based browser here';
@@ -165,6 +229,49 @@ test('extended mode drives tabs in the owner\'s own browser and keeps them throu
   assert.equal(ext.readMode(directory), 'window');
   const rows = JSON.parse(readFileSync(join(directory, 'chat-1', 'tabs.json'), 'utf8'));
   assert.equal(rows.length, 1, 'the tab is kept to open again');
+});
+
+test('a tab opens in the profile the agent names; a closed profile loads with no restart', { skip: (noChromium || process.platform !== 'linux') && 'needs Chromium on Linux', timeout: 120000 }, async t => {
+  // The site shows the cookies it got, so each profile's own logins can be told apart.
+  const server = createServer((req, res) => {
+    if (req.url === '/set') res.setHeader('Set-Cookie', 'who=personal; Path=/');
+    res.setHeader('Content-Type', 'text/html'); res.end(`<title>${req.headers.cookie || 'none'}</title><p>Signed in</p>`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const directory = mkdtempSync(join(process.env.HELM_DIR, 'two-profiles-'));
+  ext.syncExtension(directory); ext.writeMode(directory, 'extended');
+  // The owner's browser: a full Chromium with no screen, so a second start hands over to it.
+  const dataDir = join(directory, 'owner'), launcher = join(directory, 'chromium');
+  writeFileSync(launcher, `#!/bin/sh\nexec "${chromiumPath}" --ozone-platform=headless --no-first-run --password-store=basic --use-mock-keychain --disable-breakpad --disable-crash-reporter "$@"\n`); chmodSync(launcher, 0o755);
+  const child = spawn(launcher, [`--user-data-dir=${dataDir}`, '--profile-directory=Default', `--load-extension=${ext.extensionFolder(directory)}`, 'about:blank'], { stdio: 'ignore', env: { ...process.env, WAYLAND_DISPLAY: '', DISPLAY: '' } });
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  t.after(async () => { child.kill(); await exited; });
+  const profiles = [{ key: 'c:Default', dataDir, directory: 'Default', name: 'Personal', lastUsed: true }, { key: 'c:Profile 2', dataDir, directory: 'Profile 2', name: 'work' }];
+  const logins = { listProfiles: async () => profiles, resolveProfile: async name => { const found = profiles.find(p => p.name === name || p.directory === name); if (!found) throw new Error(`no profile ${name}`); return found; } };
+  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }), canWindow: true, ownerQuietMs: 300, extensionWaitMs: 20000, logins, browsers: () => [{ name: 'Chromium', program: chromiumPath, launcher }] });
+  t.after(() => manager.stop());
+  await manager.prepare();
+  assert.equal(await manager.relay.waitForExtension(30000), true, 'the add-on connects to Helm');
+  assert.equal(manager.relay.profiles.length, 1, 'only the open profile is connected');
+
+  // No profile named: the profile the owner used last.
+  const personal = await manager.open('chat-1', { url: `${base}/set` });
+  assert.equal(personal.profile, 'Personal (Default)');
+  assert.match((await manager.open('chat-1', { url: base })).tab.title, /who=personal/);
+  // The agent names a profile that has no window: the running browser loads it.
+  const work = await manager.open('chat-2', { url: base, profile: 'work' });
+  assert.equal(work.profile, 'work (Profile 2)');
+  assert.equal(work.tab.title, 'none', 'the work profile has its own logins');
+  assert.equal(manager.relay.profiles.length, 2);
+  assert.equal(child.exitCode, null, 'the owner\'s browser kept running');
+  // The chat keeps its profile for later tabs, and through a Helm restart.
+  assert.equal((await manager.open('chat-2', { url: base })).profile, 'work (Profile 2)');
+  assert.deepEqual(JSON.parse(readFileSync(join(directory, 'chat-2', 'profile.json'), 'utf8')), { dataDir, directory: 'Profile 2', name: 'work' });
+  const listed = (await manager.profiles('chat-2')).profiles;
+  assert.deepEqual(listed.map(p => !!p.connected), [true, true], 'the list shows both profiles connected');
+  await assert.rejects(manager.open('chat-3', { url: base, profile: 'nobody' }), /no profile nobody/);
 });
 
 test('Set up opens Chrome\'s add-ons page and copies the folder; Settings sees each state', async t => {
@@ -246,15 +353,17 @@ test('a restart closes only the owner\'s browser and opens it again with its las
   assert.equal(helms.exitCode, null, 'other copies keep running');
 });
 
-test('helm browser mode asks the chat\'s machine, and --restart goes only with extended', async () => {
+test('helm browser mode asks the chat\'s machine, and an agent can never restart the owner\'s browser', async () => {
   const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
   const calls = [];
-  const run = args => runBrowserCommand(args, { rpc: async (env, method, params, ms) => { calls.push({ method, params, ms }); return { mode: params.mode || 'window' }; }, self: () => 'here', env: { HELM_SESSION_ID: 'chat-1' }, print: () => {} });
-  await run(['mode']); await run(['mode', 'extended', '--restart']); await run(['mode', 'window']);
-  assert.deepEqual(calls.map(call => [call.method, call.params]), [['browser.mode', { id: 'chat-1' }], ['browser.mode', { id: 'chat-1', mode: 'extended', restart: true }], ['browser.mode', { id: 'chat-1', mode: 'window', restart: false }]]);
-  assert.equal(calls[1].ms, 60000, 'a restart may take a while');
+  const run = args => runBrowserCommand(args, { rpc: async (env, method, params, ms) => { calls.push({ method, params, ms }); return { mode: params.mode || 'window', tab: { id: 'x' } }; }, self: () => 'here', env: { HELM_SESSION_ID: 'chat-1' }, print: () => {} });
+  await run(['mode']); await run(['mode', 'extended']); await run(['mode', 'window']);
+  assert.deepEqual(calls.map(call => [call.method, call.params]), [['browser.mode', { id: 'chat-1' }], ['browser.mode', { id: 'chat-1', mode: 'extended' }], ['browser.mode', { id: 'chat-1', mode: 'window' }]]);
   await assert.rejects(run(['mode', 'other']), /window or extended/);
-  await assert.rejects(run(['mode', 'window', '--restart']), /--restart/);
+  await assert.rejects(run(['mode', 'extended', '--restart']), /never restart/);
+  assert.equal(calls.length, 3, 'nothing was sent for --restart');
+  await run(['open', 'https://example.com', '--profile', 'work']);
+  assert.deepEqual(calls[3].params, { id: 'chat-1', url: 'https://example.com', profile: 'work' }, 'open names the profile');
   const seen = [];
   const manager = { owner: id => seen.push(['owner', id]), modeInfo: async () => ({ mode: 'window' }), setMode: async (mode, options) => { seen.push(['set', mode, options]); return { mode }; } };
   const routes = createBrowserRoutes({ sessions: { get: () => ({}) }, manager });

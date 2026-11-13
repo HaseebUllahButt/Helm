@@ -80,7 +80,7 @@ export async function runBrowserScript({ source, file, tabId, args = {}, timeout
     ...handle(tabId),
     tab: id => handle(id),
     tabs: async () => (await send('browser.list', null, {}, 'tabs', 60000)).tabs,
-    open: async url => { const opened = await send('browser.open', null, { url: url || 'about:blank' }, 'open', 30000); return Object.assign(handle(opened.tab.id), { tab: opened.tab, text: opened.text, elements: opened.elements }); },
+    open: async (url, { profile } = {}) => { const opened = await send('browser.open', null, { url: url || 'about:blank', ...(profile ? { profile } : {}) }, 'open', profile ? 50000 : 30000); return Object.assign(handle(opened.tab.id), { tab: opened.tab, text: opened.text, elements: opened.elements }); },
     log, args,
   };
   const ms = () => now() - started;

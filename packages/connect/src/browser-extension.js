@@ -16,7 +16,9 @@ import { extensionIdFromKey } from './browser-relay.js';
 
 export const EXTENSION_SOURCE = fileURLToPath(new URL('../browser-extension/', import.meta.url));
 const FILES = ['manifest.json', 'background.js'];
-export const EXTENSION_ID = extensionIdFromKey(JSON.parse(readFileSync(join(EXTENSION_SOURCE, 'manifest.json'), 'utf8')).key);
+const MANIFEST = JSON.parse(readFileSync(join(EXTENSION_SOURCE, 'manifest.json'), 'utf8'));
+export const EXTENSION_ID = extensionIdFromKey(MANIFEST.key);
+export const EXTENSION_VERSION = MANIFEST.version;
 export const extensionFolder = directory => join(directory, 'extension');
 export const linkFile = directory => join(extensionFolder(directory), 'helm-link.json');
 
@@ -142,6 +144,42 @@ export async function restartOwnBrowser({ program, launcher, env = process.env, 
   const child = spawn(file, list, { detached: true, stdio: 'ignore', env: { ...env, ...screen } });
   child.on('error', () => {}); child.unref();
   return { closed: pids.length };
+}
+
+// ---------- The owner's profiles ----------
+/**
+ * The profile whose copy of the add-on wrote `mark` into its storage files,
+ * from `profiles` ({ dataDir, directory }), or null.
+ */
+export function profileOfMark(mark, profiles) {
+  if (!/^[0-9a-f]{32}$/.test(mark || '')) return null;
+  const want = Buffer.from(mark);
+  for (const profile of profiles) {
+    const folder = join(profile.dataDir, profile.directory, 'Local Extension Settings', EXTENSION_ID);
+    let names; try { names = readdirSync(folder); } catch { continue; }
+    for (const name of names) {
+      if (!/\.(log|ldb)$/.test(name)) continue;
+      try { if (readFileSync(join(folder, name)).includes(want)) return profile; } catch { /* written now */ }
+    }
+  }
+  return null;
+}
+/** True while a browser runs with this profile folder: its lock names a live program. */
+export function browserRunning(dataDir) {
+  let lock; try { lock = readlinkSync(join(dataDir, 'SingletonLock')); } catch { return false; }
+  const pid = Number(/-(\d+)$/.exec(lock)?.[1]);
+  return Number.isInteger(pid) && pid > 0 && alive(pid);
+}
+/**
+ * Ask the owner's running browser to load one more profile, with no window
+ * and no restart. The add-on in that profile then connects to Helm.
+ */
+export function openProfile({ program, launcher, dataDir, directory, env = process.env, screen = {} }) {
+  const command = launcher || program; if (!command) return false;
+  const args = [`--user-data-dir=${dataDir}`, `--profile-directory=${directory}`, '--no-startup-window'];
+  const scoped = process.platform === 'linux' && !env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
+  const [file, list] = scoped ? [scoped, ['--user', '--scope', '--collect', '--quiet', command, ...args]] : [command, args];
+  try { const child = spawn(file, list, { detached: true, stdio: 'ignore', env: { ...env, ...screen } }); child.on('error', () => {}); child.unref(); return true; } catch { return false; }
 }
 
 /**
