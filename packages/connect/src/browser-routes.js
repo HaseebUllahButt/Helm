@@ -1,10 +1,14 @@
 import { discoverApps } from './browser-apps.js';
 import { BrowserManager } from './browser.js';
 
-export function createBrowserRoutes({ sessions, scanApps = discoverApps, alert, manager = new BrowserManager({ session: id => sessions.get(id), alert }) } = {}) {
+// Chats of other machines that use this machine's browser (helm browser --machine).
+const GUEST_ID = /^guest-[\w-]{1,150}$/;
+const GUEST_REFUSED = new Set(['browser.openApp', 'browser.setup', 'browser.main', 'browser.mode', 'browser.loginDefault', 'browser.importLogins']);
+
+export function createBrowserRoutes({ sessions, scanApps = discoverApps, alert, guests = new Map(), manager = new BrowserManager({ session: id => guests.get(id) || sessions.get(id), alert }) } = {}) {
   const apps = async id => scanApps(sessions.get(id), { roots: await sessions.appProcessRoots?.(id) || [] });
   return {
-    manager,
+    manager, guests,
     stop: () => manager.stop(),
     // A deleted chat's browser goes with it: its window, tabs and sign-ins.
     sessionChanged(session) {
@@ -13,6 +17,13 @@ export function createBrowserRoutes({ sessions, scanApps = discoverApps, alert, 
     },
     async dispatch(method, p) {
       if (!method.startsWith('browser.')) return undefined;
+      // A chat on another machine uses this browser: it gets its own tabs here.
+      if (p?.guest) {
+        if (GUEST_REFUSED.has(method)) throw new Error(`${method} works only on the chat's own machine`);
+        if (!GUEST_ID.test(p.id || '')) throw new Error('a browser belongs to a Helm thread');
+        const { chat, from, mode, title } = p.guest;
+        guests.set(p.id, { id: p.id, guest: true, chat: String(chat || ''), from: String(from || ''), mode: typeof mode === 'string' ? mode : null, title: typeof title === 'string' ? title.slice(0, 200) : null });
+      }
       // A local link in a terminal opens in the chat's external browser.
       if (method === 'browser.openApp') {
         const url = new URL(p.url);

@@ -481,8 +481,10 @@ export class Daemon {
       // A CAPTCHA waits for the owner: the same notice as a question, taken away when it is solved.
       alert: ({ sessionId, tag, resolve }) => {
         if (resolve) return this.broadcastFrame(T.NOTIFY, { payload: { tag, envId: this.id, sessionId, resolve: true } });
-        let session = null; try { session = this.sessions.get(sessionId); } catch { /* gone already */ }
-        this.broadcastFrame(T.NOTIFY, { payload: describeCaptcha({ ...session, id: sessionId, envId: this.id, machine: this.name }, tag) });
+        // A chat of another machine using this browser: the notice names it.
+        let session = this.browsers?.guests.get(sessionId) || null; try { session ||= this.sessions.get(sessionId); } catch { /* gone already */ }
+        const where = session?.guest ? { id: session.chat, envId: session.from } : { id: sessionId, envId: this.id };
+        this.broadcastFrame(T.NOTIFY, { payload: describeCaptcha({ ...session, ...where, machine: this.name }, tag) });
       } });
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),

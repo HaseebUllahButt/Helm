@@ -38,6 +38,18 @@ The owner uses the same browser window. Helm has no browser panel.
   from inside Chromium, never through the desktop, so it never takes the
   owner's keyboard or mouse. Helm does not show or stream the page. A machine without a screen (the VM) uses a hidden Chromium,
   which is never started where windows can show.
+- **Another machine's browser (`--machine <name>`).** A machine with no
+  screen (the VM) gets more CAPTCHAs: sites see a hidden browser on a
+  server address. A chat there can use the owner's signed-in browser on
+  another machine. That machine keeps the tabs as a guest chat,
+  `guest-<machine>-<chat>`, made from the caller's `guest` field (its chat,
+  machine, mode and title). Read-only chats stay read-only there. Settings,
+  mode, main browser, login copies and terminal links refuse guests. A
+  CAPTCHA notice opens the caller's chat. A machine on an older Helm answers
+  "thread not found", which the command turns into "update it".
+- **A command tool before a website.** The agent note tells agents to use a
+  service's own command tool or API key (Cloudflare, GitHub) before its
+  website: no login page and no CAPTCHA.
 - **Local terminal links use the chat's machine.** Opening a local link
   checks that its server still belongs to the chat, then opens its address
   in the chat's browser window. No public link is made. Discovery runs
