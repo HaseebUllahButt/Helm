@@ -2452,7 +2452,7 @@ try {
 
     case 'browser': {
       const { runBrowserCommand } = await import('../src/browser-cli.js');
-      await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession });
+      await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession, machine: machineId });
       break;
     }
     case 'canvas':

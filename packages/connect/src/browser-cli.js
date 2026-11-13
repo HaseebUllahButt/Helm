@@ -4,14 +4,28 @@ import { parseAgentArgs } from './agent-args.js';
 import { runBrowserScript } from './browser-script.js';
 import { CAPTCHA_SLICE_MS } from './browser-targets.js';
 
-export async function runBrowserCommand(args, { rpc, self, findSession, env = process.env, print = console.log, readInput = readStdin, exit = setExit } = {}) {
-  const { words, options } = parseAgentArgs(args, { values: ['session', 'output', 'budget', 'note', 'within', 'frame', 'timeout', 'profile'], switches: ['full-page', 'default', 'clear-default', 'restart'] });
+export async function runBrowserCommand(args, { rpc, self, findSession, machine, env = process.env, print = console.log, readInput = readStdin, exit = setExit } = {}) {
+  const { words, options } = parseAgentArgs(args, { values: ['session', 'output', 'budget', 'note', 'within', 'frame', 'timeout', 'profile', 'machine'], switches: ['full-page', 'default', 'clear-default', 'restart'] });
   const [command = 'tabs', tabId, source] = words;
-  if (['help', '--help'].includes(command)) { print('helm browser open <url> [--profile <name>] | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | script <tab> <file or -> [key=value ...] [--timeout <ms>] | point <tab> <element # or CSS selector> [--note <text>] | captcha <tab> [--timeout <ms>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default | mode [window|extended] | main [name] | setup [--session <chat-id>]'); return; }
+  if (['help', '--help'].includes(command)) { print('helm browser open <url> [--profile <name>] [--machine <name>] | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | script <tab> <file or -> [key=value ...] [--timeout <ms>] | point <tab> <element # or CSS selector> [--note <text>] | captcha <tab> [--timeout <ms>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default | mode [window|extended] | main [name] | setup [--session <chat-id>]'); return; }
   const sessionId = options.session || env.HELM_SESSION_ID || env.HELM_NATIVE_SESSION;
   if (!sessionId && command !== 'main') throw new Error('run browser commands in a Helm chat, or pass --session <chat-id>');
-  const target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
-  const id = target.session.id;
+  let target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
+  let id = target.session.id;
+  // --machine: use the browser of another machine, for example the owner's
+  // signed-in browser on a laptop when this machine has no screen. That
+  // machine keeps the tabs for this chat as a guest.
+  const there = options.machine ? machine(options.machine) : null;
+  if (there && there !== target.env) {
+    if (['mode', 'main', 'setup', 'logins'].includes(command)) throw new Error(`helm browser ${command} works only on the chat's own machine`);
+    const own = options.session ? target.session : (await findSession(sessionId).catch(() => null))?.session || { id: sessionId };
+    const guest = { chat: id, from: target.env, mode: own.mode || null, title: own.title || own.name || null };
+    target = { env: there, session: { id: guestId(target.env, id) } }; id = target.session.id;
+    const direct = rpc;
+    rpc = (env_, method, params, ms) => direct(env_, method, { ...params, guest }, ms).catch(error => {
+      throw /thread not found/.test(error.message) ? new Error('That machine runs an older Helm. Update it, then try again.') : error;
+    });
+  }
   let result;
   if (command === 'mode') {
     if (tabId && !['window', 'extended'].includes(tabId)) throw new Error('choose a browser mode: window or extended');
@@ -61,6 +75,9 @@ export async function runBrowserCommand(args, { rpc, self, findSession, env = pr
   } else throw new Error(`unknown browser command: ${command}`);
   print(JSON.stringify(result, null, 2)); return result;
 }
+
+/** The name a chat has on another machine whose browser it uses. */
+export const guestId = (machine, chat) => `guest-${String(machine).replace(/[^\w-]/g, '').slice(0, 40)}-${String(chat).replace(/[^\w-]/g, '').slice(0, 100)}`;
 
 const keyValues = words => Object.fromEntries(words.map(value => { const at = value.indexOf('='); if (at < 1) throw new Error('parameters use key=value'); return [value.slice(0, at), value.slice(at + 1)]; }));
 async function readStdin() { let text = ''; for await (const chunk of process.stdin) text += chunk; return text; }

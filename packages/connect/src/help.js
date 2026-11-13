@@ -446,6 +446,10 @@ const DETAILS = {
                       use it too. A profile with no open window loads in
                       the running browser, with no restart. In Helm's
                       window, it copies that profile's logins first.
+    --machine <name>  use the browser of another machine, for example the
+                      owner's signed-in browser on their laptop when this
+                      machine has no screen. Add it to every command for
+                      those tabs. Sites show a hidden browser more CAPTCHAs.
     profiles / logins list the owner's browser profiles; copy logins into
                       Helm's window
     mode              show where tabs open. extended (the default): the

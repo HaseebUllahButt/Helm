@@ -517,3 +517,33 @@ test('helm browser main lists and sets the main browser on the chat machine', as
     { ProcessId: 14, ExecutablePath: exe, CommandLine: `${exe} --type=renderer` },
   ]) }), [12]);
 });
+
+test('--machine uses another machine\'s browser as a guest chat, and keeps the chat\'s mode', async () => {
+  const { runBrowserCommand, guestId } = await import('../packages/connect/src/browser-cli.js');
+  const calls = [];
+  const deps = {
+    rpc: async (env, method, params) => { calls.push({ env, method, params }); return { tab: { id: 'x' } }; },
+    self: () => 'vm', machine: name => ({ laptop: 'lap', vm: 'vm' })[name.toLowerCase()],
+    findSession: async id => ({ env: 'vm', session: { id, mode: 'readonly', title: 'Cloudflare fix' } }),
+    env: { HELM_SESSION_ID: 'chat-1' }, print: () => {},
+  };
+  await runBrowserCommand(['open', 'https://dash.cloudflare.com', '--machine', 'Laptop'], deps);
+  assert.deepEqual(calls[0], { env: 'lap', method: 'browser.open', params: { id: guestId('vm', 'chat-1'), url: 'https://dash.cloudflare.com', guest: { chat: 'chat-1', from: 'vm', mode: 'readonly', title: 'Cloudflare fix' } } });
+  assert.equal(guestId('vm', 'chat-1'), 'guest-vm-chat-1');
+  // This machine itself: a normal call.
+  await runBrowserCommand(['tabs', '--machine', 'vm'], deps);
+  assert.deepEqual(calls[1], { env: 'vm', method: 'browser.list', params: { id: 'chat-1' } });
+  await assert.rejects(runBrowserCommand(['mode', 'window', '--machine', 'laptop'], deps), /only on the chat's own machine/);
+  // A machine on an older Helm does not know guests.
+  await assert.rejects(runBrowserCommand(['tabs', '--machine', 'laptop'], { ...deps, rpc: async () => { throw new Error('thread not found'); } }), /older Helm/);
+
+  const seen = [];
+  const manager = { open: async (id, p) => { seen.push(['open', id, manager.session(id)]); return { ok: true }; }, session: null };
+  const routes = createBrowserRoutes({ sessions: { get: () => { throw new Error('thread not found'); } }, manager });
+  manager.session = id => routes.guests.get(id);
+  const guest = { chat: 'chat-1', from: 'vm', mode: 'readonly', title: 'Cloudflare fix' };
+  await routes.dispatch('browser.open', { id: 'guest-vm-chat-1', url: 'https://example.com', guest });
+  assert.deepEqual(seen[0][2], { id: 'guest-vm-chat-1', guest: true, ...guest }, 'the guest keeps its chat\'s read-only mode');
+  await assert.rejects(routes.dispatch('browser.setup', { id: 'guest-vm-chat-1', do: 'restart', guest }), /only on the chat's own machine/);
+  await assert.rejects(routes.dispatch('browser.open', { id: 'chat-9', guest }), /belongs to a Helm thread/, 'a guest cannot take a local chat\'s name');
+});
