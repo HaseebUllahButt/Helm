@@ -22,11 +22,13 @@ export function createBrowserRoutes({ sessions, scanApps = discoverApps, alert, 
       }
       // Settings: the owner's browser on this machine, with no chat.
       if (method === 'browser.setup') {
+        if (p.do === 'main') return manager.setMain(p.name);
         if (p.do === 'open') return manager.ownerSetup();
         if (p.do === 'restart') return manager.setMode('extended', { restart: true });
         if (p.do === 'mode') return manager.setMode(p.mode);
         return manager.modeInfo();
       }
+      if (method === 'browser.main') { if (p.id) manager.owner(p.id); return p.name ? manager.setMain(p.name) : manager.mainInfo(); }
       if (method === 'browser.mode') { manager.owner(p.id); return p.mode ? manager.setMode(p.mode, { restart: !!p.restart }) : manager.modeInfo(); }
       if (method === 'browser.profiles') return manager.profiles(p.id);
       if (method === 'browser.importLogins') return manager.importLogins(p.id, p.profileKey);

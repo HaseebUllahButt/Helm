@@ -327,12 +327,37 @@ test('until the owner\'s browser connects, tabs open in Helm\'s window, then mov
   assert.equal(again.note, undefined, 'no note once the owner\'s browser is in use');
 });
 
+test('a closed browser without a flags file is started with no window, so agents use the owner\'s real profile, never a copy', { skip: noChromium, timeout: 90000 }, async t => {
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Started</title><button>Ready</button>'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const directory = mkdtempSync(join(process.env.HELM_DIR, 'start-'));
+  ext.writeMode(directory, 'extended');
+  // A launcher without a flags file, whose program is not running.
+  const launcher = join(directory, 'brave'); writeFileSync(launcher, '#!/bin/sh\n');
+  const started = [];
+  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }), canWindow: true, ownerQuietMs: 300, extensionWaitMs: 300,
+    browsers: () => [{ name: 'Brave', program: join(directory, 'brave-bin'), launcher }],
+    startOwn: browser => { started.push(browser); void startBrowser(t, directory); return true; },
+    launchWindow: () => { throw new Error('Helm\'s own window must not open'); } });
+  t.after(() => manager.stop());
+  await manager.prepare({ install: false });
+  const opened = await manager.open('chat-1', { url });
+  assert.equal(opened.note, undefined, 'the tab is in the owner\'s browser, not in Helm\'s window');
+  assert.equal(manager.shared.helmOwnBrowser, true);
+  assert.deepEqual(started.map(browser => [browser.program, browser.launcher]), [[join(directory, 'brave-bin'), launcher]], 'Helm started the owner\'s browser once');
+  assert.match((await manager.run('chat-1', opened.tab.id, { kind: 'look' })).text, /Ready/);
+});
+
 test('the owner\'s browser is found also when Chromium writes its command as one line', () => {
   assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave\0--password-store=basic\0'), true);
   assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave --password-store=basic --load-extension=/a,/b'), true);
   assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave --password-store=basic --user-data-dir=/home/me/.helm/app-window --app=http://127.0.0.1:8787/'), false, 'the Helm app window');
   assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave --type=renderer --lang=en-US'), false, 'a helper process');
   assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave\0--user-data-dir=/tmp/helm-window\0'), false);
+  assert.equal(ext.ownBrowserCommand('browser.exe "--user-data-dir=C:/User Name/.helm/app-window"'), false);
+  assert.equal(ext.ownBrowserCommand('browser.exe --user-data-dir "C:/User Name/.helm/app-window"'), false);
 });
 
 test('a restart closes only the owner\'s browser and opens it again with its last tabs', { skip: process.platform !== 'linux' && 'reads /proc' }, async t => {
@@ -370,4 +395,125 @@ test('helm browser mode asks the chat\'s machine, and an agent can never restart
   assert.deepEqual(await routes.dispatch('browser.mode', { id: 'chat-1' }), { mode: 'window' });
   await routes.dispatch('browser.mode', { id: 'chat-1', mode: 'extended', restart: true });
   assert.deepEqual(seen, [['owner', 'chat-1'], ['owner', 'chat-1'], ['set', 'extended', { restart: true }]]);
+});
+
+test('the saved main browser wins, survives mode changes, and falls back when removed', async t => {
+  const directory = mkdtempSync(join(process.env.HELM_DIR, 'main-'));
+  let found = [{ name: 'Chromium', program: '/missing/chromium', systemDefault: true }, { name: 'Vivaldi', program: '/missing/vivaldi' }];
+  const manager = new BrowserManager({ directory, canWindow: true, mode: 'window', browsers: () => found });
+  t.after(() => manager.stop());
+  assert.equal(manager.ownBrowser().name, 'Chromium');
+  await manager.setMain('vIvAlDi');
+  assert.equal(manager.ownBrowser().name, 'Vivaldi');
+  ext.writeMode(directory, 'window');
+  assert.equal(ext.readChoice(directory).main, 'Vivaldi');
+  assert.deepEqual(manager.mainInfo().browsers.map(b => b.selected), [false, true]);
+  found = found.slice(0, 1);
+  assert.equal(manager.ownBrowser().name, 'Chromium');
+  await assert.rejects(manager.setMain('Firefox'), /Choose a browser/);
+  found = [{ name: 'Helium', program: '/missing/helium' }, ...found.map(b => ({ ...b, systemDefault: false }))];
+  assert.equal(manager.mainNote(), '', 'a saved choice counts even when temporarily absent');
+  const other = new BrowserManager({ directory: join(directory, 'other'), browsers: () => found });
+  assert.match(other.mainNote(), /Ask the owner once/);
+});
+
+test('menu setup keeps Flatpak and other add-ons, then restores the owner entry', () => {
+  const directory = mkdtempSync(join(process.env.HELM_DIR, 'menu-'));
+  const desktopFile = join(directory, 'org.wave.Browser.desktop'), env = { HOME: directory };
+  const original = '[Desktop Entry]\nName=Wave\nExec=/usr/bin/flatpak run org.wave.Browser --load-extension=/owner %U\n[Desktop Action private]\nExec=/usr/bin/flatpak run org.wave.Browser --incognito\n';
+  writeFileSync(desktopFile, original);
+  const browser = { name: 'Wave', program: '/usr/bin/flatpak', desktopFile };
+  const target = ext.setDesktop(browser, '/helm folder/extension', true, env, 'linux');
+  const added = readFileSync(target, 'utf8');
+  assert.match(added, /# Helm browser entry:/);
+  assert.match(added, /Exec=\/usr\/bin\/flatpak run org.wave.Browser "--load-extension=\/owner,\/helm folder\/extension" %U --silent-debugger-extension-api/);
+  assert.equal((added.match(/--silent-debugger-extension-api/g) || []).length, 2);
+  ext.setDesktop(browser, '/helm folder/extension', true, env, 'linux');
+  assert.equal(readFileSync(target, 'utf8'), added);
+  ext.setDesktop(browser, '/helm folder/extension', false, env, 'linux');
+  assert.equal(existsSync(target), false);
+  assert.equal(readFileSync(desktopFile, 'utf8'), original);
+  mkdirSync(join(target, '..'), { recursive: true }); writeFileSync(target, original);
+  ext.setDesktop({ ...browser, desktopFile: target }, '/extension', true, env, 'linux');
+  ext.setDesktop({ ...browser, desktopFile: target }, '/extension', false, env, 'linux');
+  assert.equal(readFileSync(target, 'utf8'), original);
+});
+
+test('switching the main browser removes old setup and closes its link', async t => {
+  const directory = mkdtempSync(join(process.env.HELM_DIR, 'switch-'));
+  const before = process.env.XDG_CONFIG_HOME; process.env.XDG_CONFIG_HOME = join(directory, 'config');
+  t.after(() => { if (before === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = before; });
+  const browsers = ['brave', 'vivaldi'].map(name => {
+    const launcher = join(directory, name); writeFileSync(launcher, `#!/bin/sh\n${name}-flags.conf\n`);
+    return { name, program: launcher, launcher };
+  });
+  const manager = new BrowserManager({ directory, canWindow: true, browsers: () => browsers });
+  t.after(() => manager.stop()); await manager.prepare({ install: true });
+  const relay = manager.relay, folder = ext.extensionFolder(directory);
+  await manager.setMain('Brave');
+  assert.equal(manager.relay, relay, 'saving the current browser keeps the live link');
+  assert.equal((await manager.modeInfo()).folder, folder);
+  await manager.setMain('Vivaldi');
+  assert.notEqual(manager.relay, relay);
+  assert.doesNotMatch(readFileSync(join(directory, 'config/brave-flags.conf'), 'utf8'), /load-extension/);
+  assert.match(readFileSync(join(directory, 'config/vivaldi-flags.conf'), 'utf8'), /load-extension/);
+  assert.notEqual((await manager.modeInfo()).folder, folder, 'the old browser cannot reconnect to the new browser link');
+  await manager.setMode('window');
+  assert.equal(readFileSync(join(directory, 'config/vivaldi-flags.conf'), 'utf8'), '');
+});
+
+test('Helm starts any supported browser with add-on flags and launcher arguments', async () => {
+  const { watch } = await import('node:fs/promises');
+  const directory = mkdtempSync(join(process.env.HELM_DIR, 'launch-'));
+  const launcher = join(directory, 'launcher'), output = join(directory, 'args');
+  writeFileSync(launcher, `#!/bin/sh\nprintf '%s\\n' "$@" > "${output}"\n`); chmodSync(launcher, 0o755);
+  const watcher = watch(directory);
+  try {
+    assert.equal(ext.startOwnBrowser({ program: launcher, args: ['run', 'org.wave.Browser'], folder: '/helm/extension', env: { ...process.env, HELM_NO_SERVICE: '1' } }), true);
+    for await (const event of watcher) {
+      if (event.filename === 'args' && existsSync(output) && readFileSync(output, 'utf8').includes('--no-startup-window')) break;
+    }
+    assert.deepEqual(readFileSync(output, 'utf8').trim().split('\n'), ['run', 'org.wave.Browser', '--load-extension=/helm/extension', ext.QUIET_FLAG, '--no-startup-window']);
+  } finally { await watcher.return(); }
+});
+
+test('Chrome and Edge keep manual setup; other Chromium browsers load the add-on', async t => {
+  for (const name of ['Google Chrome', 'Microsoft Edge', 'Edge', 'msedge']) {
+    const manager = new BrowserManager({ directory: join(process.env.HELM_DIR, name), canWindow: true, browsers: () => [{ name, program: `/missing/${name}` }] });
+    t.after(() => manager.stop());
+    assert.equal((await manager.modeInfo()).state, 'one-step');
+    assert.match(manager.ownBrowserSteps()[0], /one step from the owner/);
+  }
+  for (const name of ['Brave', 'Helium', 'Vivaldi', 'Chromium']) assert.equal(ext.manualBrowser({ name, program: `/missing/${name}` }), false);
+});
+
+test('helm browser main lists and sets the main browser on the chat machine', async () => {
+  const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
+  const calls = [], output = [];
+  const routes = createBrowserRoutes({ manager: { owner() {}, mainInfo: () => ({ browsers: [{ name: 'Brave', selected: true }] }), setMain: name => ({ browser: name }) } });
+  const run = args => runBrowserCommand(args, { rpc: async (env, method, params) => { calls.push([method, params]); return routes.dispatch(method, params); }, self: () => 'here', env: { HELM_SESSION_ID: 'chat' }, print: text => output.push(JSON.parse(text)) });
+  await run(['main']); await run(['main', 'Google', 'Chrome']);
+  assert.equal(output[0].browsers[0].selected, true);
+  assert.equal(output[1].browser, 'Google Chrome');
+  assert.deepEqual(calls, [['browser.main', { id: 'chat' }], ['browser.main', { id: 'chat', name: 'Google Chrome' }]]);
+  await runBrowserCommand(['main'], { rpc: (env, method, params) => routes.dispatch(method, params), self: () => 'here', env: {}, print() {} });
+});
+
+ test('launch flags keep existing add-ons and do not mistake Helium for Chrome', () => {
+  const directory = mkdtempSync(join(process.env.HELM_DIR, 'launch-flags-'));
+  const launcher = join(directory, 'launcher'); writeFileSync(launcher, '#!/bin/sh\nwave-flags.conf\n');
+  writeFileSync(join(directory, 'wave-flags.conf'), '--load-extension=/owner\n');
+  assert.deepEqual(ext.extensionArgs('/helm', false, launcher, ['run', 'org.wave.Browser', '--load-extension=/other'], { XDG_CONFIG_HOME: directory }), ['run', 'org.wave.Browser', '--load-extension=/owner,/other,/helm', ext.QUIET_FLAG]);
+  assert.equal(ext.manualBrowser({ name: 'Helium', program: '/opt/helium/chrome' }), false);
+});
+
+ test('macOS and Windows find the real browser and exclude Helm app windows', () => {
+  const program = '/Applications/Wave.app/Contents/MacOS/Wave';
+  assert.deepEqual(ext.ownBrowserPids(program, { platform: 'darwin', run: () => `12 ${program} --no-first-run\n13 ${program} --user-data-dir=/helm/app-window\n14 ${program} --type=renderer` }), [12]);
+  const exe = 'C:/Wave/browser.exe';
+  assert.deepEqual(ext.ownBrowserPids(exe, { platform: 'win32', run: () => JSON.stringify([
+    { ProcessId: 12, ExecutablePath: exe, CommandLine: `${exe} --no-first-run` },
+    { ProcessId: 13, ExecutablePath: exe, CommandLine: `${exe} --user-data-dir=/helm/app-window` },
+    { ProcessId: 14, ExecutablePath: exe, CommandLine: `${exe} --type=renderer` },
+  ]) }), [12]);
 });
