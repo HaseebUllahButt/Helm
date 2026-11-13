@@ -10,7 +10,7 @@ import { browserArgs, ignoredBrowserArgs, browserIdentity, presentAsChrome } fro
 import * as browserLogins from './browser-logins.js';
 import { canOpenWindow, systemChromium, launchTarget, launchWindow as openWindow, windowProfile, sharedProfile, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen, stopWindow, trimProfile, screenEnv } from './browser-window.js';
 import { ExtensionRelay } from './browser-relay.js';
-import { EXTENSION_ID, copyText, extensionFolder, linkFile, manualSteps, openExtensionsPage, ownBrowserPids, pasteSteps, readMode, restartOwnBrowser, setFlags, syncExtension, writeMode, flagsFile } from './browser-extension.js';
+import { EXTENSION_ID, EXTENSION_VERSION, browserRunning, openProfile, profileOfMark, copyText, extensionFolder, linkFile, manualSteps, openExtensionsPage, ownBrowserPids, pasteSteps, readMode, restartOwnBrowser, setFlags, syncExtension, writeMode, flagsFile } from './browser-extension.js';
 import { discoverBrowsers } from './chromium-find.js';
 
 const id = () => randomBytes(8).toString('hex');
@@ -235,11 +235,12 @@ export class BrowserManager {
   startRelay() {
     if (this.relayStart) return this.relayStart;
     const changed = syncExtension(this.directory);
-    this.relay ||= new ExtensionRelay({ linkFile: linkFile(this.directory), extensionId: EXTENSION_ID });
+    // An add-on with another version loads this Helm's copy as it connects.
+    this.relay ||= new ExtensionRelay({ linkFile: linkFile(this.directory), extensionId: EXTENSION_ID, version: EXTENSION_VERSION });
     this.relayAt = Date.now();
     return this.relayStart = this.relay.start().then(relay => {
-      // A newer add-on came with this Helm: the browser loads it again.
-      if (changed) void relay.waitForExtension(60000).then(on => on && relay.call('reload', {}).catch(() => {}));
+      // A changed add-on came with this Helm: the browser loads it again.
+      if (changed) void relay.waitForExtension(60000).then(on => on && relay.callAll('reload', {}));
       return relay;
     }, error => { this.relayStart = null; throw error; });
   }
@@ -265,7 +266,65 @@ export class BrowserManager {
     if (!browser.flags) return [`${browser.name} needs one step from the owner before you can use it. Do the task in Helm's window now. At the end, tell the owner once: in Helm, open Settings, choose this machine, and click Set up under Your browser.`];
     if (!ownBrowserPids(browser.program).length) return [`${browser.name} is closed. It connects to Helm when the owner opens it. Until then your tabs open in Helm's window.`];
     // Never interrupt the owner: the browser loads the add-on on its own next start.
-    return [`${browser.name} loads the Helm add-on the next time it starts. Until then your tabs open in Helm's window: if a site is not signed in, run helm browser logins "<profile>". Do not restart ${browser.name} unless the owner asks.`];
+    return [`${browser.name} loads the Helm add-on the next time it starts. Until then your tabs open in Helm's window: if a site is not signed in, run helm browser logins "<profile>". Never close or restart ${browser.name} yourself.`];
+  }
+  /** The owner's profile that wrote this add-on mark, or null. Found once per mark. */
+  profileOfMark(mark, profiles) {
+    this.markProfiles ||= new Map();
+    if (this.markProfiles.has(mark)) return this.markProfiles.get(mark);
+    const found = profileOfMark(mark, profiles);
+    if (found) this.markProfiles.set(mark, found);
+    return found;
+  }
+  /**
+   * Where a chat's new tabs open in the owner's own browser: the profile the
+   * agent names, else the chat's last one, else the owner's default login
+   * profile, else the profile the owner used last, else the first that
+   * connected. A named profile that is not open is loaded into the running
+   * browser, with no window and no restart. Returns { mark, name }.
+   */
+  async ownProfile(sessionId, wanted) {
+    const relay = this.relay; if (!relay?.connected) throw new Error(OWN_BROWSER_OFF);
+    const profiles = await this.logins.listProfiles().catch(() => []);
+    const same = (a, b) => !!a && !!b && a.dataDir === b.dataDir && a.directory === b.directory;
+    const markOf = profile => relay.profiles.find(mark => same(this.profileOfMark(mark, profiles), profile));
+    const named = profile => ({ name: profile.name && profile.name !== profile.directory ? `${profile.name} (${profile.directory})` : profile.directory });
+    this.chatProfiles ||= new Map();
+    if (!wanted && !this.chatProfiles.has(sessionId)) {
+      let saved = null; try { saved = JSON.parse(await readFile(join(this.directory, sessionId, 'profile.json'), 'utf8')); } catch { /* none chosen */ }
+      if (saved?.dataDir && saved?.directory) this.chatProfiles.set(sessionId, { dataDir: String(saved.dataDir), directory: String(saved.directory), name: String(saved.name || '') });
+    }
+    let profile = wanted ? await this.logins.resolveProfile(wanted) : this.chatProfiles.get(sessionId) || null;
+    if (!profile) {
+      const { profileKey } = await this.savedLoginDefault();
+      const choice = profileKey && profiles.find(p => p.key === profileKey);
+      if (choice && markOf(choice)) profile = choice;
+    }
+    if (!profile) {
+      const last = profiles.find(p => p.lastUsed && markOf(p));
+      const mark = last ? markOf(last) : relay.profiles[0];
+      const known = last || this.profileOfMark(mark, profiles);
+      return { mark, ...(known ? named(known) : { name: 'the first profile that connected' }) };
+    }
+    let mark = markOf(profile);
+    if (!mark) {
+      // The profile is not open: the running browser loads it. Never a restart.
+      const connected = relay.profiles.map(m => this.profileOfMark(m, profiles)).find(Boolean);
+      const browser = this.ownBrowser(), label = named(profile).name;
+      if (connected && connected.dataDir !== profile.dataDir) throw new Error(`The profile ${label} belongs to another browser. Helm uses the browser where its add-on is connected. Never close or restart a browser yourself.`);
+      if (!browser || !browserRunning(profile.dataDir)) throw new Error(`The browser of the profile ${label} is not open. Ask the owner to open it. Never start, close or restart it yourself.`);
+      openProfile({ program: browser.program, launcher: browser.launcher, dataDir: profile.dataDir, directory: profile.directory, screen: screenEnv() });
+      const opened = await relay.waitForExtension(this.profileWaitMs ?? 15000, m => same(this.profileOfMark(m, profiles), profile));
+      mark = markOf(profile);
+      if (!opened || !mark) throw new Error(`The profile ${label} did not connect to Helm. Ask the owner to open that profile in ${browser.name}. Never close or restart the browser yourself.`);
+    }
+    if (wanted || !this.chatProfiles.has(sessionId)) {
+      const keep = { dataDir: profile.dataDir, directory: profile.directory, name: profile.name || '' };
+      this.chatProfiles.set(sessionId, keep);
+      const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 });
+      await this.writePrivate(join(folder, 'profile.json'), keep).catch(() => {});
+    }
+    return { mark, ...named(profile) };
   }
   /** The owner's own browser, driven through the add-on as if it were Helm's window. */
   async ownBrowserContext() {
@@ -499,22 +558,25 @@ export class BrowserManager {
    * answered within `wait` gets a plain tab that loads it, so the tab is
    * listed while the site is slow.
    */
-  async newPage(context, url, { wait = 2000 } = {}) {
+  async newPage(context, url, { wait = 2000, profile } = {}) {
     const spare = context.helmSpare; context.helmSpare = null;
-    const going = context.helmWindow && url && url !== 'about:blank';
+    // In the owner's browser every tab opens in the chat's profile.
+    const own = !!context.helmOwnBrowser && !!profile;
+    const going = context.helmWindow && url && (url !== 'about:blank' || own);
     if (spare && !spare.isClosed() && !going) return spare;
     if (!going) {
       const page = await context.newPage();
       try { await [...this.tabs.values()].find(tab => tab.page === page)?.prepared; return page; }
       catch (error) { await page.close().catch(() => {}); throw error; }
     }
-    let page; try { page = await this.windowTab(context, url, wait); } catch (error) { if (spare && !spare.isClosed()) context.helmSpare = spare; throw error; }
-    if (!page) { if (spare && !spare.isClosed()) return spare; return context.newPage(); }
+    // The owner's browser hands the tab over blank, before its site answers.
+    let page; try { page = await this.windowTab(context, url, own ? Math.max(wait, 10000) : wait, own ? profile : undefined); } catch (error) { if (spare && !spare.isClosed()) context.helmSpare = spare; throw error; }
+    if (!page) { if (own) throw new Error('Your browser did not open the tab in time. Try again.'); if (spare && !spare.isClosed()) return spare; return context.newPage(); }
     if (spare && !spare.isClosed()) await spare.close().catch(() => {});
-    page.helmGoing = url; return page;
+    if (url !== 'about:blank') page.helmGoing = url; return page;
   }
   /** Chromium opens the tab at `url`; Playwright hands the page over once the site first answers. Null when Chromium cannot be asked or the site is slow. */
-  async windowTab(context, url, wait) {
+  async windowTab(context, url, wait, profile) {
     const browser = context.browser?.(), first = context.pages().find(page => !page.isClosed());
     const cdp = browser ? await browser.newBrowserCDPSession() : first ? await context.newCDPSession(first) : null;
     if (!cdp) return null;
@@ -526,7 +588,7 @@ export class BrowserManager {
     context.on('page', check);
     let timer;
     try {
-      ({ targetId: want } = await cdp.send('Target.createTarget', { url }));
+      ({ targetId: want } = await cdp.send('Target.createTarget', { url, ...(profile ? { helmProfile: profile } : {}) }));
       if (seen.has(want)) return seen.get(want);
       const page = await Promise.race([arrived, new Promise(resolve => { timer = setTimeout(resolve, wait); timer.unref?.(); })]);
       if (page) return page;
@@ -577,7 +639,13 @@ export class BrowserManager {
     const [width, height] = await tab.page.evaluate(() => [innerWidth, innerHeight]);
     return tab.windowSize = { width, height };
   }
-  async profiles(sessionId) { this.owner(sessionId); return { profiles: await this.logins.listProfiles() }; }
+  async profiles(sessionId) {
+    this.owner(sessionId);
+    const profiles = await this.logins.listProfiles();
+    // In the owner's own browser: which profiles Helm's add-on is connected in.
+    const open = this.extended && this.relay?.connected ? this.relay.profiles.map(mark => this.profileOfMark(mark, profiles)).filter(Boolean) : [];
+    return { profiles: profiles.map(p => open.some(o => o.dataDir === p.dataDir && o.directory === p.directory) ? { ...p, connected: true } : p) };
+  }
   async loginDefault(sessionId, profileKey) {
     this.owner(sessionId); const file = join(this.directory, 'logins.json');
     if (profileKey === null) { await rm(file, { force: true }); return { profileKey: null }; }
@@ -702,7 +770,8 @@ export class BrowserManager {
       }
       // The tabs open together, each at its address. One whose site is slow
       // to answer opens empty and loads behind, as before.
-      const pages = await Promise.all(restore.map(({ context, kept, address }) => kept?.page || this.newPage(context, address).catch(() => context.newPage())));
+      const own = restore.some(({ context, kept }) => !kept && context.helmOwnBrowser) ? await this.ownProfile(sessionId).catch(() => null) : null;
+      const pages = await Promise.all(restore.map(({ context, kept, address }) => kept?.page || this.newPage(context, address, { profile: own?.mark }).catch(() => context.newPage())));
       for (const [index, { row, kept, address }] of restore.entries()) {
         const page = pages[index], tab = kept || this.register(sessionId, page);
         this.tabs.delete(tab.id); tab.id = row.id; tab.title = row.title || tab.title || ''; this.tabs.set(tab.id, tab);
@@ -741,12 +810,20 @@ export class BrowserManager {
     // Listing never opens a window: a closed window's tabs are listed asleep.
     if (this.canWindow && !this.contexts.has(sessionId)) return answer([...live(), ...(await this.savedRows(sessionId)).filter(row => !this.tabs.has(row.id)).map(row => ({ ...row, asleep: true }))]);
     await this.recover(sessionId); return answer(live()); }
-  async open(sessionId, { url = 'about:blank' } = {}) {
+  /**
+   * Open a tab for a chat. `profile` names the owner's browser profile: in
+   * the owner's own browser the tab opens there, else Helm's window first
+   * copies that profile's logins.
+   */
+  async open(sessionId, { url = 'about:blank', profile } = {}) {
     await this.recover(sessionId); url = httpUrl(url);
-    const context = await this.context(sessionId);
-    const page = await this.newPage(context, url);
+    if (profile != null && (typeof profile !== 'string' || !profile.trim())) throw new Error('name a browser profile, for example --profile work');
+    let context = await this.context(sessionId), place = null;
+    if (context.helmOwnBrowser) place = await this.ownProfile(sessionId, profile);
+    else if (profile) { await this.importLogins(sessionId, profile); context = await this.context(sessionId); }
+    const page = await this.newPage(context, url, { profile: place?.mark });
     const tab = this.register(sessionId, page);
-    try { if (url !== 'about:blank') await (page.helmGoing ? this.arrive(page, url) : page.goto(url, { waitUntil: 'domcontentloaded' })); else await this.blank(page); await this.settle(tab, { navigation: true }); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(context.helmFallback ? { note: `This tab opened in Helm's window, not in the owner's browser. ${this.ownBrowserSteps().join(' ')}` } : {}), ...(await this.look(tab)) }; }
+    try { if (url !== 'about:blank') await (page.helmGoing ? this.arrive(page, url) : page.goto(url, { waitUntil: 'domcontentloaded' })); else await this.blank(page); await this.settle(tab, { navigation: true }); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(place ? { profile: place.name } : {}), ...(context.helmFallback ? { note: `This tab opened in Helm's window, not in the owner's browser. ${this.ownBrowserSteps().join(' ')}` } : {}), ...(await this.look(tab)) }; }
     catch (error) { tab.explicitClose = true; await page.close(); throw /net::ERR_|Timeout \d+ms/.test(error.message) ? new Error(plainNavError(error, url)) : error; }
   }
   get(sessionId, tabId) { this.owner(sessionId); const tab = this.tabs.get(tabId); if (!tab || tab.sessionId !== sessionId) throw new Error('browser tab not found in this thread'); return tab; }
@@ -1368,6 +1445,6 @@ export function browserReady({ env = process.env, platform = process.platform, f
 
 export function browserNote(directory = join(HELM_DIR, 'browser'), { screen = canOpenWindow() } = {}) {
   // Extended mode: the owner's own browser already has their logins. It needs a screen.
-  const logins = readMode(directory) === 'extended' && screen ? 'Your tabs open in the owner\'s own browser, signed in: never ask for logins. If a tab opens in Helm\'s window, follow the reply\'s note.' : 'When a site needs a login, pick the fitting profile from helm browser profiles and run helm browser logins "<profile>".';
-  return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. Use helm browser script for loops and ifs. For an owner step, point with helm browser point; do not click. For a CAPTCHA, run helm browser captcha <tab>; never solve it. Never ask for passwords. ${logins} Respect the request on signed-in sites.]`;
+  const logins = readMode(directory) === 'extended' && screen ? 'Your tabs open in the owner\'s own browser, signed in: never ask for logins. For a profile the owner names, add --profile "<name>" to helm browser open. If a tab opens in Helm\'s window, follow the reply\'s note.' : 'When a site needs a login, pick the fitting profile from helm browser profiles and run helm browser logins "<profile>".';
+  return `[Helm browser: Use helm browser on this machine (helm browser --help). localhost reaches your dev servers. With a screen, all chats share one window: close your tabs when done. Use helm browser script for loops and ifs. For an owner step, point with helm browser point; do not click. For a CAPTCHA, run helm browser captcha <tab>; never solve it. Never ask for passwords. ${logins} Never restart the owner's browser or give it a debugging port. Respect the request on signed-in sites.]`;
 }

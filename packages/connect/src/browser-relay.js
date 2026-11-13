@@ -6,6 +6,10 @@
 // the same in both modes. Only tabs the add-on opened for Helm, and popups
 // they open, are visible here: the owner's own tabs never are.
 //
+// Each profile of the owner's browser runs its own copy of the add-on, and
+// each copy connects here with its profile's mark. A new tab opens in the
+// profile Helm names; every later step goes to the copy that holds the tab.
+//
 // Ideas and traps borrowed from opencode's Browse (MIT): new tabs start blank
 // and go to their address only after the driver has set the page up, and
 // browser-wide cookie, cache and close commands are refused.
@@ -34,13 +38,15 @@ export class ExtensionRelay {
    * `linkFile` is helm-link.json in the add-on's folder: the add-on reads the
    * port and key from it on each connection attempt.
    */
-  constructor({ linkFile, extensionId, commandMs = 30000 }) {
-    this.linkFile = linkFile; this.extensionId = extensionId; this.commandMs = commandMs;
+  constructor({ linkFile, extensionId, commandMs = 30000, version = '' }) {
+    this.linkFile = linkFile; this.extensionId = extensionId; this.commandMs = commandMs; this.version = version;
     this.key = randomBytes(32).toString('hex'); this.token = randomBytes(18).toString('base64url');
-    this.extension = null; this.pending = new Map(); this.nextId = 1; this.tabs = new Map(); this.children = new Map(); this.clients = new Set(); this.waiters = new Set();
-    this.info = { userAgent: '', version: '' }; this.serial = 0;
+    this.links = new Map(); this.pending = new Map(); this.nextId = 1; this.tabs = new Map(); this.children = new Map(); this.clients = new Set(); this.waiters = new Set();
+    this.info = { userAgent: '', version: '' }; this.serial = 0; this.reloaded = new Set();
   }
-  get connected() { return !!this.extension?.ready; }
+  get connected() { return this.links.size > 0; }
+  /** The marks of the connected profiles, the first connected first. */
+  get profiles() { return [...this.links.keys()]; }
   get cdpUrl() { return `ws://127.0.0.1:${this.port}/cdp/${this.token}`; }
 
   async start() {
@@ -60,7 +66,7 @@ export class ExtensionRelay {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     this.server = server; this.wss = wss; this.port = server.address().port;
     await this.writeLink();
-    this.pinger = setInterval(() => { if (this.connected) void this.call('ping', {}, 10000).catch(() => {}); }, 20000); this.pinger.unref?.();
+    this.pinger = setInterval(() => { if (this.connected) void this.callAll('ping', {}, 10000); }, 20000); this.pinger.unref?.();
     return this;
   }
   async writeLink() {
@@ -77,66 +83,81 @@ export class ExtensionRelay {
     await new Promise(resolve => this.server ? this.server.close(() => resolve()) : resolve());
     this.server = null;
   }
-  /** Resolves once the add-on is connected, or false after `ms`. */
-  waitForExtension(ms = 3000) {
-    if (this.connected) return Promise.resolve(true);
+  /** Resolves once the add-on is connected (in a profile `want` accepts), or false after `ms`. */
+  waitForExtension(ms = 3000, want = () => true) {
+    if (this.profiles.some(want)) return Promise.resolve(true);
     return new Promise(resolve => {
-      const done = value => { clearTimeout(timer); this.waiters.delete(done); resolve(value); };
+      const done = value => { clearTimeout(timer); this.waiters.delete(check); resolve(value); };
+      const check = profile => { if (want(profile)) done(true); };
       const timer = setTimeout(() => done(false), ms); timer.unref?.();
-      this.waiters.add(done);
+      this.waiters.add(check);
     });
   }
 
   // ---------- The add-on ----------
   acceptExtension(ws) {
-    // One browser at a time: a second one is told to try later.
-    if (this.connected) { ws.close(4001, 'another browser is connected'); return; }
     const link = { ws, ready: false, challenge: randomBytes(16).toString('hex') };
     const timer = setTimeout(() => { if (!link.ready) ws.terminate(); }, 10000); timer.unref?.();
     ws.on('message', raw => {
       let message; try { message = JSON.parse(raw); } catch { return; }
       if (!link.ready) {
         if (message.type !== 'hello' || !same(message.proof, sign(this.key, `helm-extension:${link.challenge}`)) || typeof message.nonce !== 'string') { ws.close(); return; }
-        if (this.connected) { ws.close(4001, 'another browser is connected'); return; }
-        link.ready = true; clearTimeout(timer);
+        // One browser at a time, one link per profile: another is told to try later.
+        // An add-on from before profile marks counts as one profile.
+        const profile = /^[0-9a-f]{32}$/.test(message.profile || '') ? message.profile : 'unmarked';
+        const userAgent = String(message.userAgent || '');
+        if (this.links.has(profile) || (this.connected && userAgent !== this.info.userAgent)) { ws.close(4001, 'another browser is connected'); return; }
+        link.ready = true; link.profile = profile; clearTimeout(timer);
         ws.send(JSON.stringify({ type: 'welcome', proof: sign(this.key, `helm-relay:${message.nonce}`) }));
-        this.extension = link;
-        this.info = { userAgent: String(message.userAgent || ''), version: String(message.version || '') };
+        this.links.set(profile, link);
+        this.info = { userAgent, version: String(message.version || '') };
+        // An add-on of another version loads Helm's copy, once: a copy from
+        // another folder must not reload again and again.
+        if (this.version && message.version !== this.version && !this.reloaded.has(profile)) { this.reloaded.add(profile); void this.send(link, 'reload', {}).catch(() => {}); }
         // After Helm restarts the add-on still holds the tabs it opened.
-        for (const tab of Array.isArray(message.tabs) ? message.tabs : []) this.addTab(tab);
-        for (const done of [...this.waiters]) done(true);
+        for (const tab of Array.isArray(message.tabs) ? message.tabs : []) this.addTab(tab, false, link);
+        for (const check of [...this.waiters]) check(profile);
         return;
       }
       if (message.id != null) {
-        const waiting = this.pending.get(message.id); if (!waiting) return;
+        const waiting = this.pending.get(message.id); if (!waiting || waiting.link !== link) return;
         this.pending.delete(message.id); clearTimeout(waiting.timer);
         if (message.error) waiting.reject(new Error(message.error)); else waiting.resolve(message.result || {});
-      } else this.onEvent(message);
+      } else this.onEvent(message, link);
     });
     ws.on('close', () => {
       clearTimeout(timer);
-      if (this.extension !== link) return;
-      this.extension = null;
-      for (const [, waiting] of this.pending) { clearTimeout(waiting.timer); waiting.reject(new Error('Your browser closed its link to Helm.')); }
-      this.pending.clear(); this.tabs.clear(); this.children.clear();
+      if (!link.ready || this.links.get(link.profile) !== link) return;
+      this.links.delete(link.profile);
+      for (const [id, waiting] of this.pending) if (waiting.link === link) { this.pending.delete(id); clearTimeout(waiting.timer); waiting.reject(new Error('Your browser closed its link to Helm.')); }
       // The driver sees a closed browser: Helm keeps the chats' tabs asleep.
-      for (const client of this.clients) client.ws.close();
+      if (!this.connected) { this.tabs.clear(); this.children.clear(); for (const client of this.clients) client.ws.close(); return; }
+      // One profile went: only its tabs close.
+      for (const tab of [...this.tabs.values()]) if (tab.link === link) this.dropTab(tab.tabId);
     });
     ws.send(JSON.stringify({ type: 'challenge', nonce: link.challenge }));
   }
-  call(method, params, ms = this.commandMs) {
-    if (!this.connected) return Promise.reject(new Error('Your browser is not connected to Helm.'));
+  /** A command for the add-on: in the profile that holds the tab, else the first connected profile. */
+  call(method, params = {}, ms = this.commandMs) {
+    const link = this.tabs.get(params.tabId)?.link || this.links.values().next().value;
+    if (!link) return Promise.reject(new Error('Your browser is not connected to Helm.'));
+    return this.send(link, method, params, ms);
+  }
+  /** Ping or reload each profile's add-on. */
+  callAll(method, params = {}, ms = this.commandMs) { return Promise.allSettled([...this.links.values()].map(link => this.send(link, method, params, ms))); }
+  send(link, method, params, ms = this.commandMs) {
+    if (this.links.get(link.profile) !== link) return Promise.reject(new Error('Your browser is not connected to Helm.'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Your browser did not answer ${method}.`)); }, ms); timer.unref?.();
-      this.pending.set(id, { resolve, reject, timer });
-      this.extension.ws.send(JSON.stringify({ id, method, params }));
+      this.pending.set(id, { resolve, reject, timer, link });
+      link.ws.send(JSON.stringify({ id, method, params }));
     });
   }
-  addTab({ tabId, targetId, url = 'about:blank', title = '', openerTabId }, waiting = false) {
+  addTab({ tabId, targetId, url = 'about:blank', title = '', openerTabId }, waiting = false, link = null) {
     if (!Number.isInteger(tabId) || typeof targetId !== 'string') return null;
     const existing = this.tabs.get(tabId); if (existing) return existing;
-    const tab = { tabId, targetId, url, title, sessionId: `helm-tab-${tabId}-${++this.serial}`, openerId: openerTabId != null ? this.tabs.get(openerTabId)?.targetId : undefined };
+    const tab = { tabId, targetId, url, title, link, profile: link?.profile, sessionId: `helm-tab-${tabId}-${++this.serial}`, openerId: openerTabId != null ? this.tabs.get(openerTabId)?.targetId : undefined };
     this.tabs.set(tabId, tab);
     for (const client of this.clients) if (client.autoAttach) this.announce(client, tab, waiting);
     for (const client of this.clients) if (client.discover) this.emit(client, 'Target.targetCreated', { targetInfo: this.targetInfo(tab) });
@@ -151,10 +172,10 @@ export class ExtensionRelay {
       this.emit(client, 'Target.targetDestroyed', { targetId: tab.targetId });
     }
   }
-  onEvent(message) {
-    if (message.event === 'added') { this.addTab(message); return; }
+  onEvent(message, link) {
+    if (message.event === 'added') { this.addTab(message, false, link); return; }
+    const tab = this.tabs.get(message.tabId); if (!tab || tab.link !== link) return;
     if (message.event === 'removed' || message.event === 'detached') { this.dropTab(message.tabId); return; }
-    const tab = this.tabs.get(message.tabId); if (!tab) return;
     if (message.event === 'updated') {
       if (typeof message.url === 'string') tab.url = message.url; if (typeof message.title === 'string') tab.title = message.title;
       for (const client of this.clients) if (client.discover || client.autoAttach) this.emit(client, 'Target.targetInfoChanged', { targetInfo: this.targetInfo(tab) });
@@ -298,10 +319,13 @@ export class ExtensionRelay {
         if (!client.tabAliases.delete(params.sessionId) && !client.aliases.delete(params.sessionId)) client.announced.delete(params.sessionId);
         return {};
       case 'Target.createTarget': {
-        const info = await this.call('tabs.create', {});
+        // Helm names the profile (helmProfile); else the first connected one.
+        const link = this.links.get(params.helmProfile) || (params.helmProfile ? null : this.links.values().next().value);
+        if (!link) throw new Error('That profile of your browser is not connected to Helm.');
+        const info = await this.send(link, 'tabs.create', {});
         const url = String(params.url || 'about:blank');
         // The tab waits on a blank page until the driver has set it up.
-        const tab = this.addTab(info, true);
+        const tab = this.addTab(info, true, link);
         if (!tab) throw new Error('Your browser did not open a tab.');
         if (url !== 'about:blank') tab.goTo = url;
         return { targetId: tab.targetId };
