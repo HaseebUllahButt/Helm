@@ -180,6 +180,8 @@ export interface Permission {
   options: PermissionOption[];
   defaultTo: 'allow' | 'deny';
   allowEdit?: boolean;
+  /** A card Helm asks itself (helm sudo): show the option labels as they are. */
+  ownLabels?: boolean;
   seq: number;
   /** When the request was raised - "waiting 12m" is computed from it. */
   at?: number;

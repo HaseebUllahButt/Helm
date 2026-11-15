@@ -324,6 +324,8 @@ function CommandItem({ item }: { item: Item }) {
         onClick={() => setOpen((v) => !v)}>
         <span className={`aicon${item.status === 'error' ? ' bad' : !live && item.exitCode === 0 ? ' done' : ''}`}><Icon name="run" size={15} /></span>
         <code className={`cmd-line${live ? ' shine' : ''}`}>{item.command}</code>
+        {/* Helm ran it for helm sudo, after the owner allowed it. */}
+        {item.name === 'sudo' && <span className="ameta">as admin</span>}
         {item.status === 'declined' && <span className="ameta">declined</span>}
         {item.exitCode != null && item.exitCode !== 0 && <span className="ameta bad">exit {item.exitCode}</span>}
         {live && item.elapsed != null && item.elapsed > 2 && <span className="ameta">{Math.round(item.elapsed)}s</span>}

@@ -77,6 +77,7 @@ import { ensureFastTcp, ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { AdminRuns } from './sudo.js';
 import { useDesktopScreen } from './browser-window.js';
 import { useOwnerLogins } from './browser.js';
 import { webBuild } from './web-build.js';
@@ -522,6 +523,9 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    // helm sudo: cards Helm asks itself, answered through Sessions.answer.
+    this.sudo = new AdminRuns({ sessions: this.sessions, machineName: () => this.name, log: (m) => console.error(`[helm] ${m}`) });
+    this.sessions.helmAsks = this.sudo;
     this.inputDelivery = new InputDelivery(this.sessions, { log: m => console.error(`[helm] ${m}`) });
     this.agentMessages = new AgentMessages({ sessions: this.sessions, delivery: this.inputDelivery, self: this.id,
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
@@ -852,6 +856,7 @@ export class Daemon {
     this.inputDelivery?.stop();
     await this.executions.stop();
     await this.browsers?.stop();
+    this.sudo?.stop();
     clearInterval(this.#brainTimer);
     clearTimeout(this.#compactTimer);
     clearTimeout(this.#keeperFirst);
@@ -1297,6 +1302,12 @@ export class Daemon {
    * aged out) gets the full list, which older apps always ask for.
    */
   // ------------------------------------------- helpers on other machines
+
+  /** This machine's own credential (its helm command, its desktop app) or one of the owner's devices. */
+  #selfOrOwner(caller) {
+    const net = loadNetwork() ?? this.net;
+    return !!caller && !net.revoked?.[caller] && (caller === net.self || !!net.devices?.[caller]);
+  }
 
   /** The paired machine a request came from. */
   #pairedCaller(caller) {
@@ -1820,6 +1831,11 @@ export class Daemon {
 
   async dispatch(method, p, caller) {
     if (method.startsWith('browser.')) return this.browsers.dispatch(method, p);
+    // Admin commands: only this machine's own helm and the owner's devices.
+    if (method.startsWith('sudo.')) {
+      if (!this.sudo) throw new Error('Helm is starting. Try again.');
+      return this.sudo.dispatch(method, p, { trusted: this.#selfOrOwner(caller) });
+    }
     switch (method) {
       case M.EXEC_START:
         if (p.sessionId && ['plan', 'readonly', 'read'].includes(this.sessions.get(p.sessionId).mode)) {

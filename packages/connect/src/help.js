@@ -53,6 +53,10 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm forward <machine> <port>   Open another machine's port on this machine's localhost
   helm forward list | stop <id|port|all>
                                   List or stop forwards (a stop removes both sides)
+  helm sudo [--reason <text>] -- <command>
+                                  Run a command as admin after the owner allows it in the app
+  helm sudo password | forget     Save or delete this machine's admin password (owner only)
+  helm sudo status | stop [chat]  Show saved password and 15-minute allows, or end them
   helm schedule list | show <id>  List scheduled tasks on every machine, or show one
   helm schedule pause | resume | remove <id>
                                   Stop a task for a while, start it again, or delete it
@@ -182,6 +186,7 @@ Machines and devices
   exec-status      Read a command's output after a connection loss
   exec-cancel      Stop a command started earlier
   run              Run a command here through Helm
+  sudo             Run a command as admin after the owner allows it
   copy             Copy files to another machine; resume if stopped
   send, receive    Send a folder with the other machine's permission
   send-task        Send files, .env and a task to another machine
@@ -464,6 +469,18 @@ const DETAILS = {
                       Google Chrome or Edge and copy the add-on's folder.
                       The owner turns on Developer mode, clicks Load
                       unpacked and pastes. Settings has the same button.`,
+
+  sudo: `
+  The owner sees a card in the chat: Allow once, Allow for 15 min or Deny.
+  Helm runs the command with the admin password the owner saved on this
+  machine. You never see the password. Output and exit code come back here.
+  The command waits for the owner: give it a long time limit.
+  One word is a shell line: helm sudo -- "apt update && apt upgrade -y".
+  Never run sudo yourself and never ask the owner for the password.
+  Allow for 15 min lets this chat run more admin commands with no card.
+  If Helm restarts while the command runs, helm sudo says so: check the
+  result before you run it again.
+  It runs on this machine only; --machine is not supported yet.`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.

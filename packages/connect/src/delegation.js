@@ -231,8 +231,17 @@ export function helperNote(parentId) {
   return `[Helm helper: You are a helper for chat ${parentId}. It sees none of your work. Only your last message goes back to it, as the result, cut at 1500 characters. Report once, and make the report stand alone: the outcome first, then commits, paths and checks run, then what is left. Send helm say ${parentId} -- "text" only when you are blocked or need its decision, never for progress. Later notes, such as a stale background watcher timing out, never reach it; do not write them.]`;
 }
 
+/**
+ * Admin rights go through the owner's card (helm sudo, sudo.js). An agent
+ * that ran sudo itself would hang on the password prompt or ask the owner
+ * to type the password into the chat.
+ */
+export function sudoNote() {
+  return '[Helm admin: When you need admin rights, run helm sudo -- <command> with a long time limit; the owner allows it in the app. Never run sudo yourself, never ask the owner for the password, never read Helm\'s saved password.]';
+}
+
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});

@@ -2455,6 +2455,13 @@ try {
       await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession, machine: machineId });
       break;
     }
+    case 'sudo': {
+      const { runSudoCommand } = await import('../src/sudo-cli.js');
+      const code = await runSudoCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self });
+      // A wait still open on the way out must not hold the command.
+      process.stdout.write('', () => process.stderr.write('', () => exit(code)));
+      break;
+    }
     case 'canvas':
     case 'render':
     case 'preview': {
