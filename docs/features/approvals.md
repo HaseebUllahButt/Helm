@@ -19,6 +19,34 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 - **Tests:** `test/browser/composer-card`, `child-requests`;
   `test/local-answer`, `driver-acp`, `driver-claude`, `driver-codex`.
 
+## Admin commands (`helm sudo`)
+- **Rule (owner, 2026-11-15):** an agent runs `helm sudo -- <command>`; it
+  never runs sudo itself and never sees the password. The owner saves the
+  admin password once per machine (Settings → the machine → Admin
+  password, or `helm sudo password` there). Each request still shows a
+  card: Allow once, Allow for 15 min, Deny. "Allow for 15 min" lets that
+  one chat run more admin commands with no card; a small "as admin" step
+  shows each one. `helm sudo status | stop` and Settings show and end it.
+  A deny note goes back in `helm sudo`'s output, not as a chat message.
+  Only this machine's own `helm` and the owner's devices may call
+  `sudo.*`; another machine is refused. v1 runs on the chat's own machine.
+- **Proof (driven 2026-11-15):** put a fake `sudo` first on PATH, then
+  `PATH=<fake>:$PATH $V up`. Never run real sudo with a real password.
+  Save the password in Settings (a wrong one says "This password is
+  wrong"). Start a fake-slow chat, then run
+  `HELM_SESSION_ID=<chat> $H sudo --reason "Install" -- 'echo hi'`: the
+  card and the waiting box show "Run as admin"; Allow once prints `hi`.
+  Restart the copy while the card waits: the card comes back with the same
+  id and `helm sudo` keeps waiting. Ctrl+C closes the card (exit 130).
+- **Traps:** an agent runs as the same user as Helm. The AES-256-GCM seal
+  (`~/.helm/sudo/`, 0600, left out of backups) and the rule keep the
+  password out of sight, but they are not a wall against a hostile agent:
+  it can read the key file, or call `helm sudo stop`. 15-minute allows live
+  in memory, so a restart ends them. A command that ran when Helm restarted
+  is never run again: `helm sudo` says its output is lost. The fake sudo
+  runs the command as you, not as root.
+- **Tests:** `test/sudo`, `sudo-cli`.
+
 ## Codex reviews
 - **Rule:** Select **Codex reviews** for one chat. Keep the existing defaults
   for new chats and helpers. Use the same project limits as **Ask before acting**.

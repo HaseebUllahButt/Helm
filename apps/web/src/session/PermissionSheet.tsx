@@ -67,6 +67,8 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
   const allow = p.options.find((o) => o.role === 'allow');
   const always = p.options.find((o) => o.role === 'allow-always');
   const deny = p.options.find((o) => o.role === 'deny');
+  // A card Helm asks itself (helm sudo) keeps the owner's own words.
+  const label = (o: { label: string }) => p.ownLabels ? o.label : plainLabel(o.label);
   const denyFirst = p.defaultTo === 'deny';
 
   // What an edit would change, in the driver's own shape: the CLI's tool
@@ -82,9 +84,9 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
     <button className="primary" disabled={busy || !edited.trim()} onClick={() => answer('allow', updatedInput())}>
       {p.kind === 'plan' ? 'Approve edited plan' : 'Allow edited command'}
     </button>
-  ) : <button className="primary" disabled={busy} onClick={() => answer('allow')}>{plainLabel(allow.label)}</button>);
-  const alwaysButton = always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{plainLabel(always.label)}</button>;
-  const denyButton = deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{plainLabel(deny.label)}</button>;
+  ) : <button className="primary" disabled={busy} onClick={() => answer('allow')}>{label(allow)}</button>);
+  const alwaysButton = always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{label(always)}</button>;
+  const denyButton = deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{label(deny)}</button>;
 
   return (
     <div className={`sheet ${p.kind}${banner ? ' banner' : ''}`}>
@@ -155,7 +157,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
           placeholder={p.kind === 'plan' ? 'What should change? (optional)' : 'Add a note (optional)'}
         />
       )}
-      {note.trim() && <p className="note">Approve lets this step run before the agent reads your note. Decline to request a change.</p>}
+      {note.trim() && <p className="note">{p.ownLabels ? 'The agent gets your note with your answer.' : 'Approve lets this step run before the agent reads your note. Decline to request a change.'}</p>}
       {/* Built in the order it is seen, so Tab walks the buttons the way the
           eye does. A prompt whose safe answer is "no" leads with Deny; it
           used to get there with row-reverse, which left Allow first in the

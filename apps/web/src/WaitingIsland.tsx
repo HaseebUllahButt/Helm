@@ -201,6 +201,7 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
               ))}
             </div>
           </> : perm?.kind === 'question' ? <p className="island-q">{perm.questions?.[0]?.question ?? perm.title}</p>
+            : perm?.kind === 'command' && perm.ownLabels ? <><p className="island-q">{perm.title}</p><pre className="island-cmd">{String(perm.detail ?? '')}</pre></>
             : perm?.kind === 'command' ? <pre className="island-cmd">{String(perm.detail ?? '')}</pre>
             : perm?.kind === 'plan' ? <div className="island-plan"><Markdown text={String(perm.detail ?? '')} className="prose plan" /></div>
             : perm?.kind === 'tool' && perm.detail ? <pre className="island-cmd">{plainDetail(perm.detail)}</pre>
@@ -212,8 +213,9 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
             {allow && <button className="island-yes" disabled={busy} onClick={sayYes}>
               {perm?.kind === 'plan' ? 'Go ahead' : 'Allow once'}{mode === 'open' && <kbd>Ctrl ↵</kbd>}
             </button>}
-            {always && <button disabled={busy} onClick={() => void answer({ option: 'always' }, 'Always allowed')}>Always allow</button>}
-            {deny && <button disabled={busy} onClick={() => void answer({ option: 'deny' }, 'Declined')}>Decline</button>}
+            {/* A card Helm asks itself (helm sudo) names its own answers. */}
+            {always && <button disabled={busy} onClick={() => void answer({ option: 'always' }, perm?.ownLabels ? always.label : 'Always allowed')}>{perm?.ownLabels ? always.label : 'Always allow'}</button>}
+            {deny && <button disabled={busy} onClick={() => void answer({ option: 'deny' }, perm?.ownLabels ? 'Denied' : 'Declined')}>{perm?.ownLabels ? deny.label : 'Decline'}</button>}
             <span className="grow" />
             <button onClick={goToChat}>Open chat<Icon name="forward" size={14} /></button>
           </div>

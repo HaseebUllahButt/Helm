@@ -1828,6 +1828,8 @@ export class Sessions extends EventEmitter {
     let s;
     try { s = this.get(id); }
     catch (error) { error.deliveryNotSent = true; throw error; }
+    // A card Helm asked itself (helm sudo): Helm answers it, not the agent.
+    if (this.helmAsks?.owns(requestId)) return this.helmAsks.answer(id, requestId, decision ?? {});
     const ask = this.#natives.hookAsks.get(requestId);
     const asked = this.events.pending(id).find((request) => request.requestId === requestId);
     if (s.nativeCli) {
@@ -1851,6 +1853,49 @@ export class Sessions extends EventEmitter {
     // Only Claude's decline takes the owner's words with the answer.
     const carried = decision?.option === 'deny' && DRIVERS[s.driver] === DRIVERS.claude;
     return { ok: true, ...await this.#approvalNote(s, requestId, decision, asked?.title, carried) };
+  }
+
+  /**
+   * A card Helm asks itself, not the agent (`helm sudo`, sudo.js). It shows
+   * and is answered like an agent's card in every chat kind; `answer` hands
+   * it to `helmAsks`. The chat reads as waiting until no card is left.
+   */
+  showHelmAsk(id, card) {
+    const s = this.#index.get(id);
+    if (!s) throw new Error(`unknown session: ${id}`);
+    if (!this.events.pending(id).some((p) => p.requestId === card.requestId)) {
+      const event = this.events.append(id, { type: 'permission.request', ...card });
+      s.lastSeq = event.seq;
+      this.emit('event', { id, event });
+    }
+    this.#helmStatus(s, 'blocked');
+  }
+
+  /** Close a card from showHelmAsk; the chat goes back to `back` when no card is left. */
+  closeHelmAsk(id, requestId, decision, back = 'working') {
+    const s = this.#index.get(id);
+    if (!s) return;
+    if (this.events.pending(id).some((p) => p.requestId === requestId)) {
+      const event = this.events.append(id, { type: 'permission.resolved', requestId, ...(decision ? { decision } : {}) });
+      s.lastSeq = event.seq;
+      this.emit('event', { id, event });
+    }
+    if (s.status === 'blocked' && !this.events.pending(id).length) this.#helmStatus(s, back);
+  }
+
+  #helmStatus(s, status) {
+    if (s.status === status) return;
+    const from = s.status;
+    s.status = status;
+    s.updatedAt = Date.now();
+    // In the log too: an open chat reads its state from there.
+    const event = this.events.append(s.id, { type: 'status', status });
+    s.lastSeq = event.seq;
+    this.emit('event', { id: s.id, event });
+    this.#save();
+    this.emit('session', { ...wire(s), ...pendingSummary(this.events.pending(s.id)) });
+    // Back to idle is not a finished turn: that change would ring "done".
+    if (status !== 'idle') this.emit('status', { session: s, from, to: status });
   }
 
   /**
