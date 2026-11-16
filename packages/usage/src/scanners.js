@@ -132,6 +132,42 @@ export const codexParser = {
   },
 };
 
+// ------------------------------------------------------------ pi / omp
+
+/**
+ * Pi (and OMP, which writes the same file) keeps one JSONL per session under
+ * `sessions/<dash-cwd>/`. The first line names the folder; every assistant
+ * `message` carries `usage` with fresh input apart from cached, and the cost
+ * Pi priced itself. A model Helm has no rate for - a free one included - is
+ * then still priced, from Pi's own figure.
+ */
+export const piParser = {
+  initState: () => ({ cwd: null }),
+  wants: (line) => line.includes('"usage"') || line.includes('"type":"session"'),
+  line: (d, state, add) => {
+    if (d.type === 'session') { if (d.cwd) state.cwd = d.cwd; return; }
+    const msg = d.message;
+    if (d.type !== 'message' || msg?.role !== 'assistant' || !msg.usage) return;
+    const u = msg.usage;
+    const input = Number(u.input) || 0;
+    const output = Number(u.output) || 0;
+    const cacheRead = Number(u.cacheRead) || 0;
+    const cacheWrite = Number(u.cacheWrite) || 0;
+    // A failed call (429, overload) is written with all zeros.
+    if (!(input || output || cacheRead || cacheWrite)) return;
+    const raw = d.timestamp || msg.timestamp;
+    const ts = typeof raw === 'number' ? new Date(raw > 1e12 ? raw : raw * 1000).toISOString() : String(raw || '');
+    const date = ts.slice(0, 13);
+    if (!date || !msg.model) return;
+    add({ date, model: msg.model, project: state.cwd || '' }, {
+      input, output, cacheRead, cacheWrite,
+      total: Number(u.totalTokens) || input + output + cacheRead + cacheWrite,
+      turns: 1,
+      billedUsd: Number(u.cost?.total) || 0,
+    });
+  },
+};
+
 // --------------------------------------------------------------- walking
 
 /** Every `.jsonl` under a root, depth-first. */
@@ -265,12 +301,13 @@ export class Scanners {
   constructor() {
     this.claude = new FileRollupCache({ id: 'claude', parser: claudeParser });
     this.codex = new FileRollupCache({ id: 'codex', parser: codexParser });
+    this.pi = new FileRollupCache({ id: 'pi', parser: piParser });
     this.dbs = new ResultCache({ id: 'db' });
     this.claudeStats = new ClaudeStatsMemory();
   }
 
   /** Every cache this holds, for loading and saving the index as one file. */
-  get caches() { return [this.claude, this.codex, this.dbs, this.claudeStats]; }
+  get caches() { return [this.claude, this.codex, this.pi, this.dbs, this.claudeStats]; }
 
   async scanClaude(home, opts) {
     const root = join(home, 'projects');
@@ -286,6 +323,14 @@ export class Scanners {
     const files = await jsonlUnder(root);
     const stats = await this.codex.scan(files, { ...opts, root });
     return { buckets: this.codex.fold(files, root), stats };
+  }
+
+  /** Pi and OMP: same layout and records, one cache keyed by file path. */
+  async scanPi(home, opts) {
+    const root = join(home, 'sessions');
+    const files = await jsonlUnder(root);
+    const stats = await this.pi.scan(files, { ...opts, root });
+    return { buckets: this.pi.fold(files, root), stats };
   }
 
   async scanDatabase(kind, dbPath, opts = {}) {

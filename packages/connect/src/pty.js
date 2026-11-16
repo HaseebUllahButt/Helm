@@ -1,6 +1,7 @@
 import { createReplayBuffer } from './replay-buffer.js';
 import { EventEmitter } from 'node:events';
 import { homedir } from 'node:os';
+import { scopeCommand, scopeEnv } from './cgroup-scope.js';
 
 /**
  * Terminals helm owns.
@@ -64,17 +65,23 @@ export class Terminals extends EventEmitter {
   /** Which terminals are still running - what a reconnecting daemon asks. */
   list() { return [...this.#live.keys()]; }
 
-  async open(id, { cwd, cols = 80, rows = 24, env = {}, shell, cmd, args, exactEnv = false } = {}) {
+  async open(id, { cwd, cols = 80, rows = 24, env = {}, shell, cmd, args, exactEnv = false, scoped: scoped_ = false } = {}) {
     if (this.#live.has(id)) return this.#live.get(id);
     const pty = await loadPty();
     if (!pty) throw new Error(`no pty support on this machine: ${ptyError?.message}`);
 
     const file = cmd || shell || process.env.SHELL || '/bin/bash';
-    const child = pty.spawn(file, cmd ? (args ?? []) : ['-l'], {
+    let childEnv = { ...(exactEnv ? {} : process.env), ...env, TERM: env.TERM || 'xterm-256color' };
+    // A memory group of its own (cgroup-scope.js), unless the daemon already
+    // made one: the memory guard then stops this terminal, not every one.
+    const scoped = scoped_ ? null : await scopeCommand('term', id, file, cmd ? (args ?? []) : ['-l'], childEnv);
+    if (this.#live.has(id)) return this.#live.get(id);
+    if (scoped) childEnv = scopeEnv(childEnv);
+    const child = pty.spawn(scoped?.cmd ?? file, scoped?.args ?? (cmd ? (args ?? []) : ['-l']), {
       name: 'xterm-256color',
       cols, rows,
       cwd: cwd || homedir(),
-      env: { ...(exactEnv ? {} : process.env), ...env, TERM: env.TERM || 'xterm-256color' },
+      env: childEnv,
     });
 
     const t = { pty: child, ring: createReplayBuffer(RING_BYTES), pending: '', position: 0, timer: null, views: new Map(), sizes: new Map(), lead: null, lastOut: 0, lastData: Date.now(), cols, rows };

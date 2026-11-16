@@ -50,13 +50,16 @@ export function askPreview(event) {
   };
   const question = event.kind === 'question' || !!event.questions?.length;
   const kind = question ? 'question' : ['command', 'edit', 'plan'].includes(event.kind) ? event.kind : 'tool';
+  // helm sudo (sudo.js): the notice says the command runs as admin.
+  const admin = kind === 'command' && event.tool === 'sudo';
   const text = question ? line(event.questions?.[0]?.question)
+    : admin ? line(`As admin: ${event.detail ?? ''}`)
     : kind === 'command' ? line(event.detail)
     : kind === 'edit' ? line(event.title)
     : kind === 'plan' ? ''
     : line(event.title || event.tool);
   // A command shown whole can be allowed from the notice; a cut one is read in the chat.
-  const whole = kind === 'command' && !!text && text === String(event.detail ?? '').trim();
+  const whole = kind === 'command' && !admin && !!text && text === String(event.detail ?? '').trim();
   return { kind, text, more: question ? Math.max(0, (event.questions?.length ?? 1) - 1) : 0, ...(whole ? { whole } : {}) };
 }
 

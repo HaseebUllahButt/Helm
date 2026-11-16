@@ -3,11 +3,13 @@
 Release checks run on private Helm data. Never change the owner's network,
 fill the owner's disk, reboot a working machine, or use owner chats as test data.
 
-`helm ship` checks the exact source and built app version in a private chat.
-It checks before merging and again from the installed version after connected
-machines update. The same approval must survive a private daemon restart and
-complete once. The check always removes its private copy, including on timeout.
-Version agreement alone does not pass this release check.
+`helm ship` goes straight out: merge, push, install. The owner chose this on
+12 Nov 2026, because the checks made every ship slow. `helm ship --check`
+adds them back: `npm run check`, then a private chat with an approval, before
+the merge and again from the installed version after connected machines
+update. The same approval must survive a private daemon restart and complete
+once. The check always removes its private copy, including on timeout. Use
+`--check` for a change to restarts, approvals or updates.
 
 ## Private failure checks
 
@@ -18,6 +20,12 @@ Use named files through `npm run test:smart -- <file>...`.
   `test/update-recovery.test.mjs` and `test/release.test.mjs`.
 - Lost message replies and daemon replacement: `test/restart-delivery.test.mjs`
   and `test/input-delivery.test.mjs`.
+- A Codex daemon that does not answer at a restart: `test/delegation.test.mjs`
+  and `test/native-codex.test.mjs`. "Did not answer" is unknown, never lost:
+  the helper keeps working, its queue waits, and Helm checks again (2.5 s,
+  doubling to one minute, with no end). A socket with nothing listening is a
+  dead daemon; only that, or a daemon that answers without the thread, ends
+  the helper and tells its lead once.
 - Blocked live links, lost approval replies, and browser reloads:
   `test/browser/client-actions.test.mjs` and `test/action-delivery.test.mjs`.
 - Transfer interruption and completion receipts: `test/send-recovery.test.mjs`.

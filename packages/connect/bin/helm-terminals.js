@@ -21,6 +21,7 @@ import { existsSync, unlinkSync, mkdirSync, chmodSync } from 'node:fs';
 import { HELM_DIR } from '../src/paths.js';
 import { Terminals, loadPty, ptyUnavailable } from '../src/pty.js';
 import { SOCKET_PATH } from '../src/terminals.js';
+import { recordStop, recentPrograms } from '../src/agent-stops.js';
 
 // Socket selectors belong to this host, not its shells or agents. Leaking
 // them makes nested Helm commands (including tests) reach the parent host.
@@ -89,7 +90,7 @@ function procOpen(msg) {
       env: msg.env ? { ...process.env, ...msg.env } : process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const proc = { child, errTail: '', backlog: createReplayBuffer(PROC_BACKLOG_MAX, { trimLine: false }) };
+    const proc = { child, errTail: '', backlog: createReplayBuffer(PROC_BACKLOG_MAX, { trimLine: false }), startedAt: Date.now(), askedByHelm: false };
     let spawned = false;
     procs.set(msg.id, proc);
 
@@ -105,6 +106,17 @@ function procOpen(msg) {
     };
     const reportExit = (code, stderr = null, signal = null) => {
       remove();
+      // Keep a record of every stop that was not a clean exit (agent-stops.js):
+      // the sender of a stray SIGTERM is otherwise never known.
+      if (code !== 0 || signal) {
+        const entry = {
+          at: Date.now(), id: msg.id, pid: child.pid, cmd: String(msg.cmd || '').split('/').pop(),
+          code, signal, askedByHelm: proc.askedByHelm, daemonConnected: clients.size > 0,
+          ranMs: Date.now() - proc.startedAt,
+          stderr: (stderr || proc.errTail.trim().split('\n').pop() || '').slice(0, 300) || null,
+        };
+        void recentPrograms().then((programs) => recordStop({ ...entry, programs }));
+      }
       broadcast({
         t: 'proc.exit', id: msg.id, code, signal,
         stderr: stderr || proc.errTail.trim().split('\n').pop() || null,
@@ -133,8 +145,16 @@ function procOpen(msg) {
   });
 }
 
+/** A process Helm itself asked to end: its stop is not a mystery. */
+function procEnding(id) {
+  const p = procs.get(id);
+  if (p) p.askedByHelm = true;
+  return p;
+}
+
 function procDrop() {
   for (const p of procs.values()) {
+    p.askedByHelm = true;
     p.backlog.clear();
     try { p.child.kill('SIGTERM'); } catch { /* already gone */ }
   }
@@ -196,8 +216,8 @@ async function handle(msg, viewer) {
     // Pipe-stdio processes, held on the same terms as the ptys.
     case 'proc.open':  return procOpen(msg);
     case 'proc.write': procs.get(msg.id)?.child.stdin.write(msg.data); return { ok: true };
-    case 'proc.end':   procs.get(msg.id)?.child.stdin.end(); return { ok: true };
-    case 'proc.kill':  procs.get(msg.id)?.child.kill(msg.signal || 'SIGTERM'); return { ok: true };
+    case 'proc.end':   procEnding(msg.id)?.child.stdin.end(); return { ok: true };
+    case 'proc.kill':  procEnding(msg.id)?.child.kill(msg.signal || 'SIGTERM'); return { ok: true };
     case 'proc.list':  return { ids: [...procs.keys()] };
     // Asked to go: close what we hold rather than orphan it. Used by tests
     // and by anything that wants the machine left tidy.

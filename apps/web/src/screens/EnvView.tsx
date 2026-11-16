@@ -73,8 +73,10 @@ const foundRow = (x: InventorySession): Session => ({
  * proof of identity: hiding history for it leaves only a terminal to open.
  */
 function dedupeDetected(list: Session[], found: InventorySession[]): InventorySession[] {
-  const own = new Set(list.filter((s) => s.engineSessionId).map((s) => `${s.engine}:${s.engineSessionId}`));
-  return found.filter((x) => !own.has(`${x.engine}:${x.id}`));
+  // OpenCode 1 and 2 share one database: a chat Helm runs as `opencode` is found as `opencode2`.
+  const key = (engine: string, id: string) => `${engine === 'opencode2' ? 'opencode' : engine}:${id}`;
+  const own = new Set(list.filter((s) => s.engineSessionId).map((s) => key(s.engine, s.engineSessionId!)));
+  return found.filter((x) => !own.has(key(x.engine, x.id)));
 }
 
 /**

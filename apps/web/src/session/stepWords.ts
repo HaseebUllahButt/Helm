@@ -254,6 +254,11 @@ export function stepWords(it: Item): Words {
   }
   if (isTodoItem(it)) return todoWords(it);
   if (it.kind === 'edit') return editWords(it.changes ?? []);
+  // helm sudo (sudo.js): Helm's own line for a command it ran as admin.
+  if (it.kind === 'command' && it.name === 'sudo') {
+    const what = clip(it.command ?? '', 60);
+    return { now: `Running as admin: ${what}`, past: `Ran as admin: ${what}` };
+  }
   if (it.kind === 'command') {
     const fromActions = it.actions?.length ? actionWords(it.actions) : undefined;
     return fromActions ?? commandWords(it.command);

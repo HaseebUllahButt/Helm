@@ -14,7 +14,7 @@ Protocol: JSON over stdin and stdout (`drivers/acp.js`).
 |---|---|---|---|---|---|---|---|
 | claude | `claude -p` stream-json | 4 modes; Helm answers `can_use_tool` | yes | changed while live | interrupt; `--resume` | yes | rate-limit events, limits page |
 | codex | `app-server`, one per account | 5 modes; command, file and permission requests | yes | applies next turn | `turn/interrupt`; `thread/resume` | yes | rate limits, limits page |
-| opencode | ACP `acp --cwd` | build/plan; Helm allows the rest itself | if the agent says so | changed while live | `session/cancel`; `session/load` | no | context only |
+| opencode | ACP `acp`; the folder comes from the process (2.x refuses `--cwd`) | build/plan; Helm allows the rest itself | if the agent says so | changed while live | `session/cancel`; `session/load` | no | context only |
 | opencode2 | ACP `acp`, no `--cwd` | as opencode | if the agent says so | as opencode | `session/resume` | no | context only |
 | devin | ACP | its own edit/read/bypass | if the agent says so | effort is `thought_level` | `session/load` replays | no | Helm answers `/usage` |
 | grok | ACP `agent --no-leader … stdio` | Claude's mode words | if the agent says so | effort is a start flag | `session/load` | no | context only |
@@ -29,6 +29,12 @@ Questions to the owner: Claude and Codex (`requestUserInput`); Pi and OMP
 through extension dialogs. Todo cards: Codex (`turn/plan`) and the ACP
 tools. Not checked: Claude and Pi todos, ACP questions beyond approvals,
 Grok effort in a live chat, Cursor effort, the Antigravity model list.
+
+Compact and send (a big history whose cache ran out, `idle-history.js`):
+Claude only. Codex: not supported; OpenAI's cache has no write premium,
+so a cold re-read costs normal input price, Codex compacts by itself near
+its limit, and its cache time is not reported. The ACP tools, Pi and OMP
+report no cache time either. Native terminal Claude chats: not offered.
 
 ## Places that list tools by name
 
@@ -76,7 +82,13 @@ A new tool, or a feature for "every tool", must look at each of these:
   own choices are applied, or the chat's saved choices are lost. On stop,
   answer every open approval with `cancelled`, or the tool hangs.
 - **opencode2:** no messages during a reply and no `--cwd`; it uses the
-  process folder.
+  process folder. On the Laptop and why the `opencode` name runs 2.x too
+  (2026-11-11). The opencode driver asks `--version` and then uses the 2.x
+  rules. Past messages of an opencode chat come from the 2.x tables when the
+  1.x tables have none; both versions share one `opencode.db`.
+- **opencode, opencode2 free models:** each free model has its own limit.
+  A chat on a free model that hits it moves to the next free model with
+  limit left and goes on in the same turn. A paid model never moves.
 - **Grok:** flags go between `agent` and `stdio`, and `--no-leader` must
   stay. Without it Helm steers a shared Grok backend.
 - **Pi:** when the version sends `agent_settled`, `agent_end` is not the

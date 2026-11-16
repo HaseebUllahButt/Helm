@@ -498,10 +498,12 @@ export async function sessionActivity({ engine, path, sessionId, active = false,
     } else if (path && ['opencode', 'opencode2'].includes(engine)) {
       const conn = new DatabaseSync(path, { readOnly: true });
       try {
-        const modern = engine === 'opencode';
-        const row = conn.prepare(modern
-          ? 'SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1'
-          : 'SELECT type, data FROM session_message WHERE session_id = ? ORDER BY seq DESC LIMIT 1').get(sessionId);
+        const v1 = () => { try { return conn.prepare('SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1').get(sessionId); } catch { return undefined; } };
+        const v2 = () => { try { return conn.prepare('SELECT type, data FROM session_message WHERE session_id = ? ORDER BY seq DESC LIMIT 1').get(sessionId); } catch { return undefined; } };
+        // An `opencode` that is OpenCode 2 keeps its chats in the v2 tables.
+        let modern = engine === 'opencode';
+        let row = modern ? v1() : v2();
+        if (!row && modern) { row = v2(); modern = !row; }
         const msg = json(row?.data);
         const role = modern ? msg?.role : row?.type;
         if (role === 'idle') phase = 'done';
@@ -989,11 +991,11 @@ export async function sessionSnapshot({ engine, path, sessionId, cwd, monitored 
       usage = { input, output, cacheRead };
     } else if (engine === 'opencode' || engine === 'opencode2') {
       const conn = new DatabaseSync(path, { readOnly: true });
-      const table = engine === 'opencode2' ? 'session_v2' : 'session';
-      const cols = tableColumns(conn, table);
-      const totals = cols.has('tokens_input')
+      const read = (table) => tableColumns(conn, table).has('tokens_input')
         ? conn.prepare(`SELECT tokens_input AS input, tokens_output AS output, tokens_cache_read AS cacheRead, cost, model FROM ${table} WHERE id = ?`).get(sessionId)
         : null;
+      // An `opencode` that is OpenCode 2 keeps its chats in session_v2.
+      const totals = engine === 'opencode2' ? read('session_v2') : (read('session') ?? read('session_v2'));
       conn.close();
       if (totals?.model) lines.splice(1, 0, `**Model:** ${esc(opencodeModel(totals.model) ?? totals.model)}`);
       if (totals) usage = totals;
@@ -1061,7 +1063,13 @@ function opencodeModel(v) {
 
 /** A database engine's messages; what `messages` runs on a worker thread. */
 export function databaseMessages(engine, path, sessionId, opts) {
-  if (engine === 'opencode') return opencodeMessages(path, sessionId, opts);
+  if (engine === 'opencode') {
+    // An `opencode` that is OpenCode 2 keeps its chats in the v2 tables.
+    let found = [];
+    try { found = opencodeMessages(path, sessionId, opts); } catch { /* no v1 tables */ }
+    if (found.length) return found;
+    try { return opencode2Messages(path, sessionId, opts); } catch { return found; }
+  }
   if (engine === 'opencode2') return opencode2Messages(path, sessionId, opts);
   return devinMessages(path, sessionId, opts);
 }

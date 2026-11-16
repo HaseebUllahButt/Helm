@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync, watch, readdirSync, lstatSync, constants, fsyncSync } from 'node:fs';
-import { cp, rm } from 'node:fs/promises';
+import { copyFile, cp, link, readlink, rm, symlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,11 @@ const UPDATE_TIMER = 'helm-update.timer';
 const DAEMON_UNITS = ['helm-serve.service', 'helm-agent.service'];
 
 const say = (m) => console.log(`  ${m}`);
+/** Run one update step and log its time, so slow steps show in the journal. */
+async function timed(name, work) {
+  const start = Date.now();
+  try { return await work(); } finally { say(`${name}: ${((Date.now() - start) / 1000).toFixed(1)}s`); }
+}
 
 /**
  * Which helm this is, for the machine list: the commit it runs and whether an
@@ -225,6 +230,12 @@ export async function rebuildStaleApp(running, dir = ROOT, { build = () => gentl
     const stamp = webBuild(join(dir, 'apps', 'web', 'dist'));
     // No stamp: a build from before stamps existed, or a development tree.
     if (!running || head !== running || !stamp || stamp.commit === head) return { rebuilt: false };
+    const same = await sameApp(join(dir, 'apps', 'web', 'dist'), git, head);
+    if (same) {
+      say(`the app did not change since ${stamp.commit.slice(0, 7)}; marking it as built from ${head.slice(0, 7)}`);
+      restampApp(join(dir, 'apps', 'web', 'dist'), same, head);
+      return { rebuilt: true };
+    }
     say(`the app was built from ${stamp.commit.slice(0, 7)}; building it from ${head.slice(0, 7)}`);
     const state = { dir, previousHead: head, targetHead: head, phase: 'prepared', restart: false, rollback: false };
     state.artifacts = await saveArtifacts(dir, ['apps/web/dist']);
@@ -466,20 +477,100 @@ const gentle = (cmd, args, opts) => platform() === 'win32'
   ? exec(cmd, args, opts)
   : exec('nice', ['-n', '10', cmd, ...args], opts);
 
+const PTY = 'node_modules/@homebridge/node-pty-prebuilt-multiarch';
+const ptyLoads = (dir) => exec(process.execPath, ['-e', "require('@homebridge/node-pty-prebuilt-multiarch')"], { cwd: dir, timeout: 30_000 })
+  .then(() => true, () => false);
+
 /**
  * npm on newer releases skips packages' install scripts unless approved, and
  * node-pty's is what builds the terminal engine - so after an install the
  * terminals quietly fall back to the slow path. Check it loads; build it if not.
  */
 async function ensurePty(dir) {
-  const pkg = join(dir, 'node_modules/@homebridge/node-pty-prebuilt-multiarch');
+  const pkg = join(dir, PTY);
   if (!existsSync(pkg)) return;
-  const loads = () => exec(process.execPath, ['-e', "require('@homebridge/node-pty-prebuilt-multiarch')"], { cwd: dir, timeout: 30_000 })
-    .then(() => true, () => false);
-  if (await loads()) return;
+  if (await ptyLoads(dir)) return;
   say('building the terminal engine');
   await gentle('npx', ['--yes', 'node-gyp', 'rebuild'], { cwd: pkg, timeout: 10 * 60_000 }).catch(() => {});
-  if (!(await loads())) say('the terminal engine did not build - terminals use the slower fallback');
+  if (!(await ptyLoads(dir))) say('the terminal engine did not build - terminals use the slower fallback');
+}
+
+/** Files that decide what npm installs. */
+const DEPENDENCY_FILE = /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|\.npmrc)$/;
+
+/**
+ * Whether the packages installed in `dir` are exactly what `tip` needs, so
+ * an update can keep them instead of a new install and terminal engine
+ * build. Any doubt answers no, and the update installs as before.
+ */
+async function sameDependencies(dir, git, head, tip) {
+  try {
+    const changed = (await git(['diff', '--name-only', '-z', head, tip])).split('\0').filter(Boolean);
+    if (changed.some(path => DEPENDENCY_FILE.test(path))) return false;
+    // npm writes what it installed to node_modules/.package-lock.json. It
+    // leaves out only optional packages for other systems.
+    const want = JSON.parse(readFileSync(join(dir, 'package-lock.json'), 'utf8')).packages;
+    const have = JSON.parse(readFileSync(join(dir, 'node_modules/.package-lock.json'), 'utf8')).packages;
+    if (!want || !have) return false;
+    for (const [path, entry] of Object.entries(have)) {
+      if (!want[path] || ['version', 'resolved', 'integrity', 'link'].some(key => want[path][key] !== entry[key])) return false;
+    }
+    for (const [path, entry] of Object.entries(want)) if (path && !have[path] && !entry.optional) return false;
+    // A newer Node needs a new terminal engine build.
+    if (existsSync(join(dir, PTY)) && !(await ptyLoads(dir))) return false;
+    return true;
+  } catch { return false; }
+}
+
+/** What the web app is built from (stampBuild.mjs reads the same folders). */
+const WEB_INPUTS = ['apps/web', 'packages/protocol', 'packages/usage', 'package.json', 'package-lock.json'];
+
+/**
+ * The served app, when nothing it is built from changed between the commit
+ * it was built from and `tip`. A build from `tip` would give the same files.
+ */
+async function sameApp(dist, git, tip) {
+  try {
+    const stamp = webBuild(dist);
+    if (!stamp || stamp.dirty || !/^[0-9a-f]{40,64}$/.test(stamp.commit) || !existsSync(join(dist, 'index.html'))) return null;
+    return await git(['diff', '--name-only', stamp.commit, tip, '--', ...WEB_INPUTS]) === '' ? stamp : null;
+  } catch { return null; }
+}
+
+/** Give a kept app the commit it now serves; `sameAs` names the build it came from. */
+function restampApp(dist, stamp, tip) {
+  const file = join(dist, 'build.json');
+  const temp = `${file}.${process.pid}.tmp`;
+  writeFileSync(temp, `${JSON.stringify({ commit: tip, dirty: false, builtAt: stamp.builtAt, sameAs: stamp.sameAs ?? stamp.commit })}\n`);
+  renameSync(temp, file);
+}
+
+/**
+ * Packages for a build in `folder`: hard links to the installed ones, so
+ * nothing is copied. Build caches are left out: a tool that rewrote one in
+ * place would change the running checkout's file too.
+ */
+async function linkTree(from, to) {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    if (/^\.(vite|vite-temp|cache)$/.test(entry.name)) continue;
+    const source = join(from, entry.name), target = join(to, entry.name);
+    if (entry.isDirectory()) await linkTree(source, target);
+    else if (entry.isSymbolicLink()) await symlink(await readlink(source), target);
+    else await link(source, target);
+  }
+}
+
+/** The chat reader of this source, when the running checkout already has it. */
+async function copyReader(dir, folder) {
+  try {
+    const { stdout } = await exec(process.execPath, ['--input-type=module', '-e',
+      "const { binaryPath } = await import('./native/log-index/build-id.mjs'); console.log(binaryPath())"], { cwd: folder, timeout: 30_000 });
+    const target = stdout.trim();
+    const name = target.slice(join(folder, 'native/log-index/').length);
+    if (!/^log-index\.[a-zA-Z0-9._-]+\.node$/.test(name) || target !== join(folder, 'native/log-index', name)) return;
+    if (existsSync(join(dir, 'native/log-index', name)) && !existsSync(target)) await copyFile(join(dir, 'native/log-index', name), target, constants.COPYFILE_FICLONE);
+  } catch { /* The build makes it. */ }
 }
 
 /** Finish the restart part of an update, including a retry after a crash. */
@@ -595,9 +686,15 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
   say(`updating ${head.slice(0, 7)} -> ${tip.slice(0, 7)}`);
   const state = { dir, previousHead: head, targetHead: tip, phase: 'prepared', restart, rollback, publishing: false,
     retainPrevious: rebuild && head !== tip, branch: await git(['symbolic-ref', '--quiet', 'HEAD']).catch(() => null) };
-  if (rebuild) state.artifacts = await saveArtifacts(dir, [
-    'apps/web/dist', ...await dependencyPaths(dir, git, tip),
-  ]);
+  // Same packages: keep node_modules where it is. It is then neither saved,
+  // installed again nor replaced, and the terminal engine stays built.
+  const keepPackages = rebuild && await sameDependencies(dir, git, head, tip);
+  const app = rebuild ? await sameApp(join(dir, 'apps/web/dist'), git, tip) : null;
+  if (keepPackages) say('the packages did not change - keeping them');
+  if (app) say(`the app did not change since ${app.commit.slice(0, 7)} - keeping it`);
+  if (rebuild) state.artifacts = await timed('save the current release', async () => saveArtifacts(dir, [
+    'apps/web/dist', ...keepPackages ? [] : await dependencyPaths(dir, git, tip),
+  ]));
   if (rebuild) state.release = join(HELM_DIR, `release-${randomUUID()}`);
   let started = false;
   try {
@@ -609,16 +706,38 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
     await checkSourcePaths(dir, git, head, tip);
     writeUpdateState(state);
     started = true;
-    // Always install in the release folder. npm links workspaces to that folder,
+    // Always build in the release folder. npm links workspaces to that folder,
     // which stays available until startup has passed.
-    if (rebuild) await prepareRelease(dir, tip, async (folder) => {
-      await gentle('npm', ['ci', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: folder });
-      await ensurePty(folder);
-      if (existsSync(join(folder, 'scripts/build-log-reader.mjs'))) {
-        await gentle(process.execPath, ['scripts/build-log-reader.mjs'], { cwd: folder });
+    if (rebuild) await timed('prepare the new release', () => prepareRelease(dir, tip, async (folder) => {
+      if (!keepPackages) {
+        await timed('install packages', () => gentle('npm', ['ci', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: folder }));
+        await timed('check the terminal engine', () => ensurePty(folder));
+      } else if (!app) {
+        // The app build needs packages. Workspace links are relative, so
+        // they point into this folder's own source.
+        await timed('link packages', async () => {
+          for (const path of await dependencyPaths(dir, git, tip)) {
+            if (!existsSync(join(dir, path))) continue;
+            try { await linkTree(join(dir, path), join(folder, path)); }
+            catch {
+              // Another disk, or links not allowed: copy instead.
+              await rm(join(folder, path), { recursive: true, force: true });
+              await copyArtifact(join(dir, path), join(folder, path));
+            }
+          }
+        });
       }
-      await gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: folder });
-    }, state.release);
+      if (existsSync(join(folder, 'scripts/build-log-reader.mjs'))) {
+        await copyReader(dir, folder);
+        await timed('build the chat reader', () => gentle(process.execPath, ['scripts/build-log-reader.mjs'], { cwd: folder }));
+      }
+      if (app) {
+        await copyArtifact(join(dir, 'apps/web/dist'), join(folder, 'apps/web/dist'));
+        restampApp(join(folder, 'apps/web/dist'), app, tip);
+      } else {
+        await timed('build the app', () => gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: folder }));
+      }
+    }, state.release, { since: head }));
     if (await git(['rev-parse', 'HEAD']) !== expected || await git(['status', '--porcelain'])) {
       throw new Error('The files changed during the update. Keep your changes and try again.');
     }
@@ -642,7 +761,7 @@ async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true
     state.publishing = true;
     writeUpdateState(state);
     await git(['reset', '--hard', '--quiet', tip]);
-    if (rebuild) await publishRelease(state.release, dir, state.artifacts.paths.map((entry) => entry.path));
+    if (rebuild) await timed('install the new release', () => publishRelease(state.release, dir, state.artifacts.paths.map((entry) => entry.path)));
     // Mark the source and build complete before touching systemd. If this
     // process dies while scheduling a restart, the next run can finish that
     // part without reinstalling or moving the checkout again.

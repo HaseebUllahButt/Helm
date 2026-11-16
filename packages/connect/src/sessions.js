@@ -12,7 +12,7 @@ import { Checkpoints } from './checkpoints/store.js';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { nativeActive } from './native-subagents.js';
 import { nonAgentClaudeTask, claudeServiceTasks, staleAgentCards } from './claude-tasks.js';
-import { ENGINES } from './engines.js';
+import { ENGINES, conversationKey } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
 import { optionArgs, peekModels, listModels, followNewModels } from './models.js';
@@ -21,7 +21,7 @@ import { EventLog } from './events.js';
 import { nativeCodexSocket } from './drivers/codex.js';
 import { defaultMode, modeFromAuto } from './modes.js';
 import { ModeFooter, MODE_FROM_LABEL } from './native-mode.js';
-import { TerminalHost, NativeHosts, PROC_SOCKET_PATH } from './terminals.js';
+import { TerminalHost, NativeHosts, PROC_SOCKET_PATH, watchTerminalMemory } from './terminals.js';
 import { inventory, scratchFolder } from './inventory.js';
 import { opencodeServiceSessions } from './opencode-service.js';
 import { claudeLiveSessions, claudeLiveStatus, descendsFrom, dedupeNativeConversations } from './external-process.js';
@@ -159,7 +159,7 @@ export class Sessions extends EventEmitter {
   /** sessionId -> open command cards (turn.start with local: true). */
   #commandCards = new Map();
 
-  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, waiterGraceMs = 3000, delegationIdleMs = DELEGATION_IDLE_MS, reattachRetryMs = 90_000, reattachConcurrency = 4 } = {}) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, waiterGraceMs = 3000, delegationIdleMs = DELEGATION_IDLE_MS, reattachRetryMs = 90_000, reattachConcurrency = 4, nativeRetryMs = 2500 } = {}) {
     super();
     this.#makeParts();
     this.runtime = runtime;
@@ -167,6 +167,7 @@ export class Sessions extends EventEmitter {
     this.waiterGraceMs = waiterGraceMs;
     this.delegationIdleMs = delegationIdleMs;
     this.reattachRetryMs = reattachRetryMs;
+    this.nativeRetryMs = nativeRetryMs;
     this.reattachConcurrency = reattachConcurrency;
     this.events = events;
     this.limits = new AccountLimits();
@@ -201,6 +202,12 @@ export class Sessions extends EventEmitter {
       this.emit('exit', { id, code });
       this.emit('session', { ...s, status: 'exited', alive: false });
     });
+    // Read from the journal after the end: the terminal says the memory
+    // guard stopped it (cgroup-scope.js).
+    watchTerminalMemory();
+    for (const host of [this.terminals, this.nativeTerminals]) {
+      host.on?.('memory.stop', ({ id }) => this.emit('exit', { id, code: null, memory: true }));
+    }
     // An agent process that dies while no driver holds it still leaves the
     // record: close what it left open so the session stops reading as busy.
     this.procs.on('proc.lost', ({ id }) => this.#resumer.procGone(id, { reason: 'Helm lost contact with the helper process.' }, true));
@@ -346,7 +353,7 @@ export class Sessions extends EventEmitter {
   recover(id, options) { return this.#limitRecovery.recover(id, options); }
 
   /** How full a conversation is: kept on its record, sent to clients as a session update. */
-  #setContext(s, used, window, model, full, compacted = false) {
+  #setContext(s, used, window, model, full, compacted = false, ttl) {
     if (!(window > 0)) return false;
     // Compacted with the new size not yet known: the ring empties and says so.
     if (compacted && !(used > 0)) {
@@ -359,9 +366,12 @@ export class Sessions extends EventEmitter {
     // `full` is the model's whole window: the menu's "Full" option, and what "Compact at" can never exceed.
     full = full > 0 ? full : undefined;
     model = typeof model === 'string' && model ? model : undefined;
+    // `ttl` is how long Claude keeps the conversation cached (idle-history.js);
+    // a reply that wrote nothing new to the cache leaves the last one.
+    ttl = ttl > 0 ? ttl : s.context?.ttl;
     const was = s.context;
-    if (was?.used === used && was?.window === window && was?.model === model && was?.full === full) return false;
-    s.context = { used, window, ...(model && { model }), ...(full && { full }), at: Date.now() };
+    if (was?.used === used && was?.window === window && was?.model === model && was?.full === full && was?.ttl === ttl) return false;
+    s.context = { used, window, ...(model && { model }), ...(full && { full }), ...(ttl > 0 && { ttl }), at: Date.now() };
     if (this.#index.has(s.id)) this.emit('session', s);
     return true;
   }
@@ -778,7 +788,7 @@ export class Sessions extends EventEmitter {
       out.push({ ...wire(s), archived: !!s.archived, alive: !!pane, status, cwd: pane?.cwd ?? s.cwd, adopted: false });
     }
     if (!parentId) {
-      const known = new Set(out.filter((s) => s.engineSessionId).map((s) => `${s.engine}:${s.engineSessionId}`));
+      const known = new Set(out.filter((s) => s.engineSessionId).map((s) => conversationKey(s.engine, s.engineSessionId)));
       for (const x of detected) {
         // V2 service chats have no terminal for the native discovery path.
         if (!includeDetected && !x.serviceActive) continue;
@@ -786,7 +796,7 @@ export class Sessions extends EventEmitter {
         const mark = this.#marks.get(id);
         // Removed stays removed - unless it was used again in a terminal since.
         const reused = mark === 'removed' && this.#removedAt.get(id) && x.updatedAt > this.#removedAt.get(id) + 60_000;
-        if ((mark === 'removed' && !reused) || known.has(`${x.engine}:${x.id}`) || this.isDelegatedConversation(x.engine, x.id)) continue;
+        if ((mark === 'removed' && !reused) || known.has(conversationKey(x.engine, x.id)) || this.isDelegatedConversation(x.engine, x.id)) continue;
         // A test's chat under /tmp is not one the owner had.
         if (scratchFolder(x.cwd)) continue;
         // A shared V2 service can own several exact IDs in the same folder.
@@ -831,7 +841,7 @@ export class Sessions extends EventEmitter {
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
-    return dedupeNativeConversations(out.filter((s) => !s.delegation?.hidden && (parentId ? !s.archived && (s.delegation?.parentId === parentId || !!team?.has(s.id)) : includeDelegations || !s.delegation || this.#delegation.unhomedDelegation(s))))
+    return dedupeNativeConversations(out.filter((s) => !s.delegation?.hidden && (parentId ? !s.archived && (s.delegation?.parentId === parentId || !!team?.has(s.id)) : includeDelegations || !s.delegation || !!s.pinnedAt || this.#delegation.unhomedDelegation(s))))
       .map((s) => {
         if (!s.delegation) return s;
         const child = this.#index.get(s.id);
@@ -1818,6 +1828,8 @@ export class Sessions extends EventEmitter {
     let s;
     try { s = this.get(id); }
     catch (error) { error.deliveryNotSent = true; throw error; }
+    // A card Helm asked itself (helm sudo): Helm answers it, not the agent.
+    if (this.helmAsks?.owns(requestId)) return this.helmAsks.answer(id, requestId, decision ?? {});
     const ask = this.#natives.hookAsks.get(requestId);
     const asked = this.events.pending(id).find((request) => request.requestId === requestId);
     if (s.nativeCli) {
@@ -1841,6 +1853,49 @@ export class Sessions extends EventEmitter {
     // Only Claude's decline takes the owner's words with the answer.
     const carried = decision?.option === 'deny' && DRIVERS[s.driver] === DRIVERS.claude;
     return { ok: true, ...await this.#approvalNote(s, requestId, decision, asked?.title, carried) };
+  }
+
+  /**
+   * A card Helm asks itself, not the agent (`helm sudo`, sudo.js). It shows
+   * and is answered like an agent's card in every chat kind; `answer` hands
+   * it to `helmAsks`. The chat reads as waiting until no card is left.
+   */
+  showHelmAsk(id, card) {
+    const s = this.#index.get(id);
+    if (!s) throw new Error(`unknown session: ${id}`);
+    if (!this.events.pending(id).some((p) => p.requestId === card.requestId)) {
+      const event = this.events.append(id, { type: 'permission.request', ...card });
+      s.lastSeq = event.seq;
+      this.emit('event', { id, event });
+    }
+    this.#helmStatus(s, 'blocked');
+  }
+
+  /** Close a card from showHelmAsk; the chat goes back to `back` when no card is left. */
+  closeHelmAsk(id, requestId, decision, back = 'working') {
+    const s = this.#index.get(id);
+    if (!s) return;
+    if (this.events.pending(id).some((p) => p.requestId === requestId)) {
+      const event = this.events.append(id, { type: 'permission.resolved', requestId, ...(decision ? { decision } : {}) });
+      s.lastSeq = event.seq;
+      this.emit('event', { id, event });
+    }
+    if (s.status === 'blocked' && !this.events.pending(id).length) this.#helmStatus(s, back);
+  }
+
+  #helmStatus(s, status) {
+    if (s.status === status) return;
+    const from = s.status;
+    s.status = status;
+    s.updatedAt = Date.now();
+    // In the log too: an open chat reads its state from there.
+    const event = this.events.append(s.id, { type: 'status', status });
+    s.lastSeq = event.seq;
+    this.emit('event', { id: s.id, event });
+    this.#save();
+    this.emit('session', { ...wire(s), ...pendingSummary(this.events.pending(s.id)) });
+    // Back to idle is not a finished turn: that change would ring "done".
+    if (status !== 'idle') this.emit('status', { session: s, from, to: status });
   }
 
   /**

@@ -171,7 +171,31 @@ export function delegationNote(engine = null) {
  * Kept to a few lines: it rides along in every session.
  */
 export function agentMessageNote() {
-  return '[Helm agent messages: Talk to other agents with helm say and helm reply. The reader has none of your context: name the files, commits and exact ask, and drop your own shorthand. Send only what the reader must act on; never trade acknowledgements or progress notes.]';
+  return '[Helm agent messages: Talk to other agents with helm say and helm reply. The reader has none of your context: name the files, commits and exact ask, and drop your own shorthand. Send only what the reader must act on; never trade acknowledgements or progress notes. Never stop another chat\'s agent process (kill, pkill): it loses that chat\'s work. Ask that chat with helm say, or ask the owner.]';
+}
+
+/**
+ * Codex lead chats waited on their own long commands by calling write_stdin
+ * with no input and a 1 s wait: 1267 such checks on the laptop on 2026-11-10
+ * and 11, each one re-reading a chat of about 200k. An empty write_stdin
+ * with a long wait returns as soon as the command ends. No number is given:
+ * Codex sets the allowed range, and some chats must report to the owner
+ * sooner. The general line in usageNote did not stop it.
+ */
+const ENGINE_WAITS = {
+  codex: ' To wait for a running command, call write_stdin with empty chars and one long yield_time_ms that the tool allows and this chat\'s rules permit: it returns as soon as the command ends. Do not check it again and again with short waits. Send real input to a command as usual.',
+};
+
+/**
+ * Cost habits that keep the work the same. Measured on 2026-11-10 (about
+ * $507 in one day): two thirds of the spend was each step re-reading its
+ * whole chat, Claude ran one command per step, a helper got four unrelated
+ * jobs and grew to 306k, and a `helm say` to an old 510k chat that had
+ * rested 15 hours re-read it all at full price. Models and checks are not
+ * touched: the owner wants no loss of quality.
+ */
+export function usageNote(engine = null) {
+  return '[Helm usage: Each step re-reads this whole chat, so a long chat makes every step cost more. Keep the same models and checks; cut only waste. Put independent reads and checks in one step: several tool calls at once, or one command. Give each new job a new helper; never give a finished helper an unrelated job. As a lead, keep your chat short: give long reading, builds and test runs to helpers. Never check a running helper or job again and again (sleep loops, watch, Monitor, ScheduleWakeup, repeated helm delegate-result or tail): each check re-reads this chat. Helm messages you when a helper ends; for your own long run, use one command that waits until it ends. To see what another chat did, read it with helm thread; helm say wakes it, and a chat idle for over an hour re-reads its whole history at full price. When the task changes and this chat is very long, tell the owner that a new chat with helm pickup costs less.' + (ENGINE_WAITS[engine] ?? '') + ']';
 }
 
 /**
@@ -207,8 +231,17 @@ export function helperNote(parentId) {
   return `[Helm helper: You are a helper for chat ${parentId}. It sees none of your work. Only your last message goes back to it, as the result, cut at 1500 characters. Report once, and make the report stand alone: the outcome first, then commits, paths and checks run, then what is left. Send helm say ${parentId} -- "text" only when you are blocked or need its decision, never for progress. Later notes, such as a stale background watcher timing out, never reach it; do not write them.]`;
 }
 
+/**
+ * Admin rights go through the owner's card (helm sudo, sudo.js). An agent
+ * that ran sudo itself would hang on the password prompt or ask the owner
+ * to type the password into the chat.
+ */
+export function sudoNote() {
+  return '[Helm admin: When you need admin rights, run helm sudo -- <command> with a long time limit; the owner allows it in the app. Never run sudo yourself, never ask the owner for the password, never read Helm\'s saved password.]';
+}
+
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});

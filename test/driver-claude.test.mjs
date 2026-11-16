@@ -1147,6 +1147,17 @@ test('Claude reports context from the last top-level reply, sized by the compact
   assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 148_500, window: 383_000, full: 1_000_000, model: 'claude-opus-5-5' });
 });
 
+test('Claude says how long it keeps the chat cached; a reply that wrote nothing keeps the last time', async (t) => {
+  const { log, reply, result } = await contextFeed(t, { modelUsage: { 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } } });
+  reply({ input_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 20_000, output_tokens: 10,
+    cache_creation: { ephemeral_1h_input_tokens: 20_000, ephemeral_5m_input_tokens: 0 } });
+  result();
+  assert.equal(log.of('context').at(-1).ttl, 60 * 60_000);
+  reply({ input_tokens: 5, cache_read_input_tokens: 20_000, cache_creation_input_tokens: 0, output_tokens: 10,
+    cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 } });
+  assert.equal(log.of('context').at(-1).ttl, 60 * 60_000);
+});
+
 test('compacting drops the ring to what is left at once, not after the next reply', async (t) => {
   const { log, reply, result, feed } = await contextFeed(t, { modelUsage: { 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } } });
   reply({ input_tokens: 5, cache_read_input_tokens: 640_000, cache_creation_input_tokens: 5_000, output_tokens: 453 });

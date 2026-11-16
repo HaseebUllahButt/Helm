@@ -307,6 +307,9 @@ async function main() {
   // Started from inside a node --test run, the runner would report to that
   // parent and skip our reporters.
   delete env.NODE_TEST_CONTEXT;
+  // Test programs stay in the runner's own memory group, where cleanup
+  // finds them; a test that checks the groups asks with HELM_SCOPES=1.
+  env.HELM_NO_SCOPES ??= '1';
   if (browser && !env.HELM_TEST_CHROMIUM) {
     const { chromium } = await import('@playwright/test').catch(() => ({}));
     const own = chromium?.executablePath?.();

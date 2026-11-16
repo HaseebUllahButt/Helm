@@ -56,6 +56,28 @@ test('remote HTTP is refused before a handshake sends anything', async () => {
   assert.equal(N.secureHubAddress('http://127.0.0.1:8787'), true);
 });
 
+test('a command skips remote HTTP addresses and waits while its hubs restart', async () => {
+  // 2026-11-11: helm agents and helm ship stopped with "Use HTTPS to connect
+  // to another machine." Loopback and the VM were restarting, so the next
+  // hub in the list was a peer's home network address on plain http.
+  const net = N.createNetwork();
+  const { createServer } = await import('node:net');
+  const closed = await new Promise((resolve) => {
+    const s = createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
+  });
+  net.port = closed;
+  net.machines.aabbccddeeff = { id: 'aabbccddeeff', name: 'home-pc', endpoints: ['http://192.168.10.64:8787', 'https://home.example.invalid'] };
+  const { hubRpc, hubUrls } = await import('../packages/connect/src/hub-client.js');
+  const { forwardHubs } = await import('../packages/connect/src/forward.js');
+  const err = await hubRpc(net, 'aabbccddeeff', 'env.info', {}, { timeout: 3000, budget: 6000 }).then(() => null, (e) => e);
+  assert.equal(err?.code, 'unreachable', err?.message);
+  assert.doesNotMatch(err.message, /Use HTTPS/);
+  for (const urls of [hubUrls(net), hubUrls(net, 'aabbccddeeff'), forwardHubs(net), N.hubAddresses(net)]) {
+    assert.deepEqual(urls.filter((url) => !N.secureHubAddress(url)), []);
+    assert.ok(urls.includes(`http://127.0.0.1:${closed}`) && urls.includes('https://home.example.invalid'));
+  }
+});
+
 test('HTTP and WebSocket ingress refuse nonlocal sockets and forged proxy headers', async t => {
   N.createNetwork();
   const { startRelay } = await import('@helm/relay');

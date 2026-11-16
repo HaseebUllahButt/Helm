@@ -670,6 +670,8 @@ async function acpFixture(t) {
     },
   };
   const driver = new OpencodeDriver({ cmd: process.execPath, env: {}, cwd: tmpdir(), mode: 'ask', procId: `test-${Math.random()}`, procHost: { hasProc: () => false, openProc: async () => {}, procPipe: () => pipe } });
+  // The stand-in program is node, whose --version (v24) would read as OpenCode 2.
+  driver.matchVersion = async () => {};
   const events = [];
   driver.on('event', (event) => events.push(event));
   t.after(() => driver.kill());

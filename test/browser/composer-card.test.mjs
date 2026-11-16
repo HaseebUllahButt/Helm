@@ -39,6 +39,10 @@ before(async () => {
       options:[{id:'allow',role:'allow',label:'Allow'},{id:'always',role:'allow-always',label:'Always allow npm'},{id:'deny',role:'deny',label:'Deny'}]};
     const toolAsk={requestId:'tool',kind:'tool',tool:'devin',title:'Run a command',detail:JSON.stringify({command:'echo hi',cwd:'/work'},null,2),
       options:[{id:'allow',role:'allow',label:'Allow'},{id:'deny',role:'deny',label:'Deny'}]};
+    const sudoAsk={requestId:'sudo-cardtest1',kind:'command',tool:'sudo',title:'Run as admin',detail:'pacman -U zapfast-bin-0.21.2.pkg.tar.zst',
+      reason:'Install Zapfast. Folder: /tmp',defaultTo:'allow',allowEdit:false,ownLabels:true,passwordNeeded:true,machine:'Laptop',
+      input:{command:'pacman -U zapfast-bin-0.21.2.pkg.tar.zst'},
+      options:[{id:'allow',role:'allow',label:'Allow once'},{id:'allow-15',role:'allow-always',label:'Allow for 15 min'},{id:'deny',role:'deny',label:'Deny'}]};
     const scenes={
       idle:{events:done(base())},
       tool:{events:base(),status:'blocked',pending:[toolAsk]},
@@ -53,6 +57,7 @@ before(async () => {
         {question:'Which cache?',options:[{label:'Disk'},{label:'Memory'}]},
         {question:'How loud?',options:[{label:'Quiet'},{label:'Loud'}]}]})]},
       command:{events:withTodos(list),status:'blocked',pending:[cmd]},
+      sudo:{events:base(),status:'blocked',pending:[sudoAsk]},
     };
     window.scene='idle';
     const client={pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},subscribe:()=>{},rpc:async(e,method,params)=>{
@@ -66,6 +71,7 @@ before(async () => {
         const events=params.since?[]:s.events.map((ev,i)=>({seq:i+1,at:t0+i,...ev}));
         return {session:{...session,status:s.status??'idle'},events,pending:window.answered?[]:(s.pending??[]).map((p,i)=>({seq:100+i,at:t0,...p})),last:events.length};
       }
+      if(method==='sudo.setup'&&params.password==='bad')throw new Error('This password is wrong: sudo did not accept it. Try again.');
       if(method==='session.answer')window.answered=true;
       return {ok:true};
     }};
@@ -305,4 +311,29 @@ test('the same card in the light theme', async (t) => {
   await command.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await command.locator('.sheet.banner.command').waitFor();
   await shot(command, 'composer-approval-light-1280.png');
+});
+
+test('a helm sudo card with no saved password asks for it, with no note box', async (t) => {
+  const page = await open(t, 'sudo');
+  const box = page.locator('.sheet-password');
+  await box.waitFor();
+  assert.equal(await box.locator('label').innerText(), 'Admin password of Laptop');
+  assert.equal(await page.locator('.sheet-links, .sheet-note').count(), 0, 'no note: a typed password must not go to the agent');
+  const allow = page.locator('.sheet-actions button', { hasText: 'Allow once' });
+  assert.equal(await allow.isDisabled(), true);
+  await shot(page, 'sudo-password-card-1280.png');
+  // A wrong password says so and keeps the card.
+  await box.locator('input').fill('bad');
+  await allow.click();
+  await box.locator('.error').waitFor();
+  assert.equal(await page.evaluate(() => window.calls.some((c) => c.method === 'session.answer')), false);
+  await shot(page, 'sudo-password-wrong-1280.png');
+  // The right one is saved first; the answer never carries it.
+  await box.locator('input').fill('right horse');
+  await box.locator('input').press('Enter');
+  await answered(page);
+  const calls = await page.evaluate(() => window.calls.filter((c) => ['sudo.setup', 'session.answer'].includes(c.method)));
+  assert.deepEqual(calls.map((c) => c.method), ['sudo.setup', 'sudo.setup', 'session.answer']);
+  assert.equal(JSON.stringify(calls.at(-1)).includes('right horse'), false);
+  assert.deepEqual(await decisionOf(page), { option: 'allow' });
 });

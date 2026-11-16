@@ -4,21 +4,37 @@ import { parseAgentArgs } from './agent-args.js';
 import { runBrowserScript } from './browser-script.js';
 import { CAPTCHA_SLICE_MS } from './browser-targets.js';
 
-export async function runBrowserCommand(args, { rpc, self, findSession, env = process.env, print = console.log, readInput = readStdin, exit = setExit } = {}) {
-  const { words, options } = parseAgentArgs(args, { values: ['session', 'output', 'budget', 'note', 'within', 'frame', 'timeout'], switches: ['full-page', 'default', 'clear-default', 'restart'] });
+export async function runBrowserCommand(args, { rpc, self, findSession, machine, env = process.env, print = console.log, readInput = readStdin, exit = setExit } = {}) {
+  const { words, options } = parseAgentArgs(args, { values: ['session', 'output', 'budget', 'note', 'within', 'frame', 'timeout', 'profile', 'machine'], switches: ['full-page', 'default', 'clear-default', 'restart'] });
   const [command = 'tabs', tabId, source] = words;
-  if (['help', '--help'].includes(command)) { print('helm browser open <url> | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | script <tab> <file or -> [key=value ...] [--timeout <ms>] | point <tab> <element # or CSS selector> [--note <text>] | captcha <tab> [--timeout <ms>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default | mode [window|extended] [--restart] | setup [--session <chat-id>]'); return; }
+  if (['help', '--help'].includes(command)) { print('helm browser open <url> [--profile <name>] [--machine <name>] | tabs | look <tab> [--within <CSS selector>] [--frame <number>] | act <tab> <JSON> | flows | run <tab> <name> key=value ... | script <tab> <file or -> [key=value ...] [--timeout <ms>] | point <tab> <element # or CSS selector> [--note <text>] | captcha <tab> [--timeout <ms>] | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default | mode [window|extended] | main [name] | setup [--session <chat-id>]'); return; }
   const sessionId = options.session || env.HELM_SESSION_ID || env.HELM_NATIVE_SESSION;
-  if (!sessionId) throw new Error('run browser commands in a Helm chat, or pass --session <chat-id>');
-  const target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
-  const id = target.session.id;
+  if (!sessionId && command !== 'main') throw new Error('run browser commands in a Helm chat, or pass --session <chat-id>');
+  let target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
+  let id = target.session.id;
+  // --machine: use the browser of another machine, for example the owner's
+  // signed-in browser on a laptop when this machine has no screen. That
+  // machine keeps the tabs for this chat as a guest.
+  const there = options.machine ? machine(options.machine) : null;
+  if (there && there !== target.env) {
+    if (['mode', 'main', 'setup', 'logins'].includes(command)) throw new Error(`helm browser ${command} works only on the chat's own machine`);
+    const own = options.session ? target.session : (await findSession(sessionId).catch(() => null))?.session || { id: sessionId };
+    const guest = { chat: id, from: target.env, mode: own.mode || null, title: own.title || own.name || null };
+    target = { env: there, session: { id: guestId(target.env, id) } }; id = target.session.id;
+    const direct = rpc;
+    rpc = (env_, method, params, ms) => direct(env_, method, { ...params, guest }, ms).catch(error => {
+      throw /thread not found/.test(error.message) ? new Error('That machine runs an older Helm. Update it, then try again.') : error;
+    });
+  }
   let result;
   if (command === 'mode') {
     if (tabId && !['window', 'extended'].includes(tabId)) throw new Error('choose a browser mode: window or extended');
-    if (options.restart && tabId !== 'extended') throw new Error('use --restart with helm browser mode extended');
-    result = await rpc(target.env, 'browser.mode', { id, ...(tabId ? { mode: tabId, restart: !!options.restart } : {}) }, options.restart ? 60000 : 20000);
+    // Only the owner restarts their browser, from Settings: an agent never does.
+    if (options.restart) throw new Error('Agents never restart the owner\'s browser. The owner can do it in Settings, under Your browser.');
+    result = await rpc(target.env, 'browser.mode', { id, ...(tabId ? { mode: tabId } : {}) }, 20000);
   }
   // Only when the owner asks: it opens a page and uses the clipboard on their screen.
+  else if (command === 'main') result = await rpc(target.env, 'browser.main', { id, ...(tabId ? { name: words.slice(1).join(' ') } : {}) });
   else if (command === 'setup') result = await rpc(target.env, 'browser.setup', { do: 'open' }, 30000);
   else if (command === 'profiles') result = await rpc(target.env, 'browser.profiles', { id });
   else if (command === 'logins') {
@@ -41,7 +57,8 @@ export async function runBrowserCommand(args, { rpc, self, findSession, env = pr
     result = await runBrowserScript({ source: source === '-' ? await readInput() : await readFile(resolve(source), 'utf8'), file: source, tabId, args: keyValues(words.slice(3)), timeout, call: (method, params, ms) => rpc(target.env, method, { id, ...params }, ms) });
     print(JSON.stringify(result, null, 2)); exit(result.ok ? 0 : 1, !!timeout && !result.ok); return result;
   }
-  else if (command === 'open') result = await rpc(target.env, 'browser.open', { id, url: tabId || 'about:blank' }, 30000);
+  // A profile that is not open yet takes up to 15 s to load.
+  else if (command === 'open') result = await rpc(target.env, 'browser.open', { id, url: tabId || 'about:blank', ...(options.profile ? { profile: options.profile } : {}) }, options.profile ? 50000 : 30000);
   else if (command === 'close') result = await rpc(target.env, 'browser.close', { id, tabId });
   else if (command === 'captcha') result = await waitForCaptcha({ rpc, env: target.env, id, tabId, timeout: options.timeout });
   else if (['look', 'act', 'screenshot', 'point'].includes(command)) {
@@ -58,6 +75,9 @@ export async function runBrowserCommand(args, { rpc, self, findSession, env = pr
   } else throw new Error(`unknown browser command: ${command}`);
   print(JSON.stringify(result, null, 2)); return result;
 }
+
+/** The name a chat has on another machine whose browser it uses. */
+export const guestId = (machine, chat) => `guest-${String(machine).replace(/[^\w-]/g, '').slice(0, 40)}-${String(chat).replace(/[^\w-]/g, '').slice(0, 100)}`;
 
 const keyValues = words => Object.fromEntries(words.map(value => { const at = value.indexOf('='); if (at < 1) throw new Error('parameters use key=value'); return [value.slice(0, at), value.slice(at + 1)]; }));
 async function readStdin() { let text = ''; for await (const chunk of process.stdin) text += chunk; return text; }

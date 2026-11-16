@@ -1,7 +1,7 @@
 import WebSocket from 'ws';
 import { randomBytes } from 'node:crypto';
 import { T } from '@helm/protocol';
-import { requireNetwork, hubCredential, allEndpoints } from '@helm/protocol/network';
+import { requireNetwork, hubCredential, hubAddresses } from '@helm/protocol/network';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { verifyHandoffSignature } from './code-transfer.js';
 import { cleanCopyFolder, createCopyRequest, copyWindow, COPY_CODEC } from './copy-transport.js';
@@ -470,10 +470,7 @@ export async function copyProxy(args, deps = {}) {
   const clearBudget = () => clearTimeout(budgetTimer);
   try {
     const endpoints = (peer.endpoints ?? []).slice(0, MAX_ENDPOINT_ROUTES);
-    const hubs = [...new Set([
-      `http://127.0.0.1:${net.port ?? 8787}`,
-      ...allEndpoints(net).sort((a, b) => Number(b.startsWith('https://')) - Number(a.startsWith('https://'))),
-    ])].slice(0, MAX_HUB_ROUTES);
+    const hubs = hubAddresses(net).slice(0, MAX_HUB_ROUTES);
     const routes = [];
     if (parsed.mode !== 'relay') {
       for (const endpoint of endpoints) routes.push({ kind: 'peer', endpoint });

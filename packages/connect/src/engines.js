@@ -288,6 +288,15 @@ export const ENGINES = {
  * drivers must not pass for an external session, or inventory would claim a
  * helm-owned process is somebody typing in a terminal.
  */
+/**
+ * The key of one CLI conversation, for matching a found chat to Helm's own
+ * record. OpenCode 1 and 2 write one shared database with unique `ses_` ids,
+ * and the `opencode` command can be either version: a helper Helm runs as
+ * `opencode` is listed as `opencode2` by the finder. Matching by engine alone
+ * showed such helpers again as their own chats in Finished (2026-11-11).
+ */
+export const conversationKey = (engine, id) => `${engine === 'opencode2' ? 'opencode' : engine}:${id}`;
+
 export function isInteractiveProc(engine, argv) {
   const e = ENGINES[engine];
   if (!e?.bin || !Array.isArray(argv) || !argv.length) return false;

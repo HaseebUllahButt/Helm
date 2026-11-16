@@ -1,3 +1,4 @@
+import { MEMORY_STOP } from '../cgroup-scope.js';
 import { spawn } from 'node:child_process';
 import { LineBuffer } from '../line-buffer.js';
 import { randomUUID } from 'node:crypto';
@@ -14,7 +15,7 @@ import { modeFor, modesFor } from '../modes.js';
  * `session/request_permission` requests that we answer by id.
  *
  * Everything engine-specific lives in `spec`, set by the subclass:
- *   args()            argv after the binary ('acp', '--cwd', ...)
+ *   args()            argv after the binary ('acp', ...)
  *   min               the CLI version this driver was written against; null
  *                     skips the `--version` probe entirely (antigravity's
  *                     PyInstaller bundle unpacks ~1GB to answer it)
@@ -647,7 +648,7 @@ export class AcpDriver extends Driver {
   #bindPipe(pipe) {
     this.#pipe = pipe;
     this.#exited = new Promise((resolve) => {
-      pipe.onExit(({ code, signal, stderr }) => {
+      pipe.onExit(({ code, signal, stderr, memory }) => {
         this.#pipe = null;
         // A turn adopted from a previous daemon has no call here to fail;
         // the process dying is its end all the same.
@@ -665,10 +666,11 @@ export class AcpDriver extends Driver {
           this.push('permission.resolved', { requestId, decision: 'cancelled' });
         }
         if (adopted) this.#turnDone(adopted, { error: { message: `${this.engine} exited` } });
-        if (code && code !== 0 && !this.killed) {
+        if (memory) this.push('error', { message: MEMORY_STOP, kind: 'exit' });
+        else if (code && code !== 0 && !this.killed) {
           this.push('error', { message: `${this.engine} exited with code ${code}${stderr ? `: ${stderr}` : ''}`, kind: 'exit' });
         }
-        this.push('status', { status: 'exited', code, signal });
+        this.push('status', { status: 'exited', code, signal, ...(memory ? { memory: true } : {}) });
         try { this.spec.onExit?.(this); } catch { /* cleanup is best effort */ }
         resolve({ code });
       });
@@ -826,8 +828,27 @@ export class AcpDriver extends Driver {
     if (!this.pending.size) this.push('status', { status: 'working' });
     // The response only arrives when the turn ends - which may be a
     // permission answer away - so it cannot be awaited here.
-    this.#call('session/prompt', { sessionId: this.engineSessionId, prompt }, promptId)
-      .then((res) => this.#turnDone(turnId, res));
+    this.#awaitPrompt(turnId, promptId, prompt);
+  }
+
+  /**
+   * Wait for one prompt to answer. A spec `retry` hook can turn a failed
+   * answer into a next prompt in the same turn: OpenCode's free models
+   * each have their own limit, and a helper that hit one used to fail.
+   */
+  #awaitPrompt(turnId, promptId, prompt) {
+    this.#call('session/prompt', { sessionId: this.engineSessionId, prompt }, promptId).then(async (res) => {
+      if (res.error && this.spec.retry && this.#turnId === turnId && !this.#interrupting) {
+        const next = await this.spec.retry(this, res.error).catch(() => null);
+        if (next && this.#turnId === turnId && !this.#interrupting && this.#pipe) {
+          const again = this.#nextId();
+          this.#promptId = again;
+          this.#awaitPrompt(turnId, again, next);
+          return;
+        }
+      }
+      this.#turnDone(turnId, res);
+    });
   }
 
   /**

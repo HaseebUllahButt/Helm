@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { HELM_DIR } from './paths.js';
 import { ownNode } from './own-node.js';
+import { scopeCommand, scopeEnv, scopePrefix, stoppedForMemory, CODEX_SCOPE_PREFIX } from './cgroup-scope.js';
 
 /**
  * Where the host listens.
@@ -82,6 +83,17 @@ export function olderNativeSockets() {
   } catch { return []; }
 }
 
+let memoryWatch = false;
+/** The daemon asks the journal whether a terminal that ended was stopped for memory. */
+export function watchTerminalMemory() { memoryWatch = true; }
+
+/** One line in agent-stops.jsonl for a stop by the memory guard. */
+function recordMemoryStop({ id, code = null, signal = 'SIGKILL', cmd = null }) {
+  void import('./agent-stops.js').then(({ recordStop }) => recordStop({
+    at: Date.now(), id, cmd, code, signal: signal || 'SIGKILL', memory: true, askedByHelm: false, daemonConnected: true,
+  })).catch(() => {});
+}
+
 /** Where a host that fails to start says why. */
 export const HOST_LOG = join(HELM_DIR, 'terminals.log');
 
@@ -132,6 +144,9 @@ export class TerminalHost extends EventEmitter {
   #procBacklog = new Map();
   #connecting = null;
   #pty = null;
+  /** Ids Helm itself asked to end: their stop is no mystery. */
+  #ending = new Set();
+
   /** Which socket to talk to and which systemd unit to spawn it as - the
    *  pty host by default; a proc-only instance when asked. */
   #socketPath;
@@ -281,10 +296,22 @@ export class TerminalHost extends EventEmitter {
       this.#procListeners.delete(msg.id);
       this.#procBacklog.get(msg.id)?.clear();
       this.#procBacklog.delete(msg.id);
-      if (l?.onExit) l.onExit({ code: msg.code, signal: msg.signal, stderr: msg.stderr });
-      // With no driver attached, the session itself has to close the turn
-      // the dead process left open - it cannot wait for somebody to look.
-      else this.emit('proc.exit', { id: msg.id, code: msg.code, signal: msg.signal });
+      const asked = this.#ending.delete(msg.id);
+      const deliver = (memory) => {
+        if (l?.onExit) l.onExit({ code: msg.code, signal: msg.signal, stderr: msg.stderr, memory });
+        // With no driver attached, the session itself has to close the turn
+        // the dead process left open - it cannot wait for somebody to look.
+        else this.emit('proc.exit', { id: msg.id, code: msg.code, signal: msg.signal, memory });
+      };
+      // The memory guard kills; a Codex connection instead ends when the
+      // Codex daemon it talks to is killed. Only those wait for the journal.
+      const codex = String(msg.id).startsWith('codex-');
+      if (asked || (msg.signal !== 'SIGKILL' && !codex)) return deliver(false);
+      void stoppedForMemory([scopePrefix('proc', msg.id), codex && CODEX_SCOPE_PREFIX], { since: Date.now() - 30_000 })
+        .then((memory) => {
+          if (memory) recordMemoryStop({ id: msg.id, code: msg.code, signal: msg.signal });
+          deliver(memory);
+        });
       return;
     }
     if (msg.t === 'native.open') {
@@ -296,7 +323,17 @@ export class TerminalHost extends EventEmitter {
     if (msg.t === 'exit') {
       this.#ids.delete(msg.id);
       this.#nativeSessions.delete(msg.id);
+      const asked = this.#ending.delete(msg.id);
       this.emit('exit', { id: msg.id, code: msg.code });
+      // Said at once; whether the memory guard did it is said after, once
+      // the journal is read. Only the daemon asks (watchTerminalMemory).
+      if (!asked && memoryWatch) {
+        void stoppedForMemory([scopePrefix('term', msg.id)], { since: Date.now() - 30_000, waits: [1500] }).then((memory) => {
+          if (!memory) return;
+          recordMemoryStop({ id: msg.id, code: msg.code, cmd: 'terminal' });
+          this.emit('memory.stop', { id: msg.id });
+        });
+      }
     }
   }
 
@@ -379,6 +416,16 @@ export class TerminalHost extends EventEmitter {
 
   async open(id, opts = {}) {
     await this.ensure();
+    this.#ending.delete(id);
+    // A memory group of its own (cgroup-scope.js). Asked here, not in the
+    // host: a host keeps running its old code across updates. A CLI
+    // terminal's host is versioned and reads its arguments, so it makes the
+    // group itself (pty.js).
+    if (!opts.native && !opts.scoped) {
+      const file = opts.cmd || opts.shell || process.env.SHELL || '/bin/bash';
+      const scoped = await scopeCommand('term', id, file, opts.cmd ? (opts.args ?? []) : ['-l'], opts.exactEnv ? opts.env : process.env);
+      if (scoped) opts = { ...opts, cmd: scoped.cmd, args: scoped.args, scoped: true, env: opts.exactEnv ? scopeEnv(opts.env ?? {}) : opts.env };
+    }
     const r = await this.#call({ t: 'open', id, ...opts });
     this.#ids.add(id);
     return { id, pid: r?.pid ?? null };
@@ -407,7 +454,14 @@ export class TerminalHost extends EventEmitter {
     // a sparse environment). Carry the daemon's lookup path with each open
     // so a restart can still find user-installed CLIs without restarting a
     // host that may be holding another live agent.
-    const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...(spec.env ?? {}) };
+    let env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...(spec.env ?? {}) };
+    // A memory group of its own, so the memory guard stops this agent
+    // alone (cgroup-scope.js). Same pid and pipes; an adopted one keeps its.
+    if (!this.#procs.has(id)) {
+      this.#ending.delete(id);
+      const scoped = await scopeCommand('proc', id, spec.cmd, spec.args ?? [], env);
+      if (scoped) { spec = { ...spec, cmd: scoped.cmd, args: scoped.args }; env = scopeEnv(env); }
+    }
     const r = await this.#call({ t: 'proc.open', id, ...spec, env });
     this.#procs.add(id);
     return r;
@@ -425,8 +479,8 @@ export class TerminalHost extends EventEmitter {
     this.#procListeners.set(id, l);
     return {
       write: (data) => this.#call({ t: 'proc.write', id, data }).catch(() => {}),
-      end: () => this.#call({ t: 'proc.end', id }).catch(() => {}),
-      kill: (signal) => this.#call({ t: 'proc.kill', id, signal }).catch(() => {}),
+      end: () => { this.#ending.add(id); return this.#call({ t: 'proc.end', id }).catch(() => {}); },
+      kill: (signal) => { this.#ending.add(id); return this.#call({ t: 'proc.kill', id, signal }).catch(() => {}); },
       onData: (cb) => {
         l.onData = cb;
         const buffer = this.#procBacklog.get(id);
@@ -441,6 +495,7 @@ export class TerminalHost extends EventEmitter {
   }
 
   async close(id) {
+    this.#ending.add(id);
     this.#ids.delete(id);
     await this.#call({ t: 'close', id }).catch(() => {});
   }
@@ -479,7 +534,7 @@ export class NativeHosts extends EventEmitter {
   }
 
   #forward(host, older = false) {
-    for (const event of ['data', 'native.open', 'hello']) host.on(event, (payload) => this.emit(event, payload));
+    for (const event of ['data', 'native.open', 'hello', 'memory.stop']) host.on(event, (payload) => this.emit(event, payload));
     host.on('exit', (payload) => {
       this.emit('exit', payload);
       if (older && !host.list().length) this.#release(host);

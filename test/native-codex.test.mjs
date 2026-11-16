@@ -45,6 +45,7 @@ let failResumes = 0;
 let extraTurns = [];
 let listFails = false;
 let readFails = false;
+let dropAfterResume = false;
 const status = () => approved ? { type: 'idle' } : { type: 'active', activeFlags: ['waitingOnApproval'] };
 const thread = () => ({ id: nativeId, path: emptyThread ? join(home, 'not-created-yet.jsonl') : path, cwd: root, name: 'Native terminal task', canAcceptDirectInput: true, createdAt: 1, updatedAt: 2, status: activeTurn ? {type:'active',activeFlags:[]} : status(), turns: [...extraTurns, ...(activeTurn ? [{id:activeTurn,status:'inProgress',items:[]}] : [])] });
 const broadcast = (method, params) => { for (const c of wsServer.clients) c.send(JSON.stringify({ method, params })); };
@@ -75,6 +76,8 @@ wsServer.on('connection', (ws) => ws.on('message', (raw) => {
       result = { turn: { id: 'native-next-turn' } }; break;
   }
   ws.send(JSON.stringify({ id: m.id, result }));
+  // Codex's own service drops the link right after a chat starts (2026-11-11).
+  if (m.method === 'thread/resume' && dropAfterResume) { dropAfterResume = false; ws.terminate(); return; }
   if (m.method === 'thread/resume' && !approved) ws.send(JSON.stringify({ id: 'same-native-request', method: 'item/commandExecution/requestApproval', params: {
     threadId: nativeId, turnId: 'native-running-turn', itemId: 'native-command', command: 'printf SAFE', availableDecisions: ['accept', 'cancel'],
   } }));
@@ -160,6 +163,23 @@ test('a transient native disconnect preserves approvals and reconnects without a
   assert.equal(events.some(e => e.type === 'error' || e.type === 'permission.resolved'), false);
   await d.start();
   assert.equal(d.nativeConnected, true);
+  await d.kill();
+});
+
+test('a link Codex drops while a chat starts is opened again before the first message', async () => {
+  // Three new helpers failed this way with "Cannot read properties of null
+  // (reading 'call')": the chat counted as started with no link left.
+  const d = new CodexDriver({cmd:'codex',env:{CODEX_HOME:home},cwd:root,engineSessionId:nativeId,transcript:path,nativeSocket:socket});
+  const events = []; d.on('event', e => events.push(e));
+  approved = true;
+  dropAfterResume = true;
+  const before = seen.length;
+  await d.send('First message after a dropped link');
+  const sent = seen.slice(before).filter(m => m.method === 'turn/start');
+  assert.equal(sent.length, 1, 'the message reached Codex');
+  assert.equal(sent[0].params.threadId, nativeId);
+  assert.equal(d.nativeConnected, true);
+  assert.equal(events.some(e => e.type === 'error'), false);
   await d.kill();
 });
 
@@ -495,4 +515,18 @@ test.after(async () => {
   await new Promise((resolve) => wsServer.close(resolve));
   await new Promise((resolve) => http.close(resolve));
   rmSync(root, { recursive: true, force: true });
+});
+
+test('a Codex socket file with no daemon behind it reads as no daemon, not as one that did not answer', async () => {
+  const { nativeCodexThreads } = await import('../packages/connect/src/drivers/codex.js');
+  // A short home: a socket path has a length limit. The daemon that
+  // listened here exited without removing its socket, as when the memory
+  // guard kills it, so nothing listens there now.
+  const dead = mkdtempSync('/tmp/hc-');
+  const left = join(dead, 'app-server-control/app-server-control.sock');
+  mkdirSync(join(dead, 'app-server-control'));
+  execFileSync(process.execPath, ['-e', `require('net').createServer().listen(${JSON.stringify(left)}, () => process.exit(0))`]);
+  try {
+    assert.equal(await nativeCodexThreads({ id: 'dead', engine: 'codex', env: { CODEX_HOME: dead } }), null);
+  } finally { rmSync(dead, { recursive: true, force: true }); }
 });

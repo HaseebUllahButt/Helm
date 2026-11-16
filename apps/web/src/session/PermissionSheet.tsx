@@ -4,6 +4,7 @@ import { ChangeList, Diff } from './Transcript';
 import { useNow, waitingSince } from '../useNow';
 import type { Decision, Permission, Question } from './types';
 import { Icon } from '../Icon';
+import { errorMessage } from '../errors';
 
 /**
  * The agent stopped to ask. This is the whole reason helm exists, so the
@@ -45,11 +46,22 @@ const ASK_LABEL: Record<Permission['kind'], string> = {
   command: 'Command approval', edit: 'File change approval', tool: 'Tool approval', plan: 'Plan approval', question: 'Question',
 };
 
-export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'sheet', onHandle }: {
+export function PermissionSheet({ permission: p, onAnswer, busy: answering, variant = 'sheet', onHandle, savePassword }: {
   permission: Permission; onAnswer: (d: Decision) => void; busy: boolean; variant?: AskVariant;
   /** Banner questions: hand the composer a way to answer with what it holds. */
   onHandle?: (handle: QuestionHandle | null) => void;
+  /**
+   * A helm sudo card on a machine with no admin password: save the typed
+   * one there (sudo.setup) before the answer. The answer never carries it,
+   * since answers are kept on disk until they arrive.
+   */
+  savePassword?: (password: string) => Promise<unknown>;
 }) {
+  const [password, setPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [passError, setPassError] = useState('');
+  const busy = answering || saving;
+  const wantsPassword = !!p.passwordNeeded && !!savePassword;
   const [note, setNote] = useState('');
   // "Edit it, then allow" - for the kinds the driver said take an updated
   // input (a command, a plan). The textarea starts on what the agent asked,
@@ -58,8 +70,19 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
   const [edited, setEdited] = useState('');
   const [noting, setNoting] = useState(false);
   const now = useNow();
-  const answer = (option: Decision['option'], updatedInput?: any) =>
-    onAnswer({ option, message: note.trim() || undefined, ...(updatedInput ? { updatedInput } : {}) });
+  const send = (option: Decision['option'], updatedInput?: any) =>
+    onAnswer({ option, ...(note.trim() && !p.passwordNeeded ? { message: note.trim() } : {}), ...(updatedInput ? { updatedInput } : {}) });
+  const answer = async (option: Decision['option'], updatedInput?: any) => {
+    if (!wantsPassword || option === 'deny') return send(option, updatedInput);
+    if (!password || saving) return;
+    setSaving(true); setPassError('');
+    try { await savePassword!(password); }
+    catch (e) { setPassError(errorMessage(e)); return; }
+    finally { setSaving(false); }
+    setPassword('');
+    send(option, updatedInput);
+  };
+  const noPassword = wantsPassword && !password;
 
   const banner = variant === 'banner';
   if (p.kind === 'question') return <QuestionSheet permission={p} onAnswer={onAnswer} busy={busy} variant={variant} onHandle={onHandle} />;
@@ -67,6 +90,8 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
   const allow = p.options.find((o) => o.role === 'allow');
   const always = p.options.find((o) => o.role === 'allow-always');
   const deny = p.options.find((o) => o.role === 'deny');
+  // A card Helm asks itself (helm sudo) keeps the owner's own words.
+  const label = (o: { label: string }) => p.ownLabels ? o.label : plainLabel(o.label);
   const denyFirst = p.defaultTo === 'deny';
 
   // What an edit would change, in the driver's own shape: the CLI's tool
@@ -82,9 +107,9 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
     <button className="primary" disabled={busy || !edited.trim()} onClick={() => answer('allow', updatedInput())}>
       {p.kind === 'plan' ? 'Approve edited plan' : 'Allow edited command'}
     </button>
-  ) : <button className="primary" disabled={busy} onClick={() => answer('allow')}>{plainLabel(allow.label)}</button>);
-  const alwaysButton = always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{plainLabel(always.label)}</button>;
-  const denyButton = deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{plainLabel(deny.label)}</button>;
+  ) : <button className="primary" disabled={busy || noPassword} onClick={() => void answer('allow')}>{saving ? 'Checking' : label(allow)}</button>);
+  const alwaysButton = always && <button className="ghost" disabled={busy || noPassword} onClick={() => void answer('always')}>{label(always)}</button>;
+  const denyButton = deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{label(deny)}</button>;
 
   return (
     <div className={`sheet ${p.kind}${banner ? ' banner' : ''}`}>
@@ -130,9 +155,21 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
         {p.kind === 'edit' && <EditDetail detail={p.detail} />}
         {p.kind === 'tool' && p.detail && <pre className="sheet-json">{plainDetail(p.detail)}</pre>}
       </div>
+      {wantsPassword && (
+        <form className="sheet-password" onSubmit={(e) => { e.preventDefault(); void answer('allow'); }}>
+          <label htmlFor={`pw-${p.requestId}`}>Admin password of {p.machine ?? 'this machine'}</label>
+          <input
+            id={`pw-${p.requestId}`} type="password" value={password} disabled={saving} autoFocus
+            autoComplete="new-password" placeholder="Type it once, then press Allow"
+            onChange={(e) => { setPassword(e.target.value); setPassError(''); }}
+          />
+          {passError ? <div className="error" role="alert">{passError}</div>
+            : <p className="note">Helm checks it and keeps it on this machine, encrypted. The agent never sees it.</p>}
+        </form>
+      )}
       {/* On the card the extras are one quiet row of links; the note box
           opens when asked for, since the composer below takes a reply too. */}
-      {(editable || banner) && (
+      {(editable || banner) && !wantsPassword && (
         <div className="sheet-links">
           {editable && !editing && (
             <button className="sheet-editlink" onClick={() => { setEdited(original); setEditing(true); }}>
@@ -149,13 +186,13 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
       )}
       {/* "No, do it differently" is the most common answer to a permission
           prompt - every denial takes a reason, not only plans. */}
-      {(!banner || noting) && (
+      {(!banner || noting) && !wantsPassword && (
         <input
           className="sheet-note" value={note} onChange={(e) => setNote(e.target.value)} autoFocus={banner}
           placeholder={p.kind === 'plan' ? 'What should change? (optional)' : 'Add a note (optional)'}
         />
       )}
-      {note.trim() && <p className="note">Approve lets this step run before the agent reads your note. Decline to request a change.</p>}
+      {note.trim() && <p className="note">{p.ownLabels ? 'The agent gets your note with your answer.' : 'Approve lets this step run before the agent reads your note. Decline to request a change.'}</p>}
       {/* Built in the order it is seen, so Tab walks the buttons the way the
           eye does. A prompt whose safe answer is "no" leads with Deny; it
           used to get there with row-reverse, which left Allow first in the

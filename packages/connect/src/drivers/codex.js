@@ -1,3 +1,4 @@
+import { MEMORY_STOP, CODEX_SCOPE_PREFIX, stoppedForMemory } from '../cgroup-scope.js';
 import { execFile, spawn } from 'node:child_process';
 import { LineBuffer } from '../line-buffer.js';
 import { mkdirSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -450,7 +451,13 @@ export class CodexServer {
           this.#socket = null;
           for (const resolve of this.#calls.values()) resolve({ error: { message: 'Codex native connection closed' } });
           this.#calls.clear();
-          for (const d of this.#drivers.values()) d.serverExited(null, 'local daemon connection closed');
+          const drivers = [...this.#drivers.values()];
+          for (const d of drivers) d.serverExited(null, 'local daemon connection closed');
+          // The daemon may have been stopped by the memory guard; the
+          // journal says, a moment later.
+          void stoppedForMemory([CODEX_SCOPE_PREFIX], { since: Date.now() - 30_000, waits: [1000] }).then((memory) => {
+            if (memory) for (const d of drivers) d.serverExited(null, 'local daemon connection closed', null, true);
+          });
         });
         await new Promise((resolve, reject) => {
           const timer = setTimeout(() => { ws.terminate(); reject(new Error('Codex native daemon connection timed out')); }, 3000);
@@ -576,12 +583,12 @@ export class CodexServer {
 
   #bindPipe(pipe) {
     this.#pipe = pipe;
-    pipe.onExit(({ code, signal, stderr }) => {
+    pipe.onExit(({ code, signal, stderr, memory }) => {
       this.#pipe = null;
       this.#forgetHeld();
       for (const resolve of this.#calls.values()) resolve({ error: { message: 'codex exited' } });
       this.#calls.clear();
-      for (const d of this.#drivers.values()) d.serverExited(code, stderr, signal);
+      for (const d of this.#drivers.values()) d.serverExited(code, stderr, signal, memory);
     });
     const lines = new LineBuffer();
     pipe.onData((chunk) => {
@@ -631,16 +638,23 @@ export function nativeCodexSocket(profile) {
 /**
  * What a native daemon has open: `loaded`, every thread id it holds, and
  * `threads`, the ones Helm can show and drive. `null` means there is no
- * daemon - its socket is gone, so nothing is open. A daemon that is there
- * but does not answer, in full, throws: that is unknown, not "nothing is
- * running", and must not close a single turn or question.
+ * daemon - its socket is gone or nothing listens on it, so nothing is
+ * open. A daemon that is there but does not answer, in full, throws: that
+ * is unknown, not "nothing is running", and must not close a single turn
+ * or question.
  */
 export async function nativeCodexThreads(profile, log = () => {}) {
   const socket = nativeCodexSocket(profile);
   if (!socket) return null;
   const server = CodexServer.for(profile.cmd || 'codex', profile.env || {}, log, null, socket);
   try {
-    await server.ensure();
+    try { await server.ensure(); } catch (err) {
+      // Nothing listens on the socket: the daemon died (on 2026-11-11 the
+      // memory guard killed it) and left its file. That is proof it is gone,
+      // with every turn it ran - not a daemon that is slow to answer.
+      if (['ECONNREFUSED', 'ENOENT'].includes(err.code)) { log(`codex native discovery: no daemon listens (${err.code})`); return null; }
+      throw err;
+    }
     const loaded = await server.call('thread/loaded/list', {});
     if (loaded.error) throw new Error(loaded.error.message);
     const ids = loaded.result.data || [];
@@ -812,7 +826,7 @@ export class CodexDriver extends Driver {
   async #subscribeNative() {
     if (!this.nativeSocket || this.#nativeSubscribed) return;
     if (this.helperFork) return;
-    const res = await this.#server.call('thread/resume', { threadId: this.threadId, excludeTurns: true });
+    const res = await (await this.#link()).call('thread/resume', { threadId: this.threadId, excludeTurns: true });
     if (!res.error) this.#nativeSubscribed = true;
   }
 
@@ -828,6 +842,25 @@ export class CodexDriver extends Driver {
   }
 
   #starting = null;
+  #startAgains = 0;
+
+  /** The link dropped while this chat started: start once or twice more, then say so. */
+  #startAgain() {
+    if (++this.#startAgains > 2) {
+      this.#startAgains = 0;
+      throw new Error('Codex closed its connection to Helm while this chat started. Send the message again.');
+    }
+    this.#started = false;
+    this.#nativeSubscribed = false;
+    return this.#start();
+  }
+
+  /** The link for a call. One that dropped since the chat started is opened again. */
+  async #link() {
+    if (this.#server) return this.#server;
+    this.#nativeSubscribed = false;
+    return this.#connectOnly();
+  }
 
   async start() {
     if (this.#starting) return this.#starting;
@@ -880,6 +913,8 @@ export class CodexDriver extends Driver {
         sandbox: this.nativeSocket ? this.#rolloutState.settings?.sandboxPolicy : this.#policy().sandbox,
         cliVersion: this.#rolloutState.cliVersion,
       };
+      if (this.#server !== server) return this.#startAgain();
+      this.#startAgains = 0;
       this.#started = true;
       // Notifications delivered during the read are newer than its snapshot.
       const saved = revision === this.#turnStateRevision ? await this.#reconcileSavedTurn(thread.turns, revision) : null;
@@ -967,6 +1002,11 @@ export class CodexDriver extends Driver {
       sandbox: res.result.sandbox ?? this.#rolloutState.settings?.sandboxPolicy ?? (this.nativeSocket ? undefined : sandbox),
       cliVersion: res.result.thread?.cliVersion ?? this.#rolloutState.cliVersion,
     };
+    // Codex's own service can drop the link while a chat starts. Counting the
+    // chat as started with no link failed its first message with "Cannot read
+    // properties of null" (2026-11-11). Start again on a new link instead.
+    if (this.#server !== server) return this.#startAgain();
+    this.#startAgains = 0;
     this.#started = true;
     if (this.nativeSocket) this.#nativeSubscribed = !nativeEmpty;
     if (this.nativeSocket) {
@@ -1057,7 +1097,7 @@ export class CodexDriver extends Driver {
    * it as "thread not found". The thread is loaded once and the call retried.
    */
   async #callThread(method, params) {
-    const res = await this.#server.call(method, params);
+    const res = await (await this.#link()).call(method, params);
     if (res.error && this.helperFork && method === 'turn/start' && this.#helperMissing(res.error)) {
       this.#started = false;
       await this.#start();
@@ -1125,8 +1165,18 @@ export class CodexDriver extends Driver {
   /** Called after Sessions has safely released the external writer. */
   enableWriting() { this.monitorOnly = false; }
 
-  serverExited(code, stderr, signal = null) {
+  serverExited(code, stderr, signal = null, memory = false) {
     this.#server = null;
+    // The memory guard stopped the Codex daemon or this connection: say so,
+    // and end the run even on a shared daemon, so a helper's lead is told.
+    if (memory) {
+      if (this.nativeSocket) { this.#started = false; this.#nativeSubscribed = false; }
+      for (const requestId of [...this.pending.keys()]) this.push('permission.resolved', { requestId, decision: 'cancelled' });
+      for (const { text, inputId } of this.#steers.splice(0)) this.push('input.failed', { text, inputId, error: 'Codex exited before reading this message.' });
+      this.push('error', { message: MEMORY_STOP, kind: 'exit' });
+      this.push('status', { status: 'exited', code, signal, memory: true });
+      return;
+    }
     if (this.nativeSocket) {
       this.#started = false;
       this.#nativeSubscribed = false;
@@ -1302,7 +1352,7 @@ export class CodexDriver extends Driver {
   }
 
   async #call(method, params = {}) {
-    const res = await this.#server.call(method, params);
+    const res = await (await this.#link()).call(method, params);
     if (res.error) {
       // A proxy can occasionally return an HTML challenge page. Keep that
       // out of a chat transcript while retaining the useful first sentence.
