@@ -71,7 +71,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy: answering, vari
   const [noting, setNoting] = useState(false);
   const now = useNow();
   const send = (option: Decision['option'], updatedInput?: any) =>
-    onAnswer({ option, message: note.trim() || undefined, ...(updatedInput ? { updatedInput } : {}) });
+    onAnswer({ option, ...(note.trim() && !p.passwordNeeded ? { message: note.trim() } : {}), ...(updatedInput ? { updatedInput } : {}) });
   const answer = async (option: Decision['option'], updatedInput?: any) => {
     if (!wantsPassword || option === 'deny') return send(option, updatedInput);
     if (!password || saving) return;
@@ -157,18 +157,19 @@ export function PermissionSheet({ permission: p, onAnswer, busy: answering, vari
       </div>
       {wantsPassword && (
         <form className="sheet-password" onSubmit={(e) => { e.preventDefault(); void answer('allow'); }}>
+          <label htmlFor={`pw-${p.requestId}`}>Admin password of {p.machine ?? 'this machine'}</label>
           <input
-            className="sheet-note" type="password" value={password} disabled={saving} autoFocus
-            autoComplete="new-password" aria-label={`Admin password for ${p.machine ?? 'this machine'}`}
-            placeholder={`Admin password of ${p.machine ?? 'this machine'}`}
+            id={`pw-${p.requestId}`} type="password" value={password} disabled={saving} autoFocus
+            autoComplete="new-password" placeholder="Type it once, then press Allow"
             onChange={(e) => { setPassword(e.target.value); setPassError(''); }}
           />
-          {passError && <div className="error" role="alert">{passError}</div>}
+          {passError ? <div className="error" role="alert">{passError}</div>
+            : <p className="note">Helm checks it and keeps it on this machine, encrypted. The agent never sees it.</p>}
         </form>
       )}
       {/* On the card the extras are one quiet row of links; the note box
           opens when asked for, since the composer below takes a reply too. */}
-      {(editable || banner) && (
+      {(editable || banner) && !wantsPassword && (
         <div className="sheet-links">
           {editable && !editing && (
             <button className="sheet-editlink" onClick={() => { setEdited(original); setEditing(true); }}>
@@ -185,7 +186,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy: answering, vari
       )}
       {/* "No, do it differently" is the most common answer to a permission
           prompt - every denial takes a reason, not only plans. */}
-      {(!banner || noting) && (
+      {(!banner || noting) && !wantsPassword && (
         <input
           className="sheet-note" value={note} onChange={(e) => setNote(e.target.value)} autoFocus={banner}
           placeholder={p.kind === 'plan' ? 'What should change? (optional)' : 'Add a note (optional)'}
