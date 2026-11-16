@@ -182,6 +182,10 @@ export interface Permission {
   allowEdit?: boolean;
   /** A card Helm asks itself (helm sudo): show the option labels as they are. */
   ownLabels?: boolean;
+  /** A helm sudo card on a machine with no saved admin password: the card asks for it. */
+  passwordNeeded?: boolean;
+  /** The machine of that password, by name. */
+  machine?: string;
   seq: number;
   /** When the request was raised - "waiting 12m" is computed from it. */
   at?: number;

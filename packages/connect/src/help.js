@@ -474,6 +474,7 @@ const DETAILS = {
   The owner sees a card in the chat: Allow once, Allow for 15 min or Deny.
   Helm runs the command with the admin password the owner saved on this
   machine. You never see the password. Output and exit code come back here.
+  With no password saved, the card asks the owner to type it once.
   The command waits for the owner: give it a long time limit.
   One word is a shell line: helm sudo -- "apt update && apt upgrade -y".
   Never run sudo yourself and never ask the owner for the password.

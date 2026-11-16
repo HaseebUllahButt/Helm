@@ -34,6 +34,7 @@ const PAGE_BYTES = 256 * 1024;
 
 export const WRONG_PASSWORD = 'The saved admin password is wrong. Ask the owner to save it again.';
 export const noPasswordMessage = (machine) => `No admin password is saved on ${machine}. Ask the owner to save it: in the Helm app Settings, or with helm sudo password on that machine.`;
+export const typePasswordMessage = (machine) => `Type the admin password of ${machine} on the card, then allow.`;
 export const CUT_OFF = 'Helm restarted while the admin command ran, and its output is lost. The command may still run, or it may have ended. Check the result before you run it again.';
 
 /** What sudo itself writes about a password. It never reaches the output. */
@@ -224,12 +225,19 @@ export class AdminRuns {
 
   // ------------------------------------------------------------ cards
 
+  /** No password is saved yet: the card asks for it, and Allow saves it. */
+  #wantsPassword(r) { return !!r.needs && !this.password.saved(); }
+
   #card(r) {
+    const wants = this.#wantsPassword(r);
     return {
       requestId: r.requestId, kind: 'command', tool: 'sudo', title: 'Run as admin',
       detail: r.command,
-      reason: [r.reason && (/[.!?]$/.test(r.reason) ? r.reason : `${r.reason}.`), `Folder: ${r.cwd}`].filter(Boolean).join(' '),
+      reason: [r.reason && (/[.!?]$/.test(r.reason) ? r.reason : `${r.reason}.`), `Folder: ${r.cwd}`,
+        wants && `No admin password is saved on ${this.machineName()}. Type it once: Helm checks it with sudo and keeps it on this machine, encrypted.`]
+        .filter(Boolean).join(' '),
       input: { command: r.command },
+      ...(wants ? { passwordNeeded: true, machine: this.machineName() } : {}),
       options: [
         { id: 'allow', role: 'allow', label: 'Allow once' },
         { id: 'allow-15', role: 'allow-always', label: 'Allow for 15 min' },
@@ -347,15 +355,15 @@ export class AdminRuns {
     let session;
     try { session = this.sessions.get(sessionId); } catch { throw new Error('Run helm sudo in a Helm chat on this machine.'); }
     if (session.adopted) throw new Error('Run helm sudo in a Helm chat on this machine.');
+    // With no saved password the card asks the owner for it (#card).
     const needs = await sudoNeedsPassword(this.sudo);
-    if (needs && !this.password.saved()) return { requestId, state: 'failed', message: noPasswordMessage(this.machineName()), output: [], next: 0 };
     const r = {
       requestId, sessionId, command, cwd, reason, needs,
       state: 'asking', chunks: [], seq: 0, waiters: new Set(), polledAt: this.now(), at: this.now(),
       back: ['working', 'idle'].includes(session.status) ? session.status : 'working',
     };
     this.#requests.set(requestId, r);
-    const until = this.#allowed(sessionId);
+    const until = !this.#wantsPassword(r) && this.#allowed(sessionId);
     if (until) {
       r.until = until;
       this.#run(r);
@@ -424,6 +432,12 @@ export class AdminRuns {
       this.#finish(r, 'cancelled', { message: 'The agent stopped asking.' });
       this.#closeCard(id, requestId, 'cancelled', r.back);
       throw Object.assign(new Error('The agent stopped waiting. Helm did not run the command.'), { deliveryNotSent: true });
+    }
+    // The card asked for the password. The app saves it with sudo.setup
+    // before it answers: an answer is kept on disk for its delivery, so it
+    // never carries the password. Until one is saved, only Deny closes it.
+    if (option !== 'deny' && this.#wantsPassword(r)) {
+      throw Object.assign(new Error(typePasswordMessage(this.machineName())), { deliveryNotSent: true });
     }
     this.#closeCard(id, requestId, option, r.back);
     if (option === 'deny') { this.#finish(r, 'denied'); return { ok: true }; }

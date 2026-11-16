@@ -1419,6 +1419,8 @@ pre.snippet {
 .sheet .plan { max-height: 40dvh; overflow: auto; padding: 8px 12px; background: var(--code-bg); border-radius: var(--radius); }
 .sheet .plan :is(h1, h2, h3, h4) { font-size: var(--t-body); font-weight: 600; margin: 4px 0; }
 .sheet-note { font-size: var(--t-meta); padding: 8px 10px; background: var(--code-bg); border-radius: var(--radius); }
+.sheet-password { display: flex; flex-direction: column; gap: 6px; }
+.sheet-password .sheet-note { width: 100%; }
 .sheet-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .sheet-actions button { width: auto; flex: 1 1 auto; margin: 0; padding: 10px 14px; min-height: 44px; font-size: var(--t-body); }
 /* One solid answer in the app's own black and white; the others are quiet words. */

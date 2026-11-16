@@ -4,6 +4,7 @@ import { ChangeList, Diff } from './Transcript';
 import { useNow, waitingSince } from '../useNow';
 import type { Decision, Permission, Question } from './types';
 import { Icon } from '../Icon';
+import { errorMessage } from '../errors';
 
 /**
  * The agent stopped to ask. This is the whole reason helm exists, so the
@@ -45,11 +46,22 @@ const ASK_LABEL: Record<Permission['kind'], string> = {
   command: 'Command approval', edit: 'File change approval', tool: 'Tool approval', plan: 'Plan approval', question: 'Question',
 };
 
-export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'sheet', onHandle }: {
+export function PermissionSheet({ permission: p, onAnswer, busy: answering, variant = 'sheet', onHandle, savePassword }: {
   permission: Permission; onAnswer: (d: Decision) => void; busy: boolean; variant?: AskVariant;
   /** Banner questions: hand the composer a way to answer with what it holds. */
   onHandle?: (handle: QuestionHandle | null) => void;
+  /**
+   * A helm sudo card on a machine with no admin password: save the typed
+   * one there (sudo.setup) before the answer. The answer never carries it,
+   * since answers are kept on disk until they arrive.
+   */
+  savePassword?: (password: string) => Promise<unknown>;
 }) {
+  const [password, setPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [passError, setPassError] = useState('');
+  const busy = answering || saving;
+  const wantsPassword = !!p.passwordNeeded && !!savePassword;
   const [note, setNote] = useState('');
   // "Edit it, then allow" - for the kinds the driver said take an updated
   // input (a command, a plan). The textarea starts on what the agent asked,
@@ -58,8 +70,19 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
   const [edited, setEdited] = useState('');
   const [noting, setNoting] = useState(false);
   const now = useNow();
-  const answer = (option: Decision['option'], updatedInput?: any) =>
+  const send = (option: Decision['option'], updatedInput?: any) =>
     onAnswer({ option, message: note.trim() || undefined, ...(updatedInput ? { updatedInput } : {}) });
+  const answer = async (option: Decision['option'], updatedInput?: any) => {
+    if (!wantsPassword || option === 'deny') return send(option, updatedInput);
+    if (!password || saving) return;
+    setSaving(true); setPassError('');
+    try { await savePassword!(password); }
+    catch (e) { setPassError(errorMessage(e)); return; }
+    finally { setSaving(false); }
+    setPassword('');
+    send(option, updatedInput);
+  };
+  const noPassword = wantsPassword && !password;
 
   const banner = variant === 'banner';
   if (p.kind === 'question') return <QuestionSheet permission={p} onAnswer={onAnswer} busy={busy} variant={variant} onHandle={onHandle} />;
@@ -84,8 +107,8 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
     <button className="primary" disabled={busy || !edited.trim()} onClick={() => answer('allow', updatedInput())}>
       {p.kind === 'plan' ? 'Approve edited plan' : 'Allow edited command'}
     </button>
-  ) : <button className="primary" disabled={busy} onClick={() => answer('allow')}>{label(allow)}</button>);
-  const alwaysButton = always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{label(always)}</button>;
+  ) : <button className="primary" disabled={busy || noPassword} onClick={() => void answer('allow')}>{saving ? 'Checking' : label(allow)}</button>);
+  const alwaysButton = always && <button className="ghost" disabled={busy || noPassword} onClick={() => void answer('always')}>{label(always)}</button>;
   const denyButton = deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{label(deny)}</button>;
 
   return (
@@ -132,6 +155,17 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
         {p.kind === 'edit' && <EditDetail detail={p.detail} />}
         {p.kind === 'tool' && p.detail && <pre className="sheet-json">{plainDetail(p.detail)}</pre>}
       </div>
+      {wantsPassword && (
+        <form className="sheet-password" onSubmit={(e) => { e.preventDefault(); void answer('allow'); }}>
+          <input
+            className="sheet-note" type="password" value={password} disabled={saving} autoFocus
+            autoComplete="new-password" aria-label={`Admin password for ${p.machine ?? 'this machine'}`}
+            placeholder={`Admin password of ${p.machine ?? 'this machine'}`}
+            onChange={(e) => { setPassword(e.target.value); setPassError(''); }}
+          />
+          {passError && <div className="error" role="alert">{passError}</div>}
+        </form>
+      )}
       {/* On the card the extras are one quiet row of links; the note box
           opens when asked for, since the composer below takes a reply too. */}
       {(editable || banner) && (

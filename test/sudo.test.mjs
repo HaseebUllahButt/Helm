@@ -109,12 +109,46 @@ test('a wrong saved password says so, and sudo\'s own words stay out', async (t)
   assert.equal(result.out + result.err, '');
 });
 
-test('with no saved password, helm sudo fails before any card', async (t) => {
-  const { ask, cards } = await setup(t, { saved: null });
+test('with no saved password, the card asks for it; Allow waits until it is saved', async (t) => {
+  const { sessions, session, runs, cards, ask } = await setup(t, { saved: null });
+  const asked = await ask('echo saved');
+  assert.equal(asked.state, 'asking');
+  const [card] = cards();
+  assert.equal(card.passwordNeeded, true);
+  assert.equal(card.machine, 'testbox');
+  assert.match(card.reason, /No admin password is saved on testbox\. Type it once/);
+  // An answer never carries the password: Allow alone keeps the card open.
+  await assert.rejects(sessions.answer(session.id, asked.requestId, { option: 'allow' }),
+    (e) => e.deliveryNotSent === true && /Type the admin password of testbox on the card/.test(e.message));
+  assert.equal(cards().length, 1);
+  // The card saves it with sudo.setup first, as Settings does.
+  await assert.rejects(runs.setup({ do: 'save', password: 'old horse' }), /This password is wrong/);
+  assert.equal((await runs.setup({ do: 'save', password: 'right horse' })).saved, true);
+  await sessions.answer(session.id, asked.requestId, { option: 'allow' });
+  const result = await finish(runs, asked.requestId);
+  assert.equal(result.out, 'saved\n');
+  // The next card does not ask again.
+  await ask('echo again');
+  assert.equal(cards()[0].passwordNeeded, undefined);
+});
+
+test('with no saved password, Deny still closes the card', async (t) => {
+  const { sessions, session, runs, cards, ask } = await setup(t, { saved: null });
   const asked = await ask('echo hi');
-  assert.equal(asked.state, 'failed');
-  assert.equal(asked.message, 'No admin password is saved on testbox. Ask the owner to save it: in the Helm app Settings, or with helm sudo password on that machine.');
+  await sessions.answer(session.id, asked.requestId, { option: 'deny' });
+  assert.equal((await finish(runs, asked.requestId)).state, 'denied');
   assert.equal(cards().length, 0);
+});
+
+test('a 15-minute allow does not skip the card once the password is forgotten', async (t) => {
+  const { sessions, session, runs, cards, ask } = await setup(t);
+  const first = await ask('echo one');
+  await sessions.answer(session.id, first.requestId, { option: 'always' });
+  await finish(runs, first.requestId);
+  await runs.setup({ do: 'forget' });
+  const second = await ask('echo two');
+  assert.equal(second.state, 'asking');
+  assert.equal(cards()[0].passwordNeeded, true);
 });
 
 test('a machine where sudo needs no password runs with none saved', async (t) => {

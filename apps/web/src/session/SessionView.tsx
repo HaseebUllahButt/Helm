@@ -675,14 +675,16 @@ function NativeClaudeApprovals({ client, env, sessionId, handle, children }: {
     return <>{children({
       ask: pending ? (pending.kind === 'question' ? 'question' : 'approval') : undefined,
       banner: pending ? <div className="ask-box">
-        <PermissionSheet key={pending.requestId} variant="banner" permission={pending} busy={busy} onAnswer={d => void answer(d)} onHandle={hold} />
+        <PermissionSheet key={pending.requestId} variant="banner" permission={pending} busy={busy} onAnswer={d => void answer(d)} onHandle={hold}
+          savePassword={(password) => client.rpc(env, 'sudo.setup', { do: 'save', password }, 30_000)} />
         {error && <div className="error" role="alert">{error}</div>}
       </div> : undefined,
     })}</>;
   }
   if (!pending && !error) return null;
   return <div className="composer-wrap"><div className="composer-col">
-    {pending && <PermissionSheet key={pending.requestId} permission={pending} busy={busy} onAnswer={d => void answer(d)} />}
+    {pending && <PermissionSheet key={pending.requestId} permission={pending} busy={busy} onAnswer={d => void answer(d)}
+      savePassword={(password) => client.rpc(env, 'sudo.setup', { do: 'save', password }, 30_000)} />}
     {error && <div className="error" role="alert">{error}</div>}
   </div></div>;
 }

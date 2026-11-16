@@ -30,6 +30,13 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
   A deny note goes back in `helm sudo`'s output, not as a chat message.
   Only this machine's own `helm` and the owner's devices may call
   `sudo.*`; another machine is refused. v1 runs on the chat's own machine.
+- **Rule (owner, 2026-11-16):** with no password saved, the card asks for
+  it ("agent should ask if not there"). The card saves it with
+  `sudo.setup` (sudo checks it first), then answers. The answer never
+  carries the password: answers are kept on disk (browser storage and
+  `~/.helm/action-delivery`) until they arrive. Allow with no saved
+  password is refused and keeps the card open; Deny still works. The
+  waiting box sends such a card to its chat.
 - **Proof (driven 2026-11-15):** put a fake `sudo` first on PATH, then
   `PATH=<fake>:$PATH $V up`. Never run real sudo with a real password.
   Save the password in Settings (a wrong one says "This password is
