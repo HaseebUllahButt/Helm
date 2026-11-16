@@ -116,7 +116,6 @@ test('with no saved password, the card asks for it; Allow waits until it is save
   const [card] = cards();
   assert.equal(card.passwordNeeded, true);
   assert.equal(card.machine, 'testbox');
-  assert.match(card.reason, /No admin password is saved on testbox\. Type it once/);
   // An answer never carries the password: Allow alone keeps the card open.
   await assert.rejects(sessions.answer(session.id, asked.requestId, { option: 'allow' }),
     (e) => e.deliveryNotSent === true && /Type the admin password of testbox on the card/.test(e.message));
@@ -132,12 +131,16 @@ test('with no saved password, the card asks for it; Allow waits until it is save
   assert.equal(cards()[0].passwordNeeded, undefined);
 });
 
-test('with no saved password, Deny still closes the card', async (t) => {
-  const { sessions, session, runs, cards, ask } = await setup(t, { saved: null });
+test('with no saved password, Deny closes the card and drops its note', async (t) => {
+  const { sessions, session, runs, cards, ask, dir } = await setup(t, { saved: null });
   const asked = await ask('echo hi');
-  await sessions.answer(session.id, asked.requestId, { option: 'deny' });
-  assert.equal((await finish(runs, asked.requestId)).state, 'denied');
+  // An owner who types the password as a note: it must not reach the agent.
+  await sessions.answer(session.id, asked.requestId, { option: 'deny', message: 'my secret pass' });
+  const result = await finish(runs, asked.requestId);
+  assert.equal(result.state, 'denied');
+  assert.equal(result.note, undefined);
   assert.equal(cards().length, 0);
+  assert.equal(readFileSync(join(dir, 'requests.json'), 'utf8').includes('my secret pass'), false);
 });
 
 test('a 15-minute allow does not skip the card once the password is forgotten', async (t) => {

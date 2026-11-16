@@ -233,9 +233,7 @@ export class AdminRuns {
     return {
       requestId: r.requestId, kind: 'command', tool: 'sudo', title: 'Run as admin',
       detail: r.command,
-      reason: [r.reason && (/[.!?]$/.test(r.reason) ? r.reason : `${r.reason}.`), `Folder: ${r.cwd}`,
-        wants && `No admin password is saved on ${this.machineName()}. Type it once: Helm checks it with sudo and keeps it on this machine, encrypted.`]
-        .filter(Boolean).join(' '),
+      reason: [r.reason && (/[.!?]$/.test(r.reason) ? r.reason : `${r.reason}.`), `Folder: ${r.cwd}`].filter(Boolean).join(' '),
       input: { command: r.command },
       ...(wants ? { passwordNeeded: true, machine: this.machineName() } : {}),
       options: [
@@ -424,7 +422,9 @@ export class AdminRuns {
       this.#closeCard(id, requestId, 'cancelled', r?.back);
       throw Object.assign(new Error('This request is no longer open.'), { deliveryNotSent: true });
     }
-    const note = typeof decision.message === 'string' ? decision.message.trim().slice(0, 2000) : '';
+    // A card that asks for the password takes no note: an owner who types
+    // the password there would send it to the agent in plain text.
+    const note = typeof decision.message === 'string' && !this.#wantsPassword(r) ? decision.message.trim().slice(0, 2000) : '';
     if (note) r.note = note;
     const option = decision.option === 'deny' ? 'deny' : decision.option === 'always' ? 'always' : 'allow';
     // Nobody waits for the answer any more: do not run an admin command for no one.

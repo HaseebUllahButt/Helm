@@ -37,6 +37,11 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
   `~/.helm/action-delivery`) until they arrive. Allow with no saved
   password is refused and keeps the card open; Deny still works. The
   waiting box sends such a card to its chat.
+- **Trap (2026-11-16):** the first version kept "Add a note" on this card.
+  The owner typed the password there and pressed Deny, and the note went to
+  the agent in plain text. Now the card has no note box, the app sends no
+  note, and the server drops a note on a card that asks for the password.
+  Test: `test/browser/composer-card` ("a helm sudo card").
 - **Proof (driven 2026-11-15):** put a fake `sudo` first on PATH, then
   `PATH=<fake>:$PATH $V up`. Never run real sudo with a real password.
   Save the password in Settings (a wrong one says "This password is
