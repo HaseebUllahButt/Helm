@@ -814,13 +814,20 @@ for (const width of [1280, 390]) for (const childState of ['error', 'blocked']) 
   const card = page.locator('.sidebar .need').filter({ hasText: 'Game task' });
   await card.locator('.need-main').waitFor();
   if (childState === 'error') {
-    await card.getByRole('button', { name: 'More for Game task' }).click();
+    await card.getByRole('button', { name: 'Show actions for Game task' }).click();
     await card.getByRole('button', { name: 'Dismiss failure' }).waitFor();
+    await card.getByRole('button', { name: 'See why the helper failed' }).waitFor();
     assert.equal(await page.getByRole('dialog', { name: 'Agents', exact: true }).count(), 0);
-    await card.getByRole('button', { name: 'More for Game task' }).click();
+    await card.getByRole('button', { name: 'Show actions for Game task' }).click();
     await card.getByRole('button', { name: 'Dismiss failure' }).waitFor({ state: 'detached' });
   } else {
-    assert.equal(await card.getByRole('button', { name: 'More for Game task' }).count(), 0, 'a row with no failure has no ⋯');
+    // The same ⋯ as every row, with nothing about failures in it.
+    const more = card.getByRole('button', { name: 'Show actions for Game task' });
+    if (await more.count()) {
+      await more.click();
+      assert.equal(await card.getByRole('button', { name: 'Dismiss failure' }).count(), 0, 'a row with no failure offers no dismiss');
+      await more.click();
+    }
   }
   await card.locator('.need-main').click();
   const details = page.getByRole('dialog', { name: 'Agents', exact: true });
@@ -849,7 +856,7 @@ test('a waiting chat has no snooze and an old snoozed value is deleted on start'
   const sidebar = page.locator('.sidebar');
   const card = sidebar.locator('.need').filter({ hasText: 'Quiet chat' });
   await card.waitFor();
-  assert.equal(await card.getByRole('button', { name: 'More for Quiet chat' }).count(), 0, 'a row without a helper failure has no ⋯');
+  assert.equal(await card.getByRole('button', { name: 'Dismiss failure' }).count(), 0, 'a row without a helper failure offers no dismiss');
   assert.equal(await sidebar.getByText(/Snooze/).count(), 0);
   assert.equal(await page.evaluate(() => localStorage.getItem('helm.snoozed')), null);
 });
@@ -920,7 +927,7 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   });
   await mount();
   const card = page.locator('.sidebar .need');
-  const more = card.getByRole('button', { name: 'More for Keep building' });
+  const more = card.getByRole('button', { name: 'Show actions for Keep building' });
   await more.click();
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).waitFor();
   assert.equal(await card.locator('.need-what').innerText(), '1 helper task failed');
@@ -932,6 +939,7 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
   await card.getByRole('alert').getByText('This machine is not connected. Check the connection. Try again.', { exact: true }).waitFor();
   await page.evaluate(() => { window.rejectDismiss = false; });
+  await more.click();
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
   await card.waitFor({ state: 'detached' });
   assert.deepEqual(await page.evaluate(() => window.dismissRequest), { env: 'laptop', params: { id: 'dismiss-parent' } });
@@ -945,6 +953,8 @@ for (const width of [1280, 390]) test(`dismissing a child failure clears it acro
   await page.evaluate(() => window.newApproval());
   await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
   await card.getByText('1 helper task needs approval', { exact: true }).waitFor();
+  await more.click();
   assert.equal(await card.getByRole('button', { name: 'Dismiss failure', exact: true }).count(), 0, 'approval remains visible after dismissing failures');
+  await card.getByRole('button', { name: 'Answer the helper', exact: true }).waitFor();
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 });

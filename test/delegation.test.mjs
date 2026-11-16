@@ -291,7 +291,20 @@ test('Codex delegates to Claude with the selected model, folder, lineage and dur
   assert.equal((await sessions.list()).some((s) => s.id === child.id), false);
   assert.equal((await sessions.list({ parentId: parent.id })).some((s) => s.id === child.id), true);
   assert.equal((await sessions.list({ includeDelegations: true })).some((s) => s.id === child.id), true);
+  sessions.pin(child.id);
+  assert.equal((await sessions.list()).find((s) => s.id === child.id)?.delegation.parentId, parent.id,
+    'pinning lists the helper without detaching it from its parent');
+  assert.equal((await sessions.list({ parentId: parent.id })).some((s) => s.id === child.id), true);
+  sessions.pin(child.id, false);
+  assert.equal((await sessions.list()).some((s) => s.id === child.id), false,
+    'unpinning returns the helper to its parent only');
   assert.equal(sessions.isDelegatedConversation(child.engine, child.engineSessionId), true);
+  // A helper's OpenCode chat is found under the other OpenCode name; it is still the helper's.
+  const record = sessions.get(child.id);
+  const saved = { engine: record.engine, engineSessionId: record.engineSessionId };
+  Object.assign(record, { engine: 'opencode', engineSessionId: 'ses_helper' });
+  assert.equal(sessions.isDelegatedConversation('opencode2', 'ses_helper'), true);
+  Object.assign(record, saved);
   assert.equal(sessions.hasActiveDelegations(parent.id), true);
   assert.deepEqual(parent.delegations, [child.id]);
   assert.equal(drivers.get(child.id).env.HELM_SESSION_ID, child.id);
@@ -508,6 +521,27 @@ test('stopping a parent leaves a helper that already finished as it was', async 
   assert.equal(sessions.get(done.id).recovery, undefined, 'and is not marked stopped');
   assert.equal(sessions.get(busy.id).delegation.status, 'interrupted', 'one still at work is stopped');
   assert.equal(parent.recovery.message, 'You stopped this chat. Helm also stopped its helper.');
+});
+
+test('a failure the parent agent already got does not ask for the owner', async (context) => {
+  // 2026-11-11: a lead on why got eight failed helpers, ran the work again
+  // on Pi, and the owner still saw "8 helper tasks failed" under Needs you.
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: lead } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Lead' });
+  const { session: child } = await sessions.delegate({ id: lead.id, profileId: 'claude-main', task: 'Batch' });
+  const { session: unread } = await sessions.delegate({ id: lead.id, profileId: 'claude-main', task: 'Batch two' });
+  sessions.get(unread.id).delegation.notifyParent = false;
+  drivers.get(child.id).finish('error');
+  drivers.get(unread.id).finish('error');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(sessions.get(child.id).delegation.notifiedSeq > 0, 'the lead got the result');
+  assert.equal(sessions.get(child.id).delegation.status, 'error', 'the helper still shows its failure');
+  assert.equal(sessions.get(lead.id).team.failed, 1, 'only the failure no agent got');
+  assert.equal(parent.team.failed, 1);
+  sessions.delegationResult(unread.id, { consume: true, parentId: lead.id });
+  assert.equal(sessions.get(lead.id).team.failed, 0, 'the lead read it');
+  assert.equal(parent.team.failed, 0, 'nothing reaches the owner');
 });
 
 test('a child completion wakes its idle parent once with a durable result ticket', async (context) => {
@@ -1282,6 +1316,13 @@ test('CLI --wait waits past five minutes and marks a timed-out reply as unfinish
   assert.equal(late.timedOut, true);
   assert.equal(late.progress, 'Type check passes. Next I am adding tests.');
   assert.match(late.output, /^Not finished: child is still working/);
+  // A look without --wait says Helm will message the parent: leads checked
+  // a working helper every 30 s, each check re-reading a 220k chat.
+  reads = 0; written.length = 0;
+  assert.equal(await runAgentCommand('delegate-result', ['child'], {
+    rpc, self: 'self', parentId: 'parent', write: (s) => written.push(s), sleep: async () => {},
+  }), 0);
+  assert.match(written.join('\n'), /child is still working\. Helm messages this chat when it ends; do not check again\./);
 });
 
 test('the real CLI discovers accounts and delegates through an authenticated relay', async (t) => {
@@ -1373,7 +1414,12 @@ test('agents are told which machine they are on and how to reach the others', as
   const alone = helmBrief({ self: 'a', machines: { a: net.machines.a } });
   assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');
   assert.match(alone, /\[Helm pickup: .*run helm pickup\.\]/, 'every agent learns where its handover goes');
+  assert.match(alone, /\[Helm usage: .*Never check a running helper.*helm thread.*\]/, 'every agent learns the habits that cut waste');
   assert.match(alone, /helm render/, 'visual replies work even with one machine');
+  const codex = helmBrief(net, { engine: 'codex' });
+  assert.match(codex, /\[Helm usage: .*call write_stdin with empty chars and one long yield_time_ms that the tool allows.*\]/,
+    'Codex waits for its own command in one step, not with 1 s checks');
+  assert.doesNotMatch(helmBrief(net, { engine: 'claude' }), /write_stdin/, 'only Codex has write_stdin');
 });
 
 test('only a helper is told to report once and to use helm say afterwards', async () => {
@@ -1683,6 +1729,20 @@ test('restart fails a helper marked working even without an open turn', async t 
 });
 
 
+test('a helper lost in a restart names its recorded stop', async t => {
+  const { recordStop } = await import('../packages/connect/src/agent-stops.js');
+  const { sessions } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  recordStop({ at: Date.now() - 60_000, id: child.id, code: 143, signal: null, askedByHelm: false, daemonConnected: false, programs: [] });
+  sessions.flush();
+  const restarted = new Sessions(new EventEmitter(), { makeDriver: () => new FakeDriver({}) });
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  assert.match(restarted.get(child.id).recovery.message,
+    /cannot find the helper process after restart\. Its process stopped at .* with code 143\. Helm was restarting\./);
+});
+
 test('loss of the process host fails an active helper without deleting its chat', async t => {
   const host = new EventEmitter();
   host.detach = () => {};
@@ -1696,23 +1756,109 @@ test('loss of the process host fails an active helper without deleting its chat'
 });
 
 
-test('startup reports a helper whose native Codex process cannot be checked', async () => {
+test('a Codex daemon that does not answer at restart keeps its helper working until it answers', async t => {
   const { SessionResume } = await import('../packages/connect/src/session-resume.js');
   const child = { id: 'unknown-helper', driver: 'codex', profileId: 'codex-main',
     nativeSocket: '/missing.sock', engineSessionId: 'unknown-thread', status: 'working',
     delegation: { status: 'working' } };
   const failures = [];
+  const reapers = new Map();
+  t.after(() => { for (const timer of reapers.values()) clearTimeout(timer); });
+  let checks = 0;
+  let answered;
+  const answer = new Promise((resolve) => { answered = resolve; });
+  const natives = { nativeLoaded: new Set(), nativeUnknown: new Set(['codex-main']),
+    // The daemon is busy for the first check after the restart, then answers
+    // and still holds the thread.
+    async discoverNativeCodex() {
+      if (++checks < 2) return;
+      natives.nativeUnknown.clear(); natives.nativeLoaded.add('unknown-thread');
+    } };
   const core = {
-    index: new Map([[child.id, child]]), drivers: new Map(),
-    natives: { nativeLoaded: new Set(), nativeUnknown: new Set(['codex-main']) },
-    delivery: { restoreUnconfirmed() {} }, deliveryState: { queue: () => [] },
+    index: new Map([[child.id, child]]), drivers: new Map(), reapers, natives,
+    delivery: { restoreUnconfirmed() {}, pump(s) { if (s === child) answered(); } }, deliveryState: { queue: () => [] },
     delegation: { processGone(s, exit) { failures.push(exit.reason); s.delegation.status = 'error'; },
-      updateTeam() {} }, save() {},
+      updateTeam() {} }, save() {}, reap() {},
+    async driver() { return { nativeConnected: false, async start() {} }; },
   };
-  const sessions = { events: { tail: () => [], last: () => 0, glance: () => ({ seq: 0, turns: [] }) },
-    emit() {}, nativeDiscovery: false };
+  const sessions = { events: { tail: () => [], last: () => 0, glance: () => ({ seq: 0, turns: [] }), append: () => ({ seq: 1 }) },
+    emit() {}, log() {}, nativeDiscovery: false, nativeRetryMs: 1 };
   await new SessionResume(sessions, core).resume();
-  assert.deepEqual(failures, ['Helm cannot check the helper because Codex did not answer.']);
-  assert.equal(child.delegation.status, 'error');
+  // Unknown is not gone: still working, its queue held, its lead not told.
+  assert.deepEqual(failures, []);
+  assert.equal(child.delegation.status, 'working');
+  assert.equal(child.status, 'working');
   assert.equal(child.queuePaused, true);
+  await answer;
+  assert.ok(checks >= 2);
+  assert.deepEqual(failures, []);
+  assert.equal(child.delegation.status, 'working');
+  assert.equal(child.queuePaused, false);
+  assert.equal(child.recovery, undefined);
+});
+
+test('helpers that end while their chat works reach it in one turn, and a restart loses none', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Lead the work');
+  const children = [];
+  for (const task of ['First part', 'Second part', 'Third part']) children.push((await sessions.delegate({ id: parent.id, profileId: 'claude-main', task })).session);
+  const results = () => sessions.history(parent.id).events.filter((e) => e.type === 'turn.start' && String(e.turnId).startsWith('local-result-'));
+  for (const [n, child] of children.entries()) {
+    drivers.get(child.id).push('item.delta', { id: 'reply', text: ` Report ${n + 1}.` });
+    drivers.get(child.id).finish();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(results().length, 1, 'the three results wait as one parent turn');
+  assert.ok(children.every((child) => sessions.get(child.id).delegation.notifiedSeq > 0));
+  // Helm stops after the results joined the ticket but before it saved
+  // that it told the parent: the restart reports those turns again.
+  for (const child of children.slice(1)) {
+    for (const key of ['notifiedSeq', 'notifiedTurns', 'toldFor']) delete sessions.get(child.id).delegation[key];
+  }
+  sessions.flush();
+  await sessions.stop();
+  const made = new Map();
+  const restarted = new Sessions(new EventEmitter(), { makeDriver: (_engine, opts) => {
+    const d = new FakeDriver(opts); made.set(opts.env.HELM_SESSION_ID, d); return d;
+  } });
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  const deadline = Date.now() + 2000;
+  while (!made.get(parent.id)?.sent && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  const sent = made.get(parent.id)?.sent ?? '';
+  assert.equal(sent.match(/A delegated task finished\./g)?.length, 3, 'one parent turn holds all three results');
+  for (const n of [1, 2, 3]) assert.match(sent, new RegExp(`Report ${n}\\.`));
+  for (const child of children) assert.match(sent, new RegExp(`helm delegate-result ${child.id}`));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(restarted.history(parent.id).events.filter((e) => e.type === 'turn.start' && String(e.turnId).startsWith('local-result-')).length, 1,
+    'reporting a joined result again adds no second parent turn');
+});
+
+test('reading one of several waiting results keeps the others in their turn', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Lead the work');
+  const children = [];
+  for (const task of ['Alpha', 'Beta', 'Gamma']) children.push((await sessions.delegate({ id: parent.id, profileId: 'claude-main', task })).session);
+  for (const child of children) {
+    drivers.get(child.id).finish();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const [ticket] = sessions.history(parent.id).events.filter((e) => e.type === 'turn.start' && String(e.turnId).startsWith('local-result-'));
+  // The parent reads the first and the second result itself.
+  sessions.delegationResult(children[0].id, { consume: true, parentId: parent.id });
+  sessions.delegationResult(children[1].id, { consume: true, parentId: parent.id });
+  assert.equal(sessions.turnState(parent.id, ticket.turnId), 'open');
+  const edit = sessions.history(parent.id).events.findLast((e) => e.type === 'turn.edit' && e.turnId === ticket.turnId);
+  assert.deepEqual(edit.parts.map((part) => part.turnId.split('-')[2]), [children[2].id]);
+  assert.match(edit.text, /^A delegated task finished\.[^]*Task: Gamma/);
+  assert.doesNotMatch(edit.text, /Task: (Alpha|Beta)/);
+  drivers.get(parent.id).finish();
+  const deadline = Date.now() + 2000;
+  while (!/Gamma/.test(drivers.get(parent.id).sent) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(drivers.get(parent.id).sent.match(/A delegated task finished\./g)?.length, 1);
+  assert.match(drivers.get(parent.id).sent, /Task: Gamma/);
+  // Reading the last one too leaves nothing to deliver.
+  sessions.delegationResult(children[2].id, { consume: true, parentId: parent.id });
 });

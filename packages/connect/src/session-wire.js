@@ -41,5 +41,7 @@ export const pendingSummary = (pending) => ({ pending: pending.length,
  */
 export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, dismissedNativeFailures, nativeSent, externalImported, externalSource, externalTail, externalAfter, externalImagesVersion, externalTranscriptDigests, externalTranscriptDigestBase, externalTranscriptPrefixDigest, externalTranscriptRevision, originHandoffId, delegationReply, taskReturnContext, lastLimits, rewindProcId, rewindFailure, ...s }) => ({
   ...s, rewindSupported: !!DRIVERS[s.driver]?.canRewind && !s.external && !nativeSocket && !s.nativeCli && !s.shared && !rewindFailure,
+  // This machine can compact a big, cold history before a send (idle-history.js).
+  ...(s.driver === 'claude' && !s.external && !nativeSocket && !s.nativeCli ? { compactFirst: true } : {}),
   ...(typeof s.title === 'string' && /\[(?:Image|Pasted text) #/.test(s.title) ? { title: bareTitle(s.title) || s.title } : {}),
 });

@@ -157,7 +157,7 @@
 
   /* The left gutter every row's mark sits in, so text starts on one line all
      the way down a screen. */
-  --sidebar-w: 264px;
+  --sidebar-w: 236px;
   --measure:   46rem;
 
   --system: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -816,6 +816,13 @@ button.linkish:hover { color: var(--text); }
 .own-browser .row button { flex: none; width: auto; margin: 0; min-height: 34px; padding: 4px 12px; font-size: var(--t-meta); }
 .own-browser .note { margin: 8px 2px 0; }
 .own-browser .note ol { margin: 6px 0; padding-left: 20px; }
+.admin-password .row { gap: 8px; }
+.admin-password .row .grow { min-width: 0; }
+.admin-password .row .rm { white-space: normal; overflow: visible; }
+.admin-password .row button { flex: none; width: auto; margin: 0; min-height: 34px; padding: 4px 12px; font-size: var(--t-meta); }
+.admin-password form { margin-top: 8px; }
+.admin-password .rows + .rows { margin-top: 8px; }
+.admin-password .note { margin: 8px 2px 0; }
 /* An empty state is a sentence and, when there is one, the next step - in
    sentence case whatever the call site wrote, because a lowercase whisper in
    the middle of a dark pane read as a dead end. */
@@ -1412,6 +1419,10 @@ pre.snippet {
 .sheet .plan { max-height: 40dvh; overflow: auto; padding: 8px 12px; background: var(--code-bg); border-radius: var(--radius); }
 .sheet .plan :is(h1, h2, h3, h4) { font-size: var(--t-body); font-weight: 600; margin: 4px 0; }
 .sheet-note { font-size: var(--t-meta); padding: 8px 10px; background: var(--code-bg); border-radius: var(--radius); }
+.sheet-password { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--code-bg); border-radius: var(--radius); }
+.sheet-password label { font-weight: 600; font-size: var(--t-body); }
+.sheet-password input { width: 100%; font-size: var(--t-body); padding: 10px 12px; min-height: 44px; }
+.sheet-password .note { margin: 0; }
 .sheet-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .sheet-actions button { width: auto; flex: 1 1 auto; margin: 0; padding: 10px 14px; min-height: 44px; font-size: var(--t-body); }
 /* One solid answer in the app's own black and white; the others are quiet words. */
@@ -1722,14 +1733,39 @@ pre.snippet {
 
 
 /* ------------------------------------------------------------------ usage */
-/* The usage screen reads top to bottom: controls, the total and three
-   tiles behind it, where it went, then each account's allowance. Every block
-   is the app's own panel, with the small-capitals label every list wears,
-   so it looks like the rest of helm rather than a report. One hue (the hub's)
-   draws every bar; red only when an allowance runs out early. */
-.pad.usage { width: 100%; max-width: 820px; margin: 0 auto; }
+/* The usage screen reads top to bottom: controls, the total with its three
+   figures beside it, where it went, then each account's allowance. A row is
+   one line where the pane is wide enough, so the whole screen fits without
+   a scroll. Every block is the app's own panel, with the small-capitals
+   label every list wears. One hue (the hub's) draws every bar; red only
+   when an allowance runs out early. The layout follows the pane's width,
+   not the window's: the sidebar can take a third of the window. */
+.pad.usage {
+  width: 100%; max-width: 820px; margin: 0 auto; container-type: inline-size;
+  /* The dashboard look, for Usage and Dashboard. A block is a card: almost
+     the page's own black, a hairline edge, its title inside. Rows in a card
+     have a hairline between them. All data is one ink (white here, the
+     accent in the other themes); colour is kept for warnings. */
+  --dash-card: #0e0e0e; --dash-edge: rgb(255 255 255 / 8%); --dash-rule: rgb(255 255 255 / 6%);
+  --dash-track: rgb(255 255 255 / 9%); --dash-ink: var(--hi);
+}
+:root:is([data-theme="light"], [data-theme="navy"]) .pad.usage {
+  --dash-card: var(--card); --dash-edge: var(--edge); --dash-rule: var(--edge);
+  --dash-track: color-mix(in oklab, var(--primary) 14%, transparent); --dash-ink: var(--primary-t);
+}
+.usage-card, .usage-where, .usage-accounts {
+  margin-top: 14px; background: var(--dash-card); border: 1px solid var(--dash-edge); border-radius: 14px; overflow: hidden;
+}
+/* A card's title: a plain name, not the small capitals of a list. */
+.pad.usage .section {
+  margin: 0; padding: 0; min-height: 0; text-transform: none; letter-spacing: 0;
+  font-size: var(--t-body); font-weight: 600; color: var(--text);
+}
+.pad.usage > .section { margin: 4px 4px 12px; }
+.pad.usage button.linkish { color: var(--text-dim); }
+.pad.usage button.linkish:hover { color: var(--text); }
 @media (min-width: 900px) { .pad.usage { padding: 22px 24px 40px; } }
-.usage-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 22px; }
+.usage-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; margin: 0 0 16px; }
 .usage-controls select { width: auto; max-width: 220px; font-size: var(--t-meta); padding: 7px 34px 7px 12px; min-height: 38px; }
 .usage-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .usage-tabs::-webkit-scrollbar { display: none; }
@@ -1737,47 +1773,55 @@ pre.snippet {
 
 /* The one number the screen leads with. Proportional figures: tabular gives
    every digit the width of a zero, which reads loose at display sizes. */
-.usage-hero { margin: 0 0 8px; }
-.usage-hero-fig { padding: 0 4px; font: 650 48px/1 var(--display); letter-spacing: -0.02em; color: var(--text); }
-.usage-hero-cap { margin-top: 8px; padding: 0 4px; font-size: var(--t-meta); color: var(--mutedfg); }
-.usage-stats {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
-  margin: 20px 0 0;
-}
-.usage-stats > div {
-  min-width: 0; padding: 12px 14px; border-radius: var(--radius-xl);
-  background: var(--card); border: 1px solid var(--line);
-}
+.usage-card.usage-spend { margin-top: 0; padding: 18px 18px 14px; }
+.usage-hero { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 24px; }
+/* What the number is, then the number: the order of a tile. */
+.usage-hero-main { min-width: 0; display: flex; flex-direction: column-reverse; gap: 10px; }
+.usage-hero-fig { font: 600 44px/1 var(--display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; color: var(--text); }
+.usage-hero-cap { font-size: var(--t-meta); color: var(--mutedfg); }
+/* Cost for each day. Thin bars from one baseline; the bar pointed at is at
+   full strength and the others step back. A day with no use is a stub. */
+.usage-days { margin-top: 22px; }
+.usage-days-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; font-size: var(--t-micro); color: var(--mutedfg); }
+.usage-days-head b { font-weight: 500; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.usage-days-bars { display: flex; align-items: stretch; gap: 3px; height: 92px; margin-top: 10px; border-bottom: 1px solid var(--dash-rule); }
+.usage-day { flex: 1 1 0; min-width: 0; padding: 0; display: flex; align-items: flex-end; justify-content: center; cursor: default; }
+.usage-day span { display: block; width: 100%; max-width: 30px; min-height: 2px; border-radius: 4px 4px 0 0; background: var(--dash-ink); opacity: 0.55; transition: opacity 0.12s var(--ease); }
+.usage-day.zero span { background: var(--dash-track); opacity: 1; }
+.usage-day.on span { opacity: 1; }
+.usage-day:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 1px; border-radius: 4px; }
+.usage-days-axis { display: flex; justify-content: space-between; gap: 3px; margin-top: 7px; font-size: var(--t-micro); color: var(--mutedfg); }
+.usage-days-axis.every span { flex: 1 1 0; min-width: 0; text-align: center; overflow: hidden; white-space: nowrap; }
+/* The three figures: plain pairs with a hairline between, no boxes. */
+.usage-stats { display: flex; min-width: 0; margin: 0; }
+.usage-stats > div { min-width: 0; padding: 0 18px; border-left: 1px solid var(--dash-rule); }
+.usage-stats > div:first-child { padding-left: 0; border-left: 0; }
+.usage-stats > div:last-child { padding-right: 0; }
 .usage-stats dt { font-size: var(--t-micro); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.usage-stats dd { margin: 4px 0 0; font: 600 20px/1.2 var(--sans); color: var(--text); letter-spacing: -0.01em; }
-.usage-stats small { display: block; margin-top: 2px; font-size: var(--t-micro); color: var(--mutedfg); }
+.usage-stats dd { margin: 3px 0 0; font: 600 18px/1.2 var(--sans); color: var(--text); letter-spacing: -0.01em; white-space: nowrap; }
+.usage-stats small { margin-left: 3px; font-size: var(--t-micro); font-weight: 400; letter-spacing: 0; color: var(--mutedfg); }
 
 /* A block's label and its control share one line. */
-.usage-where { margin-top: 26px; }
-.usage-where-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin-bottom: 10px; }
-.usage-where-head .section { margin: 0; }
-.usage-accounts { margin-top: 26px; }
+.usage-where-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; padding: 11px 11px 8px 18px; }
 
-/* Where it went: one panel, a row per slice - name and amount on one line,
-   the bar under them, every bar measured from the same start against the
-   biggest slice so the longest is the full width. */
-.usage-shares, .usage-panel {
-  list-style: none; margin: 0; padding: 3px;
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-xl);
-}
+/* Where it went: one panel, a line per slice - name, bar, amount, share.
+   Every column but the name has a fixed width, so the bars start and end
+   in line down the panel, each measured against the biggest slice. In a
+   narrow pane the bar goes under the name. */
+.usage-shares, .usage-panel { list-style: none; margin: 0; padding: 0 6px 6px; }
 .usage-shares > li, .usage-panel > * { position: relative; }
 .usage-shares > li + li::before, .usage-panel > * + *::before {
   content: ''; position: absolute; top: 0; left: 12px; right: 12px; height: 1px;
-  background: var(--line); pointer-events: none;
+  background: var(--dash-rule); pointer-events: none;
 }
 .usage-shares > li:hover::before, .usage-shares > li:hover + li::before { opacity: 0; }
 .usage-share {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto 3.4em; align-items: center; gap: 8px 10px;
-  width: 100%; padding: 11px 12px 12px; border-radius: var(--radius); text-align: left;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto 3.4em; align-items: center; gap: 7px 10px;
+  width: 100%; padding: 10px 12px 11px; border-radius: var(--radius); text-align: left;
   font-size: var(--t-body); color: var(--text-80);
 }
-li.marked > .usage-share { grid-template-columns: auto minmax(0, 1fr) auto 3.4em; }
-li.marked > button.usage-share { grid-template-columns: auto minmax(0, 1fr) auto 3.4em auto; }
+li.marked > .usage-share { grid-template-columns: 22px minmax(0, 1fr) auto 3.4em; }
+li.marked > button.usage-share { grid-template-columns: 22px minmax(0, 1fr) auto 3.4em 14px; }
 button.usage-share { transition: background 0.12s var(--ease); }
 button.usage-share:hover { background: var(--hover); color: var(--text); }
 .usage-share-mark.mark { width: 22px; height: 22px; border-radius: 6px; }
@@ -1787,18 +1831,32 @@ button.usage-share:hover { background: var(--hover); color: var(--text); }
 .usage-share-pct { color: var(--mutedfg); font-size: var(--t-meta); font-variant-numeric: tabular-nums; text-align: right; }
 .usage-share-go { color: var(--icon); }
 .usage-share-track {
-  grid-column: 1 / -1; height: 6px; border-radius: 999px;
-  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  grid-column: 1 / -1; height: 4px; border-radius: 999px;
+  background: var(--dash-track);
 }
 li.marked .usage-share-track { margin-left: 32px; }
-.usage-share-track > span { display: block; height: 100%; border-radius: 999px; background: var(--primary-t); }
-.usage-more { margin: 10px 4px 0; font-size: var(--t-meta); }
+@container (min-width: 620px) {
+  .usage-share { grid-template-columns: minmax(0, 1fr) 36% 6.5em 3.4em; padding-block: 10px; }
+  li.marked > .usage-share { grid-template-columns: 22px minmax(0, 1fr) 36% 6.5em 3.4em; }
+  li.marked > button.usage-share { grid-template-columns: 22px minmax(0, 1fr) 36% 6.5em 3.4em 14px; }
+  .usage-share-track { grid-row: 1; grid-column: 2; }
+  li.marked .usage-share-track { grid-column: 3; margin-left: 0; }
+}
+.usage-share-track > span { display: block; height: 100%; border-radius: 999px; background: var(--dash-ink); }
+/* "Show more" closes a card: one quiet line across its foot. */
+.pad.usage .usage-more, .pad.usage .usage-accounts > .linkish {
+  display: flex; width: 100%; margin: 0; padding: 11px 18px; min-height: 42px;
+  border-top: 1px solid var(--dash-rule); border-radius: 0;
+  color: var(--mutedfg); font-size: var(--t-meta); font-weight: 500; text-align: left;
+}
+.pad.usage .usage-more:hover, .pad.usage .usage-accounts > .linkish:hover { color: var(--text); background: var(--hover); }
 
-.usage-note { margin: 22px 0 0; padding: 0 4px; font-size: var(--t-micro); line-height: 1.6; color: var(--mutedfg); }
+.usage-note { margin: 16px 0 0; padding: 0 4px; font-size: var(--t-micro); line-height: 1.6; color: var(--mutedfg); }
 .usage-note .linkish { font-size: inherit; }
-@media (max-width: 420px) {
-  .usage-stats > div { padding: 10px 12px; }
-  .usage-stats dd { font-size: 17px; }
+@container (max-width: 619px) {
+  .usage-stats { flex: 1 1 100%; }
+  .usage-stats > div { padding: 0 14px; }
+  .usage-stats > div:last-child { flex: 1; }
 }
 
 /* ------------------------------------------------------------ new in this pass */
@@ -2034,17 +2092,18 @@ button.sheet-editlink:hover { color: var(--text); text-decoration-color: current
 .need-what { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .need-m { flex: 0 4 auto; min-width: 24px; margin-left: auto; padding-left: 6px; color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* The ⋯ holds no column of its own: it shows over the row's right end. */
+/* The ⋯ takes the machine name's place on the second line, so it never
+   covers the title or the count. */
 .need-more {
-  position: absolute; right: 5px; top: 6px; width: 26px; height: 24px; border-radius: 7px; color: var(--mutedfg);
-  display: inline-flex; align-items: center; justify-content: center; opacity: 0; background: var(--sidebar);
+  position: absolute; right: 6px; bottom: 6px; width: 26px; height: 22px; border-radius: 7px; color: var(--mutedfg);
+  display: inline-flex; align-items: center; justify-content: center; opacity: 0; background: none;
 }
 .need:hover .need-more, .need-more[aria-expanded="true"], .need-more:focus-visible { opacity: 1; }
-.need-more:hover { background: var(--hover); color: var(--text); }
-@media (pointer: coarse) { .need-more { opacity: .6; } .need-t { padding-right: 26px; } }
-.need-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 10px 8px 26px; }
-.need-foot button { height: 28px; padding: 0 10px; border-radius: 8px; font-size: var(--t-meta); background: var(--accent); color: var(--text); }
-.need-foot button:hover:not(:disabled) { background: var(--hover); }
-.need-foot .need-dismiss { color: var(--text-dim); }
+.need:is(:hover, :has(.need-more[aria-expanded="true"]), :has(.need-more:focus-visible)) .need-m { visibility: hidden; }
+.need-more:hover, .need-more[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+@media (pointer: coarse) { .need-more { opacity: .6; } .need-m { padding-right: 26px; } }
+.need .row-menu { top: 100%; right: 4px; }
+.menu .menu-line { border: 0; height: 1px; margin: 4px 6px; background: var(--line); }
 @media (prefers-reduced-motion: reduce) { .need-dot { animation: none; } }
 
 /* A run of finished tool calls, folded into what it did. */
@@ -2783,7 +2842,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-task .grow { flex: 1; min-width: 0; }
 .delegation-task b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-weight: 500; font-size: var(--t-body); overflow: hidden; overflow-wrap: anywhere; }
 .delegation-task small { display: block; font: var(--t-micro) var(--mono); color: var(--mutedfg); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.delegation-group.finished .delegation-task b { color: var(--text-dim); }
+.delegation-group.group-finished .delegation-task b { color: var(--text-dim); }
 .delegation-status {
   display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 44px; padding: 0 8px;
   border-radius: var(--radius); color: var(--mutedfg); font-size: var(--t-micro); font-weight: 550; white-space: nowrap;
@@ -2799,6 +2858,29 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-detail .note, .delegation-detail .error { margin: 0; }
 .delegation-request { margin: 0; color: var(--mutedfg); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-meta); }
 .delegation-output { max-height: 40dvh; overflow-y: auto; padding: 10px 12px; border-radius: var(--radius); background: var(--bg); }
+.delegation-output.full { max-height: 60dvh; }
+.delegation-label { margin: 0 0 -6px; font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--mutedfg); }
+.delegation-task-text { display: grid; gap: 10px; justify-items: start; }
+.delegation-request.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.delegation-detail > .linkish, .delegation-task-text > .linkish { justify-self: start; margin-top: -6px; }
+/* A failed helper says why first, in the colours of every Helm error. */
+.delegation-failure { display: grid; gap: 4px; padding: 10px 12px; border-radius: var(--radius); color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, transparent); border: 1px solid color-mix(in srgb, var(--red) 32%, transparent); }
+.delegation-failure b { font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.delegation-failure p { margin: 0; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
+.delegation-actions .primary { padding: 6px 14px; }
+.delegation-actions:has(.primary) { margin-left: 0; }
+.delegation-more { width: 100%; min-height: 36px; margin-top: 4px; border-radius: var(--radius); color: var(--text-dim); font-size: var(--t-meta); font-weight: 550; }
+.delegation-more:hover { background: var(--hover); color: var(--text); }
+.delegation-search { width: 100%; margin: 0; min-height: 36px; padding: 6px 12px; border: 1px solid var(--edge); border-radius: var(--radius); background: var(--card); }
+.delegation-counts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: -6px 0 -4px; font-size: var(--t-meta); }
+.delegation-counts a { color: var(--text-dim); text-decoration: none; }
+.delegation-counts a:hover { color: var(--text); text-decoration: underline; }
+.delegation-counts a.state-needs { color: var(--need-text); }
+.delegation-counts a.state-working { color: var(--sky); }
+.delegation-counts a.state-failed { color: var(--red); }
+.delegation-group { scroll-margin-top: 8px; }
+.delegation-group.group-failed .delegation-task b { color: var(--text-dim); }
 .delegation-detail .sheet {
   margin: 0; padding: 12px 14px; max-height: none; box-shadow: none;
   border-radius: var(--radius-xl); background: var(--bg);
@@ -3174,43 +3256,41 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .sidebar .row.machine .rm { flex: none; font-size: var(--t-micro); }
 .sidebar .row.machine .mdot { margin: 0 2px; }
 
-/* Accounts: one panel, a block per account with hairlines between - the
-   name with its engine's mark and where it was read, each allowance as a
-   labelled meter, then what the period was worth. */
+/* Accounts: one panel, a row per account with hairlines between - the name
+   with its engine's mark and the age of the reading on the left, each
+   allowance as a one-line meter on the right, then one quiet line for
+   banked resets and what the period was worth. The 5-hour meters share one
+   column and the weeks the next, so they compare down the panel. */
 .usage-limits-note { color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.55; margin: 8px 0; padding: 0 4px; }
 .usage-account .usage-limits-note { padding: 0; margin: 10px 0 0; }
-.usage-account { padding: 13px 12px 14px; }
-.usage-account-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: var(--t-body); }
+.pad.usage .usage-accounts > .section { padding: 15px 18px 12px; }
+.usage-accounts > .usage-limits-note { margin: -4px 0 10px; padding: 0 18px; }
+.usage-accounts > .usage-limits-note:last-child, .usage-accounts > .empty { margin: 0; padding: 0 18px 16px; }
+/* Column names over the account rows, where the rows have columns. */
+.usage-cols { display: none; }
+.usage-account { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px 24px; padding: 12px; }
+.usage-account-name { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-width: 0; font-size: var(--t-body); }
 .usage-account-name b { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .usage-account-name b span { font-weight: 400; color: var(--text-dim); }
 .usage-account-name small { color: var(--mutedfg); font-size: var(--t-micro); }
-.usage-meter {
-  height: 6px; border-radius: 999px;
-  background: color-mix(in oklab, var(--primary) 14%, transparent);
-  overflow: hidden;
-}
-.usage-meter span { display: block; height: 100%; border-radius: 999px; background: var(--hi); }
-:root:is([data-theme="light"], [data-theme="navy"]) .usage-meter span { background: var(--primary-t); }
-.usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 28px; margin-top: 14px; }
+.usage-meter { height: 4px; border-radius: 999px; background: var(--dash-track); overflow: hidden; }
+.usage-meter span { display: block; height: 100%; border-radius: 999px; background: var(--dash-ink); }
+.usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 10px 24px; min-width: 0; }
 .usage-allowance {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 6px 10px;
+  display: grid; grid-template-columns: minmax(3.9em, auto) minmax(32px, 1fr) 4.6em; align-items: center; gap: 3px 10px;
   font-size: var(--t-meta); min-width: 0;
 }
-.usage-window { color: var(--text-dim); }
-.usage-allowance b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); text-align: right; }
-.usage-allowance .usage-meter { grid-column: 1 / -1; grid-row: 2; }
+.usage-window { color: var(--text-dim); white-space: nowrap; }
+.usage-allowance b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); text-align: right; white-space: nowrap; }
 .usage-allowance small { grid-column: 1 / -1; color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.45; }
-.usage-allowance small em { font-style: normal; color: var(--red); font-weight: 550; }
+.usage-allowance small em { display: block; font-style: normal; color: var(--red); font-weight: 550; }
 .usage-allowance.dry .usage-meter span { background: var(--red); }
 .usage-account.idle { padding-block: 10px; }
-.usage-resets { margin: 12px 0 0; font-size: var(--t-meta); color: var(--mutedfg); }
+.usage-account-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; min-width: 0; font-size: var(--t-meta); color: var(--mutedfg); }
+.usage-resets { margin: 0; }
 .usage-resets b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .usage-account.idle .usage-account-name b { font-weight: 500; color: var(--text-dim); }
-.usage-value {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
-  margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line);
-  font-size: var(--t-meta); color: var(--mutedfg);
-}
+.usage-value { flex: 1 1 auto; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
 .usage-value b { color: var(--text); font-weight: 600; }
 .usage-plan { margin-left: auto; }
 .usage-plan summary { cursor: pointer; color: var(--mutedfg); list-style: none; font-size: var(--t-micro); }
@@ -3219,7 +3299,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .usage-plan[open] summary { color: var(--text-dim); }
 .usage-plan-price { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--mutedfg); font-size: var(--t-micro); }
 .usage-plan-price input { width: 90px; padding: 4px 8px; font: inherit; color: var(--text); }
-.usage-accounts > .linkish { margin: 10px 4px 0; font-size: var(--t-meta); }
 .modal:has(.usage-model-detail) { max-width: 580px; max-height: calc(100dvh - 40px); overflow-y: auto; }
 .usage-model-detail .modal-title { overflow-wrap: anywhere; min-width: 0; }
 .usage-model-detail .modal-head button { flex: none; width: auto; margin: 0; }
@@ -3228,9 +3307,25 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .usage-token-detail > div { display: flex; justify-content: space-between; gap: 12px; margin: 6px 0; }
 .usage-token-detail dt { color: var(--text-dim); }
 .usage-token-detail dd { margin: 0; font-variant-numeric: tabular-nums; }
-@media (max-width: 600px) {
-  .usage-account-windows { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  .usage-account-name small { flex-basis: 100%; padding-left: 32px; margin-top: -4px; }
+@container (max-width: 559px) {
+  .usage-account-windows { grid-template-columns: minmax(0, 1fr); }
+  .usage-account-name small { flex-basis: 100%; padding-left: 32px; }
+}
+@container (min-width: 700px) {
+  .usage-account { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+  .usage-account-windows { grid-template-columns: repeat(2, 228px); }
+  .usage-account-name:only-child { grid-column: 1 / -1; }
+  .usage-account:not(.dash-machine) .usage-account-windows > .usage-allowance:first-child:not([data-window="5h"]) { grid-column: 2; }
+  .usage-cols {
+    display: grid; grid-template-columns: minmax(0, 1fr) 228px 228px; gap: 24px; padding: 0 18px 9px;
+    border-bottom: 1px solid var(--dash-rule); font-size: var(--t-micro); color: var(--mutedfg);
+  }
+  /* Under a column name, a meter needs no label of its own. */
+  .usage-cols + .usage-panel .usage-allowance:is([data-window="5h"], [data-window="7d"]) { grid-template-columns: minmax(32px, 1fr) 4.6em; }
+  .usage-cols + .usage-panel .usage-allowance:is([data-window="5h"], [data-window="7d"]) .usage-window { display: none; }
+  .dash-balance { min-width: 340px; }
+  .usage-account:not(.idle) .usage-account-name small { flex-basis: 100%; padding-left: 32px; }
+  .usage-account-meta { grid-column: 1 / -1; padding-left: 32px; }
 }
 
 /* GitHub pipeline: the same quiet rows as Git, with explicit outcome labels. */
@@ -4090,18 +4185,28 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
   .tour-header { flex-wrap: nowrap; }
 }
 
-/* Dashboard: compute online as tiles, a block per machine with its load as
-   labelled meters, then the limit balancer and the accounts. A meter turns
-   amber with the word "high" from 80% and red with "full" from 95%. */
-.dash .section:first-child { margin-top: 0; }
-.dash-stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 0 0 8px; }
-.dash .usage-panel { margin-bottom: 8px; }
+/* Dashboard: compute online as tiles, a card of machines with each one's
+   load as labelled meters, then the limit balancer and the accounts. A meter
+   turns amber with the word "high" from 80% and red with "full" from 95%. */
+.usage-stats.dash-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; flex: none; }
+.usage-stats.dash-stats > div {
+  padding: 14px 16px 15px; background: var(--dash-card); border: 1px solid var(--dash-edge); border-radius: 14px;
+}
+.usage-stats.dash-stats dd { margin-top: 8px; font-size: 24px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.usage-stats.dash-stats small { display: block; margin: 5px 0 0; }
+@container (max-width: 559px) {
+  .usage-stats.dash-stats { grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 8px; }
+  .usage-stats.dash-stats > div { padding: 12px 12px 13px; }
+  .usage-stats.dash-stats dd { font-size: 21px; }
+}
+.dash-meter.usage-allowance { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
+.dash-meter .usage-meter { grid-column: 1 / -1; grid-row: 2; }
 .dash-machine-name {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; border: 0;
   background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .dash-machine-name .mdot { margin: 0 2px; }
-.dash-machine-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dash-machine-text { flex: 0 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .dash-machine-text b { font-weight: 600; font-size: var(--t-body); overflow-wrap: anywhere; }
 .dash-machine-text small { color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.45; }
 .dash-machine-name .chev { flex: none; color: var(--icon); display: inline-flex; }
@@ -4112,7 +4217,7 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
 .dash-meter.high b em { color: var(--amber-text); }
 .dash-meter.full .usage-meter span { background: var(--red); }
 .dash-meter.full b em { color: var(--red); }
-.dash-balance { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; font-size: var(--t-meta); }
+.dash-balance { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: var(--t-meta); }
 .dash-balance li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--text-dim); }
 .dash-balance li span { min-width: 0; overflow-wrap: anywhere; }
 .dash-balance li small { color: var(--mutedfg); font-size: var(--t-micro); }
@@ -4123,3 +4228,147 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
 .home-machines-head .linkish { text-transform: none; letter-spacing: 0; font-size: var(--t-meta); }
 .home-balance { margin: 8px 2px 0; font-size: var(--t-meta); color: var(--text-dim); line-height: 1.5; }
 .home-balance .linkish { font-size: inherit; }
+
+/* "Compact 510k" beside send (HistoryChoice.tsx): the next send compacts a
+   big, cold Claude history first. On, it reads as a choice made, not a
+   warning; off, it is a plain chip like the others in the row. */
+.ctl.history-choice { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ctl.history-choice.on { color: var(--text); background: var(--accent); }
+/* Narrow: its own line above usage, so the setting chips keep their room. */
+.ctl.history-choice { order: 9; flex: 1 0 100%; height: auto; min-height: 28px; text-align: left; white-space: normal; padding: 4px 10px; }
+.ctl.history-choice .history-short { display: none; }
+@container slab (min-width: 760px) {
+  .ctl.history-choice { order: 0; flex: none; text-align: center; white-space: nowrap; padding: 0 10px; }
+  .ctl.history-choice .history-short { display: inline; }
+  .ctl.history-choice .history-long { display: none; }
+}
+
+/* ------------------------------------------------------------------ finish
+   The premium pass (owner, 12 Nov 2026: "more premium looking"). On a
+   computer the work sits on one framed panel inside the window. The
+   sidebar stays exactly as it was (owner: "dont touch sidebar"); the
+   frame round the panel is the sidebar's colour. Depth comes from light,
+   not lines (no outlines, 26 Oct 2026): a lit top edge, a faint sheen
+   down the top of a card, and a ring of light too weak to read as a
+   border. Each theme answers the tokens. */
+:root {
+  --frame: var(--sidebar);
+  --panel: #0b0b0c;
+  --ring: rgb(255 255 255 / 7%);
+  --ring-2: rgb(255 255 255 / 11%);
+  --glow: radial-gradient(ellipse 70% 45% at 50% -6%, rgb(255 255 255 / 6.5%), rgb(255 255 255 / 0) 70%);
+  --ring-focus: rgb(255 255 255 / 17%);
+  --lit: inset 0 1px 0 rgb(255 255 255 / 4.5%);
+  --sheen: linear-gradient(180deg, rgb(255 255 255 / 2.4%), rgb(255 255 255 / 0) 64px);
+  --panel-shadow: 0 0 0 1px var(--ring), 0 30px 80px -40px rgb(0 0 0 / 90%);
+  --lift: 0 18px 44px -22px rgb(0 0 0 / 80%), 0 2px 6px rgb(0 0 0 / 30%);
+  --card: #141415;
+  --raised: #19191a;
+  --shadow: 0 0 0 1px rgb(255 255 255 / 7%), inset 0 1px 0 rgb(255 255 255 / 5%), 0 24px 56px -20px rgb(0 0 0 / 80%), 0 2px 8px rgb(0 0 0 / 35%);
+}
+:root[data-theme="navy"] {
+  --panel: #081b26;
+  --glow: radial-gradient(ellipse 70% 45% at 50% -6%, rgb(200 240 240 / 6%), rgb(200 240 240 / 0) 70%);
+  --ring: rgb(134 214 219 / 7%);
+  --ring-2: rgb(134 214 219 / 12%);
+  --ring-focus: rgb(134 214 219 / 22%);
+  --lit: inset 0 1px 0 rgb(200 240 240 / 5%);
+  --sheen: linear-gradient(180deg, rgb(200 240 240 / 2.4%), rgb(200 240 240 / 0) 64px);
+  --panel-shadow: 0 0 0 1px var(--ring), 0 30px 80px -40px rgb(0 0 0 / 80%);
+  --lift: 0 18px 44px -22px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 25%);
+}
+:root[data-theme="light"] {
+  --panel: #f7f8fa;
+  --glow: none;
+  --ring: rgb(26 29 36 / 7%);
+  --ring-2: rgb(26 29 36 / 11%);
+  --ring-focus: rgb(26 29 36 / 20%);
+  --lit: inset 0 1px 0 rgb(255 255 255 / 80%);
+  --sheen: none;
+  --panel-shadow: 0 0 0 1px var(--ring), 0 1px 3px rgb(26 29 36 / 5%), 0 16px 40px -28px rgb(26 29 36 / 22%);
+  --lift: 0 12px 32px -18px rgb(26 29 36 / 26%), 0 1px 3px rgb(26 29 36 / 8%);
+}
+
+@media (min-width: 900px) {
+  html, body, .shell { background: var(--frame); }
+  /* The panel. It names its own colour as the page colour, so every bar,
+     composer and control inside it that sits "on the page" matches it. */
+  .main {
+    --bg: var(--panel);
+    height: auto; margin: 8px 8px 8px 0; position: relative; overflow: hidden;
+    background: var(--glow), var(--panel); border-radius: 14px; box-shadow: var(--panel-shadow);
+  }
+  /* A fine grain over the panel, as on printed paper: flat fills read as cheap. */
+  .main::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 100; border-radius: inherit;
+    opacity: .05; mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  :root[data-theme="light"] .main::after { display: none; }
+  /* Bars and the composer strip let the panel's light show through. */
+  .main .bar, .main .composer-wrap { background: transparent; }
+}
+
+/* Cards and lists on the page: lit from above. */
+:root:not([data-theme="light"]) :is(.rows.plain, .pad .rows, .card) {
+  background-image: var(--sheen);
+  box-shadow: var(--lit), 0 0 0 1px var(--ring);
+}
+:root:not([data-theme="light"]) .modal .rows { box-shadow: none; background-image: none; }
+.pad.usage { --dash-card: var(--card); --dash-edge: transparent; }
+.usage-card, .usage-where, .usage-accounts { background-image: var(--sheen); box-shadow: var(--lit), 0 0 0 1px var(--ring); }
+
+/* The composer floats: a ring of light, a soft fall of shadow, and a
+   brighter ring while you type in it. */
+.slab {
+  background-image: var(--sheen);
+  box-shadow: 0 0 0 1px var(--ring-2), var(--lift);
+  transition: box-shadow 0.18s var(--ease);
+}
+.slab::after { box-shadow: var(--lit); }
+.slab:focus-within { box-shadow: 0 0 0 1px var(--ring-focus), 0 0 0 5px var(--ring), var(--lift); }
+:root[data-theme="light"] .slab { box-shadow: 0 0 0 1px var(--ring-2), var(--lift); }
+:root[data-theme="light"] .slab:focus-within { box-shadow: 0 0 0 1px var(--ring-focus), 0 0 0 5px var(--ring), var(--lift); }
+:root[data-theme="light"] .slab::after { box-shadow: none; }
+
+/* The chosen tab of a set: a raised key. */
+.segmented button.on { box-shadow: var(--lit), 0 0 0 1px var(--ring), 0 1px 2px rgb(0 0 0 / 25%); }
+
+/* Big headings set tight, as display type is. */
+.screen-title { letter-spacing: -0.022em; }
+.bar:not(.session-bar) h1 { letter-spacing: -0.022em; }
+
+@media (prefers-reduced-motion: reduce) { .slab { transition: none; } }
+
+/* Round 2 of the finish (owner: "cant feel the difference"). Glass where
+   things float and a lit message bubble. No hub colour: the owner turned
+   down the violet send button and violet glow (12 Nov 2026). */
+.slab {
+  background-color: color-mix(in srgb, var(--raised) 82%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(140%); backdrop-filter: blur(18px) saturate(140%);
+}
+:root:not([data-theme="light"]) .turn.user .bubble {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--raised) 100%, #fff 4%), var(--raised));
+  box-shadow: var(--lit), 0 0 0 1px var(--ring), 0 8px 24px -16px rgb(0 0 0 / 70%);
+}
+.main :is(.row, .iconbtn, .segmented button) { transition: background-color .14s var(--ease), color .14s var(--ease), box-shadow .14s var(--ease); }
+@media (prefers-reduced-motion: reduce) { .main :is(.row, .iconbtn, .segmented button) { transition: none; } }
+
+/* A shorter, quieter message box (owner, 12 Nov 2026: "much better and
+   less vertically large"). Settings in the foot are plain words that
+   light up on hover, not a row of filled pills; a mode that removes the
+   guardrails keeps its amber words. Phones keep their thumb sizes. */
+.slab { border-radius: 16px; }
+.slab textarea { padding: 9px 14px 0; min-height: 30px; }
+.slab-foot { gap: 2px; padding: 0 6px 6px 6px; }
+.chips { gap: 2px; }
+.chip-pick, .chip-pick.on { background: transparent; border-color: transparent; color: var(--mutedfg); }
+.chip-pick:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.chip-pick.danger, .chip-pick.danger.on { background: transparent; border-color: transparent; color: var(--amber-text); }
+.chip-pick.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--amber) 10%, transparent); }
+@media (min-width: 600px) {
+  .chip-pick { height: 26px; padding: 0 8px 0 6px; border-radius: 7px; }
+  .ctl { height: 26px; border-radius: 7px; }
+  .ctl.icon { width: 28px; }
+  .send { width: 28px; height: 28px; }
+}

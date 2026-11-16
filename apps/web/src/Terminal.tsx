@@ -268,7 +268,9 @@ export function Terminal({ client, env, sessionId }: {
       if ((kind === 'connection' && payload?.online)
         || (e === env && kind === 'transport' && payload?.gap)) attach();
       if (e === env && kind === 'session.exit' && payload?.id === sessionId) {
-        xterm.write('\r\n\x1b[2m[ The terminal ended. ]\x1b[0m\r\n');
+        xterm.write(payload?.memory
+          ? '\r\n\x1b[2m[ The computer ran out of memory. The memory guard stopped this terminal. ]\x1b[0m\r\n'
+          : '\r\n\x1b[2m[ The terminal ended. ]\x1b[0m\r\n');
       }
     });
 

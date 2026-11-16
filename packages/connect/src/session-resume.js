@@ -1,4 +1,6 @@
+import { MEMORY_STOP } from './cgroup-scope.js';
 import { loadProfiles, materialize } from './profiles.js';
+import { lastStop, describeStop } from './agent-stops.js';
 import { activeTurnFromEvents } from './events.js';
 import { existsSync } from 'node:fs';
 import { hostedProcId } from './hosted-process.js';
@@ -6,6 +8,8 @@ import { expand } from './paths.js';
 
 /** How a recovery note says the agent's state could not be checked. */
 const RECONNECT_FAILED = 'Helm did not reconnect to the agent:';
+/** What a held native Codex thread says while Helm waits for its daemon. */
+const NATIVE_WAIT = 'Codex did not answer. Helm checks again until it answers, and holds new messages until then.';
 
 /** Run async jobs at most `n` at a time: `slot(() => work())` returns the job's promise. */
 const limiter = (n) => {
@@ -94,7 +98,7 @@ export class SessionResume {
       closed.add(e.turnId);
       const uncertain = attempt && !attempt.requeued;
       this.#sessions.events.append(id, { type: 'turn.done', turnId: e.turnId, status: uncertain ? 'error' : 'interrupted',
-        error: uncertain ? 'Helm could not confirm delivery. Check the agent\'s work before sending this again.' : 'agent exited' });
+        error: exit.memory ? MEMORY_STOP : uncertain ? 'Helm could not confirm delivery. Check the agent\'s work before sending this again.' : 'agent exited' });
     }
     for (const p of this.#sessions.events.pending(id)) {
       this.#sessions.events.append(id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
@@ -190,11 +194,13 @@ export class SessionResume {
         continue;
       }
       if (local && e.queued === true && !echoed) {
-        if (this.#core.delegation.discardConsumedResult(s, e.turnId)) continue;
+        // A result ticket drops the results the parent read since.
+        const kept = { text: e.text ?? '' };
+        if (this.#core.delegation.discardConsumedResult(s, e.turnId, kept)) continue;
         // The event log is the queue. Recover the text, compact command, and
         // image bytes from it in sequence order; the small attachment refs
         // themselves are deliberately not enough to send to a driver.
-        let text = e.text ?? '';
+        let text = kept.text;
         if (s.brain) {
           const body = text.replace(/^\[helm [^\]\n]*\]\n\n/, '');
           const line = this.#sessions.brief?.();
@@ -307,6 +313,31 @@ export class SessionResume {
   }
 
   /**
+   * Check again, until the Codex daemon answers, on a thread it did not
+   * answer for at restart. There is no end: the wait doubles from 2.5
+   * seconds to at most a minute between checks. Once the daemon answers,
+   * a thread it still holds is reattached; one it does not hold, or a daemon
+   * that is proven gone, is settled by the check itself (discoverNativeCodex),
+   * which tells a helper's lead once.
+   */
+  #awaitDaemon(s, delay = this.#sessions.nativeRetryMs ?? 2500) {
+    const key = `native-wait:${s.id}`;
+    clearTimeout(this.#core.reapers.get(key));
+    const timer = setTimeout(async () => {
+      this.#core.reapers.delete(key);
+      if (!this.#core.index.has(s.id) || !this.unreachable(s)) return;
+      try { await this.#core.natives.discoverNativeCodex(loadProfiles()?.profiles ?? []); }
+      catch (err) { this.#sessions.log(`[${s.id}] could not check Codex: ${err.message}`); }
+      if (!this.#core.index.has(s.id)) return;
+      if (this.#core.natives.nativeUnknown.has(s.profileId)) { this.#awaitDaemon(s, Math.min(delay * 2, 60_000)); return; }
+      if (this.#core.natives.nativeLoaded.has(s.engineSessionId) && !this.#core.drivers.get(s.id)?.nativeConnected) await this.#reattach(s, 0);
+      else { this.reconnected(s); this.#core.delivery.pump(s); }
+    }, delay);
+    timer.unref?.();
+    this.#core.reapers.set(key, timer);
+  }
+
+  /**
    * Re-watch every surviving pane after a daemon restart. `onRestored` runs
    * once every saved chat is back in order, before the agents reconnect: a
    * slow reconnect must hold only its own chat, never new chats or sends.
@@ -355,12 +386,14 @@ export class SessionResume {
         // still be running. The next answer from the daemon settles it.
         if (s.recovery?.kind === 'restart') delete s.recovery;
         this.#restoreOpenTurns(s, this.#sessions.events.tail(s.id, 0), true);
-        // Only a thread with work in flight has anything to hold or to warn
-        // about; an idle one simply carries on at its next message.
+        // Only a thread with work in flight has anything to hold; an idle
+        // one simply carries on at its next message. A helper is not failed
+        // here: "did not answer" is not "gone", and its lead would start the
+        // same work again beside a thread that may still run it.
         if (this.#inFlight(s)) {
           s.queuePaused = true;
-          s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} Codex did not answer, so this thread could not be checked.`, at: Date.now() };
-          this.#core.delegation.processGone(s, { reason: 'Helm cannot check the helper because Codex did not answer.' });
+          s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} ${NATIVE_WAIT}`, at: Date.now() };
+          this.#awaitDaemon(s);
         } else if (this.unreachable(s)) {
           // A mark left by an earlier restart, on a thread with nothing to hold.
           delete s.recovery; s.queuePaused = false;
@@ -404,7 +437,10 @@ export class SessionResume {
       // The active turn died with the old daemon. Unsent queued tickets are
       // different: `#restoreOpenTurns` puts them back into the outbox rather
       // than closing them as though the agent had already seen them.
-      this.#core.delegation.processGone(s, { reason: 'Helm cannot find the helper process after restart.' });
+      // The process host's record says when and how it ended (agent-stops.js).
+      const stop = procId ? lastStop(procId) : null;
+      const recent = stop && Date.now() - stop.at < 7 * 24 * 3600_000 ? ` ${describeStop(stop)}` : '';
+      this.#core.delegation.processGone(s, { reason: `Helm cannot find the helper process after restart.${recent}` });
       this.#restoreOpenTurns(s, s.delegation ? this.#sessions.events.glance(s.id).turns : seen.turns, false);
       // The process a failed reconnect was about is gone; so is the mark.
       // Anything it was doing is settled just above, as "restart" if need be.

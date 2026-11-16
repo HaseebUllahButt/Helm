@@ -62,7 +62,9 @@ export class InputDelivery {
       throw failure('invalid reliable message', 'invalid_argument');
     }
     const source = params.source === 'agent' ? 'agent' : 'user';
-    const request = { id, data, attachments, references, delivery, ...(source === 'agent' ? { source } : {}) };
+    // 'compact' or 'full': what to do with a big history whose cache expired.
+    const history = ['compact', 'full'].includes(params.history) ? params.history : undefined;
+    const request = { id, data, attachments, references, delivery, ...(source === 'agent' ? { source } : {}), ...(history ? { history } : {}) };
     const digest = hash(request);
     // Bind an ID to both its sender and its original target/content.
     const key = hash([caller, messageId]);

@@ -30,12 +30,17 @@
 - **Tests:** `test/owner-preferences`, `owner-sync`.
 
 ## Usage & cost
-- **Prove (driven):** `$V key Control+Shift+4; $V text | head -20` shows "At
-  API prices · last 7 days" and "WHERE IT WENT"; `$V rpc usage.report '{}'`
-  gives the same totals.
+- **Prove (driven 2026-11-11):** `$V key Control+Shift+4; $V text | head -20`
+  shows "At pay-per-use prices · last 7 days", "Cost per day" and "Usage by
+  group"; `$V rpc usage.report '{}'` gives the same totals. The layout
+  follows the pane width, not the window: check 390, 960 and 1280 wide.
+  Usage and Dashboard share one look (cards, tiles, meters): look at both
+  after a change to either. "Today" has no chart; "All" past two months
+  shows one bar a week.
 - **Traps:** an unpriced model shows "unpriced" or "–", never $0. With
   `up --real` this is the owner's real spend. Devin spend can be five
-  minutes late. Costs are API prices, not money spent.
+  minutes late. Costs are API prices, not money spent. Pi and OMP chats
+  carry the cost Pi wrote down, so a free model shows $0, not "unpriced".
 - **Tests:** `test/browser/usage`; `test/usage`, `usage-sync`,
   `cost-accounting`, `devin-usage`, `other-pricing`, `token-rate`.
 
@@ -78,8 +83,8 @@
   `usage-recovery`.
 
 ## Updates
-- `helm ship` checks a free private chat before merging and after the machines
-  update. It restarts the private daemon, checks the same approval, then uses it
+- `helm ship --check` checks a free private chat before merging and after the
+  machines update (plain `helm ship` skips it). It restarts the private daemon, checks the same approval, then uses it
   and checks that one provider turn completes. It never creates owner chats.
   A failed proof prevents a successful ship result. The local check needs
   Playwright and its Chromium browser. Run `node scripts/release-proof.mjs`

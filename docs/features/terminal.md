@@ -50,3 +50,21 @@ reason and "Try again" show there. Its first screen comes back with the start
 ## "View in terminal" from a chat
 - **Not yet driven;** the fake agent runs no commands.
 - **Tests:** `test/native-cli-tray`; `test/browser/native-cli-tray`.
+
+## One memory group each (Linux with systemd)
+Each terminal, agent process and Codex daemon runs in its own systemd scope
+(`cgroup-scope.js`). When memory runs out, systemd-oomd stops only the
+biggest one. On 2026-11-11 one host unit held everything, and oomd stopped
+3440 processes and three Codex helpers at once.
+- **Decisions:** only grouping, no memory limits. The daemon asks for the
+  scope, not the host: the terminal and process hosts keep their old code
+  across updates. CLI terminal hosts are versioned and make it themselves
+  (`pty.js`). Codex starts its shared daemon itself, so Helm's daemon moves
+  it into a scope every 20 s. A memory stop shows as "The computer ran out
+  of memory…" in the chat, the terminal and `agent-stops.jsonl`.
+- **Traps:** scope names carry the HELM_DIR tag; Helm's own `.service`
+  units are only searched by the process that is that unit's main process,
+  because an agent's test copy runs inside them. `test:smart` turns scopes
+  off (`HELM_NO_SCOPES`); `verify-helm` turns them on (`HELM_SCOPES=1`).
+  Read a group with `cat /proc/<pid>/cgroup`.
+- **Tests:** `test/cgroup-scope`, `agent-stops`.

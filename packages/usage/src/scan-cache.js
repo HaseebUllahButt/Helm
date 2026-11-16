@@ -41,10 +41,12 @@ export const DEDUPE_RING = 32;
  */
 // cacheWrite1h is the part of cacheWrite that went into a 1-hour cache (2x
 // input rather than 1.25x); it is inside cacheWrite, not beside it.
-export const FIELDS = ['input', 'output', 'cacheWrite', 'cacheWrite1h', 'cacheRead', 'reasoning', 'total', 'turns'];
+// billedUsd is the cost the CLI itself wrote down (Pi and OMP do), carried
+// like OpenCode's; a bucket from an older index simply has none.
+export const FIELDS = ['input', 'output', 'cacheWrite', 'cacheWrite1h', 'cacheRead', 'reasoning', 'total', 'turns', 'billedUsd'];
 
 export const blankTokens = () => ({
-  input: 0, output: 0, cacheWrite: 0, cacheWrite1h: 0, cacheRead: 0, reasoning: 0, total: 0, turns: 0,
+  input: 0, output: 0, cacheWrite: 0, cacheWrite1h: 0, cacheRead: 0, reasoning: 0, total: 0, turns: 0, billedUsd: 0,
 });
 
 /**
@@ -159,7 +161,7 @@ export class FileRollupCache {
       const key = bucketKey(dims);
       let b = entry.buckets[key];
       if (!b) b = entry.buckets[key] = blankTokens();
-      for (const f of FIELDS) if (tokens[f]) b[f] += tokens[f];
+      for (const f of FIELDS) if (tokens[f]) b[f] = (b[f] || 0) + tokens[f];
     };
     const { consumed, size, read } = await foldLinesFrom(filePath, startByte, (line) => {
       if (!parser.wants(line)) return;

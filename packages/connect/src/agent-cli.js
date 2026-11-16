@@ -94,7 +94,7 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     if (!options.wait) {
       const where = session.delegation?.worktree;
       write(options.json ? JSON.stringify({ session, status: session.status })
-        : `Started ${id} (${session.engine}${session.model ? ` / ${session.model}` : ''})${away ? ` on ${options.machine}` : ''}${where ? ` in ${where.path} on branch ${where.branch}` : ''}. Read with helm delegate-result ${id} --wait`);
+        : `Started ${id} (${session.engine}${session.model ? ` / ${session.model}` : ''})${away ? ` on ${options.machine}` : ''}${where ? ` in ${where.path} on branch ${where.branch}` : ''}. Helm messages this chat when it ends: end your turn or do other work, and do not check it. If you cannot go on without it, run helm delegate-result ${id} --wait once.`);
       return 0;
     }
   } else {
@@ -115,11 +115,17 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     if (Date.now() >= deadline) {
       // Progress is not the result: say so where a reader looks for it.
       result = { ...result, timedOut: true, progress: result.output ?? '',
-        output: `Not finished: ${id} is still working; the text so far is under "progress". Wait for the result with: helm delegate-result ${id} --wait --json` };
+        output: `Not finished: ${id} is still working; the text so far is under "progress". Helm messages this chat when it ends: end your turn and do not check it again.` };
       break;
     }
     await sleep(Math.min(1000, Math.max(1, deadline - Date.now())));
   } while (true);
+  // Lead chats checked a working helper every 30 s, and each check re-read
+  // a 220k chat: on 2026-11-11 a quarter to a third of their steps did only
+  // that. Helm already messages the parent when a helper ends.
+  if (!options.wait && !result.complete && ['working', 'starting'].includes(result.status)) {
+    result = { ...result, note: `${id} is still working. Helm messages this chat when it ends; do not check again. Do other work or end your turn.` };
+  }
   if (options.json) write(JSON.stringify(result));
   else {
     write(`${id}: ${result.status}${result.timedOut ? ' (wait timed out; task continues; this is not its result)' : ''}`);
@@ -130,6 +136,7 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     for (const message of result.messages ?? []) write(`Message from ${message.from.title}:\n${message.text}`);
     if (result.error) write(result.error);
     if (result.pending) write(`Needs approval in Helm: ${result.pending.title ?? result.pending.kind}`);
+    if (result.note) write(result.note);
   }
   return result.timedOut ? 3 : result.status === 'blocked' ? 2
     : ['error', 'interrupted'].includes(result.status) ? 1 : 0;

@@ -2,7 +2,7 @@ import { M } from '@helm/protocol';
 
 /** Automatic updates come from the owner's machines; GitHub needs a request. */
 export async function synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
-  rebuildStaleApp, syncFromBundle, net, id, rpc }) {
+  rebuildStaleApp, syncFromBundle, net, id, rpc, told = new Set() }) {
   const mine = await currentVersion();
   if (!mine) return { note: { reason: 'Cannot determine the installed Helm version.' } };
   if (mine.dirty) return { note: { reason: 'Local changes are blocking automatic updates. Save and publish them to update every machine.' } };
@@ -18,6 +18,15 @@ export async function synchronizeVersion({ running, currentVersion, rebuildIfCom
       .then((info) => ({ id: peer, name: info.name, v: info.version }), () => null)));
   const newer = peers.filter((p) => p?.v?.full && p.v.full !== mine.full && p.v.time > mine.time)
     .sort((a, b) => b.v.time - a.v.time);
+  // This machine runs a version that others lack: tell them now, once per
+  // version, so they need not wait for their next round.
+  if (running && mine.full === running) {
+    for (const peer of peers) {
+      if (!peer?.v?.full || peer.v.full === mine.full || !(peer.v.time < mine.time) || told.has(`${peer.id} ${mine.full}`)) continue;
+      told.add(`${peer.id} ${mine.full}`);
+      rpc(net, peer.id, M.ENV_NEWER, { full: mine.full, time: mine.time }, { timeout: 8000, budget: 8000 }).catch(() => {});
+    }
+  }
   let divergence = null, fetchError = null;
   for (const peer of newer) {
     let bundle;

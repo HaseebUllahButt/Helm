@@ -1,9 +1,10 @@
+import { MEMORY_STOP } from './cgroup-scope.js';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { getProfiles } from './profiles.js';
 import { nativeWorking } from './native-subagents.js';
-import { ENGINES } from './engines.js';
+import { ENGINES, conversationKey } from './engines.js';
 import { modelPrefs, startPrefs, subagentPrefs } from './settings.js';
 import { codexHelperFork, delegationMode, delegationOutput, isWakeTurn, resultNotice, turnOf } from './delegation.js';
 import { nativeCodexSocket } from './drivers/codex.js';
@@ -19,6 +20,8 @@ const ACTIVE = ['starting', 'working', 'blocked'];
 // meanwhile. Ask again for about ten minutes before the log says so.
 const REMOTE_RESULT_TRIES = 20;
 const REMOTE_RESULT_RETRY_MS = 30_000;
+/** The queue ticket a helper's result goes to its parent under: helper id and the seq of its turn end. */
+const RESULT_TICKET = /^local-result-([a-f0-9]{12})-(\d+)$/;
 
 /**
  * The folder a helper from another machine works in: the one it asked for,
@@ -36,6 +39,11 @@ export function remoteHelperFolder(remoteParent, home = homedir()) {
  * Helpers a chat delegates work to (`helm delegate`): starting them, the
  * team counts on their parent, and carrying each result back to it.
  */
+/** The parent agent got this helper's latest result: told or read it. `toldFor` is the end it was told about. */
+const resultTold = (record) => record?.toldFor !== undefined ? record.toldFor === (record.finishedAt ?? 0)
+  // Saved before toldFor existed: any notice or read counts.
+  : (record?.notifiedSeq ?? 0) > 0 || (record?.consumedSeq ?? 0) > 0 || (record?.toldSeq ?? 0) > 0;
+
 export class SessionDelegation {
   #sessions;
   #core;
@@ -123,9 +131,14 @@ export class SessionDelegation {
     // A card the driver also reported is already counted through the map.
     const unreported = nativeWorking(cards.filter((card) => !this.#core.subagents.hookState(parent, card)));
     // A helper on another machine counts from the state it last sent.
+    // A failure its parent agent already has is that agent's to handle, and
+    // the agent's reply tells the owner. On 2026-11-11 eight helpers of a
+    // lead on why ran out of free limit; the lead ran the work again on Pi,
+    // and the owner still saw "8 helper tasks failed" under "Needs you".
     const rows = [...children.map((session) => ({ state: session.delegation.status ?? session.status, team: session.team,
-      failed: session.delegation.dismissedFailureAt !== (session.delegation.finishedAt ?? 0) })),
-    ...remote.map((helper) => ({ state: helper.status, team: helper.team, failed: helper.dismissedFailureAt !== (helper.finishedAt ?? 0) }))];
+      failed: session.delegation.dismissedFailureAt !== (session.delegation.finishedAt ?? 0) && !resultTold(session.delegation) })),
+    ...remote.map((helper) => ({ state: helper.status, team: helper.team,
+      failed: helper.dismissedFailureAt !== (helper.finishedAt ?? 0) && !helper.told && !resultTold(helper) }))];
     parent.team = rows.reduce((team, row) => {
       team.working += Number(['working', 'starting'].includes(row.state)) + (row.team?.working ?? 0);
       team.blocked += Number(row.state === 'blocked') + (row.team?.blocked ?? 0);
@@ -167,7 +180,8 @@ export class SessionDelegation {
 
   /** Provider history must not rediscover a hidden task as an ordinary chat. */
   isDelegatedConversation(engine, id) {
-    return [...this.#core.index.values()].some((s) => s.delegation && s.engine === engine && s.engineSessionId === id);
+    const key = conversationKey(engine, id);
+    return [...this.#core.index.values()].some((s) => s.delegation && s.engineSessionId && conversationKey(s.engine, s.engineSessionId) === key);
   }
 
   hasActiveDelegations(id) {
@@ -272,7 +286,9 @@ export class SessionDelegation {
   }
 
   /** Close lost work once. Keep the conversation and use the normal parent receipt. */
-  processGone(child, { code = null, signal = null, reason = null } = {}) {
+  processGone(child, { code = null, signal = null, reason = null, memory = false } = {}) {
+    // The lead hears the plain cause, once, through notifyParent below.
+    if (memory) reason = MEMORY_STOP;
     if (!child.delegation) return;
     if (!ACTIVE.includes(child.delegation.status)) {
       if (code != null || signal) {
@@ -356,6 +372,8 @@ export class SessionDelegation {
           throw new Error('Could not save the result receipt. Read the result again.');
         }
         this.#waiters.delete(id);
+        session.delegation.toldFor = session.delegation.finishedAt ?? 0;
+        this.updateTeam(session);
         if (!remoteOwner) this.#dropConsumed(parent);
       }
       result.consumedSeq = session.delegation.consumedSeq;
@@ -365,12 +383,13 @@ export class SessionDelegation {
 
   #dropConsumed(parent) {
     for (const item of [...(this.#core.deliveryState.queue(parent.id) ?? [])]) {
-      if (this.#consumedResult(parent, item.turnId)) this.#sessions.dequeue(parent.id, item.turnId);
+      if (this.#core.deliveryState.delivering(parent.id) === item.turnId) continue;
+      if (this.#unread(parent, item.turnId) === '') this.#sessions.dequeue(parent.id, item.turnId);
     }
   }
 
   #consumedResult(parent, turnId) {
-    const match = /^local-result-([a-f0-9]{12})-(\d+)$/.exec(turnId ?? '');
+    const match = RESULT_TICKET.exec(turnId ?? '');
     const remote = match && parent.remoteHelpers?.find((helper) => helper.id === match[1]);
     if (remote) return (remote.consumedSeq ?? 0) >= Number(match[2]);
     const child = match && this.#core.index.get(match[1]);
@@ -378,8 +397,80 @@ export class SessionDelegation {
       && (child.delegation.consumedSeq ?? 0) >= Number(match[2]);
   }
 
-  discardConsumedResult(parent, turnId) {
-    if (!this.#consumedResult(parent, turnId)) return false;
+  /**
+   * The results a waiting result ticket holds. Results that end while the
+   * parent works join one ticket (#queueResult), so one parent turn reads
+   * them all; its last edit names each result and its length in the text.
+   */
+  #parts(parentId, turnId) {
+    const events = this.#sessions.events.tail(parentId, 0);
+    const last = events.findLast((e) => e.turnId === turnId && (e.type === 'turn.edit' || e.type === 'turn.start'));
+    const text = last?.text ?? '';
+    if (!Array.isArray(last?.parts)) return { text, parts: [{ turnId, text }] };
+    let at = 0;
+    const parts = last.parts.map((part) => {
+      const block = text.slice(at, at + part.chars);
+      at += part.chars + 2;
+      return { turnId: part.turnId, text: block };
+    });
+    return { text, parts };
+  }
+
+  /** Write which results a waiting ticket holds, as one edit of its text. */
+  #rewrite(parent, turnId, parts) {
+    const text = parts.map((part) => part.text).join('\n\n');
+    const event = this.#sessions.events.append(parent.id, { type: 'turn.edit', turnId, text,
+      parts: parts.map((part) => ({ turnId: part.turnId, chars: part.text.length })) });
+    parent.lastSeq = event.seq;
+    this.#sessions.emit('event', { id: parent.id, event });
+    this.#core.deliveryState.updateTicket(parent.id, turnId, { text });
+    return text;
+  }
+
+  /**
+   * What a result ticket still has to say once the parent read some of its
+   * results with `helm delegate-result`: null when it is not a result ticket
+   * or nothing in it was read, '' when every result in it was read, else
+   * the text left, written back to the ticket.
+   */
+  #unread(parent, turnId) {
+    if (!RESULT_TICKET.test(turnId ?? '')) return null;
+    const { parts } = this.#parts(parent.id, turnId);
+    const left = parts.filter((part) => !this.#consumedResult(parent, part.turnId));
+    if (left.length === parts.length) return null;
+    return left.length ? this.#rewrite(parent, turnId, left) : '';
+  }
+
+  /**
+   * Give a result to the parent. A result ticket still waiting for the
+   * parent takes it in: each extra parent turn reads the parent's whole
+   * history again. The parent never gets it mid-turn: it waits for the
+   * turn to end, like any queued result.
+   */
+  async #queueResult(parent, ticket, text) {
+    const block = text.replace(/\n$/, '');
+    // Told already, alone or inside another result's ticket: a restart can
+    // report the same turn again.
+    if (this.#sessions.events.tail(parent.id, 0).some((e) => e.type === 'turn.edit' && e.parts?.some((part) => part.turnId === ticket))) return;
+    // Its own ticket exists: input() answers that it is a duplicate.
+    const lead = parent.stoppedAt || this.#sessions.events.turnState(parent.id, ticket) !== null ? null : (this.#core.deliveryState.queue(parent.id) ?? []).findLast((item) =>
+      RESULT_TICKET.test(item.turnId) && item.source === 'delegation' && item.delivery === 'queue'
+      && (item.stopGeneration ?? 0) === (parent.stopGeneration ?? 0) && this.#core.deliveryState.delivering(parent.id) !== item.turnId);
+    if (!lead) {
+      await this.#sessions.input(parent.id, text, { turnId: ticket, delivery: 'queue', source: 'delegation' });
+      return;
+    }
+    const { parts } = this.#parts(parent.id, lead.turnId);
+    this.#rewrite(parent, lead.turnId, [...parts, { turnId: ticket, text: block }]);
+  }
+
+  discardConsumedResult(parent, turnId, item = null) {
+    const left = this.#unread(parent, turnId);
+    if (left === null) return false;
+    if (left) {
+      if (item) item.text = left;
+      return false;
+    }
     if (this.#sessions.events.turnState(parent.id, turnId) === 'open') {
       const event = this.#sessions.events.append(parent.id, { type: 'turn.remove', turnId });
       parent.lastSeq = event.seq;
@@ -457,7 +548,9 @@ export class SessionDelegation {
     }
     const sent = () => {
       child.delegation.notifiedSeq = event.seq;
+      child.delegation.toldFor = child.delegation.finishedAt ?? 0;
       if (turnId) child.delegation.notifiedTurns = [...(child.delegation.notifiedTurns ?? []), turnId].slice(-50);
+      this.updateTeam(child);
       this.#core.save();
     };
     try {
@@ -472,9 +565,9 @@ export class SessionDelegation {
       if (away) {
         if (!await this.#sendRemoteResult(child, { seq: event.seq, status: outcome, text })) return;
       } else {
-        await this.#sessions.input(parent.id, text, { turnId: ticket, delivery: 'queue', source: 'delegation' });
+        await this.#queueResult(parent, ticket, text);
         // Collecting the result can race driver startup inside input().
-        if (this.#consumedResult(parent, ticket)) this.#sessions.dequeue(parent.id, ticket);
+        this.#dropConsumed(parent);
       }
       sent();
     } catch (error) { this.#sessions.log(`[${child.id}] could not return task result: ${error.message}`); }
@@ -499,6 +592,7 @@ export class SessionDelegation {
   remoteState(child) {
     return { id: child.id, title: child.title, status: this.delegationResult(child.id).status,
       ...(child.team ? { team: child.team } : {}), ...(child.delegation.finishedAt ? { finishedAt: child.delegation.finishedAt } : {}),
+      ...(resultTold(child.delegation) ? { told: true } : {}),
       ...(child.archived ? { archived: true } : {}) };
   }
 
@@ -571,8 +665,9 @@ export class SessionDelegation {
     if (helper.removed && !state.removed) return { ok: true };
     Object.assign(helper, { title: state.title ?? helper.title, status: state.status, team: state.team,
       removed: state.removed === true, ...(state.result ? { result: state.result } : {}),
-      finishedAt: state.finishedAt, archived: state.archived === true });
+      finishedAt: state.finishedAt, archived: state.archived === true, told: state.told === true });
     if (!state.team) delete helper.team;
+    if (!state.told) delete helper.told;
     if (!state.archived) delete helper.archived;
     this.refreshTeam(parent);
     this.#core.save();
@@ -589,9 +684,11 @@ export class SessionDelegation {
     if (parent.archived || parent.stoppedAt || (parent.stopGeneration ?? 0) !== generation
       || (helper.consumedSeq ?? 0) >= seq || (helper.toldSeq ?? 0) >= seq) return { ok: true, skipped: true };
     const ticket = `local-result-${helper.id}-${seq}`;
-    await this.#sessions.input(parent.id, text, { turnId: ticket, delivery: 'queue', source: 'delegation' });
+    await this.#queueResult(parent, ticket, text);
     helper.toldSeq = seq;
-    if (this.#consumedResult(parent, ticket)) this.#sessions.dequeue(parent.id, ticket);
+    helper.toldFor = helper.finishedAt ?? 0;
+    this.refreshTeam(parent);
+    this.#dropConsumed(parent);
     this.#core.save();
     return { ok: true };
   }
@@ -601,6 +698,8 @@ export class SessionDelegation {
     const helper = parent.remoteHelpers?.find((h) => h.id === id);
     if (!helper || !Number.isInteger(seq)) return;
     helper.consumedSeq = Math.max(helper.consumedSeq ?? 0, seq);
+    helper.toldFor = helper.finishedAt ?? 0;
+    this.refreshTeam(parent);
     this.#core.save();
     this.#dropConsumed(parent);
   }

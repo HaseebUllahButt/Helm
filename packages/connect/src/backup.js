@@ -3,9 +3,12 @@ import { lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync, renameS
 import { resolve, join, dirname, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { REVIEW_FILE } from './restore-guard.js';
+import { KEY_NAME, SEALED_NAME } from './sudo.js';
 
 const MAGIC = Buffer.from('HELMBK01');
 const fail = message => { throw new Error(message); };
+// The admin password and its key stay on their machine (sudo.js).
+const NEVER_BACKED_UP = new Set([KEY_NAME, SEALED_NAME]);
 const inside = (parent, child) => child === parent || child.startsWith(parent + sep);
 const key = (password, salt) => {
   if (!Buffer.isBuffer(password) || password.length < 12) fail('Use a secret with at least 12 bytes. Pass it in memory, not in command arguments.');
@@ -14,6 +17,7 @@ const key = (password, salt) => {
 function snapshot(root, prefix = '') {
   const entries = [];
   for (const name of readdirSync(join(root, prefix)).sort()) {
+    if (NEVER_BACKED_UP.has(name)) continue;
     const path = prefix ? `${prefix}/${name}` : name;
     const full = join(root, path), stat = lstatSync(full);
     if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) fail('Use an offline folder with only regular files and folders.');

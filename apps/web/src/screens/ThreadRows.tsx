@@ -121,10 +121,13 @@ export function PagedRows<T extends { s: { id: string } }>({ items, isSelected, 
  * The ⋯ on a thread row: continue, rename, pin, move, archive, delete. One component, so
  * the sidebar's rows and the machine screen's rows offer the same things.
  */
-export function ThreadActions({ s, onContinue, onRename, onPin, onArchive, onDelete, onMove, ending: askedToEnd, setEnding: setAskedToEnd }: {
+export function ThreadActions({ s, onContinue, onRename, onPin, onArchive, onDelete, onMove, ending: askedToEnd, setEnding: setAskedToEnd, extra = [], buttonClass = 'rowend' }: {
   s: Session; onContinue?: () => void; onRename?: (title: string) => void; onPin?: () => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void;
   /** The delete question, when the row asks it (its Delete key). */
   ending?: boolean; setEnding?: (on: boolean) => void;
+  /** Items that come first, such as what a waiting chat needs. */
+  extra?: { label: string; onClick: () => void; disabled?: boolean }[];
+  buttonClass?: string;
 }) {
   const eng = engineOf(s.engine);
   const adopted = s.adopted;
@@ -138,11 +141,15 @@ export function ThreadActions({ s, onContinue, onRename, onPin, onArchive, onDel
   return (
     <>
       <button
-        className="rowend" title="Show chat actions" aria-label={`Show actions for ${s.title}`} aria-haspopup="menu" aria-expanded={menu}
+        className={buttonClass} title="Show chat actions" aria-label={`Show actions for ${s.title}`} aria-haspopup="menu" aria-expanded={menu}
         onClick={(e) => { e.stopPropagation(); setMenu((open) => !open); }}
       ><Icon name="more" size={16} /></button>
       {menu && (
         <div className="menu row-menu" onClick={(e) => e.stopPropagation()}>
+          {extra.map((item) => (
+            <button key={item.label} disabled={item.disabled} onClick={() => { setMenu(false); item.onClick(); }}>{item.label}</button>
+          ))}
+          {extra.length > 0 && !!(onContinue || onRename || onPin || onMove || onArchive || onDelete) && <hr className="menu-line" />}
           {onContinue && (
             <button onClick={() => { setMenu(false); onContinue(); }}>Continue in a new chat</button>
           )}
@@ -202,14 +209,17 @@ export const whereOf = (s: Session) => (s.quick ? 'sketch' : dirName(chatFolder(
 /**
  * A chat that waits on you, as a plain sidebar row: a breathing dot, the
  * title, and what it wants. A row with a question or a request opens the
- * waiting box at the top (`onPick`); a failure opens the chat. Clearing a
- * helper failure sits behind the ⋯ button, which shows only when there is one.
+ * waiting box at the top (`onPick`); a failure opens the chat at the failed
+ * helper. The ⋯ is the same menu as every other row, with what this chat
+ * needs first: see why a helper failed, or dismiss that failure.
  */
-export function NeedCard({ s, machine, selected = false, onOpen, onPick, onDismiss }: {
+export function NeedCard({ s, machine, selected = false, onOpen, onPick, onDismiss, onReview, actions }: {
   s: Session; machine: string; selected?: boolean; onOpen: () => void; onPick?: () => void;
   onDismiss: () => Promise<void>;
+  /** Open the chat at the helper that failed or waits. */
+  onReview?: () => void;
+  actions?: { onContinue?: () => void; onRename?: (title: string) => void; onPin?: () => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void };
 }) {
-  const [choosing, setChoosing] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState('');
   const dismiss = async () => {
@@ -223,6 +233,12 @@ export function NeedCard({ s, machine, selected = false, onOpen, onPick, onDismi
   const ask = s.status === 'blocked' ? s.ask : null;
   const problem = s.status !== 'blocked' && s.recovery ? plainProblem(s.recovery.kind, s.recovery.message) : null;
   const line = waitingLine(s);
+  const failed = s.team?.failed ?? 0;
+  const extra = [
+    ...(failed && onReview ? [{ label: failed === 1 ? 'See why the helper failed' : 'See why the helpers failed', onClick: onReview }] : []),
+    ...(s.team?.blocked && onReview ? [{ label: 'Answer the helper', onClick: onReview }] : []),
+    ...(failed ? [{ label: dismissing ? 'Dismissing…' : failed === 1 ? 'Dismiss failure' : 'Dismiss failures', onClick: () => void dismiss(), disabled: dismissing }] : []),
+  ];
   return (
     <div className={`need${s.recovery && s.status !== 'blocked' ? ' need-recovery' : ''}${selected ? ' active' : ''}`}>
       <div className="need-row">
@@ -238,16 +254,8 @@ export function NeedCard({ s, machine, selected = false, onOpen, onPick, onDismi
             <span className="need-m">{machine}</span>
           </span>
         </button>
-        {!!s.team?.failed && <button className="need-more" aria-label={`More for ${s.title}`} aria-expanded={choosing} onClick={() => setChoosing((c) => !c)}>
-          <Icon name="more" size={15} />
-        </button>}
+        {(actions || extra.length > 0) && <ThreadActions s={s} {...actions} extra={extra} buttonClass="need-more" />}
       </div>
-      {choosing && !!s.team?.failed && (
-        <div className="need-foot">
-          <button className="need-dismiss" disabled={dismissing} onClick={() => void dismiss()}
-            title="Clear this helper failure alert on all devices. Its history stays. New failures show alerts.">{dismissing ? 'Dismissing…' : s.team.failed === 1 ? 'Dismiss failure' : 'Dismiss failures'}</button>
-        </div>
-      )}
       {dismissError && <p className="error" role="alert">{dismissError}</p>}
     </div>
   );

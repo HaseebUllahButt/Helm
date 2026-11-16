@@ -145,14 +145,18 @@ export class DriverEvents {
     // in it: kept on the record (written out when the turn ends, with the
     // rest) and sent to clients as a session update.
     if (e.type === 'context') {
-      this.#core.setContext(s, e.used, e.window, e.model, e.full, e.compacted === true);
+      this.#core.setContext(s, e.used, e.window, e.model, e.full, e.compacted === true, e.ttl);
       return;
     }
     if (e.type === 'status') {
-      if (e.status === 'exited' && current === d) this.#core.delegation.processGone(s, { code: e.code, signal: e.signal });
+      if (e.status === 'exited' && current === d) this.#core.delegation.processGone(s, { code: e.code, signal: e.signal, memory: e.memory === true });
       // A closed process is not a closed conversation: the next message
       // resumes it. Only an explicit kill removes the session.
-      const status = e.status === 'exited' ? 'idle' : e.status;
+      // A card Helm asked itself (helm sudo) still waits: the agent working
+      // on does not answer it, so the chat keeps reading as waiting.
+      const helmCard = e.status === 'working' && this.#sessions.events.pending(s.id).some((p) => this.#sessions.helmAsks?.owns(p.requestId));
+      const status = e.status === 'exited' ? 'idle' : helmCard ? 'blocked' : e.status;
+      if (helmCard) forwarded = { ...forwarded, status };
       if (s.delegation && !s.stoppedAt && ['working', 'blocked'].includes(status)) s.delegation.status = status;
       if (s.delegation) this.#core.delegation.updateTeam(s);
       if (e.status === 'exited' && this.#core.drivers.get(s.id) === d) { this.#core.drivers.delete(s.id); this.#core.deliveryState.clearAwaitingEcho(s.id); }

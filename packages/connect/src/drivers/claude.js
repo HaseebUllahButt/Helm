@@ -1,3 +1,4 @@
+import { MEMORY_STOP } from '../cgroup-scope.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
@@ -5,6 +6,7 @@ import { modeFor } from '../modes.js';
 import { nonAgentClaudeTask, staleAgentCards, stoppedTask } from '../claude-tasks.js';
 import { bareModel, compactWindow, configDir } from '../context-limit.js';
 import { WORTH_SAYING } from '@helm/usage/recache';
+import { cacheTtlOf } from '@helm/usage/idle-history';
 
 // Messages that mean the CLI is working: outside a turn, a turn it began itself.
 // A bare `result` is not one: a result with no work before it is the last
@@ -185,6 +187,8 @@ export class ClaudeDriver extends Driver {
   #contextWindow = null;
   /** The model's whole window, before the account's compaction size cuts it down. */
   #contextFull = null;
+  /** How long Claude keeps this conversation cached, as its last cache write said. */
+  #cacheTtl = undefined;
   #contextModel = null;
   /** The last message sent as a new turn, for an answer that never echoes it. */
   #lastSent = '';
@@ -376,7 +380,7 @@ export class ClaudeDriver extends Driver {
     }
     this.#initialized = this.#initialize();
     this.#exited = new Promise((resolve) => {
-      pipe.onExit(({ code, signal, stderr }) => {
+      pipe.onExit(({ code, signal, stderr, memory }) => {
         this.#pipe = null;
         this.#inTurn = false;
         // No process, no hook: a model picked now starts the next process.
@@ -394,10 +398,11 @@ export class ClaudeDriver extends Driver {
         for (const requestId of [...this.pending.keys()]) {
           this.push('permission.resolved', { requestId, decision: 'cancelled' });
         }
-        if (code && code !== 0 && !this.killed) {
+        if (memory) this.push('error', { message: MEMORY_STOP, kind: 'exit' });
+        else if (code && code !== 0 && !this.killed) {
           this.push('error', { message: `claude exited with code ${code}${stderr ? `: ${stderr}` : ''}`, kind: 'exit' });
         }
-        this.push('status', { status: 'exited', code, signal });
+        this.push('status', { status: 'exited', code, signal, ...(memory ? { memory: true } : {}) });
         resolve({ code, signal });
       });
     });
@@ -984,6 +989,7 @@ export class ClaudeDriver extends Driver {
       this.#contextUsed = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
         + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0);
       this.#contextModel = m.message.model;
+      this.#cacheTtl = cacheTtlOf(u) ?? this.#cacheTtl;
       this.#pushContext();
     }
     if (m.error) this.push('error', { message: resultText(m.message?.content) || m.error, kind: m.error });
@@ -1009,7 +1015,7 @@ export class ClaudeDriver extends Driver {
 
   /** Tell the thread how full its context is, once the size is known. */
   #pushContext() {
-    if (this.#contextUsed && this.#contextWindow) this.push('context', { used: this.#contextUsed, window: this.#contextWindow, full: this.#contextFull, model: bareModel(this.#contextModel ?? '') || undefined });
+    if (this.#contextUsed && this.#contextWindow) this.push('context', { used: this.#contextUsed, window: this.#contextWindow, full: this.#contextFull, model: bareModel(this.#contextModel ?? '') || undefined, ...(this.#cacheTtl && { ttl: this.#cacheTtl }) });
   }
 
   /**

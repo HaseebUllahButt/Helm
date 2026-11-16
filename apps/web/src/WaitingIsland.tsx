@@ -130,7 +130,8 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
     return q;
   };
   const question = choice(perm);
-  const allow = perm && perm.kind !== 'question' && perm.kind !== 'edit' ? perm.options.find((o) => o.role === 'allow') : undefined;
+  // A helm sudo card that asks for the admin password is answered in its chat.
+  const allow = perm && perm.kind !== 'question' && perm.kind !== 'edit' && !perm.passwordNeeded ? perm.options.find((o) => o.role === 'allow') : undefined;
   const always = allow && perm?.kind !== 'plan' ? perm?.options.find((o) => o.role === 'allow-always') : undefined;
   const deny = allow ? perm?.options.find((o) => o.role === 'deny') : undefined;
   const pickAnswer = (label: string) => question && void answer(
@@ -201,19 +202,22 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
               ))}
             </div>
           </> : perm?.kind === 'question' ? <p className="island-q">{perm.questions?.[0]?.question ?? perm.title}</p>
+            : perm?.kind === 'command' && perm.ownLabels ? <><p className="island-q">{perm.title}</p><pre className="island-cmd">{String(perm.detail ?? '')}</pre></>
             : perm?.kind === 'command' ? <pre className="island-cmd">{String(perm.detail ?? '')}</pre>
             : perm?.kind === 'plan' ? <div className="island-plan"><Markdown text={String(perm.detail ?? '')} className="prose plan" /></div>
             : perm?.kind === 'tool' && perm.detail ? <pre className="island-cmd">{plainDetail(perm.detail)}</pre>
             : perm ? <p className="island-q">{perm.title}</p>
             : ask?.text ? <pre className={ask.kind === 'command' ? 'island-cmd' : 'island-q'}>{ask.text}</pre>
             : null}
+          {perm?.passwordNeeded && <p className="island-where">Open the chat to type the admin password of {perm.machine ?? 'this machine'}.</p>}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="island-acts">
             {allow && <button className="island-yes" disabled={busy} onClick={sayYes}>
               {perm?.kind === 'plan' ? 'Go ahead' : 'Allow once'}{mode === 'open' && <kbd>Ctrl ↵</kbd>}
             </button>}
-            {always && <button disabled={busy} onClick={() => void answer({ option: 'always' }, 'Always allowed')}>Always allow</button>}
-            {deny && <button disabled={busy} onClick={() => void answer({ option: 'deny' }, 'Declined')}>Decline</button>}
+            {/* A card Helm asks itself (helm sudo) names its own answers. */}
+            {always && <button disabled={busy} onClick={() => void answer({ option: 'always' }, perm?.ownLabels ? always.label : 'Always allowed')}>{perm?.ownLabels ? always.label : 'Always allow'}</button>}
+            {deny && <button disabled={busy} onClick={() => void answer({ option: 'deny' }, perm?.ownLabels ? 'Denied' : 'Declined')}>{perm?.ownLabels ? deny.label : 'Decline'}</button>}
             <span className="grow" />
             <button onClick={goToChat}>Open chat<Icon name="forward" size={14} /></button>
           </div>

@@ -283,6 +283,8 @@ export class NativeSessions {
             const event = this.#sessions.events.append(session.id, { type: 'turn.done', turnId: turn.turnId, status, ...(error ? { error } : {}) });
             session.lastSeq = event.seq;
             this.#sessions.emit('event', { id: session.id, event });
+            // Its lead hears once, as for any other helper that ends or is lost.
+            if (session.delegation) void this.#core.delegation.notifyParent(session, event);
           }
           if (session.status !== 'idle') {
             const event = this.#sessions.events.append(session.id, { type: 'status', status: 'idle' });

@@ -77,6 +77,7 @@ import { ensureFastTcp, ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { AdminRuns } from './sudo.js';
 import { useDesktopScreen } from './browser-window.js';
 import { useOwnerLogins } from './browser.js';
 import { webBuild } from './web-build.js';
@@ -399,6 +400,8 @@ export class Daemon {
   #stopWatchCheckout = null;
   #syncing = false;
   #syncAgain = false;
+  /** Machines told about a version: "machine commit". */
+  #toldNewer = new Set();
   /** Set when this machine and another both have their own changes. */
   syncNote = null;
 
@@ -414,7 +417,7 @@ export class Daemon {
       const running = (await this.#versionP)?.full;
       const net = loadNetwork() ?? this.net;
       const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
-        rebuildStaleApp, syncFromBundle, net, id: this.id, rpc: hubRpc });
+        rebuildStaleApp, syncFromBundle, net, id: this.id, rpc: hubRpc, told: this.#toldNewer });
       this.syncNote = r.note ?? null;
       if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting now'); }
     } catch (err) {
@@ -479,8 +482,10 @@ export class Daemon {
       // A CAPTCHA waits for the owner: the same notice as a question, taken away when it is solved.
       alert: ({ sessionId, tag, resolve }) => {
         if (resolve) return this.broadcastFrame(T.NOTIFY, { payload: { tag, envId: this.id, sessionId, resolve: true } });
-        let session = null; try { session = this.sessions.get(sessionId); } catch { /* gone already */ }
-        this.broadcastFrame(T.NOTIFY, { payload: describeCaptcha({ ...session, id: sessionId, envId: this.id, machine: this.name }, tag) });
+        // A chat of another machine using this browser: the notice names it.
+        let session = this.browsers?.guests.get(sessionId) || null; try { session ||= this.sessions.get(sessionId); } catch { /* gone already */ }
+        const where = session?.guest ? { id: session.chat, envId: session.from } : { id: sessionId, envId: this.id };
+        this.broadcastFrame(T.NOTIFY, { payload: describeCaptcha({ ...session, ...where, machine: this.name }, tag) });
       } });
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),
@@ -518,6 +523,9 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    // helm sudo: cards Helm asks itself, answered through Sessions.answer.
+    this.sudo = new AdminRuns({ sessions: this.sessions, machineName: () => this.name, log: (m) => console.error(`[helm] ${m}`) });
+    this.sessions.helmAsks = this.sudo;
     this.inputDelivery = new InputDelivery(this.sessions, { log: m => console.error(`[helm] ${m}`) });
     this.agentMessages = new AgentMessages({ sessions: this.sessions, delivery: this.inputDelivery, self: this.id,
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
@@ -848,6 +856,7 @@ export class Daemon {
     this.inputDelivery?.stop();
     await this.executions.stop();
     await this.browsers?.stop();
+    this.sudo?.stop();
     clearInterval(this.#brainTimer);
     clearTimeout(this.#compactTimer);
     clearTimeout(this.#keeperFirst);
@@ -1293,6 +1302,12 @@ export class Daemon {
    * aged out) gets the full list, which older apps always ask for.
    */
   // ------------------------------------------- helpers on other machines
+
+  /** This machine's own credential (its helm command, its desktop app) or one of the owner's devices. */
+  #selfOrOwner(caller) {
+    const net = loadNetwork() ?? this.net;
+    return !!caller && !net.revoked?.[caller] && (caller === net.self || !!net.devices?.[caller]);
+  }
 
   /** The paired machine a request came from. */
   #pairedCaller(caller) {
@@ -1816,6 +1831,11 @@ export class Daemon {
 
   async dispatch(method, p, caller) {
     if (method.startsWith('browser.')) return this.browsers.dispatch(method, p);
+    // Admin commands: only this machine's own helm and the owner's devices.
+    if (method.startsWith('sudo.')) {
+      if (!this.sudo) throw new Error('Helm is starting. Try again.');
+      return this.sudo.dispatch(method, p, { trusted: this.#selfOrOwner(caller) });
+    }
     switch (method) {
       case M.EXEC_START:
         if (p.sessionId && ['plan', 'readonly', 'read'].includes(this.sessions.get(p.sessionId).mode)) {
@@ -1860,6 +1880,17 @@ export class Daemon {
       case M.CLI_AUTO_UPDATE: return { auto: saveCliAutoUpdate(p.on === true) };
 
       case M.ENV_BUNDLE: return makeBundle({ have: Array.isArray(p.have) ? p.have : [] });
+      // Another machine runs a newer version: check now. The round itself
+      // asks every machine, so a false notice costs one check.
+      case M.ENV_NEWER: {
+        const mine = await this.#versionP;
+        const checking = typeof p.full === 'string' && Number.isFinite(p.time) && p.full !== mine?.full && !(p.time <= (mine?.time ?? 0));
+        if (checking && !this.#stopped) {
+          console.log(`[helm] another machine runs ${p.full.slice(0, 7)}; checking for it now`);
+          void this.#syncVersions();
+        }
+        return { checking };
+      }
 
       // GitHub's version, only when the owner asks; `replace` keeps their
       // own changes on a backup branch and then uses GitHub's.

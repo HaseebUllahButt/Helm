@@ -53,6 +53,10 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm forward <machine> <port>   Open another machine's port on this machine's localhost
   helm forward list | stop <id|port|all>
                                   List or stop forwards (a stop removes both sides)
+  helm sudo [--reason <text>] -- <command>
+                                  Run a command as admin after the owner allows it in the app
+  helm sudo password | forget     Save or delete this machine's admin password (owner only)
+  helm sudo status | stop [chat]  Show saved password and 15-minute allows, or end them
   helm schedule list | show <id>  List scheduled tasks on every machine, or show one
   helm schedule pause | resume | remove <id>
                                   Stop a task for a while, start it again, or delete it
@@ -135,8 +139,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm self-update                  Get the newest Helm and restart it on this machine
   helm self-update --rollback       Restore the saved previous release. Keep later edits and saved changes.
   helm ship                         Merge this branch into main, push it and install it on every online machine
-                                    Check a private chat and its approval before and after installation.
-    --no-check                      Skip npm run check before the merge
+    --check                         Also run the tests and check a private chat before and after installation
     --wait <minutes>                Wait this long for the machines to restart (default: 10)
   helm service install|uninstall    Install or remove the background service
 
@@ -183,6 +186,7 @@ Machines and devices
   exec-status      Read a command's output after a connection loss
   exec-cancel      Stop a command started earlier
   run              Run a command here through Helm
+  sudo             Run a command as admin after the owner allows it
   copy             Copy files to another machine; resume if stopped
   send, receive    Send a folder with the other machine's permission
   send-task        Send files, .env and a task to another machine
@@ -294,7 +298,11 @@ const DETAILS = {
   say: `
   Messages wait for the receiver's next turn.
   Messages do not interrupt work.
-  In a chat, the message shows you as the sender.`,
+  In a chat, the message shows you as the sender.
+  A Claude chat with more than 200k tokens of history and an expired cache
+  compacts its history first, so it does not read all of it again at full price.
+  A chat whose helpers still work keeps its full history.
+  Add --full-history to keep all of the history.`,
 
   share: `
   Spins are public links.
@@ -437,20 +445,43 @@ const DETAILS = {
                       (10 minutes; --timeout <ms> changes it). It works in
                       read-only chats. With no screen it stops at once.
     screenshot        only when visuals matter; close <tab> releases it
-    profiles / logins copy the owner's browser logins into Helm's window
+    open <url> --profile <name>
+                      open the tab in this profile of the owner's browser,
+                      in its folded Helm tab group. Later tabs of the chat
+                      use it too. A profile with no open window loads in
+                      the running browser, with no restart. In Helm's
+                      window, it copies that profile's logins first.
+    --machine <name>  use the browser of another machine, for example the
+                      owner's signed-in browser on their laptop when this
+                      machine has no screen. Add it to every command for
+                      those tabs. Sites show a hidden browser more CAPTCHAs.
+    profiles / logins list the owner's browser profiles; copy logins into
+                      Helm's window
     mode              show where tabs open. extended (the default): the
                       owner's own browser, with its real logins, through
                       Helm's add-on. window: Helm's own window. Until the
                       owner's browser connects, tabs open in Helm's window.
     mode extended     use the owner's browser. Helm sets the add-on up; the
-                      browser loads it on its next start. Add --restart only
-                      when the owner asks: it closes and reopens their
-                      browser, and their tabs come back.
+                      browser loads it on its next start. Never close,
+                      restart or start the owner's browser yourself.
     mode window       use only Helm's own window
     setup             only when the owner asks: open the add-ons page of
                       Google Chrome or Edge and copy the add-on's folder.
                       The owner turns on Developer mode, clicks Load
                       unpacked and pastes. Settings has the same button.`,
+
+  sudo: `
+  The owner sees a card in the chat: Allow once, Allow for 15 min or Deny.
+  Helm runs the command with the admin password the owner saved on this
+  machine. You never see the password. Output and exit code come back here.
+  With no password saved, the card asks the owner to type it once.
+  The command waits for the owner: give it a long time limit.
+  One word is a shell line: helm sudo -- "apt update && apt upgrade -y".
+  Never run sudo yourself and never ask the owner for the password.
+  Allow for 15 min lets this chat run more admin commands with no card.
+  If Helm restarts while the command runs, helm sudo says so: check the
+  result before you run it again.
+  It runs on this machine only; --machine is not supported yet.`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.

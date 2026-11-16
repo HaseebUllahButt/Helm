@@ -356,7 +356,7 @@ test('launch options stay folded until asked for, then create a linked child and
   assert.equal(await page.evaluate(()=>document.activeElement?.dataset.task), 'child', 'focus lands on the new task');
   const toggle = page.getByRole('button', {name:'Needs approval, details'});
   assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
-  assert.equal(await page.locator('.delegation-group.active .delegation-branch').count(), 1);
+  assert.equal(await page.locator('.delegation-group.group-needs .delegation-branch').count(), 1);
   assert.deepEqual(await page.locator('.sheet-actions button').allTextContents(), ['Decline', 'Approve'], 'safe visual order must also be the keyboard order');
   const request = await page.evaluate(() => JSON.parse(JSON.stringify(window.calls.find((c)=>c.method==='session.delegate'))));
   assert.deepEqual(request.params, {id:'parent',profileId:'claude-main',model:'opus',task:'Review the vulnerability'});
@@ -422,17 +422,17 @@ test('subagents fit a phone, open only the selected task, trap focus, stop a tas
   assert.equal(await page.locator('#launcher').evaluate((el)=>el===document.activeElement),true);
 });
 
-test('a failed task moves to Finished and retries with the same account, model, effort and task', async () => {
+test('a failed task moves to Failed, says why first, and retries with the same account, model, effort and task', async () => {
   await page.evaluate(() => window.showSubagents());
   await page.getByRole('button',{name:'Needs approval, details'}).waitFor();
   await page.evaluate(() => {
     window.results = { child:{ session:window.child, status:'error', complete:true, output:'', error:'CLI crashed' } };
     window.sendSessionUpdate('local', {...window.child, effort:'high', status:'error', delegation:{...window.child.delegation, status:'error'}});
   });
-  await page.locator('.delegation-group.finished .delegation-branch').waitFor();
-  assert.equal(await page.locator('.delegation-group.active').count(), 0);
+  await page.locator('.delegation-group.group-failed .delegation-branch').waitFor();
+  assert.equal(await page.locator('.delegation-group:is(.group-needs, .group-working)').count(), 0);
   await page.getByRole('button',{name:'Failed, details'}).click();
-  await page.getByText('CLI crashed', {exact:true}).waitFor();
+  await page.locator('.delegation-failure').getByText('CLI crashed', {exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Stop helper'}).count(), 0);
   const before = await page.evaluate(() => window.calls.filter((call)=>call.method==='session.delegate').length);
   await page.evaluate(() => {
@@ -440,7 +440,7 @@ test('a failed task moves to Finished and retries with the same account, model, 
     window.results.retry = { session:window.nextChild, status:'working', complete:false, output:'' };
   });
   await page.getByRole('button',{name:'Retry task'}).click();
-  await page.locator('.delegation-group.active .delegation-branch.selected').waitFor();
+  await page.locator('.delegation-group.group-working .delegation-branch.selected').waitFor();
   const retried = await page.evaluate(() => JSON.parse(JSON.stringify(window.calls.filter((call)=>call.method==='session.delegate'))));
   assert.equal(retried.length, before + 1);
   assert.deepEqual(retried.at(-1).params, {id:'parent',profileId:'claude-main',model:'opus',effort:'high',task:'Review the vulnerability'});
@@ -591,9 +591,11 @@ test('a CLI\'s own subagents show beside delegated tasks, looking the same', asy
       await view.locator('.chip.working').waitFor();
       await launcher.click();
       await view.getByRole('dialog', {name:'Agents',exact:true}).waitFor();
-      const active = view.locator('.delegation-group.active');
-      const finished = view.locator('.delegation-group.finished');
-      await active.getByRole('heading').filter({hasText:'2'}).waitFor();
+      // Owner order: what needs you, what works, then what finished.
+      const active = view.locator('.delegation-group:is(.group-needs, .group-working)');
+      const finished = view.locator('.delegation-group.group-finished');
+      await view.locator('.delegation-group.group-needs').getByRole('heading').filter({hasText:'1'}).waitFor();
+      await view.locator('.delegation-group.group-working').getByRole('heading').filter({hasText:'1'}).waitFor();
       await finished.getByRole('heading').filter({hasText:'2'}).waitFor();
       // Nothing marks them apart from Helm's own helpers.
       assert.equal(await view.locator('.native-badge').count(), 0);
@@ -648,7 +650,7 @@ test('a terminal thread lists its CLI\'s subagents without a task form', async (
     await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
     await view.addScriptTag({ content:bundle.outputFiles[0].text });
     const dialog = view.getByRole('dialog', {name:'Helpers'});
-    await dialog.locator('.delegation-group.finished .delegation-branch').waitFor();
+    await dialog.locator('.delegation-group.group-finished .delegation-branch').waitFor();
     await dialog.getByRole('button', {name:'Stopped, details'}).click();
     await dialog.getByText('The agent finished without a written reply.', {exact:true}).waitFor();
     assert.equal(await dialog.getByRole('button', {name:/New task/}).count(), 0);

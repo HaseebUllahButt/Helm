@@ -15,8 +15,27 @@ and a project copy nobody kept. A helper can run on another machine
   $V click "New task"; $V click "Describe one task"; $V type "my child task"; $V click "Start helper"
   $V wait "Needs approval"; $V click Allow; $V wait "FINISHED"
   ```
-- **Proof:** "ACTIVE 1" with "my child task · fake-ask · CLI default", then
-  "FINISHED 1" and "working on it done.".
+- **Proof:** "NEEDS APPROVAL 1" with "my child task · fake-ask · CLI default",
+  then "FINISHED 1" and "working on it done.".
+- **Order (owner, 2026-11-11):** Needs approval, Working, Waiting for its
+  helpers, Finished, Failed. Live ones oldest first, ended ones newest
+  first. Finished and Failed show 5, then "Show N more"; over 8 helpers a
+  "Find a helper" box and a count line with links to each group show.
+- **A failed helper:** "Why it failed" comes first, then **Ask the chat to
+  fix it** (sends the reason and `helm delegate-result <id>` to the chat;
+  the owner presses it, Helm never sends it alone), **Retry task** and
+  **Open chat**. Output shows the helper's last message, not the notes
+  before it ("Let me look…"): those made a 200-helper lead a wall of text.
+  **Show all output** has the rest. A long task folds to 4 lines.
+- **Sidebar:** a "Needs you" row has the same ⋯ as every row, with **See
+  why the helper failed**, **Answer the helper** and **Dismiss failure**
+  first. The ⋯ takes the machine name's place, never the title's.
+- **Prove the order (driven 2026-11-11):** `rpc session.delegate` 18 `fake`,
+  4 `fake-slow` and 1 `fake-ask` helpers on one fake chat, then stop 3
+  `fake-slow` processes of the copy (by `HELM_DIR` and `HELM_SESSION_ID`
+  in `/proc/<pid>/environ`). Agents shows the groups in order; open a
+  failed one. The copy tells the chat at once, so "helper failed" never
+  reaches Needs you there: use `fake-ask` for the sidebar ⋯.
 - **Task box:** Enter starts the helper, Shift+Enter makes a new line (on a
   phone Return makes a new line). Paste, drop or the paperclip adds pictures
   and files; they go with the first message. A machine without
@@ -28,8 +47,9 @@ and a project copy nobody kept. A helper can run on another machine
   "this agent cannot see images" instead.
 - **Traps:** the child's result starts a new parent turn, so fake-ask asks
   again. Close the sheet with "Close thread details"; Back may not.
-- **Tests:** `test/browser/subagents`, `orchestration`, `child-requests`,
-  `todos`; `test/delegation`, `task-return`, `subagent-usage`.
+- **Tests:** `test/browser/subagents`, `sidebar`, `orchestration`,
+  `child-requests`, `todos`; `test/delegation`, `task-return`,
+  `subagent-usage`.
 
 ## `helm delegate`
 - **Prove:** run against the private copy:
@@ -37,7 +57,9 @@ and a project copy nobody kept. A helper can run on another machine
   packages/connect/bin/helm.js delegate fake --wait --json -- "hi"`: JSON
   with `"status": "done"` and the reply in `"output"`.
 - **Traps:** never unset `HELM_SESSION_ID` for real helpers (they would show
-  as separate chats). Helpers sharing a folder can clash; use `--worktree` (its copy ends as
+  as separate chats). The `opencode` command can be OpenCode 2: the finder
+  lists such a helper as `opencode2`, so matching uses `conversationKey`
+  (engines.js), never the tool name. Helpers sharing a folder can clash; use `--worktree` (its copy ends as
   in git-and-schedules.md, "A worktree per chat").
   A finished helper releases its process after 30 s idle and resumes on a
   follow-up. A Codex helper that shares its parent's context keeps the
@@ -48,6 +70,14 @@ and a project copy nobody kept. A helper can run on another machine
   characters, and the line `Full output: helm delegate-result <id>`. The
   interim notes ("Let me look...") filled the parent's context.
   `delegate-result` still gives the full `output` and the `final` message.
+- **Results join one turn:** a result that ends while an earlier result
+  still waits for the parent joins that waiting turn, local or remote. Each
+  parent turn reads the parent's whole history again, so four results were
+  four full reads. The ticket keeps its first result's id; its last
+  `turn.edit` lists each result's ticket id and length (`parts`). Reading one
+  result with `delegate-result` cuts only its block; reading all removes the
+  turn. Results never steer into a running turn. The chat shows one card per
+  result (`helperMessages`, agentMessage.ts).
 - **Lost processes:** a helper that exits or loses its local process host shows a failure.
   Helm keeps its history and tells its parent once. Startup checks also close
   helpers marked working when their process is gone. Exit codes and signals
@@ -170,6 +200,20 @@ and a project copy nobody kept. A helper can run on another machine
     Anthropic's multi-agent research lessons: vague briefs made helpers
     repeat work or leave gaps. In orchestrator mode the lead starts helpers
     in the background and ends its turn, so it can read messages.
+  - Every agent gets cost habits (`usageNote`): one step for independent
+    reads, a new helper for each new job, short lead chats, and
+    `helm thread` instead of `helm say` to read another chat. A say to an
+    old chat that rested 15 hours re-read 510k at full price ($8).
+    Codex also learns to wait for its own command with one empty
+    `write_stdin` and one long wait the tool allows: it checked with 1 s
+    waits 1267 times in two days, each re-reading about 200k.
+  - Agents never stop another chat's process with `kill`: on 2026-11-10 a
+    chat did that twice to a neighbour (`agentMessageNote`). Every agent
+    stop Helm did not ask for is saved in `~/.helm/agent-stops.jsonl` by the
+    process host, with the programs started just before; `helm doctor`
+    counts them, and a helper lost in a restart names its stop. The host
+    only loads new code when it starts again (a reboot), so a change there
+    reaches a machine late.
   - Retry an unconfirmed send with the same `--message-id`, recipient and
     text; the receipt stops a duplicate. "Delivered" means accepted, not
     read. Stopped or archived agents are not woken.

@@ -3,7 +3,7 @@ import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { sshPeer, directSshAddresses, hasPinnedSshHost, connectDirectSsh, bridgeDirectSsh } from './direct-ssh.js';
 import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
 import { T } from '@helm/protocol';
-import { requireNetwork, hubCredential, allEndpoints } from '@helm/protocol/network';
+import { requireNetwork, hubCredential, hubAddresses } from '@helm/protocol/network';
 
 /** SSH stays end-to-end encrypted; hubs only carry its byte stream. */
 export async function proxy(host, port) {
@@ -26,7 +26,7 @@ async function connectProxy(host, port) {
       try { return await bridgeDirectSsh(socket); } finally { release(); }
     }
   }
-  const hubs = [...new Set([`http://127.0.0.1:${net.port ?? 8787}`, ...allEndpoints(net)])];
+  const hubs = hubAddresses(net);
   const failures = [];
   for (const hub of hubs) {
     for (const path of ['/helm/ws', '/ws']) {
