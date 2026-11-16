@@ -1,5 +1,6 @@
 import { errorMessage } from '../errors';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { fitTextarea } from '../fitTextarea';
 import { BackIcon, Icon } from '../Icon';
 import type { Client, Environment } from '../client';
 import { ago } from './common';
@@ -45,10 +46,7 @@ export function OwnerView({ client, envs, onBack }: { client: Client; envs: Envi
   const box = useRef<HTMLTextAreaElement>(null);
   // The box grows with the list, so every line reads whole on a phone.
   useLayoutEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight + 2}px`;
+    if (box.current) fitTextarea(box.current, Infinity, 2);
   }, [text, !!state]);
   const online = envs.filter((e) => e.online);
   const onlineKey = online.map((e) => e.id).join(',');

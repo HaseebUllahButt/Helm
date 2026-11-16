@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom';
 import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useNow } from '../useNow';
+import { fitTextarea } from '../fitTextarea';
 import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
 import { useDictation, type Transcribe } from './voice';
 import type { Turn } from './types';
@@ -471,11 +472,9 @@ function ComposerBody({ ask, compacting, draft, setDraft, onSend, onKey, onStop,
     return () => { window.removeEventListener('dragover', over); window.removeEventListener('dragleave', leave); window.removeEventListener('drop', drop); window.removeEventListener('dragend', end); };
   }, [!!onAttach]);
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = '0px';
-    el.style.height = Math.min(el.scrollHeight, 180) + 'px';
+  // Before paint, so a new line never shows a frame at the old height.
+  useLayoutEffect(() => {
+    if (ref.current) fitTextarea(ref.current, 180);
   }, [draft]);
 
   // A drag over the chat covers it with one clear target, not only a
