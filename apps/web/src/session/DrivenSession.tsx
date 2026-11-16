@@ -927,7 +927,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         live={live} setDraft={setDraft} onSend={send} onStop={stop} stopping={stopping} working={working}
         engine={engine} keys={false} waiting={!!pending} ask={pending ? (pending.kind === 'question' ? 'question' : 'approval') : undefined}
         shoulder={taskList && <TodoStrip todos={taskList} />}
-        banner={pending && <div ref={permissionBox} className="ask-box"><PermissionSheet key={pending.requestId} variant="banner" permission={pending} onAnswer={answer} busy={busy} onHandle={holdQuestion} /></div>}
+        banner={pending && <div ref={permissionBox} className="ask-box"><PermissionSheet key={pending.requestId} variant="banner" permission={pending} onAnswer={answer} busy={busy} onHandle={holdQuestion}
+          savePassword={(password) => client.rpc(env.id, 'sudo.setup', { do: 'save', password }, 30_000)} /></div>}
         danger={mode?.danger} compacting={compacting || undefined}
         beforeSend={staleHistoryNow && <HistoryChoice stale={staleHistoryNow} keepFull={keepFullHistory} onToggle={() => setKeepFullHistory((v) => !v)} />}
         sendLabel={staleHistoryNow ? historySendLabel(keepFullHistory) : undefined}

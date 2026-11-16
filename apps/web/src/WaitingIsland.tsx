@@ -130,7 +130,8 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
     return q;
   };
   const question = choice(perm);
-  const allow = perm && perm.kind !== 'question' && perm.kind !== 'edit' ? perm.options.find((o) => o.role === 'allow') : undefined;
+  // A helm sudo card that asks for the admin password is answered in its chat.
+  const allow = perm && perm.kind !== 'question' && perm.kind !== 'edit' && !perm.passwordNeeded ? perm.options.find((o) => o.role === 'allow') : undefined;
   const always = allow && perm?.kind !== 'plan' ? perm?.options.find((o) => o.role === 'allow-always') : undefined;
   const deny = allow ? perm?.options.find((o) => o.role === 'deny') : undefined;
   const pickAnswer = (label: string) => question && void answer(
@@ -208,6 +209,7 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
             : perm ? <p className="island-q">{perm.title}</p>
             : ask?.text ? <pre className={ask.kind === 'command' ? 'island-cmd' : 'island-q'}>{ask.text}</pre>
             : null}
+          {perm?.passwordNeeded && <p className="island-where">Open the chat to type the admin password of {perm.machine ?? 'this machine'}.</p>}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="island-acts">
             {allow && <button className="island-yes" disabled={busy} onClick={sayYes}>

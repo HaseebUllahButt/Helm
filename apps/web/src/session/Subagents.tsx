@@ -425,7 +425,8 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
         <p>{reasonText || 'The helper stopped with an error and gave no reason. Open its chat to see its last steps.'}</p>
       </div>}
       {permissions.map((permission) => <PermissionSheet key={permission.requestId} permission={permission} busy={sending}
-        onAnswer={(decision) => void answer(permission, decision)} />)}
+        onAnswer={(decision) => void answer(permission, decision)}
+        savePassword={(password) => client.rpc(envOf(selected), 'sudo.setup', { do: 'save', password }, 30_000)} />)}
       {result?.pending && !permissions.length && <p className="note">Needs approval: {result.pending.title || result.pending.kind}</p>}
       {failed && <div className="delegation-actions">
         {canAsk && <button type="button" className="primary" disabled={!!acting} onClick={() => void askLead(child, reasonText || 'no reason given')}

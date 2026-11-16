@@ -57,12 +57,18 @@ test('a no from the owner is said with the note', async (t) => {
   assert.match(r.err, /The owner said no: Not on this machine\.\n$/);
 });
 
-test('no saved password fails at once, with no card', async (t) => {
-  const { run, cards } = await cli(t, { saved: null });
+test('no saved password: helm sudo waits on the card until the owner saves it', async (t) => {
+  const { run, runs, sessions, session } = await cli(t, { saved: null, answer: null });
+  sessions.on('event', ({ id, event }) => {
+    if (id !== session.id || event.type !== 'permission.request') return;
+    assert.equal(event.passwordNeeded, true);
+    // The app saves the typed password first, then answers.
+    setImmediate(() => void runs.setup({ do: 'save', password: 'right horse' })
+      .then(() => sessions.answer(id, event.requestId, { option: 'allow' })));
+  });
   const r = await run(['--', 'echo hi']);
-  assert.equal(r.code, 1);
-  assert.match(r.err, /^No admin password is saved on testbox\./);
-  assert.equal(cards().length, 0);
+  assert.equal(r.out, 'hi\n');
+  assert.equal(r.code, 0);
 });
 
 test('--machine is not supported yet, and helm sudo needs a chat', async (t) => {
