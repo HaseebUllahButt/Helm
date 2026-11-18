@@ -76,6 +76,10 @@ A new tool, or a feature for "every tool", must look at each of these:
   another 30 minutes. Terminal-owned servers keep their settings. Unknown
   background state keeps the chat alive and writes the reason to the log.
   A restart suspends the connection and does not unsubscribe.
+  Codex's shared daemon keeps its own copy of Codex and can fall behind the
+  installed CLI without a word; OpenAI then refuses newer models. Helm reads
+  its version once a minute and runs `update --from-cli` when it is older,
+  only while no chat on it is busy (`codex-daemon.js`).
   Codex has no slash command list
   of its own, so Helm keeps a fixed one.
 - **ACP:** do not copy the tool's mode or model notices back before Helm's

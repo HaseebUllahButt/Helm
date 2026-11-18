@@ -8,6 +8,7 @@ import { ENGINES } from './engines.js';
 import { accountKey } from './settings.js';
 import { permissionCard } from './drivers/claude.js';
 import { codexTurnOutcome, nativeCodexThreads } from './drivers/codex.js';
+import { CodexDaemonSync } from './codex-daemon.js';
 import { MODES } from './modes.js';
 import { ModeFooter, MODE_LABELS, MODE_FROM_LABEL, claudeBox } from './native-mode.js';
 import { claudeLiveSessions, claudeLiveStatus, descendsFrom } from './external-process.js';
@@ -29,6 +30,17 @@ export class NativeSessions {
   constructor(sessions, core) {
     this.#sessions = sessions;
     this.#core = core;
+    this.codexDaemons = new CodexDaemonSync({ log: (line) => sessions.log(line) });
+  }
+
+  /** A Helm chat on this daemon that is at work, asks, or still has a turn open. */
+  #codexDaemonBusy(socket) {
+    for (const s of this.#core.index.values()) {
+      if (s.nativeSocket !== socket) continue;
+      if (['working', 'blocked', 'starting'].includes(s.status)) return true;
+      if (this.#sessions.events.activeTurn(s.id) || this.#sessions.events.pending(s.id).length) return true;
+    }
+    return false;
   }
 
   /** requestId -> { id, reply, raw }: a terminal Claude's question, waiting in its hook. */
@@ -377,6 +389,14 @@ export class NativeSessions {
             }
           }
         }
+      }
+      // Last, so a restart it makes comes after this round has read every thread.
+      for (const [accountIndex, result] of results.entries()) {
+        const found = result.status === 'fulfilled' ? result.value : null;
+        if (!found) continue;
+        try {
+          await this.codexDaemons.sync(accountProfiles[accountIndex], () => found.busy || this.#codexDaemonBusy(found.socket));
+        } catch (err) { this.#sessions.log(`codex daemon: ${err.message}`); }
       }
     })();
     this.nativeDiscovery = work;
