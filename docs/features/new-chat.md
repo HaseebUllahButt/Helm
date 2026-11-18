@@ -17,7 +17,10 @@
   folders there. Only bind Ctrl/⌘+N, never a bare letter. The box once hung
   on "looking for agents" with the VM off; it must show the saved list.
 - **Going back to an unused chat (owner, 2026-10-26):** leaving a chat with
-  nothing sent still deletes it. Back or forward to it starts the same chat
+  nothing sent still deletes it. A chat whose message this device still
+  holds (on its way or failed) is never deleted: the machine has not seen
+  the message, so it calls the chat empty. That lost four first messages to
+  the laptop on 2026-11-18. Back or forward to it starts the same chat
   again (same folder, agent and settings, and the unsent text), so it is
   never an empty page. Prove (driven 2026-10-26): new fake chat, type
   "keep me" without sending, open another chat, `$V key Control+BracketLeft`
