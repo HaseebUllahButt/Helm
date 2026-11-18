@@ -2259,9 +2259,10 @@ try {
     }
 
     case 'network-repair': {
-      const { ensureFastTcp, ensureTcpRecovery } = await import('../src/network-recovery.js');
+      const { ensureFastTcp, ensureTcpRecovery, ensureLanFirewall } = await import('../src/network-recovery.js');
       const recovery = await ensureTcpRecovery({ interactive: true });
       const fast = await ensureFastTcp({ interactive: true });
+      const firewall = await ensureLanFirewall({ interactive: true });
       if (!recovery.supported) console.log('TCP packet-size recovery is not available on this system.');
       else if (recovery.repair) console.log(`Could not enable packet-size recovery: ${recovery.reason}`);
       else console.log('TCP packet-size recovery is enabled and saved for reboot.');
@@ -2269,7 +2270,10 @@ try {
       else if (fast.chosen && fast.chosen !== 'bbr') console.log(`This system uses ${fast.chosen} by its own choice. Helm keeps it.`);
       else if (fast.repair) console.log(`Could not turn on fast sending on lossy links: ${fast.reason}`);
       else console.log('Fast sending on lossy links (BBR) is on and saved for reboot.');
-      if (recovery.repair || (fast.repair && !(fast.chosen && fast.chosen !== 'bbr'))) process.exitCode = 1;
+      if (!firewall.supported) console.log('No ufw firewall is on. Helm changed no firewall rules.');
+      else if (firewall.repair) console.log(`Could not open the firewall for Helm on the local network: ${firewall.reason}`);
+      else console.log('The firewall lets Helm machines on the local network find and reach each other.');
+      if (recovery.repair || firewall.repair || (fast.repair && !(fast.chosen && fast.chosen !== 'bbr'))) process.exitCode = 1;
       break;
     }
 
@@ -2303,6 +2307,16 @@ try {
     Check your VPN settings.
     For Tailscale, run:
       tailscale set --exit-node-allow-lan-access=true`);
+      }
+      // ufw drops the Wi-Fi finding and direct link packets by default. The
+      // only symptom is a slow route through the hub, like the VPN case.
+      const { lanFirewallStatus } = await import('../src/network-recovery.js');
+      const firewall = await lanFirewallStatus().catch(() => null);
+      if (firewall?.missing.length) {
+        console.log(`
+  ! The firewall (ufw) blocks Helm on the local network.
+    Machines on the same Wi-Fi cannot find or reach this one directly.
+    Run: helm network-repair`);
       }
       const peers = allEndpoints(net).filter((e) => !(me?.endpoints ?? []).includes(e));
       if (peers.length) console.log(`Other Helm homes:   ${peers.join(' ')}`);

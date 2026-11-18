@@ -74,7 +74,7 @@ import { SendEngine } from './send-engine.js';
 import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
-import { ensureFastTcp, ensureTcpRecovery } from './network-recovery.js';
+import { ensureFastTcp, ensureLanFirewall, ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
@@ -979,6 +979,7 @@ export class Daemon {
   #networkRecoveryAt = -Infinity;
   networkRecovery = null;
   fastTcp = null;
+  lanFirewall = null;
 
   async #checkNetworkRecovery() {
     if (Date.now() - this.#networkRecoveryAt < SYNC_EVERY_MS) return;
@@ -992,6 +993,11 @@ export class Daemon {
     this.fastTcp = await ensureFastTcp();
     if (this.fastTcp.repair && (!fast?.repair || fast.reason !== this.fastTcp.reason)) {
       console.warn(`[helm] fast sending needs setup: ${this.fastTcp.reason} Run helm network-repair.`);
+    }
+    const firewall = this.lanFirewall;
+    this.lanFirewall = await ensureLanFirewall();
+    if (this.lanFirewall.repair && !firewall?.repair) {
+      console.warn('[helm] the firewall blocks Helm on the local network. Run helm network-repair.');
     }
   }
 

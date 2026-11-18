@@ -22,6 +22,11 @@ owner's home or network to bypass this check.
   `"lanDiscovery": false` in `config.json` or `HELM_LAN_DISCOVERY=0`. Test
   copies stay quiet unless `HELM_LAN_DISCOVERY=1`. `helm status` shows
   "local network finding" and the machines it heard.
+  ufw drops these packets by default, and the only symptom is a slow route
+  through the hub. Helm opens UDP 8787 and 44301–44332 in ufw for this
+  machine's private range only: at start with `sudo -n`, and with a password
+  prompt in `helm network-repair`. `helm status` warns while a rule is
+  missing. Other firewalls are left alone.
   A browser stays signed in until it is removed.
   Its credential still carries a seven-day expiry, because older Helm refuses
   one without it; newer Helm ignores the expiry.

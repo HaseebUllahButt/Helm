@@ -172,3 +172,81 @@ export async function ensureFastTcp({
   }
   return status;
 }
+
+export const UFW_CONF = '/etc/ufw/ufw.conf';
+export const UFW_RULES = '/etc/ufw/user.rules';
+// Two UDP ports on the local network: Wi-Fi finding (lan-discovery.js) and
+// the direct links themselves (direct-config.js). Both are encrypted and
+// signed, so opening them to the local subnet only lets other machines of
+// this network find and reach this one. Kept literal here so a peer can never
+// put a value into the privileged command.
+export const LAN_FIREWALL_PORTS = [
+  { port: '8787', comment: 'Helm finds machines on the local network' },
+  { port: '44301:44332', comment: 'Helm direct links on the local network' },
+];
+const PRIVATE_RANGES = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'];
+
+const ipNumber = (ip) => ip.split('.').reduce((n, part) => (n * 256) + Number(part), 0);
+function inRange(address, cidr) {
+  const [base, bits] = cidr.split('/');
+  const size = 2 ** (32 - Number(bits));
+  return Math.floor(ipNumber(address) / size) === Math.floor(ipNumber(base) / size);
+}
+
+/**
+ * The ufw rules Helm needs for the local network and does not have, as
+ * { port, range, comment }. Null when ufw is off or not installed. Read only:
+ * both files are world-readable on Arch, Debian and Ubuntu.
+ */
+export function missingLanRules(conf, rules, addresses) {
+  if (!/^\s*ENABLED\s*=\s*yes\s*$/m.test(String(conf ?? ''))) return null;
+  const allowed = [...String(rules ?? '').matchAll(/^### tuple ### allow (?:udp|any) (\S+) 0\.0\.0\.0\/0 any (\S+) in\b/gm)]
+    .map(([, port, from]) => ({ port, from }));
+  const missing = [];
+  for (const address of addresses) {
+    const range = PRIVATE_RANGES.find((cidr) => inRange(address, cidr));
+    if (!range) continue;
+    for (const { port, comment } of LAN_FIREWALL_PORTS) {
+      const open = allowed.some((rule) => rule.port === port
+        && (rule.from === '0.0.0.0/0' || (/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(rule.from) && inRange(address, rule.from))));
+      if (!open && !missing.some((m) => m.port === port && m.range === range)) missing.push({ port, range, comment });
+    }
+  }
+  return missing;
+}
+
+export async function lanFirewallStatus({ read = readFile, addresses } = {}) {
+  const [conf, rules] = await Promise.all([read(UFW_CONF, 'utf8').catch(() => ''), read(UFW_RULES, 'utf8').catch(() => '')]);
+  const list = addresses ?? (await import('./net-addr.js')).lanAddresses().map((a) => a.address);
+  const missing = missingLanRules(conf, rules, list);
+  return { supported: missing !== null, missing: missing ?? [] };
+}
+
+/**
+ * Open Helm's two local-network UDP ports in ufw, for the private range this
+ * machine is in. Other firewalls (firewalld, plain nftables) are left alone.
+ */
+export async function ensureLanFirewall({
+  os = platform(), env = process.env, uid = process.getuid?.(), interactive = false,
+  read = readFile, run = exec, addresses,
+} = {}) {
+  if (os !== 'linux' || env.HELM_NO_SERVICE === '1' || env.NODE_TEST_CONTEXT) return { supported: false, missing: [] };
+  let status = await lanFirewallStatus({ read, addresses });
+  if (!status.supported || !status.missing.length) return status;
+  try {
+    for (const { port, range, comment } of status.missing) {
+      const args = ['allow', 'in', 'proto', 'udp', 'from', range, 'to', 'any', 'port', port, 'comment', comment];
+      await run(uid === 0 ? 'ufw' : 'sudo', uid === 0 ? args : [...(interactive ? [] : ['-n']), 'ufw', ...args],
+        { timeout: interactive ? 120_000 : 5000, maxBuffer: 16 * 1024 });
+    }
+    status = await lanFirewallStatus({ read, addresses });
+  } catch (error) {
+    status = await lanFirewallStatus({ read, addresses });
+    status.reason = String(error.stderr || error.message || error).trim().slice(0, 500);
+  }
+  if (status.missing.length) {
+    status.repair = 'helm network-repair';
+    status.reason ||= 'The firewall blocks Helm on the local network.';
+  }
+  return status;
+}
