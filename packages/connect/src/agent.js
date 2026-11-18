@@ -2,7 +2,8 @@ import { StartReceipts } from './start-receipts.js';
 import { assertRestoreReviewed } from './restore-guard.js';
 import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
-import { encodeTunnelFrame, decodeTunnelFrame } from '../../protocol/tunnel-frame.js';
+import { encodeTunnelFrame, decodeTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
+import { FrameLanes, FramePieces, laneKey } from '../../protocol/frame-lanes.js';
 import { createHash } from 'node:crypto';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { hostname, platform, arch, release, homedir } from 'node:os';
@@ -128,22 +129,26 @@ export function eventLinks(links, kind) {
  * phone that can only reach the VM and a laptop that can only be reached on
  * the LAN still meet, as long as some hub can see both of them.
  */
-function watchLinkProgress(ws) {
+function watchLinkProgress(ws, held = () => 0) {
   let received = ws?._socket?.bytesRead ?? 0;
   const written = () => (ws?._socket?.bytesWritten ?? 0) - (ws?._socket?.writableLength ?? 0);
+  // Large frames this link holds back (frame-lanes.js) count as queued too.
+  const waiting = () => (ws?._socket?.writableLength ?? 0) + held();
   let sent = written();
-  let queued = ws?._socket?.writableLength ?? 0;
+  let queued = waiting();
   return () => {
     const bytes = ws?._socket?.bytesRead ?? 0;
     const outgoing = written();
     const moved = bytes > received || (queued > 0 && outgoing > sent);
-    received = bytes; sent = outgoing; queued = ws?._socket?.writableLength ?? 0;
+    received = bytes; sent = outgoing; queued = waiting();
     return moved;
   };
 }
 
 export class Link {
   #ws = null;
+  /** Small frames first, large ones in pieces (frame-lanes.js). */
+  #out = null;
   #backoff = RECONNECT_MIN;
   #stopped = false;
   #beat = null;
@@ -213,7 +218,7 @@ export class Link {
       this.start();
       return;
     }
-    const progress = watchLinkProgress(this.#ws);
+    const progress = watchLinkProgress(this.#ws, () => this.#out?.queued ?? 0);
     const check = () => {
       if (this.#stopped) return;
       if (progress()) {
@@ -250,7 +255,7 @@ export class Link {
   #heartbeat() {
     clearInterval(this.#beat);
     this.#waiting = false;
-    const progress = watchLinkProgress(this.#ws);
+    const progress = watchLinkProgress(this.#ws, () => this.#out?.queued ?? 0);
     this.#beat = setInterval(() => {
       const flowing = progress();
       // Pings can wait behind a large upload. Keep the link while incoming
@@ -291,12 +296,13 @@ export class Link {
 
   send(t, extra = {}) {
     if (this.#ws?.readyState === WebSocket.OPEN) {
-      this.#ws.send(encodeTunnelFrame({ t, ...extra }, this.binaryTunnel === true));
+      const frame = { t, ...extra };
+      this.#out.send(encodeTunnelFrame(frame, this.binaryTunnel === true), { key: laneKey(frame) });
     }
   }
 
   get tunnelWritable() {
-    return this.#ws?.readyState === WebSocket.OPEN && this.#ws.bufferedAmount < TUNNEL_SOCKET_LIMIT;
+    return this.#ws?.readyState === WebSocket.OPEN && this.#out.bufferedAmount < TUNNEL_SOCKET_LIMIT;
   }
 
   async #open() {
@@ -339,12 +345,17 @@ export class Link {
       `${this.url.replace(/^http/, 'ws')}/ws` +
       `?name=${encodeURIComponent(this.daemon.name)}` +
       `&info=${encodeURIComponent(JSON.stringify(info))}` +
-      '&binaryTunnel=1&watched=1' +
+      '&binaryTunnel=1&watched=1&lanes=1' +
       (isSelf ? '&role=self' : ''),
       { headers: { authorization: `Bearer ${credential}` }, handshakeTimeout: 15_000 }
     );
     this.#ws = ws;
     this.binaryTunnel = false;
+    // Pieces go out only after this hub's welcome says it joins them.
+    this.lanes = false;
+    this.#out = new FrameLanes(ws, { text: () => this.lanes, binary: () => this.lanes && this.binaryTunnel });
+    const parts = new TunnelFrames();
+    const pieces = new FramePieces();
 
     ws.on('open', () => {
       if (!current()) { ws.terminate(); return; }
@@ -359,11 +370,17 @@ export class Link {
     ws.on('message', (raw) => {
       if (!current()) return;
       let msg;
-      try { msg = decodeTunnelFrame(raw); } catch { return; }
-      if (msg?.t === T.WELCOME) this.binaryTunnel = msg.binaryTunnel === 1;
+      try { msg = this.lanes ? parts.decode(raw) : decodeTunnelFrame(raw); } catch { return; }
+      if (msg?.t === T.WELCOME) { this.binaryTunnel = msg.binaryTunnel === 1; this.lanes = msg.lanes === 1; }
       // Data and credit frames also prove the hub is alive. A pong queued
       // behind transfer bytes must not tear down an actively flowing link.
       this.#alive();
+      if (this.lanes) {
+        const whole = pieces.take(msg);
+        if (whole === null) return;
+        if (whole !== undefined) { try { msg = decodeTunnelFrame(whole); } catch { return; } }
+      }
+      if (msg === undefined) return;
       this.daemon.onFrame(this, msg).catch((err) =>
         console.error(`[helm] ${this.url}: ${err?.message || err}`)
       );

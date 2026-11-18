@@ -12,8 +12,9 @@ import {
 import { loadOwner, mergeOwner, ownerHash } from '../../../packages/protocol/owner.js';
 import { fanOut, isNew } from './notify.js';
 import { desktop } from './desktop-notify.js';
-import { encodeTunnelFrame, decodeTunnelFrame } from '../../../packages/protocol/tunnel-frame.js';
-import { CHUNK_AT, CHUNK_MAX, chunkText } from '../../../packages/protocol/frame-chunks.js';
+import { encodeTunnelFrame, decodeTunnelFrame, TunnelFrames } from '../../../packages/protocol/tunnel-frame.js';
+import { CHUNK_MAX } from '../../../packages/protocol/frame-chunks.js';
+import { FrameLanes, FramePieces, laneKey } from '../../../packages/protocol/frame-lanes.js';
 
 const HEARTBEAT_MS = 30_000;
 // Longer than the CLI's 120s call timeout: the relay must not report a
@@ -54,18 +55,23 @@ export function createWsLayer() {
 
   // A browser counts a frame only once it is whole, so one large reply on a
   // slow link read as a dead socket and was fetched again. A client that
-  // asks (chunks=1) gets each large text frame as pieces, back to back, in
-  // the shape a direct channel uses (frame-chunks.js).
-  let pieceGroups = 0;
+  // asks (chunks=1) gets each large text frame as pieces in the shape a
+  // direct channel uses (frame-chunks.js). A machine that asks (lanes=1)
+  // gets binary copy frames as parts too. Every socket sends small frames
+  // before large ones (frame-lanes.js), so a "send message" never waits
+  // behind a chat list on a slow link.
+  const lanesFor = sock => sock.out ??= new FrameLanes(sock, {
+    text: () => sock.lanes === true || sock.chunks === true,
+    binary: () => sock.lanes === true && sock.binaryTunnel === true,
+    maxPieces: () => (sock.lanes === true ? Infinity : CHUNK_MAX),
+  });
+  /** What this socket still has to send: its own buffer and its large lane. */
+  const outgoing = sock => sock.out?.bufferedAmount ?? sock.bufferedAmount ?? 0;
   const send = (sock, t, extra) => {
     if (sock?.readyState !== 1) return;
-    const frame = encodeTunnelFrame({ t, ...extra }, sock.binaryTunnel === true);
-    if (!sock.chunks || typeof frame !== 'string' || frame.length <= CHUNK_AT || frame.length > CHUNK_AT * CHUNK_MAX) {
-      sock.send(frame);
-      return;
-    }
-    const pieces = chunkText(frame, `h${(++pieceGroups).toString(36)}`, t === T.RPC_RESULT ? extra?.id : undefined);
-    for (const piece of pieces) sock.send(piece);
+    const frame = { t, ...extra };
+    lanesFor(sock).send(encodeTunnelFrame(frame, sock.binaryTunnel === true),
+      { key: laneKey(frame), rid: t === T.RPC_RESULT ? extra?.id : undefined });
   };
 
   /** Whether a browser or another hub here wants this machine's live events. */
@@ -244,24 +250,13 @@ export function createWsLayer() {
       };
       const closed = () => finish(false);
       sock.once('close', closed);
-      try { sock.send(frame, error => finish(!error)); }
-      catch { finish(false); }
+      lanesFor(sock).send(frame, { key: 'handoff', done: error => finish(!error) });
     });
   }
 
-  async function sendHandoff(id, sock, type, extra) {
-    const frame = encodeTunnelFrame({ t: type, ...extra }, sock.binaryTunnel === true);
-    if (!sock.chunks || typeof frame !== 'string' || frame.length <= CHUNK_AT || frame.length > CHUNK_AT * CHUNK_MAX) {
-      return writeHandoff(id, sock, frame);
-    }
-    // Produce each piece only when the previous one has left the ws buffer.
-    const gid = `h${(++pieceGroups).toString(36)}`;
-    const n = Math.ceil(frame.length / CHUNK_AT);
-    for (let i = 0; i < n; i++) {
-      const piece = JSON.stringify({ t: 'dc-chunk', gid, i, n, data: frame.slice(i * CHUNK_AT, (i + 1) * CHUNK_AT) });
-      if (!await writeHandoff(id, sock, piece)) return false;
-    }
-    return true;
+  // A large job leaves in pieces only toward a machine that asked (lanes=1).
+  function sendHandoff(id, sock, type, extra) {
+    return writeHandoff(id, sock, encodeTunnelFrame({ t: type, ...extra }, sock.binaryTunnel === true));
   }
 
   async function pumpHandoffs(id, sock, state) {
@@ -884,6 +879,9 @@ export function createWsLayer() {
   wss.on('connection', (sock, req, auth) => {
     const asked = new URL(req.url, 'http://localhost').searchParams;
     sock.binaryTunnel = asked.get('binaryTunnel') === '1';
+    // Pieces both ways, small frames between them (frame-lanes.js). A hub
+    // that does not say lanes in its welcome gets whole frames, as before.
+    sock.lanes = asked.get('lanes') === '1';
     // Protocol/transport errors occur before the JSON message handler. Keep
     // a malformed frame confined to its socket, including normal close cleanup.
     sock.on('error', () => sock.terminate());
@@ -921,6 +919,7 @@ export function createWsLayer() {
       }
       send(sock, T.WELCOME, {
         version: PROTOCOL_VERSION, envId, name: auth.env.name, ...(sock.binaryTunnel ? { binaryTunnel: 1 } : {}),
+        ...(sock.lanes ? { lanes: 1 } : {}),
       });
       broadcastPeers();
       notifyPresence(envId, true);
@@ -941,15 +940,21 @@ export function createWsLayer() {
       markSeen(sock.sub);
       sock.chunks = asked.get('chunks') === '1';
       send(sock, T.WELCOME, { version: PROTOCOL_VERSION, role: 'client', ...(sock.binaryTunnel ? { binaryTunnel: 1 } : {}),
-        ...(sock.chunks ? { chunks: 1 } : {}) });
+        ...(sock.chunks ? { chunks: 1 } : {}), ...(sock.lanes ? { lanes: 1 } : {}) });
     }
 
     sock.on('message', (raw) => {
       let msg;
-      try { msg = decodeTunnelFrame(raw); } catch { return; }
+      try { msg = sock.lanes ? (sock.parts ??= new TunnelFrames()).decode(raw) : decodeTunnelFrame(raw); } catch { return; }
       // Authenticated traffic is liveness evidence even when a pong is
       // waiting behind file data on a slow connection.
       sock.isAlive = true;
+      if (sock.lanes) {
+        const whole = (sock.pieces ??= new FramePieces()).take(msg);
+        if (whole === null) return;
+        if (whole !== undefined) { try { msg = decodeTunnelFrame(whole); } catch { return; } }
+      }
+      if (msg === undefined) return;
       try {
         if (loadNetwork()?.revoked?.[sock.envId ?? sock.sub]) return;
         if (sock.envId) handleDaemonFrame(sock, msg);
@@ -1251,7 +1256,7 @@ export function createWsLayer() {
               chunk => routeTunnel(inner, { t: T.TUNNEL_DATA, sid, data: chunk.toString('base64') }), fail,
               { canSend: () => {
                 const target = tunnels.get(inner.sidMap.get(sid))?.target;
-                return target?.readyState === 1 && (target.bufferedAmount ?? 0) < TUNNEL_SOCKET_LIMIT;
+                return target?.readyState === 1 && outgoing(target) < TUNNEL_SOCKET_LIMIT;
               } });
           }
           resolve(stream);
