@@ -33,6 +33,12 @@ const RETRY_MAX_MS = 5 * 60_000;
 // one that opens and drops in a loop backs off instead of retrying every 2s.
 const STEADY_MS = 30_000;
 const IDLE_MS = 15 * 60_000;
+// Heard on the same Wi-Fi lately, the other machine is one hop away: a
+// setup that got no answer was most likely a lost or late message, not a
+// machine that is gone. Try again soon, a few times, before the long wait.
+const LOCAL_RETRY_MS = 3_000;
+const LOCAL_RETRIES = 5;
+const MAX_LOG = 64;
 const SMOOTHING = 0.3;
 
 export class DirectMesh {
@@ -44,9 +50,12 @@ export class DirectMesh {
    * @param {(env) => boolean} o.supports         whether that machine's Helm answers direct channels
    * @param {(env) => void} [o.changed]           a channel opened, closed or was timed
    * @param {() => boolean} [o.enabled]          the live off switch
+   * @param {object} [o.local]                    the same Wi-Fi (lan-discovery.js):
+   *   signal(env, peer, payload) -> where it went or null; ready(env) -> heard lately;
+   *   where(env) -> where that machine was heard
    */
-  constructor({ network, signal, forget = () => {}, supports, changed = () => {}, now = () => performance.now(), makePeer = directPeer, enabled = () => true }) {
-    Object.assign(this, { network, sendSignal: signal, forget, supports, changed, now, makePeer, enabled });
+  constructor({ network, signal, forget = () => {}, supports, changed = () => {}, now = () => performance.now(), makePeer = directPeer, enabled = () => true, local = null }) {
+    Object.assign(this, { network, sendSignal: signal, forget, supports, changed, now, makePeer, enabled, local });
     this.channels = new Map(); // env -> channel
     this.waits = new Map();    // env -> { failures, retryAt }
     this.used = new Map();     // env -> when a request last wanted a channel
@@ -64,19 +73,32 @@ export class DirectMesh {
       && !net.revoked?.[env] && !net.revoked?.[net.self];
   }
 
+  /** That machine takes direct links: its hub said so, or the local network did. */
+  #offered(env) {
+    return this.supports(env) || !!this.local?.ready(env);
+  }
+
   #open(env) {
-    if (this.channels.has(env) || !this.#usable(env) || !this.supports(env)) return;
+    if (this.channels.has(env) || !this.#usable(env) || !this.#offered(env)) return;
     const wait = this.waits.get(env);
     if (wait && this.now() < wait.retryAt) return;
     const channel = {
       env, id: `dm-${randomBytes(8).toString('hex')}`, state: 'connecting',
       ms: null, probing: null, opened: null, pending: new Map(), peer: null,
+      // What setup said so far, and where on the local network each went.
+      log: [],
     };
     this.channels.set(env, channel);
     try {
       channel.peer = this.makePeer({
         env,
-        signal: (payload) => this.sendSignal(env, channel.id, payload),
+        // Through a hub and, when that machine is on the same Wi-Fi, straight
+        // to it too: the first copy to arrive wins.
+        signal: (payload) => {
+          this.sendSignal(env, channel.id, payload);
+          const entry = { payload, to: this.local?.signal(env, channel.id, payload) ?? null };
+          if (channel.log.length < MAX_LOG) channel.log.push(entry);
+        },
         onMessage: (message) => this.#message(channel, message),
         onClose: (error) => this.#closed(channel, error),
         connectTimeout: CONNECT_TIMEOUT_MS,
@@ -94,7 +116,30 @@ export class DirectMesh {
     }, (error) => this.#closed(channel, error));
   }
 
-  /** A signalling blob from a hub. True if it belonged to one of our channels. */
+  /**
+   * The local network just heard this machine, new or at a new address.
+   * A setup in progress resends what it said there, so it need not wait for
+   * the hub's copy; otherwise any wait is over and a channel opens now.
+   */
+  heard(env) {
+    if (!this.#usable(env) || !this.#offered(env)) return;
+    const channel = this.channels.get(env);
+    if (channel) {
+      if (channel.state !== 'connecting') return;
+      const where = this.local?.where?.(env) ?? null;
+      for (const entry of channel.log) {
+        if (entry.to && entry.to === where) continue;
+        const to = this.local?.signal(env, channel.id, entry.payload) ?? null;
+        if (to) entry.to = to;
+      }
+      return;
+    }
+    clearTimeout(this.waits.get(env)?.timer);
+    this.waits.delete(env);
+    this.want(env);
+  }
+
+  /** A signalling blob from a hub or the local network. True if it belonged to one of our channels. */
   receive(frame) {
     const channel = this.channels.get(frame?.env);
     if (!channel || channel.id !== frame.peer) return false;
@@ -130,8 +175,16 @@ export class DirectMesh {
     const wait = this.waits.get(channel.env) ?? { failures: 0, retryAt: 0 };
     wait.reason = String(error?.message ?? 'direct channel closed').replace(/[\r\n\t]/g, ' ').slice(0, 240);
     wait.failures = steady ? 0 : wait.failures + 1;
-    const delay = Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** wait.failures);
-    wait.retryAt = this.now() + delay * (0.75 + Math.random() * 0.5);
+    const quick = !steady && wait.failures <= LOCAL_RETRIES && /no answer/.test(wait.reason) && !!this.local?.ready(channel.env);
+    const delay = (quick ? LOCAL_RETRY_MS : Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** wait.failures)) * (0.75 + Math.random() * 0.5);
+    wait.retryAt = this.now() + delay;
+    clearTimeout(wait.timer);
+    // The keepalive round is 20 s apart: a quick retry needs its own wake.
+    wait.timer = quick ? setTimeout(() => {
+      wait.retryAt = Math.min(wait.retryAt, this.now());
+      if (this.used.has(channel.env)) this.#open(channel.env);
+    }, delay) : null;
+    wait.timer?.unref?.();
     this.waits.set(channel.env, wait);
     this.changed(channel.env);
   }
@@ -228,8 +281,13 @@ export class DirectMesh {
     }
   }
 
-  networkChanged() {
+  #clearWaits() {
+    for (const wait of this.waits.values()) clearTimeout(wait.timer);
     this.waits.clear();
+  }
+
+  networkChanged() {
+    this.#clearWaits();
     for (const [env, channel] of this.channels) {
       if (channel.state === 'connecting') {
         this.#drop(env);
@@ -260,7 +318,7 @@ export class DirectMesh {
     if (!this.enabled()) return { state: 'off', ms: null };
     const channel = this.channels.get(env);
     if (channel) return { state: channel.state, ms: channel.ms == null ? null : Math.round(channel.ms) };
-    if (!this.supports(env)) return { state: 'unsupported', ms: null };
+    if (!this.#offered(env)) return { state: 'unsupported', ms: null };
     const wait = this.waits.get(env);
     if (wait?.failures) return { state: 'retrying', ms: null, reason: wait.reason, retryInMs: Math.max(0, Math.round(wait.retryAt - this.now())) };
     return { state: 'off', ms: null };
@@ -269,6 +327,6 @@ export class DirectMesh {
   stop() {
     this.used.clear();
     for (const env of [...this.channels.keys()]) this.#drop(env);
-    this.waits.clear();
+    this.#clearWaits();
   }
 }

@@ -39,7 +39,7 @@ import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub, directCaller } from './peer.js';
 import { allowDirectSignal } from './direct-auth.js';
-import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
+import { LanDiscovery, withHeardAddresses, localSignalRouter } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, describeCaptcha, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
 import { Forwards, forwardedPorts } from './forwards.js';
@@ -724,14 +724,19 @@ export class Daemon {
     this.#keeperTimer.unref?.();
 
     await this.#tick();
-    // Listen for machines on the same network, and say we are here. Started
-    // after the first tick so the roster links go out first; an address
-    // heard here only adds a link, it never replaces one that works.
+    // Listen for machines on the same Wi-Fi, and say we are here. What is
+    // heard only carries direct-link setup (lan-discovery.js); hub links
+    // still use the roster's HTTPS addresses.
+    const directOn = () => loadSettings()?.directRoutes !== false;
     this.lan = new LanDiscovery({
       network: () => loadNetwork() ?? this.net,
-      port: this.port,
       announce: this.advertiseLan,
-      onChange: () => this.#reconcileLinks(),
+      direct: directOn,
+      onPeer: (id) => this.mesh?.direct?.heard(id),
+      onSignal: localSignalRouter({
+        network: () => loadNetwork() ?? this.net, peers: () => this.peers,
+        direct: () => this.mesh?.direct, lan: () => this.lan, enabled: directOn,
+      }),
     });
     this.lan.start().catch((err) => console.error('[helm] local network discovery:', err?.message || err));
     this.networkMonitor = new NetworkMonitor(reason => this.#networkChanged(reason));
@@ -926,11 +931,9 @@ export class Daemon {
     const plan = withHeardAddresses({
       urls, net, self: this.id, mine,
       connected: (url) => !!this.#links.get(url)?.connected,
-      // A hint link that is up stays up, even if an announcement or two was lost.
-      heard: this.lan?.active ? [
-        ...[...this.#links.values()].filter((l) => l.hintFor && l.connected).map((l) => ({ url: l.url, id: l.hintFor })),
-        ...this.lan.list(),
-      ] : [],
+      // The local network no longer names hub addresses: plain HTTP to
+      // another machine is refused. This keeps one link per machine.
+      heard: [],
     });
     this.#hintOwners = plan.owners;
     return plan.urls.filter(secureHubAddress);
@@ -948,9 +951,12 @@ export class Daemon {
     for (const link of this.#links.values()) {
       if (link.url !== `http://127.0.0.1:${this.port}`) link.recover();
     }
+    // Forget old Wi-Fi addresses first, so the new setups below are not
+    // sent to them; the new network's hellos then resend them (heard()).
+    const lan = this.lan?.networkChanged();
     this.mesh?.networkChanged();
     this.#networkRecoveryAt = -Infinity;
-    await Promise.all([this.lan?.networkChanged(), this.#tick()]);
+    await Promise.all([lan, this.#tick()]);
   }
 
   #networkRecoveryAt = -Infinity;
@@ -1265,7 +1271,15 @@ export class Daemon {
     // Direct channels to other machines, with the hubs as the backup. Off
     // with `"directRoutes": false` in ~/.helm/config.json.
     this.mesh = new HubMesh(loadNetwork, hub.meshChanged, hub.meshEvent, hub.meshSignal,
-      { direct: loadSettings()?.directRoutes === false ? false : { enabled: () => loadSettings()?.directRoutes !== false } });
+      { direct: loadSettings()?.directRoutes === false ? false : {
+        enabled: () => loadSettings()?.directRoutes !== false,
+        // The same Wi-Fi carries the setup too, when that machine was heard there.
+        local: {
+          signal: (env, peer, payload) => this.lan?.signal(env, 'dial', peer, payload) ?? null,
+          ready: (env) => !!this.lan?.ready(env),
+          where: (env) => this.lan?.where(env) ?? null,
+        },
+      } });
     hub.attachMesh(this.mesh);
   }
 

@@ -56,9 +56,14 @@ machine -> folder -> chat. Each chat runs one profile: a CLI on an account.
   (`refreshAppLauncher`) and sets the frame once the window's browser has
   exited (`syncWindowFrame`): Chromium writes its settings back after it lets
   go of the profile lock.
-- **Remote hub access needs HTTPS.** HTTP works only over loopback. LAN
-  discovery stays off until Helm has an encrypted LAN transport. Encrypted
-  direct links remain available through a reachable HTTPS hub.
+- **Remote hub access needs HTTPS.** HTTP works only over loopback. Helm
+  never announces or dials a plain HTTP hub address on the local network.
+- **Local network finding carries only direct-link setup.** Machines on one
+  Wi-Fi send the setup messages of a direct link both by UDP datagram and
+  through a hub; the first copy wins. Each datagram is sealed under a key
+  from the network key and signed with the sender's pinned machine key.
+  Old and repeated datagrams are refused. A slow hub then no longer delays
+  the direct link (2026-11-18: an 8 s hub meant minutes without one).
 - **Machine credentials need the machine's private signing key.** The shared
   network key alone cannot sign them. Upgrade all machines together. Old
   machine and browser credentials are refused. Remote browsers must sign in
