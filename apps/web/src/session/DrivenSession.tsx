@@ -357,12 +357,20 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       const { env: machine, id, text } = (event as CustomEvent).detail;
       if (machine === env.id && id === session.id) setDraft([text, live.get()].filter(Boolean).join('\n\n'));
     };
+    const retried = (event: Event) => {
+      const { env: machine, id, text } = (event as CustomEvent).detail;
+      if (machine === env.id && id === session.id && live.get().trim() === String(text).trim()) setDraft('');
+    };
     window.addEventListener('helm:restore-draft', restore);
-    return () => window.removeEventListener('helm:restore-draft', restore);
+    window.addEventListener('helm:retried-send', retried);
+    return () => { window.removeEventListener('helm:restore-draft', restore); window.removeEventListener('helm:retried-send', retried); };
   }, [env.id, session.id]);
   const turnsNow = useRef(log.turns);
   turnsNow.current = log.turns;
   const arrived = (messageId: string) => turnsNow.current.some((turn) => turn.messageId === messageId);
+  const stillSending = (messageId: string) => {
+    try { return client.pendingActions().some(action => action.actionId === messageId); } catch { return false; }
+  };
   useEffect(() => {
     try {
       const pending = new Set(client.pendingActions().filter(action => action.env === env.id
@@ -396,6 +404,16 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     catch (e: any) {
       if (!rejectedDelivery(e) && arrived(messageId)) {
         retryDeliveryIds.current.delete(fingerprint);
+        if (atts.length) {
+          if (editRevision.current === clearedAt) setDraft('');
+          await setAttachments(current => current.filter(image => !atts.includes(image)));
+        }
+        return;
+      }
+      // Still saved as on its way: the app keeps sending it and the chat
+      // shows it with a note. Putting the words back too would invite a
+      // second copy.
+      if (!rejectedDelivery(e) && stillSending(messageId)) {
         if (atts.length) {
           if (editRevision.current === clearedAt) setDraft('');
           await setAttachments(current => current.filter(image => !atts.includes(image)));
@@ -909,7 +927,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         empty={preparing ? '' : session.alive === false ? 'Your next message continues this chat.' : sentFirst ? 'Waiting for the agent…' : undefined}
       /></CanvasContext.Provider>
 
-      <DeliveryStatus client={client} env={env.id} id={session.id} />
+      <DeliveryStatus client={client} env={env.id} id={session.id} machine={env.name} />
       {storage.error && <div className="error floating" role="alert">{storage.error}</div>}
       {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
         <strong>Send not confirmed</strong>

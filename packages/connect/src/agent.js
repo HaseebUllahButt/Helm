@@ -2,7 +2,8 @@ import { StartReceipts } from './start-receipts.js';
 import { assertRestoreReviewed } from './restore-guard.js';
 import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
-import { encodeTunnelFrame, decodeTunnelFrame } from '../../protocol/tunnel-frame.js';
+import { encodeTunnelFrame, decodeTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
+import { FrameLanes, FramePieces, laneKey } from '../../protocol/frame-lanes.js';
 import { createHash } from 'node:crypto';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { hostname, platform, arch, release, homedir } from 'node:os';
@@ -39,7 +40,7 @@ import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub, directCaller } from './peer.js';
 import { allowDirectSignal } from './direct-auth.js';
-import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
+import { LanDiscovery, withHeardAddresses, localSignalRouter } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, describeCaptcha, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
 import { Forwards, forwardedPorts } from './forwards.js';
@@ -128,22 +129,26 @@ export function eventLinks(links, kind) {
  * phone that can only reach the VM and a laptop that can only be reached on
  * the LAN still meet, as long as some hub can see both of them.
  */
-function watchLinkProgress(ws) {
+function watchLinkProgress(ws, held = () => 0) {
   let received = ws?._socket?.bytesRead ?? 0;
   const written = () => (ws?._socket?.bytesWritten ?? 0) - (ws?._socket?.writableLength ?? 0);
+  // Large frames this link holds back (frame-lanes.js) count as queued too.
+  const waiting = () => (ws?._socket?.writableLength ?? 0) + held();
   let sent = written();
-  let queued = ws?._socket?.writableLength ?? 0;
+  let queued = waiting();
   return () => {
     const bytes = ws?._socket?.bytesRead ?? 0;
     const outgoing = written();
     const moved = bytes > received || (queued > 0 && outgoing > sent);
-    received = bytes; sent = outgoing; queued = ws?._socket?.writableLength ?? 0;
+    received = bytes; sent = outgoing; queued = waiting();
     return moved;
   };
 }
 
 export class Link {
   #ws = null;
+  /** Small frames first, large ones in pieces (frame-lanes.js). */
+  #out = null;
   #backoff = RECONNECT_MIN;
   #stopped = false;
   #beat = null;
@@ -213,7 +218,7 @@ export class Link {
       this.start();
       return;
     }
-    const progress = watchLinkProgress(this.#ws);
+    const progress = watchLinkProgress(this.#ws, () => this.#out?.queued ?? 0);
     const check = () => {
       if (this.#stopped) return;
       if (progress()) {
@@ -250,7 +255,7 @@ export class Link {
   #heartbeat() {
     clearInterval(this.#beat);
     this.#waiting = false;
-    const progress = watchLinkProgress(this.#ws);
+    const progress = watchLinkProgress(this.#ws, () => this.#out?.queued ?? 0);
     this.#beat = setInterval(() => {
       const flowing = progress();
       // Pings can wait behind a large upload. Keep the link while incoming
@@ -291,12 +296,13 @@ export class Link {
 
   send(t, extra = {}) {
     if (this.#ws?.readyState === WebSocket.OPEN) {
-      this.#ws.send(encodeTunnelFrame({ t, ...extra }, this.binaryTunnel === true));
+      const frame = { t, ...extra };
+      this.#out.send(encodeTunnelFrame(frame, this.binaryTunnel === true), { key: laneKey(frame) });
     }
   }
 
   get tunnelWritable() {
-    return this.#ws?.readyState === WebSocket.OPEN && this.#ws.bufferedAmount < TUNNEL_SOCKET_LIMIT;
+    return this.#ws?.readyState === WebSocket.OPEN && this.#out.bufferedAmount < TUNNEL_SOCKET_LIMIT;
   }
 
   async #open() {
@@ -339,12 +345,17 @@ export class Link {
       `${this.url.replace(/^http/, 'ws')}/ws` +
       `?name=${encodeURIComponent(this.daemon.name)}` +
       `&info=${encodeURIComponent(JSON.stringify(info))}` +
-      '&binaryTunnel=1&watched=1' +
+      '&binaryTunnel=1&watched=1&lanes=1' +
       (isSelf ? '&role=self' : ''),
       { headers: { authorization: `Bearer ${credential}` }, handshakeTimeout: 15_000 }
     );
     this.#ws = ws;
     this.binaryTunnel = false;
+    // Pieces go out only after this hub's welcome says it joins them.
+    this.lanes = false;
+    this.#out = new FrameLanes(ws, { text: () => this.lanes, binary: () => this.lanes && this.binaryTunnel });
+    const parts = new TunnelFrames();
+    const pieces = new FramePieces();
 
     ws.on('open', () => {
       if (!current()) { ws.terminate(); return; }
@@ -359,11 +370,17 @@ export class Link {
     ws.on('message', (raw) => {
       if (!current()) return;
       let msg;
-      try { msg = decodeTunnelFrame(raw); } catch { return; }
-      if (msg?.t === T.WELCOME) this.binaryTunnel = msg.binaryTunnel === 1;
+      try { msg = this.lanes ? parts.decode(raw) : decodeTunnelFrame(raw); } catch { return; }
+      if (msg?.t === T.WELCOME) { this.binaryTunnel = msg.binaryTunnel === 1; this.lanes = msg.lanes === 1; }
       // Data and credit frames also prove the hub is alive. A pong queued
       // behind transfer bytes must not tear down an actively flowing link.
       this.#alive();
+      if (this.lanes) {
+        const whole = pieces.take(msg);
+        if (whole === null) return;
+        if (whole !== undefined) { try { msg = decodeTunnelFrame(whole); } catch { return; } }
+      }
+      if (msg === undefined) return;
       this.daemon.onFrame(this, msg).catch((err) =>
         console.error(`[helm] ${this.url}: ${err?.message || err}`)
       );
@@ -724,14 +741,19 @@ export class Daemon {
     this.#keeperTimer.unref?.();
 
     await this.#tick();
-    // Listen for machines on the same network, and say we are here. Started
-    // after the first tick so the roster links go out first; an address
-    // heard here only adds a link, it never replaces one that works.
+    // Listen for machines on the same Wi-Fi, and say we are here. What is
+    // heard only carries direct-link setup (lan-discovery.js); hub links
+    // still use the roster's HTTPS addresses.
+    const directOn = () => loadSettings()?.directRoutes !== false;
     this.lan = new LanDiscovery({
       network: () => loadNetwork() ?? this.net,
-      port: this.port,
       announce: this.advertiseLan,
-      onChange: () => this.#reconcileLinks(),
+      direct: directOn,
+      onPeer: (id) => this.mesh?.direct?.heard(id),
+      onSignal: localSignalRouter({
+        network: () => loadNetwork() ?? this.net, peers: () => this.peers,
+        direct: () => this.mesh?.direct, lan: () => this.lan, enabled: directOn,
+      }),
     });
     this.lan.start().catch((err) => console.error('[helm] local network discovery:', err?.message || err));
     this.networkMonitor = new NetworkMonitor(reason => this.#networkChanged(reason));
@@ -926,11 +948,9 @@ export class Daemon {
     const plan = withHeardAddresses({
       urls, net, self: this.id, mine,
       connected: (url) => !!this.#links.get(url)?.connected,
-      // A hint link that is up stays up, even if an announcement or two was lost.
-      heard: this.lan?.active ? [
-        ...[...this.#links.values()].filter((l) => l.hintFor && l.connected).map((l) => ({ url: l.url, id: l.hintFor })),
-        ...this.lan.list(),
-      ] : [],
+      // The local network no longer names hub addresses: plain HTTP to
+      // another machine is refused. This keeps one link per machine.
+      heard: [],
     });
     this.#hintOwners = plan.owners;
     return plan.urls.filter(secureHubAddress);
@@ -948,9 +968,12 @@ export class Daemon {
     for (const link of this.#links.values()) {
       if (link.url !== `http://127.0.0.1:${this.port}`) link.recover();
     }
+    // Forget old Wi-Fi addresses first, so the new setups below are not
+    // sent to them; the new network's hellos then resend them (heard()).
+    const lan = this.lan?.networkChanged();
     this.mesh?.networkChanged();
     this.#networkRecoveryAt = -Infinity;
-    await Promise.all([this.lan?.networkChanged(), this.#tick()]);
+    await Promise.all([lan, this.#tick()]);
   }
 
   #networkRecoveryAt = -Infinity;
@@ -1265,7 +1288,15 @@ export class Daemon {
     // Direct channels to other machines, with the hubs as the backup. Off
     // with `"directRoutes": false` in ~/.helm/config.json.
     this.mesh = new HubMesh(loadNetwork, hub.meshChanged, hub.meshEvent, hub.meshSignal,
-      { direct: loadSettings()?.directRoutes === false ? false : { enabled: () => loadSettings()?.directRoutes !== false } });
+      { direct: loadSettings()?.directRoutes === false ? false : {
+        enabled: () => loadSettings()?.directRoutes !== false,
+        // The same Wi-Fi carries the setup too, when that machine was heard there.
+        local: {
+          signal: (env, peer, payload) => this.lan?.signal(env, 'dial', peer, payload) ?? null,
+          ready: (env) => !!this.lan?.ready(env),
+          where: (env) => this.lan?.where(env) ?? null,
+        },
+      } });
     hub.attachMesh(this.mesh);
   }
 

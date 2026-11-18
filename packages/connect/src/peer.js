@@ -186,6 +186,8 @@ export function directCaller(net, device, sub, enabled = true, credential) {
 
 export class PeerHub {
   #peers = new Map();
+  /** Another name for a peer: the same offer that came by a second route. */
+  #aliases = new Map();
   #transportSeq = 0;
 
   /**
@@ -213,10 +215,23 @@ export class PeerHub {
    * signalling traffic in front of machines with no business seeing it.
    */
   async signal(peerId, payload, link = null, device = null) {
-    let peer = this.#peers.get(peerId);
+    let peer = this.#peers.get(peerId) ?? this.#aliases.get(peerId);
 
     if (payload?.type === 'offer') {
       if (!device) return;
+      // A machine sends its offer both over the local network and through a
+      // hub, so one offer arrives under two names. The second copy becomes
+      // a second way to answer, not a second connection.
+      const twin = this.#twin(device, payload.negotiation);
+      if (twin) {
+        if (twin.routes.has(peerId)) return;
+        if (twin.routes.size >= 4) return;
+        twin.routes.set(peerId, link);
+        this.#aliases.set(peerId, twin);
+        for (const sent of twin.sent) this.sendSignal(peerId, sent, link);
+        return;
+      }
+      this.#aliases.delete(peerId);
       this.drop(peerId);
       peer = this.#create(peerId, link);
       peer.negotiation = payload.negotiation;
@@ -225,8 +240,9 @@ export class PeerHub {
 
     if (!peer) return;
     if (payload.negotiation && payload.negotiation !== peer.negotiation) return;
-    if ((device && peer.device && device !== peer.device) || (link && peer.link && link !== peer.link)) return;
-    if (link) peer.link = link;
+    const route = peer.routes.get(peerId);
+    if ((device && peer.device && device !== peer.device) || (link && route && link !== route)) return;
+    if (link) peer.routes.set(peerId, link);
     // Which device this channel belongs to, so a revocation can find it.
     if (device) peer.device = device;
     if (!this.authTimer) {
@@ -247,7 +263,7 @@ export class PeerHub {
         if (this.#peers.get(peerId) !== peer) return;
         await pc.setLocalDescription(answer);
         if (this.#peers.get(peerId) !== peer) return;
-        this.sendSignal(peerId, { type: 'answer', sdp: pc.localDescription.sdp, negotiation: peer.negotiation }, peer.link);
+        this.#post(peer, { type: 'answer', sdp: pc.localDescription.sdp, negotiation: peer.negotiation });
       } catch (error) {
         this.drop(peerId, peer);
         throw error;
@@ -265,7 +281,8 @@ export class PeerHub {
 
   #create(peerId, link = null) {
     const pc = new RTCPeerConnection(nativeDirectConfig());
-    const peer = { id: peerId, pc, channel: null, link, remoteReady: false, candidates: [] };
+    // routes: each name this offer came under -> the link to answer it on.
+    const peer = { id: peerId, pc, channel: null, routes: new Map([[peerId, link]]), sent: [], remoteReady: false, candidates: [] };
     peer.transport = {
       id: `dc-${peerId}-${++this.#transportSeq}`,
       send: (t, extra = {}) => this.#sendTunnel(peerId, peer, t, extra),
@@ -276,7 +293,7 @@ export class PeerHub {
 
     pc.onicecandidate = ({ candidate }) => {
       if (candidate && this.#peers.get(peerId) === peer) {
-        this.sendSignal(peerId, { type: 'candidate', candidate, negotiation: peer.negotiation }, peer.link);
+        this.#post(peer, { type: 'candidate', candidate, negotiation: peer.negotiation });
       }
     };
 
@@ -437,10 +454,25 @@ export class PeerHub {
     }
   }
 
+  #twin(device, negotiation) {
+    if (typeof negotiation !== 'string' || !negotiation) return null;
+    for (const peer of this.#peers.values()) {
+      if (peer.device === device && peer.negotiation === negotiation) return peer;
+    }
+    return null;
+  }
+
+  /** An answer or candidate, on every route the offer came by. */
+  #post(peer, payload) {
+    if (peer.sent.length < 64) peer.sent.push(payload);
+    for (const [id, link] of peer.routes) this.sendSignal(id, payload, link);
+  }
+
   drop(peerId, expected) {
     const peer = this.#peers.get(peerId);
     if (!peer || (expected && expected !== peer)) return;
     this.#peers.delete(peerId);
+    for (const id of peer.routes.keys()) if (this.#aliases.get(id) === peer) this.#aliases.delete(id);
     if (!this.#peers.size) { clearInterval(this.authTimer); this.authTimer = null; }
     clearTimeout(peer.deadline);
     clearTimeout(peer.disconnectedTimer);

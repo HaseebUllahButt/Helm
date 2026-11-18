@@ -16,7 +16,13 @@ owner's home or network to bypass this check.
   Control+Shift+s; $V click "Devices & pairing"; $V text` shows "Linux
   Chrome · this device · online now".
 - **Transport:** remote access requires HTTPS. HTTP works only on loopback.
-  LAN discovery stays off. A browser stays signed in until it is removed.
+  Local network finding is on: machines on one Wi-Fi find each other on
+  UDP 8787 and set up the direct link without waiting for the hub. Packets
+  are encrypted and signed; no hub address is announced. Turn it off with
+  `"lanDiscovery": false` in `config.json` or `HELM_LAN_DISCOVERY=0`. Test
+  copies stay quiet unless `HELM_LAN_DISCOVERY=1`. `helm status` shows
+  "local network finding" and the machines it heard.
+  A browser stays signed in until it is removed.
   Its credential still carries a seven-day expiry, because older Helm refuses
   one without it; newer Helm ignores the expiry.
   Old credentials stop working after the security update. A browser pairs
@@ -35,7 +41,7 @@ owner's home or network to bypass this check.
   must be greater than the beginning. Private tests must match their own
   firewall rules and never change the owner's network.
 - **Tests:** `test/machine-kind`, `device-presence`, `roster-watch`,
-  `gossip`, `lan-discovery`, `network-monitor`, `hub-mesh`, `direct-mesh`, `auth`, `local-login`,
+  `gossip`, `lan-discovery`, `network-monitor`, `hub-mesh`, `frame-lanes`, `direct-mesh`, `auth`, `local-login`,
   `hub-authz`, `roster-trust`, `security-transport`, `security-routes`; `test/browser/hub-auth`.
 
 ## Check installation and connections
