@@ -13,6 +13,29 @@ import { ExtensionRelay } from './browser-relay.js';
 import { EXTENSION_ID, EXTENSION_VERSION, browserRunning, openProfile, profileOfMark, copyText, extensionFolder, linkFile, manualSteps, openExtensionsPage, ownBrowserPids, pasteSteps, readMode, restartOwnBrowser, startOwnBrowser, syncExtension, writeMode, flagsFile, readChoice, writeMain, manualBrowser, setBrowserExtension } from './browser-extension.js';
 import { discoverBrowsers } from './chromium-find.js';
 
+/**
+ * patchright sends some commands to every frame of a page without waiting on
+ * them. When a frame closes mid-command (Pinterest does this while it loads),
+ * the library rejects a promise that nobody holds, and Node stops all of
+ * Helm. Only that one error is ignored here; every other unhandled rejection
+ * still stops the process as before.
+ */
+export function closedBrowserSession(error) {
+  return (error?.name === 'ProtocolError' || error?.constructor?.name === 'ProtocolError')
+    && /patchright-core/.test(String(error?.stack ?? ''))
+    && /Detached while handling command|session closed|Target closed|Target page, context or browser has been closed/i.test(String(error?.message ?? ''));
+}
+if (!globalThis.__helmBrowserRejectionGuard) {
+  globalThis.__helmBrowserRejectionGuard = true;
+  process.on('unhandledRejection', (error) => {
+    if (closedBrowserSession(error)) {
+      console.warn(`[helm] browser: ignored a command for a closed frame (${String(error.message).slice(0, 160)})`);
+      return;
+    }
+    throw error;
+  });
+}
+
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
 const text = (value, max = 20000) => { if (typeof value !== 'string' || value.length > max) throw new Error(`expected text up to ${max} characters`); return value; };
