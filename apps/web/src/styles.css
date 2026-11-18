@@ -4372,3 +4372,9 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
   .ctl.icon { width: 28px; }
   .send { width: 28px; height: 28px; }
 }
+/* A message on its way: its words, then a quiet line that says where it is. */
+.thread-recovery.sending-message .failed-send-text { -webkit-line-clamp: 2; }
+.thread-recovery .sending-note { display: flex; align-items: center; gap: 7px; }
+.sending-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--mutedfg); animation: sending-pulse 1.4s ease-in-out infinite; }
+@keyframes sending-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .sending-dot { animation: none; } }

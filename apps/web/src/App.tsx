@@ -299,13 +299,22 @@ function Shell({ client, conn, onSignOut }: {
    * re-checks that no input has reached the chat, so a send from another
    * device between our last refresh and this navigation can never be lost.
    */
+  /**
+   * A message this device sent may still be on its way, or have failed with
+   * its words kept. The machine has not seen it, so it calls the chat empty.
+   * Leaving such a chat deleted it with the message still waiting
+   * (2026-11-18, four first messages to the laptop). A read error keeps it too.
+   */
+  const holdsWords = useCallback((envId: string, id: string) => {
+    try { return client.holdsDelivery?.(envId, id) ?? false; } catch { return true; }
+  }, [client]);
   const discardEmpty = useCallback((from: typeof nav.current, to?: MainView[]) => {
     const current = from.stack[from.stack.length - 1];
     const next = to?.[to.length - 1];
     if (current?.kind !== 'session' || current.session.brain || current.session.engine === 'shell') return;
     if (next?.kind === 'session' && next.session.id === current.session.id) return;
     const envId = from.selected;
-    if (!envId) return;
+    if (!envId || holdsWords(envId, current.session.id)) return;
     client.rpc<{ discarded: boolean }>(envId, 'session.discard-empty', { id: current.session.id }, 10_000)
       .then((r) => {
         if (!r.discarded) return;
@@ -314,7 +323,7 @@ function Shell({ client, conn, onSignOut }: {
         reopen.current(current.session.id);
       })
       .catch(() => { /* offline: the still-empty chat remains recoverable */ });
-  }, [client, removeSession]);
+  }, [client, removeSession, holdsWords]);
 
   useEffect(() => {
     history.replaceState({ helm: 1, ...nav.current }, '');
@@ -443,6 +452,21 @@ function Shell({ client, conn, onSignOut }: {
     if (!listedThread(found) && !orchestrator) return;
     navigate([{ kind: 'env' }, { kind: 'session', session: orchestrator ?? found }], want.envId);
   }, [sessions]);
+
+  // Unconfirmed sends keep going while the app is open, in every chat, not
+  // only the one on screen. Each keeps its number; the machine drops repeats.
+  const onlineNow = useRef<(env: string) => boolean>(() => true);
+  onlineNow.current = (env) => envs.some((e) => e.id === env && e.online);
+  useEffect(() => {
+    const resume = () => { void client.resumeAllActions?.((env) => onlineNow.current(env)); };
+    const off = client.on((e, kind, payload) => {
+      if ((kind === 'connection' && payload?.online) || (e && kind === 'presence' && payload?.online)
+        || (e && kind === 'transport' && payload?.direct)) resume();
+    });
+    const timer = setInterval(() => { if (!document.hidden) resume(); }, 15_000);
+    resume();
+    return () => { off(); clearInterval(timer); };
+  }, [client]);
 
   useEffect(() => {
     if (conn.online) { setDownSince(null); return; }
@@ -809,7 +833,7 @@ function Shell({ client, conn, onSignOut }: {
     const top = nav.current.stack.at(-1);
     if (nav.current.selected === chat.envId && top?.kind === 'starting' && top.startId === chat.id) {
       restate([...nav.current.stack.slice(0, -1), { kind: 'session', session }]);
-    } else if (!chat.message && !chat.draft.trim()) {
+    } else if (!chat.message && !chat.draft.trim() && !holdsWords(chat.envId, session.id)) {
       client.rpc<{ discarded: boolean }>(chat.envId, 'session.discard-empty', { id: session.id }, 10_000)
         .then((r) => {
           if (!r.discarded) return;
