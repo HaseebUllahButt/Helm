@@ -232,9 +232,13 @@ test('a chunked handoff waits for each piece to be sent', { timeout: 10000 }, as
   const id = '8'.padStart(24, '0');
   t.after(() => db.prepare('DELETE FROM handoff_queue WHERE id = ?').run(id));
   const serverSocket = layer.online.get('m1');
-  serverSocket.chunks = true;
+  serverSocket.lanes = true;
   const realSend = serverSocket.send.bind(serverSocket);
   const writes = [], changed = new EventEmitter();
+  let sentUpTo = 0;
+  // A piece held here is still in the socket's buffer.
+  Object.defineProperty(serverSocket, 'bufferedAmount',
+    { get: () => writes.slice(sentUpTo).reduce((sum, write) => sum + write.raw.length, 0) });
   serverSocket.send = (raw, ...args) => {
     const frame = JSON.parse(raw);
     if (frame.t !== 'dc-chunk') return realSend(raw, ...args);
@@ -251,6 +255,7 @@ test('a chunked handoff waits for each piece to be sent', { timeout: 10000 }, as
     while (writes.length <= i) await once(changed, 'write');
     assert.equal(writes.length, i + 1);
     assert.equal(writes[i].frame.i, i);
+    sentUpTo = i + 1;
     realSend(writes[i].raw, ...writes[i].args);
   }
   await target.until(frame => frame.t === 'dc-chunk' && frame.i === count - 1);
@@ -321,6 +326,41 @@ test('a client that asks gets large frames as ordered pieces; other clients get 
   assert.equal(joinPieces(eventPieces).payload.session.title.length, 40_000);
   machine.send({ t: 'event', kind: 'session.update', payload: { session: { id: 'small' } } });
   assert.equal((await chunked.until(frame => frame.t === 'event')).payload.session.id, 'small', 'small frames stay whole');
+});
+
+test('a machine that asks (lanes=1) gets and sends pieces; an older machine gets whole frames', async t => {
+  const { chunkText } = await import('../packages/protocol/frame-chunks.js');
+  const { open } = await hubFixture(t);
+  const machine = await open('env=m1&lanes=1');
+  const old = await open('env=m2');
+  const client = await open('');
+  assert.equal(machine.frames[0].lanes, 1, 'the welcome says this hub joins pieces');
+  assert.equal('lanes' in old.frames[0], false);
+  for (const env of ['m1', 'm2']) client.send({ t: 'subscribe', env });
+  await client.settled();
+
+  client.send({ t: 'rpc', id: 'big', env: 'm1', method: 'session.events', params: { pad: 'x'.repeat(40_000) } });
+  await machine.until(frame => frame.t === 'dc-chunk' && frame.i === frame.n - 1);
+  const asked = joinPieces(machine.frames.filter(frame => frame.t === 'dc-chunk'));
+  assert.equal(asked.t, 'rpc');
+  assert.equal(asked.params.pad.length, 40_000);
+
+  // The machine's large reply comes in pieces, with a small event between them.
+  const reply = JSON.stringify({ t: 'rpcResult', id: asked.id, ok: true, result: 'y'.repeat(50_000) });
+  const [first, ...rest] = chunkText(reply, 'g1', asked.id);
+  machine.ws.send(first);
+  machine.send({ t: 'event', kind: 'session.update', payload: { session: { id: 'small' } } });
+  for (const piece of rest) machine.ws.send(piece);
+  const result = await client.until(frame => frame.t === 'rpcResult' && frame.id === 'big');
+  assert.equal(result.result.length, 50_000, 'an older client gets the reply whole');
+  const kinds = client.frames.filter(frame => ['event', 'rpcResult'].includes(frame.t)).map(frame => frame.t);
+  assert.deepEqual(kinds, ['event', 'rpcResult'], 'the small event did not wait for the large reply');
+  assert.ok(client.frames.every(frame => frame.t !== 'dc-chunk'));
+
+  client.send({ t: 'rpc', id: 'big2', env: 'm2', method: 'session.events', params: { pad: 'x'.repeat(40_000) } });
+  const whole = await old.until(frame => frame.t === 'rpc');
+  assert.equal(whole.params.pad.length, 40_000, 'an older machine gets the request whole');
+  assert.ok(old.frames.every(frame => frame.t !== 'dc-chunk'));
 });
 
 test('a machine that asks hears whether a browser or another hub watches it', async t => {

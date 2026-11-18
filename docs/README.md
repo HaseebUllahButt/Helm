@@ -22,7 +22,7 @@ models, rewind, history) and the traps in each driver.
 | [session-settings.md](session-settings.md) | Where a chat's mode, model and effort come from |
 | [browser-use.md](browser-use.md) | The browser each chat shares with the owner |
 | [integrations.md](integrations.md) | Connectors, skills and plugins per account |
-| [share-flow-control.md](share-flow-control.md) | Spin traffic on the machine-to-hub link |
+| [share-flow-control.md](share-flow-control.md) | Spin traffic and small-frames-first on the machine-to-hub link |
 | [recovery-checks.md](recovery-checks.md) | What `helm ship` checks, on private data only |
 | [backups.md](backups.md) | Offline encrypted backups and restore |
 | [rust-log-reader.md](rust-log-reader.md) | What Rust reads in chat logs, and what stays in JavaScript |

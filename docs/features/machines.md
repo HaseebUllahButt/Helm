@@ -35,7 +35,7 @@ owner's home or network to bypass this check.
   must be greater than the beginning. Private tests must match their own
   firewall rules and never change the owner's network.
 - **Tests:** `test/machine-kind`, `device-presence`, `roster-watch`,
-  `gossip`, `lan-discovery`, `network-monitor`, `hub-mesh`, `direct-mesh`, `auth`, `local-login`,
+  `gossip`, `lan-discovery`, `network-monitor`, `hub-mesh`, `frame-lanes`, `direct-mesh`, `auth`, `local-login`,
   `hub-authz`, `roster-trust`, `security-transport`, `security-routes`; `test/browser/hub-auth`.
 
 ## Check installation and connections

@@ -16,8 +16,8 @@ gets the old unbounded stream. Keep both directions of this fallback.
   The daemon acknowledges only when its local TCP write completes, and
   pauses the local app socket while waiting for credit. Uploads hold the
   visitor through a bounded PassThrough's write callback.
-- Both senders wait while the shared WebSocket's `bufferedAmount` is at
-  256 KiB (checking every 5 ms), and yield with `setImmediate` after two
+- Both senders wait while the shared WebSocket's `bufferedAmount`, plus
+  what its large lane holds back, is at 256 KiB (checking every 5 ms), and yield with `setImmediate` after two
   frames. Control frames keep their normal send path, so the queue can pass
   the gate by one encoded frame (about 88 KiB). This gates bulk data; it is
   not a cap on control messages.
@@ -25,6 +25,23 @@ gets the old unbounded stream. Keep both directions of this fallback.
   Destroy, failed opens, machine loss and hub shutdown free mappings,
   transfer leases, timers and sockets. A visitor that leaves while the port
   is opening destroys the late stream.
+
+## Small frames first
+
+Every frame on a machine-to-hub socket goes through that socket's
+FrameLanes (frame-lanes.js), never `sock.send` directly. On the slow VM
+link a 2 MB chat list held "create chat", "send message" and WebRTC
+offers for minutes. Small frames now go out at once; a large frame leaves
+in pieces, the next one only while the socket buffer is nearly empty. Frames
+with one lane key (a tunnel, events, requests, signals) keep their order.
+
+- Pieces go only to a peer that asked (`lanes=1` on the URL and `lanes: 1`
+  in the hub's welcome, or the app's `chunks=1`). Older peers get whole
+  frames, still small first. Keep both sides of this fallback.
+- The large lane only holds frames back; it has no cap and drops nothing.
+  The joiner refuses only what `ws` refuses: one frame over 100 MiB.
+- The kernel's own send buffer is out of reach; on a lossy link a small
+  frame can still wait behind what the kernel already holds.
 
 ## Benchmark
 
