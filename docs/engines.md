@@ -36,6 +36,11 @@ so a cold re-read costs normal input price, Codex compacts by itself near
 its limit, and its cache time is not reported. The ACP tools, Pi and OMP
 report no cache time either. Native terminal Claude chats: not offered.
 
+Shared local model accounts use OpenCode 1, OpenCode 2 or Pi with an
+OpenAI-compatible provider. Helm gives each account its own CLI config.
+The other engines and CLI chats started outside Helm have no automatic
+local account. See [Shared local models](features/new-chat.md#shared-local-models).
+
 ## Places that list tools by name
 
 A new tool, or a feature for "every tool", must look at each of these:

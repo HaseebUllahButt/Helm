@@ -2072,6 +2072,16 @@ try {
       break;
     }
 
+    case 'models': {
+      const { runModelsCommand } = await import('../src/local-model-cli.js');
+      const net = requireNetwork();
+      await runModelsCommand(rest, {
+        net, machineId,
+        rpc: (env, method, params, timeout) => hubRpc(net, env, method, params, { timeout, budget: timeout }),
+      });
+      break;
+    }
+
     case 'redesignate':
       await redesignate();
       break;
@@ -2251,9 +2261,10 @@ try {
     case 'profiles': {
       const { refreshProfiles, getProfiles } = await import('../src/profiles.js');
       const { authStatuses } = await import('../src/auth.js');
-      const profiles = rest.includes('--refresh')
-        ? (await refreshProfiles()).profiles
-        : await getProfiles();
+      if (rest.includes('--refresh')) await refreshProfiles();
+      const net = loadNetwork();
+      if (net) await hubRpc(net, net.self, M.AGENT_LIST, { models: false, localModels: true }, { timeout: 5000, budget: 5000 }).catch(() => {});
+      const profiles = await getProfiles();
       // The app hides signed-out accounts; list them here, marked, so it's clear why.
       const auth = await authStatuses(profiles, { refresh: rest.includes('--refresh'), waitMs: 30_000 });
       for (const p of profiles) {

@@ -924,14 +924,17 @@ export class Sessions extends EventEmitter {
     if (quick && cwd) throw new Error('a sketch has no folder: send quick or cwd, not both');
     if (!quick && !cwd) throw new Error('which folder? send cwd, or quick for a chat with no folder');
     this.#rewinder.assertRewindUnlocked(null, cwd ? expand(cwd) : null);
-    const profiles = await getProfiles();
-    const profile = profiles.find((p) => p.id === profileId);
+    const profile = await this.#profileFor(profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
     if (quick && (brain || delegation || !ENGINES[profile.engine]?.driver)) {
       throw new Error(`${profile.label || profile.engine} cannot start a sketch: only agents helm drives can`);
     }
     // The account's configured default is what a new session starts with; a
     // model chosen up front always wins.
+    if (profile.localModel) {
+      if (model && model !== profile.localModel.selector) throw new Error(`Choose ${profile.localModel.selector} for this local account.`);
+      model = profile.localModel.selector;
+    }
     if (!model) {
       // A model released since a picker was last opened still becomes the
       // default before this chat starts - from the held catalogue only, so a
@@ -1352,6 +1355,17 @@ export class Sessions extends EventEmitter {
     return { ok: true };
   }
 
+  async #profileFor(id, engine) {
+    const profiles = await getProfiles();
+    const saved = profiles.find((p) => p.id === id);
+    if (!this.localModelAccounts || !id?.startsWith('local-') || (saved && !saved.localModel)) return saved;
+    const active = await this.localModelAccounts.sync(profiles.filter((p) => !p.localModel));
+    const profile = active.find((p) => p.id === id && (!engine || p.engine === engine))
+      ?? (engine === 'pi' ? active.find((p) => p.id === `${id}@pi` && p.engine === engine) : null);
+    if (!profile) throw new Error(`The model account ${id} is unavailable. Check helm models list.`);
+    return profile;
+  }
+
   /**
    * The live driver for a session, starting (or resuming) one if needed.
    *
@@ -1387,8 +1401,7 @@ export class Sessions extends EventEmitter {
       s.engineSessionId = null;
       this.#save();
     }
-    const profiles = await getProfiles();
-    const profile = profiles.find((p) => p.id === s.profileId);
+    const profile = await this.#profileFor(s.profileId, s.engine);
     if (!profile) throw new Error(`the account for this session (${s.profileId}) is gone`);
     const spec = materialize(profile);
     // A quick chat's folder is helm's own; if it went missing (cleaned by
@@ -2152,6 +2165,12 @@ export class Sessions extends EventEmitter {
     }
     if (s.nativeCli) return this.#natives.nativeWrite(s, nativeSettingCommand(s.engine, 'model', model));
     if (!s.driver) throw new Error('not a headless session');
+    if (s.profileId?.startsWith('local-')) {
+      const profile = await this.#profileFor(s.profileId, s.engine);
+      if (profile?.localModel && model !== profile.localModel.selector) {
+        throw new Error(`Choose ${profile.localModel.selector} for this local account.`);
+      }
+    }
     const value = model || null;
     const d = this.#drivers.get(id);
     if (ask && !d?.modelSwitchSignal) return { ok: false, noSignal: true, session: s };

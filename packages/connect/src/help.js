@@ -38,6 +38,9 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm machines [--load]            machines in this network; --load adds CPU, memory and GPU use
   helm wake <machine> [--wait <minutes>]
                                     Send a wake signal from an online machine on the same local network
+  helm models serve <model> [--machine <name>|auto]  Run an Ollama model on a joined machine
+  helm models list                  Show shared models, their addresses and memory use
+  helm models stop <model> [--machine <name>]        Stop a shared model
   helm redesignate [machine] <kind> what a machine is for: pc or vm
   helm spin <port> [options]         same as helm share; make a public link
   helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
@@ -185,6 +188,7 @@ Set up this machine
 Machines and devices
   machines         List the machines in this network
   wake             Wake an offline machine
+  models           Serve, list or stop shared local models
   devices          List the devices that control this network
   redesignate      Set what a machine is for: pc or vm
   remove           Remove a device or machine permanently
@@ -232,6 +236,13 @@ Run helm help <command> for its options, or helm help --all for all of them.
 `;
 
 const DETAILS = {
+  models: `
+  Helm checks free GPU memory on each answering machine by default.
+  Run the model on a Linux machine with Ollama and a systemd user service.
+  Get the owner's approval before you install Ollama. Use helm sudo for admin commands.
+  Use the OpenAI address that Helm prints on this machine.
+  Run helm agents to see the OpenCode and Pi accounts for the model.
+  Stop a model to free its memory. Its download stays on the serving machine.`,
   backup: `
   Keep keys out of command arguments. Use a private key file and keep a separate safe copy.
   Back up a stopped data copy. This command never stops services for you.

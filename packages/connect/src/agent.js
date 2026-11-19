@@ -46,6 +46,9 @@ import { LanDiscovery, withHeardAddresses, localSignalRouter } from './lan-disco
 import { describe as describeAsk, describeDone, describeCaptcha, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
 import { Forwards, forwardedPorts } from './forwards.js';
+import { LocalModelHost } from './local-model-host.js';
+import { LocalModelAccounts, localProfileCatalog } from './local-model-accounts.js';
+import { LocalModelJobs } from './local-model-jobs.js';
 import { Screens } from './screen.js';
 import { ownerSeenAt } from '@helm/protocol/owner-seen';
 import { publicHosts } from '@helm/protocol/share';
@@ -495,6 +498,14 @@ export class Daemon {
       rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 15_000, ...opts }),
       log: (line) => console.error(`[helm] ${line}`),
     });
+    const modelNetwork = () => loadNetwork() ?? this.net;
+    const modelLog = (line) => console.error(`[helm] ${line}`);
+    this.localModels = new LocalModelHost({ network: modelNetwork, forwards: this.forwards, log: modelLog });
+    this.localModelJobs = new LocalModelJobs({ host: this.localModels, log: modelLog });
+    this.localModelAccounts = new LocalModelAccounts({
+      network: modelNetwork, host: this.localModels, forwards: this.forwards, log: modelLog,
+      rpc: (env, method, params, timeout) => hubRpc(modelNetwork(), env, method, params, { timeout, budget: timeout }),
+    });
     // Remote screens: this machine's desktop for the owner (screen.js).
     this.screens = new Screens({
       network: () => loadNetwork() ?? this.net,
@@ -549,6 +560,7 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    this.sessions.localModelAccounts = this.localModelAccounts;
     // helm sudo: cards Helm asks itself, answered through Sessions.answer.
     this.sudo = new AdminRuns({ sessions: this.sessions, machineName: () => this.name, log: (m) => console.error(`[helm] ${m}`) });
     this.sessions.helmAsks = this.sudo;
@@ -625,6 +637,8 @@ export class Daemon {
       rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
     });
     this.forwards.begin().catch((err) => console.error(`[helm] forwards: ${err.message}`));
+    this.localModels.begin().catch((err) => console.error(`[helm] models: ${err.message}`));
+    this.localModelJobs.begin();
     this.screens.begin();
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
@@ -899,6 +913,8 @@ export class Daemon {
     this.cliUpdates?.stop();
     this.taskTransfers?.stop();
     this.screens?.close();
+    this.localModelJobs.close();
+    await this.localModels.close();
     await this.forwards?.stop();
     await this.sendEngine?.stop();
     this.search?.close();
@@ -2106,6 +2122,16 @@ export class Daemon {
       case M.FORWARD_REMOVE:
         return this.forwards.remove(String(p.id ?? ''), { notify: p.notify === true });
 
+      case M.LOCAL_MODELS_CATALOG: return this.localModels.catalog();
+      case M.LOCAL_MODELS_LIST: return this.localModelJobs.list();
+      case M.LOCAL_MODELS_WORK:
+        this.#pairedCaller(caller);
+        return this.localModelJobs.submit(p);
+      case M.LOCAL_MODELS_JOB: return this.localModelJobs.read(p.id);
+      case M.LOCAL_MODELS_OPEN: return this.localModels.open(this.#pairedCaller(caller), p.generation);
+      case M.LOCAL_MODELS_ENDPOINT:
+        if (caller !== this.id) throw new Error('Open the model address from this machine.');
+        return { url: await this.localModelAccounts.endpoint(p.host) };
 
       case M.FS_LIST:   return fsApi.list(p.path);
       case M.FS_ROOTS:  return fsApi.roots();
@@ -2177,7 +2203,7 @@ export class Daemon {
           : await currentProfiles();
         // Offer only accounts that can sign in: a profile whose CLI says it is
         // signed out is left out until it isn't (auth.js).
-        const profiles = await usableProfiles(found, { refresh: !!p.refresh });
+        const profiles = await usableProfiles([...found, ...await this.localModelAccounts.sync(found, { fresh: !!p.refresh })], { refresh: !!p.refresh });
         // Each profile carries its account key and model prefs, so the app
         // groups aliases and renders the picker filter with no extra call.
         const cfg = loadSettings();
@@ -2190,7 +2216,9 @@ export class Daemon {
       }
 
       case M.AGENT_LIST: {
-        const profiles = p.refresh ? (await refreshProfiles()).profiles : await currentProfiles();
+        const found = p.refresh ? (await refreshProfiles()).profiles : await currentProfiles();
+        const local = p.localModels === false ? [] : await this.localModelAccounts.sync(found, { fresh: !!p.refresh || p.localModels === true });
+        const profiles = [...found, ...local];
         const statuses = await authStatuses(profiles, { refresh: !!p.refresh });
         this.cliAgents = markShown(await agentCatalog(profiles, statuses, { models: p.models !== false, credentials: true }),
           profiles, pickerPrefs().hidden);
@@ -2258,7 +2286,7 @@ export class Daemon {
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
         const engine = ENGINES[profile.engine];
         const spec = materialize(profile);
-        const catalog = await listModels(
+        const catalog = localProfileCatalog(profile) ?? await listModels(
           profile.engine,
           spec.env?.[engine?.homeEnv] ?? engine?.defaultHome,
           spec.env,
@@ -2268,7 +2296,7 @@ export class Daemon {
         // A live agent reports the pickers it actually has - real display
         // names, the levels this session offers - which beats what the CLI
         // can print. The printed list is the fallback for a cold session.
-        const live = p.id ? this.sessions.catalog(p.id) : null;
+        const live = p.id && !localProfileCatalog(profile) ? this.sessions.catalog(p.id) : null;
         // What the static list claims beyond the live picker is demoted, not
         // deleted: the printed catalogue names rows `set_config_option` then
         // refuses (devin's `models list` shows ~600 uids; the session accepts

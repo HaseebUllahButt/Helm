@@ -76,6 +76,7 @@ export interface Profile {
   env?: Record<string, string>;
   envFrom?: string[];
   source: string;
+  localModel?: { model: string };
   /** Set when the account is launched through a wrapper script that picks its login. */
   wraps?: string;
   /** authenticated / unknown - signed-out profiles never reach the app. */

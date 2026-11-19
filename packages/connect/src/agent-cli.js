@@ -58,7 +58,8 @@ export async function runAgentCommand(command, args, { rpc, self, wake, machine:
     // helper never has to guess which id is the inexpensive one.
     const cheap = options.model === 'cheap';
     if (options.wake) await wake(target);
-    let { agents } = await rpc(target, M.AGENT_LIST, { models: cheap }, cheap ? 60_000 : undefined);
+    const localModels = account.startsWith('local-');
+    let { agents } = await rpc(target, M.AGENT_LIST, { models: cheap, localModels }, cheap ? 60_000 : undefined);
     let agent = chooseAgent(agents, account);
     if (!agent.available) throw new Error(`${agent.id} is signed out; log in through its CLI first`);
     // `same` is not a hand pick: when this chat's account is out of limit,
@@ -74,7 +75,7 @@ export async function runAgentCommand(command, args, { rpc, self, wake, machine:
     // season's small model; give the refresh a few seconds to land.
     for (let tries = 0; cheap && agent.refreshing && tries < 8; tries++) {
       await sleep(1000);
-      ({ agents } = await rpc(target, M.AGENT_LIST, { models: true }, 60_000));
+      ({ agents } = await rpc(target, M.AGENT_LIST, { models: true, localModels }, 60_000));
       agent = agents.find((a) => a.id === agent.id) ?? chooseAgent(agents, account);
     }
     if (cheap) {

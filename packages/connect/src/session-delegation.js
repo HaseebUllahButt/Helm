@@ -238,7 +238,7 @@ export class SessionDelegation {
     // reuse its cache. Explicit and saved helper choices still win.
     // Another engine uses its own account default.
     const defaults = subagentPrefs(profile);
-    model ||= defaults.model || (parentEngine === profile.engine
+    model ||= defaults.model || (profile.source !== 'local-model' && parentEngine === profile.engine
       ? (parent ? parent.engineModel || parent.model : remoteParent.model) : null) || undefined;
     effort ||= defaults.effort;
     const selectedMode = delegationMode(profile.engine, parentMode, mode, defaults.mode || startPrefs(profile)?.mode, parentEngine);

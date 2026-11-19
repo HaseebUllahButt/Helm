@@ -331,6 +331,12 @@ export const M = {
   FORWARD_LIST: 'forward.list',    // {} -> { forwards[], ownerSeenAt }  ownerSeenAt: when the owner last used Helm in a browser on this machine
   FORWARD_ADD: 'forward.add',      // { id, side: 'in'|'out', peer, port, localPort?, expiresAt? } -> { forward }  in: listen here; out: let the peer reach port here
   FORWARD_REMOVE: 'forward.remove', // { id, notify? } -> { removed }  notify: tell the other machine to remove its side too
+  LOCAL_MODELS_CATALOG: 'models.catalog',
+  LOCAL_MODELS_LIST: 'models.list',
+  LOCAL_MODELS_WORK: 'models.work',
+  LOCAL_MODELS_JOB: 'models.job',
+  LOCAL_MODELS_OPEN: 'models.open',
+  LOCAL_MODELS_ENDPOINT: 'models.endpoint',
   SCREEN_STATUS: 'screen.status',  // {} -> { supported, backend?, built?, running?, needsSetup?, packages?, error? }  owner only
   SCREEN_SETUP: 'screen.setup',    // {} -> status  installs the build packages as admin, then builds the engine; owner only
   SCREEN_START: 'screen.start',    // {} -> { port, token } | { needs: 'setup', packages } | { error }  this machine's real screen; owner only
