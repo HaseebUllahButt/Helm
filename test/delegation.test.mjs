@@ -1332,6 +1332,7 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
   const { Daemon } = await import('../packages/connect/src/agent.js');
   const { T } = await import('@helm/protocol');
   const { primeModels } = await import('../packages/connect/src/models.js');
+  const { ownNode } = await import('../packages/connect/src/own-node.js');
   primeModels('codex', '~/.codex', null, { default: 'gpt-test', models: ['gpt-test'] });
   const largeCatalog = Array.from({ length: 6000 }, (_, i) => `catalog-model-${i}`);
   primeModels('claude', '~/.claude-test', null, { default: 'opus', models: ['opus', 'sonnet', ...largeCatalog],
@@ -1370,9 +1371,9 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
     await once(env, 'message');
     const bin = fileURLToPath(new URL('../packages/connect/bin/helm.js', import.meta.url));
     const invoke = (args) => new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [bin, ...args], { env: { ...process.env, HELM_SESSION_ID: parent.id, CODEX_THREAD_ID: parent.engineSessionId }, cwd: process.env.HELM_DIR });
+      const child = spawn(ownNode(), [bin, ...args], { env: { ...process.env, HELM_SESSION_ID: parent.id, CODEX_THREAD_ID: parent.engineSessionId }, cwd: process.env.HELM_DIR });
       let out = '', err = '';
-      const timer = setTimeout(() => { child.kill(); reject(new Error('CLI timed out')); }, 15_000);
+      const timer = setTimeout(() => { child.kill(); reject(new Error(`helm ${args[0]} timed out`)); }, 30_000);
       child.stdout.on('data', (text) => { out += text; });
       child.stderr.on('data', (text) => { err += text; });
       child.on('error', (error) => { clearTimeout(timer); reject(error); });

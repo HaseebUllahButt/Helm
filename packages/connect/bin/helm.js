@@ -2,7 +2,7 @@
 import { hostname, platform } from 'node:os';
 import { rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { argv, exit } from 'node:process';
 import {
@@ -721,6 +721,12 @@ async function dictate() {
 const brainRpc = (env, method, params = {}, timeout = 25_000) =>
   untilBack(env, () => hubRpc(requireNetwork(), env, method, params, { timeout }));
 
+const wakeTarget = async (target, options) => {
+  const { createWakeCommand } = await import('../src/wake-cli.js');
+  await createWakeCommand({ machineId })(target, options);
+  return requireNetwork();
+};
+
 // A machine restarting Helm answers nothing for a minute or so. While no
 // request has gone out, waiting and asking again is safe, and beats telling
 // an agent its helper is gone. Anything that may have arrived is not retried.
@@ -904,11 +910,19 @@ async function deleteChat() {
   console.log(`Deleted ${machine} ${shortId(session.id)} (${session.title}).`);
 }
 
+async function authorizeSharedKeys(names, job) {
+  const { authorizeKeys } = await import('../src/shared-keys-cli.js');
+  const self = requireNetwork().self;
+  return authorizeKeys(names, { rpc: brainRpc, self, ...job });
+}
+
 async function spawn_() {
   const { spawnAgent, parseSpawnArgs } = await import('../src/spawn-cli.js');
   const { machine } = parseSpawnArgs(rest);
   const env = machineId(machine);
   await spawnAgent(rest, { rpc: (method, params, timeout) => brainRpc(env, method, params, timeout),
+    wake: () => wakeTarget(env),
+    authorize: (names, job) => authorizeSharedKeys(names, { ...job, target: env }),
     write: (text) => process.stdout.write(text) });
 }
 
@@ -933,14 +947,17 @@ async function handoff() {
   const { handoffRequestDigest } = await import('../src/handoffs.js');
   const valueFlags = new Set(['--folder', '--target-folder', '--source-folder', '--account', '--model', '--mode', '--title', '--handoff-id']);
   const args = [];
+  let wake = false;
   for (let i = 0; i < rest.length; i++) {
+    if (cmd === 'dispatch' && rest[i] === '--') { args.push(...rest.slice(i + 1)); break; }
     if (!rest[i].startsWith('--')) { args.push(rest[i]); continue; }
+    if (cmd === 'dispatch' && rest[i] === '--wake') wake = true;
     if (valueFlags.has(rest[i])) i++;
   }
   const who = args.shift();
   if (!who) die('usage: helm dispatch <machine> [text...]');
 
-  const net = requireNetwork();
+  let net = requireNetwork();
   const target = machineId(who);
   if (target === net.self) die('The task move target is this machine.');
 
@@ -958,6 +975,11 @@ async function handoff() {
   const requestedTargetFolder = strFlag('target-folder', strFlag('folder', ''));
   const sourceName = net.machines[net.self]?.name ?? 'the source machine';
   const targetName = net.machines[target]?.name ?? who;
+  if (wake) {
+    if (!explicitAccount && !sourceId) die('Use --account <target-profile-id> outside a Helm chat.');
+    if (explicitAccount && !strFlag('account', '')) die('Set --account to an account ID.');
+    net = await wakeTarget(target);
+  }
 
   // Which of the target's profiles runs the work. An explicit --account is
   // taken verbatim - the target validates it when the job lands, which is
@@ -1154,6 +1176,10 @@ async function sendTask() {
   const { options, request } = parseTaskArgs(rest, { machineId });
   const net = requireNetwork();
   const { handoffId } = request;
+  if (options.key) {
+    const id = createHash('sha256').update(`shared-key-task-${handoffId}`).digest('hex').slice(0, 32);
+    request.keyPermit = await authorizeSharedKeys(options.key, { target: request.targetMachineId, kind: 'chat', id });
+  }
   console.error(`helm: task ${handoffId}; retry with the same arguments and --handoff-id ${handoffId}`);
   const started = Date.now();
   let result = await brainRpc(net.self, M.TASK_SEND, request, 360_000);
@@ -1984,9 +2010,11 @@ try {
         console.log(commandHelp('run', USAGE));
         break;
       }
-      if (rest.includes('--') || rest.some(arg => ['--heavy', '--cwd', '--timeout', '--env'].includes(arg))) {
-        const { runLocalWork } = await import('../src/execution-cli.js');
-        process.exitCode = await runLocalWork(rest);
+      if (rest.includes('--') || rest.some(arg => ['--heavy', '--cwd', '--timeout', '--env', '--key'].includes(arg))) {
+        const { parseWorkArgs, runLocalWork, runRemoteWork } = await import('../src/execution-cli.js');
+        process.exitCode = await (parseWorkArgs(rest).keys
+          ? runRemoteWork(rest, { net: requireNetwork(), authorize: authorizeSharedKeys, local: true })
+          : runLocalWork(rest));
         break;
       }
       // Keep the original no-command alias for installations using helm run.
@@ -2050,6 +2078,23 @@ try {
       await listMachines();
       break;
 
+    case 'wake': {
+      const { parseWakeArgs } = await import('../src/wake-cli.js');
+      const { machine, waitMs } = parseWakeArgs(rest);
+      await wakeTarget(machineId(machine), { waitMs, write: console.log });
+      break;
+    }
+
+    case 'models': {
+      const { runModelsCommand } = await import('../src/local-model-cli.js');
+      const net = requireNetwork();
+      await runModelsCommand(rest, {
+        net, machineId,
+        rpc: (env, method, params, timeout) => hubRpc(net, env, method, params, { timeout, budget: timeout }),
+      });
+      break;
+    }
+
     case 'redesignate':
       await redesignate();
       break;
@@ -2063,12 +2108,25 @@ try {
       await forwardCmd();
       break;
 
+    case 'when':
     case 'schedule':
     case 'schedules': {
-      const { runScheduleCommand } = await import('../src/schedule-cli.js');
+      const run = cmd === 'when' ? (await import('../src/when-cli.js')).runWhenCommand
+        : (await import('../src/schedule-cli.js')).runScheduleCommand;
       const net = requireNetwork();
       try {
-        process.exitCode = await runScheduleCommand(rest, { net, machineId,
+        process.exitCode = await run(rest, { net, machineId, cwd: process.cwd(), contextChatId: process.env.HELM_SESSION_ID,
+          rpc: (env, method, params, timeout) => hubRpc(net, env, method, params, { timeout, budget: timeout }) });
+      } catch (error) { die(error.message); }
+      break;
+    }
+
+    case 'tools':
+    case 'tool': {
+      const { runToolsCommand } = await import('../src/tools-cli.js');
+      const net = requireNetwork();
+      try {
+        process.exitCode = await runToolsCommand(rest, { net, machineId,
           rpc: (env, method, params, timeout) => hubRpc(net, env, method, params, { timeout, budget: timeout }) });
       } catch (error) { die(error.message); }
       break;
@@ -2229,9 +2287,10 @@ try {
     case 'profiles': {
       const { refreshProfiles, getProfiles } = await import('../src/profiles.js');
       const { authStatuses } = await import('../src/auth.js');
-      const profiles = rest.includes('--refresh')
-        ? (await refreshProfiles()).profiles
-        : await getProfiles();
+      if (rest.includes('--refresh')) await refreshProfiles();
+      const net = loadNetwork();
+      if (net) await hubRpc(net, net.self, M.AGENT_LIST, { models: false, localModels: true }, { timeout: 5000, budget: 5000 }).catch(() => {});
+      const profiles = await getProfiles();
       // The app hides signed-out accounts; list them here, marked, so it's clear why.
       const auth = await authStatuses(profiles, { refresh: rest.includes('--refresh'), waitMs: 30_000 });
       for (const p of profiles) {
@@ -2378,7 +2437,7 @@ try {
     // is the brain's guardrail too.
     case 'exec': {
       const { runRemoteWork } = await import('../src/execution-cli.js');
-      process.exitCode = await runRemoteWork(rest, { net: requireNetwork(), machineId });
+      process.exitCode = await runRemoteWork(rest, { net: requireNetwork(), machineId, wake: wakeTarget, authorize: authorizeSharedKeys });
       break;
     }
     // exec-result is the older name, kept for scripts that use it.
@@ -2401,7 +2460,7 @@ try {
       const { runAgentCommand } = await import('../src/agent-cli.js');
       // Catalogs and JSON replies can exceed a pipe's buffer. Let stdout
       // drain naturally instead of truncating them with process.exit().
-      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self, machine: machineId });
+      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self, machine: machineId, wake: wakeTarget, authorize: authorizeSharedKeys });
       break;
     }
     case 'brain':
@@ -2464,6 +2523,11 @@ try {
       await deleteChat();
       break;
 
+    case 'webchat': {
+      const { runWebchatCommand } = await import('../src/webchat-cli.js');
+      process.exitCode = await runWebchatCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession, machine: machineId });
+      break;
+    }
     case 'browser': {
       const { runBrowserCommand } = await import('../src/browser-cli.js');
       await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession, machine: machineId });
@@ -2483,6 +2547,17 @@ try {
           console.log(`\n  This machine can show its screen (${r.backend} ${r.display}). ${r.running ? 'It is on now.' : 'It is off.'}\n  ${ready}\n  Open it from the Helm app: press Ctrl+Shift+R.\n`);
         }
       } else die('usage: helm screen [status | stop]\n  Open a screen from the Helm app: press Ctrl+Shift+R.');
+      break;
+    }
+    case 'phone': {
+      const { runPhoneCommand } = await import('../src/phone-cli.js');
+      const code = await runPhoneCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self });
+      process.stdout.write('', () => process.stderr.write('', () => exit(code)));
+      break;
+    }
+    case 'keys': {
+      const { runKeysCommand } = await import('../src/shared-keys-cli.js');
+      await runKeysCommand(rest, { rpc: brainRpc, self: requireNetwork().self });
       break;
     }
     case 'sudo': {

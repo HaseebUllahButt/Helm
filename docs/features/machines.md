@@ -49,6 +49,30 @@ owner's home or network to bypass this check.
   `gossip`, `lan-discovery`, `network-monitor`, `hub-mesh`, `frame-lanes`, `direct-mesh`, `auth`, `local-login`,
   `hub-authz`, `roster-trust`, `security-transport`, `security-routes`; `test/browser/hub-auth`.
 
+## Wake an offline machine
+
+- On phone Home, expand **Machines**. On a computer, open Home or
+  Dashboard. **Wake** appears next to an offline machine when Helm can see
+  an online sender on its last wired network.
+- Run `helm wake <machine>` to send a signal. Add `--wait <minutes>`
+  to wait for the machine to connect. Add `--wake` to `exec`, `spawn`,
+  `delegate --machine` or `dispatch` to wait up to five minutes before
+  starting the job. Press Ctrl+C to stop waiting.
+- Run current Helm on both Linux machines. Connect the target by
+  Ethernet and start Helm there before putting it to sleep. Keep one
+  machine online on the same IPv4 network and router. The sender can use
+  Wi-Fi if its access point passes broadcasts to the wired network.
+  Run `helm doctor` on the target to check the card and see how to enable wake.
+- Machines share signed wake details with current hubs. A target's
+  last wired network stays available across a restart. Helm checks the
+  sender's current network before it sends the signal.
+- Keep test packets inside a private network namespace. Give
+  two fake targets the same IP range and different router addresses. Confirm
+  that Wake appears for only the matching target, then capture its packet.
+  Attach the matching target after the packet and check that `exec --wake`
+  runs its command after the target connects.
+- See `test/wake-state`, `test/wake-machine` and `test/wake-cli`.
+
 ## Remote screens
 - **What:** the owner sees and uses another machine's real desktop in its own
   Helm app window. The engine is screen-relay's (`native/screen`, see its
@@ -184,6 +208,23 @@ owner's home or network to bypass this check.
   no retry, so a newer rsync needs a reviewed allowlist change.
 - **Tests:** `test/execution`, `execution-rpc`, `copy`,
   `copy-transport`, `copy-arguments`, `copy-binary`, `bulk-transfer`.
+
+## Tools: `helm tools`
+- **Reach:** `helm tools add|list|show|run|remove`, and **Settings >
+  Tools** (also in the palette). The app lists and removes; adding is
+  only through the command, on the machine that has the program.
+- **Rules:** each machine keeps its own tools in `~/.helm/tools.json`.
+  `list` asks every machine; what it hears is kept in `tools-seen.json`,
+  so an offline machine still shows its last known tools. A tool on this
+  machine runs like `helm run` (this shell's settings, live input). On
+  another machine it runs like `helm exec`: the caller reads all piped
+  input first (1 MB, sent with `exec.start` as `stdin`). An older Helm
+  drops that input, and the caller says so.
+- **Prove:** with the private copy, `$H tools add hi --description "Say hi."
+  -- echo hi`, then `$H tools run hi there` prints `hi there`. Open Settings >
+  Tools at phone and computer sizes, press Remove, and see the notice with
+  the add command to undo it.
+- **Tests:** `test/tools`, `test/execution`.
 
 ## Saved CLI conversations and Take over
 - **Rules:** a saved Claude, Codex, OpenCode or Pi conversation opens with

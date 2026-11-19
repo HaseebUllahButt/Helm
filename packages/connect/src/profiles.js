@@ -4,6 +4,7 @@ import { ENGINES } from './engines.js';
 import { HELM_DIR, PROFILES_FILE, SECRETS_FILE, expand } from './paths.js';
 import { migrateProfileSettings } from './settings.js';
 import { opencodeServiceSessions, opencodeServiceProfile } from './opencode-service.js';
+import { cachedModelProfiles } from './local-model-accounts.js';
 
 const write = (file, body, mode = 0o600) => {
   mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
@@ -76,7 +77,7 @@ export async function getProfiles() {
   const saved = loadProfiles();
   const profiles = saved?.profiles?.length ? saved.profiles : (await refreshProfiles()).profiles;
   if (await addServiceProfile(profiles)) saveProfiles(profiles);
-  return profiles;
+  return [...profiles, ...cachedModelProfiles(profiles)];
 }
 
 async function addServiceProfile(profiles) {

@@ -42,10 +42,12 @@ import { shareHopTarget, clearShareHop, ShareHop } from './screens/ShareHop';
 import { type Auth, Login } from './screens/Login';
 import { EnvView } from './screens/EnvView';
 import { Home, type HomeBrain } from './screens/Home';
+import { MachineWakeRow } from './MachineWakeRow';
 import { BrainView } from './screens/Brain';
 import { Start } from './screens/Start';
 import { SessionView as SessionViewScreen } from './session/SessionView';
 import { steady } from './steady';
+import { setPhoneRpc } from './session/phoneShare';
 
 // Tests import the model list editor from here, where it used to live.
 export { ModelPrefsView };
@@ -72,6 +74,8 @@ const DevicesView = deferredScreen('Devices', () => import('./screens/Devices').
 const EnvSettings = deferredScreen('Machine settings', () => import('./screens/MachineSettings').then(m => ({ default: m.EnvSettings })));
 const SettingsView = deferredScreen('Settings', () => import('./screens/Settings').then(m => ({ default: m.SettingsView })));
 const LinksView = deferredScreen('Links', () => import('./screens/Settings').then(m => ({ default: m.LinksView })));
+const SchedulesView = deferredScreen('Schedules', () => import('./screens/Schedules').then(m => ({ default: m.SchedulesView })));
+const ToolsView = deferredScreen('Tools', () => import('./screens/Tools').then(m => ({ default: m.ToolsView })));
 const NetworkSettings = deferredScreen('Network settings', () => import('./screens/Settings').then(m => ({ default: m.NetworkSettings })));
 const OwnerView = deferredScreen('Your preferences', () => import('./screens/Owner').then(m => ({ default: m.OwnerView })));
 const ModelPrefsView = deferredScreen('Models', () => import('./screens/ModelPrefs').then(m => ({ default: m.ModelPrefsView })));
@@ -101,6 +105,7 @@ export function App() {
   useEffect(() => {
     if (!auth) return;
     const c = new Client(auth.endpoints, auth.token, auth.trust);
+    setPhoneRpc((env, method, params, timeout) => c.rpc(env, method, params, timeout));
     const off = c.on((_e, kind, payload) => {
       if (kind === 'connection') setConn({ online: !!payload.online, reachable: payload.reachable ?? !!payload.online, error: payload.error });
       if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints, trust: c.auth.trust });
@@ -114,7 +119,7 @@ export function App() {
     });
     c.connect().catch(() => {});
     setClient(c);
-    return () => { off(); c.close?.(); };
+    return () => { off(); setPhoneRpc(null); c.close?.(); };
   }, [auth]);
 
   const signOut = () => { forgetWorkspace(workspaceScope(auth?.token)); clearAuth(); setAuth(null); setClient(null); };
@@ -156,8 +161,10 @@ export type MainView =
   | { kind: 'start'; cwd: string; quick?: boolean }
   | { kind: 'settings' }
   | { kind: 'network-settings' }
+  | { kind: 'schedules' }
   // Every machine's public and private links (`helm share`) in one list.
   | { kind: 'links' }
+  | { kind: 'tools' }
   // Which helm each machine runs, and updating them from here.
   | { kind: 'updates' }
   // The owner's preferences every agent gets, and the keeper that updates them.
@@ -180,7 +187,7 @@ export type MainView =
 const VIEW_KINDS: Record<MainView['kind'], true> = {
   env: true, integrations: true, usage: true, dashboard: true, brain: true, new: true,
   browse: true, 'transfer-browse': true, transfer: true, verify: true,
-  start: true, settings: true, 'network-settings': true, links: true,
+  start: true, settings: true, 'network-settings': true, links: true, schedules: true, tools: true,
   updates: true, owner: true, models: true, devices: true, 'app-settings': true,
   session: true, 'native-agent': true, starting: true,
   'terminal-opening': true,
@@ -421,6 +428,7 @@ function Shell({ client, conn, onSignOut }: {
     };
     // "A new device paired" is about the list of devices, not a session.
     const devicesScreen = () => navigate([{ kind: 'app-settings' }, { kind: 'devices' }]);
+    const schedulesScreen = () => navigate([{ kind: 'app-settings' }, { kind: 'schedules' }]);
     const m = /^#open=([^/]+)\/(.+)$/.exec(location.hash);
     if (m) {
       take(m[1], m[2]);
@@ -428,10 +436,14 @@ function Shell({ client, conn, onSignOut }: {
     } else if (location.hash === '#devices') {
       devicesScreen();
       history.replaceState(history.state, '', location.pathname + location.search);
+    } else if (location.hash === '#schedules') {
+      schedulesScreen();
+      history.replaceState(history.state, '', location.pathname + location.search);
     }
     const onMessage = (e: MessageEvent) => {
       if (e.data?.type !== 'helm:open') return;
       if (e.data.view === 'devices') devicesScreen();
+      else if (e.data.view === 'schedules') schedulesScreen();
       else take(e.data.envId, e.data.sessionId);
     };
     navigator.serviceWorker?.addEventListener('message', onMessage);
@@ -608,6 +620,8 @@ function Shell({ client, conn, onSignOut }: {
     go('a:dashboard', 'Dashboard', 'machines compute cpu memory gpu load limits balancer accounts', [{ kind: 'dashboard' }]);
     go('a:defaults', 'Agent defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
     go('a:links', 'Spins', 'share spin private forward port', [{ kind: 'app-settings' }, { kind: 'links' }]);
+    go('a:schedules', 'Schedules', 'trigger event task webhook', [{ kind: 'app-settings' }, { kind: 'schedules' }]);
+    go('a:tools', 'Tools', 'tools commands registry scripts agents helm tools', [{ kind: 'app-settings' }, { kind: 'tools' }]);
     for (const t of ['light', 'dark', 'system'] as Theme[]) {
       items.push({
         id: `theme:${t}`, group: 'action', title: `Theme: ${t[0].toUpperCase()}${t.slice(1)}`, keywords: 'appearance colour',
@@ -1107,7 +1121,7 @@ function Shell({ client, conn, onSignOut }: {
   instantTerminal.current = () => {
     const online = envs.filter((e) => e.online);
     const current = nav.current.stack.at(-1);
-    const global = !current || ['usage', 'dashboard', 'brain', 'links', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
+    const global = !current || ['usage', 'dashboard', 'brain', 'links', 'schedules', 'tools', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
       && !(current.kind === 'usage' && current.envId);
     const chosen = !global && nav.current.selected !== autoPicked.current ? nav.current.selected : null;
     const lastUsed = (e: Environment) => Math.max(0, ...(sessions[e.id] ?? []).filter(ownTerminal).map((s) => s.updatedAt ?? 0));
@@ -1378,7 +1392,7 @@ function Shell({ client, conn, onSignOut }: {
   // no machine either.
   const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'dashboard' || view.kind === 'devices'
     || view.kind === 'network-settings' || view.kind === 'app-settings' || view.kind === 'updates'
-    || view.kind === 'links' || view.kind === 'owner';
+    || view.kind === 'links' || view.kind === 'schedules' || view.kind === 'tools' || view.kind === 'owner';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -1396,12 +1410,14 @@ function Shell({ client, conn, onSignOut }: {
   const homeMachines = envs.map((e) => ({ env: e, running: workingThreadsOn(e).length, waiting: e.online ? waitingCountOn(e) : 0 }));
 
   const phoneMachineRow = (e: Environment) => (
-    <button key={e.id} type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
-      <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-      <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
-      <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
-      <span className="chev"><Icon name="forward" size={15} /></span>
-    </button>
+    <MachineWakeRow key={e.id} client={client} env={e} machines={envs}>
+      <button type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
+        <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+        <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
+        <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
+        <span className="chev"><Icon name="forward" size={15} /></span>
+      </button>
+    </MachineWakeRow>
   );
 
   return (
@@ -1634,6 +1650,10 @@ function Shell({ client, conn, onSignOut }: {
           <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
         ) : view.kind === 'links' ? (
           <LinksView client={client} envs={envs} onBack={back} />
+        ) : view.kind === 'schedules' ? (
+          <SchedulesView client={client} envs={envs} onBack={back} />
+        ) : view.kind === 'tools' ? (
+          <ToolsView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'owner' ? (
           <OwnerView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'network-settings' ? (

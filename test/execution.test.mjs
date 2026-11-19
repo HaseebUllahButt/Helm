@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once, EventEmitter } from 'node:events';
@@ -296,20 +296,33 @@ test('no command is refused for being one too many', async t => {
 test('output retention is bounded and paged with an explicit truncation marker', async t => {
   const jobs = makeJobs(); t.after(() => jobs.stop());
   jobs.start({ id: id(8), ...spec('process.stdout.write("x".repeat(600000))') }, 'owner');
-  await pause(400);
+  let status;
+  do { ({ status } = await jobs.read({ id: id(8), since: Number.MAX_SAFE_INTEGER, wait: 1000 }, 'owner')); }
+  while (status !== 'exited');
   const first = await jobs.read({ id: id(8) }, 'owner');
   assert.equal(first.truncated, true);
   assert.ok(first.chunks.reduce((n,c) => n + Buffer.from(c.data,'base64').length,0) <= 64 * 1024);
   assert.equal(first.more, true);
-  const r = await result(jobs, id(8)); assert.ok(r.output.length <= 256 * 1024);
+  const r = await result(jobs, id(8));
+  assert.ok(r.output.length <= 256 * 1024);
 });
 
 test('completed output expires even without another command starting', async t => {
   const jobs = makeJobs({ retainMs: 30 }); t.after(() => jobs.stop());
   const request = { id: id(9), ...spec('console.log("saved briefly")') };
   jobs.start(request, 'owner');
-  assert.equal((await result(jobs, id(9))).exitCode, 0);
-  await pause(60);
+  const dir = join(jobs.directory, request.id);
+  await new Promise((resolve, reject) => {
+    const signal = AbortSignal.timeout(5000);
+    const watcher = watch(dir, { signal }, check);
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    function check() {
+      if (!JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).expired) return;
+      watcher.close();
+      resolve();
+    }
+    check();
+  });
   await assert.rejects(() => jobs.read({ id: id(9) }, 'owner'), /expired/);
   assert.throws(() => jobs.start(request, 'owner'), /expired/);
 });
@@ -411,4 +424,35 @@ test('exec-cancel asks once and says whether the command had already finished', 
 test('a finished result is kept for an hour by default', t => {
   const jobs = makeJobs(); t.after(() => jobs.stop());
   assert.equal(jobs.retainMs, 60 * 60_000);
+});
+
+test('a durable command gets saved input once, and the input file is gone after', async t => {
+  const jobs = makeJobs(); t.after(() => jobs.stop());
+  const input = Buffer.from('line one\nline two\n').toString('base64');
+  const started = jobs.start({ ...spec('let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(s.toUpperCase()))'), id: id(901), stdin: input }, 'owner');
+  assert.equal(started.stdin, true, 'the start says the input was taken');
+  const r = await result(jobs, id(901));
+  assert.equal(r.exitCode, 0);
+  assert.equal(r.output, 'LINE ONE\nLINE TWO\n\n');
+  assert.ok(!readdirSync(join(jobs.directory, id(901))).includes('stdin'));
+  assert.throws(() => jobs.start({ ...spec('0'), id: id(902), stdin: 'A'.repeat(2 * 1024 * 1024) }, 'owner'), /too large/);
+  // Without input, stdin is empty as before.
+  jobs.start({ ...spec('let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.stringify(s)))'), id: id(903) }, 'owner');
+  assert.equal((await result(jobs, id(903))).output, '""\n');
+});
+
+test('remote CLI sends input with the start and warns when an older machine drops it', async () => {
+  for (const takes of [true, false]) {
+    const stdout = new PassThrough(), stderr = new PassThrough(); let warned = '', sent;
+    stderr.on('data', chunk => warned += chunk);
+    const connect = async () => ({ close() {}, rpc: async (method, p) => {
+      if (method === M.EXEC_START) { sent = p.stdin; return { id: p.id, ...(takes ? { stdin: true } : {}) }; }
+      return { status: 'exited', exitCode: 0, last: 0, more: false, chunks: [] };
+    } });
+    const { runRemoteCommand } = await import('../packages/connect/src/execution-cli.js');
+    await runRemoteCommand({ machine: 'VM', argv: ['cat'], heavy: false, timeout: 5000, env: {}, stdin: Buffer.from('hi') },
+      { net: { self: 'self' }, machineId: () => 'vm', connect, stdout, stderr, parentId: null });
+    assert.equal(Buffer.from(sent, 'base64').toString(), 'hi');
+    assert.equal(/older Helm/.test(warned), !takes);
+  }
 });

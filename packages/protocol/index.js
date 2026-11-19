@@ -77,6 +77,7 @@ export const T = {
   // revocation has to propagate even when nothing else about the network has
   // changed.
   ROSTER: 'roster',               // daemon <-> hub { roster }
+  WAKE_STATE: 'wakeState',        // daemon <-> hub { hash } or { records[], hash? }
   // The owner's preferences (owner.js): one owner-wide record, reconciled the
   // same way - a fingerprint, and the record itself only when they differ.
   OWNER: 'owner',                 // daemon <-> hub { hash } | { record }
@@ -113,6 +114,7 @@ export const CONTROLLER_REFUSAL =
 export const M = {
   ENV_INFO: 'env.info',            // {} -> { host, os, arch, uptime, engines }
   MACHINE_STATS: 'machine.stats',  // {} -> { at, cpu{cores,model,used%}, load[], memory{total,used}, disk{total,free}, gpus[], uptime }
+  MACHINE_WAKE: 'machine.wake',    // on an online sender: { target } -> { sent }
   // Renaming goes to the machine being renamed, never to the hub the phone
   // happened to reach: a machine's roster record has exactly one author.
   ENV_RENAME: 'env.rename',        // { name } -> { id, name }
@@ -239,6 +241,9 @@ export const M = {
   SCHEDULE_SAVE: 'schedule.save',
   SCHEDULE_DELETE: 'schedule.delete',
   SCHEDULE_RUN: 'schedule.run',
+  TOOL_LIST: 'tool.list',         // { seen? } -> { tools[], seen?, at }
+  TOOL_SAVE: 'tool.save',         // { name, argv[], description?, cwd? } -> { tool, replaced }
+  TOOL_REMOVE: 'tool.remove',     // { name } -> { removed }
   SESSION_NOTIFY: 'session.notify',       // { id, on } -> { ok }  ping me when this thread finishes
   SESSION_MODE: 'session.mode',       // { id, mode } -> { session }
   SESSION_MODEL: 'session.model',
@@ -329,6 +334,12 @@ export const M = {
   FORWARD_LIST: 'forward.list',    // {} -> { forwards[], ownerSeenAt }  ownerSeenAt: when the owner last used Helm in a browser on this machine
   FORWARD_ADD: 'forward.add',      // { id, side: 'in'|'out', peer, port, localPort?, expiresAt? } -> { forward }  in: listen here; out: let the peer reach port here
   FORWARD_REMOVE: 'forward.remove', // { id, notify? } -> { removed }  notify: tell the other machine to remove its side too
+  LOCAL_MODELS_CATALOG: 'models.catalog',
+  LOCAL_MODELS_LIST: 'models.list',
+  LOCAL_MODELS_WORK: 'models.work',
+  LOCAL_MODELS_JOB: 'models.job',
+  LOCAL_MODELS_OPEN: 'models.open',
+  LOCAL_MODELS_ENDPOINT: 'models.endpoint',
   SCREEN_STATUS: 'screen.status',  // {} -> { supported, backend?, built?, running?, needsSetup?, packages?, error? }  owner only
   SCREEN_SETUP: 'screen.setup',    // {} -> status  installs the build packages as admin, then builds the engine; owner only
   SCREEN_START: 'screen.start',    // {} -> { port, token } | { needs: 'setup', packages } | { error }  this machine's real screen; owner only

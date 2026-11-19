@@ -3,9 +3,11 @@ import { join } from 'node:path';
 import { randomBytes, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { HELM_DIR } from './paths.js';
+import { EventTriggers } from './event-triggers.js';
 
 const MAX_BODY = 16384, MAX_TASKS = 128, MAX_DELIVERIES = 32;
 const token = () => randomBytes(24).toString('hex');
+const isWebhook = record => record.type === 'webhook' || record.event?.kind === 'webhook';
 const same = (a, b) => typeof a === 'string' && typeof b === 'string' && timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
 const secretName = /authorization|cookie|token|secret|signature|password|key/i;
 export function renderWebhookPrompt(prompt, { body, headers = {}, query = {} }) {
@@ -39,7 +41,7 @@ export function nextScheduledRun(record, from) {
 }
 
 export class Schedules {
-  constructor({ sessions, directory = HELM_DIR, now = Date.now, shareName, publicOrigin = () => null } = {}) {
+  constructor({ sessions, directory = HELM_DIR, now = Date.now, shareName, publicOrigin = () => null, triggers } = {}) {
     this.sessions = sessions; this.directory = directory; this.filename = join(directory, 'schedules.json');
     this.now = now; this.shareName = shareName; this.publicOrigin = publicOrigin;
     this.records = []; this.running = new Set(); this.generation = 0; this.rates = new Map();
@@ -48,24 +50,55 @@ export class Schedules {
       if (!Array.isArray(data) || data.length > MAX_TASKS) throw new Error('saved schedules are invalid');
       this.records = data;
     }
+    this.triggers = new EventTriggers({ ...triggers, schedules: this, sessions, now });
   }
   persist() {
     mkdirSync(this.directory, { recursive: true });
     writeFileSync(`${this.filename}.tmp`, JSON.stringify(this.records), { mode: 0o600 });
     renameSync(`${this.filename}.tmp`, this.filename);
   }
-  view(record) {
+  view(record, includeLinks = true) {
     const { webhookToken, hmacSecret, deliveries, ...visible } = record;
     const path = webhookToken ? `/hooks/${record.id}/${webhookToken}` : null;
-    return { ...visible, ...(path ? { webhook: { path, url: this.port && this.publicOrigin() ? `${this.publicOrigin()}${path}` : null, hasSecret: !!hmacSecret, error: this.listenerError || null },
-      deliveries: (deliveries || []).map(({ prompt, ...receipt }) => receipt) } : {}) };
+    const result = record.type === 'event' ? this.triggers.visible(record) : visible;
+    if (!path) return result;
+    const origin = this.publicOrigin();
+    return { ...result, webhook: { hasSecret: !!hmacSecret, error: this.listenerError || null,
+      ...(includeLinks ? { path, url: this.port && origin ? `${origin}${path}` : null,
+        ...(record.type === 'event' && this.port ? { localUrl: `http://127.0.0.1:${this.port}${path}` } : {}) } : {}) },
+      deliveries: (deliveries || []).map(({ prompt, ...receipt }) => receipt) };
   }
-  list(sessionId) {
-    return { schedules: this.records.filter(r => !sessionId || r.sessionId === sessionId).map(r => this.view(r)), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, error: this.backgroundError || null };
+  list(sessionId, includeLinks) {
+    return { supportsTriggers: true, schedules: this.records.filter(r => !sessionId || r.sessionId === sessionId).map(r => this.view(r, includeLinks)), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, error: this.backgroundError || this.triggerError || null };
+  }
+  observeChat(session, event) {
+    try {
+      if (event) this.triggers.observeChat(session, event);
+      else this.triggers.observeNative(session);
+    } catch (error) { this.triggerError = error.message; }
+  }
+  async saveTrigger(input) {
+    if (this.records.length >= MAX_TASKS) throw new Error('This machine has too many scheduled tasks.');
+    const generation = this.generation;
+    if (input.event?.kind === 'webhook') await this.listen();
+    const record = await this.triggers.create(input, randomBytes(8).toString('hex'), token());
+    if (generation !== this.generation) throw new Error('Helm is stopping. Try again after it starts.');
+    if (this.records.length >= MAX_TASKS) throw new Error('This machine has too many scheduled tasks.');
+    this.records.push(record);
+    this.persist();
+    this.triggers.background(record);
+    return { schedule: this.view(record, false) };
   }
   save(input) {
     const current = input.id ? this.records.find(r => r.id === input.id) : null;
     if (input.id && !current) throw new Error('schedule not found');
+    if (!current && input.type === 'event') return this.saveTrigger(input);
+    if (current?.type === 'event') {
+      if (typeof input.enabled !== 'boolean' || Object.keys(input).some(key => key !== 'id' && key !== 'enabled')) throw new Error('Use helm when to pause or resume this trigger.');
+      this.triggers.setEnabled(current, input.enabled);
+      if (input.enabled) this.triggers.background(current);
+      return { schedule: this.view(current, false) };
+    }
     // Pausing needs no checks: it must work while a run is sending, and for a
     // chat that is archived or deleted.
     if (current && input.enabled === false && Object.keys(input).every(key => key === 'id' || key === 'enabled')) {
@@ -107,12 +140,15 @@ export class Schedules {
     return { schedule: this.view(record) };
   }
   remove(id) {
-    if (this.running.has(id)) throw new Error('wait for the current dispatch to finish');
+    const record = this.records.find(r => r.id === id);
+    if (this.running.has(id) || this.triggers.checking.has(id) && record?.run) throw new Error('wait for the current dispatch to finish');
+    if (record?.type === 'event') record.enabled = false;
     this.records = this.records.filter(r => r.id !== id); this.rates.delete(id); this.persist(); return { ok: true };
   }
   async run(id, manual = true, delivery = null) {
     const record = this.records.find(r => r.id === id);
     if (!record) throw new Error('schedule not found');
+    if (record.type === 'event') throw new Error('This task starts when its event happens.');
     if (this.running.has(id)) return { skipped: true, reason: 'This task is already dispatching.' };
     if (record.type === 'webhook' && !delivery) {
       delivery = record.deliveries?.find(d => d.status === 'pending' || d.status === 'error');
@@ -162,10 +198,11 @@ export class Schedules {
     } finally { this.running.delete(id); }
   }
   async receive(id, suppliedToken, { body = '', rawBody, headers = {}, query = {} } = {}) {
-    const record = this.records.find(r => r.id === id && r.type === 'webhook');
+    const record = this.records.find(r => r.id === id && isWebhook(r));
     if (!record || !same(record.webhookToken, suppliedToken)) return { status: 404, error: 'Webhook not found' };
+    if ((rawBody?.length ?? Buffer.byteLength(body)) > MAX_BODY) return { status: 413, error: 'Webhook body exceeds 16 KiB' };
+    if (record.type === 'event') return this.triggers.webhook(record, body, headers, rawBody);
     if (!record.enabled) return { status: 409, error: 'Automation is paused' };
-    if (Buffer.byteLength(body) > MAX_BODY) return { status: 413, error: 'Webhook body exceeds 16 KiB' };
     if (record.hmacSecret) {
       const expected = `sha256=${createHmac('sha256', record.hmacSecret).update(rawBody || body).digest('hex')}`;
       if (!same(expected, headers['x-hub-signature-256'])) return { status: 401, error: 'Invalid signature' };
@@ -191,7 +228,7 @@ export class Schedules {
     try {
       for (const record of [...this.records]) {
         if (generation !== this.generation) break;
-        if (!record.enabled || this.running.has(record.id)) continue;
+        if (record.type === 'event' || !record.enabled || this.running.has(record.id)) continue;
         const delivery = record.type === 'webhook' ? record.deliveries?.find(d => d.status === 'pending' || d.status === 'error') : null;
         if (record.type === 'webhook' ? !delivery : record.nextRunAt > this.now()) continue;
         if (record.type === 'fixed_time' && !record.dispatching && this.now() - record.nextRunAt > 600000) {
@@ -205,16 +242,24 @@ export class Schedules {
   // The webhook Spin is open while a webhook task is on. Stop on it pauses
   // them all; `helm schedule resume` opens it again.
   share() {
-    return this.port && this.records.some(r => r.type === 'webhook' && r.enabled) ? { name: this.shareName, port: this.port, automation: true, createdAt: 0 } : null;
+    return this.port && this.records.some(r => isWebhook(r) && r.enabled) ? { name: this.shareName, port: this.port, automation: true, createdAt: 0 } : null;
   }
   closeWebhooks() {
-    const paused = this.records.filter(r => r.type === 'webhook' && r.enabled);
+    const paused = this.records.filter(r => isWebhook(r) && r.enabled);
     for (const record of paused) record.enabled = false;
     if (paused.length) this.persist();
     return paused.map(({ id, name }) => ({ id, name }));
   }
-  async listen() {
-    if (this.server || !this.shareName) return;
+  listen() {
+    if (!this.shareName) return Promise.resolve();
+    this.listening ??= this.openListener().catch(error => {
+      this.listenerError = error.message;
+      this.listening = null;
+      throw error;
+    });
+    return this.listening;
+  }
+  async openListener() {
     this.server = createServer({ maxHeaderSize: 8192, requestTimeout: 10000, headersTimeout: 10000 }, (req, res) => {
       const reply = (status, data) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)); };
       let url; try { url = new URL(req.url, 'http://localhost'); } catch { reply(400, { error: 'Invalid URL' }); return; }
@@ -234,15 +279,39 @@ export class Schedules {
       });
     });
     const server = this.server;
-    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+    const portFile = join(this.directory, 'webhook-port');
+    const preferred = existsSync(portFile) ? Number(readFileSync(portFile, 'utf8')) : 0;
+    const bind = port => new Promise((resolve, reject) => {
+      const ready = () => { server.off('error', failed); resolve(); };
+      const failed = error => { server.off('listening', ready); reject(error); };
+      server.once('error', failed);
+      server.listen(port, '127.0.0.1', ready);
+    });
+    try { await bind(Number.isInteger(preferred) && preferred >= 0 && preferred <= 65535 ? preferred : 0); }
+    catch (error) {
+      if (error.code !== 'EADDRINUSE') throw error;
+      await bind(0);
+    }
     if (this.server !== server) { server.close(); return; }
     this.port = server.address().port; server.unref();
+    this.listenerError = null;
+    mkdirSync(this.directory, { recursive: true });
+    writeFileSync(portFile, String(this.port), { mode: 0o600 });
   }
   backgroundTick() { void this.tick().then(() => { this.backgroundError = null; }).catch(error => { this.backgroundError = error.message; }); }
   start() {
     if (this.timer) return;
     void this.listen().catch(error => { this.listenerError = error.message; });
     this.timer = setInterval(() => this.backgroundTick(), 15000); this.timer.unref?.(); this.backgroundTick();
+    this.triggerTimer = setInterval(() => {
+      void this.triggers.tick().then(() => { this.triggerError = null; }).catch(error => { this.triggerError = error.message; });
+    }, 5000);
+    this.triggerTimer.unref?.();
   }
-  stop() { this.generation += 1; clearInterval(this.timer); this.timer = null; this.server?.close(); this.server = null; this.port = null; }
+  stop() {
+    this.generation += 1;
+    clearInterval(this.timer); this.timer = null;
+    clearInterval(this.triggerTimer); this.triggers.stop();
+    this.server?.close(); this.server = null; this.port = null; this.listening = null;
+  }
 }
