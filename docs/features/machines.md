@@ -70,6 +70,13 @@ owner's home or network to bypass this check.
   switches to watch only, with a "Take over again" bar. niri reserves
   Super+Ctrl+Esc on the owner's machines. A hidden test browser has no
   keyboard lock, so only Brave or Chrome proves the Super keys.
+- **Desktop shortcuts on Wayland:** niri never runs its own binds for keys
+  from a Wayland virtual keyboard (tested 2026-11-19: `wtype` Super+Esc did
+  not open the overview). So the engine presses keys through a kernel
+  keyboard (/dev/uinput, Helm's edit in `input.cpp`) and keeps the virtual
+  keyboard for typed text. Set up writes a `uaccess` udev rule
+  (`70-helm-screen.rules`) so the signed-in person may use it. Until then a
+  Wayland screen asks for Set up; "Open without shortcuts" skips it.
 - **Speed:** every frame goes through a hub, so the delay is the path to the
   hub and back (about 0.2 to 0.9 s from why through the VM). The owner's
   router blocks devices on its Wi-Fi from reaching each other, so why and

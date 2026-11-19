@@ -14,7 +14,7 @@ import { webcrypto } from 'node:crypto';
 const base = mkdtempSync(join(tmpdir(), 'helm-screen-'));
 process.env.HELM_DIR = join(base, 'helm');
 const {
-  packageFamily, packagesFor, installCommand, findDisplay, connectionsTo, screenForwardId, sourceHash, SCREEN_URL, SOURCE_DIR, Screens,
+  packageFamily, packagesFor, installCommand, findDisplay, connectionsTo, screenForwardId, sourceHash, SCREEN_URL, SOURCE_DIR, Screens, keysReady, UINPUT_COMMAND, UINPUT_RULE_FILE,
 } = await import('../packages/connect/src/screen.js');
 test.after(() => rmSync(base, { recursive: true, force: true }));
 
@@ -103,4 +103,15 @@ test('the window call refuses any link but a screen link', async () => {
   await assert.rejects(screens.window({ url: 'http://127.0.0.1:1/?name=x#token=bad' }), /not a screen link/);
   await assert.rejects(screens.window({ url: 'https://example.com/' }), /not a screen link/);
   assert.ok(!existsSync(join(process.env.HELM_DIR, 'screen', 'engine.json')));
+});
+
+test('desktop shortcuts need a kernel keyboard this account may use', () => {
+  const dev = join(base, 'uinput');
+  writeFileSync(dev, '', { mode: 0o600 });
+  assert.equal(keysReady(dev), true);
+  assert.equal(keysReady(join(base, 'none')), false);
+  // The rule gives the device to the signed-in person only, and loads it now.
+  assert.ok(UINPUT_COMMAND.startsWith(`printf '%s\\n' 'KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess"`));
+  assert.match(UINPUT_RULE_FILE, /^\/etc\/udev\/rules\.d\/(?:[0-6]\d|7[0-2])-/, "uaccess works only before 73-seat-late");
+  assert.match(UINPUT_COMMAND, /udevadm trigger --action=add --name-match=uinput/);
 });

@@ -8,7 +8,7 @@ import type { Client } from './client';
  */
 export type ScreenOpen =
   | { url: string }
-  | { needs: 'setup'; packages: string[]; canInstall: boolean }
+  | { needs: 'setup'; packages: string[]; canInstall: boolean; keys?: boolean }
   | { error: string };
 
 /** The forward id; screen.js makes the same one to stop it. */
@@ -20,12 +20,12 @@ export async function screenForwardId(source: string, target: string): Promise<s
 const older = (err: any, name: string) =>
   /unknown method/.test(err?.message || '') ? `${name} runs an older Helm without screens. Update it first.` : null;
 
-export async function openScreen(client: Client, { machine, name, here, hereName }: { machine: string; name: string; here: string; hereName: string }): Promise<ScreenOpen> {
+export async function openScreen(client: Client, { machine, name, here, hereName, withoutKeys = false }: { machine: string; name: string; here: string; hereName: string; withoutKeys?: boolean }): Promise<ScreenOpen> {
   let started: any;
-  try { started = await client.rpc(machine, 'screen.start', {}, 120_000); }
+  try { started = await client.rpc(machine, 'screen.start', withoutKeys ? { withoutKeys } : {}, 120_000); }
   catch (err: any) { return { error: older(err, name) ?? `${name} did not start its screen: ${err.message}` }; }
   if (started?.error) return { error: started.error };
-  if (started?.needs === 'setup') return { needs: 'setup', packages: started.packages ?? [], canInstall: !!started.canInstall };
+  if (started?.needs === 'setup') return { needs: 'setup', packages: started.packages ?? [], canInstall: !!started.canInstall, keys: !!started.keys };
   let port = Number(started?.port);
   if (machine !== here) {
     const id = await screenForwardId(machine, here);

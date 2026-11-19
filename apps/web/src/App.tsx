@@ -1154,7 +1154,7 @@ function Shell({ client, conn, onSignOut }: {
   // window. Inside Helm only: in a browser tab it replaces hard reload.
   const [screenPicker, setScreenPicker] = useState(false);
   const [screenNote, setScreenNote] = useState<{ text: string; busy?: boolean } | null>(null);
-  const [screenSetup, setScreenSetup] = useState<{ envId: string; name: string; packages: string[]; canInstall: boolean; busy?: boolean } | null>(null);
+  const [screenSetup, setScreenSetup] = useState<{ envId: string; name: string; packages: string[]; canInstall: boolean; keys?: boolean; busy?: boolean } | null>(null);
   const askScreen = useRef<() => void>(() => {});
   askScreen.current = () => {
     setPalette(false);
@@ -1175,14 +1175,14 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
-  const openScreenOn = useCallback(async (envId: string) => {
+  const openScreenOn = useCallback(async (envId: string, withoutKeys = false) => {
     const env = envs.find((e) => e.id === envId);
     const here = envs.find((e) => e.id === hereId);
     if (!env || !here) return;
     setScreenPicker(false);
     setScreenNote({ text: `Opening the screen of ${env.name}…`, busy: true });
-    const r = await openScreen(client, { machine: env.id, name: env.name, here: here.id, hereName: here.name });
-    if ('needs' in r) { setScreenNote(null); setScreenSetup({ envId: env.id, name: env.name, packages: r.packages, canInstall: r.canInstall }); return; }
+    const r = await openScreen(client, { machine: env.id, name: env.name, here: here.id, hereName: here.name, withoutKeys });
+    if ('needs' in r) { setScreenNote(null); setScreenSetup({ envId: env.id, name: env.name, packages: r.packages, canInstall: r.canInstall, keys: r.keys }); return; }
     if ('error' in r) { setScreenNote({ text: r.error }); return; }
     const shown = await showScreen(client, here.id, r.url, env.id);
     setScreenNote(shown ? null : { text: `Helm could not open a window for the screen of ${env.name}. Allow pop-ups for Helm, then try again.` });
@@ -1845,8 +1845,11 @@ function Shell({ client, conn, onSignOut }: {
         }))} />}
       {screenSetup && (
         <Confirm title={`Set up the screen of ${screenSetup.name}?`} confirmLabel="Set up" busy={screenSetup.busy} enterConfirms
+          other={screenSetup.keys && !screenSetup.packages.length ? { label: 'Open without shortcuts', onClick: () => { const { envId } = screenSetup; setScreenSetup(null); void openScreenOn(envId, true); } } : undefined}
           body={screenSetup.canInstall
-            ? <>Helm installs the missing build packages on {screenSetup.name} as admin, then builds the screen program. This takes 1 to 3 minutes.</>
+            ? screenSetup.packages.length
+              ? <>Helm installs the missing build packages on {screenSetup.name} as admin, then builds the screen program.{screenSetup.keys ? ' It also lets the screen press desktop shortcuts there.' : ''} This takes 1 to 3 minutes.</>
+              : <>Helm lets the screen act as a keyboard on {screenSetup.name}, so its desktop shortcuts work. This needs admin rights once. Without it, typing works, but shortcuts like Super+T do not.</>
             : <>{screenSetup.name} needs a C++ compiler, make, pkg-config, x264, libwebsockets and the display libraries. Helm cannot install them on this Linux. Install them, then try again.</>}
           onCancel={() => { if (!screenSetup.busy) setScreenSetup(null); }}
           onConfirm={() => { if (screenSetup.canInstall) void setUpScreen(); else setScreenSetup(null); }} />

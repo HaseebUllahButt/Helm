@@ -2,7 +2,10 @@
 #include "backends/linux/wayland/keymap.hpp"
 #include "backends/linux/wayland/wayland.hpp"
 #include "core/input.hpp"
+#include <fcntl.h>
 #include <linux/input-event-codes.h>
+#include <linux/uinput.h>
+#include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -112,6 +115,57 @@ void keyboardRepeatInfo(void*, wl_keyboard*, int32_t, int32_t) {}
 
 const wl_keyboard_listener keyboardListener = {
   keyboardKeymap, keyboardEnter, keyboardLeave, keyboardKey, keyboardModifiers, keyboardRepeatInfo
+};
+
+// Helm: keys through a kernel keyboard (/dev/uinput) when this user may use
+// it. Some compositors (niri) never run their own shortcuts for keys from a
+// Wayland virtual keyboard; a kernel keyboard goes the same way as a real one.
+class UinputKeyboard {
+ public:
+  static std::unique_ptr<UinputKeyboard> open() {
+    const int fd = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return nullptr;
+    std::unique_ptr<UinputKeyboard> keyboard(new UinputKeyboard(fd));
+    if (!keyboard->create()) return nullptr;
+    return keyboard;
+  }
+  ~UinputKeyboard() {
+    ::ioctl(fd_, UI_DEV_DESTROY);
+    ::close(fd_);
+  }
+  UinputKeyboard(const UinputKeyboard&) = delete;
+  UinputKeyboard& operator=(const UinputKeyboard&) = delete;
+
+  void key(uint32_t code, bool press) {
+    emit(EV_KEY, uint16_t(code), press ? 1 : 0);
+    emit(EV_SYN, SYN_REPORT, 0);
+  }
+
+ private:
+  explicit UinputKeyboard(int fd) : fd_(fd) {}
+
+  bool create() {
+    if (::ioctl(fd_, UI_SET_EVBIT, EV_KEY) < 0 || ::ioctl(fd_, UI_SET_EVBIT, EV_SYN) < 0) return false;
+    // Keyboard keys only, so libinput sees a keyboard and not a mouse.
+    for (int code = KEY_ESC; code <= KEY_MICMUTE; ++code)
+      if (::ioctl(fd_, UI_SET_KEYBIT, code) < 0) return false;
+    uinput_setup setup {};
+    setup.id.bustype = BUS_VIRTUAL;
+    setup.id.vendor = 0x1209;
+    setup.id.product = 0x4e4c;
+    std::snprintf(setup.name, sizeof setup.name, "Helm screen keyboard");
+    return ::ioctl(fd_, UI_DEV_SETUP, &setup) >= 0 && ::ioctl(fd_, UI_DEV_CREATE) >= 0;
+  }
+
+  void emit(uint16_t type, uint16_t code, int32_t value) {
+    input_event event {};
+    event.type = type;
+    event.code = code;
+    event.value = value;
+    while (::write(fd_, &event, sizeof event) < 0 && errno == EINTR) {}
+  }
+
+  int fd_;
 };
 
 uint32_t linuxButton(unsigned button) {
@@ -282,6 +336,7 @@ class WaylandInput final : public InputBackend {
   XkbContext xkbContext_;
   XkbState xkbState_;
   std::unique_ptr<Keymap> keymap_;
+  std::unique_ptr<UinputKeyboard> uinput_;
   SeatWatch seatWatch_;
   std::set<uint32_t> held_;
   std::set<uint32_t> modifierKeys_;
@@ -329,6 +384,8 @@ class WaylandInput final : public InputBackend {
       connection_->virtualPointerManager, seat_.get(), connection_->output));
     if (!pointer_) throw std::runtime_error("Cannot create output-bound Wayland virtual pointer");
     uploadKeymap(keymap_->text());
+    uinput_ = UinputKeyboard::open();
+    std::fprintf(stderr, "keys: %s\n", uinput_ ? "uinput" : "virtual-keyboard");
     if (!flushDisplay(connection_->display) || wl_display_roundtrip(connection_->display) < 0)
       throw std::runtime_error("Wayland input device registration failed");
   }
@@ -423,6 +480,13 @@ class WaylandInput final : public InputBackend {
     sendModifiers();
   }
 
+  // A key the viewer pressed: the kernel keyboard when there is one, so the
+  // compositor's own shortcuts work; typed text stays on the virtual keyboard.
+  void sendKey(uint32_t key, bool press) {
+    if (uinput_) uinput_->key(key, press);
+    else emitKey(key, press);
+  }
+
   void type(uint32_t key) {
     std::vector<uint32_t> lifted;
     for (const auto held : held_)
@@ -443,7 +507,7 @@ class WaylandInput final : public InputBackend {
     switch (job.kind) {
       case InputJob::Kind::key:
         if (job.press) held_.insert(job.code); else held_.erase(job.code);
-        emitKey(job.code, job.press);
+        sendKey(job.code, job.press);
         break;
       case InputJob::Kind::text: {
         bool changed = false;
@@ -493,6 +557,7 @@ class WaylandInput final : public InputBackend {
   }
 
   void cleanup() {
+    uinput_.reset();
     pointer_.reset();
     keyboard_.reset();
     seat_.reset();
@@ -546,8 +611,9 @@ class WaylandInput final : public InputBackend {
     }
     lock.unlock();
     const std::vector<uint32_t> held(held_.begin(), held_.end());
-    for (const auto key : held) emitKey(key, false);
+    for (const auto key : held) sendKey(key, false);
     held_.clear();
+    uinput_.reset();
     if (connection_) flushDisplay(connection_->display);
     cleanup();
   }
