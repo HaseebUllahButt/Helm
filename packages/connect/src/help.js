@@ -61,6 +61,12 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm schedule list | show <id>  List scheduled tasks on every machine, or show one
   helm schedule pause | resume | remove <id>
                                   Stop a task for a while, start it again, or delete it
+  helm tools list [--json]         List the named commands on every machine
+  helm tools run <name> [args]     Run a tool on its machine; input, output and exit code pass through
+  helm tools add <name> [--description <text>] [--machine <name>] [--cwd <path>] -- <command>
+                                  Save a command as a tool (default machine: this one)
+  helm tools show | remove <name> [--machine <name>]
+                                  Show a tool's command, or delete it
   helm remove <id>                  Remove a device or machine permanently
   helm leave                        Remove this machine from its network
 
@@ -188,6 +194,7 @@ Machines and devices
   exec-cancel      Stop a command started earlier
   run              Run a command here through Helm
   sudo             Run a command as admin after the owner allows it
+  tools            Find and run the owner's named commands on any machine
   copy             Copy files to another machine; resume if stopped
   send, receive    Send a folder with the other machine's permission
   send-task        Send files, .env and a task to another machine
@@ -346,6 +353,22 @@ const DETAILS = {
   A restart of Helm does not pause a task.
   Webhook tasks share one Spin per machine (helm-hooks-...).
   Stop on that Spin pauses every webhook task there.`,
+
+  tools: `
+  Tools are commands the owner saved by name on a machine.
+  Any agent on any machine can find and run them.
+  Run helm tools list when you need a capability you do not have.
+    helm tools run <name> [args]   Every word after the name goes to the tool.
+                                   Put helm options before the name:
+                                   --machine <name>  when two machines have it
+                                   --timeout <ms>    default 15 minutes
+  A tool on this machine runs in your folder, with your input as it comes.
+  A tool on another machine runs in its home folder (or its --cwd).
+  There it gets all piped input at once, up to 1 MB.
+  The exit code is the tool's own (124 when it timed out).
+  A tool on an offline machine shows in the list, but cannot run.
+  remove deletes the tool. Its output shows the add command to undo it.
+  Add --json to list or show for JSON.`,
 
   spin: `
   This command runs helm share.

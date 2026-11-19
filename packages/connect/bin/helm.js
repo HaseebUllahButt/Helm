@@ -2074,6 +2074,17 @@ try {
       break;
     }
 
+    case 'tools':
+    case 'tool': {
+      const { runToolsCommand } = await import('../src/tools-cli.js');
+      const net = requireNetwork();
+      try {
+        process.exitCode = await runToolsCommand(rest, { net, machineId,
+          rpc: (env, method, params, timeout) => hubRpc(net, env, method, params, { timeout, budget: timeout }) });
+      } catch (error) { die(error.message); }
+      break;
+    }
+
     case 'remove':
     case 'revoke':
       remove();

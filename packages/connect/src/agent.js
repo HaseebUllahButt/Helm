@@ -74,6 +74,7 @@ import { EVENTS_DIR } from './events.js';
 import { SendEngine } from './send-engine.js';
 import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
+import { Tools } from './tools.js';
 import { ExecutionJobs } from './execution.js';
 import { ensureFastTcp, ensureLanFirewall, ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
@@ -2462,6 +2463,10 @@ export class Daemon {
         if (method === M.SCHEDULE_SAVE) return this.schedules.save(p);
         if (method === M.SCHEDULE_DELETE) return this.schedules.remove(p.id);
         return this.schedules.run(p.id);
+      // The tool registry: this machine's named commands (helm tools).
+      case M.TOOL_LIST: return (this.tools ??= new Tools()).dispatchList({ seen: p.seen === true });
+      case M.TOOL_SAVE: return (this.tools ??= new Tools()).save(p);
+      case M.TOOL_REMOVE: return (this.tools ??= new Tools()).remove(String(p.name ?? ''));
       case M.SESSION_NOTIFY:   return this.sessions.setNotifyDone(p.id, p.on !== false);
       case M.SESSION_CONTROL: return this.sessions.control(p.id, p.kind);
       case M.SESSION_MODE:    return this.sessions.setMode(p.id, p.mode);

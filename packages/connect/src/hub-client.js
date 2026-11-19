@@ -126,6 +126,8 @@ export const REPEATABLE = new Set([
   // A running screen is reused, so asking again starts nothing new.
   M.SCREEN_STATUS, M.SCREEN_START, M.SCREEN_STOP,
   M.SESSION_DELIVER,
+  // Keyed by the tool's name: a second save or remove changes nothing.
+  M.TOOL_LIST, M.TOOL_SAVE, M.TOOL_REMOVE,
 ]);
 export const NON_REPEATABLE = new Set(Object.values(M).filter(method => !REPEATABLE.has(method)));
 

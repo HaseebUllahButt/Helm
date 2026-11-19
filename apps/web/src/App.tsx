@@ -72,6 +72,7 @@ const DevicesView = deferredScreen('Devices', () => import('./screens/Devices').
 const EnvSettings = deferredScreen('Machine settings', () => import('./screens/MachineSettings').then(m => ({ default: m.EnvSettings })));
 const SettingsView = deferredScreen('Settings', () => import('./screens/Settings').then(m => ({ default: m.SettingsView })));
 const LinksView = deferredScreen('Links', () => import('./screens/Settings').then(m => ({ default: m.LinksView })));
+const ToolsView = deferredScreen('Tools', () => import('./screens/Tools').then(m => ({ default: m.ToolsView })));
 const NetworkSettings = deferredScreen('Network settings', () => import('./screens/Settings').then(m => ({ default: m.NetworkSettings })));
 const OwnerView = deferredScreen('Your preferences', () => import('./screens/Owner').then(m => ({ default: m.OwnerView })));
 const ModelPrefsView = deferredScreen('Models', () => import('./screens/ModelPrefs').then(m => ({ default: m.ModelPrefsView })));
@@ -158,6 +159,7 @@ export type MainView =
   | { kind: 'network-settings' }
   // Every machine's public and private links (`helm share`) in one list.
   | { kind: 'links' }
+  | { kind: 'tools' }
   // Which helm each machine runs, and updating them from here.
   | { kind: 'updates' }
   // The owner's preferences every agent gets, and the keeper that updates them.
@@ -180,7 +182,7 @@ export type MainView =
 const VIEW_KINDS: Record<MainView['kind'], true> = {
   env: true, integrations: true, usage: true, dashboard: true, brain: true, new: true,
   browse: true, 'transfer-browse': true, transfer: true, verify: true,
-  start: true, settings: true, 'network-settings': true, links: true,
+  start: true, settings: true, 'network-settings': true, links: true, tools: true,
   updates: true, owner: true, models: true, devices: true, 'app-settings': true,
   session: true, 'native-agent': true, starting: true,
   'terminal-opening': true,
@@ -608,6 +610,7 @@ function Shell({ client, conn, onSignOut }: {
     go('a:dashboard', 'Dashboard', 'machines compute cpu memory gpu load limits balancer accounts', [{ kind: 'dashboard' }]);
     go('a:defaults', 'Agent defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
     go('a:links', 'Spins', 'share spin private forward port', [{ kind: 'app-settings' }, { kind: 'links' }]);
+    go('a:tools', 'Tools', 'tools commands registry scripts agents helm tools', [{ kind: 'app-settings' }, { kind: 'tools' }]);
     for (const t of ['light', 'dark', 'system'] as Theme[]) {
       items.push({
         id: `theme:${t}`, group: 'action', title: `Theme: ${t[0].toUpperCase()}${t.slice(1)}`, keywords: 'appearance colour',
@@ -1107,7 +1110,7 @@ function Shell({ client, conn, onSignOut }: {
   instantTerminal.current = () => {
     const online = envs.filter((e) => e.online);
     const current = nav.current.stack.at(-1);
-    const global = !current || ['usage', 'dashboard', 'brain', 'links', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
+    const global = !current || ['usage', 'dashboard', 'brain', 'links', 'tools', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
       && !(current.kind === 'usage' && current.envId);
     const chosen = !global && nav.current.selected !== autoPicked.current ? nav.current.selected : null;
     const lastUsed = (e: Environment) => Math.max(0, ...(sessions[e.id] ?? []).filter(ownTerminal).map((s) => s.updatedAt ?? 0));
@@ -1378,7 +1381,7 @@ function Shell({ client, conn, onSignOut }: {
   // no machine either.
   const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'dashboard' || view.kind === 'devices'
     || view.kind === 'network-settings' || view.kind === 'app-settings' || view.kind === 'updates'
-    || view.kind === 'links' || view.kind === 'owner';
+    || view.kind === 'links' || view.kind === 'tools' || view.kind === 'owner';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -1634,6 +1637,8 @@ function Shell({ client, conn, onSignOut }: {
           <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
         ) : view.kind === 'links' ? (
           <LinksView client={client} envs={envs} onBack={back} />
+        ) : view.kind === 'tools' ? (
+          <ToolsView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'owner' ? (
           <OwnerView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'network-settings' ? (
