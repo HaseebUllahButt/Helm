@@ -44,6 +44,7 @@ import { LanDiscovery, withHeardAddresses, localSignalRouter } from './lan-disco
 import { describe as describeAsk, describeDone, describeCaptcha, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
 import { Forwards, forwardedPorts } from './forwards.js';
+import { Screens } from './screen.js';
 import { ownerSeenAt } from '@helm/protocol/owner-seen';
 import { publicHosts } from '@helm/protocol/share';
 import { brief, render, summaryLine, readThread, readSnapshot, sessionMatches, snapshotReply, writeSnapshot, mergeSnapshot, fold } from './brain.js';
@@ -492,6 +493,12 @@ export class Daemon {
       rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 15_000, ...opts }),
       log: (line) => console.error(`[helm] ${line}`),
     });
+    // Remote screens: this machine's desktop for the owner (screen.js).
+    this.screens = new Screens({
+      network: () => loadNetwork() ?? this.net,
+      forwards: this.forwards,
+      log: (line) => console.error(`[helm] ${line}`),
+    });
     this.executions = new ExecutionJobs();
     // Helm's service can start before the desktop; its browser windows find the screen later.
     useDesktopScreen(); useOwnerLogins();
@@ -616,6 +623,7 @@ export class Daemon {
       rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
     });
     this.forwards.begin().catch((err) => console.error(`[helm] forwards: ${err.message}`));
+    this.screens.begin();
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
     // path: a message must not wait on every machine answering. The refresh
@@ -888,6 +896,7 @@ export class Daemon {
     this.#stopWatchCheckout?.();
     this.cliUpdates?.stop();
     this.taskTransfers?.stop();
+    this.screens?.close();
     await this.forwards?.stop();
     await this.sendEngine?.stop();
     this.search?.close();
@@ -1869,6 +1878,22 @@ export class Daemon {
   async dispatch(method, p, caller) {
     if (method.startsWith('browser.')) return this.browsers.dispatch(method, p);
     // Admin commands: only this machine's own helm and the owner's devices.
+    // A screen shows and drives the whole desktop: the owner only.
+    if (method.startsWith('screen.')) {
+      if (!this.#selfOrOwner(caller)) throw new Error('Only this machine and the owner\'s devices can open its screen.');
+      if (method === M.SCREEN_STATUS) return this.screens.status();
+      if (method === M.SCREEN_SETUP) {
+        // Admin rights with no card: only a press of Set up on the owner's
+        // own device, never this machine's helm command (an agent's).
+        const net = loadNetwork() ?? this.net;
+        if (!net.devices?.[caller] || net.revoked?.[caller]) throw new Error('Set up a screen from the Helm app: open the screen menu (Ctrl+Shift+R) and press Set up.');
+        return this.screens.setup();
+      }
+      if (method === M.SCREEN_START) return this.screens.start();
+      if (method === M.SCREEN_STOP) return this.screens.stop();
+      if (method === M.SCREEN_WINDOW) return this.screens.window(p);
+      throw new Error(`unknown method: ${method}`);
+    }
     if (method.startsWith('sudo.')) {
       if (!this.sudo) throw new Error('Helm is starting. Try again.');
       return this.sudo.dispatch(method, p, { trusted: this.#selfOrOwner(caller) });

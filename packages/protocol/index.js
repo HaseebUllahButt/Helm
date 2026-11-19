@@ -329,6 +329,11 @@ export const M = {
   FORWARD_LIST: 'forward.list',    // {} -> { forwards[], ownerSeenAt }  ownerSeenAt: when the owner last used Helm in a browser on this machine
   FORWARD_ADD: 'forward.add',      // { id, side: 'in'|'out', peer, port, localPort?, expiresAt? } -> { forward }  in: listen here; out: let the peer reach port here
   FORWARD_REMOVE: 'forward.remove', // { id, notify? } -> { removed }  notify: tell the other machine to remove its side too
+  SCREEN_STATUS: 'screen.status',  // {} -> { supported, backend?, built?, running?, needsSetup?, packages?, error? }  owner only
+  SCREEN_SETUP: 'screen.setup',    // {} -> status  installs the build packages as admin, then builds the engine; owner only
+  SCREEN_START: 'screen.start',    // {} -> { port, token } | { needs: 'setup', packages } | { error }  this machine's real screen; owner only
+  SCREEN_STOP: 'screen.stop',      // {} -> { stopped }
+  SCREEN_WINDOW: 'screen.window',  // { url } -> { opened }  on the owner's computer: a screen link in its own app window
 
   // A round trip that does nothing, for measuring what one costs. The
   // terminal needs to know: how it draws depends on how far away you are.

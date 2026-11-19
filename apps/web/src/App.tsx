@@ -2,6 +2,7 @@ import { errorMessage } from './errors';
 import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice } from './session/voice';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
+import { openScreen, showScreen } from './screen';
 import { useNow } from './useNow';
 import { isUnread, markSeen, seenHere, unseenFinish, useSeenVersion } from './threadStatus';
 import { usePageHidden } from './usePageHidden';
@@ -583,6 +584,7 @@ function Shell({ client, conn, onSignOut }: {
           run: () => setNewChat({ envId: e.id }),
         });
         items.push({ id: `integrations:${e.id}`, group: 'action', title: `Connectors & skills on ${e.name}`, keywords: 'mcp servers plugins integrations', run: () => navigate([{ kind: 'env' }, { kind: 'integrations' }], e.id) });
+        items.push({ id: `screen:${e.id}`, group: 'action', title: `Screen of ${e.name}`, keywords: 'remote desktop screen view control rdp vnc', run: () => { if (hereId) void openScreenOn(e.id); else askScreen.current(); } });
         items.push({
           id: `send:${e.id}`, group: 'action', title: `Send a project from ${e.name}`,
           keywords: 'transfer env copy move folder', run: () => navigate([{ kind: 'env' }, { kind: 'transfer-browse' }], e.id),
@@ -612,6 +614,7 @@ function Shell({ client, conn, onSignOut }: {
         run: () => saveAppearance({ ...loadAppearance(), theme: t }),
       });
     }
+    items.push({ id: 'a:screen', group: 'action', title: 'Open a screen', sub: 'See and use the desktop of a machine.', keywords: 'remote desktop screen view control rdp vnc', run: () => askScreen.current() });
     items.push({ id: 'a:keys', group: 'action', title: 'Keyboard shortcuts', keywords: 'keys help', run: () => setHelp(true) });
     return items;
   };
@@ -1147,6 +1150,56 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
+  // Ctrl/Cmd+Shift+R: pick a machine, see and use its screen in its own
+  // window. Inside Helm only: in a browser tab it replaces hard reload.
+  const [screenPicker, setScreenPicker] = useState(false);
+  const [screenNote, setScreenNote] = useState<{ text: string; busy?: boolean } | null>(null);
+  const [screenSetup, setScreenSetup] = useState<{ envId: string; name: string; packages: string[]; canInstall: boolean; busy?: boolean } | null>(null);
+  const askScreen = useRef<() => void>(() => {});
+  askScreen.current = () => {
+    setPalette(false);
+    if (!hereId) {
+      setScreenNote({ text: 'Screens open in the Helm app on a computer with Helm. This window does not run on one of your machines.' });
+      return;
+    }
+    setScreenPicker(true);
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyR' || !(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.isComposing
+          || document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      askScreen.current();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+  const openScreenOn = useCallback(async (envId: string) => {
+    const env = envs.find((e) => e.id === envId);
+    const here = envs.find((e) => e.id === hereId);
+    if (!env || !here) return;
+    setScreenPicker(false);
+    setScreenNote({ text: `Opening the screen of ${env.name}…`, busy: true });
+    const r = await openScreen(client, { machine: env.id, name: env.name, here: here.id, hereName: here.name });
+    if ('needs' in r) { setScreenNote(null); setScreenSetup({ envId: env.id, name: env.name, packages: r.packages, canInstall: r.canInstall }); return; }
+    if ('error' in r) { setScreenNote({ text: r.error }); return; }
+    const shown = await showScreen(client, here.id, r.url, env.id);
+    setScreenNote(shown ? null : { text: `Helm could not open a window for the screen of ${env.name}. Allow pop-ups for Helm, then try again.` });
+  }, [envs, hereId, client]);
+  const setUpScreen = useCallback(async () => {
+    if (!screenSetup) return;
+    const { envId, name } = screenSetup;
+    setScreenSetup({ ...screenSetup, busy: true });
+    try {
+      await client.rpc(envId, 'screen.setup', {}, 20 * 60_000);
+      setScreenSetup(null);
+      await openScreenOn(envId);
+    } catch (err: any) {
+      setScreenSetup(null);
+      setScreenNote({ text: `${name} could not set up its screen: ${err.message}` });
+    }
+  }, [screenSetup, client, openScreenOn]);
   // Ctrl/Cmd+Shift+T: pick a device, land in its terminal. Only the Helm app
   // window gets this key; an ordinary browser tab keeps it for "reopen tab".
   const [terminalPicker, setTerminalPicker] = useState(false);
@@ -1638,6 +1691,7 @@ function Shell({ client, conn, onSignOut }: {
             onUsage={() => push({ kind: 'usage', envId: env.id })}
             onOpen={(s) => push({ kind: 'session', session: s })}
             onNewTerminal={() => newTerminal.current(env.id, '~')}
+            onScreen={() => { if (hereId) void openScreenOn(env.id); else askScreen.current(); }}
           />
         ) : view.kind === 'integrations' ? (
           <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
@@ -1782,6 +1836,27 @@ function Shell({ client, conn, onSignOut }: {
         </div>
       )}
       {palette && <Palette items={paletteItems()} search={searchSaid} onClose={() => setPalette(false)} engineOf={engineOf} />}
+      {screenPicker && <Palette heading="Open a screen" placeholder="Pick a machine" engineOf={engineOf}
+        onClose={() => setScreenPicker(false)}
+        items={envs.filter((e) => e.online).map((e) => ({
+          id: `screen:${e.id}`, group: 'machine' as const, title: e.name,
+          sub: e.id === hereId ? 'this computer' : 'see and use its desktop', keywords: 'device machine screen desktop',
+          run: () => void openScreenOn(e.id),
+        }))} />}
+      {screenSetup && (
+        <Confirm title={`Set up the screen of ${screenSetup.name}?`} confirmLabel="Set up" busy={screenSetup.busy} enterConfirms
+          body={screenSetup.canInstall
+            ? <>Helm installs the missing build packages on {screenSetup.name} as admin, then builds the screen program. This takes 1 to 3 minutes.</>
+            : <>{screenSetup.name} needs a C++ compiler, make, pkg-config, x264, libwebsockets and the display libraries. Helm cannot install them on this Linux. Install them, then try again.</>}
+          onCancel={() => { if (!screenSetup.busy) setScreenSetup(null); }}
+          onConfirm={() => { if (screenSetup.canInstall) void setUpScreen(); else setScreenSetup(null); }} />
+      )}
+      {screenNote && (
+        <div className="undo" role="status">
+          <span className="undo-text">{screenNote.text}</span>
+          {!screenNote.busy && <button onClick={() => setScreenNote(null)}>Close</button>}
+        </div>
+      )}
       {terminalPicker && <Palette heading="Open a terminal" placeholder="Pick a machine" engineOf={engineOf}
         onClose={() => setTerminalPicker(false)}
         items={envs.filter((e) => e.online).map((e) => {

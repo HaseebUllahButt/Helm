@@ -49,6 +49,33 @@ owner's home or network to bypass this check.
   `gossip`, `lan-discovery`, `network-monitor`, `hub-mesh`, `frame-lanes`, `direct-mesh`, `auth`, `local-login`,
   `hub-authz`, `roster-trust`, `security-transport`, `security-routes`; `test/browser/hub-auth`.
 
+## Remote screens
+- **What:** the owner sees and uses another machine's real desktop in its own
+  Helm app window. The engine is screen-relay's (`native/screen`, see its
+  README). Decided 2026-11-19: this is for the owner only. Agents keep
+  `helm browser` and never open a screen.
+- **Reach:** Ctrl/Cmd+Shift+R in Helm (a machine menu), search "Open a
+  screen" or "Screen of <machine>", or the screen button on a machine's
+  page. `helm screen [status | stop]` shows or stops this machine's own.
+- **Rules:** only an owner device may call `screen.*` on another machine,
+  and only an owner device may press Set up (admin rights with no card).
+  Each start makes a new 64-character key; the viewer link carries it in
+  the fragment, so other local pages cannot use the engine. The window
+  opens only from a page on a loopback address (the Helm app on a
+  computer), because the forward listens on that computer's 127.0.0.1.
+  A phone gets a note instead.
+- **Full keyboard:** the viewer's keyboard button goes fullscreen and locks
+  the keyboard, so Super keys reach the other machine. Super+Ctrl+Esc gives
+  them back; niri reserves that key on the owner's machines.
+- **Linux only** for now: X11, or Wayland on niri, sway or Hyprland. GNOME
+  and KDE on Wayland lack the screen copy the engine uses.
+- **Prove (driven 2026-11-19):** `$V open --desktop; $V key
+  Control+Shift+KeyR` shows "Open a screen" with this machine as "this
+  computer". Click it: a machine with no build packages shows "Set up the
+  screen of …". Never press Set up in a copy: it installs packages on the
+  real machine. The live picture needs two real machines.
+- **Tests:** `test/screen.test.mjs`.
+
 ## Check installation and connections
 - Open Settings and select **Check connection**. Each answering machine reports
   its paths to the others. A failed read identifies the device-to-machine step.
