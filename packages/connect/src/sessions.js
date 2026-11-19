@@ -927,6 +927,7 @@ export class Sessions extends EventEmitter {
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
+    if (brain && ENGINES[profile.engine]?.answersOnly) throw new Error(`${profile.label || profile.engine} only answers questions; it cannot be the brain`);
     if (quick && (brain || delegation || !ENGINES[profile.engine]?.driver)) {
       throw new Error(`${profile.label || profile.engine} cannot start a sketch: only agents helm drives can`);
     }

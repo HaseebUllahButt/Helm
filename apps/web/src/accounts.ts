@@ -47,7 +47,7 @@ export function accountsFrom(profiles: Profile[]): Account[] {
       profile: p, aliases: [p.id], prefs: p.prefs, defaults: p.defaults,
     });
   }
-  const order = ['claude', 'codex', 'opencode', 'opencode2', 'devin', 'grok', 'cursor', 'vibe', 'pi', 'omp', 'antigravity', 'agy', 'gemini', 'kimi', 'muse'];
+  const order = ['claude', 'codex', 'opencode', 'opencode2', 'devin', 'grok', 'cursor', 'vibe', 'pi', 'omp', 'antigravity', 'agy', 'gemini', 'kimi', 'muse', 'webchat'];
   const rank = (e: string) => { const i = order.indexOf(e); return i < 0 ? order.length : i; };
   return [...by.values()].sort((a, b) =>
     (rank(a.engine) - rank(b.engine)) || a.account.localeCompare(b.account));
