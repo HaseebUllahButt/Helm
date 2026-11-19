@@ -49,7 +49,7 @@ export function useViewingReport(client: Client, view: MainView, selected: strin
             ...viewingNow.current,
           }, abort.signal);
           failures = 0;
-          if (open?.envId && open.sessionId) {
+          if (open?.view === 'schedules' || open?.envId && open.sessionId) {
             window.dispatchEvent(new MessageEvent('helm:open', { data: { type: 'helm:open', ...open } }));
           }
         } catch {

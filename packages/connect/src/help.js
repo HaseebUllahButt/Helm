@@ -66,6 +66,10 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm schedule list | show <id>  List scheduled tasks on every machine, or show one
   helm schedule pause | resume | remove <id>
                                   Stop a task for a while, start it again, or delete it
+  helm when <event> [options] -- "<task>"
+                                  Start a task when an event occurs
+  helm when list | show <id> | pause <id> | resume <id> | remove <id>
+                                  Find and control triggers
   helm remove <id>                  Remove a device or machine permanently
   helm leave                        Remove this machine from its network
 
@@ -197,6 +201,7 @@ Machines and devices
   exec-cancel      Stop a command started earlier
   run              Run a command here through Helm
   sudo             Run a command as admin after the owner allows it
+  schedule, when   List scheduled tasks and set tasks to start on an event
   copy             Copy files to another machine; resume if stopped
   send, receive    Send a folder with the other machine's permission
   send-task        Send files, .env and a task to another machine
@@ -366,9 +371,7 @@ const DETAILS = {
   the app asks the owner to set them up.`,
 
   schedule: `
-  Scheduled tasks send a saved message to a chat at set times,
-  or when their webhook link gets a POST. The app no longer shows them.
-  Use this command to find and control the ones that still exist.
+  Find scheduled tasks and event triggers. The app lists both under Settings, then Schedules.
     --on <machine>   Look only on that machine.
     --json           Print the result as JSON.
     --link           With show: print the full webhook link. It holds a password.
@@ -377,6 +380,31 @@ const DETAILS = {
   A restart of Helm does not pause a task.
   Webhook tasks share one Spin per machine (helm-hooks-...).
   Stop on that Spin pauses every webhook task there.`,
+
+  when: `
+  Start a new chat or run a shell command on an event.
+    file-change --path <path>         Watch one path.
+    file-change --glob "<pattern>"   Watch matching files.
+    command-change --check "<cmd>" --every <minutes>
+                                     Check for a change in output or exit code.
+    webhook                          POST to its private address.
+    chat-finished [--chat <id>]        Watch chats and helpers on this machine.
+    machine-online [--watch-machine <name>]
+                                     Watch other machines come online.
+    --machine <name>                 Pick the machine that runs the task. Default: here.
+    --account <account>              Pick the account for the new chat.
+    --cwd <folder>                    Set the folder on the chosen machine.
+    --name <name>                    Set the name shown in Schedules.
+    --cooldown <seconds>             Set the time between runs. Default: 60 seconds.
+    --run "<command>"                Run a shell command. Read event data from stdin.
+    -- "<task>"                      Start a chat and include the event data.
+  For list and other controls, use --machine to look on one machine.
+  Run helm when show <id> --link to see a webhook address. Keep it private.
+  Reuse an Idempotency-Key header when you retry a POST.
+  Helm skips observed changes during the cool-down or while a task runs.
+  A webhook returns 429 during that time. Try the POST again later.
+  Helm pauses a trigger after three failures in a row and tells the owner.
+  Find the last fire and result in Settings, then Schedules.`,
 
   spin: `
   This command runs helm share.

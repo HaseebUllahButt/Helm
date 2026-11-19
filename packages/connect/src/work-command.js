@@ -5,8 +5,8 @@ export const WORK_TIMEOUT_MS = 15 * 60_000;
 const worker = fileURLToPath(new URL('../bin/helm-work.js', import.meta.url));
 
 /** A supervisor process runs the command and reports how it ends. */
-export function startWork(spec, { env = process.env } = {}) {
-  const child = spawn(process.execPath, ['--no-warnings', worker], {
+export function startWork(spec, { env = process.env, node = process.execPath } = {}) {
+  const child = spawn(node, ['--no-warnings', worker], {
     cwd: spec.cwd, env, stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
   });
   child.on('error', () => {});
@@ -15,8 +15,8 @@ export function startWork(spec, { env = process.env } = {}) {
 }
 
 /** Detached supervisors own remote commands, even while the daemon restarts. */
-export function startDurableWork(_spec, { directory, env = process.env } = {}) {
-  const child = spawn(process.execPath, ['--no-warnings', worker, '--durable', directory], {
+export function startDurableWork(_spec, { directory, env = process.env, node = process.execPath } = {}) {
+  const child = spawn(node, ['--no-warnings', worker, '--durable', directory], {
     env, stdio: 'ignore', detached: true,
   });
   child.unref();

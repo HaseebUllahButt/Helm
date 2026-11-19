@@ -242,7 +242,7 @@ export function sudoNote() {
 }
 
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), '[Helm triggers: Run helm when --help to start a task on an event.]', visualNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});

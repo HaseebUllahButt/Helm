@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once, EventEmitter } from 'node:events';
@@ -310,8 +310,18 @@ test('completed output expires even without another command starting', async t =
   const jobs = makeJobs({ retainMs: 30 }); t.after(() => jobs.stop());
   const request = { id: id(9), ...spec('console.log("saved briefly")') };
   jobs.start(request, 'owner');
-  assert.equal((await result(jobs, id(9))).exitCode, 0);
-  await pause(60);
+  const dir = join(jobs.directory, request.id);
+  await new Promise((resolve, reject) => {
+    const signal = AbortSignal.timeout(5000);
+    const watcher = watch(dir, { signal }, check);
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    function check() {
+      if (!JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).expired) return;
+      watcher.close();
+      resolve();
+    }
+    check();
+  });
   await assert.rejects(() => jobs.read({ id: id(9) }, 'owner'), /expired/);
   assert.throws(() => jobs.start(request, 'owner'), /expired/);
 });

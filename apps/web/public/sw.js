@@ -214,7 +214,7 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const { envId, sessionId, view } = event.notification.data ?? {};
-  const target = view === 'devices' ? '/#devices'
+  const target = view === 'devices' || view === 'schedules' ? `/#${view}`
     : envId && sessionId ? `/#open=${envId}/${sessionId}` : '/';
   event.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
