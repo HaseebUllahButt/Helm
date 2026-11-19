@@ -2602,7 +2602,7 @@ export class Client {
    * clicked. Only the page's own origin can answer for this computer.
    */
   desktopWait(body: { window: string; focused: boolean; envId: string | null; sessionId: string | null }, signal: AbortSignal) {
-    return this.httpAt<{ open: { envId: string | null; sessionId: string | null } | null; desktop: boolean }>(
+    return this.httpAt<{ open: { envId: string | null; sessionId: string | null; view?: string } | null; desktop: boolean }>(
       location.origin, '/api/desktop/wait', { method: 'POST', body: JSON.stringify(body), signal });
   }
 

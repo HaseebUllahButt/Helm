@@ -20,7 +20,7 @@ mark.
 | Settings, usage, limits, dashboard, updates, connectors | [settings.md](settings.md) |
 | Rewind: Edit / Branch from here | [rewind.md](rewind.md) |
 | Files, images, voice, visuals | [files-and-visuals.md](files-and-visuals.md) |
-| Git and CI / CD | [git-and-schedules.md](git-and-schedules.md) |
+| Git, CI / CD, schedules and triggers | [git-and-schedules.md](git-and-schedules.md) |
 
 ## Setup without clicks
 

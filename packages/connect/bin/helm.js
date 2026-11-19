@@ -2063,12 +2063,14 @@ try {
       await forwardCmd();
       break;
 
+    case 'when':
     case 'schedule':
     case 'schedules': {
-      const { runScheduleCommand } = await import('../src/schedule-cli.js');
+      const run = cmd === 'when' ? (await import('../src/when-cli.js')).runWhenCommand
+        : (await import('../src/schedule-cli.js')).runScheduleCommand;
       const net = requireNetwork();
       try {
-        process.exitCode = await runScheduleCommand(rest, { net, machineId,
+        process.exitCode = await run(rest, { net, machineId, cwd: process.cwd(), contextChatId: process.env.HELM_SESSION_ID,
           rpc: (env, method, params, timeout) => hubRpc(net, env, method, params, { timeout, budget: timeout }) });
       } catch (error) { die(error.message); }
       break;

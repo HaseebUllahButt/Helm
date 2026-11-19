@@ -41,7 +41,8 @@ export class ExecutionJobs {
     if (job.finishedAt && Date.now() - job.finishedAt >= this.retainMs && !job.expired) {
       // Keep the identity, so an old id can never start the command again.
       job = { id: job.id, owner: job.owner, fingerprint: job.fingerprint, status: 'exited',
-        finishedAt: job.finishedAt, expired: true };
+        finishedAt: job.finishedAt, expired: true,
+        ...(job.keepResult ? { keepResult: true, exitCode: job.exitCode, error: job.error } : {}) };
       writeExecution(dir, job);
     }
     return job;
@@ -55,13 +56,13 @@ export class ExecutionJobs {
       }
     } catch { /* The next read or sweep can try again. */ }
   }
-  #load(id, owner) {
+  #load(id, owner, resultOnly = false) {
     const dir = this.#dir(id);
     let job;
     try { job = readExecution(dir); } catch { throw new Error(MISSING); }
     if (job.owner !== owner) throw new Error(MISSING);
     job = this.#expire(dir, job);
-    if (job.expired) throw new Error(MISSING);
+    if (job.expired && !(resultOnly && job.keepResult)) throw new Error(MISSING);
     return job;
   }
   #status(id, job) {
@@ -80,7 +81,7 @@ export class ExecutionJobs {
     return job;
   }
 
-  start(params, owner) {
+  start(params, owner, { stdin, node, keepResult = false } = {}) {
     if (this.#closed) throw new Error('Helm is stopping; no command was started.');
     const { id, argv, heavy = false, timeout = WORK_TIMEOUT_MS, env = {} } = params;
     const dir = this.#dir(id), cwd = params.cwd ?? homedir();
@@ -88,7 +89,7 @@ export class ExecutionJobs {
     if (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd.includes('\0')) throw new Error('command cwd must be an absolute path');
     if (typeof heavy !== 'boolean' || !Number.isInteger(timeout) || timeout < 1 || timeout > 24 * 60 * 60_000) throw new Error('invalid command timeout or heavy flag');
     if (!env || typeof env !== 'object' || Array.isArray(env) || Object.entries(env).length > 128 || Object.entries(env).some(([k,v]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || typeof v !== 'string' || v.includes('\0')) || JSON.stringify(env).length > 64 * 1024) throw new Error('invalid command environment');
-    const spec = { argv, cwd, heavy, timeout, env };
+    const spec = { argv, cwd, heavy, timeout, env, ...(stdin == null ? {} : { stdin: Buffer.from(stdin).toString('base64') }) };
     const fingerprint = createHash('sha256').update(JSON.stringify(spec)).digest('hex');
     try { mkdirSync(dir, { mode: 0o700 }); }
     catch (error) {
@@ -96,10 +97,11 @@ export class ExecutionJobs {
       let existing;
       try { existing = readExecution(dir); } catch { throw new Error('command record is incomplete; do not rerun it'); }
       if (existing.owner !== owner || existing.fingerprint !== fingerprint) throw new Error('command id already belongs to another request');
-      if (existing.expired || (existing.finishedAt && Date.now() - existing.finishedAt >= this.retainMs)) throw new Error(MISSING);
+      if (!(keepResult && existing.keepResult) && (existing.expired || (existing.finishedAt && Date.now() - existing.finishedAt >= this.retainMs))) throw new Error(MISSING);
       return { id, status: this.#status(id, existing).status };
     }
-    const job = { id, owner, fingerprint, status: 'starting', createdAt: Date.now(), seq: 0, chunks: [], bytes: 0, exitCode: null };
+    const job = { id, owner, fingerprint, status: 'starting', createdAt: Date.now(), seq: 0, chunks: [], bytes: 0, exitCode: null,
+      ...(keepResult ? { keepResult: true } : {}) };
     writeExecution(dir, job);
     const specFile = join(dir, 'spec.json');
     const failed = error => {
@@ -110,7 +112,7 @@ export class ExecutionJobs {
     catch (error) { failed(error); throw error; }
     let child;
     try {
-      child = this.launch(spec, { directory: dir });
+      child = this.launch(spec, { directory: dir, ...(node ? { node } : {}) });
       child.on('error', failed);
     } catch (error) { failed(error); }
     // The worker may already be running. A failed pid write must not remove
@@ -119,9 +121,10 @@ export class ExecutionJobs {
     return { id, status: 'starting' };
   }
 
-  async read({ id, since = 0, wait = 0 }, owner) {
+  async read({ id, since = 0, wait = 0 }, owner, { resultOnly = false } = {}) {
     if (!Number.isInteger(since) || since < 0 || !Number.isInteger(wait) || wait < 0 || wait > 10_000) throw new Error('invalid command cursor or wait');
-    let job = this.#status(id, this.#load(id, owner));
+    let job = this.#status(id, this.#load(id, owner, resultOnly));
+    if (resultOnly) return { status: job.status, exitCode: job.exitCode, error: job.error };
     if (wait && job.seq <= since && job.status !== 'exited' && !this.#closed) {
       await new Promise(resolve => {
         let watcher, timer;

@@ -62,12 +62,16 @@ async function run(spec) {
     if (Date.now() >= end) throw new Error('Command timeout elapsed before execution.');
     command = spawn(argv[0], argv.slice(1), {
       cwd: spec.cwd, env: { ...process.env, ...spec.env },
-      stdio: durableDir ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'inherit', 'inherit'],
+      stdio: durableDir ? [spec.stdin == null ? 'ignore' : 'pipe', 'pipe', 'pipe'] : ['pipe', 'inherit', 'inherit'],
       detached: process.platform !== 'win32',
     });
     if (durableDir) {
       command.stdout.on('data', data => append('stdout', data));
       command.stderr.on('data', data => append('stderr', data));
+      if (command.stdin) {
+        command.stdin.on('error', () => {});
+        command.stdin.end(Buffer.from(spec.stdin, 'base64'));
+      }
     } else {
       process.stdin.pipe(command.stdin);
       command.stdin.on('error', () => {});

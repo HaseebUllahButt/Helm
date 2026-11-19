@@ -576,6 +576,14 @@ export class Daemon {
     this.githubRepos = createGithubRepos({ noteFolder: fsApi.noteFolder });
     this.sessions.cloner = this.githubRepos;
     try { this.schedules = new Schedules({ sessions: this.sessions, shareName: `helm-hooks-${createHash('sha256').update(this.id).digest('hex').slice(0, 16)}`,
+      triggers: { self: this.id, executions: this.executions, presence: () => this.sendPresence(),
+        machineName: id => {
+          const net = loadNetwork() ?? this.net;
+          return net.revoked?.[id] ? null : net.machines?.[id]?.name;
+        },
+        notify: record => this.broadcastFrame(T.NOTIFY, { payload: { tag: `helm-trigger-${record.id}-${Date.now()}`,
+          title: 'Helm paused a trigger', body: `${record.name} failed three times on ${this.name}. Open Schedules to see the result.`,
+          envId: this.id, view: 'schedules' } }) },
       publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     // A chat in its own worktree is also told where its work goes back to.
@@ -675,6 +683,7 @@ export class Daemon {
     this.sessions.on('session', (session) => {
       this.#updates.push({ session: wire(session) });
       this.browsers.sessionChanged(session);
+      if (!session.deleted) this.schedules?.observeChat(session);
       if (session.deleted) {
         try { for (const name of removeChatShares(session.id)) console.log(`[helm] [${session.id}] stopped its link ${name}`); }
         catch (error) { console.log(`[helm] [${session.id}] could not stop its links: ${error.message}`); }
@@ -698,6 +707,11 @@ export class Daemon {
     this.sessions.on('event', ({ id, event }) => {
       this.#queueEvent(id, event);
       this.search.note(id, event);
+      if (event?.type === 'turn.done' && !event.local && this.schedules) {
+        let session;
+        try { session = this.sessions.get(id); } catch { /* Chat is gone. */ }
+        if (session) this.schedules.observeChat(session, event);
+      }
       if (event?.type === 'permission.request') {
         this.#notify(id, event);
         // The list only hears "blocked"; this says what about, so the
@@ -2458,7 +2472,7 @@ export class Daemon {
       case M.SCHEDULE_DELETE:
       case M.SCHEDULE_RUN:
         if (!this.schedules) throw new Error('Schedules could not load on this machine.');
-        if (method === M.SCHEDULE_LIST) return this.schedules.list(p.sessionId);
+        if (method === M.SCHEDULE_LIST) return this.schedules.list(p.sessionId, p.includeLinks !== false);
         if (method === M.SCHEDULE_SAVE) return this.schedules.save(p);
         if (method === M.SCHEDULE_DELETE) return this.schedules.remove(p.id);
         return this.schedules.run(p.id);

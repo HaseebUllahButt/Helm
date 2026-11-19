@@ -72,6 +72,7 @@ const DevicesView = deferredScreen('Devices', () => import('./screens/Devices').
 const EnvSettings = deferredScreen('Machine settings', () => import('./screens/MachineSettings').then(m => ({ default: m.EnvSettings })));
 const SettingsView = deferredScreen('Settings', () => import('./screens/Settings').then(m => ({ default: m.SettingsView })));
 const LinksView = deferredScreen('Links', () => import('./screens/Settings').then(m => ({ default: m.LinksView })));
+const SchedulesView = deferredScreen('Schedules', () => import('./screens/Schedules').then(m => ({ default: m.SchedulesView })));
 const NetworkSettings = deferredScreen('Network settings', () => import('./screens/Settings').then(m => ({ default: m.NetworkSettings })));
 const OwnerView = deferredScreen('Your preferences', () => import('./screens/Owner').then(m => ({ default: m.OwnerView })));
 const ModelPrefsView = deferredScreen('Models', () => import('./screens/ModelPrefs').then(m => ({ default: m.ModelPrefsView })));
@@ -156,6 +157,7 @@ export type MainView =
   | { kind: 'start'; cwd: string; quick?: boolean }
   | { kind: 'settings' }
   | { kind: 'network-settings' }
+  | { kind: 'schedules' }
   // Every machine's public and private links (`helm share`) in one list.
   | { kind: 'links' }
   // Which helm each machine runs, and updating them from here.
@@ -180,7 +182,7 @@ export type MainView =
 const VIEW_KINDS: Record<MainView['kind'], true> = {
   env: true, integrations: true, usage: true, dashboard: true, brain: true, new: true,
   browse: true, 'transfer-browse': true, transfer: true, verify: true,
-  start: true, settings: true, 'network-settings': true, links: true,
+  start: true, settings: true, 'network-settings': true, links: true, schedules: true,
   updates: true, owner: true, models: true, devices: true, 'app-settings': true,
   session: true, 'native-agent': true, starting: true,
   'terminal-opening': true,
@@ -421,6 +423,7 @@ function Shell({ client, conn, onSignOut }: {
     };
     // "A new device paired" is about the list of devices, not a session.
     const devicesScreen = () => navigate([{ kind: 'app-settings' }, { kind: 'devices' }]);
+    const schedulesScreen = () => navigate([{ kind: 'app-settings' }, { kind: 'schedules' }]);
     const m = /^#open=([^/]+)\/(.+)$/.exec(location.hash);
     if (m) {
       take(m[1], m[2]);
@@ -428,10 +431,14 @@ function Shell({ client, conn, onSignOut }: {
     } else if (location.hash === '#devices') {
       devicesScreen();
       history.replaceState(history.state, '', location.pathname + location.search);
+    } else if (location.hash === '#schedules') {
+      schedulesScreen();
+      history.replaceState(history.state, '', location.pathname + location.search);
     }
     const onMessage = (e: MessageEvent) => {
       if (e.data?.type !== 'helm:open') return;
       if (e.data.view === 'devices') devicesScreen();
+      else if (e.data.view === 'schedules') schedulesScreen();
       else take(e.data.envId, e.data.sessionId);
     };
     navigator.serviceWorker?.addEventListener('message', onMessage);
@@ -608,6 +615,7 @@ function Shell({ client, conn, onSignOut }: {
     go('a:dashboard', 'Dashboard', 'machines compute cpu memory gpu load limits balancer accounts', [{ kind: 'dashboard' }]);
     go('a:defaults', 'Agent defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
     go('a:links', 'Spins', 'share spin private forward port', [{ kind: 'app-settings' }, { kind: 'links' }]);
+    go('a:schedules', 'Schedules', 'trigger event task webhook', [{ kind: 'app-settings' }, { kind: 'schedules' }]);
     for (const t of ['light', 'dark', 'system'] as Theme[]) {
       items.push({
         id: `theme:${t}`, group: 'action', title: `Theme: ${t[0].toUpperCase()}${t.slice(1)}`, keywords: 'appearance colour',
@@ -1107,7 +1115,7 @@ function Shell({ client, conn, onSignOut }: {
   instantTerminal.current = () => {
     const online = envs.filter((e) => e.online);
     const current = nav.current.stack.at(-1);
-    const global = !current || ['usage', 'dashboard', 'brain', 'links', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
+    const global = !current || ['usage', 'dashboard', 'brain', 'links', 'schedules', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
       && !(current.kind === 'usage' && current.envId);
     const chosen = !global && nav.current.selected !== autoPicked.current ? nav.current.selected : null;
     const lastUsed = (e: Environment) => Math.max(0, ...(sessions[e.id] ?? []).filter(ownTerminal).map((s) => s.updatedAt ?? 0));
@@ -1378,7 +1386,7 @@ function Shell({ client, conn, onSignOut }: {
   // no machine either.
   const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'dashboard' || view.kind === 'devices'
     || view.kind === 'network-settings' || view.kind === 'app-settings' || view.kind === 'updates'
-    || view.kind === 'links' || view.kind === 'owner';
+    || view.kind === 'links' || view.kind === 'schedules' || view.kind === 'owner';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -1634,6 +1642,8 @@ function Shell({ client, conn, onSignOut }: {
           <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
         ) : view.kind === 'links' ? (
           <LinksView client={client} envs={envs} onBack={back} />
+        ) : view.kind === 'schedules' ? (
+          <SchedulesView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'owner' ? (
           <OwnerView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'network-settings' ? (

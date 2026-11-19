@@ -204,12 +204,14 @@ export function createDesktopNotifier({ onOpen = () => false } = {}) {
     child.on('close', () => {
       if (shown.get(payload.tag) === record) shown.delete(payload.tag);
       if (!out.split('\n').slice(1).includes('default')) return;
-      const target = { envId: payload.envId ?? null, sessionId: payload.sessionId ?? null };
+      const target = { envId: payload.envId ?? null, sessionId: payload.sessionId ?? null,
+        ...(payload.view === 'schedules' ? { view: payload.view } : {}) };
       const told = onOpen(target);
       const raised = raise(entry.wmClass, env);
       // No Helm window anywhere: open one, already on the chat.
       if (!told && !raised) {
-        launch(entry.exec, target.envId && target.sessionId ? `#open=${target.envId}/${target.sessionId}` : '', env);
+        launch(entry.exec, target.view === 'schedules' ? '#schedules'
+          : target.envId && target.sessionId ? `#open=${target.envId}/${target.sessionId}` : '', env);
       }
     });
     return true;
