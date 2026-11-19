@@ -241,9 +241,13 @@ export function sudoNote() {
   return '[Helm admin: When you need admin rights, run helm sudo -- <command> with a long time limit; the owner allows it in the app. Never run sudo yourself, never ask the owner for the password, never read Helm\'s saved password.]';
 }
 
-/** The owner's named commands (helm tools). One line, so agents look before they build. */
+/**
+ * What Helm adds beyond chats, in one line, so agents look before they build:
+ * the owner's named commands (helm tools), event triggers (helm when), and
+ * what only the owner's phone has (helm phone, phone.js).
+ */
 export function toolsNote() {
-  return '[Helm tools: For a capability you lack, run helm tools list: the owner\'s saved commands. Run one with helm tools run <name> [args].]';
+  return '[Helm tools: For a capability you lack, run helm tools list: the owner\'s saved commands. Run one with helm tools run <name> [args]. To start a task on an event, see helm when --help. For an answer, photo, location or SMS code from the owner\'s phone, run helm phone ask|photo|location|code with a long time limit.]';
 }
 
 /**
@@ -256,13 +260,8 @@ export function webchatNote(profiles = loadProfiles()?.profiles ?? []) {
   return `[Helm web chats: The accounts ${names.join(', ')} are signed-in web chats. They only answer questions: no files, tools or commands. Ask with helm delegate <account> --wait -- "question". Put all context into the question. Send follow-ups to the same helper with helm say.]`;
 }
 
-/** helm phone (phone.js): what only the owner's phone has. Agents asked in plain chat text before. */
-export function phoneNote() {
-  return '[Helm phone: For an answer, photo, location or SMS sign-in code from the owner\'s phone, run helm phone ask|photo|location|code with a long time limit (helm phone --help).]';
-}
-
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), webchatNote(), pickupNote(), agentMessageNote(), '[Helm triggers: Run helm when --help to start a task on an event.]', visualNote(), toolsNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), phoneNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), webchatNote(), pickupNote(), agentMessageNote(), visualNote(), toolsNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});

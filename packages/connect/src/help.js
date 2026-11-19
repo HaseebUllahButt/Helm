@@ -222,7 +222,7 @@ Machines and devices
   run              Run a command here through Helm
   sudo             Run a command as admin after the owner allows it
   schedule, when   List scheduled tasks and set tasks to start on an event
-  tools            Find and run the owner's named commands on any machine
+  tools            Find and run the owner's saved commands
   phone            Ask the owner's phone: an answer, photo, place or code
   copy             Copy files to another machine; resume if stopped
   send, receive    Send a folder with the other machine's permission
@@ -245,7 +245,7 @@ Chats and agents
   chat             Share a live agent between this terminal and the app
   delegate         Start a helper for this chat
   delegate-result  Read a helper's result
-  webchat          Make a signed-in web chat (Gemini, ChatGPT, Claude.ai) an account
+  webchat          Use a signed-in web chat (Gemini, ChatGPT, Claude.ai) as an account
   say, reply       Send a message to an agent, or answer one
   messages         Read messages in this chat and its helpers
   delete           Delete a chat
