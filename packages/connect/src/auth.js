@@ -78,6 +78,7 @@ const run = (cmd, args, env) =>
   });
 
 export async function probeAuth(profile) {
+  if (profile.source === 'local-model') return 'authenticated';
   const probe = PROBES[profile.engine];
   if (!probe) return 'unknown';
   const spec = materialize(profile);

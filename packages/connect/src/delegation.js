@@ -1,5 +1,6 @@
 import { ENGINES } from './engines.js';
 import { materialize } from './profiles.js';
+import { localProfileCatalog } from './local-model-accounts.js';
 import { listModels } from './models.js';
 import { modelPrefs, startPrefs, subagentPrefs, accountKey } from './settings.js';
 import { modesFor, defaultMode } from './modes.js';
@@ -90,7 +91,7 @@ export async function agentCatalog(profiles, statuses, { models = true, credenti
     const spec = materialize(p);
     const engine = ENGINES[p.engine];
     try {
-      const catalog = await listModels(p.engine, spec.env?.[engine.homeEnv] ?? engine.defaultHome,
+      const catalog = localProfileCatalog(p) ?? await listModels(p.engine, spec.env?.[engine.homeEnv] ?? engine.defaultHome,
         spec.env, p.wraps ? { cmd: spec.cmd, args: spec.args } : null);
       const labels = Object.fromEntries((catalog.models ?? []).filter((id) => catalog.labels?.[id])
         .map((id) => [id, catalog.labels[id]]));
@@ -251,7 +252,7 @@ export function helmBrief(net, { parentId = null, engine = null } = {}) {
     .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
   if (!self?.name || !others.length) return toolNotes(parentId, engine);
-  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}. Reach them through helm (helm exec, helm copy, helm spawn), not SSH: helm help lists every command and helm <command> --help explains one. For an account that only another machine has, use helm delegate --machine <name>. Never rerun a helm exec that may have started; read it with helm exec-status. Links from helm share (spins) end after 3 hours; add --keep only when the owner asks. To show the owner a dev server, run helm forward <port> yourself; send only the localhost link it prints.]
+  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}. Reach them through helm (helm exec, helm copy, helm spawn), not SSH: helm help lists every command and helm <command> --help explains one. For an account that only another machine has, use helm delegate --machine <name>. See shared models with helm models list. Use helm delegate local-<model> -- "task" to use one. Never rerun a helm exec that may have started; read it with helm exec-status. Links from helm share (spins) end after 3 hours; add --keep only when the owner asks. To show the owner a dev server, run helm forward <port> yourself; send only the localhost link it prints.]
 ${toolNotes(parentId, engine)}`;
 }
 
