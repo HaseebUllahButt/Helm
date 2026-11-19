@@ -80,7 +80,7 @@ export class ExecutionJobs {
     return job;
   }
 
-  start(params, owner) {
+  start(params, owner, keys) {
     if (this.#closed) throw new Error('Helm is stopping; no command was started.');
     const { id, argv, heavy = false, timeout = WORK_TIMEOUT_MS, env = {} } = params;
     const dir = this.#dir(id), cwd = params.cwd ?? homedir();
@@ -89,7 +89,8 @@ export class ExecutionJobs {
     if (typeof heavy !== 'boolean' || !Number.isInteger(timeout) || timeout < 1 || timeout > 24 * 60 * 60_000) throw new Error('invalid command timeout or heavy flag');
     if (!env || typeof env !== 'object' || Array.isArray(env) || Object.entries(env).length > 128 || Object.entries(env).some(([k,v]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || typeof v !== 'string' || v.includes('\0')) || JSON.stringify(env).length > 64 * 1024) throw new Error('invalid command environment');
     const spec = { argv, cwd, heavy, timeout, env };
-    const fingerprint = createHash('sha256').update(JSON.stringify(spec)).digest('hex');
+    const fingerprint = createHash('sha256').update(JSON.stringify(
+      keys ? { ...spec, keyPermit: params.keyPermit } : spec)).digest('hex');
     try { mkdirSync(dir, { mode: 0o700 }); }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
@@ -110,7 +111,7 @@ export class ExecutionJobs {
     catch (error) { failed(error); throw error; }
     let child;
     try {
-      child = this.launch(spec, { directory: dir });
+      child = this.launch(spec, { directory: dir, keys });
       child.on('error', failed);
     } catch (error) { failed(error); }
     // The worker may already be running. A failed pid write must not remove

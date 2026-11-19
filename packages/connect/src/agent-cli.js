@@ -11,9 +11,10 @@ export function limitLine(windows, now = Date.now()) {
 /** Injected RPC keeps argument and result behavior testable without a live hub. */
 export async function runAgentCommand(command, args, { rpc, self, machine: findMachine = (name) => name,
   parentId = process.env.HELM_SESSION_ID, callerThreadId = process.env.CODEX_THREAD_ID,
-  ownAccount = process.env.HELM_PROFILE_ID, write = console.log, warn = console.error, sleep = pause } = {}) {
+  authorize, ownAccount = process.env.HELM_PROFILE_ID, write = console.log, warn = console.error, sleep = pause } = {}) {
   const { options, words } = parseAgentArgs(args, {
     values: command === 'delegate' ? ['model', 'mode', 'effort', 'parent', 'cwd', 'timeout', 'machine'] : command === 'delegate-result' ? ['timeout'] : ['machine'],
+    repeat: command === 'delegate' ? ['key'] : [],
     switches: command === 'agents' ? ['json', 'refresh'] : command === 'delegate' ? ['wait', 'json', 'worktree'] : ['wait', 'json'],
   });
   // `--machine`: the accounts, and the helper, of another machine.
@@ -79,7 +80,9 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
       if (!agent.cheapModel) throw new Error(`${agent.id} has no small model; choose one from: ${(agent.models ?? []).join(', ') || 'helm agents'}`);
       options.model = agent.cheapModel;
     }
-    const { session } = await rpc(self, M.SESSION_DELEGATE, {
+    const keyPermit = options.key && await authorize(options.key, { target, kind: 'chat' });
+    const { session } = await rpc(self, keyPermit ? 'keys.delegate' : M.SESSION_DELEGATE, {
+      ...(keyPermit ? { keyPermit } : {}),
       // The child works in its parent's folder unless `--cwd` says otherwise.
       id: options.parent ?? parentId, cwd: options.cwd, profileId: agent.id,
       model: options.model, mode: options.mode, effort: options.effort, task: task.join(' '),

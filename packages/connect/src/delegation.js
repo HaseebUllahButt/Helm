@@ -241,7 +241,9 @@ export function sudoNote() {
 }
 
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const sharedKeyNote = '[Helm keys: Agent tools save output. Use helm run --key NAME -- <command> so only the command receives the value. See helm keys --help.]';
+
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), sharedKeyNote, writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});

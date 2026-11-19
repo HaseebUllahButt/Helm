@@ -896,6 +896,13 @@ export class Sessions extends EventEmitter {
     let setupStarted = false;
     try {
       const session = await this.#start({ ...options, onStartSetup: () => { setupStarted = true; } });
+      if (options.keyPermit) {
+        try { await this.sharedKeys.attach(options.keyPermit, options.keySource, session); }
+        catch (error) {
+          await this.kill(session.id);
+          throw error;
+        }
+      }
       if (options.reservedSessionId) this.#saveStart(session.id);
       return session;
     } catch (error) {
@@ -1829,7 +1836,8 @@ export class Sessions extends EventEmitter {
     try { s = this.get(id); }
     catch (error) { error.deliveryNotSent = true; throw error; }
     // A card Helm asked itself (helm sudo): Helm answers it, not the agent.
-    if (this.helmAsks?.owns(requestId)) return this.helmAsks.answer(id, requestId, decision ?? {});
+    const helmAsk = [].concat(this.helmAsks ?? []).find(handler => handler.owns(requestId));
+    if (helmAsk) return helmAsk.answer(id, requestId, decision ?? {});
     const ask = this.#natives.hookAsks.get(requestId);
     const asked = this.events.pending(id).find((request) => request.requestId === requestId);
     if (s.nativeCli) {

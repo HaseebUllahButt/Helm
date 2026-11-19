@@ -2,7 +2,7 @@
 import { hostname, platform } from 'node:os';
 import { rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { argv, exit } from 'node:process';
 import {
@@ -904,11 +904,18 @@ async function deleteChat() {
   console.log(`Deleted ${machine} ${shortId(session.id)} (${session.title}).`);
 }
 
+async function authorizeSharedKeys(names, job) {
+  const { authorizeKeys } = await import('../src/shared-keys-cli.js');
+  const self = requireNetwork().self;
+  return authorizeKeys(names, { rpc: brainRpc, self, ...job });
+}
+
 async function spawn_() {
   const { spawnAgent, parseSpawnArgs } = await import('../src/spawn-cli.js');
   const { machine } = parseSpawnArgs(rest);
   const env = machineId(machine);
   await spawnAgent(rest, { rpc: (method, params, timeout) => brainRpc(env, method, params, timeout),
+    authorize: (names, job) => authorizeSharedKeys(names, { ...job, target: env }),
     write: (text) => process.stdout.write(text) });
 }
 
@@ -1154,6 +1161,10 @@ async function sendTask() {
   const { options, request } = parseTaskArgs(rest, { machineId });
   const net = requireNetwork();
   const { handoffId } = request;
+  if (options.key) {
+    const id = createHash('sha256').update(`shared-key-task-${handoffId}`).digest('hex').slice(0, 32);
+    request.keyPermit = await authorizeSharedKeys(options.key, { target: request.targetMachineId, kind: 'chat', id });
+  }
   console.error(`helm: task ${handoffId}; retry with the same arguments and --handoff-id ${handoffId}`);
   const started = Date.now();
   let result = await brainRpc(net.self, M.TASK_SEND, request, 360_000);
@@ -1984,9 +1995,11 @@ try {
         console.log(commandHelp('run', USAGE));
         break;
       }
-      if (rest.includes('--') || rest.some(arg => ['--heavy', '--cwd', '--timeout', '--env'].includes(arg))) {
-        const { runLocalWork } = await import('../src/execution-cli.js');
-        process.exitCode = await runLocalWork(rest);
+      if (rest.includes('--') || rest.some(arg => ['--heavy', '--cwd', '--timeout', '--env', '--key'].includes(arg))) {
+        const { parseWorkArgs, runLocalWork, runRemoteWork } = await import('../src/execution-cli.js');
+        process.exitCode = await (parseWorkArgs(rest).keys
+          ? runRemoteWork(rest, { net: requireNetwork(), authorize: authorizeSharedKeys, local: true })
+          : runLocalWork(rest));
         break;
       }
       // Keep the original no-command alias for installations using helm run.
@@ -2378,7 +2391,7 @@ try {
     // is the brain's guardrail too.
     case 'exec': {
       const { runRemoteWork } = await import('../src/execution-cli.js');
-      process.exitCode = await runRemoteWork(rest, { net: requireNetwork(), machineId });
+      process.exitCode = await runRemoteWork(rest, { net: requireNetwork(), machineId, authorize: authorizeSharedKeys });
       break;
     }
     // exec-result is the older name, kept for scripts that use it.
@@ -2401,7 +2414,7 @@ try {
       const { runAgentCommand } = await import('../src/agent-cli.js');
       // Catalogs and JSON replies can exceed a pipe's buffer. Let stdout
       // drain naturally instead of truncating them with process.exit().
-      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self, machine: machineId });
+      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self, machine: machineId, authorize: authorizeSharedKeys });
       break;
     }
     case 'brain':
@@ -2483,6 +2496,11 @@ try {
           console.log(`\n  This machine can show its screen (${r.backend} ${r.display}). ${r.running ? 'It is on now.' : 'It is off.'}\n  ${ready}\n  Open it from the Helm app: press Ctrl+Shift+R.\n`);
         }
       } else die('usage: helm screen [status | stop]\n  Open a screen from the Helm app: press Ctrl+Shift+R.');
+      break;
+    }
+    case 'keys': {
+      const { runKeysCommand } = await import('../src/shared-keys-cli.js');
+      await runKeysCommand(rest, { rpc: brainRpc, self: requireNetwork().self });
       break;
     }
     case 'sudo': {

@@ -213,7 +213,7 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
           {error && <p className="error" role="alert">{error}</p>}
           <div className="island-acts">
             {allow && <button className="island-yes" disabled={busy} onClick={sayYes}>
-              {perm?.kind === 'plan' ? 'Go ahead' : 'Allow once'}{mode === 'open' && <kbd>Ctrl ↵</kbd>}
+              {perm?.ownLabels ? allow.label : perm?.kind === 'plan' ? 'Go ahead' : 'Allow once'}{mode === 'open' && <kbd>Ctrl ↵</kbd>}
             </button>}
             {/* A card Helm asks itself (helm sudo) names its own answers. */}
             {always && <button disabled={busy} onClick={() => void answer({ option: 'always' }, perm?.ownLabels ? always.label : 'Always allowed')}>{perm?.ownLabels ? always.label : 'Always allow'}</button>}
