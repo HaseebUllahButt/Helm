@@ -2469,6 +2469,22 @@ try {
       await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession, machine: machineId });
       break;
     }
+    case 'screen': {
+      const net = requireNetwork();
+      const verb = rest.find((a) => !a.startsWith('-')) ?? 'status';
+      if (verb === 'stop') {
+        const { stopped } = await hubRpc(net, net.self, M.SCREEN_STOP, {}, { timeout: 15_000 });
+        console.log(stopped ? '\n  Stopped the screen of this machine.\n' : '\n  The screen of this machine was not on.\n');
+      } else if (verb === 'status') {
+        const r = await hubRpc(net, net.self, M.SCREEN_STATUS, {}, { timeout: 30_000 });
+        if (!r.supported) console.log(`\n  ${r.error}\n`);
+        else {
+          const ready = r.built ? 'The screen program is built.' : r.needsSetup ? `It needs ${r.packages.length} packages first: open it once from the Helm app and press Set up.` : 'The first open builds the screen program.';
+          console.log(`\n  This machine can show its screen (${r.backend} ${r.display}). ${r.running ? 'It is on now.' : 'It is off.'}\n  ${ready}\n  Open it from the Helm app: press Ctrl+Shift+R.\n`);
+        }
+      } else die('usage: helm screen [status | stop]\n  Open a screen from the Helm app: press Ctrl+Shift+R.');
+      break;
+    }
     case 'sudo': {
       const { runSudoCommand } = await import('../src/sudo-cli.js');
       const code = await runSudoCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self });

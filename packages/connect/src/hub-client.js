@@ -123,6 +123,8 @@ export const REPEATABLE = new Set([
   M.HANDOFF_ACCEPT, M.TRANSFER_ACCEPT,
   // Keyed by the forward's id: a second add or remove changes nothing.
   M.FORWARD_ADD, M.FORWARD_REMOVE,
+  // A running screen is reused, so asking again starts nothing new.
+  M.SCREEN_STATUS, M.SCREEN_START, M.SCREEN_STOP,
   M.SESSION_DELIVER,
 ]);
 export const NON_REPEATABLE = new Set(Object.values(M).filter(method => !REPEATABLE.has(method)));

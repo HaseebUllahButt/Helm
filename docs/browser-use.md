@@ -36,7 +36,8 @@ The owner uses the same browser window. Helm has no browser panel.
   opens stays theirs. Logins are shared by all chats.
 - **No picture in Helm.** The agent drives it
   from inside Chromium, never through the desktop, so it never takes the
-  owner's keyboard or mouse. Helm does not show or stream the page. A machine without a screen (the VM) uses a hidden Chromium,
+  owner's keyboard or mouse. Helm does not show or stream the page. (A remote
+  screen is the owner's own tool, never an agent's: docs/features/machines.md.) A machine without a screen (the VM) uses a hidden Chromium,
   which is never started where windows can show.
 - **Another machine's browser (`--machine <name>`).** A machine with no
   screen (the VM) gets more CAPTCHAs: sites see a hidden browser on a

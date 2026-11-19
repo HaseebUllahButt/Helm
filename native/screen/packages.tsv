@@ -1,0 +1,38 @@
+core	compiler	build-essential	gcc-c++ make	base-devel	build-base
+core	pkg-config	pkg-config	pkgconf-pkg-config	pkgconf	pkgconf
+core	setpriv	util-linux	util-linux	util-linux	setpriv
+core	x264-dev	libx264-dev	x264-devel	x264	x264-dev
+core	libwebsockets-dev	libwebsockets-dev	libwebsockets-devel	libwebsockets	libwebsockets-dev openssl-dev
+core	zlib-dev	zlib1g-dev	zlib-ng-compat-devel	zlib	zlib-dev
+core	linux-headers	-	-	-	linux-headers
+x11	libx11-dev	libx11-dev	libX11-devel	libx11	libx11-dev
+x11	libxext-dev	libxext-dev	libXext-devel	libxext	libxext-dev
+x11	libxdamage-dev	libxdamage-dev	libXdamage-devel	libxdamage	libxdamage-dev
+x11	libxfixes-dev	libxfixes-dev	libXfixes-devel	libxfixes	libxfixes-dev
+x11	libxtst-dev	libxtst-dev	libXtst-devel	libxtst	libxtst-dev
+x11	Xvfb	xvfb	xorg-x11-server-Xvfb	xorg-server-xvfb	xvfb
+x11	xauth	xauth	xorg-x11-xauth	xorg-xauth	xauth
+x11	xprop	x11-utils	xprop	xorg-xprop	xprop
+x11	xwininfo	x11-utils	xwininfo	xorg-xwininfo	xwininfo
+x11	xdpyinfo	x11-utils	xdpyinfo	xorg-xdpyinfo	xdpyinfo
+x11	setxkbmap	x11-xkb-utils	setxkbmap	xorg-setxkbmap	setxkbmap
+xfce	dbus-run-session	dbus	dbus-daemon	dbus	dbus
+xfce	dbus-x11	dbus-x11	dbus-x11	dbus	dbus-x11
+xfce	at-spi2-core	at-spi2-core	at-spi2-core	at-spi2-core	at-spi2-core
+xfce	xfce4-session	xfce4-session	xfce4-session	xfce4-session	xfce4-session
+xfce	xfwm4	xfwm4	xfwm4	xfwm4	xfwm4
+xfce	xfce4-panel	xfce4-panel	xfce4-panel	xfce4-panel	xfce4-panel
+xfce	xfdesktop	xfdesktop4	xfdesktop	xfdesktop	xfdesktop
+xfce	xfce4-settings	xfce4-settings	xfce4-settings	xfce4-settings	xfce4-settings
+xfce	thunar	thunar	Thunar	thunar	thunar
+xfce	xfce4-terminal	xfce4-terminal	xfce4-terminal	xfce4-terminal	xfce4-terminal
+xfce	fonts-dejavu	fonts-dejavu-core	dejavu-sans-fonts	ttf-dejavu	font-dejavu
+xfce	librsvg	librsvg2-common	librsvg2	librsvg	librsvg
+xfce	glycin-loaders	glycin-loaders	glycin-loaders	glycin	glycin-loaders-all
+xfce	gdk-pixbuf-bin	libgdk-pixbuf2.0-bin	gdk-pixbuf2-devel	gdk-pixbuf2	gdk-pixbuf
+wayland	wayland-dev	libwayland-dev	wayland-devel	wayland wayland-protocols	wayland-dev
+wayland	wayland-scanner	libwayland-bin	wayland-devel	wayland	wayland-dev
+wayland	xkbcommon-dev	libxkbcommon-dev	libxkbcommon-devel	libxkbcommon	libxkbcommon-dev
+wayland	sway	sway	sway	sway	sway
+wayland	Xwayland	xwayland	xorg-x11-server-Xwayland	xorg-xwayland	xwayland
+wayland	foot	foot	foot	foot	foot

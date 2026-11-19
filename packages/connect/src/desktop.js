@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, readd
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir, platform } from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { HELM_DIR } from './paths.js';
 
@@ -180,6 +180,30 @@ const wmClass = (url, profile) => `chrome-${new URL(url).hostname}__-${profile}`
  * Write the launcher. Returns what it did, so the caller can say it.
  * @param {{ url: string, browser?: string, profile?: string }} opts
  */
+/**
+ * Open a page in a window of its own in the Helm app (a remote screen): no
+ * tabs, no address bar. The window profile is one browser, so a second
+ * --app= opens one more window in the app that runs.
+ * `env` carries the desktop's display: a user service may start without it.
+ */
+export function openAppWindow(url, { env = process.env } = {}) {
+  if (platform() !== 'linux') return false;
+  let bin = null;
+  try {
+    const exec = /^Exec=(.*)$/m.exec(readFileSync(join(appsDir(), 'helm-app.desktop'), 'utf8'))?.[1];
+    if (exec && /--app=/.test(exec)) bin = which(exec.split(/\s+/)[0]);
+  } catch { /* no launcher yet */ }
+  bin ??= BROWSERS.map(which).find(Boolean);
+  if (!bin) return false;
+  const dir = windowProfile();
+  seedWindowProfile(dir);
+  try {
+    spawn(bin, [`--user-data-dir=${dir}`, '--profile-directory=Default', '--no-first-run', '--disable-extensions', `--app=${url}`],
+      { env, detached: true, stdio: 'ignore' }).unref();
+    return true;
+  } catch { return false; }
+}
+
 export function installApp({ url, browser, profile = 'Default' }) {
   if (platform() !== 'linux') {
     throw new Error(

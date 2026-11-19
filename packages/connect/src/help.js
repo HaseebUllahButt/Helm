@@ -53,6 +53,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm forward <machine> <port>   Open another machine's port on this machine's localhost
   helm forward list | stop <id|port|all>
                                   List or stop forwards (a stop removes both sides)
+  helm screen [status | stop]     Show or stop the screen Helm shows of this machine
   helm sudo [--reason <text>] -- <command>
                                   Run a command as admin after the owner allows it in the app
   helm sudo password | forget     Save or delete this machine's admin password (owner only)
@@ -322,6 +323,16 @@ const DETAILS = {
   When the app is not running, the link shows a "not reachable" page.
   It ends after 3 hours. Use --for <hours>, or --keep only when the owner asks.
   Stop it with helm forward stop <id>. This removes both sides.`,
+
+  screen: `
+  The owner sees and uses a machine's desktop in its own Helm window.
+  Only the owner opens a screen: in the Helm app, press Ctrl+Shift+R
+  and pick a machine. Agents cannot open a screen.
+    helm screen          Show if this machine can show its screen, and if it is on.
+    helm screen stop     Stop it now. It also stops after 15 minutes with no viewer.
+  Linux only for now: X11, or Wayland on niri, sway or Hyprland.
+  The first open builds the screen program. When packages are missing,
+  the app asks the owner to set them up.`,
 
   schedule: `
   Scheduled tasks send a saved message to a chat at set times,
