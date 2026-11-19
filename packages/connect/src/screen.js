@@ -311,7 +311,10 @@ export class Screens {
     try {
       child = spawn(engine, [
         '--bind', '127.0.0.1', '--port', String(port), '--token-file', tokenFile,
-        '--fps', '60', '--bitrate-min', '1000000', '--bitrate-start', '8000000', '--bitrate-max', '40000000',
+        // The engine writes to Helm's tunnel on this machine, so it cannot see
+        // how slow the real path is and would send 40 Mbps bursts that wait
+        // in the tunnel. A lower cap keeps keys and the picture in step.
+        '--fps', '60', '--bitrate-min', '500000', '--bitrate-start', '3000000', '--bitrate-max', '8000000',
         '--backend', display.backend, '--viewer-dir', viewerDir,
       ], { env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG ?? 'C.UTF-8', ...display.env }, stdio: ['ignore', logFd, logFd], detached: true });
     } finally { closeSync(logFd); }

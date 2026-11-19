@@ -64,9 +64,17 @@ owner's home or network to bypass this check.
   opens only from a page on a loopback address (the Helm app on a
   computer), because the forward listens on that computer's 127.0.0.1.
   A phone gets a note instead.
-- **Full keyboard:** the viewer's keyboard button goes fullscreen and locks
-  the keyboard, so Super keys reach the other machine. Super+Ctrl+Esc gives
-  them back; niri reserves that key on the owner's machines.
+- **Keys:** the window opens on a card: Take over (fullscreen plus keyboard
+  lock, so Super keys reach the other machine) or Only watch. Super+Ctrl+Esc,
+  leaving fullscreen or going to another window gives the keys back and
+  switches to watch only, with a "Take over again" bar. niri reserves
+  Super+Ctrl+Esc on the owner's machines. A hidden test browser has no
+  keyboard lock, so only Brave or Chrome proves the Super keys.
+- **Speed:** every frame goes through a hub, so the delay is the path to the
+  hub and back (about 0.2 to 0.9 s from why through the VM). The owner's
+  router blocks devices on its Wi-Fi from reaching each other, so why and
+  Laptop cannot use a direct path. The engine writes to Helm's tunnel on its
+  own machine and cannot see that path, so Helm caps it at 8 Mbps.
 - **Linux only** for now: X11, or Wayland on niri, sway or Hyprland. GNOME
   and KDE on Wayland lack the screen copy the engine uses.
 - **Prove (driven 2026-11-19):** `$V open --desktop; $V key
