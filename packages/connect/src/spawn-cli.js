@@ -4,10 +4,10 @@ import { chooseAgent, delegationOutput, parseAgentArgs } from './delegation.js';
 
 export function parseSpawnArgs(args) {
   const { words, options } = parseAgentArgs(args, {
-    values: ['model', 'mode', 'effort', 'title', 'timeout'], switches: ['mkdir', 'wait'],
+    values: ['model', 'mode', 'effort', 'title', 'timeout'], switches: ['mkdir', 'wait', 'wake'],
   });
   const [machine, folder, account, ...prompt] = words;
-  if (!machine || !folder || !account) throw new Error('usage: helm spawn <machine> <folder | -> <account> [text...] [--mkdir] [--wait] [--timeout <ms>]');
+  if (!machine || !folder || !account) throw new Error('usage: helm spawn <machine> <folder | -> <account> [text...] [--wake] [--mkdir] [--wait] [--timeout <ms>]');
   // "-" is no folder: a quick chat, in an empty folder the machine makes.
   const quick = folder === '-';
   if (quick && options.mkdir) throw new Error('--mkdir needs a folder; a sketch (-) has none');
@@ -22,8 +22,9 @@ export function parseSpawnArgs(args) {
 }
 
 /** Preflight and waiting use existing RPCs, including on an older target. */
-export async function spawnAgent(args, { rpc, write = () => {}, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
+export async function spawnAgent(args, { rpc, wake, write = () => {}, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
   const { machine, folder, account, quick, text, options, timeout } = parseSpawnArgs(args);
+  if (options.wake) await wake(machine);
   const call = async (method, params, budget) => {
     try { return await rpc(method, params, budget); }
     catch (error) { throw new Error(`spawn on ${machine}: ${error.message}`); }

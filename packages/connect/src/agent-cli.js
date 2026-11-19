@@ -9,12 +9,12 @@ export function limitLine(windows, now = Date.now()) {
 }
 
 /** Injected RPC keeps argument and result behavior testable without a live hub. */
-export async function runAgentCommand(command, args, { rpc, self, machine: findMachine = (name) => name,
+export async function runAgentCommand(command, args, { rpc, self, wake, machine: findMachine = (name) => name,
   parentId = process.env.HELM_SESSION_ID, callerThreadId = process.env.CODEX_THREAD_ID,
   ownAccount = process.env.HELM_PROFILE_ID, write = console.log, warn = console.error, sleep = pause } = {}) {
   const { options, words } = parseAgentArgs(args, {
     values: command === 'delegate' ? ['model', 'mode', 'effort', 'parent', 'cwd', 'timeout', 'machine'] : command === 'delegate-result' ? ['timeout'] : ['machine'],
-    switches: command === 'agents' ? ['json', 'refresh'] : command === 'delegate' ? ['wait', 'json', 'worktree'] : ['wait', 'json'],
+    switches: command === 'agents' ? ['json', 'refresh'] : command === 'delegate' ? ['wait', 'json', 'worktree', 'wake'] : ['wait', 'json'],
   });
   // `--machine`: the accounts, and the helper, of another machine.
   const target = options.machine ? findMachine(options.machine) : self;
@@ -43,6 +43,7 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
   }
   let id;
   if (command === 'delegate') {
+    if (options.wake && !options.machine) throw new Error('Use --wake with --machine <name>.');
     const [named, ...task] = words;
     if (!named || !task.join(' ').trim()) throw new Error('helm delegate <account|same> [--model <id>] [--wait] [--json] -- "<task>"');
     // A helper belongs to the chat that asked for it. One started from a
@@ -56,6 +57,7 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     // `cheap` names the account's small model (helm agents shows it), so a
     // helper never has to guess which id is the inexpensive one.
     const cheap = options.model === 'cheap';
+    if (options.wake) await wake(target);
     let { agents } = await rpc(target, M.AGENT_LIST, { models: cheap }, cheap ? 60_000 : undefined);
     let agent = chooseAgent(agents, account);
     if (!agent.available) throw new Error(`${agent.id} is signed out; log in through its CLI first`);

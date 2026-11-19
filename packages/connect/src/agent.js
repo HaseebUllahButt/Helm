@@ -16,6 +16,8 @@ import {
   roster as rosterOf, rosterHash, machineName, NAME_RULE, machineKind,
   MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
+import { wakeState, wakeHash, WAKE_EXEC } from '@helm/protocol/wake-state';
+import { localWakeAdapters, sendWake, wakeExecArgs } from './wake-machine.js';
 import { createRuntime } from './runtime/index.js';
 import { logReader, nativeFeatures } from './log-index-native.js';
 import { BASH_GUARD_MODES } from './pi-settings.js';
@@ -1027,6 +1029,7 @@ export class Daemon {
       this.broadcastFrame(T.ROSTER, { hash: rosterHash(net) });
       for (const link of this.#links.values()) link.ownerOffered = false;
       this.broadcastFrame(T.OWNER, { hash: ownerHash(loadOwner()) });
+      this.broadcastFrame(T.WAKE_STATE, { hash: wakeHash(wakeState.records(net)) });
       // A direct WebRTC channel is authenticated once, when the hub makes the
       // introduction. Revocation has to reach it too, or a removed phone
       // keeps a working side door to this machine.
@@ -1080,6 +1083,10 @@ export class Daemon {
       sendV2: true,
       signedHub: true,
     });
+    try {
+      const wake = wakeState.publish(this.net, localWakeAdapters().map(adapter => adapter.link));
+      if (wake) this.broadcastFrame(T.WAKE_STATE, { records: [wake] });
+    } catch (error) { console.warn('[helm] Could not save wake details:', error.message); }
   }
 
   /** Addresses that reach this machine, whoever supplied them. */
@@ -1211,7 +1218,10 @@ export class Daemon {
     // reconcile tick: this is how a hub learns our addresses, and how a
     // revocation made while it was offline reaches it.
     const net = loadNetwork();
-    if (net) link.send(T.ROSTER, { roster: rosterOf(net) });
+    if (net) {
+      link.send(T.ROSTER, { roster: rosterOf(net) });
+      link.send(T.WAKE_STATE, { records: Object.values(wakeState.records(net)) });
+    }
     link.send(T.OWNER, { hash: ownerHash(loadOwner()) });
     if (!local) this.mesh?.up(link);
     // One way into each machine's hub: whichever of a heard address and the
@@ -1518,6 +1528,7 @@ export class Daemon {
       helperAttachments: true,
       // Runs helpers for chats on other machines (helm delegate --machine).
       remoteHelpers: true,
+      wakeSender: platform() === 'linux',
       sendV2: true,
       // Answers requests from other machines over a direct channel, checking
       // each one as a hub would (direct-mesh.js). Older machines leave this
@@ -1652,6 +1663,24 @@ export class Daemon {
           link.offered = true;
           link.send(T.ROSTER, { roster: rosterOf(net) });
         }
+        return;
+      }
+
+      case T.WAKE_STATE: {
+        const net = loadNetwork();
+        if (!net || net.revoked?.[net.self]) return;
+        try {
+          const changed = wakeState.merge(net, msg.records);
+          const records = wakeState.records(net);
+          if (changed) {
+            for (const other of this.live) {
+              if (other !== link) other.send(T.WAKE_STATE, { records: Object.values(records) });
+            }
+          }
+          if (msg.hash && wakeHash(records) !== msg.hash) {
+            link.send(T.WAKE_STATE, { records: Object.values(records) });
+          }
+        } catch (error) { console.warn('[helm] Could not save wake details:', error.message); }
         return;
       }
 
@@ -1903,9 +1932,12 @@ export class Daemon {
         if (p.sessionId && ['plan', 'readonly', 'read'].includes(this.sessions.get(p.sessionId).mode)) {
           throw new Error('a read-only session cannot start managed commands');
         }
-        return this.executions.start(p, caller ?? this.id);
+        return this.executions.start(p.argv?.[0] === WAKE_EXEC ? { ...p, argv: wakeExecArgs(p.argv) } : p, caller ?? this.id);
       case M.EXEC_READ: return this.executions.read(p, caller ?? this.id);
       case M.EXEC_CANCEL: return this.executions.cancel(p, caller ?? this.id);
+      case M.MACHINE_WAKE:
+        if (!this.#selfOrOwner(caller)) throw new Error("Wake a machine from the owner's app or with helm wake.");
+        return sendWake(p.target);
       case M.ENV_INFO:
         return { ...(await this.describe()), name: this.name, web: webBuild() };
 

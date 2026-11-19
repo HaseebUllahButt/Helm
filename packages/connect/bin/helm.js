@@ -721,6 +721,12 @@ async function dictate() {
 const brainRpc = (env, method, params = {}, timeout = 25_000) =>
   untilBack(env, () => hubRpc(requireNetwork(), env, method, params, { timeout }));
 
+const wakeTarget = async (target, options) => {
+  const { createWakeCommand } = await import('../src/wake-cli.js');
+  await createWakeCommand({ machineId })(target, options);
+  return requireNetwork();
+};
+
 // A machine restarting Helm answers nothing for a minute or so. While no
 // request has gone out, waiting and asking again is safe, and beats telling
 // an agent its helper is gone. Anything that may have arrived is not retried.
@@ -909,6 +915,7 @@ async function spawn_() {
   const { machine } = parseSpawnArgs(rest);
   const env = machineId(machine);
   await spawnAgent(rest, { rpc: (method, params, timeout) => brainRpc(env, method, params, timeout),
+    wake: () => wakeTarget(env),
     write: (text) => process.stdout.write(text) });
 }
 
@@ -933,14 +940,17 @@ async function handoff() {
   const { handoffRequestDigest } = await import('../src/handoffs.js');
   const valueFlags = new Set(['--folder', '--target-folder', '--source-folder', '--account', '--model', '--mode', '--title', '--handoff-id']);
   const args = [];
+  let wake = false;
   for (let i = 0; i < rest.length; i++) {
+    if (cmd === 'dispatch' && rest[i] === '--') { args.push(...rest.slice(i + 1)); break; }
     if (!rest[i].startsWith('--')) { args.push(rest[i]); continue; }
+    if (cmd === 'dispatch' && rest[i] === '--wake') wake = true;
     if (valueFlags.has(rest[i])) i++;
   }
   const who = args.shift();
   if (!who) die('usage: helm dispatch <machine> [text...]');
 
-  const net = requireNetwork();
+  let net = requireNetwork();
   const target = machineId(who);
   if (target === net.self) die('The task move target is this machine.');
 
@@ -958,6 +968,11 @@ async function handoff() {
   const requestedTargetFolder = strFlag('target-folder', strFlag('folder', ''));
   const sourceName = net.machines[net.self]?.name ?? 'the source machine';
   const targetName = net.machines[target]?.name ?? who;
+  if (wake) {
+    if (!explicitAccount && !sourceId) die('Use --account <target-profile-id> outside a Helm chat.');
+    if (explicitAccount && !strFlag('account', '')) die('Set --account to an account ID.');
+    net = await wakeTarget(target);
+  }
 
   // Which of the target's profiles runs the work. An explicit --account is
   // taken verbatim - the target validates it when the job lands, which is
@@ -2050,6 +2065,13 @@ try {
       await listMachines();
       break;
 
+    case 'wake': {
+      const { parseWakeArgs } = await import('../src/wake-cli.js');
+      const { machine, waitMs } = parseWakeArgs(rest);
+      await wakeTarget(machineId(machine), { waitMs, write: console.log });
+      break;
+    }
+
     case 'redesignate':
       await redesignate();
       break;
@@ -2378,7 +2400,7 @@ try {
     // is the brain's guardrail too.
     case 'exec': {
       const { runRemoteWork } = await import('../src/execution-cli.js');
-      process.exitCode = await runRemoteWork(rest, { net: requireNetwork(), machineId });
+      process.exitCode = await runRemoteWork(rest, { net: requireNetwork(), machineId, wake: wakeTarget });
       break;
     }
     // exec-result is the older name, kept for scripts that use it.
@@ -2401,7 +2423,7 @@ try {
       const { runAgentCommand } = await import('../src/agent-cli.js');
       // Catalogs and JSON replies can exceed a pipe's buffer. Let stdout
       // drain naturally instead of truncating them with process.exit().
-      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self, machine: machineId });
+      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self, machine: machineId, wake: wakeTarget });
       break;
     }
     case 'brain':

@@ -7,6 +7,7 @@ import {
   hubHelloAnswer, issueChallenge, HELLO_PATH, sanitizeRoster, hubTrust, signNetworkProof, checkDeviceRequest,
   admitMachine,
 } from '@helm/protocol/network';
+import { possibleWakers, wakeState } from '@helm/protocol/wake-state';
 import { ROLE } from '@helm/protocol/identity';
 import { fanOut } from './notify.js';
 import { desktop } from './desktop-notify.js';
@@ -337,8 +338,10 @@ export function identify(token, req, proof) {
 export function listMachines(online) {
   const net = loadNetwork();
   if (!net) return [];
+  const wake = wakeState.records(net);
   return Object.values(net.machines).map((m) => {
     const cached = q.stateGet.get(m.id);
+    const wakeVia = possibleWakers(wake, m.id, net.self);
     return {
       id: m.id,
       name: m.name,
@@ -349,6 +352,7 @@ export function listMachines(online) {
       lastSeen: cached?.last_seen ?? null,
       info: online.get?.(m.id)?.info ?? JSON.parse(cached?.info || '{}'),
       endpoints: m.endpoints ?? [],
+      ...(wakeVia.length ? { wakeVia } : {}),
       createdAt: m.addedAt,
     };
   });

@@ -42,6 +42,7 @@ import { shareHopTarget, clearShareHop, ShareHop } from './screens/ShareHop';
 import { type Auth, Login } from './screens/Login';
 import { EnvView } from './screens/EnvView';
 import { Home, type HomeBrain } from './screens/Home';
+import { MachineWakeRow } from './MachineWakeRow';
 import { BrainView } from './screens/Brain';
 import { Start } from './screens/Start';
 import { SessionView as SessionViewScreen } from './session/SessionView';
@@ -1396,12 +1397,14 @@ function Shell({ client, conn, onSignOut }: {
   const homeMachines = envs.map((e) => ({ env: e, running: workingThreadsOn(e).length, waiting: e.online ? waitingCountOn(e) : 0 }));
 
   const phoneMachineRow = (e: Environment) => (
-    <button key={e.id} type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
-      <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-      <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
-      <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
-      <span className="chev"><Icon name="forward" size={15} /></span>
-    </button>
+    <MachineWakeRow key={e.id} client={client} env={e} machines={envs}>
+      <button type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
+        <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+        <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
+        <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
+        <span className="chev"><Icon name="forward" size={15} /></span>
+      </button>
+    </MachineWakeRow>
   );
 
   return (
