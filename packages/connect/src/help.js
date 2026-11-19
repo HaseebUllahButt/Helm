@@ -36,6 +36,8 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm browser open <url>            browse with your agent in a Chromium-based browser
   helm browser tabs | look <id>      list tabs or read text and numbered controls
   helm machines [--load]            machines in this network; --load adds CPU, memory and GPU use
+  helm wake <machine> [--wait <minutes>]
+                                    Send a wake signal from an online machine on the same local network
   helm redesignate [machine] <kind> what a machine is for: pc or vm
   helm spin <port> [options]         same as helm share; make a public link
   helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
@@ -76,7 +78,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm agents [--machine <name>] [--json] [--refresh]
                                     List command line accounts, sign-in status and model IDs
   helm run -- <command> [args]      Run a command here through Helm
-  helm exec <machine> [--cwd <path>] -- <command> [args]
+  helm exec <machine> [--wake] [--cwd <path>] -- <command> [args]
                                     Run a command on another machine through Helm
     --env NAME=value               Set a command environment value (repeat this flag for more values)
     --timeout <milliseconds>       Set the command time limit (default 15 minutes)
@@ -109,13 +111,15 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
   helm spawn <machine> - <account> <text...>          the same, as a sketch with no folder
     --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
+    --wake                           Wake an offline machine before starting the chat
   helm delegate <account> --model <id> --wait --json -- "<task>"
                                     Start a helper in this folder
-    --machine <name>                Start the helper on another machine
+    --machine <name> [--wake]        Start the helper on another machine
   helm delegate-result <id> [--wait] [--json]   Read the helper result or approval request
   helm handoff <machine> [text...]  Move code and this task to another machine
     --handoff-id <id>               Continue a stopped task move with the same ID
-  helm dispatch <machine> [text...]  Send this folder and task when the other machine connects
+  helm dispatch <machine> [--wake] [text...]
+                                    Send this folder and task when the other machine connects
   helm dispatch-status <id>         Show progress for a task sent to another machine
   helm send-task <machine> --account <id> [text...]  Send files, .env and a task directly
     --no-env --allow-skipped --handoff-id <id>       Control .env files, skipped files and retries
@@ -180,6 +184,7 @@ Set up this machine
 
 Machines and devices
   machines         List the machines in this network
+  wake             Wake an offline machine
   devices          List the devices that control this network
   redesignate      Set what a machine is for: pc or vm
   remove           Remove a device or machine permanently
@@ -242,7 +247,16 @@ const DETAILS = {
   Exit 1 means a required local check failed. Warnings alone exit 0.
   A home health reply does not prove that its live connection works.`,
 
+  wake: `
+  Run helm machines to list machine names.
+  The target needs a wired network card with Wake-on-LAN on.
+  Keep another Linux machine with Helm online on the same IPv4 network.
+  Run helm doctor on the target to check its settings.
+  Add --wait <minutes> to wait for Helm to connect after sending the signal.
+  Press Ctrl+C to stop waiting.`,
+
   exec: `
+  Add --wake to wake an offline machine and wait up to 5 minutes for it.
   Run pipelines with: helm exec <machine> --cwd <path> -- sh -lc '<script>'.
   Do not rerun a command if Helm cannot confirm that it started.
   Read it with helm exec-status <machine> <id> --wait.
@@ -270,6 +284,7 @@ const DETAILS = {
                      place there, else in that machine's home.
                      Use --cwd for another folder there.
                      Its card and result come back to this chat.
+    --wake           With --machine, wake it and wait up to 5 minutes.
     --model <id>     Pick a model ID, or cheap for the account's small model.
                      Without a choice, use the parent's model on the same CLI.
                      A saved helper model takes priority.
@@ -291,10 +306,15 @@ const DETAILS = {
   Keep finished helpers. The owner reads them under this chat.`,
 
   spawn: `
+  Add --wake to wake an offline machine and wait up to 5 minutes for it.
   Account names (<account>) differ between machines.
   Run helm agents --machine <machine> to list them and their limit left.
   A tool name, such as codex, uses the account with the most limit left.
   For a helper of this chat on another machine, use helm delegate --machine.`,
+
+  dispatch: `
+  Add --wake to wake an offline machine and wait up to 5 minutes for it.
+  Run helm dispatch-status <id> to check a task after Helm accepts it.`,
 
   say: `
   Messages wait for the receiver's next turn.

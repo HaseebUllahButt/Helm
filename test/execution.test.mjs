@@ -296,7 +296,9 @@ test('no command is refused for being one too many', async t => {
 test('output retention is bounded and paged with an explicit truncation marker', async t => {
   const jobs = makeJobs(); t.after(() => jobs.stop());
   jobs.start({ id: id(8), ...spec('process.stdout.write("x".repeat(600000))') }, 'owner');
-  await pause(400);
+  let status;
+  do { ({ status } = await jobs.read({ id: id(8), since: Number.MAX_SAFE_INTEGER, wait: 1000 }, 'owner')); }
+  while (status !== 'exited');
   const first = await jobs.read({ id: id(8) }, 'owner');
   assert.equal(first.truncated, true);
   assert.ok(first.chunks.reduce((n,c) => n + Buffer.from(c.data,'base64').length,0) <= 64 * 1024);

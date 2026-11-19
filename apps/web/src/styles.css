@@ -585,6 +585,9 @@ code, pre, kbd { font-family: var(--mono); }
 /* A machine is a place: its name in the display face. */
 .row.machine .rt-text { font-family: var(--display); font-weight: 600; letter-spacing: -0.01em; }
 .row.machine.offline .rt-text { color: var(--text-dim); }
+.machine-wake-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.machine-wake-button { min-height: 44px; padding-inline: 12px; }
+.machine-wake-message { grid-column: 1 / -1; padding: 0 10px 8px; color: var(--text-dim); }
 .sidebar .row.machine.active::after { display: none; }
 
 .mark {

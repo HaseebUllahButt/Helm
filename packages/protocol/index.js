@@ -77,6 +77,7 @@ export const T = {
   // revocation has to propagate even when nothing else about the network has
   // changed.
   ROSTER: 'roster',               // daemon <-> hub { roster }
+  WAKE_STATE: 'wakeState',        // daemon <-> hub { hash } or { records[], hash? }
   // The owner's preferences (owner.js): one owner-wide record, reconciled the
   // same way - a fingerprint, and the record itself only when they differ.
   OWNER: 'owner',                 // daemon <-> hub { hash } | { record }
@@ -113,6 +114,7 @@ export const CONTROLLER_REFUSAL =
 export const M = {
   ENV_INFO: 'env.info',            // {} -> { host, os, arch, uptime, engines }
   MACHINE_STATS: 'machine.stats',  // {} -> { at, cpu{cores,model,used%}, load[], memory{total,used}, disk{total,free}, gpus[], uptime }
+  MACHINE_WAKE: 'machine.wake',    // on an online sender: { target } -> { sent }
   // Renaming goes to the machine being renamed, never to the hub the phone
   // happened to reach: a machine's roster record has exactly one author.
   ENV_RENAME: 'env.rename',        // { name } -> { id, name }

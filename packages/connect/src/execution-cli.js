@@ -11,11 +11,12 @@ export function parseWorkArgs(args, { remote = false } = {}) {
   const flags = args.slice(0, separator);
   if (remote) {
     options.machine = flags.shift();
-    if (!options.machine || options.machine.startsWith('-')) throw new Error('helm exec <machine> [--cwd <path>] -- <command> [args]');
+    if (!options.machine || options.machine.startsWith('-')) throw new Error('helm exec <machine> [--wake] [--cwd <path>] -- <command> [args]');
   }
   while (flags.length) {
     const flag = flags.shift();
     if (flag === '--heavy') { options.heavy = true; continue; }
+    if (flag === '--wake' && remote) { options.wake = true; continue; }
     if (!['--cwd', '--timeout', '--env'].includes(flag) || !flags.length) throw new Error(`invalid command option: ${flag}`);
     const value = flags.shift();
     if (flag === '--cwd') options.cwd = value;
@@ -73,14 +74,16 @@ export async function runLocalWork(args, { stdout = process.stdout, stderr = pro
 }
 
 /** One connection serves start, output and cancellation; reconnect only reads the same job. */
-export async function runRemoteWork(args, { net, machineId, connect = connectHub,
+export async function runRemoteWork(args, { net, machineId, connect = connectHub, wake,
   stdout = process.stdout, stderr = process.stderr, parentId = process.env.HELM_SESSION_ID } = {}) {
   const options = parseWorkArgs(args, { remote: true });
   const target = machineId(options.machine);
   const id = randomBytes(16).toString('hex');
   let connection, cursor = 0, cancelRequested = false;
+  const waking = options.wake ? new AbortController() : null;
   const cancel = () => {
     cancelRequested = true;
+    waking?.abort();
     connection?.rpc(M.EXEC_CANCEL, { id }).catch(() => {});
   };
   process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
@@ -94,7 +97,13 @@ export async function runRemoteWork(args, { net, machineId, connect = connectHub
         if (['plan', 'readonly', 'read'].includes(state.session?.mode)) throw new Error('a read-only session cannot start managed commands');
       } finally { local.close(); }
     }
+    if (waking && !cancelRequested) {
+      try { net = (await wake(target, { signal: waking.signal })) ?? net; }
+      catch (error) { if (!waking.signal.aborted) throw error; }
+    }
+    if (cancelRequested) return 130;
     connection = await connect(net, target);
+    if (cancelRequested) return 130;
     try {
       await connection.rpc(M.EXEC_START, { id, argv: options.argv, ...(options.cwd ? { cwd: options.cwd } : {}),
         heavy: options.heavy, timeout: options.timeout, env: options.env,

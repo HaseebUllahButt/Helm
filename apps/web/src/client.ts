@@ -27,6 +27,8 @@ export interface Environment {
    */
   kind?: 'pc' | 'vm' | 'nas';
   online: boolean;
+  /** Machines with a saved local network in common, in sending order. */
+  wakeVia?: string[];
   lastSeen: number | null;
   /** Where this machine's own hub answers - the direct path to it. */
   endpoints?: string[];
@@ -44,6 +46,8 @@ export interface Environment {
     helperAttachments?: boolean;
     /** Runs helpers for chats on other machines (helm delegate --machine). */
     remoteHelpers?: boolean;
+    /** Can send a wake signal on a local network. */
+    wakeSender?: boolean;
     runtime?: { version: string };
     /** Which helm this machine runs; null where it is not a git checkout. */
     version?: { commit: string; full?: string; time?: number; dirty?: boolean; dir?: string; branch: string; subject: string; updatable: boolean } | null;

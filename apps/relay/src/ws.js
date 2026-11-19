@@ -10,6 +10,7 @@ import {
   loadNetwork, saveNetwork, roster, mergeRoster, rosterHash, watchNetwork,
 } from '@helm/protocol/network';
 import { loadOwner, mergeOwner, ownerHash } from '../../../packages/protocol/owner.js';
+import { wakeState, wakeHash } from '@helm/protocol/wake-state';
 import { fanOut, isNew } from './notify.js';
 import { desktop } from './desktop-notify.js';
 import { encodeTunnelFrame, decodeTunnelFrame, TunnelFrames } from '../../../packages/protocol/tunnel-frame.js';
@@ -48,6 +49,7 @@ export function createWsLayer() {
   const signalPeers = new Map();
   let mesh;
   let meshIds = new Set();
+  let publishedWakeHash;
   const reachable = {
     has: (id) => online.has(id) || !!mesh?.machines().has(id),
     get: (id) => online.get(id) ?? mesh?.machines().get(id),
@@ -118,7 +120,7 @@ export function createWsLayer() {
     }
   }
 
-  function notifyPresence(envId) {
+  function notifyPresence(envId, wakeChanged = false) {
     const net = loadNetwork();
     const cached = q.stateGet.get(envId);
     const payload = {
@@ -126,6 +128,7 @@ export function createWsLayer() {
       online: reachable.has(envId),
       info: reachable.get(envId)?.info ?? JSON.parse(cached?.info || '{}'),
       name: net?.machines?.[envId]?.name,
+      ...(wakeChanged ? { wakeChanged: true } : {}),
     };
     for (const sock of clients.keys()) send(sock, T.PRESENCE, payload);
     publishHubState();
@@ -546,13 +549,32 @@ export function createWsLayer() {
           // it does on presence and on reconnect and otherwise never. This is
           // the moment we learn, so it is the moment to say so.
           for (const [id, m] of Object.entries(loadNetwork()?.machines ?? {})) {
-            if (named.has(id) && named.get(id) !== m.name) notifyPresence(id, online.has(id));
+            if (named.has(id) && named.get(id) !== m.name) notifyPresence(id);
           }
         } else if (rosterHash(msg.roster) !== rosterHash(net)) {
           // Nothing to learn from theirs, yet we still disagree - so we know
           // something they do not. Send it, once.
           send(sock, T.ROSTER, { roster: roster(net) });
         }
+        return;
+      }
+
+      case T.WAKE_STATE: {
+        const net = loadNetwork();
+        if (!net || net.revoked?.[net.self]) return;
+        try {
+          const changed = wakeState.merge(net, msg.records);
+          const records = wakeState.records(net);
+          const hash = wakeHash(records);
+          if (msg.hash && msg.hash !== hash) send(sock, T.WAKE_STATE, { hash, records: Object.values(records) });
+          if ((changed || envId === net.self) && hash !== publishedWakeHash) {
+            publishedWakeHash = hash;
+            for (const other of online.values()) {
+              if (other !== sock) send(other, T.WAKE_STATE, { records: Object.values(records) });
+            }
+            notifyPresence(envId, true);
+          }
+        } catch (error) { console.warn('[helm] Could not save wake details:', error.message); }
         return;
       }
 
@@ -922,7 +944,7 @@ export function createWsLayer() {
         ...(sock.lanes ? { lanes: 1 } : {}),
       });
       broadcastPeers();
-      notifyPresence(envId, true);
+      notifyPresence(envId);
       watchMesh();
       tellWatched(envId);
       // A machine that just connected may have queued handoffs waiting for
@@ -981,7 +1003,7 @@ export function createWsLayer() {
         if (online.get(sock.envId) === sock) {
           online.delete(sock.envId);
           q.stateSet.run(sock.envId, JSON.stringify(auth.info || {}), now());
-          notifyPresence(sock.envId, false);
+          notifyPresence(sock.envId);
           broadcastPeers();
           watchMesh();
         }
