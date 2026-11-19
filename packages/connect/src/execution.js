@@ -82,7 +82,7 @@ export class ExecutionJobs {
     return job;
   }
 
-  start(params, owner, { stdin, node, keepResult = false } = {}) {
+  start(params, owner, { stdin, node, keepResult = false, keys } = {}) {
     if (this.#closed) throw new Error('Helm is stopping; no command was started.');
     const { id, argv, heavy = false, timeout = WORK_TIMEOUT_MS, env = {} } = params;
     const dir = this.#dir(id), cwd = params.cwd ?? homedir();
@@ -96,7 +96,7 @@ export class ExecutionJobs {
     if (params.stdin != null && (typeof params.stdin !== 'string' || params.stdin.length > Math.ceil(MAX_STDIN / 3) * 4)) throw new Error('command input is too large; the limit is 1 MB');
     const input = stdin != null ? Buffer.from(stdin) : params.stdin != null ? Buffer.from(params.stdin, 'base64') : null;
     const spec = { argv, cwd, heavy, timeout, env, ...(input ? { stdin: true } : {}) };
-    const fingerprint = createHash('sha256').update(JSON.stringify(spec))
+    const fingerprint = createHash('sha256').update(JSON.stringify(keys ? { ...spec, keyPermit: params.keyPermit } : spec))
       .update(input ? createHash('sha256').update(input).digest('hex') : '').digest('hex');
     try { mkdirSync(dir, { mode: 0o700 }); }
     catch (error) {
@@ -122,7 +122,7 @@ export class ExecutionJobs {
     catch (error) { failed(error); throw error; }
     let child;
     try {
-      child = this.launch(spec, { directory: dir, ...(node ? { node } : {}) });
+      child = this.launch(spec, { directory: dir, ...(node ? { node } : {}), ...(keys ? { keys } : {}) });
       child.on('error', failed);
     } catch (error) { failed(error); }
     // The worker may already be running. A failed pid write must not remove

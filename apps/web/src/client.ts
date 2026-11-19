@@ -34,6 +34,7 @@ export interface Environment {
   endpoints?: string[];
   info: {
     host?: string;
+    sharedKeys?: boolean;
     platform?: string;
     arch?: string;
     /** 'pty' when terminals are helm's own; 'panes' is the slow fallback. */

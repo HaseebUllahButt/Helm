@@ -17,9 +17,10 @@ export function parseWorkArgs(args, { remote = false } = {}) {
     const flag = flags.shift();
     if (flag === '--heavy') { options.heavy = true; continue; }
     if (flag === '--wake' && remote) { options.wake = true; continue; }
-    if (!['--cwd', '--timeout', '--env'].includes(flag) || !flags.length) throw new Error(`invalid command option: ${flag}`);
+    if (!['--cwd', '--timeout', '--env', '--key'].includes(flag) || !flags.length) throw new Error(`invalid command option: ${flag}`);
     const value = flags.shift();
-    if (flag === '--cwd') options.cwd = value;
+    if (flag === '--key') (options.keys ??= []).push(value);
+    else if (flag === '--cwd') options.cwd = value;
     else if (flag === '--timeout') options.timeout = Number(value);
     else {
       const index = value.indexOf('=');
@@ -53,6 +54,7 @@ export function parseCommandRef(args, verb, switches = []) {
 /** Local execution preserves the calling shell's environment, including test DB choices. */
 export async function runLocalWork(args, { stdout = process.stdout, stderr = process.stderr, stdin = process.stdin } = {}) {
   const options = parseWorkArgs(args);
+  if (options.keys) throw new Error('Run a shared key command through the Helm service.');
   const child = startWork({ ...options, cwd: resolve(options.cwd ?? process.cwd()) });
   child.stdout.pipe(stdout, { end: false }); child.stderr.pipe(stderr, { end: false });
   stdin.pipe(child.stdin); child.stdin.on('error', () => {});
@@ -75,17 +77,23 @@ export async function runLocalWork(args, { stdout = process.stdout, stderr = pro
 
 /** One connection serves start, output and cancellation; reconnect only reads the same job. */
 export async function runRemoteWork(args, deps = {}) {
-  return runRemoteCommand(parseWorkArgs(args, { remote: true }), deps);
+  return runRemoteCommand(parseWorkArgs(args, { remote: !deps.local }), deps);
 }
 
 /**
- * Run parsed work on a machine and stream its output (helm exec, helm tools
- * run). `options.stdin` is a Buffer the caller already read: it goes with
- * the start, because the command keeps running if this link drops.
+ * Run parsed work on a machine and stream its output (helm exec, helm run
+ * --key, helm tools run). `options.stdin` is a Buffer the caller already
+ * read: it goes with the start, because the command keeps running if this
+ * link drops. `local` runs it on this machine through the Helm service.
  */
 export async function runRemoteCommand(options, { net, machineId, connect = connectHub, wake,
-  stdout = process.stdout, stderr = process.stderr, parentId = process.env.HELM_SESSION_ID } = {}) {
-  const target = machineId(options.machine);
+  stdout = process.stdout, stderr = process.stderr, parentId = process.env.HELM_SESSION_ID,
+  authorize, local = false } = {}) {
+  const target = local ? net.self : machineId(options.machine);
+  if (local) {
+    options.machine = net.machines[net.self]?.name ?? net.self;
+    options.cwd = resolve(options.cwd ?? process.cwd());
+  }
   const id = randomBytes(16).toString('hex');
   let connection, cursor = 0, cancelRequested = false;
   const waking = options.wake ? new AbortController() : null;
@@ -105,6 +113,7 @@ export async function runRemoteCommand(options, { net, machineId, connect = conn
         if (['plan', 'readonly', 'read'].includes(state.session?.mode)) throw new Error('a read-only session cannot start managed commands');
       } finally { local.close(); }
     }
+    const keyPermit = options.keys && await authorize(options.keys, { target, id, kind: 'command' });
     if (waking && !cancelRequested) {
       try { net = (await wake(target, { signal: waking.signal })) ?? net; }
       catch (error) { if (!waking.signal.aborted) throw error; }
@@ -113,7 +122,7 @@ export async function runRemoteCommand(options, { net, machineId, connect = conn
     connection = await connect(net, target);
     if (cancelRequested) return 130;
     try {
-      const started = await connection.rpc(M.EXEC_START, { id, argv: options.argv, ...(options.cwd ? { cwd: options.cwd } : {}),
+      const started = await connection.rpc(keyPermit ? 'keys.exec' : M.EXEC_START, { id, ...(keyPermit ? { keyPermit } : {}), argv: options.argv, ...(options.cwd ? { cwd: options.cwd } : {}),
         heavy: options.heavy, timeout: options.timeout, env: options.env,
         ...(options.stdin?.length ? { stdin: options.stdin.toString('base64') } : {}),
         ...(target === net.self && parentId ? { sessionId: parentId } : {}) });

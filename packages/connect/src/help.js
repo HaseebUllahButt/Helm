@@ -97,10 +97,16 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm profiles [--refresh]         List agent accounts on this machine
   helm agents [--machine <name>] [--json] [--refresh]
                                     List command line accounts, sign-in status and model IDs
-  helm run -- <command> [args]      Run a command here through Helm
+  helm keys set <NAME>              Save a shared key from input or a hidden prompt
+  helm keys list [--json]           List key names, use and chat access
+  helm keys remove <NAME>           Remove a shared key
+  helm keys revoke <grant>         Remove a chat's access to a key
+
+  helm run [--key <NAME>] -- <command> [args]   Run a command here through Helm
   helm exec <machine> [--wake] [--cwd <path>] -- <command> [args]
                                     Run a command on another machine through Helm
     --env NAME=value               Set a command environment value (repeat this flag for more values)
+    --key <NAME>                   Use a shared key for this command. Repeat for more keys.
     --timeout <milliseconds>       Set the command time limit (default 15 minutes)
   helm exec-status <machine> <id> [--wait] [--json]
                                     Read command output after a connection loss
@@ -131,10 +137,12 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
   helm spawn <machine> - <account> <text...>          the same, as a sketch with no folder
     --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
+    --key <NAME>                   Give this chat access to a shared key. Repeat for more keys.
     --wake                           Wake an offline machine before starting the chat
   helm delegate <account> --model <id> --wait --json -- "<task>"
                                     Start a helper in this folder
     --machine <name> [--wake]        Start the helper on another machine
+    --key <NAME>                   Give the helper access to a shared key. Repeat for more keys.
   helm delegate-result <id> [--wait] [--json]   Read the helper result or approval request
   helm webchat add <account> --site gemini|chatgpt|claude --profile <browser profile>
                                     Make a signed-in web chat a Helm account that answers questions
@@ -150,6 +158,7 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm dispatch-status <id>         Show progress for a task sent to another machine
   helm send-task <machine> --account <id> [text...]  Send files, .env and a task directly
     --no-env --allow-skipped --handoff-id <id>       Control .env files, skipped files and retries
+    --key <NAME>                   Give the chat access to a key. Repeat for more keys. Skip .env files.
   helm receive <source> [minutes]   Allow this machine to receive one folder from <source>
   helm send <machine> [folder] --grant <token>
                                   Send a folder with the receiving machine's permission
@@ -224,6 +233,7 @@ Machines and devices
   schedule, when   List scheduled tasks and set tasks to start on an event
   tools            Find and run the owner's saved commands
   phone            Ask the owner's phone: an answer, photo, place or code
+  keys             Save, list and remove shared keys
   copy             Copy files to another machine; resume if stopped
   send, receive    Send a folder with the other machine's permission
   send-task        Send files, .env and a task to another machine
@@ -293,6 +303,22 @@ const DETAILS = {
   Run helm doctor on the target to check its settings.
   Add --wait <minutes> to wait for Helm to connect after sending the signal.
   Press Ctrl+C to stop waiting.`,
+
+  keys: `
+  Save a key in Settings or from your own terminal. Type it at the hidden
+  prompt or pipe it to helm keys set. Keep the value out of arguments and chats.
+  The first machine in your Helm network stores the keys. Keep it connected.
+  A chat needs the owner's approval the first time it asks to use a key.
+  To give another chat access, add --key NAME to delegate, spawn or send-task.
+  Agent tools save their own output. Helm keeps key values out of those tools.
+  In the chat, use helm run --key NAME -- <command> without interactive input.
+  Helm puts the value in that command's environment and hides it in its output.
+  Use helm exec <machine> --key NAME -- <command> to run it on another machine.
+  Access ends when the chat ends. Use Settings or helm keys revoke to end it sooner.`,
+
+  run: `
+  Repeat --key NAME to use several shared keys. Commands with keys run
+  without interactive input. Run helm keys --help for details.`,
 
   exec: `
   Add --wake to wake an offline machine and wait up to 5 minutes for it.

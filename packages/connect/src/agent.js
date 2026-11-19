@@ -88,6 +88,8 @@ import { createBrowserRoutes } from './browser-routes.js';
 import { AdminRuns } from './sudo.js';
 import { PhoneRequests } from './phone.js';
 import { joinHelmAsks } from './helm-asks.js';
+import { SharedKeys } from './shared-keys.js';
+import { validToken } from './shared-key-store.js';
 import { useDesktopScreen } from './browser-window.js';
 import { useOwnerLogins } from './browser.js';
 import { webBuild } from './web-build.js';
@@ -568,7 +570,11 @@ export class Daemon {
     this.sudo = new AdminRuns({ sessions: this.sessions, machineName: () => this.name, log: (m) => console.error(`[helm] ${m}`) });
     // helm phone: the owner's phone gives an agent an answer, a photo, a place or a code.
     this.phone = new PhoneRequests({ sessions: this.sessions, envId: () => this.id, log: (m) => console.error(`[helm] ${m}`) });
-    this.sessions.helmAsks = joinHelmAsks(this.sudo, this.phone);
+    // Shared keys (shared-keys.js): the owner allows a chat to use a key on a card.
+    this.sharedKeys = new SharedKeys({ sessions: this.sessions, network: () => loadNetwork() ?? this.net,
+      rpc: (env, method, params, timeout = 25_000) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout }) });
+    this.sessions.helmAsks = joinHelmAsks(this.sudo, this.phone, this.sharedKeys);
+    this.sessions.sharedKeys = this.sharedKeys;
     this.inputDelivery = new InputDelivery(this.sessions, { log: m => console.error(`[helm] ${m}`) });
     this.agentMessages = new AgentMessages({ sessions: this.sessions, delivery: this.inputDelivery, self: this.id,
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
@@ -682,7 +688,7 @@ export class Daemon {
       // Logged here: it can fail after new chats were let through.
       .catch((error) => { console.error(`[helm] session recovery: ${error.message}`); throw Object.assign(error, { logged: true }); });
     this.sessionRecovery = Promise.race([resumed, recordsRestored])
-      .then(() => { if (!this.#stopped) { this.inputDelivery.resume(); this.schedules?.start(); this.sessions.startLimitRecovery(); this.chatMoves.start(); } })
+      .then(() => { if (!this.#stopped) { this.inputDelivery.resume(); this.sharedKeys.restore().catch(() => {}); this.schedules?.start(); this.sessions.startLimitRecovery(); this.chatMoves.start(); } })
       .catch((error) => { if (!error?.logged) console.error(`[helm] session recovery: ${error?.message}`); });
     // Caches worth having warm, none worth being late for: they start once
     // the links are up. Re-reading the shell's aliases blocks for a moment,
@@ -702,6 +708,7 @@ export class Daemon {
     }, WARM_DELAY_MS);
     warm.unref?.();
     this.sessions.on('session', (session) => {
+      this.sharedKeys.onSession(session);
       this.#updates.push({ session: wire(session) });
       this.browsers.sessionChanged(session);
       if (!session.deleted) this.schedules?.observeChat(session);
@@ -923,6 +930,7 @@ export class Daemon {
     await this.browsers?.stop();
     this.sudo?.stop();
     this.phone?.stop();
+    this.sharedKeys?.stop();
     clearInterval(this.#brainTimer);
     clearTimeout(this.#compactTimer);
     clearTimeout(this.#keeperFirst);
@@ -1431,7 +1439,7 @@ export class Daemon {
     const { id: _id, machine, callerThreadId: _thread, ...ask } = p;
     let reply;
     try {
-      reply = await hubRpc(net, machine, M.SESSION_DELEGATE, { ...ask, parentId: parent.id, parentMachine: this.id,
+      reply = await hubRpc(net, machine, ask.keyPermit ? 'keys.delegate' : M.SESSION_DELEGATE, { ...ask, parentId: parent.id, parentMachine: this.id,
         parent: { mode: parent.mode ?? undefined, engine: parent.engine, model: parent.engineModel || parent.model || undefined,
           cwd: parent.cwd ?? undefined, home: homedir(), generation: parent.stopGeneration ?? 0 } }, { timeout: 65_000 });
     } catch (error) {
@@ -1560,6 +1568,7 @@ export class Daemon {
       home: homedir(),
       precopiedHandoff: true,
       agentMessages: true,
+      sharedKeys: true,
       // A new helper task can carry pasted pictures and files.
       helperAttachments: true,
       // Runs helpers for chats on other machines (helm delegate --machine).
@@ -1967,12 +1976,29 @@ export class Daemon {
       if (!this.phone) throw new Error('Helm is starting. Try again.');
       return this.phone.dispatch(method, p, { trusted: this.#selfOrOwner(caller) });
     }
+    if (method.startsWith('keys.') && !['keys.exec', 'keys.start', 'keys.delegate'].includes(method)) {
+      await this.sessionRecovery;
+      return this.sharedKeys.dispatch(method, p, caller);
+    }
+    // A paired machine can run work. Only the owner's app can approve access.
+    if ([M.SESSION_ANSWER, 'session.answer-deliver'].includes(method) && this.sharedKeys?.owns(p.requestId)) {
+      const net = loadNetwork() ?? this.net;
+      if (!caller || !net.devices?.[caller] || net.revoked?.[caller]) throw new Error('Approve shared keys in the Helm app.');
+    }
     switch (method) {
-      case M.EXEC_START:
+      case 'keys.exec':
+      case M.EXEC_START: {
         if (p.sessionId && ['plan', 'readonly', 'read'].includes(this.sessions.get(p.sessionId).mode)) {
           throw new Error('a read-only session cannot start managed commands');
         }
+        if (method === 'keys.exec') {
+          const source = this.#pairedCaller(caller);
+          if (!validToken(p.keyPermit) || p.keyPermit !== p.id) throw new Error('This command needs a shared key grant.');
+          const keys = await this.sharedKeys.claimCommand(p.keyPermit, source);
+          return this.executions.start(p, source, { keys });
+        }
         return this.executions.start(p.argv?.[0] === WAKE_EXEC ? { ...p, argv: wakeExecArgs(p.argv) } : p, caller ?? this.id);
+      }
       case M.EXEC_READ: return this.executions.read(p, caller ?? this.id);
       case M.EXEC_CANCEL: return this.executions.cancel(p, caller ?? this.id);
       case M.MACHINE_WAKE:
@@ -2405,18 +2431,26 @@ export class Daemon {
       // Only the keeper starts a hidden helper; one asked for from outside is
       // always a card in its chat, where the owner can see it. A helper with
       // no chat had no card and no one to read its result.
+      case 'keys.delegate':
       case M.SESSION_DELEGATE: {
+        const { keyPermit, ...request } = p;
+        p = request;
+        if (method === 'keys.delegate') {
+          this.#pairedCaller(caller);
+          if (!validToken(keyPermit)) throw new Error('This helper needs a shared key grant.');
+          p.keyPermit = keyPermit;
+        }
         // Another machine's chat asks for a helper here. The asking machine
         // is the one the network says sent it, never one named in the request.
         if (p?.parentMachine !== undefined) {
           const remoteParent = this.#remoteParent(p, caller);
           const { id: _id, machine: _machine, parent: _parent, parentMachine: _pm, ...ask } = p;
-          return this.sessions.delegate({ ...ask, remoteParent, hidden: false, tour: false });
+          return this.sessions.delegate({ ...ask, keySource: caller, remoteParent, hidden: false, tour: false });
         }
         if (!p?.id) throw new Error('A helper needs the chat that starts it. To start work on another machine, use helm spawn.');
         if (p.machine && p.machine !== this.id) return this.#delegateAway(p);
         const { machine: _machine, ...ask } = p;
-        return this.sessions.delegate({ ...ask, hidden: false, tour: false });
+        return this.sessions.delegate({ ...ask, keySource: caller, hidden: false, tour: false });
       }
       case M.SESSION_HELPER_STATE:
         await this.sessionRecovery;
@@ -2445,9 +2479,15 @@ export class Daemon {
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
       case M.SESSION_NATIVE_AGENT: return this.sessions.nativeAgent(p.id, p.agentId, { full: p.full === true, limit: p.limit });
       case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);
+      case 'keys.start':
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
-        const { originHandoffId: _originHandoffId, delegation: _delegation, reservedSessionId: _reservedSessionId, attach, ...start } = p;
+        const { originHandoffId: _originHandoffId, delegation: _delegation, reservedSessionId: _reservedSessionId, keyPermit, keySource: _keySource, attach, ...start } = p;
+        if (method === 'keys.start') {
+          start.keySource = this.#pairedCaller(caller);
+          if (!validToken(keyPermit)) throw new Error('This chat needs a shared key grant.');
+          start.keyPermit = keyPermit;
+        }
         await this.sessionRecovery;
         this.startReceipts ??= new StartReceipts(this.sessions);
         const session = await this.startReceipts.start({ ...start, quick: start.quick === true, size: attach ?? null }, caller);
@@ -2701,6 +2741,9 @@ export class Daemon {
         return this.copyReceiver.sendReceiver.status(p.jobId, caller);
       }
       case M.TASK_SEND:
+        if (p.keyPermit !== undefined && (!validToken(p.keyPermit) || caller !== this.id)) {
+          throw new Error('This task needs a shared key grant from this machine.');
+        }
         return this.taskTransfers.send(p, caller);
       case M.TASK_COLLECT:
         return this.handoffs.collect(p.handoffId, caller);

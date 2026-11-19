@@ -19,6 +19,7 @@ mark.
 | Browser for chats | [browser.md](browser.md) |
 | Spins: `helm share` public links | [spins.md](spins.md) |
 | Settings, usage, limits, dashboard, updates, connectors | [settings.md](settings.md) |
+| Shared keys and chat access | [shared-keys.md](shared-keys.md) |
 | Rewind: Edit / Branch from here | [rewind.md](rewind.md) |
 | Files, images, voice, visuals | [files-and-visuals.md](files-and-visuals.md) |
 | Git, CI / CD, schedules and triggers | [git-and-schedules.md](git-and-schedules.md) |

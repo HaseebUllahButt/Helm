@@ -303,7 +303,8 @@ test('output retention is bounded and paged with an explicit truncation marker',
   assert.equal(first.truncated, true);
   assert.ok(first.chunks.reduce((n,c) => n + Buffer.from(c.data,'base64').length,0) <= 64 * 1024);
   assert.equal(first.more, true);
-  const r = await result(jobs, id(8)); assert.ok(r.output.length <= 256 * 1024);
+  const r = await result(jobs, id(8));
+  assert.ok(r.output.length <= 256 * 1024);
 });
 
 test('completed output expires even without another command starting', async t => {
