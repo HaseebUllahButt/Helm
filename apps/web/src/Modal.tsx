@@ -26,8 +26,10 @@ export function Sheet({ children, onClose, label, onKeyDown }: { children: React
  * `enterConfirms` puts focus on the yes button, so Enter answers yes. The key
  * that asked never answers: a double press of Delete lost the owner's chats.
  */
-export function Confirm({ title, body, confirmLabel = 'Confirm', danger, busy, enterConfirms, onCancel, onConfirm }: {
+export function Confirm({ title, body, confirmLabel = 'Confirm', danger, busy, enterConfirms, other, onCancel, onConfirm }: {
   title: string; body?: ReactNode; confirmLabel?: string; danger?: boolean; busy?: boolean; enterConfirms?: boolean;
+  /** A third answer beside Cancel and yes. */
+  other?: { label: string; onClick: () => void };
   onCancel: () => void; onConfirm: () => void;
 }) {
   const yes = useRef<HTMLButtonElement>(null);
@@ -39,6 +41,7 @@ export function Confirm({ title, body, confirmLabel = 'Confirm', danger, busy, e
       {body && <div className="modal-body">{body}</div>}
       <div className="modal-actions">
         <button className="ghost" onClick={onCancel} disabled={busy}>Cancel</button>
+        {other && <button className="ghost" onClick={other.onClick} disabled={busy}>{other.label}</button>}
         <button ref={yes} className={danger ? 'primary danger' : 'primary'} onClick={onConfirm} disabled={busy}>
           {busy ? '…' : confirmLabel}
         </button>

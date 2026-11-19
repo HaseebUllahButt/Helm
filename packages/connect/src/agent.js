@@ -1889,7 +1889,7 @@ export class Daemon {
         if (!net.devices?.[caller] || net.revoked?.[caller]) throw new Error('Set up a screen from the Helm app: open the screen menu (Ctrl+Shift+R) and press Set up.');
         return this.screens.setup();
       }
-      if (method === M.SCREEN_START) return this.screens.start();
+      if (method === M.SCREEN_START) return this.screens.start({ withoutKeys: p?.withoutKeys === true });
       if (method === M.SCREEN_STOP) return this.screens.stop();
       if (method === M.SCREEN_WINDOW) return this.screens.window(p);
       throw new Error(`unknown method: ${method}`);

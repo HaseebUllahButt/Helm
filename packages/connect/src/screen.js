@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants as fsConstants, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +40,19 @@ const INSTALL = {
   pacman: 'pacman -S --needed --noconfirm',
   apk: 'apk add',
 };
+
+// On Wayland the engine presses keys through a kernel keyboard, so the
+// desktop's own shortcuts work (niri ignores them from a Wayland virtual
+// keyboard). This rule lets the signed-in person use /dev/uinput; "uaccess"
+// is the same rule that gives them their sound card and camera.
+export const UINPUT_RULE_FILE = '/etc/udev/rules.d/70-helm-screen.rules';
+export const UINPUT_COMMAND = `printf '%s\\n' 'KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"' > ${UINPUT_RULE_FILE}`
+  + ' && (modprobe uinput || true) && udevadm control --reload-rules && udevadm trigger --action=add --name-match=uinput && udevadm settle';
+
+/** Whether this user may make a kernel keyboard. */
+export function keysReady(path = '/dev/uinput') {
+  try { accessSync(path, fsConstants.W_OK); return true; } catch { return false; }
+}
 
 function run(cmd, args, { cwd, env, timeoutMs = 120_000 } = {}) {
   return new Promise((resolve) => {
@@ -176,8 +189,9 @@ export class Screens {
    * @param {() => object} o.network   the roster
    * @param {object} o.forwards  this machine's Forwards
    */
-  constructor({ network, forwards, log = () => {}, now = Date.now, idleMs = IDLE_MS, source = SOURCE_DIR } = {}) {
+  constructor({ network, forwards, log = () => {}, now = Date.now, idleMs = IDLE_MS, source = SOURCE_DIR, canPressKeys = keysReady } = {}) {
     this.network = network;
+    this.keysReady = () => canPressKeys();
     this.forwards = forwards;
     this.log = log;
     this.now = now;
@@ -227,11 +241,13 @@ export class Screens {
     const missing = built ? null : await this.#missing(display.backend);
     return {
       supported: true, backend: display.backend, display: display.display, desktop: display.desktop,
-      built, running: !!running, needsSetup: !!missing, packages: missing?.packages ?? [],
+      built, running: !!running, needsSetup: !!missing || this.#needsKeys(display.backend), packages: missing?.packages ?? [],
     };
   }
 
-  /** Install the system packages (owner only), then build. */
+  #needsKeys(backend) { return backend === 'wayland' && !this.keysReady(); }
+
+  /** Install the system packages and the keyboard rule (owner only), then build. */
   async setup() {
     const display = await findDisplay();
     if (display.error) throw new Error(display.error);
@@ -244,6 +260,13 @@ export class Screens {
       if (done.code !== 0) throw new Error(`The package install failed: ${done.output.trim().split('\n').slice(-3).join(' ')}`);
       const still = await this.#missing(display.backend);
       if (still) throw new Error(`Packages are still missing after the install: ${still.said}`);
+    }
+    if (this.#needsKeys(display.backend)) {
+      this.log('screen: letting the engine use a kernel keyboard');
+      const done = await runAsAdmin(UINPUT_COMMAND, { machine: this.#name(this.network()?.self) });
+      if (done.message) throw new Error(done.message);
+      if (done.code !== 0) throw new Error(`Helm could not let the screen press desktop shortcuts: ${done.output.trim().split('\n').slice(-2).join(' ')}`);
+      if (!this.keysReady()) throw new Error('The keyboard rule is in place, but this account still cannot use it. Sign out and in again on this machine, then try again.');
     }
     await this.#build(display.backend);
     return this.status();
@@ -284,11 +307,18 @@ export class Screens {
   }
 
   /** Start the engine on this machine's real screen, or reuse the one that runs. */
-  async start() {
+  async start({ withoutKeys = false } = {}) {
     const display = await findDisplay();
     if (display.error) return { error: display.error };
+    const keys = display.backend !== 'wayland' || this.keysReady();
+    if (!keys && !withoutKeys) {
+      const missing = existsSync(this.#enginePath(display.backend)) ? null : await this.#missing(display.backend);
+      return { needs: 'setup', keys: true, packages: missing?.packages ?? [], canInstall: !missing || !!missing.command };
+    }
     const running = this.#running();
-    if (running && running.display === display.display && await this.#answers(running.port, running.token)) {
+    // An engine started before the keyboard rule keeps the old keys: start a new one.
+    const stale = running && keys && running.keys === false;
+    if (running && !stale && running.display === display.display && await this.#answers(running.port, running.token)) {
       this.#idleSince = null;
       return { port: running.port, token: running.token, backend: running.backend };
     }
@@ -332,7 +362,7 @@ export class Screens {
       try { said = readFileSync(logFile, 'utf8').trim().split('\n').filter((l) => !/^\[|x264 \[info\]/.test(l)).slice(-2).join(' '); } catch { /* no log */ }
       return { error: `The screen program did not start${said ? `: ${said}` : '.'}` };
     }
-    writeFileSync(stateFile(), JSON.stringify({ pid: child.pid, port, token, backend: display.backend, display: display.display, startedAt: this.now() }), { mode: 0o600 });
+    writeFileSync(stateFile(), JSON.stringify({ pid: child.pid, port, token, backend: display.backend, display: display.display, keys, startedAt: this.now() }), { mode: 0o600 });
     this.#idleSince = null;
     this.log(`screen: engine on port ${port} (${display.backend} ${display.display})`);
     return { port, token, backend: display.backend, width: caps.width, height: caps.height };
