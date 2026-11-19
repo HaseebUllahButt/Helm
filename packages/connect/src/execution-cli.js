@@ -74,9 +74,17 @@ export async function runLocalWork(args, { stdout = process.stdout, stderr = pro
 }
 
 /** One connection serves start, output and cancellation; reconnect only reads the same job. */
-export async function runRemoteWork(args, { net, machineId, connect = connectHub, wake,
+export async function runRemoteWork(args, deps = {}) {
+  return runRemoteCommand(parseWorkArgs(args, { remote: true }), deps);
+}
+
+/**
+ * Run parsed work on a machine and stream its output (helm exec, helm tools
+ * run). `options.stdin` is a Buffer the caller already read: it goes with
+ * the start, because the command keeps running if this link drops.
+ */
+export async function runRemoteCommand(options, { net, machineId, connect = connectHub, wake,
   stdout = process.stdout, stderr = process.stderr, parentId = process.env.HELM_SESSION_ID } = {}) {
-  const options = parseWorkArgs(args, { remote: true });
   const target = machineId(options.machine);
   const id = randomBytes(16).toString('hex');
   let connection, cursor = 0, cancelRequested = false;
@@ -105,9 +113,12 @@ export async function runRemoteWork(args, { net, machineId, connect = connectHub
     connection = await connect(net, target);
     if (cancelRequested) return 130;
     try {
-      await connection.rpc(M.EXEC_START, { id, argv: options.argv, ...(options.cwd ? { cwd: options.cwd } : {}),
+      const started = await connection.rpc(M.EXEC_START, { id, argv: options.argv, ...(options.cwd ? { cwd: options.cwd } : {}),
         heavy: options.heavy, timeout: options.timeout, env: options.env,
+        ...(options.stdin?.length ? { stdin: options.stdin.toString('base64') } : {}),
         ...(target === net.self && parentId ? { sessionId: parentId } : {}) });
+      // An older Helm drops the input without a word. Say so here.
+      if (options.stdin?.length && !started?.stdin) stderr.write(`helm: ${options.machine} runs an older Helm. The command did not get your input. Update Helm there.\n`);
     } catch (error) {
       throw new Error(`${error.message}\nCommand ${id} may have started; it was not retried. Inspect it with helm exec-status ${options.machine} ${id} --wait, or stop it with helm exec-cancel ${options.machine} ${id}.`);
     }

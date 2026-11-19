@@ -62,15 +62,18 @@ async function run(spec) {
     if (Date.now() >= end) throw new Error('Command timeout elapsed before execution.');
     command = spawn(argv[0], argv.slice(1), {
       cwd: spec.cwd, env: { ...process.env, ...spec.env },
-      stdio: durableDir ? [spec.stdin == null ? 'ignore' : 'pipe', 'pipe', 'pipe'] : ['pipe', 'inherit', 'inherit'],
+      stdio: durableDir ? [spec.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] : ['pipe', 'inherit', 'inherit'],
       detached: process.platform !== 'win32',
     });
     if (durableDir) {
       command.stdout.on('data', data => append('stdout', data));
       command.stderr.on('data', data => append('stderr', data));
-      if (command.stdin) {
+      if (spec.stdin) {
+        // The input was saved beside the job. It is read once, then deleted.
+        const file = join(durableDir, 'stdin');
         command.stdin.on('error', () => {});
-        command.stdin.end(Buffer.from(spec.stdin, 'base64'));
+        try { command.stdin.end(readFileSync(file)); } catch { command.stdin.end(); }
+        rmSync(file, { force: true });
       }
     } else {
       process.stdin.pipe(command.stdin);
@@ -97,6 +100,7 @@ async function run(spec) {
     if (!durableDir) process.stdin.destroy();
     await closeDescendants();
     if (durableDir) {
+      rmSync(join(durableDir, 'stdin'), { force: true });
       notify({ status: 'exited', exitCode: code, signal: exitSignal ?? null, finishedAt: Date.now() });
       watcher?.close();
     } else if (process.connected) process.disconnect();

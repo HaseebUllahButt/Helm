@@ -241,6 +241,9 @@ export const M = {
   SCHEDULE_SAVE: 'schedule.save',
   SCHEDULE_DELETE: 'schedule.delete',
   SCHEDULE_RUN: 'schedule.run',
+  TOOL_LIST: 'tool.list',         // { seen? } -> { tools[], seen?, at }
+  TOOL_SAVE: 'tool.save',         // { name, argv[], description?, cwd? } -> { tool, replaced }
+  TOOL_REMOVE: 'tool.remove',     // { name } -> { removed }
   SESSION_NOTIFY: 'session.notify',       // { id, on } -> { ok }  ping me when this thread finishes
   SESSION_MODE: 'session.mode',       // { id, mode } -> { session }
   SESSION_MODEL: 'session.model',

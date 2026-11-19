@@ -241,8 +241,13 @@ export function sudoNote() {
   return '[Helm admin: When you need admin rights, run helm sudo -- <command> with a long time limit; the owner allows it in the app. Never run sudo yourself, never ask the owner for the password, never read Helm\'s saved password.]';
 }
 
+/** The owner's named commands (helm tools). One line, so agents look before they build. */
+export function toolsNote() {
+  return '[Helm tools: For a capability you lack, run helm tools list: the owner\'s saved commands. Run one with helm tools run <name> [args].]';
+}
+
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), '[Helm triggers: Run helm when --help to start a task on an event.]', visualNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), '[Helm triggers: Run helm when --help to start a task on an event.]', visualNote(), toolsNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});

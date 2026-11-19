@@ -209,6 +209,23 @@ owner's home or network to bypass this check.
 - **Tests:** `test/execution`, `execution-rpc`, `copy`,
   `copy-transport`, `copy-arguments`, `copy-binary`, `bulk-transfer`.
 
+## Tools: `helm tools`
+- **Reach:** `helm tools add|list|show|run|remove`, and **Settings >
+  Tools** (also in the palette). The app lists and removes; adding is
+  only through the command, on the machine that has the program.
+- **Rules:** each machine keeps its own tools in `~/.helm/tools.json`.
+  `list` asks every machine; what it hears is kept in `tools-seen.json`,
+  so an offline machine still shows its last known tools. A tool on this
+  machine runs like `helm run` (this shell's settings, live input). On
+  another machine it runs like `helm exec`: the caller reads all piped
+  input first (1 MB, sent with `exec.start` as `stdin`). An older Helm
+  drops that input, and the caller says so.
+- **Prove:** with the private copy, `$H tools add hi --description "Say hi."
+  -- echo hi`, then `$H tools run hi there` prints `hi there`. Open Settings >
+  Tools at phone and computer sizes, press Remove, and see the notice with
+  the add command to undo it.
+- **Tests:** `test/tools`, `test/execution`.
+
 ## Saved CLI conversations and Take over
 - **Rules:** a saved Claude, Codex, OpenCode or Pi conversation opens with
   its messages; opening alone starts no agent, and the next message resumes

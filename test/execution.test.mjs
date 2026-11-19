@@ -424,3 +424,34 @@ test('a finished result is kept for an hour by default', t => {
   const jobs = makeJobs(); t.after(() => jobs.stop());
   assert.equal(jobs.retainMs, 60 * 60_000);
 });
+
+test('a durable command gets saved input once, and the input file is gone after', async t => {
+  const jobs = makeJobs(); t.after(() => jobs.stop());
+  const input = Buffer.from('line one\nline two\n').toString('base64');
+  const started = jobs.start({ ...spec('let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(s.toUpperCase()))'), id: id(901), stdin: input }, 'owner');
+  assert.equal(started.stdin, true, 'the start says the input was taken');
+  const r = await result(jobs, id(901));
+  assert.equal(r.exitCode, 0);
+  assert.equal(r.output, 'LINE ONE\nLINE TWO\n\n');
+  assert.ok(!readdirSync(join(jobs.directory, id(901))).includes('stdin'));
+  assert.throws(() => jobs.start({ ...spec('0'), id: id(902), stdin: 'A'.repeat(2 * 1024 * 1024) }, 'owner'), /too large/);
+  // Without input, stdin is empty as before.
+  jobs.start({ ...spec('let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.stringify(s)))'), id: id(903) }, 'owner');
+  assert.equal((await result(jobs, id(903))).output, '""\n');
+});
+
+test('remote CLI sends input with the start and warns when an older machine drops it', async () => {
+  for (const takes of [true, false]) {
+    const stdout = new PassThrough(), stderr = new PassThrough(); let warned = '', sent;
+    stderr.on('data', chunk => warned += chunk);
+    const connect = async () => ({ close() {}, rpc: async (method, p) => {
+      if (method === M.EXEC_START) { sent = p.stdin; return { id: p.id, ...(takes ? { stdin: true } : {}) }; }
+      return { status: 'exited', exitCode: 0, last: 0, more: false, chunks: [] };
+    } });
+    const { runRemoteCommand } = await import('../packages/connect/src/execution-cli.js');
+    await runRemoteCommand({ machine: 'VM', argv: ['cat'], heavy: false, timeout: 5000, env: {}, stdin: Buffer.from('hi') },
+      { net: { self: 'self' }, machineId: () => 'vm', connect, stdout, stderr, parentId: null });
+    assert.equal(Buffer.from(sent, 'base64').toString(), 'hi');
+    assert.equal(/older Helm/.test(warned), !takes);
+  }
+});
