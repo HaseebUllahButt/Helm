@@ -10,6 +10,7 @@ mark.
 |---|---|
 | Chats and the composer: send, queue, stop, modes, keys | [chats.md](chats.md) |
 | Approvals, questions, "Needs you", alerts | [approvals.md](approvals.md) |
+| Phone requests: `helm phone` answers, photos, location, codes | [phone.md](phone.md) |
 | New chat, clone, accounts, models | [new-chat.md](new-chat.md) |
 | Sidebar, shelves, search, rename/archive/delete, brain | [sidebar.md](sidebar.md) |
 | Helpers, subagents, messages between agents | [helpers.md](helpers.md) |

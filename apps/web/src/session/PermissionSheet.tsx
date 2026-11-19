@@ -5,6 +5,7 @@ import { useNow, waitingSince } from '../useNow';
 import type { Decision, Permission, Question } from './types';
 import { Icon } from '../Icon';
 import { errorMessage } from '../errors';
+import { PhoneSheet } from './PhoneSheet';
 
 /**
  * The agent stopped to ask. This is the whole reason helm exists, so the
@@ -85,6 +86,8 @@ export function PermissionSheet({ permission: p, onAnswer, busy: answering, vari
   const noPassword = wantsPassword && !password;
 
   const banner = variant === 'banner';
+  // helm phone: an answer, photo, location or code, sent from its own card.
+  if (p.phone) return <PhoneSheet permission={p} variant={variant} />;
   if (p.kind === 'question') return <QuestionSheet permission={p} onAnswer={onAnswer} busy={busy} variant={variant} onHandle={onHandle} />;
 
   const allow = p.options.find((o) => o.role === 'allow');

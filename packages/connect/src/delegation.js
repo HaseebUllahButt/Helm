@@ -240,8 +240,13 @@ export function sudoNote() {
   return '[Helm admin: When you need admin rights, run helm sudo -- <command> with a long time limit; the owner allows it in the app. Never run sudo yourself, never ask the owner for the password, never read Helm\'s saved password.]';
 }
 
+/** helm phone (phone.js): what only the owner's phone has. Agents asked in plain chat text before. */
+export function phoneNote() {
+  return '[Helm phone: For an answer, photo, location or SMS sign-in code from the owner\'s phone, run helm phone ask|photo|location|code with a long time limit (helm phone --help).]';
+}
+
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), phoneNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});
