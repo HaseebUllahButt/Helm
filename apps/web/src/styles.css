@@ -1,5 +1,6 @@
 @import '@xterm/xterm/css/xterm.css';
 @import './session/side-dock.css';
+@import './session/phone.css';
 @import 'katex/dist/katex.min.css';
 
 /* Saved visual replies: controls belong to Helm; the page stays isolated. */

@@ -2536,6 +2536,12 @@ try {
       } else die('usage: helm screen [status | stop]\n  Open a screen from the Helm app: press Ctrl+Shift+R.');
       break;
     }
+    case 'phone': {
+      const { runPhoneCommand } = await import('../src/phone-cli.js');
+      const code = await runPhoneCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self });
+      process.stdout.write('', () => process.stderr.write('', () => exit(code)));
+      break;
+    }
     case 'sudo': {
       const { runSudoCommand } = await import('../src/sudo-cli.js');
       const code = await runSudoCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self });

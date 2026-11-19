@@ -86,6 +86,8 @@ import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
 import { AdminRuns } from './sudo.js';
+import { PhoneRequests } from './phone.js';
+import { joinHelmAsks } from './helm-asks.js';
 import { useDesktopScreen } from './browser-window.js';
 import { useOwnerLogins } from './browser.js';
 import { webBuild } from './web-build.js';
@@ -564,7 +566,9 @@ export class Daemon {
     this.sessions.localModelAccounts = this.localModelAccounts;
     // helm sudo: cards Helm asks itself, answered through Sessions.answer.
     this.sudo = new AdminRuns({ sessions: this.sessions, machineName: () => this.name, log: (m) => console.error(`[helm] ${m}`) });
-    this.sessions.helmAsks = this.sudo;
+    // helm phone: the owner's phone gives an agent an answer, a photo, a place or a code.
+    this.phone = new PhoneRequests({ sessions: this.sessions, envId: () => this.id, log: (m) => console.error(`[helm] ${m}`) });
+    this.sessions.helmAsks = joinHelmAsks(this.sudo, this.phone);
     this.inputDelivery = new InputDelivery(this.sessions, { log: m => console.error(`[helm] ${m}`) });
     this.agentMessages = new AgentMessages({ sessions: this.sessions, delivery: this.inputDelivery, self: this.id,
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
@@ -918,6 +922,7 @@ export class Daemon {
     await this.executions.stop();
     await this.browsers?.stop();
     this.sudo?.stop();
+    this.phone?.stop();
     clearInterval(this.#brainTimer);
     clearTimeout(this.#compactTimer);
     clearTimeout(this.#keeperFirst);
@@ -1957,6 +1962,10 @@ export class Daemon {
     if (method.startsWith('sudo.')) {
       if (!this.sudo) throw new Error('Helm is starting. Try again.');
       return this.sudo.dispatch(method, p, { trusted: this.#selfOrOwner(caller) });
+    }
+    if (method.startsWith('phone.')) {
+      if (!this.phone) throw new Error('Helm is starting. Try again.');
+      return this.phone.dispatch(method, p, { trusted: this.#selfOrOwner(caller) });
     }
     switch (method) {
       case M.EXEC_START:

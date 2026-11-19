@@ -1,0 +1,29 @@
+/* helm phone cards (PhoneSheet.tsx): an answer, a photo, the location or a code. */
+.sheet.phone .sheet-head .tag { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phone-body { display: flex; flex-direction: column; gap: 10px; }
+.phone-row { display: flex; gap: 8px; align-items: center; width: 100%; flex-wrap: wrap; }
+.phone-row input { flex: 1 1 12em; min-width: 0; width: auto; min-height: 44px; padding: 10px 12px; font-size: var(--t-body); }
+.phone-row button.ghost, .phone-row button.primary, .phone-row button { flex: 1 0 auto; width: auto; margin: 0; min-height: 44px; padding: 10px 14px; font-size: var(--t-body); }
+.phone-code:not(:placeholder-shown) { font-family: var(--mono); letter-spacing: .1em; }
+.phone-note { margin: 0; color: var(--mutedfg); font-size: var(--t-meta); overflow-wrap: anywhere; }
+.phone-note b { color: var(--text); font-family: var(--mono); }
+.phone-photo { display: block; max-width: 100%; max-height: 36dvh; border-radius: var(--radius); object-fit: contain; align-self: flex-start; }
+.sheet.phone .q-num { display: inline-flex; }
+
+/* The same card in the waiting box, which is always dark. */
+.phone-island .island-where { margin-left: 0; white-space: normal; }
+.phone-island .island-opts { margin-bottom: 8px; }
+.phone-island .phone-row { margin-top: 2px; }
+.phone-island .phone-row input {
+  background: #0d0d0d; color: #ededed; border: 1px solid rgb(255 255 255 / 10%); border-radius: 10px; min-height: 40px;
+}
+.phone-island .phone-row button, .phone-island .phone-row button.ghost {
+  min-height: 40px; padding: 0 12px; border-radius: 10px; font-size: var(--t-meta); font-weight: 500;
+  color: #ededed; background: rgb(255 255 255 / 8%);
+}
+.phone-island .phone-row button:hover:not(:disabled) { background: rgb(255 255 255 / 14%); }
+.phone-island .phone-note { color: var(--mutedfg); margin-top: 6px; }
+.phone-island .phone-note b { color: #ededed; }
+.phone-island .phone-photo { max-height: 28dvh; margin-bottom: 4px; }
+.phone-acts { justify-content: flex-end; }
+.phone-row input + button.ghost, .phone-row input + button { flex: 0 0 auto; }

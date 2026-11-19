@@ -63,6 +63,13 @@ export const USAGE = `helm - Control your coding agents from anywhere
                                   Run a command as admin after the owner allows it in the app
   helm sudo password | forget     Save or delete this machine's admin password (owner only)
   helm sudo status | stop [chat]  Show saved password and 15-minute allows, or end them
+  helm phone ask "<question>" [--choice <a>]... [--why <text>] [--timeout <min>]
+                                  Ask the owner on the phone and print the answer
+  helm phone photo | location ["<why>"]
+                                  Get a photo (a file path) or the place (latitude longitude)
+  helm phone code ["<site>"]      Get a one-time sign-in code the owner pastes
+  helm phone list | cancel <id|all>
+                                  Show or close open phone requests
   helm schedule list | show <id>  List scheduled tasks on every machine, or show one
   helm schedule pause | resume | remove <id>
                                   Stop a task for a while, start it again, or delete it
@@ -216,6 +223,7 @@ Machines and devices
   sudo             Run a command as admin after the owner allows it
   schedule, when   List scheduled tasks and set tasks to start on an event
   tools            Find and run the owner's named commands on any machine
+  phone            Ask the owner's phone: an answer, photo, place or code
   copy             Copy files to another machine; resume if stopped
   send, receive    Send a folder with the other machine's permission
   send-task        Send files, .env and a task to another machine
@@ -590,6 +598,19 @@ const DETAILS = {
   Use it like any account: helm delegate <account> -- "question".
   A follow-up to the same helper continues the same web conversation.
   The app lists these accounts with the other accounts.`,
+
+  phone: `
+  The owner sees a card in this chat, in the waiting box and as a
+  notification on the phone and every other controller. Each card says which
+  chat asks and why. The owner can send or refuse.
+  The command waits for the answer: give it a long time limit, or run it in
+  the background. Default wait: 30 min. Helm restarts do not lose it.
+  Prints: ask, the answer text; photo, a file path; location,
+  "<latitude> <longitude>" and the accuracy; code, the code. --json prints
+  the answer as JSON.
+  Exit codes: 0 answered, 1 refused, 2 wrong use, 3 no answer in time,
+  130 closed (Ctrl+C, helm phone cancel, or the chat ended).
+  Use it only for what the owner must give: never ask for passwords.`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.

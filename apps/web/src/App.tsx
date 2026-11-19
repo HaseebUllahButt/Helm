@@ -47,6 +47,7 @@ import { BrainView } from './screens/Brain';
 import { Start } from './screens/Start';
 import { SessionView as SessionViewScreen } from './session/SessionView';
 import { steady } from './steady';
+import { setPhoneRpc } from './session/phoneShare';
 
 // Tests import the model list editor from here, where it used to live.
 export { ModelPrefsView };
@@ -104,6 +105,7 @@ export function App() {
   useEffect(() => {
     if (!auth) return;
     const c = new Client(auth.endpoints, auth.token, auth.trust);
+    setPhoneRpc((env, method, params, timeout) => c.rpc(env, method, params, timeout));
     const off = c.on((_e, kind, payload) => {
       if (kind === 'connection') setConn({ online: !!payload.online, reachable: payload.reachable ?? !!payload.online, error: payload.error });
       if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints, trust: c.auth.trust });
@@ -117,7 +119,7 @@ export function App() {
     });
     c.connect().catch(() => {});
     setClient(c);
-    return () => { off(); c.close?.(); };
+    return () => { off(); setPhoneRpc(null); c.close?.(); };
   }, [auth]);
 
   const signOut = () => { forgetWorkspace(workspaceScope(auth?.token)); clearAuth(); setAuth(null); setClient(null); };
