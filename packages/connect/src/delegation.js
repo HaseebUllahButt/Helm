@@ -1,5 +1,5 @@
 import { ENGINES } from './engines.js';
-import { materialize } from './profiles.js';
+import { materialize, loadProfiles } from './profiles.js';
 import { localProfileCatalog } from './local-model-accounts.js';
 import { listModels } from './models.js';
 import { modelPrefs, startPrefs, subagentPrefs, accountKey } from './settings.js';
@@ -246,8 +246,18 @@ export function toolsNote() {
   return '[Helm tools: For a capability you lack, run helm tools list: the owner\'s saved commands. Run one with helm tools run <name> [args].]';
 }
 
+/**
+ * Only when this machine has web chat accounts (helm webchat): they look
+ * like any account in helm agents, but answer questions only.
+ */
+export function webchatNote(profiles = loadProfiles()?.profiles ?? []) {
+  const names = profiles.filter((p) => p.engine === 'webchat' && !p.disabled).map((p) => p.id);
+  if (!names.length) return '';
+  return `[Helm web chats: The accounts ${names.join(', ')} are signed-in web chats. They only answer questions: no files, tools or commands. Ask with helm delegate <account> --wait -- "question". Put all context into the question. Send follow-ups to the same helper with helm say.]`;
+}
+
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), '[Helm triggers: Run helm when --help to start a task on an event.]', visualNote(), toolsNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), webchatNote(), pickupNote(), agentMessageNote(), '[Helm triggers: Run helm when --help to start a task on an event.]', visualNote(), toolsNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});

@@ -1,0 +1,13 @@
+<!doctype html><title>ChatGPT</title>
+<button data-testid="model-switcher-dropdown-button" id="picker"><span>GPT-5</span></button>
+<div id="menu" role="menu" hidden>
+  <div role="menuitem" data-name="GPT-5"><div>GPT-5</div><div>For most questions</div></div>
+  <div role="menuitem" data-name="GPT-5 Thinking"><div>GPT-5 Thinking</div><div>Thinks longer</div></div>
+</div>
+<div id="chat"></div>
+<div id="prompt-textarea" class="ProseMirror" contenteditable="true"></div>
+<button data-testid="send-button" id="send">Send</button>
+<script>window.FAKE = { editor: '#prompt-textarea', send: '#send', picker: '#picker', disableSend: true,
+  replyTag: '[data-message-author-role="assistant"]', reply: '<div data-message-author-role="assistant"><div class="markdown" data-text></div></div>',
+  stop: ['data-testid', 'stop-button'], tempParam: 'temporary-chat=true', saved: '/chatgpt/c/', savedPath: '/chatgpt/c/xyz789' };</script>
+<script src="/fake-chat.js"></script>

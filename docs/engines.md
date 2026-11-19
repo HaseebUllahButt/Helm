@@ -4,7 +4,7 @@ A feature that touches chats needs a decision for each tool, even "not
 supported here". This page says where the tools differ and what breaks.
 Read from the code on 2026-11-04; check the driver before you trust a row.
 
-Eleven tools have a headless driver: Helm runs the CLI itself and reads its
+Eleven tools have a headless driver, plus web chats (below): Helm runs the CLI itself and reads its
 event stream (`DRIVERS` in `session-wire.js`). Gemini, Kimi and Muse work
 only as native chats: the owner starts them in a terminal and Helm reads
 their history. `shell` is a plain terminal. ACP is the Agent Client
@@ -24,6 +24,7 @@ Protocol: JSON over stdin and stdout (`drivers/acp.js`).
 | agy | stream-json NDJSON | none: Helm cannot answer requests | saved as files | each change restarts it | no cancel, stop kills it | no | per-turn difference |
 | pi, omp | `--mode rpc` (`pi.js`) | no modes; extension dialogs become cards | yes | `set_model`, `set_thinking_level` | `abort`; `--session` | no | from messages |
 | gemini, kimi, muse | no driver | – | – | – | native chat only | no | no |
+| webchat | `helm webchat worker` types into a site in the owner's browser | none: answers only, no tools | no | the account's model, chosen in the site's picker | stop presses the site's Stop; the site address continues the chat | no | no |
 
 Questions to the owner: Claude and Codex (`requestUserInput`); Pi and OMP
 through extension dialogs. Todo cards: Codex (`turn/plan`) and the ACP
@@ -109,5 +110,16 @@ A new tool, or a feature for "every tool", must look at each of these:
   show in Helm.
 - **Antigravity:** never run `--version` (about 1 GB unpack) and never
   clean its shared temp folder (it kills a live agent).
+- **Web chats (`webchat`):** Gemini, ChatGPT and Claude.ai in a signed-in
+  browser profile (`helm webchat add`). One site file per site in
+  `webchat/sites/`; only `webchat/page.js` reads its selectors. The worker
+  runs on the process host, so an answer on its way survives a restart.
+  The engine session id is the conversation address, or `temporary`: a
+  temporary chat has no address, so a lost tab starts a new one with the
+  earlier answers in front. Helm's agent brief is never sent to the site
+  (`takesInstructions`), and an agent message reaches it without Helm's
+  header. A temporary chat that does not turn on sends nothing. Only
+  Gemini was driven live (2026-11-19); ChatGPT and Claude.ai are tested
+  against saved pages in `test/fixtures/webchat`, never the owner's browser.
 - **Rewind:** off for native, shared and outside chats, even on Claude and
   Codex. A Codex rewind step that timed out must not run again.

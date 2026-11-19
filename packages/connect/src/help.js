@@ -129,6 +129,13 @@ export const USAGE = `helm - Control your coding agents from anywhere
                                     Start a helper in this folder
     --machine <name> [--wake]        Start the helper on another machine
   helm delegate-result <id> [--wait] [--json]   Read the helper result or approval request
+  helm webchat add <account> --site gemini|chatgpt|claude --profile <browser profile>
+                                    Make a signed-in web chat a Helm account that answers questions
+    --model <name>                  Choose this model in the site's model picker
+    --temporary                     Use a temporary chat, so answers do not stay in the site history
+    --machine <name>                Use the browser of that machine
+  helm webchat list [--json]        List web chat accounts
+  helm webchat remove <account>     Remove a web chat account
   helm handoff <machine> [text...]  Move code and this task to another machine
     --handoff-id <id>               Continue a stopped task move with the same ID
   helm dispatch <machine> [--wake] [text...]
@@ -230,6 +237,7 @@ Chats and agents
   chat             Share a live agent between this terminal and the app
   delegate         Start a helper for this chat
   delegate-result  Read a helper's result
+  webchat          Make a signed-in web chat (Gemini, ChatGPT, Claude.ai) an account
   say, reply       Send a message to an agent, or answer one
   messages         Read messages in this chat and its helpers
   delete           Delete a chat
@@ -574,6 +582,14 @@ const DETAILS = {
   If Helm restarts while the command runs, helm sudo says so: check the
   result before you run it again.
   It runs on this machine only; --machine is not supported yet.`,
+
+  webchat: `
+  A web chat account types each question into the site in the owner's
+  browser and returns the answer. It cannot use tools, files or commands.
+  Sign in to the site in that browser profile first.
+  Use it like any account: helm delegate <account> -- "question".
+  A follow-up to the same helper continues the same web conversation.
+  The app lists these accounts with the other accounts.`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.

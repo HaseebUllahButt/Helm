@@ -2510,6 +2510,11 @@ try {
       await deleteChat();
       break;
 
+    case 'webchat': {
+      const { runWebchatCommand } = await import('../src/webchat-cli.js');
+      process.exitCode = await runWebchatCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession, machine: machineId });
+      break;
+    }
     case 'browser': {
       const { runBrowserCommand } = await import('../src/browser-cli.js');
       await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession, machine: machineId });
