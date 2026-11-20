@@ -93,6 +93,12 @@ A new tool, or a feature for "every tool", must look at each of these:
   stay. Without it Helm steers a shared Grok backend.
 - **Pi:** when the version sends `agent_settled`, `agent_end` is not the
   end: compaction runs after it.
+- **Pi, OMP mid-reply messages:** a `prompt` with `streamingBehavior:
+  'steer'`, read after every tool call of the current step; the user
+  `message_start` echo is the read. Pi keeps an unread steer through an
+  abort and puts it before the next prompt, so a stop sends `clear_queue`
+  first (pi 0.84.4+). OMP has no `clear_queue` and runs it after the
+  abort. In OMP a steer also moves a running `bash` to the background.
 - **Vibe:** the profile names `vibe`, but the driver runs `vibe-acp` from
   the same folder. With no Mistral sign-in, `session/new` says "Missing API
   key"; Helm shows `vibe --setup` instead. Its chat store

@@ -854,6 +854,31 @@ test('interrupt: stops the turn and reports it as interrupted, not as an error',
   await driver.kill();
 });
 
+test('the owner\'s message mid-reply uses Send now only where Claude can move the running command to the background', async (t) => {
+  for (const [capabilities, sendsNow] of [[['interrupt_send_now_v1', 'background_tasks_moves_bash_v1'], true], [['interrupt_send_now_v1'], false]]) {
+    const { driver, writes, send } = await modelControl(t);
+    const events = [];
+    driver.on('event', (e) => events.push(e));
+    send({ type: 'system', subtype: 'init', session_id: 'existing-conversation', capabilities, tools: [] });
+    await driver.send('build it');
+    send({ type: 'user', isReplay: true, uuid: 'turn-1', message: { role: 'user', content: [{ type: 'text', text: 'build it' }] } });
+    writes.length = 0;
+    await driver.steer('Stop and look at this', [], { inputId: 'ticket-1', clientId: 'msg-1', now: true });
+    // Without the move, Claude 2.1.329 ends the running command instead: the message waits for the step.
+    const sendNow = writes.find((w) => w.type === 'control_request' && w.request.subtype === 'interrupt');
+    assert.equal(!!sendNow, sendsNow);
+    if (!sendsNow) continue;
+    assert.deepEqual(sendNow.request, { subtype: 'interrupt', send_now: true, message_uuid: 'msg-1' });
+    send({ type: 'control_response', response: { subtype: 'success', request_id: sendNow.request_id, response: { send_now: 'stopped' } } });
+    await new Promise(setImmediate);
+    // Claude ended the turn to read the message next: that is not a failure.
+    send({ type: 'result', subtype: 'error_during_execution', is_error: true, session_id: 'existing-conversation' });
+    const done = events.find((e) => e.type === 'turn.done');
+    assert.equal(done.status, 'ok');
+    assert.equal(done.error, undefined);
+  }
+});
+
 test('Stop also stops the commands and watches Claude left running; a stop for the next message does not', async (t) => {
   const { driver, writes, send } = await modelControl(t);
   for (const [task_id, task_type] of [['bash-1', 'local_bash'], ['watch-1', 'monitor']]) {

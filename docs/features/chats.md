@@ -50,6 +50,14 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   $V restart                            # the first approval and second message stay
   $V click Approve; $V wait "TOOL APPROVAL"   # "second" was delivered and asks again
   ```
+- **Rule (owner, 2026-11-20):** the owner's message must reach the agent
+  at once. A CLI that reads input mid-reply gets it at its next read
+  point. Claude uses its Send now when it can move the running command to
+  the background; 2.1.329 cannot in `-p` mode and would end the command,
+  so Helm waits for the step there. Every other CLI has its reply stopped
+  and the message sent, with a hidden note to go back to the stopped work
+  (`MADE_WAY_NOTE`). Agents' messages, helpers, approvals and held
+  messages still wait for the reply to end.
 - **Traps:** each CLI reads a mid-reply message at a different moment
   (Codex after its next step, Claude after its current tools). Save the send
   boundary before calling a CLI. A lost reply does not prove delivery or
