@@ -60,6 +60,8 @@ export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot 
   if (/\b(enospc|edquot)\b|no space left|disk.*full|quota.*exceeded|needs more free space/i.test(text)) return `Free some space on ${machine || 'this machine'}. Try again.`;
   if (/rate.?limit|\b429\b|usage limit/i.test(text)) return 'The service reached its usage limit. Try again later.';
   if (/context (window|length)|prompt is too long|too many tokens/i.test(text)) return 'This chat is too long. Summarize it or start a new chat.';
+  const folder = /the folder (\S.*?) does not exist on this machine/i.exec(message);
+  if (folder) return `The folder ${folder[1]} does not exist on ${machine || 'this machine'}. Pick another folder.`;
   if (/unknown session: /i.test(text)) return `${where} no longer has this chat. Your message did not send. Start a new chat.`;
   if (/no conversation found|session.*not found/i.test(text)) return 'This machine no longer has the chat history. Send a message to start again.';
   if (/\b(enoent|not_found)\b|no such file|not a file|file.*not found|folder.*not found/i.test(text)) return 'Helm cannot find the file or folder. Check that it still exists.';

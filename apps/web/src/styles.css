@@ -3093,6 +3093,9 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .recovery-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .recovery-actions button { width: auto; margin: 0; min-height: 38px; padding: 6px 16px; border-radius: 10px; font-size: var(--t-meta); font-weight: 600; }
 .recovery-actions button.primary { min-width: 110px; }
+/* A folder that looks like the missing one, then the picker: several buttons wrap on a phone. */
+.folder-card .recovery-actions { flex-wrap: wrap; }
+.errline.note .alabel { color: var(--text-dim); }
 
 /* A failure in the conversation: the plain sentence, the raw line on request. */
 .errline { align-items: flex-start; }

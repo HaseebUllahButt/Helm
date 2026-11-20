@@ -128,6 +128,8 @@ export interface Session {
   /** Claude Code's own subagents (its Agent/Task tool), read from its files; no Helm session behind them. */
   nativeCards?: NativeAgent[];
   autoResumeLimited?: boolean;
+  /** The chat's folder is missing and Helm could not find it; the agent works in an empty folder. `candidates`: repos that look like it. */
+  folderLost?: { path: string; at: number; candidates?: string[] };
   recovery?: { kind: 'limited' | 'error' | 'interrupted' | 'restart'; message: string; at: number; resetAt?: number | null; autoResumeError?: string; autoResumeCancelled?: boolean };
   /** How full the conversation's context is after its latest reply (Claude, Codex). */
   context?: { used: number; window: number; at: number; /** The model that replied (`claude-opus-5-5`). */ model?: string; /** The model's whole window, before the account's "compact at" size cuts it down. */ full?: number; /** Just compacted; the new size comes with the next reply. */ compacted?: boolean; /** How long Claude keeps it cached, in ms. */ ttl?: number };

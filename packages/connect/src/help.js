@@ -118,6 +118,8 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm search <words...> [--json]   Find chats with these words on every machine, newest first
   helm thread <id> [-n 40]          Read recent messages from a chat
   helm delete <id>                  Delete a chat
+  helm chat-folder <id> [folder] [--only]
+                                    Show or change the folder a chat works in
   helm pickup [chat-id] [-n 3]      Show where earlier project chats stopped on every machine
                                     Show requests, unfinished work, commits and unsaved changes
   helm say <id> <text...>           Send a message from this agent (a plain prompt outside a chat)
@@ -259,6 +261,7 @@ Chats and agents
   say, reply       Send a message to an agent, or answer one
   messages         Read messages in this chat and its helpers
   delete           Delete a chat
+  chat-folder      Show or change a chat's folder
   brain            Open the Helm brain on the VM
   integrate        Control normal CLI commands automatically
   dictate          Record speech and turn it into text
@@ -637,6 +640,15 @@ const DETAILS = {
   Exit codes: 0 answered, 1 refused, 2 wrong use, 3 no answer in time,
   130 closed (Ctrl+C, helm phone cancel, or the chat ended).
   Use it only for what the owner must give: never ask for passwords.`,
+
+  'chat-folder': `
+  Use it when a project folder moved, was renamed or was deleted.
+  The chat keeps its messages, and the agent keeps its history (Claude,
+  Codex). The change starts with the next message. A chat that is working
+  keeps its folder until the step stops.
+  The other chats in the old folder move too. Add --only to move one chat.
+  When a folder is missing, Helm looks for it first. If Helm cannot find
+  it, the chat works in an empty folder and says so.`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.

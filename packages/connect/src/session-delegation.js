@@ -13,6 +13,8 @@ import { authStatuses } from './auth.js';
 import { wire } from './session-wire.js';
 import { clip } from './session-text.js';
 import { acceptAttachments } from './session-attachments.js';
+import { waitingFolder } from './chat-folder.js';
+import { expand } from './paths.js';
 
 const UNHOMED_DELEGATION_MS = 24 * 60 * 60_000;
 const ACTIVE = ['starting', 'working', 'blocked'];
@@ -215,6 +217,8 @@ export class SessionDelegation {
     // A folder named by the caller wins (`--cwd`: a worktree beside the
     // parent's checkout); otherwise the child works where its parent does.
     let folder = cwd ?? parent?.cwd ?? (remoteParent ? remoteHelperFolder(remoteParent) : undefined);
+    // A parent whose folder is missing works in an empty one (session-folders.js); so does its helper.
+    if (!cwd && parent?.folderLost && !existsSync(expand(folder)) && existsSync(waitingFolder(parent.id))) folder = waitingFolder(parent.id);
     if (typeof folder !== 'string' || !folder.trim()) throw new Error('delegation needs a working folder');
     // No depth cap (the owner's rule: no hidden limits on agents). Depth is
     // still counted for display, and a chain that leads back to itself - a
