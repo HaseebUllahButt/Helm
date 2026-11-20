@@ -2,6 +2,7 @@ import { MEMORY_STOP } from '../cgroup-scope.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Driver, checkVersion, assertFolder, waitForExit } from './index.js';
+import { MADE_WAY_NOTE } from '@helm/protocol/brief';
 import { modeFor } from '../modes.js';
 import { nonAgentClaudeTask, staleAgentCards, stoppedTask } from '../claude-tasks.js';
 import { bareModel, compactWindow, configDir } from '../context-limit.js';
@@ -489,14 +490,17 @@ export class ClaudeDriver extends Driver {
    * steps, so this lands when the step in flight ends - what typing while
    * the CLI works does. The replay says when it was used.
    *
-   * `now`: the owner wants it read at once. Where Claude can move a
-   * running command to the background, its Send now does that, so the turn
-   * reads the message and the work keeps running (Ctrl+B in the terminal).
+   * `now`: the owner wants it read at once (`steersNow`).
    */
   async steer(text, attachments = [], { inputId, clientId, now = false } = {}) {
     if (!this.#pipe || !this.#inTurn) throw new Error('claude has no active turn to steer');
+    // Where Claude cannot move the running command to the background, Send
+    // now stops the step (owner, 2026-11-20: "interrupt chat and then send
+    // message"); the note tells Claude to go back to the stopped work.
+    const sendNow = now && this.steersNow;
+    const stops = sendNow && !this.#capabilities.has('background_tasks_moves_bash_v1');
     const content = [];
-    if (text) content.push({ type: 'text', text });
+    if (text) content.push({ type: 'text', text: stops ? `${text}\n\n${MADE_WAY_NOTE}` : text });
     // Labelled in order, so "[Image #2]" in the message names this one.
     let n = 0;
     for (const a of attachments ?? []) {
@@ -518,10 +522,16 @@ export class ClaudeDriver extends Driver {
       this.#inputs.delete(uuid);
       throw err;
     }
-    // Without the move, Claude 2.1.329 ends the running command to make way
-    // (measured with a fake API): reading after the step keeps the work.
-    if (now && this.#capabilities.has('interrupt_send_now_v1') && this.#capabilities.has('background_tasks_moves_bash_v1')) this.#sendNow(uuid);
+    if (sendNow) this.#sendNow(uuid);
   }
+
+  /**
+   * Claude takes the owner's message at once, also while it only writes: its
+   * Send now moves the running command to the background where it can, and
+   * otherwise stops the step (Claude 2.1.329 in `-p` mode, measured with a
+   * fake API) and runs the message next.
+   */
+  get steersNow() { return this.#capabilities.has('interrupt_send_now_v1'); }
 
   #sendNow(uuid) {
     this.#sendingNow = true;

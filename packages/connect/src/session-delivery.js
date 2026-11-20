@@ -902,8 +902,11 @@ export class SessionDelivery {
     const d = this.#core.drivers.get(s.id);
     const timing = messageDelivery(s.engine).timing;
     if (timing === 'turn' || typeof d?.steer !== 'function') return this.#makeWay(s, d);
-    const ready = () => !s.queuePaused && !s.stoppedAt && (timing === 'tool'
-      ? ['working', 'blocked'].includes(s.status) && this.#core.deliveryState.hasSteps(s.id)
+    // A CLI that takes the owner's message at once (`steersNow`) needs no
+    // step to hand it to; an agent's message still waits for one.
+    const ready = (item) => !s.queuePaused && !s.stoppedAt && (timing === 'tool'
+      ? ['working', 'blocked'].includes(s.status) && (this.#core.deliveryState.hasSteps(s.id)
+        || (s.status === 'working' && !!d.steersNow && !!item && item.source !== 'agent'))
       : s.status === 'working');
     const eligible = (item) => !!item && item.delivery !== 'queue' && !item.nativeRejected && !item.referenceContext
       && this.#canSteer(d, item);
@@ -915,12 +918,12 @@ export class SessionDelivery {
         : item.source === 'agent' && eligible(item) && q.slice(0, i).every((held) => held.delivery === 'queue'));
       return at < 0 ? undefined : q[at];
     };
-    if (!ready() || !next()) return;
+    if (!ready(next()) || !next()) return;
     this.#core.deliveryState.setSending(s.id);
     try {
       for (;;) {
         const item = next();
-        if (!eligible(item) || !ready()) break;
+        if (!eligible(item) || !ready(item)) break;
         try { await this.#steerOne(s, d, item); }
         catch (err) {
           // The turn ended under it: the pump sends it as the next turn.
