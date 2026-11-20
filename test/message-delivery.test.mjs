@@ -124,6 +124,34 @@ test('Claude takes the owner\'s message at once, also while it only writes; an a
   assert.equal(driver.steered[0].now, true);
 });
 
+test('Pi and OpenCode stop the step for the owner\'s message; a helper and an agent\'s message still join the step', async (t) => {
+  for (const engine of ['pi', 'opencode']) {
+    await t.test(engine, async (t) => {
+      const { sessions, session, driver } = await setup(t, engine);
+      driver.stopsForNow = true;
+      await sessions.input(session.id, 'Stop and do this');
+      await tick(); await tick();
+      assert.equal(driver.interrupts, 1, 'the owner\'s message stops the step');
+      assert.equal(driver.steered.length, 0);
+      assert.ok(driver.sent.at(-1).startsWith(`Stop and do this\n\n${MADE_WAY_NOTE}`));
+      assert.equal(stripBrief(driver.sent.at(-1)), 'Stop and do this');
+      await sessions.input(session.id, 'From a teammate', { source: 'agent' });
+      await tick();
+      assert.equal(driver.interrupts, 1, 'an agent\'s message never stops the step');
+      assert.equal(driver.steered.at(-1)?.text.split('\n')[0], 'From a teammate');
+    });
+  }
+  await t.test('helper', async (t) => {
+    const { sessions, session, driver } = await setup(t, 'pi');
+    driver.stopsForNow = true;
+    session.delegation = { parentId: 'lead', status: 'working' };
+    await sessions.input(session.id, 'Owner to helper');
+    await tick(); await tick();
+    assert.equal(driver.interrupts, undefined, 'a stopped helper would report itself stopped');
+    assert.equal(driver.steered.at(-1)?.text.split('\n')[0], 'Owner to helper');
+  });
+});
+
 test('explicit held messages and slash commands are barriers to automatic mid-turn input', async (t) => {
   const { sessions, session, driver, ticket } = await setup(t, 'codex');
   driver.push('item.start', { id: 'command', kind: 'command', turnId: driver.turnId });

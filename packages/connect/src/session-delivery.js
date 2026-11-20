@@ -768,7 +768,7 @@ export class SessionDelivery {
    * `turn.deliver` lands for a steer instead of a close; `turn.accept`
    * follows when the CLI says it used the message.
    */
-  async sendNow(id, turnId) {
+  async sendNow(id, turnId, { stop = false } = {}) {
     this.#core.rewinder.assertRewindUnlocked(id);
     const s = this.#sessions.get(id);
     const item = (this.#core.deliveryState.queue(id) ?? []).find((x) => x.turnId === turnId);
@@ -781,7 +781,7 @@ export class SessionDelivery {
       const d = this.#core.drivers.get(id) ?? await this.#core.driver(s);
       this.#checkDelivery(s, item);
       const busy = s.status === 'working' || s.status === 'blocked';
-      if (busy && this.#canSteer(d, item)) {
+      if (busy && !stop && this.#canSteer(d, item)) {
         await this.#steerOne(s, d, item);
         return { ok: true, found: true, sent: true };
       }
@@ -902,6 +902,9 @@ export class SessionDelivery {
     const d = this.#core.drivers.get(s.id);
     const timing = messageDelivery(s.engine).timing;
     if (timing === 'turn' || typeof d?.steer !== 'function') return this.#makeWay(s, d);
+    // A CLI that reads the owner's message only after its step stops the step instead.
+    // Where it cannot (a helper, an approval card), the message joins the step as before.
+    if (d.stopsForNow && await this.#makeWay(s, d, { stop: true })) return;
     // A CLI that takes the owner's message at once (`steersNow`) needs no
     // step to hand it to; an agent's message still waits for one.
     const ready = (item) => !s.queuePaused && !s.stoppedAt && (timing === 'tool'
@@ -943,13 +946,16 @@ export class SessionDelivery {
    * waits: stopped, it would report itself stopped to its lead. So does an
    * approval card, where Decline is the way to end the turn.
    */
-  async #makeWay(s, d) {
-    if (s.status !== 'working' || s.delegation || s.nativeCli || typeof d?.interrupt !== 'function') return;
+  async #makeWay(s, d, { stop = false } = {}) {
+    if (s.status !== 'working' || s.delegation || s.nativeCli || typeof d?.interrupt !== 'function') return false;
     const first = this.#core.deliveryState.queue(s.id)?.[0];
     if (!first || first.source === 'agent' || first.delivery === 'queue' || first.nativeRejected
-      || first.compact != null || first.text.trimStart().startsWith('/')) return;
-    try { await this.sendNow(s.id, first.turnId); }
-    catch (err) { this.#sessions.log(`[${s.id}] could not stop the reply for a message: ${err.message}`); }
+      || first.compact != null || first.text.trimStart().startsWith('/')) return false;
+    try { return (await this.sendNow(s.id, first.turnId, { stop })).sent; }
+    catch (err) {
+      this.#sessions.log(`[${s.id}] could not stop the reply for a message: ${err.message}`);
+      return false;
+    }
   }
 
   /**

@@ -1630,8 +1630,8 @@ export class CodexDriver extends Driver {
 
   /**
    * Watch a turn while the owner's message in it is unread, and move the
-   * turn on once only commands hold it. Codex thinking or editing is left
-   * alone: it reads the message when that step ends.
+   * turn on: the commands keep running, the rest of the step stops. Only a
+   * file edit in progress is waited out.
    */
   async #readSoon(turnId) {
     if (this.#readSoonTurn === turnId || this.nativeSocket || this.monitorOnly) return;
@@ -1664,19 +1664,19 @@ export class CodexDriver extends Driver {
   async #moveOn(turnId) {
     this.#moveStop = false;
     if (this.pending.size || this.#opening || this.status !== 'working') return 'wait';
-    const running = [];
-    for (const [id, item] of this.#items) {
-      if (item.kind === 'command') running.push(id);
-      else if (!id.startsWith('plan-')) return 'wait';
-    }
-    if (!running.length) return 'wait';
+    // The owner asked for a stop (2026-11-20: "interrupt chat and then send
+    // message"): thinking, writing and tool calls are cut. A file edit is
+    // written in a moment and never cut in half.
+    const editing = () => [...this.#items.values()].some((item) => item.kind === 'edit');
+    if (editing()) return 'wait';
+    const running = [...this.#items].filter(([, item]) => item.kind === 'command').map(([id]) => id);
     const listed = await this.#server.call('thread/backgroundTerminals/list', { threadId: this.threadId }, 10_000);
     if (listed.error || !Array.isArray(listed.result?.data)) return 'no';
     const before = new Map(listed.result.data.map((t) => [t.itemId, t]));
     // A command outside the list would end with the turn.
     if (!running.every((id) => before.has(id))) return 'wait';
     if (this.#turnId !== turnId || this.pending.size || this.#opening || this.status !== 'working'
-      || ![...this.#items].every(([id, item]) => item.kind === 'command' || id.startsWith('plan-'))
+      || editing() || [...this.#items].some(([id, item]) => item.kind === 'command' && !running.includes(id))
       || !this.#steers.some((entry) => entry.now && entry.turnId === turnId)) return 'wait';
     if (this.#moveStop) return 'no';
 

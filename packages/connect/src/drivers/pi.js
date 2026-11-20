@@ -522,6 +522,13 @@ class PiRpcDriver extends Driver {
   get dropsHandedOnInterrupt() { return this.#clearsQueue; }
 
   /**
+   * Pi reads a steer only after the tool batch, so the owner's message stops
+   * the step and goes as the next prompt (owner, 2026-11-20). OMP's steer
+   * already moves a running bash to the background and is read at once.
+   */
+  get stopsForNow() { return this.engine !== 'omp'; }
+
+  /**
    * Answer an extension dialog. The wire shape depends on the method the
    * extension called: confirm wants `confirmed`, select/input/editor want
    * `value`, and any of them may take `cancelled`.

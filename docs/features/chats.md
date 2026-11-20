@@ -66,10 +66,14 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   step stops (owner: "it should interrupt chat and then send message") and
   the message carries `MADE_WAY_NOTE`. Driven 2026-11-20 with the real CLI
   and a fake API: read 0.1 s after the send, turn ended ok. Codex reads a steer only when its tool
-  call returns (a command wait holds it up to 5 min); when only commands
-  hold the turn, Helm stops the turn and starts the next one with the
-  message and a note naming each command that still runs. Codex commands
-  outlive `turn/interrupt` (0.171.0), so no work stops. Every other CLI has its reply stopped
+  call returns (a command wait holds it up to 5 min). After 1 s Helm stops
+  the turn and starts the next one with the message and a note naming each
+  command that still runs; thinking and writing are cut, only a file edit
+  in progress is waited out. Codex commands outlive `turn/interrupt`
+  (0.171.0), so commands keep running. Pi and OpenCode read a message
+  only after the step (`stopsForNow`): the step stops, as below. OMP's
+  steer moves a running bash to the background and is read at once, so
+  it keeps the steer. Every other CLI has its reply stopped
   and the message sent, with a hidden note to go back to the stopped work
   (`MADE_WAY_NOTE`). Agents' messages, helpers, approvals and held
   messages still wait for the reply to end.
