@@ -495,6 +495,42 @@ test('the owner\'s message moves a Codex turn on when only a background command 
   assert.equal(driver.status, 'idle');
 });
 
+test('the owner\'s message stops Codex while it thinks; only a file edit in progress is waited out', async (t) => {
+  let listed = 0, secondLook, started;
+  const looked = new Promise((resolve) => { secondLook = resolve; });
+  const restarted = new Promise((resolve) => { started = resolve; });
+  const { driver, notify, writes } = scriptedCodex(t, {
+    openTurn: 'turn-a',
+    reply(request, say) {
+      switch (request.method) {
+        case 'thread/read': return { result: { thread: { status: { type: 'active', activeFlags: [] }, turns: [{ id: 'turn-a', status: 'inProgress' }] } } };
+        case 'turn/steer': return { result: { turnId: 'turn-a' } };
+        case 'thread/backgroundTerminals/list':
+          if (++listed === 1) secondLook();
+          return { result: { data: [], nextCursor: null } };
+        case 'turn/interrupt':
+          say('turn/completed', { turn: { id: 'turn-a', status: 'interrupted' } });
+          return { result: {} };
+        case 'turn/start':
+          started(request);
+          say('turn/started', { turn: { id: 'turn-b' } });
+          return { result: { turn: { id: 'turn-b' } } };
+      }
+    },
+  });
+  await driver.start();
+  notify('item/started', { turnId: 'turn-a', item: { type: 'fileChange', id: 'edit-1', changes: [], status: 'inProgress' } });
+  notify('item/started', { turnId: 'turn-a', item: { type: 'reasoning', id: 'think-1', summary: [], content: [] } });
+  await driver.steer('Stop and answer me', [], { inputId: 'ticket', clientId: 'owner-1', now: true });
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  assert.equal(listed, 0, 'a file edit is never cut in half');
+  notify('item/completed', { turnId: 'turn-a', item: { type: 'fileChange', id: 'edit-1', changes: [], status: 'completed' } });
+  await looked;
+  const start = await restarted;
+  assert.ok(writes.some((w) => w.method === 'turn/interrupt'), 'thinking is cut');
+  assert.deepEqual(start.params.input, [{ type: 'text', text: 'Stop and answer me', text_elements: [] }]);
+});
+
 test('a Stop while Helm moves a Codex turn on ends the turn there', async (t) => {
   let interrupts = 0;
   const { driver, log, notify, writes } = scriptedCodex(t, {
