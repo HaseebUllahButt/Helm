@@ -220,8 +220,13 @@ test('a failed update is recorded and the old version stays', async () => {
   writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
 case "$1" in --version) echo "2.1.0 (Claude Code)";; update) echo "network is down" >&2; exit 3;; esac\n`);
   chmodSync(join(m.bin, 'claude'), 0o755);
-  const [r] = await m.updater().update({ engine: 'claude' });
+  const messages = [];
+  const log = message => messages.push(message);
+  const [r] = await m.updater({ log }).update({ engine: 'claude' });
   assert.deepEqual([r.ok, r.changed, r.to, r.message], [false, false, '2.1.0', 'network is down']);
+  const [again] = await m.updater({ log }).update({ engine: 'claude' });
+  assert.equal(again.ok, false);
+  assert.equal(messages.filter(message => message.includes('network is down')).length, 1);
 });
 
 /** A fake Claude Code as large as the real program, which names the models it knows. */

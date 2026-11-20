@@ -65,11 +65,12 @@ function pendingRefreshes(engine, key) {
  * `launcher` is the {cmd, args} of an account run through a wrapper script
  * (discover.js wrappedEngine): its own binary can only be reached that way.
  */
-export async function listModels(engine, home, environment = {}, launcher = null, { settled = false } = {}) {
+export async function listModels(engine, home, environment = {}, launcher = null, { settled = false, refresh = false } = {}) {
   const key = modelsKey(engine, home, launcher);
   if (settled) await modelsSettled(engine, home, launcher);
   const answer = (value) => ({ ...value, refreshing: pendingRefreshes(engine, key).length > 0 });
   const hit = cache.get(key);
+  if (refresh) return answer(await refreshModels(key, engine, home, environment, launcher, hit));
   if (hit && Date.now() - hit.at < CACHE_MS) return answer(hit.value);
   // Some CLIs take seconds to list (agy asks the server every time). A list
   // that has aged out is still a far better answer than a spinner: hand it
@@ -824,8 +825,8 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
       env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
     }));
   }
-  const models = stdout.split('\n').map((l) => l.trim()).filter((l) => l && l.includes('/'));
-  if (def && !models.includes(def)) models.unshift(def);
+  const listedModels = stdout.split('\n').map((l) => l.trim()).filter((l) => l && l.includes('/'));
+  const models = def && !listedModels.includes(def) ? [def, ...listedModels] : listedModels;
   const signedOut = await refusedOpencodeKeys(bin, root, environment);
   const refused = (m) => signedOut.some((p) => m.startsWith(`${p}/`));
   // OpenCode lists opencode-go/ before opencode/, so with no configured
@@ -859,6 +860,7 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
     default: startModel ?? def,
     ...(signedOut.length ? { signedOut, startModel } : {}),
     models,
+    selectableModels: listedModels.filter((model) => !refused(model)),
     labels,
     efforts: [],
     effortsByModel,

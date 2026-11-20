@@ -198,7 +198,7 @@ owner's home or network to bypass this check.
 - **Traps:** if exec says the command may have started, never rerun it;
   read it with `exec-status`. A detached supervisor saves its output and
   result across daemon restarts. Output keeps only the last 256 KB for an
-  hour; the id remains reserved after that, so it cannot start the work again.
+  hour. The exit details and reserved ID remain after the output expires.
   `helm copy` needs rsync 3.2.3+ on both ends; a break resumes on rerun.
   With protected arguments, rsync receives its folder and options inside
   the byte stream. Check those before passing them to rsync, and bind the

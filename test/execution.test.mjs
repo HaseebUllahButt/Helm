@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync, watch } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once, EventEmitter } from 'node:events';
@@ -307,24 +307,24 @@ test('output retention is bounded and paged with an explicit truncation marker',
   assert.ok(r.output.length <= 256 * 1024);
 });
 
-test('completed output expires even without another command starting', async t => {
-  const jobs = makeJobs({ retainMs: 30 }); t.after(() => jobs.stop());
-  const request = { id: id(9), ...spec('console.log("saved briefly")') };
+test('completed output expires and the exit details survive a restart', async t => {
+  const jobs = makeJobs(); t.after(() => jobs.stop());
+  const request = { id: id(9), ...spec('console.log("saved briefly"); process.exitCode = 7') };
   jobs.start(request, 'owner');
+  const { output, errors, ...completed } = await result(jobs, request.id);
+  assert.equal(output.trim(), 'saved briefly');
+  assert.equal(errors, '');
   const dir = join(jobs.directory, request.id);
-  await new Promise((resolve, reject) => {
-    const signal = AbortSignal.timeout(5000);
-    const watcher = watch(dir, { signal }, check);
-    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-    function check() {
-      if (!JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).expired) return;
-      watcher.close();
-      resolve();
-    }
-    check();
-  });
-  await assert.rejects(() => jobs.read({ id: id(9) }, 'owner'), /expired/);
-  assert.throws(() => jobs.start(request, 'owner'), /expired/);
+  await jobs.stop();
+  const restarted = new ExecutionJobs({ directory: jobs.directory, retainMs: 0 });
+  t.after(() => restarted.stop());
+  const saved = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+  assert.equal(saved.expired, true);
+  assert.equal(saved.chunks, undefined);
+  const read = await restarted.read({ id: request.id }, 'owner');
+  assert.deepEqual(read, { ...completed, last: 0, chunks: [], more: false, truncated: true });
+  await assert.rejects(() => restarted.read({ id: request.id }, 'other owner'), /not found/);
+  assert.throws(() => restarted.start(request, 'owner'), /expired/);
 });
 
 test('orphaned descendants cannot keep a completed command alive', async () => {
@@ -421,7 +421,7 @@ test('exec-cancel asks once and says whether the command had already finished', 
   assert.match(said, /already finished/);
 });
 
-test('a finished result is kept for an hour by default', t => {
+test('command output is kept for an hour by default', t => {
   const jobs = makeJobs(); t.after(() => jobs.stop());
   assert.equal(jobs.retainMs, 60 * 60_000);
 });

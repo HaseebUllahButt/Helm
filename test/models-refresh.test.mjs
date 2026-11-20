@@ -386,6 +386,14 @@ test('OpenCode tries usable local model rows before forced refresh, without its 
     const v1 = await listModels('opencode', v1Home);
     assert.deepEqual(v1.models, ['provider/v1-model']);
     assert.deepEqual(modelCalls().slice(3), ['models --standalone', 'models']);
+
+    mkdirSync(join(localHome, 'opencode'));
+    writeFileSync(join(localHome, 'opencode', 'opencode.json'), JSON.stringify({ model: 'provider/gone-model' }));
+    writeFileSync(join(localHome, 'models.txt'), 'provider/new-model\n');
+    assert.deepEqual((await listModels('opencode', localHome)).models, ['provider/local-model']);
+    const keeper = await listModels('opencode', localHome, {}, null, { refresh: true });
+    assert.deepEqual(keeper.models, ['provider/gone-model', 'provider/new-model']);
+    assert.deepEqual(keeper.selectableModels, ['provider/new-model']);
   } finally {
     process.env.PATH = priorPath;
     if (priorLog === undefined) delete process.env.OPENCODE_CALLS_PATH;

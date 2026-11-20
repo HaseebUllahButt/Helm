@@ -78,7 +78,7 @@ export async function readCodexHelperHistory(file) {
 }
 
 /** Public capabilities and optional credential metadata, never secret values. */
-export async function agentCatalog(profiles, statuses, { models = true, credentials = false } = {}) {
+export async function agentCatalog(profiles, statuses, { models = true, credentials = false, keeper = false, refresh = false } = {}) {
   return Promise.all(profiles.filter((p) => !p.disabled && ENGINES[p.engine]?.driver).map(async (p) => {
     const auth = statuses.get(p.id) ?? 'unknown';
     const account = createHash('sha256').update(accountKey(p)).digest('hex').slice(0, 16);
@@ -92,11 +92,12 @@ export async function agentCatalog(profiles, statuses, { models = true, credenti
     const engine = ENGINES[p.engine];
     try {
       const catalog = localProfileCatalog(p) ?? await listModels(p.engine, spec.env?.[engine.homeEnv] ?? engine.defaultHome,
-        spec.env, p.wraps ? { cmd: spec.cmd, args: spec.args } : null);
+        spec.env, p.wraps ? { cmd: spec.cmd, args: spec.args } : null, { refresh });
       const labels = Object.fromEntries((catalog.models ?? []).filter((id) => catalog.labels?.[id])
         .map((id) => [id, catalog.labels[id]]));
       return { ...row, models: catalog.models, labels,
         defaultModel: modelPrefs(p)?.default ?? catalog.default ?? null,
+        ...(keeper ? { smallModels: cheapModels(p.engine, catalog.selectableModels ?? catalog.models) } : {}),
         cheapModel: cheapModel(p.engine, catalog.models), refreshing: !!catalog.refreshing };
     } catch { return { ...row, models: [], defaultModel: null }; }
   }));
@@ -136,9 +137,17 @@ const CHEAP_TIER = {
   codex: /nano|mini/i,
 };
 export function cheapModel(engine, models = []) {
+  return models.find(isCheapTier(engine)) ?? null;
+}
+
+function cheapModels(engine, models = []) {
+  return models.filter(isCheapTier(engine));
+}
+
+function isCheapTier(engine) {
   // A tier word starts a part of the name: "gpt-5-mini", never the "mini" in "gemini".
   const want = CHEAP_TIER[engine] ?? /(?:^|[^a-z])(?:haiku|flash|mini|nano|lite|spark)/i;
-  return models.find((m) => want.test(m)) ?? null;
+  return (model) => want.test(model);
 }
 
 /**

@@ -13,6 +13,8 @@ before(async () => {
     import React, { lazy, Suspense, useState } from 'react';
     import { createRoot } from 'react-dom/client';
     import { AppErrorBoundary } from './apps/web/src/AppErrorBoundary';
+    import { DrivenSession } from './apps/web/src/session/DrivenSession';
+    import { Transcript } from './apps/web/src/session/Transcript';
     const Screen = lazy(() => import('/assets/expired.js'));
     function Broken() { throw new Error('Cannot render this chat'); }
     function App() {
@@ -26,7 +28,28 @@ before(async () => {
       </>;
     }
     window.reloads = 0;
-    createRoot(document.getElementById('root')).render(
+    const root = createRoot(document.getElementById('root'));
+    window.mountCommand = (exitCode) => root.render(<Transcript status="idle" loaded turns={[{
+      id: 'turn', text: 'Run the command', at: 1000, done: { status: 'error', durationMs: 3000 },
+      items: [{ id: 'cmd', kind: 'command', command: 'example', output: 'working', status: 'error', exitCode, startedAt: 1000, doneAt: 4000 }],
+    }]} />);
+    window.mountRecovery = (message, models) => {
+      const env = { id: 'here', name: 'Here', online: true };
+      const chat = { id: models.length ? 'model' : 'folder', cwd: '/project', title: 'Test chat',
+        profileId: 'codex', driver: 'codex', engine: 'codex', status: 'idle',
+        recovery: { kind: 'error', message, at: Date.now() } };
+      const client = {
+        on: () => () => {}, subscribe: () => {}, pendingActions: () => [], resumeActions: async () => [],
+        rpc: async (_env, method) => {
+          if (method === 'session.events') return { session: chat, events: [], pending: [], last: 0 };
+          if (method === 'model.list') return { models, default: models[0] };
+          return {};
+        },
+      };
+      root.render(<DrivenSession key={chat.id} client={client} env={env} session={chat}
+        onBack={() => {}} onClosed={() => {}} onArchived={() => {}} onSession={() => {}} />);
+    };
+    root.render(
       <AppErrorBoundary reload={() => window.reloads++}><App /></AppErrorBoundary>);
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false,
     external: ['/assets/expired.js'], format: 'iife', jsx: 'automatic' });
@@ -67,6 +90,27 @@ test('a render error leaves a readable recovery screen without raw details', asy
   assert.equal(await page.getByText('Cannot render this chat', { exact: true }).count(), 0);
   await page.getByRole('button', { name: 'Reload Helm' }).click();
   assert.equal(await page.evaluate(() => window.reloads), 1);
+});
+
+test('chat recovery opens the existing model picker and shows a missing folder path', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.mountRecovery('The model is at capacity.', ['gpt-5-mini', 'gpt-5']));
+  const card = page.locator('.recovery');
+  await card.getByText('This model is busy. Try again later.', { exact: true }).waitFor();
+  await card.getByRole('button', { name: 'Choose model' }).click();
+  await page.getByRole('listbox', { name: /^model$/i }).waitFor();
+  await page.evaluate(() => window.mountRecovery('The folder /home/me/old work does not exist on this machine', []));
+  await card.getByText('Restore the folder /home/me/old work on the chat’s machine. Then try again.', { exact: true }).waitFor();
+  assert.equal(await card.getByRole('button', { name: 'Choose model' }).count(), 0);
+});
+
+test('the transcript distinguishes a timeout from another command failure', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.mountCommand(124));
+  await page.locator('.work-head').click();
+  await page.getByText('Command timed out', { exact: true }).waitFor();
+  await page.evaluate(() => window.mountCommand(7));
+  await page.getByText('Command failed (exit code 7)', { exact: true }).waitFor();
 });
 
 test('the installed shell remains recoverable even when its entry bundle is missing', async t => {

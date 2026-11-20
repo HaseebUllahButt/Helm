@@ -211,6 +211,21 @@ async function onMessage(m) {
   }
   if (scenario === 'ext-command') return ok(m);
   if (scenario === 'omp-ext') { ok(m); return out({ type: 'prompt_result', id: m.id, agentInvoked: false }); }
+  if (scenario === 'retry-exhausted' || scenario === 'omp-provider-error') {
+    const messages = [{ role: 'assistant', stopReason: 'error', content: [],
+      ...(scenario === 'omp-provider-error' ? { errorMessage: 'The model is at capacity.' } : {}) }];
+    const frames = [
+      { id: m.id, type: 'response', command: m.type, success: true },
+      { type: 'agent_start' },
+      { type: 'agent_end', messages, willRetry: false },
+    ];
+    if (scenario === 'retry-exhausted') frames.push(
+      { type: 'auto_retry_end', success: false, finalError: 'Too many requests' },
+      { type: 'agent_settled' },
+    );
+    process.stdout.write(frames.map(frame => JSON.stringify(frame) + '\\n').join(''));
+    return;
+  }
   ok(m);
   state.streaming = true;
   out({ type: 'agent_start' });
@@ -322,6 +337,18 @@ test('pi: an overflow compaction and its retry stay inside the one turn', async 
   const retried = log.of('item.start').find((e) => e.kind === 'text');
   assert.equal(retried.turnId, done.turnId, 'the retried answer belongs to the turn');
   assert.deepEqual(log.of('status').map((e) => e.status), ['working', 'idle']);
+});
+
+for (const [scenario, cls, error] of [
+  ['retry-exhausted', PiDriver, 'Too many requests'],
+  ['omp-provider-error', OmpDriver, 'The model is at capacity.'],
+]) test(`${scenario} ends the reply as failed with the original cause`, async t => {
+  const { driver, log } = livePi(t, scenario, { cls });
+  await driver.send('Answer me');
+  const done = await log.until(e => e.type === 'turn.done');
+  assert.equal(done.status, 'error');
+  assert.equal(done.error, error);
+  assert.equal(log.of('turn.done').length, 1);
 });
 
 test('omp: auto compaction after the turn reads as working, then idle', async (t) => {

@@ -40,10 +40,11 @@ export class ExecutionJobs {
   #dir(id) { if (!ID.test(id ?? '')) throw new Error('invalid command id'); return join(this.directory, id); }
   #expire(dir, job) {
     if (job.finishedAt && Date.now() - job.finishedAt >= this.retainMs && !job.expired) {
-      // Keep the identity, so an old id can never start the command again.
+      // Drop the output and keep the result and identity.
       job = { id: job.id, owner: job.owner, fingerprint: job.fingerprint, status: 'exited',
         finishedAt: job.finishedAt, expired: true,
-        ...(job.keepResult ? { keepResult: true, exitCode: job.exitCode, error: job.error } : {}) };
+        seq: job.seq, exitCode: job.exitCode, signal: job.signal, reason: job.reason, error: job.error,
+        ...(job.keepResult ? { keepResult: true } : {}) };
       writeExecution(dir, job);
     }
     return job;
@@ -57,13 +58,14 @@ export class ExecutionJobs {
       }
     } catch { /* The next read or sweep can try again. */ }
   }
-  #load(id, owner, resultOnly = false) {
+  #load(id, owner) {
     const dir = this.#dir(id);
     let job;
     try { job = readExecution(dir); } catch { throw new Error(MISSING); }
     if (job.owner !== owner) throw new Error(MISSING);
     job = this.#expire(dir, job);
-    if (job.expired && !(resultOnly && job.keepResult)) throw new Error(MISSING);
+    // Older records may already have lost their exit details.
+    if (job.expired && !('exitCode' in job)) throw new Error(MISSING);
     return job;
   }
   #status(id, job) {
@@ -133,7 +135,7 @@ export class ExecutionJobs {
 
   async read({ id, since = 0, wait = 0 }, owner, { resultOnly = false } = {}) {
     if (!Number.isInteger(since) || since < 0 || !Number.isInteger(wait) || wait < 0 || wait > 10_000) throw new Error('invalid command cursor or wait');
-    let job = this.#status(id, this.#load(id, owner, resultOnly));
+    let job = this.#status(id, this.#load(id, owner));
     if (resultOnly) return { status: job.status, exitCode: job.exitCode, error: job.error };
     if (wait && job.seq <= since && job.status !== 'exited' && !this.#closed) {
       await new Promise(resolve => {
@@ -158,7 +160,8 @@ export class ExecutionJobs {
     }
     const last = chunks.at(-1)?.seq ?? since;
     return { id, status: job.status, reason: job.reason, exitCode: job.exitCode, signal: job.signal, error: job.error,
-      chunks, last, more: job.seq > last, truncated: since < (job.chunks?.[0]?.seq ?? 1) - 1 };
+      chunks, last, more: !job.expired && job.seq > last,
+      truncated: job.expired ? since < (job.seq ?? 0) : since < (job.chunks?.[0]?.seq ?? 1) - 1 };
   }
 
   cancel({ id }, owner) {

@@ -139,10 +139,14 @@ export function TeamSummary({ team, onManage, onOpen, onReview, onStop }: {
 }) {
   const now = useNow();
   if (!team.length) return null;
-  const working = team.filter(({ session }) => ['working', 'starting', 'waiting'].includes(stateOf(session))).length;
-  const blocked = team.filter(({ session }) => stateOf(session) === 'blocked').length;
-  const failed = team.filter(({ session }) => stateOf(session) === 'error').length;
-  const summary = [working && `${working} working`, blocked && `${blocked} need approval`, failed && `${failed} failed`, !working && !blocked && !failed && `${team.length} finished`].filter(Boolean).join(' · ');
+  const online = team.filter(({ session }) => !session.offline);
+  const offline = team.length - online.length;
+  const working = online.filter(({ session }) => ['working', 'starting', 'waiting'].includes(stateOf(session))).length;
+  const blocked = online.filter(({ session }) => stateOf(session) === 'blocked').length;
+  const failed = online.filter(({ session }) => stateOf(session) === 'error').length;
+  const finished = online.length - working - blocked - failed;
+  const summary = [working && `${working} working`, blocked && `${blocked} need approval`, failed && `${failed} failed`,
+    offline && `${offline} offline`, finished && `${finished} finished`].filter(Boolean).join(' · ');
   return <details className={`team-summary${blocked || failed ? ' needs-attention' : ''}`}>
     <summary><strong>Team</strong><span>{summary}</span></summary>
     <div className="team-actions">
@@ -158,7 +162,7 @@ export function TeamSummary({ team, onManage, onOpen, onReview, onStop }: {
       return <li key={session.id} style={{ marginLeft: Math.min(depth, 3) * 14 }}>
         <button className="team-task" onClick={() => onOpen ? onOpen(session) : onManage()}>
           <EngineMark engine={session.engine} /><span className="team-task-copy"><b>{session.title}</b><small>{session.model || session.engineModel || session.engine} · {elapsed < 1 ? '<1m' : `${elapsed}m`}</small></span>
-          <span className={`team-state state-${state}`}>{names[state] || state}</span>
+          <span className={`team-state state-${session.offline ? 'idle' : state}`}>{session.offline ? 'Last seen: ' : ''}{names[state] || state}</span>
         </button>
         {result && <p className="team-result">{result}</p>}
       </li>;

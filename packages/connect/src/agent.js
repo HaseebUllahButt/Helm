@@ -619,7 +619,10 @@ export class Daemon {
       self: () => this.id, name: () => this.name, network: () => loadNetwork() ?? this.net,
       words: async (p) => ownerWords(await this.sessions.list(), { dir: EVENTS_DIR, since: Number(p.since) || 0, read: p.read }),
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
-      agents: async () => { const profiles = await getProfiles(); return agentCatalog(profiles, await authStatuses(profiles)); },
+      agents: async (refresh = false) => {
+        const profiles = await getProfiles();
+        return agentCatalog(profiles, await authStatuses(profiles), { keeper: true, refresh });
+      },
       ask: (p) => askHidden(this.sessions, p),
       changed: (record) => this.broadcastFrame(T.OWNER, { record }),
       log: (line) => console.log(`[helm] ${line}`),

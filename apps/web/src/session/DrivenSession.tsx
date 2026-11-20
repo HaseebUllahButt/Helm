@@ -993,6 +993,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         )}
         {session.recovery && session.recovery.kind !== 'interrupted' && !working && !pending && (
           <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} autoResume={session.autoResumeLimited}
+            onChangeModel={controls.hasPicker('model') ? () => controls.show('model') : undefined}
             onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(errorMessage(e))); }} />
         )}
         {childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Helpers need your answer">

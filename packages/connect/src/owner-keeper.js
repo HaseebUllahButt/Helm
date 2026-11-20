@@ -152,16 +152,19 @@ export function parseKeeperReply(reply, current = []) {
 }
 
 /** The first account here with a small model, Claude and Codex first. */
-export function pickKeeperAgent(agents = []) {
+export function pickKeeperAgent(agents = [], refused = new Set()) {
   const rank = (e) => { const i = ['claude', 'codex', 'gemini'].indexOf(e); return i < 0 ? 9 : i; };
-  const row = agents.filter((a) => a.available && a.cheapModel).sort((a, b) => rank(a.engine) - rank(b.engine))[0];
+  const choices = agents.filter(a => a.available).map(row => ({
+    ...row, model: (row.smallModels ?? [row.cheapModel]).find(model => model && !refused.has(`${row.account ?? row.id}/${model}`)),
+  }));
+  const row = choices.filter(a => a.model).sort((a, b) => rank(a.engine) - rank(b.engine))[0];
   if (!row) return null;
   const modes = modesFor(row.engine);
   // Read only where the CLI has it; else asking first, so a tool it should
   // not want would wait (and the run would stop) rather than run.
   const mode = modes.find((m) => ['readonly', 'read'].includes(m.id))?.id
     ?? modes.find((m) => m.short === 'ask')?.id ?? defaultMode(row.engine);
-  return { profileId: row.id, model: row.cheapModel, mode, engine: row.engine };
+  return { profileId: row.id, model: row.model, mode, engine: row.engine };
 }
 
 /**
@@ -278,10 +281,25 @@ export class OwnerKeeper {
         read[m.id] = Object.fromEntries(Object.entries(seen).slice(-PER_MACHINE));
       }
       if (!chats.length) return finish('nothing new', { since: startedAt, read });
-      const agent = pickKeeperAgent(await this.agents());
+      const refused = new Set();
+      let agents = await this.agents();
+      let agent = pickKeeperAgent(agents);
       if (!agent) return finish('failed: no account on this machine has a small model');
       const record = loadOwner();
-      const reply = await this.ask({ ...agent, task: keeperTask(record.lines, chats) });
+      const task = keeperTask(record.lines, chats);
+      let reply;
+      while (agent) {
+        try { reply = await this.ask({ ...agent, task }); break; }
+        catch (error) {
+          if (!/model.{0,160}(?:not found|does not exist|not available|unavailable|not supported|not enabled)/i.test(error.message)) throw error;
+          if (loadOwner().keeper === false) return finish('turned off');
+          const account = agents.find(row => row.id === agent.profileId)?.account ?? agent.profileId;
+          refused.add(`${account}/${agent.model}`);
+          if (refused.size === 1) agents = await this.agents(true);
+          agent = pickKeeperAgent(agents, refused);
+          if (!agent) throw error;
+        }
+      }
       const lines = parseKeeperReply(reply, record.lines);
       // The owner may have turned it off while the model was thinking.
       if (lines && loadOwner().keeper !== false) {

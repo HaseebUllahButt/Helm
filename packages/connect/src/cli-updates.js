@@ -448,9 +448,12 @@ export class CliUpdater {
       message,
     };
     const state = loadState();
+    const previous = state.engines[id]?.lastResult;
     state.engines[id] = { ...state.engines[id], lastResult: result };
     saveState(state);
-    this.log(`${tool.label}: ${r.ok ? (result.changed ? `updated ${result.from} -> ${result.to}` : 'already up to date') : `update failed (${result.message})`}`);
+    if (r.ok || previous?.ok !== false || previous.from !== result.from || previous.message !== result.message) {
+      this.log(`${tool.label}: ${r.ok ? (result.changed ? `updated ${result.from} -> ${result.to}` : 'already up to date') : `update failed (${result.message})`}`);
+    }
     return { ...base, ...result };
   }
 

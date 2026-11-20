@@ -10,11 +10,12 @@ import { plainProblem } from './problem';
  * eye already is when a turn ends, not at the top of a long thread. The
  * original failure stays behind Details.
  */
-export function RecoveryCard({ recovery, busy, offline, onRetry, autoResume, onAutoResume }: {
+export function RecoveryCard({ recovery, busy, offline, onRetry, onChangeModel, autoResume, onAutoResume }: {
   recovery: NonNullable<Session['recovery']>;
   busy: boolean; offline: boolean;
   /** Absent while there is nothing to retry from here. */
   onRetry?: () => void;
+  onChangeModel?: () => void;
   autoResume?: boolean; onAutoResume?: (on: boolean) => void;
 }) {
   const [details, setDetails] = useState(false);
@@ -22,6 +23,7 @@ export function RecoveryCard({ recovery, busy, offline, onRetry, autoResume, onA
   const [hiddenAt, setHiddenAt] = useState(0);
   if (hiddenAt === recovery.at) return null;
   const p = plainProblem(recovery.kind, recovery.message);
+  const changeModel = p.changeModel && onChangeModel;
   const tone = recovery.kind === 'error' ? 'bad' : recovery.kind === 'limited' ? 'warn' : 'quiet';
   return (
     <div className={`recovery ${tone}`} role="status">
@@ -36,9 +38,10 @@ export function RecoveryCard({ recovery, busy, offline, onRetry, autoResume, onA
       </div>
       {recovery.kind === 'limited' && onAutoResume && <label className="automation-option"><input type="checkbox" checked={!!autoResume} disabled={busy || offline} onChange={event => onAutoResume(event.target.checked)} /> Continue when the limit resets</label>}
       {details && p.raw && <pre className="recovery-raw">{p.raw}</pre>}
-      {(p.raw || onRetry) && (
+      {(p.raw || onRetry || changeModel) && (
         <div className="recovery-actions">
           {p.raw && <button className="ghost" aria-expanded={details} onClick={() => setDetails(!details)}>{details ? 'Hide details' : 'Details'}</button>}
+          {changeModel && <button className="ghost" disabled={busy || offline} onClick={changeModel}>Choose model</button>}
           {onRetry && <button className="primary" disabled={busy || offline} title={offline ? 'The machine is offline.' : undefined} onClick={onRetry}>{p.action}</button>}
         </div>
       )}

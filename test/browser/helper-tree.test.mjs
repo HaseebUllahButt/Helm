@@ -8,6 +8,7 @@ test('remote leads stay visible, refresh, and keep their own helpers below them'
     import React from 'react';
     import {createRoot} from 'react-dom/client';
     import {Subagents} from './apps/web/src/session/Subagents';
+    import {TeamSummary} from './apps/web/src/session/TeamSummary';
     const root = createRoot(document.getElementById('root'));
     const listeners = new Set();
     const lead = (id,status,working=0) => ({id,title:id,engine:'codex',profileId:'same-account',status:'idle',
@@ -22,7 +23,9 @@ test('remote leads stay visible, refresh, and keep their own helpers below them'
         if(method==='agent.list') return {agents:[]};
         return {};
       }};
-    const render=()=>root.render(<Subagents client={client} env={{id:'local',name:'Here',online:true}} parent={parent} onClose={()=>{}} />);
+    const team = [{ session: { ...lead('offline', 'working'), offline: true }, depth: 0 }];
+    const render=()=>root.render(<><TeamSummary team={team} onManage={()=>{}} onStop={()=>{}} />
+      <Subagents client={client} env={{id:'local',name:'Here',online:true}} parent={parent} onClose={()=>{}} /></>);
     window.finish=()=>{rows=rows.map(s=>s.id==='working'?lead(s.id,'done'):s); listeners.forEach(fn=>fn('away','session.update',{session:rows[2]}));};
     window.addLead=()=>{rows.push(lead('new-lead','working'));parent={...parent,remoteHelpers:rows.map(s=>({id:s.id,machine:'away',status:s.delegation.status}))};render();};
     render();
@@ -35,6 +38,11 @@ test('remote leads stay visible, refresh, and keep their own helpers below them'
     await page.getByRole('button', {name:'Waiting for its helpers, details', exact:true}).waitFor();
     await page.getByRole('button',{name:'Stopped, details',exact:true}).waitFor();
     assert.equal(await page.getByText('another machine is offline',{exact:true}).count(), 1);
+    const summary = page.locator('.team-summary');
+    await summary.locator('summary').getByText('1 offline', { exact: true }).waitFor();
+    await summary.locator('summary').click();
+    await summary.getByText('Last seen: Working', { exact: true }).waitFor();
+    await page.locator('.group-offline').getByRole('button', { name: 'Last seen: Working, details' }).waitFor();
     assert.ok((await page.evaluate(()=>window.subscribed)).includes('away'));
     const waiting = page.locator('li').filter({has:page.getByRole('button',{name:'Waiting for its helpers, details',exact:true})}).first();
     assert.equal(await waiting.locator('summary').count(), 0, 'no separate helper header');
