@@ -60,9 +60,12 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   ```
 - **Rule (owner, 2026-11-20):** the owner's message must reach the agent
   at once. A CLI that reads input mid-reply gets it at its next read
-  point. Claude uses its Send now when it can move the running command to
-  the background; 2.1.329 cannot in `-p` mode and would end the command,
-  so Helm waits for the step there. Codex reads a steer only when its tool
+  point. Claude gets it at once, also while it only writes, through its
+  Send now (`interrupt` with `send_now`). Where Claude can move the running
+  command to the background it does; 2.1.329 in `-p` mode cannot, so the
+  step stops (owner: "it should interrupt chat and then send message") and
+  the message carries `MADE_WAY_NOTE`. Driven 2026-11-20 with the real CLI
+  and a fake API: read 0.1 s after the send, turn ended ok. Codex reads a steer only when its tool
   call returns (a command wait holds it up to 5 min); when only commands
   hold the turn, Helm stops the turn and starts the next one with the
   message and a note naming each command that still runs. Codex commands

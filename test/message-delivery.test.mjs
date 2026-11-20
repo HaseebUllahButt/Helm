@@ -110,6 +110,20 @@ test('Codex takes images at a tool boundary, not while merely writing; thread co
   assert.match(driver.sent.at(-1), /^With context\n\n/);
 });
 
+test('Claude takes the owner\'s message at once, also while it only writes; an agent\'s waits for a step', async (t) => {
+  const { sessions, session, driver } = await setup(t, 'claude');
+  driver.steersNow = true;
+  await sessions.input(session.id, 'From a teammate', { source: 'agent' });
+  await tick();
+  assert.equal(driver.steered.length, 0, 'an agent\'s message waits for a step');
+  driver.finish(); await tick();
+  await sessions.input(session.id, 'Stop and do this');
+  await tick();
+  assert.equal(driver.steered.length, 1);
+  assert.equal(driver.steered[0].text.split('\n')[0], 'Stop and do this');
+  assert.equal(driver.steered[0].now, true);
+});
+
 test('explicit held messages and slash commands are barriers to automatic mid-turn input', async (t) => {
   const { sessions, session, driver, ticket } = await setup(t, 'codex');
   driver.push('item.start', { id: 'command', kind: 'command', turnId: driver.turnId });
