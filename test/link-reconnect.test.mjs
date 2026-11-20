@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
+import { EventEmitter, once } from 'node:events';
 
 const dir = mkdtempSync(join(tmpdir(), 'helm-link-reconnect-'));
 process.env.HELM_DIR = dir;
@@ -274,3 +275,42 @@ test('a hub with nobody watching gets no live events after it says so, and a new
   await again;
   assert.equal(setup.link.watched, true, 'the next socket waits for that hub to say again');
 });
+
+for (const newer of [true, false]) {
+  test(`a machine link ${newer ? 'cuts and joins pieces with a hub that says lanes' : 'sends whole frames to an older hub'}`, async context => {
+    const { chunkText } = await import('../packages/protocol/frame-chunks.js');
+    const setup = await fixture(context, null);
+    const heard = [], frames = [];
+    const changed = new EventEmitter();
+    setup.daemon.onFrame = async (_link, frame) => { frames.push(frame); changed.emit('change'); };
+    setup.webSockets.on('connection', socket => {
+      socket.send(JSON.stringify({ t: 'welcome', version: 1, ...(newer ? { lanes: 1 } : {}) }));
+      socket.on('message', raw => { heard.push(JSON.parse(raw)); changed.emit('change'); });
+      if (newer) {
+        // The hub's own large frame, in pieces, with a small one between.
+        const [first, ...rest] = chunkText(JSON.stringify({ t: 'rpc', id: 'r', method: 'session.events', params: { pad: 'p'.repeat(40_000) } }), 'g', undefined);
+        socket.send(first);
+        socket.send(JSON.stringify({ t: 'pong' }));
+        for (const piece of rest) socket.send(piece);
+      }
+    });
+    const until = async match => { while (!match()) await once(changed, 'change'); };
+    setup.link.start(); await setup.ready;
+    assert.match(setup.lastUrl(), /[?&]lanes=1(&|$)/, 'the machine asks for pieces');
+    await until(() => frames.some(frame => frame.t === 'welcome'));
+    setup.link.send('rpcResult', { id: 'list', ok: true, result: 'x'.repeat(50_000) });
+    setup.link.send('event', { kind: 'session.update', payload: {} });
+    await until(() => heard.some(frame => frame.t === 'event') && (newer ? heard.some(frame => frame.t === 'dc-chunk' && frame.i === frame.n - 1) : heard.some(frame => frame.t === 'rpcResult')));
+    const pieces = heard.filter(frame => frame.t === 'dc-chunk');
+    if (newer) {
+      assert.equal(JSON.parse(pieces.map(piece => piece.data).join('')).result.length, 50_000);
+      await until(() => frames.some(frame => frame.t === 'rpc'));
+      assert.equal(frames.find(frame => frame.t === 'rpc').params.pad.length, 40_000, 'the hub\'s pieces arrive as one frame');
+      assert.ok(frames.findIndex(frame => frame.t === 'pong') < frames.findIndex(frame => frame.t === 'rpc'));
+      assert.ok(frames.every(frame => frame.t !== 'dc-chunk'));
+    } else {
+      assert.equal(pieces.length, 0, 'an older hub never sees a piece');
+      assert.equal(heard.find(frame => frame.t === 'rpcResult').result.length, 50_000);
+    }
+  });
+}

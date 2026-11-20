@@ -6,6 +6,7 @@ import { expand } from './paths.js';
 export function parseTaskArgs(args, { env = process.env, cwd = process.cwd(), machineId } = {}) {
   const { options, words } = parseAgentArgs(args, {
     values: ['account', 'source-folder', 'target-folder', 'session', 'model', 'mode', 'handoff-id'],
+    repeat: ['key'],
     switches: ['no-env', 'allow-skipped', 'json'],
   });
   const who = words.shift();
@@ -20,6 +21,6 @@ export function parseTaskArgs(args, { env = process.env, cwd = process.cwd(), ma
     // there requires --session so another project cannot pause this chat.
     sessionId: options.session || (!options['source-folder'] ? env.HELM_SESSION_ID : undefined),
     model: options.model, mode: options.mode, prompt: words.join(' '),
-    includeEnv: !options['no-env'], allowSkipped: !!options['allow-skipped'],
+    includeEnv: !options['no-env'] && !options.key, allowSkipped: !!options['allow-skipped'],
   } };
 }

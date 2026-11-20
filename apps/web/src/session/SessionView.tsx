@@ -531,7 +531,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
 
   return (
     <>
-      <DeliveryStatus client={client} env={env.id} id={session.id} />
+      <DeliveryStatus client={client} env={env.id} id={session.id} machine={env.name} />
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         {/* As in a Helm chat: the title and what needs a look now. Where it

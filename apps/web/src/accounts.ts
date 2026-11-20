@@ -42,12 +42,12 @@ export function accountsFrom(profiles: Profile[]): Account[] {
     by.set(key, {
       key, engine: p.engine,
       // A wrapper account has no home to name it by; its alias (a1) is the name.
-      account: suffix || (p.wraps ? p.id : 'default'),
+      account: p.localModel?.model || suffix || (p.wraps ? p.id : 'default'),
       token: (p.envFrom ?? []).some((k) => /TOKEN|KEY/i.test(k)),
       profile: p, aliases: [p.id], prefs: p.prefs, defaults: p.defaults,
     });
   }
-  const order = ['claude', 'codex', 'opencode', 'opencode2', 'devin', 'grok', 'cursor', 'vibe', 'pi', 'omp', 'antigravity', 'agy', 'gemini', 'kimi', 'muse'];
+  const order = ['claude', 'codex', 'opencode', 'opencode2', 'devin', 'grok', 'cursor', 'vibe', 'pi', 'omp', 'antigravity', 'agy', 'gemini', 'kimi', 'muse', 'webchat'];
   const rank = (e: string) => { const i = order.indexOf(e); return i < 0 ? order.length : i; };
   return [...by.values()].sort((a, b) =>
     (rank(a.engine) - rank(b.engine)) || a.account.localeCompare(b.account));

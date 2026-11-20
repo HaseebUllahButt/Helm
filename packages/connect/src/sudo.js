@@ -147,6 +147,45 @@ export async function checkAdminPassword(password, sudo = 'sudo') {
   return { ok: false, message: reason ? `sudo did not accept it: ${reason.slice(0, 200)}` : 'sudo did not accept this password.' };
 }
 
+/**
+ * Run one command as admin for an owner's own action, with no chat and no
+ * card: the owner pressed Set up for a machine's screen (screen.js). Root
+ * runs it as is; else sudo with no password, else the saved password, the
+ * same order as AdminRuns. Never for an agent's request.
+ */
+export async function runAsAdmin(command, { password = new AdminPassword(), sudo = 'sudo', machine = hostname(), timeoutMs = 15 * 60_000 } = {}) {
+  let argv, secret = null;
+  if (isRoot()) argv = ['/bin/sh', '-c', command];
+  else if (!(await sudoNeedsPassword(sudo))) argv = [sudo, '-k', '-n', '--', '/bin/sh', '-c', command];
+  else {
+    secret = password.read();
+    if (!secret) return { code: null, output: '', message: password.saved() ? WRONG_PASSWORD : noPasswordMessage(machine) };
+    argv = [sudo, '-k', '-S', '-p', '', '--', '/bin/sh', '-c', command];
+  }
+  return new Promise((resolve) => {
+    let output = '';
+    const keep = (data) => { output = (output + data).slice(-64 * 1024); };
+    let child;
+    try { child = spawn(argv[0], argv.slice(1), { env: plainEnv(), stdio: ['pipe', 'pipe', 'pipe'] }); }
+    catch (error) { secret?.fill(0); resolve({ code: null, output: '', message: `Helm could not start the command: ${error.message}` }); return; }
+    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+    child.stdout.on('data', keep);
+    child.stderr.on('data', keep);
+    child.stdin.on('error', () => {});
+    if (secret) {
+      const line = Buffer.concat([secret, Buffer.from('\n')]);
+      secret.fill(0);
+      child.stdin.end(line, () => line.fill(0));
+    } else child.stdin.end();
+    child.on('error', (error) => { clearTimeout(timer); resolve({ code: null, output, message: error.message }); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const said = output.split('\n').filter((l) => !SUDO_LINE.test(l.trim())).join('\n');
+      resolve({ code, output: said, ...(WRONG.test(output) ? { message: WRONG_PASSWORD } : {}) });
+    });
+  });
+}
+
 /** Save the owner's password after sudo accepts it. */
 export async function saveAdminPassword(password, { dir = SUDO_DIR, sudo = 'sudo' } = {}) {
   const checked = await checkAdminPassword(password, sudo);

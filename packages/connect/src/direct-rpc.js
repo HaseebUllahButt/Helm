@@ -35,7 +35,9 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
   const localCandidates = [];
   const fragments = new Map();
   const tunnelFrames = new TunnelFrames();
-  let offerSent = false, remoteReady = false;
+  let offerSent = false, remoteReady = false, answered = false;
+  // Each setup message can come twice: over the local network and a hub.
+  const heardCandidates = new Set();
   let open = false, closed = false;
   let disconnectedTimer;
   let localCount = 0, remoteCount = 0;
@@ -142,10 +144,16 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
       if (closed || (payload?.negotiation && payload.negotiation !== negotiation)) return;
       try {
         if (payload?.type === 'answer') {
+          // A second copy of the answer would fail on a settled connection.
+          if (answered) return;
+          answered = true;
           await pc.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
           remoteReady = true;
           for (const candidate of candidates.splice(0)) await pc.addIceCandidate(candidate);
         } else if (payload?.type === 'candidate' && payload.candidate) {
+          const seen = JSON.stringify(payload.candidate);
+          if (heardCandidates.has(seen) || heardCandidates.size >= 256) return;
+          heardCandidates.add(seen);
           remoteCount++;
           if (remoteReady) await pc.addIceCandidate(payload.candidate);
           else if (candidates.length < 128) candidates.push(payload.candidate);

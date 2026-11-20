@@ -87,7 +87,7 @@ function dedupeDetected(list: Session[], found: InventorySession[]): InventorySe
  */
 const botThread = (s: Session) => /^whatsapp-/i.test(s.title);
 
-export function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onOpen, onNewTerminal, onResume, resuming, sendJobs = [], sendTarget }: {
+export function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onOpen, onNewTerminal, onScreen, onResume, resuming, sendJobs = [], sendTarget }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[]; sendJobs?: SendJob[]; sendTarget?: string;
   /** What this machine last said it was running, while it cannot be asked. */
   remembered?: Session[]; rememberedAt?: number;
@@ -99,6 +99,8 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
   onUsage: () => void; onOpen: (s: Session) => void;
   /** A new terminal on this machine, on screen at once while it opens. */
   onNewTerminal: () => void;
+  /** See and use this machine's desktop in its own window. */
+  onScreen?: () => void;
   /** Continue a conversation a CLI recorded on its own; starts the engine. */
   onResume: (s: Session) => void;
   resuming: string | null;
@@ -420,6 +422,10 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
           disabled={!env.online}
           onClick={openTerminal}
         ><Icon name="terminal" size={18} />{env.info.terminals === 'panes' && <b className="slowmark" aria-hidden="true">!</b>}</button>
+        {onScreen && (
+          <button className="iconbtn" title={`Open the screen of ${env.name} (Ctrl+Shift+R)`} aria-label={`Open the screen of ${env.name}`}
+            disabled={!env.online} onClick={onScreen}><Icon name="machine" size={18} /></button>
+        )}
         <button className="iconbtn" title={`Show costs on ${env.name}`} aria-label={`Show costs on ${env.name}`} onClick={onUsage}><Meter /></button>
         <button className="iconbtn" title={`Open settings for ${env.name}`} aria-label={`Open settings for ${env.name}`} onClick={onSettings}><Gear /></button>
       </div>

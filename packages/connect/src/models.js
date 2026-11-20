@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { ENGINES } from './engines.js';
 import { expand } from './paths.js';
 import { syncNewModels } from './settings.js';
+import { webchatModels } from './webchat/config.js';
 
 const exec = promisify(execFile);
 
@@ -152,6 +153,7 @@ function refreshModels(key, engine, home, environment, launcher, hit) {
       else if (engine === 'gemini') value = await geminiModels();
       else if (engine === 'agy') value = await agyModels(root, environment, launcher);
       else if (engine === 'kimi') value = await kimiModels(environment);
+      else if (engine === 'webchat') value = webchatModels(environment);
     } catch {
       // A transient provider or CLI failure should not make a previously known
       // model disappear from the picker. The next expiry will try discovery

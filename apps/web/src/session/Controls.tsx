@@ -101,7 +101,7 @@ export function Controls({ options, session, busy, pending, onPick, onFavs, onDe
             {pending === g.kind && <span className="muted">saving…</span>}
           </button>
         ))}
-        {(['model', 'effort', 'mode'] as const).filter(kind => !groups.some(g => g.kind === kind) && !options?.nativeControls?.includes(kind)).map(kind => {
+        {(['model', 'effort', 'mode'] as const).filter(kind => !groups.some(g => g.kind === kind) && !options?.nativeControls?.includes(kind) && !(kind === 'model' && fixedModel(session))).map(kind => {
           const value = kind === 'model' ? session.model || session.engineModel : kind === 'effort' ? session.effort || session.engineEffort : session.mode;
           if (!value) return null;
           const title = kind === 'effort' ? 'thinking' : kind === 'mode' ? 'permissions' : kind;
@@ -211,6 +211,13 @@ interface Group {
   pick?: (id: string) => readonly [Kind, string];
 }
 
+/**
+ * A web chat account names its one model (helm webchat add --model). Its
+ * chip has no choice and only repeats the account name under the box; the
+ * empty chat already names the model.
+ */
+const fixedModel = (session: Session) => session.engine === 'webchat';
+
 /** The short word a chip shows, so four of them fit on a phone. */
 const shortModel = (slug: string, labels?: Record<string, string>, engine?: string) => {
   const name = labels?.[slug] ?? slug;
@@ -243,7 +250,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
   const savedModel = options.prefs?.default ?? options.default ?? null;
   const savedVariant = variants?.find((v) => v.id === savedModel);
 
-  if (options.models.length || options.more?.length) {
+  if (!fixedModel(session) && (options.models.length || options.more?.length)) {
     const unique = (ids: string[]) => [...new Set(ids.map(toBase))];
     let ids = unique(options.models);
     let more = unique(options.more ?? []).filter((m) => !ids.includes(m));

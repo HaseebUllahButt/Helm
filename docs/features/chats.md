@@ -18,7 +18,15 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   A lost reply triggers a result check. Opening the chat checks saved actions
   again. Returning to the app or restoring a connection checks again.
   The owner can also press "Check again" without closing the chat.
-  Each check keeps the original action number. The chat shows "Checking delivery" while a result is unknown.
+  Each check keeps the original action number. The app tries every
+  unconfirmed send again every 15 s and on each reconnect, in all chats,
+  until the machine confirms it. After 3 s the chat shows the waiting words
+  with "Sending to <machine>…", or "<machine>'s link is slow. Your message
+  waits to send." at 1.5 s round trips or more. A failed send keeps its words
+  with Retry (a new number) and Dismiss. Prove (driven 2026-11-18): `$V eval`
+  a wrapper on `WebSocket.prototype.send`, `RTCDataChannel.prototype.send`
+  and `fetch('/api/action')` that holds `session.deliver` and
+  `session.action-status`; send; the note shows; release it; the note goes.
   A saved chat message with the same message number also confirms delivery.
   This proof ends the check without sending again. Live replies stay visible
   while a history read waits. A final failed receipt keeps the full request
@@ -32,8 +40,8 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   a driver writes its answer is a final failure. Older receipts with the exact
   `no pending request <id>` error become final failures when read. Preserve their
   request digest and never replay them. Other unknown errors stay held.
-- **Tests:** `test/action-delivery`, `input-delivery`, `http-read`;
-  `test/browser/client-actions`, `client-reconnect`, `delivery-recovery`.
+- **Tests:** `test/action-delivery`, `input-delivery`, `http-read`, `client-connectivity`;
+  `test/browser/client-actions`, `client-reconnect`, `delivery-recovery`, `delivery-note`.
 - **Rule:** app errors use `apps/web/src/errors.ts`. Keep clear, short messages.
   Put technical text behind Details on failed tasks. Log each distinct error once.
   Retry an unconfirmed send with its original

@@ -114,7 +114,7 @@ test('both routes to a machine are timed over real hubs and its own hub is used'
   const lines = routeLines({ machines: [{ ...row, name: 'homepc' }], lan: { on: false, reason: 'turned off', heard: [] } });
   assert.match(lines[0], /homepc\s+via its own hub http:\/\/127\.0\.0\.1:\d+\s+\d+ms/);
   assert.match(lines[0], /\n\s+also: http:\/\/127\.0\.0\.1:\d+ \d+ms/);
-  assert.equal(lines.at(-1), '  local network: off (turned off)');
+  assert.equal(lines.at(-1), '  local network finding: off (turned off)');
 
   // Losing the chosen hub moves the next request to the other at once.
   viaOwn.stop();

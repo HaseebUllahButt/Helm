@@ -667,14 +667,17 @@ export async function nativeCodexThreads(profile, log = () => {}) {
     const loaded = await server.call('thread/loaded/list', {});
     if (loaded.error) throw new Error(loaded.error.message);
     const ids = loaded.result.data || [];
+    // Any thread at work, helpers and hidden ones too: a daemon restart would end it.
+    let busy = false;
     const threads = await Promise.all(ids.map(async (id) => {
       const read = await server.call('thread/read', { threadId: id, includeTurns: false });
       const thread = read.result?.thread;
       if (read.error || !thread) throw new Error(`thread ${id} could not be read: ${read.error?.message ?? 'no thread'}`);
+      if (thread.status?.type === 'active') busy = true;
       return !thread.parentThreadId && !thread.ephemeral && thread.canAcceptDirectInput === true
         ? { ...thread, path: thread.path && existsSync(thread.path) ? thread.path : null, nativeSocket: socket, profileId: profile.id } : null;
     }));
-    return { loaded: ids, threads: threads.filter(Boolean) };
+    return { loaded: ids, threads: threads.filter(Boolean), busy, socket };
   } catch (err) { log(`codex native discovery: ${err.message}`); throw err; }
   finally { server.releaseNativeDiscovery(); }
 }

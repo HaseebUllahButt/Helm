@@ -9,6 +9,7 @@ import { VibeDriver } from './drivers/vibe.js';
 import { AgyDriver } from './drivers/agy.js';
 import { AntigravityDriver } from './drivers/antigravity.js';
 import { PiDriver, OmpDriver } from './drivers/pi.js';
+import { WebchatDriver } from './drivers/webchat.js';
 import { bareTitle } from './titles.js';
 import { askPreview } from './notify.js';
 
@@ -26,6 +27,7 @@ export const DRIVERS = {
   antigravity: AntigravityDriver,
   pi: PiDriver,
   omp: OmpDriver,
+  webchat: WebchatDriver,
 };
 
 /** How many prompts wait, and what the newest one is about. */

@@ -1,59 +1,110 @@
 import dgram from 'node:dgram';
-import { proofOf } from '@helm/protocol/identity';
-import { bootstrapAddress } from '@helm/protocol/network';
+import { createCipheriv, createDecipheriv, createPublicKey, hkdfSync, randomBytes, sign, verify } from 'node:crypto';
+import { T } from '@helm/protocol';
+import { bootstrapAddress, machineSigningInfo } from '@helm/protocol/network';
+import { allowDirectSignal } from './direct-auth.js';
+import { loadSettings } from './settings.js';
 import { broadcastAddresses, isPrivateV4, lanIsRoutable } from './net-addr.js';
 
 /**
- * Machines on the same network finding each other without the roster.
+ * Machines on the same Wi-Fi finding each other, and carrying the direct
+ * link's setup messages straight across it.
  *
- * The roster carries each machine's LAN address, but it is often wrong in
- * exactly the moment it matters: a laptop that just moved to the home wifi
- * advertises its new address only after its next tick reaches a hub the
- * others can also reach - and the hub they share is the VM, over the VPN
- * that made the trip slow in the first place. So each machine also says
- * "I am here, my hub is on port N" to its own network, and the others dial
- * that address directly.
+ * A direct link (direct-mesh.js) needs an offer, an answer and a few
+ * address candidates to go between the two machines before it opens. Those
+ * went only through a hub. When the hub is the VM over a lossy path, each
+ * one can wait seconds behind a chat list, so two machines one metre apart
+ * waited minutes for a link (2026-11-18: VM round trip 8 s, "no answer").
+ * Now each setup message also goes in one datagram to the other machine on
+ * the local network. Whichever copy arrives first is used; the receiver
+ * ignores the other (peer.js twin offers, direct-rpc.js repeat answers).
  *
- * A plain UDP broadcast, not mDNS. mDNS would mean a DNS packet parser or a
- * dependency, and port 5353 already belongs to the system's own responder
- * (Avahi, Bonjour) on most desktops; all we need is for Helm machines to
- * hear each other, and one small datagram to the subnet's broadcast address
- * does that. Neither crosses a router, which is the point: same network only.
+ * A plain UDP broadcast, not mDNS: port 5353 already belongs to the system's
+ * own responder on most desktops, and one small datagram to the subnet's
+ * broadcast address is all Helm machines need. Neither crosses a router.
  *
- * An announcement is only ever a hint of where to dial. It names no machine
- * in the clear - the tag is a MAC over the machine id under the network's
- * key, rotated every ten minutes, so a stranger on a cafe wifi learns
- * nothing it could follow you with - and the address it points to still has
- * to pass the usual hub handshake, which proves the network key before this
- * machine says anything. A replay may admit a bounded number of dial candidates;
- * the handshake never releases a credential to a hub without the key.
+ * Every packet is sealed with AES-256-GCM under a key derived from the
+ * network key, so a stranger on a cafe Wi-Fi learns nothing, not even which
+ * machine sent it. Inside, the sender signs it with its machine signing key,
+ * checked against the key pinned in the roster: the network key alone
+ * cannot speak for a machine. A packet outside the clock window, or one whose
+ * nonce was seen, is refused, so a recorded packet cannot be played back. A
+ * removed machine is refused, and so is everything once this machine itself
+ * is removed. Offers then pass the same check a hub's do (allowDirectSignal).
  *
- * Off with `"lanDiscovery": false` in ~/.helm/config.json.
+ * No hub address is announced or dialled here any more. Hubs stay HTTPS;
+ * the local network only introduces the encrypted direct link.
+ *
+ * Off with `"lanDiscovery": false` in ~/.helm/config.json or
+ * HELM_LAN_DISCOVERY=0.
  */
 
 /** UDP, so the same number as the hub's TCP port without getting in its way. */
 export const LAN_PORT = 8787;
 const ANNOUNCE_EVERY_MS = 30_000;
+/** Extra hellos after a start or a Wi-Fi change: the first can go out before the interface is up. */
+const BURST_MS = [1_000, 3_000];
 /** Long enough to survive two lost announcements in a row. */
 const HINT_TTL_MS = 100_000;
-const TAG_PERIOD_MS = 10 * 60_000;
 const ROUTE_CHECK_MS = 5 * 60_000;
-const MAX_HINTS = 32;
-const MAX_HINTS_PER_MACHINE = 2;
-const LABEL = 'lan-announce';
+/** Two machines' clocks must agree to within this. */
+export const CLOCK_WINDOW_MS = 2 * 60_000;
+const MAX_PACKET = 16 * 1024;
+const MAX_SEEN = 8192;
+const MAX_HINTS = 64;
+const MAGIC = Buffer.from('HLM2');
+const LABEL = 'helm-lan-v2';
 
-export function announceTag(net, id, period) {
-  return proofOf(net.key, LABEL, `${net.id}:${id}:${period}`).slice(0, 22);
+const keys = new Map();
+/** The packet key: the network key, stretched for this one use. */
+function packetKey(net) {
+  const id = `${net.id}\n${net.key}`;
+  let key = keys.get(id);
+  if (!key) {
+    key = Buffer.from(hkdfSync('sha256', Buffer.from(String(net.key), 'base64url'), Buffer.from(String(net.id)), Buffer.from(LABEL), 32));
+    if (keys.size > 8) keys.clear();
+    keys.set(id, key);
+  }
+  return key;
+}
+
+const signedBody = (net, body) => Buffer.from(`${LABEL}:${net.id}:${body}`);
+
+/** One message, signed by this machine and sealed under the network key. */
+export function sealPacket(net, message, privateKey) {
+  const body = JSON.stringify(message);
+  const plain = Buffer.from(JSON.stringify({ m: body, s: sign(null, signedBody(net, body), privateKey).toString('base64url') }));
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', packetKey(net), iv);
+  cipher.setAAD(MAGIC);
+  const sealed = Buffer.concat([cipher.update(plain), cipher.final()]);
+  return Buffer.concat([MAGIC, iv, cipher.getAuthTag(), sealed]);
+}
+
+/** The message and its signature, or null for anything not sealed under this network's key. */
+export function openPacket(net, raw) {
+  if (!Buffer.isBuffer(raw) || raw.length < 32 || raw.length > MAX_PACKET || !raw.subarray(0, 4).equals(MAGIC)) return null;
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', packetKey(net), raw.subarray(4, 16));
+    decipher.setAAD(MAGIC);
+    decipher.setAuthTag(raw.subarray(16, 32));
+    const outer = JSON.parse(Buffer.concat([decipher.update(raw.subarray(32)), decipher.final()]).toString('utf8'));
+    if (typeof outer?.m !== 'string' || typeof outer.s !== 'string' || outer.s.length > 128) return null;
+    const message = JSON.parse(outer.m);
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return null;
+    return { message, body: outer.m, signature: outer.s };
+  } catch { return null; }
 }
 
 /**
  * On unless the owner said no. Test runs (HELM_NO_SERVICE) stay quiet on the
  * real network unless they ask for it, so a test daemon never shouts on the
- * owner's wifi.
+ * owner's Wi-Fi.
  */
-export function lanDiscoveryEnabled() {
-  // Keep discovery off until it can advertise an encrypted LAN transport.
-  return false;
+export function lanDiscoveryEnabled(cfg = loadSettings(), env = process.env) {
+  if (cfg?.lanDiscovery === false || env.HELM_LAN_DISCOVERY === '0') return false;
+  if (env.HELM_LAN_DISCOVERY === '1') return true;
+  return env.HELM_NO_SERVICE !== '1';
 }
 
 /**
@@ -106,28 +157,37 @@ export function withHeardAddresses({ urls, net, self, mine = new Set(), heard, c
 export class LanDiscovery {
   #socket = null;
   #timer = null;
-  #tags = { period: null, at: 0, byTag: new Map() };
+  #burst = [];
   #routable = { ok: true, at: -Infinity };
   #warned = false;
   #stopped = false;
   #reason = null;
+  #privateKey = null;
+  #publicKeys = new Map();
+  /** nonce -> when it can be forgotten: older packets fail the clock check anyway. */
+  #seen = new Map();
+  #rejected = 0;
+  /** Until when our broadcasts ask everyone to answer: just after a start or a Wi-Fi change. */
+  #askUntil = -Infinity;
 
   /**
    * @param {object} opts
-   * @param {() => object} opts.network    the roster, read fresh each time
-   * @param {number} opts.port             this machine's hub port, announced
-   * @param {boolean} [opts.announce]      say we are here (listen either way)
-   * @param {() => void} [opts.onChange]   a new address was heard, or one expired
+   * @param {() => object} opts.network        the roster, read fresh each time
+   * @param {boolean} [opts.announce]          say we are here (listen either way)
+   * @param {() => boolean} [opts.direct]      whether this machine takes direct links now
+   * @param {(id) => void} [opts.onPeer]       a machine was heard at a new address
+   * @param {(signal) => void} [opts.onSignal] { from, side, peer, payload } for a direct link's setup
+   * @param {() => object} [opts.signingKey]   this machine's private signing key
    */
   constructor({
-    network, port, announce = true, onChange = () => {},
+    network, announce = true, direct = () => true, onPeer = () => {}, onSignal = () => {},
     discoveryPort = LAN_PORT, bindAddress = '0.0.0.0',
     targets = () => broadcastAddresses().map((address) => ({ address, port: discoveryPort })),
     accept = isPrivateV4, enabled = () => lanDiscoveryEnabled(), routable = lanIsRoutable,
-    now = Date.now, every = ANNOUNCE_EVERY_MS,
+    now = Date.now, every = ANNOUNCE_EVERY_MS, signingKey = () => machineSigningInfo().privateKey,
   }) {
-    Object.assign(this, { network, port, announce, onChange, discoveryPort, bindAddress, targets, accept, enabled, routable, now, every });
-    /** url -> { id, seen } */
+    Object.assign(this, { network, announce, direct, onPeer, onSignal, discoveryPort, bindAddress, targets, accept, enabled, routable, now, every, signingKey });
+    /** machine id -> { address, port, seen, direct } */
     this.hints = new Map();
   }
 
@@ -136,9 +196,11 @@ export class LanDiscovery {
 
   async start() {
     this.#stopped = false;
+    this.#askUntil = this.now() + BURST_MS.at(-1) + 1_000;
     await this.tick();
     this.#timer = setInterval(() => { void this.tick(); }, this.every);
     this.#timer.unref?.();
+    this.#hurry();
     return this;
   }
 
@@ -146,19 +208,34 @@ export class LanDiscovery {
     this.#stopped = true;
     clearInterval(this.#timer);
     this.#timer = null;
+    for (const timer of this.#burst.splice(0)) clearTimeout(timer);
     this.#close();
   }
 
-  /** The addresses heard and still fresh, as { url, id }. */
+  /** The machines heard and still fresh. */
   list() {
-    return [...this.hints].map(([url, hint]) => ({ url, id: hint.id, seen: hint.seen }));
+    return [...this.hints].filter(([, hint]) => this.#fresh(hint))
+      .map(([id, hint]) => ({ id, address: hint.address, port: hint.port, seen: hint.seen, direct: hint.direct }));
+  }
+
+  /** Heard lately, and its Helm takes direct links: worth a local setup. */
+  ready(id) {
+    const hint = this.hints.get(id);
+    return !!this.#socket && this.#fresh(hint) && hint.direct;
+  }
+
+  /** Where that machine was last heard, as "address:port", or null. */
+  where(id) {
+    const hint = this.hints.get(id);
+    return this.#socket && this.#fresh(hint) ? `${hint.address}:${hint.port}` : null;
   }
 
   status() {
     return {
       on: this.active,
       reason: this.active ? null : this.#reason ?? null,
-      heard: this.list().map(({ url, id }) => ({ url, id })),
+      heard: this.list().map(({ id, address, seen }) => ({ id, address, ageMs: Math.max(0, this.now() - seen) })),
+      rejected: this.#rejected,
     };
   }
 
@@ -166,31 +243,60 @@ export class LanDiscovery {
   networkChanged() {
     this.#routable.at = -Infinity;
     this.hints.clear();
-    this.onChange();
-    return this.tick();
+    this.#askUntil = this.now() + BURST_MS.at(-1) + 1_000;
+    const done = this.tick();
+    this.#hurry();
+    return done;
   }
 
   async tick() {
     if (this.#stopped) return;
     if (!this.enabled()) return this.#off('turned off');
     // A full-tunnel VPN sends this subnet's traffic into the tunnel: nothing
-    // on the wifi would hear us, and an answer from it would never come
+    // on the Wi-Fi would hear us, and an answer from it would never come
     // back. Do not advertise an address we cannot answer on.
     if (this.now() - this.#routable.at >= ROUTE_CHECK_MS) {
       const r = await this.routable().catch(() => null);
       this.#routable = { ok: r?.ok !== false, at: this.now() };
     }
+    if (this.#stopped) return;
     if (!this.#routable.ok) return this.#off('the local network is routed into a VPN');
     if (!this.#socket && !(await this.#open())) return;
     this.#reason = null;
     this.#expire();
-    this.#announce();
+    this.#hello();
+  }
+
+  /**
+   * Send one setup message for a direct link to a machine heard here.
+   * Returns where it went ("address:port"), or null when that machine has
+   * not been heard lately and only the hub can carry it.
+   */
+  signal(to, side, peer, payload) {
+    const hint = this.hints.get(to);
+    if (!this.#socket || !this.#fresh(hint)) return null;
+    const sent = this.#send({ k: 'signal', to, side, peer, payload }, hint);
+    return sent ? `${hint.address}:${hint.port}` : null;
+  }
+
+  #fresh(hint) {
+    return !!hint && this.now() - hint.seen < HINT_TTL_MS;
+  }
+
+  #hurry() {
+    this.#askUntil = this.now() + BURST_MS.at(-1) + 1_000;
+    for (const timer of this.#burst.splice(0)) clearTimeout(timer);
+    for (const ms of BURST_MS) {
+      const timer = setTimeout(() => { if (!this.#stopped) this.#hello(); }, ms);
+      timer.unref?.();
+      this.#burst.push(timer);
+    }
   }
 
   #off(reason) {
     this.#reason = reason;
     this.#close();
-    if (this.hints.size) { this.hints.clear(); this.onChange(); }
+    this.hints.clear();
   }
 
   async #open() {
@@ -224,79 +330,127 @@ export class LanDiscovery {
     this.#socket = null;
   }
 
-  #packet() {
+  #send(fields, target) {
     const net = this.network();
-    if (!net?.key || !net.self) return null;
-    const period = Math.floor(this.now() / TAG_PERIOD_MS);
-    return Buffer.from(JSON.stringify({ helm: 'lan', v: 1, tag: announceTag(net, net.self, period), port: this.port }));
+    if (!this.#socket || !net?.key || !net.self || net.revoked?.[net.self]) return false;
+    let packet;
+    try {
+      this.#privateKey ??= this.signingKey();
+      packet = sealPacket(net, { ...fields, from: net.self, at: this.now(), nonce: randomBytes(16).toString('hex') }, this.#privateKey);
+    } catch { return false; }
+    // Too big for one datagram: the hub carries this one alone.
+    if (packet.length > MAX_PACKET) return false;
+    for (const t of Array.isArray(target) ? target : [target]) this.#socket.send(packet, t.port, t.address, () => {});
+    return true;
   }
 
-  #announce(to = null) {
+  #hello(to = null, target = null) {
     if (!this.announce || !this.#socket) return;
-    const packet = this.#packet();
-    if (!packet) return;
-    for (const target of to ? [to] : this.targets()) {
-      this.#socket.send(packet, target.port, target.address, () => {});
-    }
+    const targets = target ? [target] : this.targets();
+    // Just started, or on a new network: ask everyone to answer now. A
+    // machine that heard us before would otherwise wait a round to say so.
+    const ask = to == null && this.now() < this.#askUntil ? 1 : 0;
+    if (targets.length) this.#send({ k: 'hello', to, direct: this.direct() ? 1 : 0, ask }, targets);
   }
 
-  /**
-   * Which machine a tag belongs to. The table is rebuilt each period and
-   * each announce round, so a flood of datagrams costs a map lookup each,
-   * not a MAC per machine per packet. Neighbouring periods count too: two
-   * machines' clocks need only agree to within ten minutes.
-   */
-  #whose(tag) {
-    const net = this.network();
-    if (!net?.key) return null;
-    const period = Math.floor(this.now() / TAG_PERIOD_MS);
-    if (this.#tags.period !== period || this.now() - this.#tags.at >= this.every) {
-      const byTag = new Map();
-      for (const id of Object.keys(net.machines ?? {})) {
-        if (id === net.self || net.revoked?.[id]) continue;
-        for (const p of [period - 1, period, period + 1]) byTag.set(announceTag(net, id, p), id);
-      }
-      this.#tags = { period, at: this.now(), byTag };
+  #publicKey(id, net) {
+    const text = net.machines?.[id]?.codeSignPubkey;
+    if (typeof text !== 'string' || text.length > 512) return null;
+    let key = this.#publicKeys.get(text);
+    if (!key) {
+      try { key = createPublicKey({ key: Buffer.from(text, 'base64url'), type: 'spki', format: 'der' }); } catch { return null; }
+      if (this.#publicKeys.size > 64) this.#publicKeys.clear();
+      this.#publicKeys.set(text, key);
     }
-    const id = this.#tags.byTag.get(tag);
-    return id && !net.revoked?.[id] && Object.hasOwn(net.machines ?? {}, id) ? id : null;
+    return key;
   }
+
+  /** Whether a nonce is new, after dropping the ones too old to matter. */
+  #fresher(nonce) {
+    if (this.#seen.has(nonce)) return false;
+    if (this.#seen.size >= MAX_SEEN) {
+      for (const [n, until] of this.#seen) if (until <= this.now()) this.#seen.delete(n);
+    }
+    return this.#seen.size < MAX_SEEN;
+  }
+
+  #reject() { this.#rejected++; }
 
   #heard(raw, rinfo) {
-    if (raw.length > 512 || rinfo.family !== 'IPv4' || !this.accept(rinfo.address)) return;
-    let msg;
-    try { msg = JSON.parse(String(raw)); } catch { return; }
-    if (msg?.helm !== 'lan' || typeof msg.tag !== 'string' || msg.tag.length > 64) return;
-    const port = Number(msg.port);
-    if (!Number.isInteger(port) || port <= 0 || port > 65535) return;
-    const id = this.#whose(msg.tag);
-    if (!id) return;
+    if (raw.length > MAX_PACKET || rinfo.family !== 'IPv4' || !this.accept(rinfo.address)) return;
+    const net = this.network();
+    if (!net?.key || !net.self || net.revoked?.[net.self]) return;
+    const opened = openPacket(net, raw);
+    if (!opened) return this.#reject();
+    const { message: m, body, signature } = opened;
+    const from = m.from;
+    // Our own broadcast comes back to us; that is not a rejection.
+    if (from === net.self) return;
+    if (typeof from !== 'string' || !Object.hasOwn(net.machines ?? {}, from) || net.revoked?.[from]
+        || (m.to != null && m.to !== net.self)
+        || typeof m.at !== 'number' || Math.abs(this.now() - m.at) > CLOCK_WINDOW_MS
+        || typeof m.nonce !== 'string' || !/^[0-9a-f]{32}$/.test(m.nonce)
+        || !this.#fresher(m.nonce)) return this.#reject();
+    const key = this.#publicKey(from, net);
+    let good = false;
+    try { good = !!key && verify(null, signedBody(net, body), key, Buffer.from(signature, 'base64url')); } catch { good = false; }
+    if (!good) return this.#reject();
+    this.#seen.set(m.nonce, this.now() + 2 * CLOCK_WINDOW_MS);
+
     // The address is where the datagram came from, never what it says.
-    const url = `http://${rinfo.address}:${port}`;
-    const known = this.hints.get(url);
-    if (known) {
-      if (known.id === id) known.seen = this.now();
+    const before = this.hints.get(from);
+    const moved = !this.#fresh(before) || before.address !== rinfo.address || before.port !== rinfo.port;
+    if (moved && !before && this.hints.size >= MAX_HINTS) return;
+    const direct = m.k === 'hello' ? m.direct === 1 : before?.direct ?? true;
+    this.hints.set(from, { address: rinfo.address, port: rinfo.port, seen: this.now(), direct });
+
+    if (m.k === 'hello') {
+      // Someone new, or someone who just started: answer them directly so
+      // they need not wait a round to hear about us. A reply names its
+      // receiver and is never answered.
+      const asked = moved || m.ask === 1;
+      if (asked && m.to == null) this.#hello(from, { address: rinfo.address, port: rinfo.port });
+      if (asked) this.#tell(() => this.onPeer(from));
       return;
     }
-    // A tag can be replayed with arbitrary source addresses and ports. Keep
-    // admitted hints until expiry instead of evicting them on each packet:
-    // otherwise a bounded map still starts unbounded in-flight handshakes.
-    if (this.hints.size >= MAX_HINTS
-        || [...this.hints.values()].filter(hint => hint.id === id).length >= MAX_HINTS_PER_MACHINE) return;
-    this.hints.set(url, { id, seen: this.now() });
-    // Someone new: answer them directly so they need not wait a round to
-    // hear about us. They answer us only once in turn, for the same reason.
-    this.#announce({ address: rinfo.address, port: rinfo.port });
-    this.onChange();
+    if (m.k !== 'signal' || !['dial', 'answer'].includes(m.side) || m.to !== net.self
+        || typeof m.peer !== 'string' || m.peer.length > 128
+        || !m.payload || typeof m.payload !== 'object' || Array.isArray(m.payload)) return;
+    if (moved) this.#tell(() => this.onPeer(from));
+    this.#tell(() => this.onSignal({ from, side: m.side, peer: m.peer, payload: m.payload }));
+  }
+
+  #tell(fn) {
+    try { void Promise.resolve(fn()).catch(() => {}); } catch { /* a listener's bug is not the socket's */ }
   }
 
   #expire() {
-    let changed = false;
-    for (const [url, hint] of this.hints) {
-      if (this.now() - hint.seen < HINT_TTL_MS) continue;
-      this.hints.delete(url);
-      changed = true;
-    }
-    if (changed) this.onChange();
+    for (const [id, hint] of this.hints) if (!this.#fresh(hint)) this.hints.delete(id);
+    for (const [n, until] of this.#seen) if (until <= this.now()) this.#seen.delete(n);
   }
+}
+
+/**
+ * Where setup messages heard on the local network go: the same places as a
+ * hub's. An offer for this machine passes the same check a hub's T.SIGNAL
+ * does, and its answers go back over the local network (and the hub, if a
+ * copy of the offer also came that way - peer.js). An answer for a link this
+ * machine dials goes to that link only when it names the machine dialled.
+ */
+export function localSignalRouter({ network, peers, direct, lan, enabled = () => true }) {
+  const links = new Map();
+  return ({ from, side, peer, payload }) => {
+    const net = network();
+    if (side === 'answer') return direct()?.receive({ env: from, peer, payload });
+    // Phones and browsers never come this way: only machines sign packets.
+    if (!Object.hasOwn(net?.machines ?? {}, from) || !allowDirectSignal(net, from, payload, enabled())) return;
+    const id = `lan-${from}-${peer}`;
+    let link = links.get(id);
+    if (!link) {
+      link = { local: true, send: (t, frame) => { if (t === T.SIGNAL) lan().signal(from, 'answer', peer, frame.payload); } };
+      links.set(id, link);
+      if (links.size > 256) links.delete(links.keys().next().value);
+    }
+    return peers()?.signal(id, payload, link, from);
+  };
 }

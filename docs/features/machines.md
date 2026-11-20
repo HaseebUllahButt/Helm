@@ -16,7 +16,18 @@ owner's home or network to bypass this check.
   Control+Shift+s; $V click "Devices & pairing"; $V text` shows "Linux
   Chrome · this device · online now".
 - **Transport:** remote access requires HTTPS. HTTP works only on loopback.
-  LAN discovery stays off. A browser stays signed in until it is removed.
+  Local network finding is on: machines on one Wi-Fi find each other on
+  UDP 8787 and set up the direct link without waiting for the hub. Packets
+  are encrypted and signed; no hub address is announced. Turn it off with
+  `"lanDiscovery": false` in `config.json` or `HELM_LAN_DISCOVERY=0`. Test
+  copies stay quiet unless `HELM_LAN_DISCOVERY=1`. `helm status` shows
+  "local network finding" and the machines it heard.
+  ufw drops these packets by default, and the only symptom is a slow route
+  through the hub. Helm opens UDP 8787 and 44301–44332 in ufw for this
+  machine's private range only: at start with `sudo -n`, and with a password
+  prompt in `helm network-repair`. `helm status` warns while a rule is
+  missing. Other firewalls are left alone.
+  A browser stays signed in until it is removed.
   Its credential still carries a seven-day expiry, because older Helm refuses
   one without it; newer Helm ignores the expiry.
   Old credentials stop working after the security update. A browser pairs
@@ -35,8 +46,74 @@ owner's home or network to bypass this check.
   must be greater than the beginning. Private tests must match their own
   firewall rules and never change the owner's network.
 - **Tests:** `test/machine-kind`, `device-presence`, `roster-watch`,
-  `gossip`, `lan-discovery`, `network-monitor`, `hub-mesh`, `direct-mesh`, `auth`, `local-login`,
+  `gossip`, `lan-discovery`, `network-monitor`, `hub-mesh`, `frame-lanes`, `direct-mesh`, `auth`, `local-login`,
   `hub-authz`, `roster-trust`, `security-transport`, `security-routes`; `test/browser/hub-auth`.
+
+## Wake an offline machine
+
+- On phone Home, expand **Machines**. On a computer, open Home or
+  Dashboard. **Wake** appears next to an offline machine when Helm can see
+  an online sender on its last wired network.
+- Run `helm wake <machine>` to send a signal. Add `--wait <minutes>`
+  to wait for the machine to connect. Add `--wake` to `exec`, `spawn`,
+  `delegate --machine` or `dispatch` to wait up to five minutes before
+  starting the job. Press Ctrl+C to stop waiting.
+- Run current Helm on both Linux machines. Connect the target by
+  Ethernet and start Helm there before putting it to sleep. Keep one
+  machine online on the same IPv4 network and router. The sender can use
+  Wi-Fi if its access point passes broadcasts to the wired network.
+  Run `helm doctor` on the target to check the card and see how to enable wake.
+- Machines share signed wake details with current hubs. A target's
+  last wired network stays available across a restart. Helm checks the
+  sender's current network before it sends the signal.
+- Keep test packets inside a private network namespace. Give
+  two fake targets the same IP range and different router addresses. Confirm
+  that Wake appears for only the matching target, then capture its packet.
+  Attach the matching target after the packet and check that `exec --wake`
+  runs its command after the target connects.
+- See `test/wake-state`, `test/wake-machine` and `test/wake-cli`.
+
+## Remote screens
+- **What:** the owner sees and uses another machine's real desktop in its own
+  Helm app window. The engine is screen-relay's (`native/screen`, see its
+  README). Decided 2026-11-19: this is for the owner only. Agents keep
+  `helm browser` and never open a screen.
+- **Reach:** Ctrl/Cmd+Shift+R in Helm (a machine menu), search "Open a
+  screen" or "Screen of <machine>", or the screen button on a machine's
+  page. `helm screen [status | stop]` shows or stops this machine's own.
+- **Rules:** only an owner device may call `screen.*` on another machine,
+  and only an owner device may press Set up (admin rights with no card).
+  Each start makes a new 64-character key; the viewer link carries it in
+  the fragment, so other local pages cannot use the engine. The window
+  opens only from a page on a loopback address (the Helm app on a
+  computer), because the forward listens on that computer's 127.0.0.1.
+  A phone gets a note instead.
+- **Keys:** the window opens on a card: Take over (fullscreen plus keyboard
+  lock, so Super keys reach the other machine) or Only watch. Super+Ctrl+Esc,
+  leaving fullscreen or going to another window gives the keys back and
+  switches to watch only, with a "Take over again" bar. niri reserves
+  Super+Ctrl+Esc on the owner's machines. A hidden test browser has no
+  keyboard lock, so only Brave or Chrome proves the Super keys.
+- **Desktop shortcuts on Wayland:** niri never runs its own binds for keys
+  from a Wayland virtual keyboard (tested 2026-11-19: `wtype` Super+Esc did
+  not open the overview). So the engine presses keys through a kernel
+  keyboard (/dev/uinput, Helm's edit in `input.cpp`) and keeps the virtual
+  keyboard for typed text. Set up writes a `uaccess` udev rule
+  (`70-helm-screen.rules`) so the signed-in person may use it. Until then a
+  Wayland screen asks for Set up; "Open without shortcuts" skips it.
+- **Speed:** every frame goes through a hub, so the delay is the path to the
+  hub and back (about 0.2 to 0.9 s from why through the VM). The owner's
+  router blocks devices on its Wi-Fi from reaching each other, so why and
+  Laptop cannot use a direct path. The engine writes to Helm's tunnel on its
+  own machine and cannot see that path, so Helm caps it at 8 Mbps.
+- **Linux only** for now: X11, or Wayland on niri, sway or Hyprland. GNOME
+  and KDE on Wayland lack the screen copy the engine uses.
+- **Prove (driven 2026-11-19):** `$V open --desktop; $V key
+  Control+Shift+KeyR` shows "Open a screen" with this machine as "this
+  computer". Click it: a machine with no build packages shows "Set up the
+  screen of …". Never press Set up in a copy: it installs packages on the
+  real machine. The live picture needs two real machines.
+- **Tests:** `test/screen.test.mjs`.
 
 ## Check installation and connections
 - Open Settings and select **Check connection**. Each answering machine reports
@@ -131,6 +208,23 @@ owner's home or network to bypass this check.
   no retry, so a newer rsync needs a reviewed allowlist change.
 - **Tests:** `test/execution`, `execution-rpc`, `copy`,
   `copy-transport`, `copy-arguments`, `copy-binary`, `bulk-transfer`.
+
+## Tools: `helm tools`
+- **Reach:** `helm tools add|list|show|run|remove`, and **Settings >
+  Tools** (also in the palette). The app lists and removes; adding is
+  only through the command, on the machine that has the program.
+- **Rules:** each machine keeps its own tools in `~/.helm/tools.json`.
+  `list` asks every machine; what it hears is kept in `tools-seen.json`,
+  so an offline machine still shows its last known tools. A tool on this
+  machine runs like `helm run` (this shell's settings, live input). On
+  another machine it runs like `helm exec`: the caller reads all piped
+  input first (1 MB, sent with `exec.start` as `stdin`). An older Helm
+  drops that input, and the caller says so.
+- **Prove:** with the private copy, `$H tools add hi --description "Say hi."
+  -- echo hi`, then `$H tools run hi there` prints `hi there`. Open Settings >
+  Tools at phone and computer sizes, press Remove, and see the notice with
+  the add command to undo it.
+- **Tests:** `test/tools`, `test/execution`.
 
 ## Saved CLI conversations and Take over
 - **Rules:** a saved Claude, Codex, OpenCode or Pi conversation opens with

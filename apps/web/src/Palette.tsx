@@ -198,6 +198,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['Ctrl/⌘ Shift E', 'Open a terminal in the chat folder, or go back'],
     ['Ctrl/⌘ Shift T', 'Pick a machine for a terminal'],
     ['Ctrl/⌘ Alt T', 'Open a terminal on the selected machine'],
+    ['Ctrl/⌘ Shift R', 'Pick a machine, then see and use its screen'],
     ['Ctrl/⌘ /', 'Show keyboard shortcuts'],
   ]],
   ['In a terminal (the Helm app window)', [
@@ -205,6 +206,9 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['Ctrl/⌘ W', 'Close this terminal'],
     ['Ctrl Tab', 'Next terminal'],
     ['Ctrl Shift Tab', 'Previous terminal'],
+  ]],
+  ['In a screen window', [
+    ['Super Ctrl Esc', 'Give the keys back to this computer (after full keyboard)'],
   ]],
   ['In the new-chat box', [
     ['Ctrl/⌘ Enter', 'Sketch, no folder'],

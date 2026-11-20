@@ -6,6 +6,7 @@ import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
 import { draftChat, onStartingChat, retryChat, sendWhenReady, startingChat, unsendChat } from '../startingChats';
 import { Composer } from './Composer';
+import { SLOW_LINK_MS } from './DeliveryStatus';
 import { EmptyChat, useDockLift } from './EmptyChat';
 import { LimitsLine } from './LimitsLine';
 import { Transcript } from './Transcript';
@@ -93,7 +94,8 @@ export function StartingChatView({ client, env, startId, onBack }: {
           note={!failed && <span className="starting-line" role="status"> · <Icon name="think" size={12} />starting…</span>} />
       )}
       <Transcript turns={turns} status="idle" loaded empty="" onWithdraw={failed || !message || chat.session ? undefined : () => safely(() => unsendChat(startId))} />
-      {message && !failed && <p className="starting-note" role="status"><Icon name="think" size={12} />Sends as soon as {chat.agent} is ready.</p>}
+      {message && !failed && <p className="starting-note" role="status"><Icon name="think" size={12} />{waited >= 3 && (client.latency?.(env.id) ?? 0) >= SLOW_LINK_MS
+        ? `${env.name}'s link is slow. Your message waits to send.` : `Sends as soon as ${chat.agent} is ready.`}</p>}
       {saveError && <p role="alert" className="error">{saveError}</p>}
       <Composer
         draft={draft} setDraft={setDraft} engine={chat.engine} keys={false}

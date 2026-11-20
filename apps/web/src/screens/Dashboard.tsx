@@ -9,6 +9,7 @@ import { bytes, memoryShare, useMachineStats, type MachineStats, type StatsState
 import { whenPhrase } from '../session/limits';
 import { ago } from './common';
 import type { HomeMachine } from './Home';
+import { MachineWakeRow } from '../MachineWakeRow';
 
 /** How often the screen asks each machine for its load. */
 const EVERY_MS = 4000;
@@ -62,7 +63,8 @@ export function DashboardView({ client, envs, machines, onBack, onOpenMachine }:
           <h2 className="section">Machines</h2>
           {machines.length ? (
             <div className="usage-panel">
-              {machines.map((m) => <MachineBlock key={m.env.id} machine={m} stats={stats[m.env.id]} onOpen={() => onOpenMachine(m.env.id)} />)}
+              {machines.map((m) => <MachineBlock key={m.env.id} client={client} envs={envs} machine={m}
+                stats={stats[m.env.id]} onOpen={() => onOpenMachine(m.env.id)} />)}
             </div>
           ) : <div className="empty quiet">You have no machines yet.<div className="note">Run <code>helm add pc</code> on a machine in your network.</div></div>}
         </section>
@@ -89,25 +91,29 @@ function Meter({ label, used, value, detail }: { label: string; used: number | n
   );
 }
 
-function MachineBlock({ machine: { env, running, waiting }, stats, onOpen }: { machine: HomeMachine; stats: StatsState | undefined; onOpen: () => void }) {
+function MachineBlock({ client, envs, machine: { env, running, waiting }, stats, onOpen }: {
+  client: Client; envs: Environment[]; machine: HomeMachine; stats: StatsState | undefined; onOpen: () => void;
+}) {
   const s = typeof stats === 'object' ? stats : null;
   const mem = s ? memoryShare(s) : null;
   const facts = [kindName(env), s && `${s.cpu.cores} cores`, s?.disk && `${bytes(s.disk.free)} disk free`, s && s.uptime > 0 && `on for ${upFor(s.uptime)}`].filter(Boolean);
   return (
     <div className={`usage-account dash-machine${env.online ? '' : ' idle'}`}>
-      <button type="button" className="dash-machine-name" onClick={onOpen} title={`Open ${env.name}`}>
-        <span className={`mdot ${env.online ? 'on' : 'off'}`} />
-        <span className="dash-machine-text">
-          <b>{env.name}</b>
-          <small>
-            {!env.online ? (env.lastSeen ? `Offline · seen ${ago(env.lastSeen)}` : 'Never connected')
-              : running ? `${running} running` : 'Nothing is running'}
-            {waiting > 0 && <span className="attention"> · {waiting} {waiting === 1 ? 'needs' : 'need'} you</span>}
-            {facts.length > 0 && ` · ${facts.join(' · ')}`}
-          </small>
-        </span>
-        <span className="chev"><Icon name="forward" size={15} /></span>
-      </button>
+      <MachineWakeRow client={client} env={env} machines={envs}>
+        <button type="button" className="dash-machine-name" onClick={onOpen} title={`Open ${env.name}`}>
+          <span className={`mdot ${env.online ? 'on' : 'off'}`} />
+          <span className="dash-machine-text">
+            <b>{env.name}</b>
+            <small>
+              {!env.online ? (env.lastSeen ? `Offline · seen ${ago(env.lastSeen)}` : 'Never connected')
+                : running ? `${running} running` : 'Nothing is running'}
+              {waiting > 0 && <span className="attention"> · {waiting} {waiting === 1 ? 'needs' : 'need'} you</span>}
+              {facts.length > 0 && ` · ${facts.join(' · ')}`}
+            </small>
+          </span>
+          <span className="chev"><Icon name="forward" size={15} /></span>
+        </button>
+      </MachineWakeRow>
       {env.online && stats === 'old' && <p className="usage-limits-note">Update Helm on this machine to see its load.</p>}
       {env.online && stats === 'silent' && <p className="usage-limits-note">This machine did not send its load.</p>}
       {env.online && stats === undefined && <p className="usage-limits-note">Reading the load…</p>}

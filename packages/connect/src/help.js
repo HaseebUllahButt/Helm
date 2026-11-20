@@ -36,6 +36,11 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm browser open <url>            browse with your agent in a Chromium-based browser
   helm browser tabs | look <id>      list tabs or read text and numbered controls
   helm machines [--load]            machines in this network; --load adds CPU, memory and GPU use
+  helm wake <machine> [--wait <minutes>]
+                                    Send a wake signal from an online machine on the same local network
+  helm models serve <model> [--machine <name>|auto]  Run an Ollama model on a joined machine
+  helm models list                  Show shared models, their addresses and memory use
+  helm models stop <model> [--machine <name>]        Stop a shared model
   helm redesignate [machine] <kind> what a machine is for: pc or vm
   helm spin <port> [options]         same as helm share; make a public link
   helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
@@ -53,13 +58,31 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm forward <machine> <port>   Open another machine's port on this machine's localhost
   helm forward list | stop <id|port|all>
                                   List or stop forwards (a stop removes both sides)
+  helm screen [status | stop]     Show or stop the screen Helm shows of this machine
   helm sudo [--reason <text>] -- <command>
                                   Run a command as admin after the owner allows it in the app
   helm sudo password | forget     Save or delete this machine's admin password (owner only)
   helm sudo status | stop [chat]  Show saved password and 15-minute allows, or end them
+  helm phone ask "<question>" [--choice <a>]... [--why <text>] [--timeout <min>]
+                                  Ask the owner on the phone and print the answer
+  helm phone photo | location ["<why>"]
+                                  Get a photo (a file path) or the place (latitude longitude)
+  helm phone code ["<site>"]      Get a one-time sign-in code the owner pastes
+  helm phone list | cancel <id|all>
+                                  Show or close open phone requests
   helm schedule list | show <id>  List scheduled tasks on every machine, or show one
   helm schedule pause | resume | remove <id>
                                   Stop a task for a while, start it again, or delete it
+  helm when <event> [options] -- "<task>"
+                                  Start a task when an event occurs
+  helm when list | show <id> | pause <id> | resume <id> | remove <id>
+                                  Find and control triggers
+  helm tools list [--json]         List the named commands on every machine
+  helm tools run <name> [args]     Run a tool on its machine; input, output and exit code pass through
+  helm tools add <name> [--description <text>] [--machine <name>] [--cwd <path>] -- <command>
+                                  Save a command as a tool (default machine: this one)
+  helm tools show | remove <name> [--machine <name>]
+                                  Show a tool's command, or delete it
   helm remove <id>                  Remove a device or machine permanently
   helm leave                        Remove this machine from its network
 
@@ -74,10 +97,16 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm profiles [--refresh]         List agent accounts on this machine
   helm agents [--machine <name>] [--json] [--refresh]
                                     List command line accounts, sign-in status and model IDs
-  helm run -- <command> [args]      Run a command here through Helm
-  helm exec <machine> [--cwd <path>] -- <command> [args]
+  helm keys set <NAME>              Save a shared key from input or a hidden prompt
+  helm keys list [--json]           List key names, use and chat access
+  helm keys remove <NAME>           Remove a shared key
+  helm keys revoke <grant>         Remove a chat's access to a key
+
+  helm run [--key <NAME>] -- <command> [args]   Run a command here through Helm
+  helm exec <machine> [--wake] [--cwd <path>] -- <command> [args]
                                     Run a command on another machine through Helm
     --env NAME=value               Set a command environment value (repeat this flag for more values)
+    --key <NAME>                   Use a shared key for this command. Repeat for more keys.
     --timeout <milliseconds>       Set the command time limit (default 15 minutes)
   helm exec-status <machine> <id> [--wait] [--json]
                                     Read command output after a connection loss
@@ -108,16 +137,28 @@ export const USAGE = `helm - Control your coding agents from anywhere
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
   helm spawn <machine> - <account> <text...>          the same, as a sketch with no folder
     --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
+    --key <NAME>                   Give this chat access to a shared key. Repeat for more keys.
+    --wake                           Wake an offline machine before starting the chat
   helm delegate <account> --model <id> --wait --json -- "<task>"
                                     Start a helper in this folder
-    --machine <name>                Start the helper on another machine
+    --machine <name> [--wake]        Start the helper on another machine
+    --key <NAME>                   Give the helper access to a shared key. Repeat for more keys.
   helm delegate-result <id> [--wait] [--json]   Read the helper result or approval request
+  helm webchat add <account> --site gemini|chatgpt|claude --profile <browser profile>
+                                    Make a signed-in web chat a Helm account that answers questions
+    --model <name>                  Choose this model in the site's model picker
+    --temporary                     Use a temporary chat, so answers do not stay in the site history
+    --machine <name>                Use the browser of that machine
+  helm webchat list [--json]        List web chat accounts
+  helm webchat remove <account>     Remove a web chat account
   helm handoff <machine> [text...]  Move code and this task to another machine
     --handoff-id <id>               Continue a stopped task move with the same ID
-  helm dispatch <machine> [text...]  Send this folder and task when the other machine connects
+  helm dispatch <machine> [--wake] [text...]
+                                    Send this folder and task when the other machine connects
   helm dispatch-status <id>         Show progress for a task sent to another machine
   helm send-task <machine> --account <id> [text...]  Send files, .env and a task directly
     --no-env --allow-skipped --handoff-id <id>       Control .env files, skipped files and retries
+    --key <NAME>                   Give the chat access to a key. Repeat for more keys. Skip .env files.
   helm receive <source> [minutes]   Allow this machine to receive one folder from <source>
   helm send <machine> [folder] --grant <token>
                                   Send a folder with the receiving machine's permission
@@ -179,6 +220,8 @@ Set up this machine
 
 Machines and devices
   machines         List the machines in this network
+  wake             Wake an offline machine
+  models           Serve, list or stop shared local models
   devices          List the devices that control this network
   redesignate      Set what a machine is for: pc or vm
   remove           Remove a device or machine permanently
@@ -187,6 +230,10 @@ Machines and devices
   exec-cancel      Stop a command started earlier
   run              Run a command here through Helm
   sudo             Run a command as admin after the owner allows it
+  schedule, when   List scheduled tasks and set tasks to start on an event
+  tools            Find and run the owner's saved commands
+  phone            Ask the owner's phone: an answer, photo, place or code
+  keys             Save, list and remove shared keys
   copy             Copy files to another machine; resume if stopped
   send, receive    Send a folder with the other machine's permission
   send-task        Send files, .env and a task to another machine
@@ -208,6 +255,7 @@ Chats and agents
   chat             Share a live agent between this terminal and the app
   delegate         Start a helper for this chat
   delegate-result  Read a helper's result
+  webchat          Use a signed-in web chat (Gemini, ChatGPT, Claude.ai) as an account
   say, reply       Send a message to an agent, or answer one
   messages         Read messages in this chat and its helpers
   delete           Delete a chat
@@ -226,6 +274,13 @@ Run helm help <command> for its options, or helm help --all for all of them.
 `;
 
 const DETAILS = {
+  models: `
+  Helm checks free GPU memory on each answering machine by default.
+  Run the model on a Linux machine with Ollama and a systemd user service.
+  Get the owner's approval before you install Ollama. Use helm sudo for admin commands.
+  Use the OpenAI address that Helm prints on this machine.
+  Run helm agents to see the OpenCode and Pi accounts for the model.
+  Stop a model to free its memory. Its download stays on the serving machine.`,
   backup: `
   Keep keys out of command arguments. Use a private key file and keep a separate safe copy.
   Back up a stopped data copy. This command never stops services for you.
@@ -241,7 +296,32 @@ const DETAILS = {
   Exit 1 means a required local check failed. Warnings alone exit 0.
   A home health reply does not prove that its live connection works.`,
 
+  wake: `
+  Run helm machines to list machine names.
+  The target needs a wired network card with Wake-on-LAN on.
+  Keep another Linux machine with Helm online on the same IPv4 network.
+  Run helm doctor on the target to check its settings.
+  Add --wait <minutes> to wait for Helm to connect after sending the signal.
+  Press Ctrl+C to stop waiting.`,
+
+  keys: `
+  Save a key in Settings or from your own terminal. Type it at the hidden
+  prompt or pipe it to helm keys set. Keep the value out of arguments and chats.
+  The first machine in your Helm network stores the keys. Keep it connected.
+  A chat needs the owner's approval the first time it asks to use a key.
+  To give another chat access, add --key NAME to delegate, spawn or send-task.
+  Agent tools save their own output. Helm keeps key values out of those tools.
+  In the chat, use helm run --key NAME -- <command> without interactive input.
+  Helm puts the value in that command's environment and hides it in its output.
+  Use helm exec <machine> --key NAME -- <command> to run it on another machine.
+  Access ends when the chat ends. Use Settings or helm keys revoke to end it sooner.`,
+
+  run: `
+  Repeat --key NAME to use several shared keys. Commands with keys run
+  without interactive input. Run helm keys --help for details.`,
+
   exec: `
+  Add --wake to wake an offline machine and wait up to 5 minutes for it.
   Run pipelines with: helm exec <machine> --cwd <path> -- sh -lc '<script>'.
   Do not rerun a command if Helm cannot confirm that it started.
   Read it with helm exec-status <machine> <id> --wait.
@@ -269,6 +349,7 @@ const DETAILS = {
                      place there, else in that machine's home.
                      Use --cwd for another folder there.
                      Its card and result come back to this chat.
+    --wake           With --machine, wake it and wait up to 5 minutes.
     --model <id>     Pick a model ID, or cheap for the account's small model.
                      Without a choice, use the parent's model on the same CLI.
                      A saved helper model takes priority.
@@ -290,10 +371,15 @@ const DETAILS = {
   Keep finished helpers. The owner reads them under this chat.`,
 
   spawn: `
+  Add --wake to wake an offline machine and wait up to 5 minutes for it.
   Account names (<account>) differ between machines.
   Run helm agents --machine <machine> to list them and their limit left.
   A tool name, such as codex, uses the account with the most limit left.
   For a helper of this chat on another machine, use helm delegate --machine.`,
+
+  dispatch: `
+  Add --wake to wake an offline machine and wait up to 5 minutes for it.
+  Run helm dispatch-status <id> to check a task after Helm accepts it.`,
 
   say: `
   Messages wait for the receiver's next turn.
@@ -323,10 +409,18 @@ const DETAILS = {
   It ends after 3 hours. Use --for <hours>, or --keep only when the owner asks.
   Stop it with helm forward stop <id>. This removes both sides.`,
 
+  screen: `
+  The owner sees and uses a machine's desktop in its own Helm window.
+  Only the owner opens a screen: in the Helm app, press Ctrl+Shift+R
+  and pick a machine. Agents cannot open a screen.
+    helm screen          Show if this machine can show its screen, and if it is on.
+    helm screen stop     Stop it now. It also stops after 15 minutes with no viewer.
+  Linux only for now: X11, or Wayland on niri, sway or Hyprland.
+  The first open builds the screen program. When packages are missing,
+  the app asks the owner to set them up.`,
+
   schedule: `
-  Scheduled tasks send a saved message to a chat at set times,
-  or when their webhook link gets a POST. The app no longer shows them.
-  Use this command to find and control the ones that still exist.
+  Find scheduled tasks and event triggers. The app lists both under Settings, then Schedules.
     --on <machine>   Look only on that machine.
     --json           Print the result as JSON.
     --link           With show: print the full webhook link. It holds a password.
@@ -335,6 +429,46 @@ const DETAILS = {
   A restart of Helm does not pause a task.
   Webhook tasks share one Spin per machine (helm-hooks-...).
   Stop on that Spin pauses every webhook task there.`,
+
+  when: `
+  Start a new chat or run a shell command on an event.
+    file-change --path <path>         Watch one path.
+    file-change --glob "<pattern>"   Watch matching files.
+    command-change --check "<cmd>" --every <minutes>
+                                     Check for a change in output or exit code.
+    webhook                          POST to its private address.
+    chat-finished [--chat <id>]        Watch chats and helpers on this machine.
+    machine-online [--watch-machine <name>]
+                                     Watch other machines come online.
+    --machine <name>                 Pick the machine that runs the task. Default: here.
+    --account <account>              Pick the account for the new chat.
+    --cwd <folder>                    Set the folder on the chosen machine.
+    --name <name>                    Set the name shown in Schedules.
+    --cooldown <seconds>             Set the time between runs. Default: 60 seconds.
+    --run "<command>"                Run a shell command. Read event data from stdin.
+    -- "<task>"                      Start a chat and include the event data.
+  For list and other controls, use --machine to look on one machine.
+  Run helm when show <id> --link to see a webhook address. Keep it private.
+  Reuse an Idempotency-Key header when you retry a POST.
+  Helm skips observed changes during the cool-down or while a task runs.
+  A webhook returns 429 during that time. Try the POST again later.
+  Helm pauses a trigger after three failures in a row and tells the owner.
+  Find the last fire and result in Settings, then Schedules.`,
+  tools: `
+  Tools are commands the owner saved by name on a machine.
+  Any agent on any machine can find and run them.
+  Run helm tools list when you need a capability you do not have.
+    helm tools run <name> [args]   Every word after the name goes to the tool.
+                                   Put helm options before the name:
+                                   --machine <name>  when two machines have it
+                                   --timeout <ms>    default 15 minutes
+  A tool on this machine runs in your folder, with your input as it comes.
+  A tool on another machine runs in its home folder (or its --cwd).
+  There it gets all piped input at once, up to 1 MB.
+  The exit code is the tool's own (124 when it timed out).
+  A tool on an offline machine shows in the list, but cannot run.
+  remove deletes the tool. Its output shows the add command to undo it.
+  Add --json to list or show for JSON.`,
 
   spin: `
   This command runs helm share.
@@ -482,6 +616,27 @@ const DETAILS = {
   If Helm restarts while the command runs, helm sudo says so: check the
   result before you run it again.
   It runs on this machine only; --machine is not supported yet.`,
+
+  webchat: `
+  A web chat account types each question into the site in the owner's
+  browser and returns the answer. It cannot use tools, files or commands.
+  Sign in to the site in that browser profile first.
+  Use it like any account: helm delegate <account> -- "question".
+  A follow-up to the same helper continues the same web conversation.
+  The app lists these accounts with the other accounts.`,
+
+  phone: `
+  The owner sees a card in this chat, in the waiting box and as a
+  notification on the phone and every other controller. Each card says which
+  chat asks and why. The owner can send or refuse.
+  The command waits for the answer: give it a long time limit, or run it in
+  the background. Default wait: 30 min. Helm restarts do not lose it.
+  Prints: ask, the answer text; photo, a file path; location,
+  "<latitude> <longitude>" and the accuracy; code, the code. --json prints
+  the answer as JSON.
+  Exit codes: 0 answered, 1 refused, 2 wrong use, 3 no answer in time,
+  130 closed (Ctrl+C, helm phone cancel, or the chat ended).
+  Use it only for what the owner must give: never ask for passwords.`,
 
   delete: `
   Delete a chat that Helm started, including its card, row and command line copy.

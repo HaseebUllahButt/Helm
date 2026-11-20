@@ -1,0 +1,14 @@
+<!doctype html><title>Gemini</title>
+<button aria-label="Open mode picker" id="picker"><span>Flash</span></button>
+<div id="menu" hidden>
+  <div role="menuitemradio" data-name="Flash"><div>Flash</div><div>Fast answers</div></div>
+  <div role="menuitemradio" data-name="Neon"><div>Neon</div><div>Deep answers</div></div>
+</div>
+<button aria-label="Turn on temporary chat" id="temp">Temporary</button>
+<div id="chat"></div>
+<rich-textarea><div class="ql-editor" contenteditable="true"></div></rich-textarea>
+<button aria-label="Send message" id="send">Send</button>
+<script>window.FAKE = { editor: '.ql-editor', send: '#send', picker: '#picker', tempButton: '#temp',
+  replyTag: 'model-response', reply: '<model-response><message-content data-text></message-content></model-response>',
+  stop: ['aria-label', 'Stop response'], saved: '/gemini/app/', savedPath: '/gemini/app/abc123' };</script>
+<script src="/fake-chat.js"></script>
