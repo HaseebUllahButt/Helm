@@ -163,6 +163,18 @@ export interface Question {
   options: QuestionOption[];
 }
 
+export interface PhoneAsk {
+  type: 'ask' | 'photo' | 'location' | 'code';
+  question?: string;
+  choices?: string[];
+  site?: string;
+  /** The title of the chat that asks. */
+  chat?: string;
+  /** The machine of that chat, where the answer goes. */
+  envId?: string;
+  until?: number;
+}
+
 export interface PermissionOption { id: string; role: 'allow' | 'allow-always' | 'deny' | 'custom'; label: string }
 
 export interface Permission {
@@ -186,6 +198,8 @@ export interface Permission {
   passwordNeeded?: boolean;
   /** The machine of that password, by name. */
   machine?: string;
+  /** A helm phone card (phone.js): what the agent wants from the owner's phone. */
+  phone?: PhoneAsk;
   seq: number;
   /** When the request was raised - "waiting 12m" is computed from it. */
   at?: number;

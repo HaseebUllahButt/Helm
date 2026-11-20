@@ -29,6 +29,7 @@ import { getProfiles } from './profiles.js';
 import { defaultMode } from './modes.js';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { markerDigest } from './bulk-transfer.js';
+import { validToken } from './shared-key-store.js';
 
 const HANDOFFS_FILE = join(HELM_DIR, 'handoffs.json');
 const HANDOFF_ID = /^[a-f0-9]{24}$/;
@@ -74,6 +75,7 @@ export const handoffRequestDigest = (p) => sha256(JSON.stringify({
   ...(p.precopied !== undefined ? { precopied: p.precopied } : {}),
   ...(p.promptEnvelope !== undefined ? { promptEnvelope: p.promptEnvelope } : {}),
   ...(p.returnToSource !== undefined ? { returnToSource: p.returnToSource, includeEnv: p.includeEnv } : {}),
+  ...(p.keyPermit !== undefined ? { keyPermit: p.keyPermit } : {}),
 }));
 
 /** One line of printable text, or null. Same bar the roster holds. */
@@ -178,7 +180,9 @@ export class Handoffs {
       promptEnvelope: p.promptEnvelope,
       returnToSource: p.returnToSource,
       includeEnv: p.includeEnv,
+      keyPermit: p.keyPermit,
     };
+    if (p.keyPermit !== undefined && !validToken(p.keyPermit)) throw new Error('This task needs a shared key grant.');
     if (p.returnToSource !== undefined && (typeof p.returnToSource !== 'boolean' || typeof p.includeEnv !== 'boolean')) throw new Error('invalid task return options');
     if (p.restoreGit !== undefined && typeof p.restoreGit !== 'boolean') throw new Error('invalid restoreGit option');
     if (p.precopied !== undefined && p.precopied !== true) throw new Error('invalid precopied option');
@@ -347,6 +351,7 @@ export class Handoffs {
           });
           record.mode = mode;
         }
+        if (p.keyPermit) await this.sessions.sharedKeys.attach(p.keyPermit, p.sourceMachineId, session);
         record.sessionId = session.id;
         record.status = 'started';
         this.#put(record);

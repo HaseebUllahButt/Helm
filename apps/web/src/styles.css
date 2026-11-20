@@ -1,5 +1,6 @@
 @import '@xterm/xterm/css/xterm.css';
 @import './session/side-dock.css';
+@import './session/phone.css';
 @import 'katex/dist/katex.min.css';
 
 /* Saved visual replies: controls belong to Helm; the page stays isolated. */
@@ -585,6 +586,9 @@ code, pre, kbd { font-family: var(--mono); }
 /* A machine is a place: its name in the display face. */
 .row.machine .rt-text { font-family: var(--display); font-weight: 600; letter-spacing: -0.01em; }
 .row.machine.offline .rt-text { color: var(--text-dim); }
+.machine-wake-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.machine-wake-button { min-height: 44px; padding-inline: 12px; }
+.machine-wake-message { grid-column: 1 / -1; padding: 0 10px 8px; color: var(--text-dim); }
 .sidebar .row.machine.active::after { display: none; }
 
 .mark {
@@ -3137,6 +3141,12 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .link-row button, .link-row .iconbtn { flex: none; width: auto; margin: 0; min-height: 34px; padding: 4px 10px; font-size: var(--t-meta); }
 .danger-text { color: var(--red); }
 .link-add { align-self: flex-start; width: auto; margin: 0; display: inline-flex; align-items: center; gap: 6px; }
+.tools-list .tool-row { gap: 8px; align-items: center; }
+.tool-row .tool-name { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+.tool-row .tool-description { white-space: normal; overflow-wrap: anywhere; }
+.tool-row .tool-command { font-family: var(--mono); font-size: var(--t-micro); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-row button { flex: none; width: auto; margin: 0; min-height: 34px; padding: 4px 10px; font-size: var(--t-meta); }
+.tool-notice { overflow-wrap: anywhere; }
 .link-form { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 .link-form label { display: grid; gap: 4px; font-size: var(--t-micro); color: var(--mutedfg); }
 .link-form .field { margin: 0; }
@@ -4372,3 +4382,9 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
   .ctl.icon { width: 28px; }
   .send { width: 28px; height: 28px; }
 }
+/* A message on its way: its words, then a quiet line that says where it is. */
+.thread-recovery.sending-message .failed-send-text { -webkit-line-clamp: 2; }
+.thread-recovery .sending-note { display: flex; align-items: center; gap: 7px; }
+.sending-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--mutedfg); animation: sending-pulse 1.4s ease-in-out infinite; }
+@keyframes sending-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .sending-dot { animation: none; } }

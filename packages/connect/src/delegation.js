@@ -1,5 +1,6 @@
 import { ENGINES } from './engines.js';
-import { materialize } from './profiles.js';
+import { materialize, loadProfiles } from './profiles.js';
+import { localProfileCatalog } from './local-model-accounts.js';
 import { listModels } from './models.js';
 import { modelPrefs, startPrefs, subagentPrefs, accountKey } from './settings.js';
 import { modesFor, defaultMode } from './modes.js';
@@ -90,7 +91,7 @@ export async function agentCatalog(profiles, statuses, { models = true, credenti
     const spec = materialize(p);
     const engine = ENGINES[p.engine];
     try {
-      const catalog = await listModels(p.engine, spec.env?.[engine.homeEnv] ?? engine.defaultHome,
+      const catalog = localProfileCatalog(p) ?? await listModels(p.engine, spec.env?.[engine.homeEnv] ?? engine.defaultHome,
         spec.env, p.wraps ? { cmd: spec.cmd, args: spec.args } : null);
       const labels = Object.fromEntries((catalog.models ?? []).filter((id) => catalog.labels?.[id])
         .map((id) => [id, catalog.labels[id]]));
@@ -240,8 +241,29 @@ export function sudoNote() {
   return '[Helm admin: When you need admin rights, run helm sudo -- <command> with a long time limit; the owner allows it in the app. Never run sudo yourself, never ask the owner for the password, never read Helm\'s saved password.]';
 }
 
+/**
+ * What Helm adds beyond chats, in one line, so agents look before they build:
+ * the owner's named commands (helm tools), event triggers (helm when), and
+ * what only the owner's phone has (helm phone, phone.js).
+ */
+export function toolsNote() {
+  return '[Helm tools: For a capability you lack, run helm tools list: the owner\'s saved commands. Run one with helm tools run <name> [args]. To start a task on an event, see helm when --help. For an answer, photo, location or SMS code from the owner\'s phone, run helm phone ask|photo|location|code with a long time limit.]';
+}
+
+/**
+ * Only when this machine has web chat accounts (helm webchat): they look
+ * like any account in helm agents, but answer questions only.
+ */
+export function webchatNote(profiles = loadProfiles()?.profiles ?? []) {
+  const names = profiles.filter((p) => p.engine === 'webchat' && !p.disabled).map((p) => p.id);
+  if (!names.length) return '';
+  return `[Helm web chats: The accounts ${names.join(', ')} are signed-in web chats. They only answer questions: no files, tools or commands. Ask with helm delegate <account> --wait -- "question". Put all context into the question. Send follow-ups to the same helper with helm say.]`;
+}
+
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+const sharedKeyNote = '[Helm keys: Agent tools save output. Use helm run --key NAME -- <command> so only the command receives the value. See helm keys --help.]';
+
+const toolNotes = (parentId, engine) => [parentId && helperNote(parentId), delegationNote(engine), usageNote(engine), webchatNote(), pickupNote(), agentMessageNote(), visualNote(), toolsNote(), browserReady() && browserNote(), process.platform !== 'win32' && sudoNote(), sharedKeyNote, writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net, { parentId = null, engine = null } = {}) {
   const machines = Object.values(net?.machines ?? {});
@@ -251,7 +273,7 @@ export function helmBrief(net, { parentId = null, engine = null } = {}) {
     .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
   if (!self?.name || !others.length) return toolNotes(parentId, engine);
-  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}. Reach them through helm (helm exec, helm copy, helm spawn), not SSH: helm help lists every command and helm <command> --help explains one. For an account that only another machine has, use helm delegate --machine <name>. Never rerun a helm exec that may have started; read it with helm exec-status. Links from helm share (spins) end after 3 hours; add --keep only when the owner asks. To show the owner a dev server, run helm forward <port> yourself; send only the localhost link it prints.]
+  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}. Reach them through helm (helm exec, helm copy, helm spawn), not SSH: helm help lists every command and helm <command> --help explains one. Use helm delegate --machine <name> for its accounts. Add --wake to start an offline machine. See shared models with helm models list; use one with helm delegate local-<model> -- "task". Never rerun a helm exec that may have started; read it with helm exec-status. Links from helm share (spins) end after 3 hours; add --keep only when the owner asks. To show the owner a dev server, run helm forward <port> yourself; send only the localhost link it prints.]
 ${toolNotes(parentId, engine)}`;
 }
 

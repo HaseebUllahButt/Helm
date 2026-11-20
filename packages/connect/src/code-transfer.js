@@ -346,6 +346,15 @@ export function sealCodeSnapshot(snapshot, targetCodePubkey, handoffId) {
   };
 }
 
+// Shared keys use the same machine encryption, with a separate packet identity.
+export function openSharedKeyPacket(envelope, id) {
+  if (typeof id !== 'string' || !id.startsWith('shared-key-') || envelope?.data?.length > 2 ** 24) {
+    throw new Error('Invalid shared key packet.');
+  }
+  try { return openEnvelope(envelope, id, null, id.startsWith('shared-key-save-')); }
+  catch { throw new Error('Helm could not open the shared key packet.'); }
+}
+
 export function openTaskPrompt(envelope, handoffId) {
   const task = openEnvelope(envelope, handoffId);
   if (task?.type !== 'task-prompt' || typeof task.prompt !== 'string'
@@ -385,9 +394,10 @@ export function canonicalSnapshot(snapshot) {
   return canonical;
 }
 
-function openEnvelope(envelope, handoffId, privateKey = null) {
+function openEnvelope(envelope, handoffId, privateKey = null, allowUncompressed = false) {
+  const uncompressed = allowUncompressed && envelope?.zip === 'none';
   if (!envelope || envelope.v !== VERSION || envelope.alg !== 'X25519-A256GCM'
-      || envelope.zip !== 'br') {
+      || (!uncompressed && envelope.zip !== 'br')) {
     throw new Error('unsupported code handoff envelope');
   }
   if (envelope.handoffId !== handoffId) throw new Error('code handoff id mismatch');
@@ -400,8 +410,10 @@ function openEnvelope(envelope, handoffId, privateKey = null) {
   const decipher = createDecipheriv('aes-256-gcm', createSecretKey(key), unb64(envelope.iv));
   decipher.setAAD(Buffer.from(`${AAD_PREFIX}${handoffId}`));
   decipher.setAuthTag(unb64(envelope.tag));
-  const packed = Buffer.concat([decipher.update(unb64(envelope.data)), decipher.final()]);
-  const json = brotliDecompressSync(packed, { maxOutputLength: MAX_DECOMPRESSED_BYTES });
+  let packed;
+  try { packed = Buffer.concat([decipher.update(unb64(envelope.data)), decipher.final()]); }
+  catch { throw new Error('Helm could not authenticate the encrypted handoff.'); }
+  const json = uncompressed ? packed : brotliDecompressSync(packed, { maxOutputLength: MAX_DECOMPRESSED_BYTES });
   return JSON.parse(json);
 }
 

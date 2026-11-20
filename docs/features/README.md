@@ -10,6 +10,7 @@ mark.
 |---|---|
 | Chats and the composer: send, queue, stop, modes, keys | [chats.md](chats.md) |
 | Approvals, questions, "Needs you", alerts | [approvals.md](approvals.md) |
+| Phone requests: `helm phone` answers, photos, location, codes | [phone.md](phone.md) |
 | New chat, clone, accounts, models | [new-chat.md](new-chat.md) |
 | Sidebar, shelves, search, rename/archive/delete, brain | [sidebar.md](sidebar.md) |
 | Helpers, subagents, messages between agents | [helpers.md](helpers.md) |
@@ -18,9 +19,10 @@ mark.
 | Browser for chats | [browser.md](browser.md) |
 | Spins: `helm share` public links | [spins.md](spins.md) |
 | Settings, usage, limits, dashboard, updates, connectors | [settings.md](settings.md) |
+| Shared keys and chat access | [shared-keys.md](shared-keys.md) |
 | Rewind: Edit / Branch from here | [rewind.md](rewind.md) |
 | Files, images, voice, visuals | [files-and-visuals.md](files-and-visuals.md) |
-| Git and CI / CD | [git-and-schedules.md](git-and-schedules.md) |
+| Git, CI / CD, schedules and triggers | [git-and-schedules.md](git-and-schedules.md) |
 
 ## Setup without clicks
 

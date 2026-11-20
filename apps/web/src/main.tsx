@@ -9,8 +9,11 @@ import { clearRefreshMarker } from './reload';
 import { blockBrowserKeys } from './browserKeys';
 import { addWindowClose } from './windowClose';
 import { warmModels } from './modelCache';
+import { takeSharedText } from './session/phoneShare';
 
 clearRefreshMarker();
+// A text message shared to the installed app, for a helm phone code card.
+takeSharedText();
 
 // Before the first render, so a light-theme device never flashes dark.
 applyAppearance();

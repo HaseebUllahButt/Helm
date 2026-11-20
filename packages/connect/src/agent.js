@@ -2,7 +2,8 @@ import { StartReceipts } from './start-receipts.js';
 import { assertRestoreReviewed } from './restore-guard.js';
 import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
-import { encodeTunnelFrame, decodeTunnelFrame } from '../../protocol/tunnel-frame.js';
+import { encodeTunnelFrame, decodeTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
+import { FrameLanes, FramePieces, laneKey } from '../../protocol/frame-lanes.js';
 import { createHash } from 'node:crypto';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { hostname, platform, arch, release, homedir } from 'node:os';
@@ -15,6 +16,8 @@ import {
   roster as rosterOf, rosterHash, machineName, NAME_RULE, machineKind,
   MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
+import { wakeState, wakeHash, WAKE_EXEC } from '@helm/protocol/wake-state';
+import { localWakeAdapters, sendWake, wakeExecArgs } from './wake-machine.js';
 import { createRuntime } from './runtime/index.js';
 import { logReader, nativeFeatures } from './log-index-native.js';
 import { BASH_GUARD_MODES } from './pi-settings.js';
@@ -39,10 +42,14 @@ import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub, directCaller } from './peer.js';
 import { allowDirectSignal } from './direct-auth.js';
-import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
+import { LanDiscovery, withHeardAddresses, localSignalRouter } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, describeCaptcha, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, removeChatShares, publicShare, assertShareNameAvailable } from './shares.js';
 import { Forwards, forwardedPorts } from './forwards.js';
+import { LocalModelHost } from './local-model-host.js';
+import { LocalModelAccounts, localProfileCatalog } from './local-model-accounts.js';
+import { LocalModelJobs } from './local-model-jobs.js';
+import { Screens } from './screen.js';
 import { ownerSeenAt } from '@helm/protocol/owner-seen';
 import { publicHosts } from '@helm/protocol/share';
 import { brief, render, summaryLine, readThread, readSnapshot, sessionMatches, snapshotReply, writeSnapshot, mergeSnapshot, fold } from './brain.js';
@@ -72,12 +79,17 @@ import { EVENTS_DIR } from './events.js';
 import { SendEngine } from './send-engine.js';
 import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
+import { Tools } from './tools.js';
 import { ExecutionJobs } from './execution.js';
-import { ensureFastTcp, ensureTcpRecovery } from './network-recovery.js';
+import { ensureFastTcp, ensureLanFirewall, ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionHistory } from './connection-history.js';
 import { createBrowserRoutes } from './browser-routes.js';
 import { AdminRuns } from './sudo.js';
+import { PhoneRequests } from './phone.js';
+import { joinHelmAsks } from './helm-asks.js';
+import { SharedKeys } from './shared-keys.js';
+import { validToken } from './shared-key-store.js';
 import { useDesktopScreen } from './browser-window.js';
 import { useOwnerLogins } from './browser.js';
 import { webBuild } from './web-build.js';
@@ -128,22 +140,26 @@ export function eventLinks(links, kind) {
  * phone that can only reach the VM and a laptop that can only be reached on
  * the LAN still meet, as long as some hub can see both of them.
  */
-function watchLinkProgress(ws) {
+function watchLinkProgress(ws, held = () => 0) {
   let received = ws?._socket?.bytesRead ?? 0;
   const written = () => (ws?._socket?.bytesWritten ?? 0) - (ws?._socket?.writableLength ?? 0);
+  // Large frames this link holds back (frame-lanes.js) count as queued too.
+  const waiting = () => (ws?._socket?.writableLength ?? 0) + held();
   let sent = written();
-  let queued = ws?._socket?.writableLength ?? 0;
+  let queued = waiting();
   return () => {
     const bytes = ws?._socket?.bytesRead ?? 0;
     const outgoing = written();
     const moved = bytes > received || (queued > 0 && outgoing > sent);
-    received = bytes; sent = outgoing; queued = ws?._socket?.writableLength ?? 0;
+    received = bytes; sent = outgoing; queued = waiting();
     return moved;
   };
 }
 
 export class Link {
   #ws = null;
+  /** Small frames first, large ones in pieces (frame-lanes.js). */
+  #out = null;
   #backoff = RECONNECT_MIN;
   #stopped = false;
   #beat = null;
@@ -213,7 +229,7 @@ export class Link {
       this.start();
       return;
     }
-    const progress = watchLinkProgress(this.#ws);
+    const progress = watchLinkProgress(this.#ws, () => this.#out?.queued ?? 0);
     const check = () => {
       if (this.#stopped) return;
       if (progress()) {
@@ -250,7 +266,7 @@ export class Link {
   #heartbeat() {
     clearInterval(this.#beat);
     this.#waiting = false;
-    const progress = watchLinkProgress(this.#ws);
+    const progress = watchLinkProgress(this.#ws, () => this.#out?.queued ?? 0);
     this.#beat = setInterval(() => {
       const flowing = progress();
       // Pings can wait behind a large upload. Keep the link while incoming
@@ -291,12 +307,13 @@ export class Link {
 
   send(t, extra = {}) {
     if (this.#ws?.readyState === WebSocket.OPEN) {
-      this.#ws.send(encodeTunnelFrame({ t, ...extra }, this.binaryTunnel === true));
+      const frame = { t, ...extra };
+      this.#out.send(encodeTunnelFrame(frame, this.binaryTunnel === true), { key: laneKey(frame) });
     }
   }
 
   get tunnelWritable() {
-    return this.#ws?.readyState === WebSocket.OPEN && this.#ws.bufferedAmount < TUNNEL_SOCKET_LIMIT;
+    return this.#ws?.readyState === WebSocket.OPEN && this.#out.bufferedAmount < TUNNEL_SOCKET_LIMIT;
   }
 
   async #open() {
@@ -339,12 +356,17 @@ export class Link {
       `${this.url.replace(/^http/, 'ws')}/ws` +
       `?name=${encodeURIComponent(this.daemon.name)}` +
       `&info=${encodeURIComponent(JSON.stringify(info))}` +
-      '&binaryTunnel=1&watched=1' +
+      '&binaryTunnel=1&watched=1&lanes=1' +
       (isSelf ? '&role=self' : ''),
       { headers: { authorization: `Bearer ${credential}` }, handshakeTimeout: 15_000 }
     );
     this.#ws = ws;
     this.binaryTunnel = false;
+    // Pieces go out only after this hub's welcome says it joins them.
+    this.lanes = false;
+    this.#out = new FrameLanes(ws, { text: () => this.lanes, binary: () => this.lanes && this.binaryTunnel });
+    const parts = new TunnelFrames();
+    const pieces = new FramePieces();
 
     ws.on('open', () => {
       if (!current()) { ws.terminate(); return; }
@@ -359,11 +381,17 @@ export class Link {
     ws.on('message', (raw) => {
       if (!current()) return;
       let msg;
-      try { msg = decodeTunnelFrame(raw); } catch { return; }
-      if (msg?.t === T.WELCOME) this.binaryTunnel = msg.binaryTunnel === 1;
+      try { msg = this.lanes ? parts.decode(raw) : decodeTunnelFrame(raw); } catch { return; }
+      if (msg?.t === T.WELCOME) { this.binaryTunnel = msg.binaryTunnel === 1; this.lanes = msg.lanes === 1; }
       // Data and credit frames also prove the hub is alive. A pong queued
       // behind transfer bytes must not tear down an actively flowing link.
       this.#alive();
+      if (this.lanes) {
+        const whole = pieces.take(msg);
+        if (whole === null) return;
+        if (whole !== undefined) { try { msg = decodeTunnelFrame(whole); } catch { return; } }
+      }
+      if (msg === undefined) return;
       this.daemon.onFrame(this, msg).catch((err) =>
         console.error(`[helm] ${this.url}: ${err?.message || err}`)
       );
@@ -475,6 +503,20 @@ export class Daemon {
       rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 15_000, ...opts }),
       log: (line) => console.error(`[helm] ${line}`),
     });
+    const modelNetwork = () => loadNetwork() ?? this.net;
+    const modelLog = (line) => console.error(`[helm] ${line}`);
+    this.localModels = new LocalModelHost({ network: modelNetwork, forwards: this.forwards, log: modelLog });
+    this.localModelJobs = new LocalModelJobs({ host: this.localModels, log: modelLog });
+    this.localModelAccounts = new LocalModelAccounts({
+      network: modelNetwork, host: this.localModels, forwards: this.forwards, log: modelLog,
+      rpc: (env, method, params, timeout) => hubRpc(modelNetwork(), env, method, params, { timeout, budget: timeout }),
+    });
+    // Remote screens: this machine's desktop for the owner (screen.js).
+    this.screens = new Screens({
+      network: () => loadNetwork() ?? this.net,
+      forwards: this.forwards,
+      log: (line) => console.error(`[helm] ${line}`),
+    });
     this.executions = new ExecutionJobs();
     // Helm's service can start before the desktop; its browser windows find the screen later.
     useDesktopScreen(); useOwnerLogins();
@@ -523,9 +565,16 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    this.sessions.localModelAccounts = this.localModelAccounts;
     // helm sudo: cards Helm asks itself, answered through Sessions.answer.
     this.sudo = new AdminRuns({ sessions: this.sessions, machineName: () => this.name, log: (m) => console.error(`[helm] ${m}`) });
-    this.sessions.helmAsks = this.sudo;
+    // helm phone: the owner's phone gives an agent an answer, a photo, a place or a code.
+    this.phone = new PhoneRequests({ sessions: this.sessions, envId: () => this.id, log: (m) => console.error(`[helm] ${m}`) });
+    // Shared keys (shared-keys.js): the owner allows a chat to use a key on a card.
+    this.sharedKeys = new SharedKeys({ sessions: this.sessions, network: () => loadNetwork() ?? this.net,
+      rpc: (env, method, params, timeout = 25_000) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout }) });
+    this.sessions.helmAsks = joinHelmAsks(this.sudo, this.phone, this.sharedKeys);
+    this.sessions.sharedKeys = this.sharedKeys;
     this.inputDelivery = new InputDelivery(this.sessions, { log: m => console.error(`[helm] ${m}`) });
     this.agentMessages = new AgentMessages({ sessions: this.sessions, delivery: this.inputDelivery, self: this.id,
       rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
@@ -552,6 +601,14 @@ export class Daemon {
     this.githubRepos = createGithubRepos({ noteFolder: fsApi.noteFolder });
     this.sessions.cloner = this.githubRepos;
     try { this.schedules = new Schedules({ sessions: this.sessions, shareName: `helm-hooks-${createHash('sha256').update(this.id).digest('hex').slice(0, 16)}`,
+      triggers: { self: this.id, executions: this.executions, presence: () => this.sendPresence(),
+        machineName: id => {
+          const net = loadNetwork() ?? this.net;
+          return net.revoked?.[id] ? null : net.machines?.[id]?.name;
+        },
+        notify: record => this.broadcastFrame(T.NOTIFY, { payload: { tag: `helm-trigger-${record.id}-${Date.now()}`,
+          title: 'Helm paused a trigger', body: `${record.name} failed three times on ${this.name}. Open Schedules to see the result.`,
+          envId: this.id, view: 'schedules' } }) },
       publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     // A chat in its own worktree is also told where its work goes back to.
@@ -599,6 +656,9 @@ export class Daemon {
       rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
     });
     this.forwards.begin().catch((err) => console.error(`[helm] forwards: ${err.message}`));
+    this.localModels.begin().catch((err) => console.error(`[helm] models: ${err.message}`));
+    this.localModelJobs.begin();
+    this.screens.begin();
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
     // path: a message must not wait on every machine answering. The refresh
@@ -628,7 +688,7 @@ export class Daemon {
       // Logged here: it can fail after new chats were let through.
       .catch((error) => { console.error(`[helm] session recovery: ${error.message}`); throw Object.assign(error, { logged: true }); });
     this.sessionRecovery = Promise.race([resumed, recordsRestored])
-      .then(() => { if (!this.#stopped) { this.inputDelivery.resume(); this.schedules?.start(); this.sessions.startLimitRecovery(); this.chatMoves.start(); } })
+      .then(() => { if (!this.#stopped) { this.inputDelivery.resume(); this.sharedKeys.restore().catch(() => {}); this.schedules?.start(); this.sessions.startLimitRecovery(); this.chatMoves.start(); } })
       .catch((error) => { if (!error?.logged) console.error(`[helm] session recovery: ${error?.message}`); });
     // Caches worth having warm, none worth being late for: they start once
     // the links are up. Re-reading the shell's aliases blocks for a moment,
@@ -648,8 +708,10 @@ export class Daemon {
     }, WARM_DELAY_MS);
     warm.unref?.();
     this.sessions.on('session', (session) => {
+      this.sharedKeys.onSession(session);
       this.#updates.push({ session: wire(session) });
       this.browsers.sessionChanged(session);
+      if (!session.deleted) this.schedules?.observeChat(session);
       if (session.deleted) {
         try { for (const name of removeChatShares(session.id)) console.log(`[helm] [${session.id}] stopped its link ${name}`); }
         catch (error) { console.log(`[helm] [${session.id}] could not stop its links: ${error.message}`); }
@@ -673,6 +735,11 @@ export class Daemon {
     this.sessions.on('event', ({ id, event }) => {
       this.#queueEvent(id, event);
       this.search.note(id, event);
+      if (event?.type === 'turn.done' && !event.local && this.schedules) {
+        let session;
+        try { session = this.sessions.get(id); } catch { /* Chat is gone. */ }
+        if (session) this.schedules.observeChat(session, event);
+      }
       if (event?.type === 'permission.request') {
         this.#notify(id, event);
         // The list only hears "blocked"; this says what about, so the
@@ -724,14 +791,19 @@ export class Daemon {
     this.#keeperTimer.unref?.();
 
     await this.#tick();
-    // Listen for machines on the same network, and say we are here. Started
-    // after the first tick so the roster links go out first; an address
-    // heard here only adds a link, it never replaces one that works.
+    // Listen for machines on the same Wi-Fi, and say we are here. What is
+    // heard only carries direct-link setup (lan-discovery.js); hub links
+    // still use the roster's HTTPS addresses.
+    const directOn = () => loadSettings()?.directRoutes !== false;
     this.lan = new LanDiscovery({
       network: () => loadNetwork() ?? this.net,
-      port: this.port,
       announce: this.advertiseLan,
-      onChange: () => this.#reconcileLinks(),
+      direct: directOn,
+      onPeer: (id) => this.mesh?.direct?.heard(id),
+      onSignal: localSignalRouter({
+        network: () => loadNetwork() ?? this.net, peers: () => this.peers,
+        direct: () => this.mesh?.direct, lan: () => this.lan, enabled: directOn,
+      }),
     });
     this.lan.start().catch((err) => console.error('[helm] local network discovery:', err?.message || err));
     this.networkMonitor = new NetworkMonitor(reason => this.#networkChanged(reason));
@@ -857,6 +929,8 @@ export class Daemon {
     await this.executions.stop();
     await this.browsers?.stop();
     this.sudo?.stop();
+    this.phone?.stop();
+    this.sharedKeys?.stop();
     clearInterval(this.#brainTimer);
     clearTimeout(this.#compactTimer);
     clearTimeout(this.#keeperFirst);
@@ -866,6 +940,9 @@ export class Daemon {
     this.#stopWatchCheckout?.();
     this.cliUpdates?.stop();
     this.taskTransfers?.stop();
+    this.screens?.close();
+    this.localModelJobs.close();
+    await this.localModels.close();
     await this.forwards?.stop();
     await this.sendEngine?.stop();
     this.search?.close();
@@ -926,11 +1003,9 @@ export class Daemon {
     const plan = withHeardAddresses({
       urls, net, self: this.id, mine,
       connected: (url) => !!this.#links.get(url)?.connected,
-      // A hint link that is up stays up, even if an announcement or two was lost.
-      heard: this.lan?.active ? [
-        ...[...this.#links.values()].filter((l) => l.hintFor && l.connected).map((l) => ({ url: l.url, id: l.hintFor })),
-        ...this.lan.list(),
-      ] : [],
+      // The local network no longer names hub addresses: plain HTTP to
+      // another machine is refused. This keeps one link per machine.
+      heard: [],
     });
     this.#hintOwners = plan.owners;
     return plan.urls.filter(secureHubAddress);
@@ -948,14 +1023,18 @@ export class Daemon {
     for (const link of this.#links.values()) {
       if (link.url !== `http://127.0.0.1:${this.port}`) link.recover();
     }
+    // Forget old Wi-Fi addresses first, so the new setups below are not
+    // sent to them; the new network's hellos then resend them (heard()).
+    const lan = this.lan?.networkChanged();
     this.mesh?.networkChanged();
     this.#networkRecoveryAt = -Infinity;
-    await Promise.all([this.lan?.networkChanged(), this.#tick()]);
+    await Promise.all([lan, this.#tick()]);
   }
 
   #networkRecoveryAt = -Infinity;
   networkRecovery = null;
   fastTcp = null;
+  lanFirewall = null;
 
   async #checkNetworkRecovery() {
     if (Date.now() - this.#networkRecoveryAt < SYNC_EVERY_MS) return;
@@ -969,6 +1048,11 @@ export class Daemon {
     this.fastTcp = await ensureFastTcp();
     if (this.fastTcp.repair && (!fast?.repair || fast.reason !== this.fastTcp.reason)) {
       console.warn(`[helm] fast sending needs setup: ${this.fastTcp.reason} Run helm network-repair.`);
+    }
+    const firewall = this.lanFirewall;
+    this.lanFirewall = await ensureLanFirewall();
+    if (this.lanFirewall.repair && !firewall?.repair) {
+      console.warn('[helm] the firewall blocks Helm on the local network. Run helm network-repair.');
     }
   }
 
@@ -989,6 +1073,7 @@ export class Daemon {
       this.broadcastFrame(T.ROSTER, { hash: rosterHash(net) });
       for (const link of this.#links.values()) link.ownerOffered = false;
       this.broadcastFrame(T.OWNER, { hash: ownerHash(loadOwner()) });
+      this.broadcastFrame(T.WAKE_STATE, { hash: wakeHash(wakeState.records(net)) });
       // A direct WebRTC channel is authenticated once, when the hub makes the
       // introduction. Revocation has to reach it too, or a removed phone
       // keeps a working side door to this machine.
@@ -1042,6 +1127,10 @@ export class Daemon {
       sendV2: true,
       signedHub: true,
     });
+    try {
+      const wake = wakeState.publish(this.net, localWakeAdapters().map(adapter => adapter.link));
+      if (wake) this.broadcastFrame(T.WAKE_STATE, { records: [wake] });
+    } catch (error) { console.warn('[helm] Could not save wake details:', error.message); }
   }
 
   /** Addresses that reach this machine, whoever supplied them. */
@@ -1173,7 +1262,10 @@ export class Daemon {
     // reconcile tick: this is how a hub learns our addresses, and how a
     // revocation made while it was offline reaches it.
     const net = loadNetwork();
-    if (net) link.send(T.ROSTER, { roster: rosterOf(net) });
+    if (net) {
+      link.send(T.ROSTER, { roster: rosterOf(net) });
+      link.send(T.WAKE_STATE, { records: Object.values(wakeState.records(net)) });
+    }
     link.send(T.OWNER, { hash: ownerHash(loadOwner()) });
     if (!local) this.mesh?.up(link);
     // One way into each machine's hub: whichever of a heard address and the
@@ -1265,7 +1357,15 @@ export class Daemon {
     // Direct channels to other machines, with the hubs as the backup. Off
     // with `"directRoutes": false` in ~/.helm/config.json.
     this.mesh = new HubMesh(loadNetwork, hub.meshChanged, hub.meshEvent, hub.meshSignal,
-      { direct: loadSettings()?.directRoutes === false ? false : { enabled: () => loadSettings()?.directRoutes !== false } });
+      { direct: loadSettings()?.directRoutes === false ? false : {
+        enabled: () => loadSettings()?.directRoutes !== false,
+        // The same Wi-Fi carries the setup too, when that machine was heard there.
+        local: {
+          signal: (env, peer, payload) => this.lan?.signal(env, 'dial', peer, payload) ?? null,
+          ready: (env) => !!this.lan?.ready(env),
+          where: (env) => this.lan?.where(env) ?? null,
+        },
+      } });
     hub.attachMesh(this.mesh);
   }
 
@@ -1339,7 +1439,7 @@ export class Daemon {
     const { id: _id, machine, callerThreadId: _thread, ...ask } = p;
     let reply;
     try {
-      reply = await hubRpc(net, machine, M.SESSION_DELEGATE, { ...ask, parentId: parent.id, parentMachine: this.id,
+      reply = await hubRpc(net, machine, ask.keyPermit ? 'keys.delegate' : M.SESSION_DELEGATE, { ...ask, parentId: parent.id, parentMachine: this.id,
         parent: { mode: parent.mode ?? undefined, engine: parent.engine, model: parent.engineModel || parent.model || undefined,
           cwd: parent.cwd ?? undefined, home: homedir(), generation: parent.stopGeneration ?? 0 } }, { timeout: 65_000 });
     } catch (error) {
@@ -1468,10 +1568,12 @@ export class Daemon {
       home: homedir(),
       precopiedHandoff: true,
       agentMessages: true,
+      sharedKeys: true,
       // A new helper task can carry pasted pictures and files.
       helperAttachments: true,
       // Runs helpers for chats on other machines (helm delegate --machine).
       remoteHelpers: true,
+      wakeSender: platform() === 'linux',
       sendV2: true,
       // Answers requests from other machines over a direct channel, checking
       // each one as a hub would (direct-mesh.js). Older machines leave this
@@ -1606,6 +1708,24 @@ export class Daemon {
           link.offered = true;
           link.send(T.ROSTER, { roster: rosterOf(net) });
         }
+        return;
+      }
+
+      case T.WAKE_STATE: {
+        const net = loadNetwork();
+        if (!net || net.revoked?.[net.self]) return;
+        try {
+          const changed = wakeState.merge(net, msg.records);
+          const records = wakeState.records(net);
+          if (changed) {
+            for (const other of this.live) {
+              if (other !== link) other.send(T.WAKE_STATE, { records: Object.values(records) });
+            }
+          }
+          if (msg.hash && wakeHash(records) !== msg.hash) {
+            link.send(T.WAKE_STATE, { records: Object.values(records) });
+          }
+        } catch (error) { console.warn('[helm] Could not save wake details:', error.message); }
         return;
       }
 
@@ -1832,18 +1952,58 @@ export class Daemon {
   async dispatch(method, p, caller) {
     if (method.startsWith('browser.')) return this.browsers.dispatch(method, p);
     // Admin commands: only this machine's own helm and the owner's devices.
+    // A screen shows and drives the whole desktop: the owner only.
+    if (method.startsWith('screen.')) {
+      if (!this.#selfOrOwner(caller)) throw new Error('Only this machine and the owner\'s devices can open its screen.');
+      if (method === M.SCREEN_STATUS) return this.screens.status();
+      if (method === M.SCREEN_SETUP) {
+        // Admin rights with no card: only a press of Set up on the owner's
+        // own device, never this machine's helm command (an agent's).
+        const net = loadNetwork() ?? this.net;
+        if (!net.devices?.[caller] || net.revoked?.[caller]) throw new Error('Set up a screen from the Helm app: open the screen menu (Ctrl+Shift+R) and press Set up.');
+        return this.screens.setup();
+      }
+      if (method === M.SCREEN_START) return this.screens.start({ withoutKeys: p?.withoutKeys === true });
+      if (method === M.SCREEN_STOP) return this.screens.stop();
+      if (method === M.SCREEN_WINDOW) return this.screens.window(p);
+      throw new Error(`unknown method: ${method}`);
+    }
     if (method.startsWith('sudo.')) {
       if (!this.sudo) throw new Error('Helm is starting. Try again.');
       return this.sudo.dispatch(method, p, { trusted: this.#selfOrOwner(caller) });
     }
+    if (method.startsWith('phone.')) {
+      if (!this.phone) throw new Error('Helm is starting. Try again.');
+      return this.phone.dispatch(method, p, { trusted: this.#selfOrOwner(caller) });
+    }
+    if (method.startsWith('keys.') && !['keys.exec', 'keys.start', 'keys.delegate'].includes(method)) {
+      await this.sessionRecovery;
+      return this.sharedKeys.dispatch(method, p, caller);
+    }
+    // A paired machine can run work. Only the owner's app can approve access.
+    if ([M.SESSION_ANSWER, 'session.answer-deliver'].includes(method) && this.sharedKeys?.owns(p.requestId)) {
+      const net = loadNetwork() ?? this.net;
+      if (!caller || !net.devices?.[caller] || net.revoked?.[caller]) throw new Error('Approve shared keys in the Helm app.');
+    }
     switch (method) {
-      case M.EXEC_START:
+      case 'keys.exec':
+      case M.EXEC_START: {
         if (p.sessionId && ['plan', 'readonly', 'read'].includes(this.sessions.get(p.sessionId).mode)) {
           throw new Error('a read-only session cannot start managed commands');
         }
-        return this.executions.start(p, caller ?? this.id);
+        if (method === 'keys.exec') {
+          const source = this.#pairedCaller(caller);
+          if (!validToken(p.keyPermit) || p.keyPermit !== p.id) throw new Error('This command needs a shared key grant.');
+          const keys = await this.sharedKeys.claimCommand(p.keyPermit, source);
+          return this.executions.start(p, source, { keys });
+        }
+        return this.executions.start(p.argv?.[0] === WAKE_EXEC ? { ...p, argv: wakeExecArgs(p.argv) } : p, caller ?? this.id);
+      }
       case M.EXEC_READ: return this.executions.read(p, caller ?? this.id);
       case M.EXEC_CANCEL: return this.executions.cancel(p, caller ?? this.id);
+      case M.MACHINE_WAKE:
+        if (!this.#selfOrOwner(caller)) throw new Error("Wake a machine from the owner's app or with helm wake.");
+        return sendWake(p.target);
       case M.ENV_INFO:
         return { ...(await this.describe()), name: this.name, web: webBuild() };
 
@@ -2012,6 +2172,16 @@ export class Daemon {
       case M.FORWARD_REMOVE:
         return this.forwards.remove(String(p.id ?? ''), { notify: p.notify === true });
 
+      case M.LOCAL_MODELS_CATALOG: return this.localModels.catalog();
+      case M.LOCAL_MODELS_LIST: return this.localModelJobs.list();
+      case M.LOCAL_MODELS_WORK:
+        this.#pairedCaller(caller);
+        return this.localModelJobs.submit(p);
+      case M.LOCAL_MODELS_JOB: return this.localModelJobs.read(p.id);
+      case M.LOCAL_MODELS_OPEN: return this.localModels.open(this.#pairedCaller(caller), p.generation);
+      case M.LOCAL_MODELS_ENDPOINT:
+        if (caller !== this.id) throw new Error('Open the model address from this machine.');
+        return { url: await this.localModelAccounts.endpoint(p.host) };
 
       case M.FS_LIST:   return fsApi.list(p.path);
       case M.FS_ROOTS:  return fsApi.roots();
@@ -2083,7 +2253,7 @@ export class Daemon {
           : await currentProfiles();
         // Offer only accounts that can sign in: a profile whose CLI says it is
         // signed out is left out until it isn't (auth.js).
-        const profiles = await usableProfiles(found, { refresh: !!p.refresh });
+        const profiles = await usableProfiles([...found, ...await this.localModelAccounts.sync(found, { fresh: !!p.refresh })], { refresh: !!p.refresh });
         // Each profile carries its account key and model prefs, so the app
         // groups aliases and renders the picker filter with no extra call.
         const cfg = loadSettings();
@@ -2096,7 +2266,9 @@ export class Daemon {
       }
 
       case M.AGENT_LIST: {
-        const profiles = p.refresh ? (await refreshProfiles()).profiles : await currentProfiles();
+        const found = p.refresh ? (await refreshProfiles()).profiles : await currentProfiles();
+        const local = p.localModels === false ? [] : await this.localModelAccounts.sync(found, { fresh: !!p.refresh || p.localModels === true });
+        const profiles = [...found, ...local];
         const statuses = await authStatuses(profiles, { refresh: !!p.refresh });
         this.cliAgents = markShown(await agentCatalog(profiles, statuses, { models: p.models !== false, credentials: true }),
           profiles, pickerPrefs().hidden);
@@ -2164,7 +2336,7 @@ export class Daemon {
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
         const engine = ENGINES[profile.engine];
         const spec = materialize(profile);
-        const catalog = await listModels(
+        const catalog = localProfileCatalog(profile) ?? await listModels(
           profile.engine,
           spec.env?.[engine?.homeEnv] ?? engine?.defaultHome,
           spec.env,
@@ -2174,7 +2346,7 @@ export class Daemon {
         // A live agent reports the pickers it actually has - real display
         // names, the levels this session offers - which beats what the CLI
         // can print. The printed list is the fallback for a cold session.
-        const live = p.id ? this.sessions.catalog(p.id) : null;
+        const live = p.id && !localProfileCatalog(profile) ? this.sessions.catalog(p.id) : null;
         // What the static list claims beyond the live picker is demoted, not
         // deleted: the printed catalogue names rows `set_config_option` then
         // refuses (devin's `models list` shows ~600 uids; the session accepts
@@ -2259,18 +2431,26 @@ export class Daemon {
       // Only the keeper starts a hidden helper; one asked for from outside is
       // always a card in its chat, where the owner can see it. A helper with
       // no chat had no card and no one to read its result.
+      case 'keys.delegate':
       case M.SESSION_DELEGATE: {
+        const { keyPermit, ...request } = p;
+        p = request;
+        if (method === 'keys.delegate') {
+          this.#pairedCaller(caller);
+          if (!validToken(keyPermit)) throw new Error('This helper needs a shared key grant.');
+          p.keyPermit = keyPermit;
+        }
         // Another machine's chat asks for a helper here. The asking machine
         // is the one the network says sent it, never one named in the request.
         if (p?.parentMachine !== undefined) {
           const remoteParent = this.#remoteParent(p, caller);
           const { id: _id, machine: _machine, parent: _parent, parentMachine: _pm, ...ask } = p;
-          return this.sessions.delegate({ ...ask, remoteParent, hidden: false, tour: false });
+          return this.sessions.delegate({ ...ask, keySource: caller, remoteParent, hidden: false, tour: false });
         }
         if (!p?.id) throw new Error('A helper needs the chat that starts it. To start work on another machine, use helm spawn.');
         if (p.machine && p.machine !== this.id) return this.#delegateAway(p);
         const { machine: _machine, ...ask } = p;
-        return this.sessions.delegate({ ...ask, hidden: false, tour: false });
+        return this.sessions.delegate({ ...ask, keySource: caller, hidden: false, tour: false });
       }
       case M.SESSION_HELPER_STATE:
         await this.sessionRecovery;
@@ -2299,9 +2479,15 @@ export class Daemon {
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
       case M.SESSION_NATIVE_AGENT: return this.sessions.nativeAgent(p.id, p.agentId, { full: p.full === true, limit: p.limit });
       case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);
+      case 'keys.start':
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
-        const { originHandoffId: _originHandoffId, delegation: _delegation, reservedSessionId: _reservedSessionId, attach, ...start } = p;
+        const { originHandoffId: _originHandoffId, delegation: _delegation, reservedSessionId: _reservedSessionId, keyPermit, keySource: _keySource, attach, ...start } = p;
+        if (method === 'keys.start') {
+          start.keySource = this.#pairedCaller(caller);
+          if (!validToken(keyPermit)) throw new Error('This chat needs a shared key grant.');
+          start.keyPermit = keyPermit;
+        }
         await this.sessionRecovery;
         this.startReceipts ??= new StartReceipts(this.sessions);
         const session = await this.startReceipts.start({ ...start, quick: start.quick === true, size: attach ?? null }, caller);
@@ -2396,10 +2582,14 @@ export class Daemon {
       case M.SCHEDULE_DELETE:
       case M.SCHEDULE_RUN:
         if (!this.schedules) throw new Error('Schedules could not load on this machine.');
-        if (method === M.SCHEDULE_LIST) return this.schedules.list(p.sessionId);
+        if (method === M.SCHEDULE_LIST) return this.schedules.list(p.sessionId, p.includeLinks !== false);
         if (method === M.SCHEDULE_SAVE) return this.schedules.save(p);
         if (method === M.SCHEDULE_DELETE) return this.schedules.remove(p.id);
         return this.schedules.run(p.id);
+      // The tool registry: this machine's named commands (helm tools).
+      case M.TOOL_LIST: return (this.tools ??= new Tools()).dispatchList({ seen: p.seen === true });
+      case M.TOOL_SAVE: return (this.tools ??= new Tools()).save(p);
+      case M.TOOL_REMOVE: return (this.tools ??= new Tools()).remove(String(p.name ?? ''));
       case M.SESSION_NOTIFY:   return this.sessions.setNotifyDone(p.id, p.on !== false);
       case M.SESSION_CONTROL: return this.sessions.control(p.id, p.kind);
       case M.SESSION_MODE:    return this.sessions.setMode(p.id, p.mode);
@@ -2551,6 +2741,9 @@ export class Daemon {
         return this.copyReceiver.sendReceiver.status(p.jobId, caller);
       }
       case M.TASK_SEND:
+        if (p.keyPermit !== undefined && (!validToken(p.keyPermit) || caller !== this.id)) {
+          throw new Error('This task needs a shared key grant from this machine.');
+        }
         return this.taskTransfers.send(p, caller);
       case M.TASK_COLLECT:
         return this.handoffs.collect(p.handoffId, caller);

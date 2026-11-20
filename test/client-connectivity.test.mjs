@@ -1552,3 +1552,48 @@ test('the @ list comes from the chat list the device holds, with no request', as
   assert.equal(lists().length, 1);
   h.client.close();
 });
+
+test('a message to a removed chat ends as a failure, and Retry sends it once under a new number', async () => {
+  const h = harness({ delays: { 'https://good/api/action': Infinity } }); h.start(); await h.advance(200);
+  const actionId = 'c'.repeat(32);
+  const done = h.client.input('pc', { id: 'chat', data: 'keep me' }, 120000, actionId).catch(error => error);
+  await h.advance(10);
+  const first = h.sockets[0].frames.find(frame => frame.method === 'session.deliver');
+  h.sockets[0].message({ t: 'rpcResult', id: first.id, ok: false, error: { message: 'unknown session: chat' } });
+  // The web backup for the same send is still waiting; let it run out.
+  await h.advance(11000);
+  const error = await done;
+  assert.equal(error.deliveryRejected, true);
+  assert.equal(h.client.pendingActions().length, 0);
+  assert.equal(h.client.failedActions().length, 1);
+  assert.equal(h.client.holdsDelivery('pc', 'chat'), true, 'failed words still belong to the chat');
+  assert.equal(h.client.holdsDelivery('pc', 'other'), false);
+  const sent = h.sockets[0].frames.filter(frame => frame.method === 'session.deliver').length;
+  const retry = h.client.retryFailedAction(actionId);
+  await h.advance(10);
+  assert.equal(h.client.failedActions().length, 0);
+  assert.equal(h.client.pendingActions().length, 1, 'the new send is saved before it goes');
+  const frames = h.sockets[0].frames.filter(frame => frame.method === 'session.deliver');
+  assert.equal(frames.length, sent + 1);
+  const again = frames.at(-1);
+  assert.notEqual(again.params.messageId, actionId);
+  assert.equal(again.params.data, 'keep me');
+  h.sockets[0].message({ t: 'rpcResult', id: again.id, ok: true, result: { ok: true } });
+  await retry;
+  assert.equal(h.client.holdsDelivery('pc', 'chat'), false);
+  h.client.close();
+});
+
+test('resuming every unconfirmed send skips machines that are offline', async () => {
+  const h = harness({ delays: { 'https://good/api/action': Infinity } }); h.start(); await h.advance(200);
+  for (const [env, letter] of [['pc', 'd'], ['away', 'e']]) {
+    const actionId = letter.repeat(32);
+    h.client.saveAction({ env, method: 'session.deliver', actionId, started: true, savedAt: 1,
+      params: { id: 'chat', data: 'later', messageId: actionId } });
+  }
+  void h.client.resumeAllActions(env => env === 'pc');
+  await h.advance(10);
+  const checks = h.sockets[0].frames.filter(frame => frame.method === 'session.action-status');
+  assert.deepEqual(checks.map(frame => frame.env), ['pc'], 'a saved send asks for its receipt before it sends again');
+  h.client.close();
+});

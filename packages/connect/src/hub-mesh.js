@@ -327,13 +327,16 @@ export class HubMesh {
     }
     const hub = this.estimate(link, env);
     const settled = this.now() - state.since >= SWITCH_HOLD_MS;
-    if (hub?.known && settled) {
+    if (hub && settled) {
       const faster = (a, b) => a.ms < b.ms * SWITCH_RATIO && b.ms - a.ms > SWITCH_MIN_GAIN_MS;
+      // A hub probe still out has taken at least that long. So a channel
+      // timed at 7ms wins at once over a hub that has not answered in 50ms,
+      // instead of waiting the 8 s a slow hub takes to answer at all.
       if (!state.on && faster(direct, hub)) {
         this.directUse.set(env, { on: true, since: this.now() });
         return true;
       }
-      if (state.on && faster(hub, direct)) {
+      if (state.on && hub.known && faster(hub, direct)) {
         this.directUse.set(env, { on: false, since: this.now() });
         return false;
       }
@@ -507,8 +510,10 @@ export function routeLines(report) {
   });
   const lan = report.lan;
   const names = new Map((report.machines ?? []).map((m) => [m.env, m.name]));
+  // Old machines report heard hub addresses as `url`.
+  const where = (h) => h.address ?? h.url;
   lines.push(lan?.on
-    ? `  local network: listening${lan.heard?.length ? `; heard ${lan.heard.map((h) => `${names.get(h.id) ?? h.id} at ${h.url}`).join(', ')}` : ', nobody heard yet'}`
-    : `  local network: off${lan?.reason ? ` (${lan.reason})` : ''}`);
+    ? `  local network finding: on; ${lan.heard?.length ? `heard ${lan.heard.map((h) => `${names.get(h.id) ?? h.id} at ${where(h)}`).join(', ')}` : 'no machine heard yet'}`
+    : `  local network finding: off${lan?.reason ? ` (${lan.reason})` : ''}`);
   return lines;
 }

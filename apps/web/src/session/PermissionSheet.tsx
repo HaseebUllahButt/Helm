@@ -5,6 +5,7 @@ import { useNow, waitingSince } from '../useNow';
 import type { Decision, Permission, Question } from './types';
 import { Icon } from '../Icon';
 import { errorMessage } from '../errors';
+import { PhoneSheet } from './PhoneSheet';
 
 /**
  * The agent stopped to ask. This is the whole reason helm exists, so the
@@ -63,6 +64,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy: answering, vari
   const busy = answering || saving;
   const wantsPassword = !!p.passwordNeeded && !!savePassword;
   const [note, setNote] = useState('');
+  const takesNote = !p.passwordNeeded && p.tool !== 'keys';
   // "Edit it, then allow" - for the kinds the driver said take an updated
   // input (a command, a plan). The textarea starts on what the agent asked,
   // and the button says what actually happens: allow *this* version.
@@ -71,7 +73,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy: answering, vari
   const [noting, setNoting] = useState(false);
   const now = useNow();
   const send = (option: Decision['option'], updatedInput?: any) =>
-    onAnswer({ option, ...(note.trim() && !p.passwordNeeded ? { message: note.trim() } : {}), ...(updatedInput ? { updatedInput } : {}) });
+    onAnswer({ option, ...(note.trim() && takesNote ? { message: note.trim() } : {}), ...(updatedInput ? { updatedInput } : {}) });
   const answer = async (option: Decision['option'], updatedInput?: any) => {
     if (!wantsPassword || option === 'deny') return send(option, updatedInput);
     if (!password || saving) return;
@@ -85,6 +87,8 @@ export function PermissionSheet({ permission: p, onAnswer, busy: answering, vari
   const noPassword = wantsPassword && !password;
 
   const banner = variant === 'banner';
+  // helm phone: an answer, photo, location or code, sent from its own card.
+  if (p.phone) return <PhoneSheet permission={p} variant={variant} />;
   if (p.kind === 'question') return <QuestionSheet permission={p} onAnswer={onAnswer} busy={busy} variant={variant} onHandle={onHandle} />;
 
   const allow = p.options.find((o) => o.role === 'allow');
@@ -120,7 +124,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy: answering, vari
         <>
           <div className="sheet-head">
             <i className="sdot blocked" />
-            <span className="ask-kind">{ASK_LABEL[p.kind]}</span>
+            <span className="ask-kind">{p.tool === 'keys' ? 'Shared key approval' : ASK_LABEL[p.kind]}</span>
             {p.tool && p.kind !== 'plan' && p.kind !== 'command' && p.tool.toLowerCase() !== p.kind && <span className="tag">{p.tool}</span>}
             {p.parentId && <span className="tag">Helper</span>}
             {p.at && <span className="q-wait">{waitingSince(p.at, now)}</span>}
@@ -169,7 +173,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy: answering, vari
       )}
       {/* On the card the extras are one quiet row of links; the note box
           opens when asked for, since the composer below takes a reply too. */}
-      {(editable || banner) && !wantsPassword && (
+      {(editable || banner) && takesNote && (
         <div className="sheet-links">
           {editable && !editing && (
             <button className="sheet-editlink" onClick={() => { setEdited(original); setEditing(true); }}>
@@ -186,13 +190,13 @@ export function PermissionSheet({ permission: p, onAnswer, busy: answering, vari
       )}
       {/* "No, do it differently" is the most common answer to a permission
           prompt - every denial takes a reason, not only plans. */}
-      {(!banner || noting) && !wantsPassword && (
+      {(!banner || noting) && takesNote && (
         <input
           className="sheet-note" value={note} onChange={(e) => setNote(e.target.value)} autoFocus={banner}
           placeholder={p.kind === 'plan' ? 'What should change? (optional)' : 'Add a note (optional)'}
         />
       )}
-      {note.trim() && <p className="note">{p.ownLabels ? 'The agent gets your note with your answer.' : 'Approve lets this step run before the agent reads your note. Decline to request a change.'}</p>}
+      {takesNote && note.trim() && <p className="note">{p.ownLabels ? 'The agent gets your note with your answer.' : 'Approve lets this step run before the agent reads your note. Decline to request a change.'}</p>}
       {/* Built in the order it is seen, so Tab walks the buttons the way the
           eye does. A prompt whose safe answer is "no" leads with Deny; it
           used to get there with row-reverse, which left Allow first in the

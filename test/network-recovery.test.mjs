@@ -213,3 +213,44 @@ test('a congestion control chosen in sysctl files is found, but not Helm\'s own'
   contents.set('/etc/sysctl.d/99-admin.conf', 'net/ipv4/tcp_congestion_control=htcp # chosen');
   assert.equal(await configuredCongestion(options), 'htcp');
 });
+
+test('the ufw rules for the local network are found missing only when ufw is on', async () => {
+  const { missingLanRules } = await import('../packages/connect/src/network-recovery.js');
+  assert.equal(missingLanRules('ENABLED=no', '', ['192.168.1.9']), null);
+  assert.equal(missingLanRules('', '', ['192.168.1.9']), null);
+  const none = missingLanRules('ENABLED=yes', '### tuple ### allow tcp 8787 0.0.0.0/0 any 192.168.1.0/24 in', ['192.168.1.9', '100.80.16.79']);
+  assert.deepEqual(none.map(({ port, range }) => `${port} ${range}`), ['8787 192.168.0.0/16', '44301:44332 192.168.0.0/16']);
+  const rules = [
+    '### tuple ### allow udp 8787 0.0.0.0/0 any 192.168.1.0/24 in',
+    '### tuple ### allow udp 44301:44332 0.0.0.0/0 any 0.0.0.0/0 in comment=48',
+  ].join('\n');
+  assert.deepEqual(missingLanRules('ENABLED=yes', rules, ['192.168.1.9']), []);
+  // A rule for another subnet does not open this one; a rule for everyone does.
+  assert.deepEqual(missingLanRules('ENABLED=yes', rules, ['10.0.0.5']).map(({ port, range }) => `${port} ${range}`), ['8787 10.0.0.0/8']);
+});
+
+test('the firewall repair runs ufw once per missing rule and reports what is still closed', async () => {
+  const { ensureLanFirewall } = await import('../packages/connect/src/network-recovery.js');
+  let rules = '';
+  const calls = [];
+  const read = async (path) => (path.endsWith('ufw.conf') ? 'ENABLED=yes\n' : rules);
+  const run = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    const at = args.indexOf('port');
+    rules += `### tuple ### allow udp ${args[at + 1]} 0.0.0.0/0 any ${args[args.indexOf('from') + 1]} in\n`;
+  };
+  const env = {};
+  const status = await ensureLanFirewall({ os: 'linux', env, uid: 1000, read, run, addresses: ['192.168.1.9'] });
+  assert.deepEqual(status, { supported: true, missing: [] });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].slice(0, 3), ['sudo', '-n', 'ufw']);
+  assert.ok(calls[0].includes('192.168.0.0/16') && calls[0].includes('8787'));
+  assert.equal((await ensureLanFirewall({ os: 'linux', env, uid: 1000, read, run, addresses: ['192.168.1.9'] })).missing.length, 0);
+  assert.equal(calls.length, 2, 'nothing to do the second time');
+
+  const failed = await ensureLanFirewall({ os: 'linux', env, uid: 1000, read: async (path) => (path.endsWith('ufw.conf') ? 'ENABLED=yes' : ''),
+    run: async () => { throw Object.assign(new Error('x'), { stderr: 'sudo: a password is required' }); }, addresses: ['10.1.2.3'] });
+  assert.equal(failed.repair, 'helm network-repair');
+  assert.match(failed.reason, /password/);
+  assert.equal(failed.missing.length, 2);
+});

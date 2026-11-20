@@ -269,6 +269,19 @@ export const ENGINES = {
       nonInteractiveSub: ['login', 'auth'],
     },
   },
+  webchat: {
+    id: 'webchat',
+    label: 'Web chat',
+    // A signed-in web chat in the owner's browser (helm webchat add). No
+    // program to find: each account carries its site and browser profile in
+    // its environment, and this variable names the account.
+    bin: null,
+    homeEnv: 'HELM_WEBCHAT_HOME',
+    defaultHome: '~/.helm/webchat',
+    // It only answers: no tools, no files, no approvals (drivers/webchat.js).
+    answersOnly: true,
+    driver: 'webchat',
+  },
   shell: {
     id: 'shell',
     label: 'Shell',

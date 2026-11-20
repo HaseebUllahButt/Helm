@@ -11,6 +11,7 @@ import { startSummary } from './common';
 import { Notifications, InstallPwa } from './Notifications';
 import type { MainView } from '../App';
 import { ConnectionCheck } from '../ConnectionCheck';
+import { SharedKeys } from '../SharedKeys';
 
 const AppearanceSettings = lazy(() => import('../AppearanceSettings').then((m) => ({ default: m.AppearanceSettings })));
 
@@ -52,6 +53,14 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
             <span className="grow"><span className="rt">Spins</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
+          <button className="row" onClick={() => onOpen({ kind: 'schedules' })}>
+            <span className="grow"><span className="rt">Schedules</span></span>
+            <span className="chev"><Icon name="forward" size={15} /></span>
+          </button>
+          <button className="row" onClick={() => onOpen({ kind: 'tools' })}>
+            <span className="grow"><span className="rt">Tools</span></span>
+            <span className="chev"><Icon name="forward" size={15} /></span>
+          </button>
           <button className="row" onClick={() => onOpen({ kind: 'usage' })}>
             <span className="grow"><span className="rt">Usage & cost</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
@@ -65,6 +74,8 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
         </div>
+
+        <SharedKeys client={client} envs={envs} />
 
         <div className="section">Speech input</div>
         <DictationKey client={client} envs={envs} onSaved={onVoice} />

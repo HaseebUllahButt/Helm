@@ -9,12 +9,13 @@ export function limitLine(windows, now = Date.now()) {
 }
 
 /** Injected RPC keeps argument and result behavior testable without a live hub. */
-export async function runAgentCommand(command, args, { rpc, self, machine: findMachine = (name) => name,
+export async function runAgentCommand(command, args, { rpc, self, wake, machine: findMachine = (name) => name,
   parentId = process.env.HELM_SESSION_ID, callerThreadId = process.env.CODEX_THREAD_ID,
-  ownAccount = process.env.HELM_PROFILE_ID, write = console.log, warn = console.error, sleep = pause } = {}) {
+  authorize, ownAccount = process.env.HELM_PROFILE_ID, write = console.log, warn = console.error, sleep = pause } = {}) {
   const { options, words } = parseAgentArgs(args, {
     values: command === 'delegate' ? ['model', 'mode', 'effort', 'parent', 'cwd', 'timeout', 'machine'] : command === 'delegate-result' ? ['timeout'] : ['machine'],
-    switches: command === 'agents' ? ['json', 'refresh'] : command === 'delegate' ? ['wait', 'json', 'worktree'] : ['wait', 'json'],
+    repeat: command === 'delegate' ? ['key'] : [],
+    switches: command === 'agents' ? ['json', 'refresh'] : command === 'delegate' ? ['wait', 'json', 'worktree', 'wake'] : ['wait', 'json'],
   });
   // `--machine`: the accounts, and the helper, of another machine.
   const target = options.machine ? findMachine(options.machine) : self;
@@ -43,6 +44,7 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
   }
   let id;
   if (command === 'delegate') {
+    if (options.wake && !options.machine) throw new Error('Use --wake with --machine <name>.');
     const [named, ...task] = words;
     if (!named || !task.join(' ').trim()) throw new Error('helm delegate <account|same> [--model <id>] [--wait] [--json] -- "<task>"');
     // A helper belongs to the chat that asked for it. One started from a
@@ -56,7 +58,9 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     // `cheap` names the account's small model (helm agents shows it), so a
     // helper never has to guess which id is the inexpensive one.
     const cheap = options.model === 'cheap';
-    let { agents } = await rpc(target, M.AGENT_LIST, { models: cheap }, cheap ? 60_000 : undefined);
+    if (options.wake) await wake(target);
+    const localModels = account.startsWith('local-');
+    let { agents } = await rpc(target, M.AGENT_LIST, { models: cheap, localModels }, cheap ? 60_000 : undefined);
     let agent = chooseAgent(agents, account);
     if (!agent.available) throw new Error(`${agent.id} is signed out; log in through its CLI first`);
     // `same` is not a hand pick: when this chat's account is out of limit,
@@ -72,14 +76,16 @@ export async function runAgentCommand(command, args, { rpc, self, machine: findM
     // season's small model; give the refresh a few seconds to land.
     for (let tries = 0; cheap && agent.refreshing && tries < 8; tries++) {
       await sleep(1000);
-      ({ agents } = await rpc(target, M.AGENT_LIST, { models: true }, 60_000));
+      ({ agents } = await rpc(target, M.AGENT_LIST, { models: true, localModels }, 60_000));
       agent = agents.find((a) => a.id === agent.id) ?? chooseAgent(agents, account);
     }
     if (cheap) {
       if (!agent.cheapModel) throw new Error(`${agent.id} has no small model; choose one from: ${(agent.models ?? []).join(', ') || 'helm agents'}`);
       options.model = agent.cheapModel;
     }
-    const { session } = await rpc(self, M.SESSION_DELEGATE, {
+    const keyPermit = options.key && await authorize(options.key, { target, kind: 'chat' });
+    const { session } = await rpc(self, keyPermit ? 'keys.delegate' : M.SESSION_DELEGATE, {
+      ...(keyPermit ? { keyPermit } : {}),
       // The child works in its parent's folder unless `--cwd` says otherwise.
       id: options.parent ?? parentId, cwd: options.cwd, profileId: agent.id,
       model: options.model, mode: options.mode, effort: options.effort, task: task.join(' '),

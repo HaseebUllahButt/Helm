@@ -15,6 +15,7 @@ const ENGINE: Record<string, { label: string; cls: string }> = {
   gemini:   { label: 'Gemini',      cls: 'gemini' },
   kimi:     { label: 'Kimi',        cls: 'kimi' },
   muse:     { label: 'Muse',        cls: 'muse' },
+  webchat:  { label: 'Web chat',    cls: 'webchat' },
   shell:    { label: 'Terminal',    cls: 'shell' },
 };
 

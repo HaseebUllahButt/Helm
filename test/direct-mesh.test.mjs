@@ -50,6 +50,12 @@ function fakePeers() {
         failed(new Error('direct channel closed'));
         onClose();
       },
+      fail(error) {
+        if (this.closed) return;
+        this.closed = true;
+        failed(error);
+        onClose(error);
+      },
       close() { this.die(); },
       async receive(payload) { this.received.push(payload); },
     };
@@ -59,7 +65,7 @@ function fakePeers() {
   return { made, makePeer };
 }
 
-function fixture({ info = { directRpc: 1 } } = {}) {
+function fixture({ info = { directRpc: 1 }, local = null } = {}) {
   const network = {
     self: 'local',
     machines: { local: {}, remote: { endpoints: ['http://192.168.1.9:8787'] }, third: {} },
@@ -70,7 +76,7 @@ function fixture({ info = { directRpc: 1 } } = {}) {
   const peers = fakePeers();
   const signals = [];
   const mesh = new HubMesh(() => network, () => {}, () => {}, (frame) => signals.push(frame),
-    { now: () => clock, probeEvery: 0, direct: { makePeer: peers.makePeer } });
+    { now: () => clock, probeEvery: 0, direct: { makePeer: peers.makePeer, ...(local ? { local } : {}) } });
   const link = (url) => ({ url, connected: true, sent: [], send(type, payload) { this.sent.push({ t: type, ...payload }); } });
   const hub = link('http://192.168.1.9:8787');
   mesh.up(hub);
@@ -337,4 +343,109 @@ test('revocation clears failed-channel backoff bookkeeping', async () => {
   assert.equal(mesh.direct.used.size, 0);
   assert.equal(peers.made.length, 1);
   mesh.stop();
+});
+
+/** The same Wi-Fi, as lan-discovery.js offers it to the direct mesh. */
+function fakeLocal(ready = true) {
+  const sent = [];
+  return { sent, ready: () => ready, set: (v) => { ready = v; }, where: () => (ready ? '192.168.1.9:8787' : null), signal(env, peer, payload) { if (!ready) return null; sent.push({ env, peer, payload }); return '192.168.1.9:8787'; } };
+}
+
+test('each setup message goes through the hub and, when heard there, the local network too', async () => {
+  const local = fakeLocal();
+  const { mesh, hub, peers, answerHub } = fixture({ local });
+  mesh.call('remote', 'session.list', {}).catch(() => {});
+  await answerHub('session.list');
+  peers.made[0].signal({ type: 'offer', sdp: 'x', negotiation: 'n' });
+  assert.equal(hub.sent.filter(f => f.t === T.HUB_SIGNAL).length, 1);
+  assert.deepEqual(local.sent.map(s => [s.env, s.payload.type]), [['remote', 'offer']]);
+  assert.equal(local.sent[0].peer, hub.sent.find(f => f.t === T.HUB_SIGNAL).peer, 'one channel id on both routes');
+  mesh.stop();
+});
+
+test('a machine heard on the Wi-Fi gets a link before its hub says it takes one', async () => {
+  const local = fakeLocal();
+  const { mesh, peers } = fixture({ info: { version: 'old' }, local });
+  mesh.direct.heard('remote');
+  assert.equal(peers.made.length, 1, 'opened at once, without waiting for a request');
+  assert.equal(mesh.direct.status('remote').state, 'connecting');
+  local.set(false);
+  peers.made[0].die();
+  assert.equal(mesh.direct.status('remote').state, 'unsupported');
+  mesh.stop();
+});
+
+test('with a fresh local hint, "no answer" is retried in seconds, not after a growing wait', async () => {
+  for (const [local, reason, quick] of [[fakeLocal(), 'direct connection timed out (no answer; 1 local, 0 remote addresses; new)', true],
+    [fakeLocal(false), 'direct connection timed out (no answer; 1 local, 0 remote addresses; new)', false],
+    [fakeLocal(), 'direct connection failed', false]]) {
+    const { mesh, peers, answerHub, tick } = fixture({ local });
+    mesh.call('remote', 'session.list', {}).catch(() => {});
+    await answerHub('session.list');
+    for (let i = 0; i < 3; i++) {
+      peers.made.at(-1).fail(new Error(reason));
+      const status = mesh.direct.status('remote');
+      assert.equal(status.state, 'retrying');
+      if (quick) assert.ok(status.retryInMs <= 3_750, `try ${i + 1}: ${status.retryInMs}ms`);
+      assert.equal(!!mesh.direct.waits.get('remote').timer, quick, 'a quick retry wakes itself');
+      tick(status.retryInMs + 1);
+      mesh.direct.tick();
+    }
+    // The fourth wait: long unless the local network says the machine is near.
+    peers.made.at(-1).fail(new Error(reason));
+    const wait = mesh.direct.status('remote').retryInMs;
+    assert.ok(quick ? wait <= 3_750 : wait >= 24_000, `${reason} / local ${local.ready()}: ${wait}ms`);
+    mesh.stop();
+  }
+});
+
+test('hearing the machine on the Wi-Fi ends the wait and resends a setup in progress', async () => {
+  const local = fakeLocal(false);
+  const { mesh, peers, answerHub } = fixture({ local });
+  mesh.call('remote', 'session.list', {}).catch(() => {});
+  await answerHub('session.list');
+  peers.made[0].signal({ type: 'offer', sdp: 'x', negotiation: 'n' });
+  assert.equal(local.sent.length, 0, 'not heard yet: hub only');
+  local.set(true);
+  mesh.direct.heard('remote');
+  assert.deepEqual(local.sent.map(s => s.payload.type), ['offer'], 'resent over the Wi-Fi');
+  mesh.direct.heard('remote');
+  assert.equal(local.sent.length, 1, 'not sent twice to the same place');
+  peers.made[0].fail(new Error('direct connection failed'));
+  assert.ok(mesh.direct.status('remote').retryInMs > 3_000);
+  mesh.direct.heard('remote');
+  assert.equal(peers.made.length, 2, 'the wait is over');
+  mesh.stop();
+});
+
+test('a channel timed in milliseconds is used before a slow hub answers its first probe', async () => {
+  const { mesh, hub, peers, answerHub, answerDirect, tick } = fixture();
+  mesh.call('remote', 'session.list', {}).catch(() => {});
+  await answerHub('session.list');
+  const peer = peers.made[0];
+  peer.open();
+  await new Promise(resolve => setImmediate(resolve));
+  tick(7);
+  await answerDirect(peer);
+  // The hub probe is out and unanswered. At 7ms against "not yet", wait a little.
+  assert.equal(mesh.table()[0].direct.used, false);
+  tick(100);
+  const read = mesh.call('remote', 'session.list', {});
+  assert.equal(peer.sent.at(-1).method, 'session.list', 'went direct');
+  await answerDirect(peer, 'session.list', { sessions: ['direct'] });
+  assert.deepEqual(await read, { sessions: ['direct'] });
+  // The hub answers 8 s late: direct stays.
+  tick(8_000);
+  await answerHub();
+  assert.equal(mesh.table()[0].direct.used, true);
+  assert.equal(hub.sent.filter(f => f.method === 'session.list').length, 1);
+  mesh.stop();
+});
+
+test('helm status says whether local network finding is on and which machines it heard', () => {
+  const machines = [{ env: 'lap', name: 'Laptop', url: null }];
+  assert.equal(routeLines({ machines, lan: { on: true, heard: [{ id: 'lap', address: '192.168.1.9', ageMs: 10 }] } }).at(-1),
+    '  local network finding: on; heard Laptop at 192.168.1.9');
+  assert.equal(routeLines({ machines, lan: { on: true, heard: [] } }).at(-1), '  local network finding: on; no machine heard yet');
+  assert.equal(routeLines({ machines, lan: { on: false, reason: 'turned off', heard: [] } }).at(-1), '  local network finding: off (turned off)');
 });

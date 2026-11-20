@@ -8,6 +8,7 @@ import { M } from '@helm/protocol';
 import { hubRpc } from './hub-client.js';
 import { findWebRoot } from './web-build.js';
 import { connectionSupport } from '@helm/protocol/connection-report';
+import { wakeChecks } from './wake-machine.js';
 
 const exec = promisify(execFile);
 const command = (file, args) => exec(file, args, { timeout: 3000, maxBuffer: 64 * 1024 });
@@ -92,7 +93,7 @@ const validNetwork = net => net && typeof net.id === 'string' && typeof net.self
  */
 export async function diagnose({
   network = readNetwork, service = inspectService, web = findWebRoot,
-  health = probeHealth, rpc = hubRpc, stops = () => strayStops(Date.now() - 7 * 24 * 3600_000),
+  health = probeHealth, rpc = hubRpc, stops = () => strayStops(Date.now() - 7 * 24 * 3600_000), wake = wakeChecks,
 } = {}) {
   const checks = [];
   let net;
@@ -106,8 +107,9 @@ export async function diagnose({
   checks.push(net ? check('registration', 'ok', 'This machine has joined a Helm network.')
     : check('registration', 'error', 'This machine has not joined a Helm network.',
       'Run helm join to add this computer, or helm setup to create a home.'));
-  const [background, app] = await Promise.all([
+  const [background, app, wakeStatus] = await Promise.all([
     service().catch(() => ({ state: 'unknown' })), Promise.resolve().then(web).catch(() => null),
+    wake(),
   ]);
   checks.push(app ? check('app-files', 'ok', 'The built app is present.')
     : check('app-files', 'error', 'The built app is missing.', 'Build the app in this checkout: npm --workspace @helm/web run build'));
@@ -117,6 +119,7 @@ export async function diagnose({
         : check('background', 'warning', 'The background service could not be confirmed.', 'Run helm start if you want Helm to stay running.'));
   if (background.linger === 'no') checks.push(check('logout', 'warning', 'Helm may stop when you log out.',
     'Run loginctl enable-linger. Ask your administrator if it needs permission.'));
+  checks.push(...wakeStatus);
   // Agents that ended without Helm asking (agent-stops.js): a helper lost
   // its work this way and nothing said who stopped it.
   const stray = (() => { try { return stops(); } catch { return []; } })();

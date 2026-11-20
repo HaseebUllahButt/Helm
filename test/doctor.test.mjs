@@ -15,7 +15,7 @@ const network = () => ({ id: 'private-network', self: 'local', key: 'secret-netw
     home: { id: 'home', kind: 'vm', endpoints: ['https://private-home.example'] } },
 });
 const defaults = overrides => ({ network: async () => network(), service: async () => ({ state: 'active', linger: 'yes' }),
-  web: () => '/built-app', health: async () => 'ok', rpc: async (_, __, method) => method === M.ENV_INFO
+  web: () => '/built-app', health: async () => 'ok', stops: () => [], wake: async () => [], rpc: async (_, __, method) => method === M.ENV_INFO
     ? { version: { full: 'one' }, web: { commit: 'one' }, terminals: 'pty' }
     : { machines: [{ env: 'home', url: 'https://private-home.example' }] }, ...overrides });
 

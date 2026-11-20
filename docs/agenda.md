@@ -28,8 +28,8 @@ These are proposals, not claims about measured time savings.
 2. Decide how the owner completes sign-in or human verification.
    One option is owner takeover of the same browser.
    Pause agent actions while the owner has control. Resume only when the owner returns control.
-   Takeover needs a separate owner decision. Earlier decisions exclude remote browser pictures in Helm.
-   Do not add remote viewing as part of this review.
+   Takeover needs a separate owner decision. The owner's remote screens (2026-11-19) show a whole desktop,
+   not an agent's browser: they do not decide takeover.
    Keep passwords outside chat. Do not automatically copy host credentials or folders into the VM.
 3. Save the result of each browser step that changes a site.
    Require a site-specific check before repeating a submission after a lost reply.

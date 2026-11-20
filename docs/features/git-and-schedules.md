@@ -94,16 +94,36 @@ edited files in; with none, the Git sheet says so.
   `git-notifications`. Run with `npm run test:automation`.
 
 ## Schedules
-Removed from the app 2026-10-17 (the owner found them unnecessary). The
-machine side (`schedule.*`, webhooks) still runs existing automations on
-purpose; `docs/agenda.md` plans to reuse it. Do not restore the screen
-without an owner request.
-- **Reach:** `helm schedule list | show | pause | resume | remove`. It asks
-  every machine; `--on` picks one. `show` hides the webhook link's password
-  unless `--link`.
-- **Rules:** pause needs no checks, so it works for an archived or deleted
-  chat. Resume checks the chat. A Helm restart during a run keeps the task
-  on and its saved turn, so the next Helm sends it once. Stop on the
-  webhook Spin pauses webhook tasks (see spins.md).
-- **Tests:** `test/schedules`, `schedule-cli`, `usage-recovery`,
-  `shell-task-alarm`.
+
+- **Reach.** Open **Settings → Schedules** or find **Schedules** in the command
+  palette. The screen shows timed tasks and triggers from each machine.
+  Use `helm when --help` to add a trigger. Use `helm when list` to find
+  triggers and `helm schedule list` to find both kinds of task.
+- **Events.** Watch a path or glob, a check command's output or exit code,
+  a private webhook POST, a chat or helper completion, or a machine that
+  comes online. With `--machine`, that machine keeps the trigger and runs
+  the task. Use `--watch-machine` to watch a different machine come online.
+  File checks use file metadata every five seconds. A command's first check
+  sets the starting result.
+- **Runs.** Use `--run` for a shell command and read event data from stdin.
+  A task prompt starts a new Helm chat. It uses the current chat's account
+  when available, then the machine's default or last account. Native-only
+  accounts can supply chat events when Helm sees them finish. Choose
+  an account Helm can start for the new chat.
+- **Pause and recovery.** During the cool-down and while a run is active,
+  Helm skips observed changes and asks webhook callers to retry. Three
+  consecutive check failures or task failures pause the trigger and send
+  a notice. Resume takes a new starting sample. A restart keeps the saved
+  run, event samples and accepted POST IDs.
+- **Webhooks.** Run `helm when show <id> --link` to read the private address.
+  Reuse the same `Idempotency-Key` when you retry a POST. The address uses
+  the machine's webhook Spin when available and localhost otherwise. Stop
+  on the Spin pauses its webhook tasks (see [spins.md](spins.md)).
+- **Prove.** Use the private Helm from [README.md](README.md). Add a
+  file-change trigger with `$H when file-change --path "$W/watch" --run "cat > '$W/result'"`.
+  Write to the watched file. Open Schedules and wait for **Succeeded**.
+  Restart the private daemon and check the same last fire. Add a webhook
+  with `--account fake` and POST a small body. Check the new chat and its
+  result in Schedules. Pause, resume and remove triggers with `helm when`.
+- **Tests.** `test/event-triggers`, `test/when-cli`, `test/schedules`,
+  `test/schedule-cli`, `test/usage-recovery`, `test/shell-task-alarm`.

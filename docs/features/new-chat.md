@@ -17,7 +17,10 @@
   folders there. Only bind Ctrl/⌘+N, never a bare letter. The box once hung
   on "looking for agents" with the VM off; it must show the saved list.
 - **Going back to an unused chat (owner, 2026-10-26):** leaving a chat with
-  nothing sent still deletes it. Back or forward to it starts the same chat
+  nothing sent still deletes it. A chat whose message this device still
+  holds (on its way or failed) is never deleted: the machine has not seen
+  the message, so it calls the chat empty. That lost four first messages to
+  the laptop on 2026-11-18. Back or forward to it starts the same chat
   again (same folder, agent and settings, and the unsent text), so it is
   never an empty page. Prove (driven 2026-10-26): new fake chat, type
   "keep me" without sending, open another chat, `$V key Control+BracketLeft`
@@ -120,3 +123,34 @@
   `engines`, `discover-wrapper`, `models`, `models-refresh`, `model-prefs`,
   `model-follow`, `project-settings`, `session-settings`;
   `test/browser/models`, `effort-default`.
+
+## Shared local models
+
+- Serve a model with `helm models serve <model> [--machine <name>|auto]`.
+  Helm reads the same GPU figures as `helm machines --load`. Auto uses the
+  most free memory on one GPU. If none reports free memory, Helm prefers a
+  CPU machine and says so. Ollama reports the memory it uses after loading.
+- The serving machine needs Linux, a systemd user manager and an installed
+  Ollama binary. Get the owner's approval before you install Ollama. Run
+  admin commands with `helm sudo` in a chat on that machine. Helm enables
+  its own Ollama user service on loopback and keeps cloud models off.
+- Run `helm models list` to see where each model runs, its memory use and
+  the OpenAI-compatible address on this machine. Helm uses a private
+  `helm forward` connection. The address serves completions and lists the
+  shared models. Ollama's management commands stay on the host.
+- Use `local-<model>` in the new chat picker, `helm spawn` or
+  `helm delegate`. OpenCode takes that name when both clients are
+  installed. Use `local-<model>@pi` for Pi in that case. A missing tag and
+  `:latest` give the same account name. Client settings belong to Helm
+  and stay separate from the owner's CLI logins.
+- OpenCode uses manual compaction for small model windows. Its automatic
+  compaction can otherwise try to summarize the first prompt.
+- `helm models stop <model>` waits for active replies and unloads the
+  model. Its download stays on the host. Use `--machine <name>` if more
+  than one machine serves the same name. The host must answer to stop it.
+- **Private check.** Pair two private Helm copies. Give one copy a fake Ollama
+  HTTP service and register a tiny model there. From the other copy, run
+  `helm models list` and check its loopback address with `GET /v1/models`.
+  Start a chat or delegate through the shared account. Restart Helm and
+  check the same address. Stop the model and check that the account leaves
+  the picker. Run `test/local-models.test.mjs` for the service tests.

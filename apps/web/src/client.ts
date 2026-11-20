@@ -27,11 +27,14 @@ export interface Environment {
    */
   kind?: 'pc' | 'vm' | 'nas';
   online: boolean;
+  /** Machines with a saved local network in common, in sending order. */
+  wakeVia?: string[];
   lastSeen: number | null;
   /** Where this machine's own hub answers - the direct path to it. */
   endpoints?: string[];
   info: {
     host?: string;
+    sharedKeys?: boolean;
     platform?: string;
     arch?: string;
     /** 'pty' when terminals are helm's own; 'panes' is the slow fallback. */
@@ -44,6 +47,8 @@ export interface Environment {
     helperAttachments?: boolean;
     /** Runs helpers for chats on other machines (helm delegate --machine). */
     remoteHelpers?: boolean;
+    /** Can send a wake signal on a local network. */
+    wakeSender?: boolean;
     runtime?: { version: string };
     /** Which helm this machine runs; null where it is not a git checkout. */
     version?: { commit: string; full?: string; time?: number; dirty?: boolean; dir?: string; branch: string; subject: string; updatable: boolean } | null;
@@ -72,6 +77,7 @@ export interface Profile {
   env?: Record<string, string>;
   envFrom?: string[];
   source: string;
+  localModel?: { model: string };
   /** Set when the account is launched through a wrapper script that picks its login. */
   wraps?: string;
   /** authenticated / unknown - signed-out profiles never reach the app. */
@@ -164,7 +170,7 @@ export interface Session {
   /** Prompts waiting on a person, for the list view. */
   pending?: number;
   /** What the newest of those prompts is about - the question's first line. */
-  ask?: { kind: 'question' | 'command' | 'edit' | 'plan' | 'tool'; text: string; more: number; requestId?: string; whole?: boolean } | null;
+  ask?: { kind: 'question' | 'command' | 'edit' | 'plan' | 'tool'; text: string; more: number; requestId?: string; whole?: boolean; phone?: string } | null;
   adopted?: boolean;
   /** Archived threads stay on the machine but are hidden from active groups. */
   archived?: boolean;
@@ -1691,6 +1697,35 @@ export class Client {
     return Promise.allSettled(this.pendingActions().filter(item => item.env === env && item.params.id === id)
       .map(item => this.deliverAction(item)));
   }
+  /**
+   * Try every unconfirmed send again, in every chat: after a reconnect, a
+   * new route, or a check that ran out of time. Each keeps its number, so
+   * the machine drops a repeat. A first message used to wait for the owner
+   * to open its chat again (2026-11-18).
+   */
+  resumeAllActions(online?: (env: string) => boolean) {
+    let actions: any[];
+    try { actions = this.pendingActions(); } catch { return Promise.resolve([]); }
+    return Promise.allSettled(actions.filter(item => !online || online(item.env)).map(item => this.deliverAction(item)));
+  }
+  /** Whether this device still holds a message or answer for the chat, unconfirmed or failed. */
+  holdsDelivery(env: string, id: string) {
+    const mine = (item: any) => item.env === env && item.params?.id === id;
+    return this.pendingActions().some(mine) || this.failedActions().some(mine);
+  }
+  /** Send a failed message again under a new number. The failure proved the old one did nothing. */
+  retryFailedAction(actionId: string) {
+    const action = this.failedActions().find(item => item.actionId === actionId);
+    if (!action || action.method !== 'session.deliver') return Promise.reject(new Error('This message is no longer here.'));
+    const { messageId: _old, ...params } = action.params;
+    const next = newMessageId();
+    // Save the new send before clearing the failure, so the words are never only in memory.
+    const frozen = JSON.parse(JSON.stringify({ ...params, messageId: next }));
+    const fresh = { env: action.env, method: 'session.deliver', actionId: next, params: frozen, savedAt: Date.now() };
+    this.saveAction(fresh);
+    this.dismissFailedAction(actionId);
+    return this.deliverAction(fresh);
+  }
   nativeMessageActions(env: string, id: string, agentId: string): any[] {
     const actions = new Map(this.savedActions().filter(item => item.method === 'session.native-message-deliver'
       && item.env === env && item.params.id === id && item.params.agentId === agentId && !item.failure)
@@ -1820,6 +1855,9 @@ export class Client {
           error.deliveryRejected = true;
           throw error;
         }
+        // The machine refused before it saved anything: the chat is gone.
+        // Retrying would ask forever for a chat nobody can open.
+        if (method === 'session.deliver' && /^unknown session: /.test(String(error?.message ?? ''))) finalFailure = true;
         // Other coded failures can follow acceptance, such as a full receiver disk.
         // Read the receipt before treating those failures as final.
         if (finalFailure || ['invalid_argument', 'delivery_conflict', 'unknown_method'].includes(error?.code)) {
@@ -1843,7 +1881,7 @@ export class Client {
     if (held && JSON.stringify(held.params) !== JSON.stringify(frozen)) {
       return Promise.reject(new Error('This message number belongs to another message.'));
     }
-    return this.deliverAction(held ?? { env, method: 'session.deliver', actionId, params: frozen }, timeout);
+    return this.deliverAction(held ?? { env, method: 'session.deliver', actionId, params: frozen, savedAt: Date.now() }, timeout);
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
@@ -2570,7 +2608,7 @@ export class Client {
    * clicked. Only the page's own origin can answer for this computer.
    */
   desktopWait(body: { window: string; focused: boolean; envId: string | null; sessionId: string | null }, signal: AbortSignal) {
-    return this.httpAt<{ open: { envId: string | null; sessionId: string | null } | null; desktop: boolean }>(
+    return this.httpAt<{ open: { envId: string | null; sessionId: string | null; view?: string } | null; desktop: boolean }>(
       location.origin, '/api/desktop/wait', { method: 'POST', body: JSON.stringify(body), signal });
   }
 

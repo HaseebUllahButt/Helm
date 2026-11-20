@@ -53,6 +53,7 @@ export class TaskTransfers {
       profileId: params.profileId, model: params.model || null, mode: params.mode || null,
       prompt: params.prompt || '', includeEnv: params.includeEnv !== false,
       returnToSource: params.returnToSource !== false,
+      ...(params.keyPermit ? { keyPermit: params.keyPermit } : {}),
     };
     if (!line(intent.folder, 1024)) throw new Error('a task needs a source folder');
     if (!line(intent.profileId, 256)) throw new Error('choose an agent account on the target');
@@ -145,6 +146,7 @@ export class TaskTransfers {
         folder, snapshotDigest: snapshot.digest,
         envelope: sealCodeSnapshot(snapshot, target.codePubkey, params.handoffId),
         profileId: intent.profileId, model: intent.model || undefined, mode,
+        ...(intent.keyPermit ? { keyPermit: intent.keyPermit } : {}),
         restoreGit: false,
         returnToSource: intent.returnToSource, includeEnv: intent.includeEnv,
         title: (source?.title || intent.prompt.trim().split('\n')[0]).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 120),
@@ -423,6 +425,7 @@ export class TaskTransfers {
       folder: bulk.folder, snapshotDigest: bulk.markerDigest,
       envelope: sealCodeSnapshot({ type: 'precopied', handoffId: params.handoffId }, target.codePubkey, params.handoffId),
       profileId: intent.profileId, model: intent.model || undefined, mode: bulk.mode,
+      ...(intent.keyPermit ? { keyPermit: intent.keyPermit } : {}),
       restoreGit: false, precopied: true,
       // A baseline of hundreds of megabytes cannot ride back the way small
       // tasks do; the work stays on the target, in git, for the owner to pull.

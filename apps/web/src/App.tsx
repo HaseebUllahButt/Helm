@@ -2,6 +2,7 @@ import { errorMessage } from './errors';
 import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice } from './session/voice';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
+import { openScreen, showScreen } from './screen';
 import { useNow } from './useNow';
 import { isUnread, markSeen, seenHere, unseenFinish, useSeenVersion } from './threadStatus';
 import { usePageHidden } from './usePageHidden';
@@ -41,10 +42,12 @@ import { shareHopTarget, clearShareHop, ShareHop } from './screens/ShareHop';
 import { type Auth, Login } from './screens/Login';
 import { EnvView } from './screens/EnvView';
 import { Home, type HomeBrain } from './screens/Home';
+import { MachineWakeRow } from './MachineWakeRow';
 import { BrainView } from './screens/Brain';
 import { Start } from './screens/Start';
 import { SessionView as SessionViewScreen } from './session/SessionView';
 import { steady } from './steady';
+import { setPhoneRpc } from './session/phoneShare';
 
 // Tests import the model list editor from here, where it used to live.
 export { ModelPrefsView };
@@ -71,6 +74,8 @@ const DevicesView = deferredScreen('Devices', () => import('./screens/Devices').
 const EnvSettings = deferredScreen('Machine settings', () => import('./screens/MachineSettings').then(m => ({ default: m.EnvSettings })));
 const SettingsView = deferredScreen('Settings', () => import('./screens/Settings').then(m => ({ default: m.SettingsView })));
 const LinksView = deferredScreen('Links', () => import('./screens/Settings').then(m => ({ default: m.LinksView })));
+const SchedulesView = deferredScreen('Schedules', () => import('./screens/Schedules').then(m => ({ default: m.SchedulesView })));
+const ToolsView = deferredScreen('Tools', () => import('./screens/Tools').then(m => ({ default: m.ToolsView })));
 const NetworkSettings = deferredScreen('Network settings', () => import('./screens/Settings').then(m => ({ default: m.NetworkSettings })));
 const OwnerView = deferredScreen('Your preferences', () => import('./screens/Owner').then(m => ({ default: m.OwnerView })));
 const ModelPrefsView = deferredScreen('Models', () => import('./screens/ModelPrefs').then(m => ({ default: m.ModelPrefsView })));
@@ -100,6 +105,7 @@ export function App() {
   useEffect(() => {
     if (!auth) return;
     const c = new Client(auth.endpoints, auth.token, auth.trust);
+    setPhoneRpc((env, method, params, timeout) => c.rpc(env, method, params, timeout));
     const off = c.on((_e, kind, payload) => {
       if (kind === 'connection') setConn({ online: !!payload.online, reachable: payload.reachable ?? !!payload.online, error: payload.error });
       if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints, trust: c.auth.trust });
@@ -113,7 +119,7 @@ export function App() {
     });
     c.connect().catch(() => {});
     setClient(c);
-    return () => { off(); c.close?.(); };
+    return () => { off(); setPhoneRpc(null); c.close?.(); };
   }, [auth]);
 
   const signOut = () => { forgetWorkspace(workspaceScope(auth?.token)); clearAuth(); setAuth(null); setClient(null); };
@@ -155,8 +161,10 @@ export type MainView =
   | { kind: 'start'; cwd: string; quick?: boolean }
   | { kind: 'settings' }
   | { kind: 'network-settings' }
+  | { kind: 'schedules' }
   // Every machine's public and private links (`helm share`) in one list.
   | { kind: 'links' }
+  | { kind: 'tools' }
   // Which helm each machine runs, and updating them from here.
   | { kind: 'updates' }
   // The owner's preferences every agent gets, and the keeper that updates them.
@@ -179,7 +187,7 @@ export type MainView =
 const VIEW_KINDS: Record<MainView['kind'], true> = {
   env: true, integrations: true, usage: true, dashboard: true, brain: true, new: true,
   browse: true, 'transfer-browse': true, transfer: true, verify: true,
-  start: true, settings: true, 'network-settings': true, links: true,
+  start: true, settings: true, 'network-settings': true, links: true, schedules: true, tools: true,
   updates: true, owner: true, models: true, devices: true, 'app-settings': true,
   session: true, 'native-agent': true, starting: true,
   'terminal-opening': true,
@@ -299,13 +307,22 @@ function Shell({ client, conn, onSignOut }: {
    * re-checks that no input has reached the chat, so a send from another
    * device between our last refresh and this navigation can never be lost.
    */
+  /**
+   * A message this device sent may still be on its way, or have failed with
+   * its words kept. The machine has not seen it, so it calls the chat empty.
+   * Leaving such a chat deleted it with the message still waiting
+   * (2026-11-18, four first messages to the laptop). A read error keeps it too.
+   */
+  const holdsWords = useCallback((envId: string, id: string) => {
+    try { return client.holdsDelivery?.(envId, id) ?? false; } catch { return true; }
+  }, [client]);
   const discardEmpty = useCallback((from: typeof nav.current, to?: MainView[]) => {
     const current = from.stack[from.stack.length - 1];
     const next = to?.[to.length - 1];
     if (current?.kind !== 'session' || current.session.brain || current.session.engine === 'shell') return;
     if (next?.kind === 'session' && next.session.id === current.session.id) return;
     const envId = from.selected;
-    if (!envId) return;
+    if (!envId || holdsWords(envId, current.session.id)) return;
     client.rpc<{ discarded: boolean }>(envId, 'session.discard-empty', { id: current.session.id }, 10_000)
       .then((r) => {
         if (!r.discarded) return;
@@ -314,7 +331,7 @@ function Shell({ client, conn, onSignOut }: {
         reopen.current(current.session.id);
       })
       .catch(() => { /* offline: the still-empty chat remains recoverable */ });
-  }, [client, removeSession]);
+  }, [client, removeSession, holdsWords]);
 
   useEffect(() => {
     history.replaceState({ helm: 1, ...nav.current }, '');
@@ -411,6 +428,7 @@ function Shell({ client, conn, onSignOut }: {
     };
     // "A new device paired" is about the list of devices, not a session.
     const devicesScreen = () => navigate([{ kind: 'app-settings' }, { kind: 'devices' }]);
+    const schedulesScreen = () => navigate([{ kind: 'app-settings' }, { kind: 'schedules' }]);
     const m = /^#open=([^/]+)\/(.+)$/.exec(location.hash);
     if (m) {
       take(m[1], m[2]);
@@ -418,10 +436,14 @@ function Shell({ client, conn, onSignOut }: {
     } else if (location.hash === '#devices') {
       devicesScreen();
       history.replaceState(history.state, '', location.pathname + location.search);
+    } else if (location.hash === '#schedules') {
+      schedulesScreen();
+      history.replaceState(history.state, '', location.pathname + location.search);
     }
     const onMessage = (e: MessageEvent) => {
       if (e.data?.type !== 'helm:open') return;
       if (e.data.view === 'devices') devicesScreen();
+      else if (e.data.view === 'schedules') schedulesScreen();
       else take(e.data.envId, e.data.sessionId);
     };
     navigator.serviceWorker?.addEventListener('message', onMessage);
@@ -443,6 +465,21 @@ function Shell({ client, conn, onSignOut }: {
     if (!listedThread(found) && !orchestrator) return;
     navigate([{ kind: 'env' }, { kind: 'session', session: orchestrator ?? found }], want.envId);
   }, [sessions]);
+
+  // Unconfirmed sends keep going while the app is open, in every chat, not
+  // only the one on screen. Each keeps its number; the machine drops repeats.
+  const onlineNow = useRef<(env: string) => boolean>(() => true);
+  onlineNow.current = (env) => envs.some((e) => e.id === env && e.online);
+  useEffect(() => {
+    const resume = () => { void client.resumeAllActions?.((env) => onlineNow.current(env)); };
+    const off = client.on((e, kind, payload) => {
+      if ((kind === 'connection' && payload?.online) || (e && kind === 'presence' && payload?.online)
+        || (e && kind === 'transport' && payload?.direct)) resume();
+    });
+    const timer = setInterval(() => { if (!document.hidden) resume(); }, 15_000);
+    resume();
+    return () => { off(); clearInterval(timer); };
+  }, [client]);
 
   useEffect(() => {
     if (conn.online) { setDownSince(null); return; }
@@ -559,6 +596,7 @@ function Shell({ client, conn, onSignOut }: {
           run: () => setNewChat({ envId: e.id }),
         });
         items.push({ id: `integrations:${e.id}`, group: 'action', title: `Connectors & skills on ${e.name}`, keywords: 'mcp servers plugins integrations', run: () => navigate([{ kind: 'env' }, { kind: 'integrations' }], e.id) });
+        items.push({ id: `screen:${e.id}`, group: 'action', title: `Screen of ${e.name}`, keywords: 'remote desktop screen view control rdp vnc', run: () => { if (hereId) void openScreenOn(e.id); else askScreen.current(); } });
         items.push({
           id: `send:${e.id}`, group: 'action', title: `Send a project from ${e.name}`,
           keywords: 'transfer env copy move folder', run: () => navigate([{ kind: 'env' }, { kind: 'transfer-browse' }], e.id),
@@ -582,12 +620,15 @@ function Shell({ client, conn, onSignOut }: {
     go('a:dashboard', 'Dashboard', 'machines compute cpu memory gpu load limits balancer accounts', [{ kind: 'dashboard' }]);
     go('a:defaults', 'Agent defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
     go('a:links', 'Spins', 'share spin private forward port', [{ kind: 'app-settings' }, { kind: 'links' }]);
+    go('a:schedules', 'Schedules', 'trigger event task webhook', [{ kind: 'app-settings' }, { kind: 'schedules' }]);
+    go('a:tools', 'Tools', 'tools commands registry scripts agents helm tools', [{ kind: 'app-settings' }, { kind: 'tools' }]);
     for (const t of ['light', 'dark', 'system'] as Theme[]) {
       items.push({
         id: `theme:${t}`, group: 'action', title: `Theme: ${t[0].toUpperCase()}${t.slice(1)}`, keywords: 'appearance colour',
         run: () => saveAppearance({ ...loadAppearance(), theme: t }),
       });
     }
+    items.push({ id: 'a:screen', group: 'action', title: 'Open a screen', sub: 'See and use the desktop of a machine.', keywords: 'remote desktop screen view control rdp vnc', run: () => askScreen.current() });
     items.push({ id: 'a:keys', group: 'action', title: 'Keyboard shortcuts', keywords: 'keys help', run: () => setHelp(true) });
     return items;
   };
@@ -809,7 +850,7 @@ function Shell({ client, conn, onSignOut }: {
     const top = nav.current.stack.at(-1);
     if (nav.current.selected === chat.envId && top?.kind === 'starting' && top.startId === chat.id) {
       restate([...nav.current.stack.slice(0, -1), { kind: 'session', session }]);
-    } else if (!chat.message && !chat.draft.trim()) {
+    } else if (!chat.message && !chat.draft.trim() && !holdsWords(chat.envId, session.id)) {
       client.rpc<{ discarded: boolean }>(chat.envId, 'session.discard-empty', { id: session.id }, 10_000)
         .then((r) => {
           if (!r.discarded) return;
@@ -1080,7 +1121,7 @@ function Shell({ client, conn, onSignOut }: {
   instantTerminal.current = () => {
     const online = envs.filter((e) => e.online);
     const current = nav.current.stack.at(-1);
-    const global = !current || ['usage', 'dashboard', 'brain', 'links', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
+    const global = !current || ['usage', 'dashboard', 'brain', 'links', 'schedules', 'tools', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
       && !(current.kind === 'usage' && current.envId);
     const chosen = !global && nav.current.selected !== autoPicked.current ? nav.current.selected : null;
     const lastUsed = (e: Environment) => Math.max(0, ...(sessions[e.id] ?? []).filter(ownTerminal).map((s) => s.updatedAt ?? 0));
@@ -1123,6 +1164,56 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
+  // Ctrl/Cmd+Shift+R: pick a machine, see and use its screen in its own
+  // window. Inside Helm only: in a browser tab it replaces hard reload.
+  const [screenPicker, setScreenPicker] = useState(false);
+  const [screenNote, setScreenNote] = useState<{ text: string; busy?: boolean } | null>(null);
+  const [screenSetup, setScreenSetup] = useState<{ envId: string; name: string; packages: string[]; canInstall: boolean; keys?: boolean; busy?: boolean } | null>(null);
+  const askScreen = useRef<() => void>(() => {});
+  askScreen.current = () => {
+    setPalette(false);
+    if (!hereId) {
+      setScreenNote({ text: 'Screens open in the Helm app on a computer with Helm. This window does not run on one of your machines.' });
+      return;
+    }
+    setScreenPicker(true);
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyR' || !(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.isComposing
+          || document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      askScreen.current();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+  const openScreenOn = useCallback(async (envId: string, withoutKeys = false) => {
+    const env = envs.find((e) => e.id === envId);
+    const here = envs.find((e) => e.id === hereId);
+    if (!env || !here) return;
+    setScreenPicker(false);
+    setScreenNote({ text: `Opening the screen of ${env.name}…`, busy: true });
+    const r = await openScreen(client, { machine: env.id, name: env.name, here: here.id, hereName: here.name, withoutKeys });
+    if ('needs' in r) { setScreenNote(null); setScreenSetup({ envId: env.id, name: env.name, packages: r.packages, canInstall: r.canInstall, keys: r.keys }); return; }
+    if ('error' in r) { setScreenNote({ text: r.error }); return; }
+    const shown = await showScreen(client, here.id, r.url, env.id);
+    setScreenNote(shown ? null : { text: `Helm could not open a window for the screen of ${env.name}. Allow pop-ups for Helm, then try again.` });
+  }, [envs, hereId, client]);
+  const setUpScreen = useCallback(async () => {
+    if (!screenSetup) return;
+    const { envId, name } = screenSetup;
+    setScreenSetup({ ...screenSetup, busy: true });
+    try {
+      await client.rpc(envId, 'screen.setup', {}, 20 * 60_000);
+      setScreenSetup(null);
+      await openScreenOn(envId);
+    } catch (err: any) {
+      setScreenSetup(null);
+      setScreenNote({ text: `${name} could not set up its screen: ${err.message}` });
+    }
+  }, [screenSetup, client, openScreenOn]);
   // Ctrl/Cmd+Shift+T: pick a device, land in its terminal. Only the Helm app
   // window gets this key; an ordinary browser tab keeps it for "reopen tab".
   const [terminalPicker, setTerminalPicker] = useState(false);
@@ -1301,7 +1392,7 @@ function Shell({ client, conn, onSignOut }: {
   // no machine either.
   const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'dashboard' || view.kind === 'devices'
     || view.kind === 'network-settings' || view.kind === 'app-settings' || view.kind === 'updates'
-    || view.kind === 'links' || view.kind === 'owner';
+    || view.kind === 'links' || view.kind === 'schedules' || view.kind === 'tools' || view.kind === 'owner';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -1319,12 +1410,14 @@ function Shell({ client, conn, onSignOut }: {
   const homeMachines = envs.map((e) => ({ env: e, running: workingThreadsOn(e).length, waiting: e.online ? waitingCountOn(e) : 0 }));
 
   const phoneMachineRow = (e: Environment) => (
-    <button key={e.id} type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
-      <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-      <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
-      <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
-      <span className="chev"><Icon name="forward" size={15} /></span>
-    </button>
+    <MachineWakeRow key={e.id} client={client} env={e} machines={envs}>
+      <button type="button" className={`row machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
+        <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+        <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
+        <span className="rm">{e.online ? 'Online' : 'Offline'}</span>
+        <span className="chev"><Icon name="forward" size={15} /></span>
+      </button>
+    </MachineWakeRow>
   );
 
   return (
@@ -1557,6 +1650,10 @@ function Shell({ client, conn, onSignOut }: {
           <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
         ) : view.kind === 'links' ? (
           <LinksView client={client} envs={envs} onBack={back} />
+        ) : view.kind === 'schedules' ? (
+          <SchedulesView client={client} envs={envs} onBack={back} />
+        ) : view.kind === 'tools' ? (
+          <ToolsView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'owner' ? (
           <OwnerView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'network-settings' ? (
@@ -1614,6 +1711,7 @@ function Shell({ client, conn, onSignOut }: {
             onUsage={() => push({ kind: 'usage', envId: env.id })}
             onOpen={(s) => push({ kind: 'session', session: s })}
             onNewTerminal={() => newTerminal.current(env.id, '~')}
+            onScreen={() => { if (hereId) void openScreenOn(env.id); else askScreen.current(); }}
           />
         ) : view.kind === 'integrations' ? (
           <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
@@ -1758,6 +1856,30 @@ function Shell({ client, conn, onSignOut }: {
         </div>
       )}
       {palette && <Palette items={paletteItems()} search={searchSaid} onClose={() => setPalette(false)} engineOf={engineOf} />}
+      {screenPicker && <Palette heading="Open a screen" placeholder="Pick a machine" engineOf={engineOf}
+        onClose={() => setScreenPicker(false)}
+        items={envs.filter((e) => e.online).map((e) => ({
+          id: `screen:${e.id}`, group: 'machine' as const, title: e.name,
+          sub: e.id === hereId ? 'this computer' : 'see and use its desktop', keywords: 'device machine screen desktop',
+          run: () => void openScreenOn(e.id),
+        }))} />}
+      {screenSetup && (
+        <Confirm title={`Set up the screen of ${screenSetup.name}?`} confirmLabel="Set up" busy={screenSetup.busy} enterConfirms
+          other={screenSetup.keys && !screenSetup.packages.length ? { label: 'Open without shortcuts', onClick: () => { const { envId } = screenSetup; setScreenSetup(null); void openScreenOn(envId, true); } } : undefined}
+          body={screenSetup.canInstall
+            ? screenSetup.packages.length
+              ? <>Helm installs the missing build packages on {screenSetup.name} as admin, then builds the screen program.{screenSetup.keys ? ' It also lets the screen press desktop shortcuts there.' : ''} This takes 1 to 3 minutes.</>
+              : <>Helm lets the screen act as a keyboard on {screenSetup.name}, so its desktop shortcuts work. This needs admin rights once. Without it, typing works, but shortcuts like Super+T do not.</>
+            : <>{screenSetup.name} needs a C++ compiler, make, pkg-config, x264, libwebsockets and the display libraries. Helm cannot install them on this Linux. Install them, then try again.</>}
+          onCancel={() => { if (!screenSetup.busy) setScreenSetup(null); }}
+          onConfirm={() => { if (screenSetup.canInstall) void setUpScreen(); else setScreenSetup(null); }} />
+      )}
+      {screenNote && (
+        <div className="undo" role="status">
+          <span className="undo-text">{screenNote.text}</span>
+          {!screenNote.busy && <button onClick={() => setScreenNote(null)}>Close</button>}
+        </div>
+      )}
       {terminalPicker && <Palette heading="Open a terminal" placeholder="Pick a machine" engineOf={engineOf}
         onClose={() => setTerminalPicker(false)}
         items={envs.filter((e) => e.online).map((e) => {
