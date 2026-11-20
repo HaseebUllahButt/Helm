@@ -152,9 +152,12 @@ and a project copy nobody kept. A helper can run on another machine
   Agent tool for work on the same account, short or long. Helpers keep
   the parent's model unless the owner asks for another. A fork reuses
   the parent's cached context, and a non-fork helper starts smaller than a
-  new chat (16.7k against 28k tokens in the 2026-11-06 run). Helpers run
-  in the foreground. Only when the owner asks for orchestrator mode do they
-  run in the background, so the parent stays free to talk. The owner
+  new chat (16.7k against 28k tokens in the 2026-11-06 run). Short work
+  stays in the foreground. Work that takes minutes runs in the background,
+  and the lead ends its turn, so it stays free to talk (owner, 2026-11-20:
+  "don't overemphasize it so that the model just sends everything to
+  helpers"). In orchestrator mode, only when the owner asks, all work goes
+  to background helpers. The owner
   cannot stop one built-in helper alone, only
   its parent, and accepts that: they step in by message. Another account,
   tool or machine, and worktrees go to `helm delegate`. Codex and every
@@ -198,8 +201,8 @@ and a project copy nobody kept. A helper can run on another machine
   - The lead briefs a helper like a new teammate: goal, exact files, what
     other helpers own, expected result, check to run. This follows
     Anthropic's multi-agent research lessons: vague briefs made helpers
-    repeat work or leave gaps. In orchestrator mode the lead starts helpers
-    in the background and ends its turn, so it can read messages.
+    repeat work or leave gaps. Long work goes to the background and the
+    lead ends its turn, so it can read messages.
   - Every agent gets cost habits (`usageNote`): one step for independent
     reads, a new helper for each new job, short lead chats, and
     `helm thread` instead of `helm say` to read another chat. A say to an

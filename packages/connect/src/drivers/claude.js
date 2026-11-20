@@ -171,6 +171,12 @@ export class ClaudeDriver extends Driver {
   /** The last top-level assistant message, which is where a branch can be cut. */
   #lastAssistant = null;
   #interrupting = false;
+  /**
+   * A Send now went out this turn and Claude has not said it found nothing
+   * to stop. Claude may end the turn to make way for the message; that end
+   * is not a failure.
+   */
+  #sendingNow = false;
   #capabilities = new Set();
   /** uuid -> { text, inputId } for messages steered into a turn and not yet read. */
   #inputs = new Map();
@@ -482,8 +488,12 @@ export class ClaudeDriver extends Driver {
    * A message for the turn already running. Claude reads its input between
    * steps, so this lands when the step in flight ends - what typing while
    * the CLI works does. The replay says when it was used.
+   *
+   * `now`: the owner wants it read at once. Where Claude can move a
+   * running command to the background, its Send now does that, so the turn
+   * reads the message and the work keeps running (Ctrl+B in the terminal).
    */
-  async steer(text, attachments = [], { inputId, clientId } = {}) {
+  async steer(text, attachments = [], { inputId, clientId, now = false } = {}) {
     if (!this.#pipe || !this.#inTurn) throw new Error('claude has no active turn to steer');
     const content = [];
     if (text) content.push({ type: 'text', text });
@@ -508,6 +518,19 @@ export class ClaudeDriver extends Driver {
       this.#inputs.delete(uuid);
       throw err;
     }
+    // Without the move, Claude 2.1.329 ends the running command to make way
+    // (measured with a fake API): reading after the step keeps the work.
+    if (now && this.#capabilities.has('interrupt_send_now_v1') && this.#capabilities.has('background_tasks_moves_bash_v1')) this.#sendNow(uuid);
+  }
+
+  #sendNow(uuid) {
+    this.#sendingNow = true;
+    this.#control({ subtype: 'interrupt', send_now: true, message_uuid: uuid }).then((r) => {
+      const outcome = r?.response?.send_now;
+      // Nothing waited (it was read already) or it is being read: no turn ends for it.
+      if (outcome === 'nothing_waiting' || outcome === 'delivering') this.#sendingNow = false;
+      if (outcome) this.log(`claude: send now ${outcome}`);
+    }, () => {});
   }
 
   /**
@@ -1079,6 +1102,9 @@ export class ClaudeDriver extends Driver {
     this.#toolStarts.clear();
     const interrupted = this.#interrupting && m.is_error;
     this.#interrupting = false;
+    // Claude ended the turn to read the owner's message next: it made way, it did not fail.
+    const madeWay = !interrupted && this.#sendingNow && m.is_error && m.subtype === 'error_during_execution';
+    this.#sendingNow = false;
     // From here the thread stands on its own; a restart resumes it as usual.
     this.forkFrom = null;
     this.push('turn.done', {
@@ -1086,14 +1112,14 @@ export class ClaudeDriver extends Driver {
       // Where a branch could be cut so that it holds everything up to and
       // including this turn's answer.
       resumeAt: this.#lastAssistant ?? undefined,
-      status: interrupted ? 'interrupted' : m.is_error ? 'error' : 'ok',
+      status: interrupted ? 'interrupted' : m.is_error && !madeWay ? 'error' : 'ok',
       // A running total for the conversation, not this turn's cost - the
       // CLI says to read the latest rather than sum them. Sessions turns it
       // back into a per-turn figure against the last total it saw.
       costTotalUsd: m.total_cost_usd,
       usage: m.usage && { input: m.usage.input_tokens, output: m.usage.output_tokens, cacheRead: m.usage.cache_read_input_tokens, cacheWrite: m.usage.cache_creation_input_tokens, inputIncludesCache: false },
       durationMs: m.duration_ms,
-      error: m.is_error && !interrupted ? (m.errors?.join('; ') || m.result || m.subtype) : undefined,
+      error: m.is_error && !interrupted && !madeWay ? (m.errors?.join('; ') || m.result || m.subtype) : undefined,
     });
     this.push('status', { status: 'idle' });
   }

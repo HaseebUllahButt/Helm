@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { messageDelivery } from '../packages/protocol/message-delivery.js';
+import { MADE_WAY_NOTE, stripBrief } from '../packages/protocol/brief.js';
 
 // When a message typed while an agent works reaches its CLI: at that CLI's
 // own handover point, as its own ticket, and never lost or matched to the
@@ -83,7 +84,9 @@ test('each CLI has one handover point and unknown names cannot borrow one', () =
   assert.deepEqual(messageDelivery('codex'), { timing: 'tool', pending: 'After next tool call' });
   assert.equal(messageDelivery('claude').timing, 'tool');
   assert.equal(messageDelivery('opencode').timing, 'loop');
-  for (const engine of ['devin', 'opencode2', 'pi', 'constructor', '__proto__', 'hasOwnProperty', undefined, null]) {
+  assert.deepEqual(messageDelivery('pi'), { timing: 'loop', pending: 'After current step' });
+  assert.deepEqual(messageDelivery('omp'), messageDelivery('pi'));
+  for (const engine of ['devin', 'opencode2', 'constructor', '__proto__', 'hasOwnProperty', undefined, null]) {
     assert.equal(messageDelivery(engine).timing, 'turn');
     assert.equal(messageDelivery(engine).pending, 'After current response');
   }
@@ -134,17 +137,41 @@ test('the chat stops reading "compacting" once the agent takes its next step, wh
   assert.equal(sessions.get(session.id).compacting, undefined);
 });
 
-test('OpenCode takes a message inside its running loop; other CLIs keep it for the reply\'s end', async (t) => {
-  for (const engine of ['opencode', 'devin', 'opencode2', 'pi']) {
+test('OpenCode and Pi take a message inside their running loop; other CLIs stop the reply for the owner\'s message', async (t) => {
+  for (const engine of ['opencode', 'pi', 'devin', 'opencode2']) {
     await t.test(engine, async (t) => {
       const { sessions, session, driver } = await setup(t, engine);
+      const loop = engine === 'opencode' || engine === 'pi';
+      // Like the real drivers: only those that read mid-reply input steer.
+      if (!loop) driver.steer = undefined;
       await sessions.input(session.id, 'Follow-up');
       await tick();
-      assert.equal(driver.steered.length, engine === 'opencode' ? 1 : 0);
-      if (engine === 'opencode') assert.equal(driver.steered[0].inputId, sessions.history(session.id).events.findLast((e) => e.text === 'Follow-up').turnId);
-      else { driver.finish(); await tick(); assert.equal(driver.sent.at(-1), 'Follow-up'); }
+      assert.equal(driver.steered.length, loop ? 1 : 0);
+      if (loop) assert.equal(driver.steered[0].inputId, sessions.history(session.id).events.findLast((e) => e.text === 'Follow-up').turnId);
+      else {
+        await tick();
+        assert.equal(driver.interrupts, 1, 'the reply makes way at once');
+        assert.ok(driver.sent.at(-1).startsWith(`Follow-up\n\n${MADE_WAY_NOTE}`), 'the agent is told to go back to the stopped work');
+        assert.equal(session.recovery, undefined, 'a reply that made way is not a stopped task');
+        assert.equal(stripBrief(driver.sent.at(-1)), 'Follow-up', 'the chat shows only the owner\'s words');
+      }
     });
   }
+});
+
+test('on a CLI without mid-reply input, agents\' messages, held messages, approvals and helpers wait for the reply', async (t) => {
+  const { sessions, session, driver } = await setup(t, 'devin');
+  driver.steer = undefined;
+  await sessions.input(session.id, 'From a teammate', { source: 'agent' });
+  await sessions.input(session.id, 'Held', { delivery: 'queue' });
+  await tick(); await tick();
+  assert.equal(driver.interrupts, undefined);
+  driver.push('status', { status: 'blocked' });
+  await sessions.input(session.id, 'While it asks');
+  await tick(); await tick();
+  assert.equal(driver.interrupts, undefined, 'an approval card is answered, not stopped');
+  driver.finish(); await tick();
+  assert.equal(driver.sent.at(-1), 'From a teammate');
 });
 
 test('a turn the queue starts on OpenCode takes the messages behind it into its loop', async (t) => {
@@ -451,7 +478,7 @@ test('Send now on a CLI without steering cuts only the current reply and keeps t
   await sessions.input(session.id, 'Held last', { delivery: 'queue' });
   const id = ticket('Send this now');
   assert.deepEqual(await sessions.sendNow(session.id, id), { ok: true, found: true, sent: true });
-  assert.equal(driver.sent.at(-1), 'Send this now');
+  assert.equal(driver.sent.at(-1), `Send this now\n\n${MADE_WAY_NOTE}`);
   assert.equal(driver.interrupts, 1);
   assert.equal(session.stoppedAt, undefined);
   assert.equal(session.stopGeneration, undefined);
