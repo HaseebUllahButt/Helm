@@ -60,3 +60,8 @@ test('a chat that could not open for now is not called lost', () => {
   assert.doesNotMatch(errorMessage(new Error('Could not resume the chat: connection reset')), /no longer has the chat history/);
   assert.match(errorMessage(new Error('Session abc not found')), /no longer has the chat history/);
 });
+
+test('a missing chat folder is named, not hidden behind a general error', () => {
+  assert.equal(errorMessage(new Error('the folder /home/me/ra2-native does not exist on this machine'), { machine: 'why' }),
+    'The folder /home/me/ra2-native does not exist on why. Pick another folder.');
+});

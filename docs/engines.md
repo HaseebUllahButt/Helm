@@ -51,6 +51,12 @@ A new tool, or a feature for "every tool", must look at each of these:
 - Helper tracking and messages to a helper: `cli-subagents.js`.
 - Moving a chat to another machine: `MOVABLE` in `chat-move.js` (Claude,
   Codex).
+- A chat's folder moved or missing (`session-folders.js`): every driver
+  starts in the found folder or an empty one. History: Claude gets a hard
+  link of its conversation under the new folder; Codex resumes by id and
+  records the new folder itself. The ACP tools load by id with the new
+  folder; one that cannot find it starts a new session and says so. Pi and
+  OMP: not checked.
 - Native chat controls: `native-controls.js`. Mode lists: `modes.js`.
 - Rewind: `session-rewind.js`; checkpoints only for tools that rewind
   (`session-delivery.js`).

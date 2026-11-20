@@ -164,6 +164,30 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   the chip reads "Compact 512k"; send: a `/compact` turn, then the message.
 - **Tests:** `test/idle-history`, `driver-claude`, `agent-messages`.
 
+## A chat's folder moves or goes
+- **What the owner sees:** a chat never fails because its folder moved. Found
+  again (renamed, moved, a symlink removed, a fresh clone): one quiet line,
+  "The folder ~/a is missing. Helm found it at ~/b, so this chat works there
+  now." Not found: the agent still answers, in an empty folder of Helm's, and
+  a "Folder missing" card above the message box offers "Pick folder" and any
+  repo that looks like it. "Change folder" is in the chat's ⋯ menu and the
+  sidebar row's ⋯ menu; agents use `helm chat-folder <id> <folder>`.
+- **Rules:** the record keeps the real path (symlinks resolved), the folder's
+  inode and its git identity (`project-key.js`). Search order: the folder the
+  AI recorded, the same inode, then exactly one repo with the same identity;
+  several repos become choices, never a guess. A change moves every chat in
+  the old folder and below it, and a saved project, as one T3 Code project
+  moves its threads; `--only` moves one. A chat that works keeps its folder
+  until its step ends. A chat that never ran keeps the plain "folder does not
+  exist" error. Helm writes nothing into the owner's folder. There is no
+  separate project record: chats are grouped by folder path, and moving all
+  chats of a path gives the same result without a new kind of record.
+- **Traps:** Claude's `--resume` looks only under the folder's own place in
+  `projects/`, so Helm hard-links the conversation there before the start
+  (`chat-folder.js`); a copy would split the history in two. The empty folder
+  is under `~/.helm/folder-missing/`; it is never taken as where a folder went.
+- **Tests:** `test/chat-folder`, `chat-worktree`, `chat-move`.
+
 ## @ chats and / commands
 - **Trap:** a new Claude sends `init` only with the first message. The `/`
   list comes from its answer to Helm's `initialize`, which also gives what

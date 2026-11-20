@@ -98,6 +98,10 @@ export interface Item {
   elapsed?: number;
   result?: any;
   visual?: Visual;
+  /** A line from Helm that is news, not a failure: "Helm found the folder". */
+  tone?: 'note';
+  /** Helm's own words (a folder notice): shown as they are, paths and all. */
+  own?: boolean;
   startedAt: number;
   doneAt?: number;
 }
@@ -520,9 +524,10 @@ export function apply(state: LogState, e: HelmEvent): void {
       return;
     case 'error': {
       const turn = state.turns[state.turns.length - 1];
-      const item: Item = { id: `err-${e.seq}`, kind: 'error', text: e.message ?? 'error', status: 'error', startedAt: e.at };
+      const note = e.tone === 'note';
+      const item: Item = { id: `err-${e.seq}`, kind: 'error', text: e.message ?? 'error', status: note ? 'ok' : 'error', startedAt: e.at, ...(note ? { tone: 'note' as const } : {}), ...(e.kind === 'folder' ? { own: true } : {}) };
       if (turn && !turn.done) { turn.items.push(item); turn.revision = e.seq; }
-      else state.turns.push({ id: `sys-${e.seq}`, revision: e.seq, text: '', at: e.at, items: [item], done: { status: 'error' } });
+      else state.turns.push({ id: `sys-${e.seq}`, revision: e.seq, text: '', at: e.at, items: [item], done: { status: note ? 'ok' : 'error' } });
       return;
     }
     default:

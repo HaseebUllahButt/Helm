@@ -210,6 +210,7 @@ export const M = {
   SESSION_DISCARD_EMPTY: 'session.discard-empty', // { id } -> { discarded }  safe navigation cleanup
   SESSION_TITLE:   'session.title',  // { id, title } -> { session }  the name the owner typed
   SESSION_ARCHIVE: 'session.archive', // { id, archived? } -> { session }
+  SESSION_FOLDER: 'session.folder', // { id, cwd, all? } -> { session, moved[] }  the chat works in this folder from its next step; all (default): the other chats of its old folder move too
   SESSION_PIN:     'session.pin',     // { id, pinned? } -> { session }  kept above every other chat in the sidebar
   SESSION_DISMISS_CHILD_FAILURES: 'session.dismiss-child-failures', // { id } -> { session }; acknowledge current failures, keep history
   SESSION_SEEN:    'session.seen',    // { id } -> { seenAt }  the owner looked at it, on some device

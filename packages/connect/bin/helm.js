@@ -895,6 +895,29 @@ async function say() {
   console.log(`Sent to ${machine} ${shortId(session.id)} (${session.title}).`);
 }
 
+/**
+ * Point a chat at another folder: `helm chat-folder <chat-id> [folder]`.
+ * With no folder, say where the chat works now. A relative folder is read
+ * from here only when the chat is on this machine.
+ */
+async function chatFolder() {
+  const words = rest.filter((x) => !x.startsWith('-'));
+  const [id, folder] = words;
+  if (!id) die('Pick a chat: `helm chat-folder <chat-id> [folder]`. Run helm digest to list chats.');
+  const { env, machine, session } = await findSession(id);
+  if (!folder) {
+    const lost = session.folderLost ? `\nThe folder is missing. Pick it: helm chat-folder ${shortId(session.id)} <folder>` : '';
+    console.log(`${machine} ${shortId(session.id)} (${session.title}) works in ${session.cwd}.${lost}`);
+    return;
+  }
+  const { resolve } = await import('node:path');
+  const here = env === requireNetwork().self && !folder.startsWith('~') ? resolve(folder) : folder;
+  const r = await brainRpc(env, M.SESSION_FOLDER, { id: session.id, cwd: here, all: !rest.includes('--only') }, 30_000);
+  const others = (r.moved ?? []).filter((x) => x !== session.id).length;
+  console.log(`${machine} ${shortId(session.id)} (${session.title}) now works in ${r.session?.cwd ?? here}.`
+    + (others ? ` ${others} other ${others === 1 ? 'chat' : 'chats'} in the old folder moved too.` : ''));
+}
+
 async function deleteChat() {
   const id = rest.find((x) => !x.startsWith('-'));
   if (!id) die('Pick a chat: `helm delete <id>`. Run helm digest to list chats.');
@@ -2521,6 +2544,10 @@ try {
 
     case 'delete':
       await deleteChat();
+      break;
+
+    case 'chat-folder':
+      await chatFolder();
       break;
 
     case 'webchat': {

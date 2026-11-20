@@ -12,6 +12,7 @@ import type { Account } from './accounts';
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { DrivenSession as DrivenSessionScreen } from './session/DrivenSession';
 import { MoveChat, canMove } from './session/MoveChat';
+import { canChangeFolder } from './session/FolderCard';
 import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
 import { StartingTerminalView } from './session/StartingTerminalView';
@@ -155,6 +156,8 @@ export type MainView =
   | { kind: 'new'; path?: string }
   | { kind: 'browse'; path?: string }
   | { kind: 'transfer-browse'; path?: string }
+  // Pick another folder for a chat whose folder moved or is missing.
+  | { kind: 'chat-folder'; session: Session; path?: string }
   | { kind: 'transfer'; cwd: string; session?: Session; jobId?: string }
   | { kind: 'verify'; path: string }
   // `quick`: a chat with no folder; `cwd` is then unused.
@@ -186,7 +189,7 @@ export type MainView =
 
 const VIEW_KINDS: Record<MainView['kind'], true> = {
   env: true, integrations: true, usage: true, dashboard: true, brain: true, new: true,
-  browse: true, 'transfer-browse': true, transfer: true, verify: true,
+  browse: true, 'transfer-browse': true, 'chat-folder': true, transfer: true, verify: true,
   start: true, settings: true, 'network-settings': true, links: true, schedules: true, tools: true,
   updates: true, owner: true, models: true, devices: true, 'app-settings': true,
   session: true, 'native-agent': true, starting: true,
@@ -688,6 +691,7 @@ function Shell({ client, conn, onSignOut }: {
       onArchive: async () => { if (await act('session.archive', { id: s.id, archived: !s.archived }) && !s.archived) setArchiveUndo({ envId: e.id, s }); },
       onDelete: () => act('session.kill', { id: s.id }),
       onMove: canMove(e, s) ? () => setMoveChat({ envId: e.id, s }) : undefined,
+      onFolder: canChangeFolder(s) ? () => navigate([{ kind: 'env' }, { kind: 'session', session: s }, { kind: 'chat-folder', session: s }], e.id) : undefined,
     };
   };
 
@@ -1747,6 +1751,21 @@ function Shell({ client, conn, onSignOut }: {
               restate([{ kind: 'env' }]);
             }}
           />
+        ) : view.kind === 'chat-folder' ? (
+          <Browse
+            client={client} env={env} path={view.path} onBack={back}
+            title="Chat folder" action="Use this folder"
+            onInto={(path) => push({ kind: 'chat-folder', session: view.session, path })}
+            onPick={async (cwd) => {
+              const r = await client.rpc<{ session: Session }>(env.id, 'session.folder', { id: view.session.id, cwd }, 30_000);
+              onSessionChanged(env.id)(r.session);
+              loadSessions(env.id);
+              const stack = nav.current.stack;
+              let at = stack.length;
+              while (at > 0 && stack[at - 1].kind === 'chat-folder') at--;
+              restate(at > 0 ? stack.slice(0, at) : [{ kind: 'env' }, { kind: 'session', session: r.session }]);
+            }}
+          />
         ) : view.kind === 'transfer-browse' ? (
           <Browse
             client={client} env={env} path={view.path} onBack={back}
@@ -1792,6 +1811,7 @@ function Shell({ client, conn, onSignOut }: {
               ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             onSendFolder={view.session.quick || !view.session.cwd ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd })}
             onMove={viewSession && canMove(env, viewSession) ? () => setMoveChat({ envId: env.id, s: viewSession }) : undefined}
+            onFolder={viewSession && canChangeFolder(viewSession) ? () => push({ kind: 'chat-folder', session: viewSession }) : undefined}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}

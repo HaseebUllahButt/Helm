@@ -49,6 +49,8 @@ import { NativeSessions } from './session-native.js';
 import { DriverEvents } from './session-driver-events.js';
 import { SessionDelivery } from './session-delivery.js';
 import { SessionWorktrees } from './session-worktrees.js';
+import { SessionFolders } from './session-folders.js';
+import { realFolder } from './chat-folder.js';
 import { runSetup } from './chat-worktree.js';
 import { projectKeysFor } from './project-key.js';
 
@@ -291,6 +293,7 @@ export class Sessions extends EventEmitter {
   #driverEvents;
   #delivery;
   #worktrees;
+  #folders;
   #makeParts() {
     const sessions = this;
     const core = {
@@ -317,6 +320,7 @@ export class Sessions extends EventEmitter {
       bindDriver: this.#bindDriver.bind(this),
       settled: this.#settled.bind(this),
       reap: this.#reap.bind(this),
+      release: this.#release.bind(this),
     };
     core.titles = this.#titles = new SessionTitles(this, core);
     core.rewinder = this.#rewinder = new SessionRewind(this, core);
@@ -330,6 +334,7 @@ export class Sessions extends EventEmitter {
     core.driverEvents = this.#driverEvents = new DriverEvents(this, core);
     core.delivery = this.#delivery = new SessionDelivery(this, core);
     core.worktrees = this.#worktrees = new SessionWorktrees(this, core);
+    core.folders = this.#folders = new SessionFolders(this, core);
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
@@ -1156,7 +1161,10 @@ export class Sessions extends EventEmitter {
       cwd = quickDir(id);
       mkdirSync(cwd, { recursive: true, mode: 0o700 });
     }
-    const dir = expand(cwd);
+    // The folder itself, not a symlink to it: the CLI files its history
+    // under the real path, and a symlink removed later left the chat with
+    // a path that no longer led anywhere.
+    const dir = realFolder(expand(cwd));
     const session = {
       id,
       driver: profile.engine,
@@ -1416,7 +1424,15 @@ export class Sessions extends EventEmitter {
     // hand), an empty one is as good as the old one.
     if (s.quick && isQuickDir(s.cwd)) mkdirSync(expand(s.cwd), { recursive: true, mode: 0o700 });
     // A chat's own worktree is removed once merged; reopened, it is rebuilt.
-    await this.#worktrees.ensure(s);
+    // When it cannot be, the chat still starts, as for any missing folder.
+    try { await this.#worktrees.ensure(s); }
+    catch (err) {
+      if (existsSync(expand(s.cwd))) throw err;
+      this.log(`[${s.id}] ${err.message}`);
+    }
+    // Where the agent starts: the chat's folder, where it moved to, or an
+    // empty folder while it is missing (session-folders.js).
+    const runIn = s.external ? s.cwd : await this.#folders.prepare(s, profile);
     // The brain's tools are the `helm` command, so which `helm` it finds is
     // the whole question. Give it this daemon's own, ahead of the installed
     // one: a machine that has not been upgraded yet would otherwise hand the
@@ -1435,10 +1451,10 @@ export class Sessions extends EventEmitter {
       HELM_SESSION_ID: s.id,
       HELM_PROFILE_ID: s.profileId,
       HELM_ENGINE: s.engine,
-      HELM_CWD: s.cwd,
+      HELM_CWD: runIn,
     };
     d = this.makeDriver(s.driver, {
-      cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
+      cmd: spec.cmd, env: spec.env, args: spec.args, cwd: runIn,
       model: s.nativeSocket && !s.nativeManaged ? null : s.model, effort: s.nativeSocket && !s.nativeManaged ? null : s.effort,
       // A reported native policy is for display. Rejoining must not turn it
       // into a policy override; the provider terminal owns that configuration.
@@ -1511,6 +1527,34 @@ export class Sessions extends EventEmitter {
 
   #settled(id) {
     clearTimeout(this.#deliveryState.clearSettling(id));
+  }
+
+  /**
+   * Stop an idle agent so its next start reads the chat's record again (a
+   * new folder). False, and nothing stopped, while it has work in hand.
+   */
+  async #release(s) {
+    await this.#retiring.get(s.id);
+    const d = this.#drivers.get(s.id);
+    if (!d) return true;
+    if (d.status !== 'idle' || s.status !== 'idle' || d.pending?.size || d.backgroundTasks > 0
+      || this.#deliveryState.isSending(s.id) || this.#deliveryState.hasQueue(s.id)
+      || this.events.pending(s.id).length || this.events.activeTurn(s.id)) return false;
+    clearTimeout(this.#reapers.get(s.id));
+    this.#reapers.delete(s.id);
+    const retiring = Promise.resolve().then(() => d.kill()).then(() => {
+      if (this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
+      if (this.#index.has(s.id)) this.emit('session', { ...wire(s), alive: false });
+    }).finally(() => { if (this.#retiring.get(s.id) === retiring) this.#retiring.delete(s.id); });
+    this.#retiring.set(s.id, retiring);
+    await retiring.catch((err) => this.log(`[${s.id}] could not stop the agent: ${err.message}`));
+    return !this.#drivers.has(s.id);
+  }
+
+  /** Point a chat at another folder; `all` moves the other chats of its folder too. */
+  async changeFolder(id, folder, options) {
+    const result = await this.#folders.change(id, folder, options);
+    return { ...result, session: wire(result.session) };
   }
 
   /** Finished children release their runtime quickly; their conversation stays resumable. */

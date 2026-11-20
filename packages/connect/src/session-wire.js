@@ -41,7 +41,7 @@ export const pendingSummary = (pending) => ({ pending: pending.length,
  * The transcript digests are most of a machine's chat list by size; on a
  * slow link a list that carried them took longer than a device waited.
  */
-export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, dismissedNativeFailures, nativeSent, externalImported, externalSource, externalTail, externalAfter, externalImagesVersion, externalTranscriptDigests, externalTranscriptDigestBase, externalTranscriptPrefixDigest, externalTranscriptRevision, originHandoffId, delegationReply, taskReturnContext, lastLimits, rewindProcId, rewindFailure, ...s }) => ({
+export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, dismissedNativeFailures, nativeSent, externalImported, externalSource, externalTail, externalAfter, externalImagesVersion, externalTranscriptDigests, externalTranscriptDigestBase, externalTranscriptPrefixDigest, externalTranscriptRevision, originHandoffId, delegationReply, taskReturnContext, lastLimits, rewindProcId, rewindFailure, folderStamp, folderKeys, ...s }) => ({
   ...s, rewindSupported: !!DRIVERS[s.driver]?.canRewind && !s.external && !nativeSocket && !s.nativeCli && !s.shared && !rewindFailure,
   // This machine can compact a big, cold history before a send (idle-history.js).
   ...(s.driver === 'claude' && !s.external && !nativeSocket && !s.nativeCli ? { compactFirst: true } : {}),
