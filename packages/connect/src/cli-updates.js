@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { accessSync, constants, createReadStream, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join, relative, isAbsolute } from 'node:path';
 import { ENGINES } from './engines.js';
@@ -252,7 +253,7 @@ function run(cmd, args, { timeout, env = process.env, platform = process.platfor
       (error, stdout, stderr) => {
         const out = stripAnsi(`${stdout ?? ''}\n${stderr ?? ''}`).split('\n').map((l) => l.trim()).filter(Boolean);
         resolve({
-          ok: !error, code: error?.code ?? 0, ms: Date.now() - started, out,
+          ok: !error, code: error ? error.code ?? null : 0, ms: Date.now() - started, out,
           timedOut: !!error && (error.killed === true || error.signal === 'SIGTERM'),
         });
       });
@@ -262,6 +263,19 @@ function run(cmd, args, { timeout, env = process.env, platform = process.platfor
 }
 
 const tail = (lines, n = 3) => lines.slice(-n).join(' · ').slice(0, 300);
+
+function rememberFailure(entry, stage, version, result, cause) {
+  const seen = entry.failures?.[stage] ?? [];
+  const key = createHash('sha256').update(JSON.stringify([version, result.code, result.timedOut, cause])).digest('hex');
+  if (seen.includes(key)) return false;
+  entry.failures = { ...entry.failures, [stage]: [...seen, key] };
+  return true;
+}
+
+function failureLog(result, message) {
+  const code = typeof result.code === 'number' ? ` Exit code ${result.code}.` : '';
+  return `failed.${code}${message ? ` ${message}` : ''}`;
+}
 
 // -------------------------------------------------------------------- state
 
@@ -435,8 +449,9 @@ export class CliUpdater {
     let to = r.ok ? await this.#version(tool.path) : tool.version;
     let message = r.timedOut ? 'the update took too long and was stopped' : tail(r.out);
     let ms = r.ms;
+    let early;
     if (r.ok && id === 'claude') {
-      const early = await this.#claudeEarly(tool, to).catch((err) => ({ ok: false, message: `early build check failed: ${err?.message || err}` }));
+      early = await this.#claudeEarly(tool, to).catch((err) => ({ message: `early build check failed: ${err?.message || err}` }));
       if (early) {
         ms += early.ms ?? 0;
         if (early.to) to = early.to;
@@ -448,11 +463,14 @@ export class CliUpdater {
       message,
     };
     const state = loadState();
-    const previous = state.engines[id]?.lastResult;
-    state.engines[id] = { ...state.engines[id], lastResult: result };
+    const entry = { ...state.engines[id], lastResult: result };
+    const logUpdate = r.ok || rememberFailure(entry, 'update', tool.version, r, result.message);
+    const logEarly = early?.run && (early.run.ok || rememberFailure(entry, 'early', early.version, early.run, early.message));
+    state.engines[id] = entry;
     saveState(state);
-    if (r.ok || previous?.ok !== false || previous.from !== result.from || previous.message !== result.message) {
-      this.log(`${tool.label}: ${r.ok ? (result.changed ? `updated ${result.from} -> ${result.to}` : 'already up to date') : `update failed (${result.message})`}`);
+    if (logEarly) this.log(early.log);
+    if (logUpdate) {
+      this.log(`${tool.label}: ${r.ok ? (result.changed ? `updated ${result.from} -> ${result.to}` : 'already up to date') : `update ${failureLog(r, result.message)}`}`);
     }
     return { ...base, ...result };
   }
@@ -475,9 +493,9 @@ export class CliUpdater {
       : { cmd: tool.path, args: ['install', next] };
     const r = await run(command.cmd, command.args, { timeout: UPDATE_TIMEOUT_MS, env: this.env, platform: this.platform });
     const to = r.ok ? await this.#version(tool.path) : null;
-    this.log(`Claude Code: ${r.ok ? `early build ${to} for ${missing.join(', ')}` : `early build failed (${tail(r.out)})`}`);
     return {
-      ms: r.ms, to,
+      ms: r.ms, to, run: r, version: `${have} -> ${next}`,
+      log: `Claude Code: ${r.ok ? `early build ${to} for ${missing.join(', ')}` : `early build ${next} ${failureLog(r, r.timedOut ? 'The update timed out.' : tail(r.out))}`}`,
       message: r.ok
         ? `Installed early build ${to}, because this version did not know ${missing.join(', ')}`
         : `Could not install early build ${next}: ${r.timedOut ? 'it took too long' : tail(r.out)}`,

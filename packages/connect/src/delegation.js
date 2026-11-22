@@ -1,7 +1,7 @@
 import { ENGINES } from './engines.js';
 import { materialize, loadProfiles } from './profiles.js';
 import { localProfileCatalog } from './local-model-accounts.js';
-import { listModels } from './models.js';
+import { listKeeperModels, listModels } from './models.js';
 import { modelPrefs, startPrefs, subagentPrefs, accountKey } from './settings.js';
 import { modesFor, defaultMode } from './modes.js';
 import { credentialScan } from './credentials.js';
@@ -78,7 +78,7 @@ export async function readCodexHelperHistory(file) {
 }
 
 /** Public capabilities and optional credential metadata, never secret values. */
-export async function agentCatalog(profiles, statuses, { models = true, credentials = false, keeper = false, refresh = false } = {}) {
+export async function agentCatalog(profiles, statuses, { models = true, credentials = false, keeper = false } = {}) {
   return Promise.all(profiles.filter((p) => !p.disabled && ENGINES[p.engine]?.driver).map(async (p) => {
     const auth = statuses.get(p.id) ?? 'unknown';
     const account = createHash('sha256').update(accountKey(p)).digest('hex').slice(0, 16);
@@ -91,13 +91,18 @@ export async function agentCatalog(profiles, statuses, { models = true, credenti
     const spec = materialize(p);
     const engine = ENGINES[p.engine];
     try {
-      const catalog = localProfileCatalog(p) ?? await listModels(p.engine, spec.env?.[engine.homeEnv] ?? engine.defaultHome,
-        spec.env, p.wraps ? { cmd: spec.cmd, args: spec.args } : null, { refresh });
+      const home = spec.env?.[engine.homeEnv] ?? engine.defaultHome;
+      const launcher = p.wraps ? { cmd: spec.cmd, args: spec.args } : null;
+      const local = localProfileCatalog(p);
+      if (keeper) {
+        const models = local?.models ?? await listKeeperModels(p.engine, home, spec.env, launcher);
+        return { ...row, smallModels: cheapModels(p.engine, models) };
+      }
+      const catalog = local ?? await listModels(p.engine, home, spec.env, launcher);
       const labels = Object.fromEntries((catalog.models ?? []).filter((id) => catalog.labels?.[id])
         .map((id) => [id, catalog.labels[id]]));
       return { ...row, models: catalog.models, labels,
         defaultModel: modelPrefs(p)?.default ?? catalog.default ?? null,
-        ...(keeper ? { smallModels: cheapModels(p.engine, catalog.selectableModels ?? catalog.models) } : {}),
         cheapModel: cheapModel(p.engine, catalog.models), refreshing: !!catalog.refreshing };
     } catch { return { ...row, models: [], defaultModel: null }; }
   }));
@@ -367,8 +372,9 @@ export function delegationOutput(session, events, active = activeTurnFromEvents(
   const complete = !!settled || (!!turn?.status && !running);
   const status = !complete && (pending || session.status === 'blocked') ? 'blocked'
     : settled || (complete ? (turn.status === 'ok' ? 'done' : turn.status) : 'working');
+  const providerError = events.findLast(e => e.type === 'error' && e.kind === 'provider-reply' && e.turnId === turn?.turnId)?.message;
   return { session, status, complete, output: output.slice(-32_000), truncated: output.length > 32_000, final: final.slice(-32_000),
-    error: turn?.items.findLast((i) => i.error)?.error ?? events.findLast((e) => e.type === 'turn.done')?.error ?? null,
+    error: providerError ?? turn?.items.findLast((i) => i.error)?.error ?? events.findLast((e) => e.type === 'turn.done')?.error ?? null,
     pending: pending ? { requestId: pending.requestId, title: pending.title, kind: pending.kind } : null };
 }
 

@@ -997,7 +997,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(errorMessage(e))); }} />
         )}
         {childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Helpers need your answer">
-          {childrenWaiting.map(({ session: child, envId }) => <button key={child.id} disabled={!onOpenSession} onClick={() => onOpenSession?.(child, envId)}>
+          {childrenWaiting.map(({ session: child, envId }) => <button key={child.id} disabled={child.offline || !onOpenSession} onClick={() => onOpenSession?.(child, envId)}>
             <Icon name="subagents" size={15} /><span><b>{child.title}</b><small>{child.ask?.kind === 'question' ? 'Answer question' : 'Review request'}{child.ask?.text ? ` · ${child.ask.text}` : ''}</small></span><Icon name="forward" size={14} />
           </button>)}
         </div>}

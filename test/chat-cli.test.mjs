@@ -177,6 +177,22 @@ test('push/history race and missing sequences recover without displaying duplica
   chat.close();
 });
 
+test('the chat CLI shows the provider cause beside a failed reply', async () => {
+  const connection = new EventEmitter();
+  const events = [
+    { seq: 1, type: 'turn.done', turnId: 'old', status: 'error', error: 'Pi ran out of retries.' },
+    { seq: 2, type: 'error', turnId: 'new', kind: 'provider-reply', message: 'Too many requests.' },
+    { seq: 3, type: 'turn.done', turnId: 'new', status: 'ok' },
+  ];
+  connection.rpc = async () => ({ events, last: 3, pending: [] });
+  let output = '';
+  const chat = new ManagedChat(connection, 's', { write: text => { output += text; } });
+  try {
+    await chat.sync();
+    assert.equal(output, '\n[error] Pi ran out of retries.\n\n[error] Too many requests.\n');
+  } finally { chat.close(); }
+});
+
 test('persistent controller RPC carries answers and events; disconnect rejects calls without replay', async () => {
   class Socket extends EventEmitter {
     sent = [];

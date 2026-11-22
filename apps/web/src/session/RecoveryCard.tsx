@@ -23,6 +23,7 @@ export function RecoveryCard({ recovery, busy, offline, onRetry, onChangeModel, 
   const [hiddenAt, setHiddenAt] = useState(0);
   if (hiddenAt === recovery.at) return null;
   const p = plainProblem(recovery.kind, recovery.message);
+  const retry = p.action && onRetry;
   const changeModel = p.changeModel && onChangeModel;
   const tone = recovery.kind === 'error' ? 'bad' : recovery.kind === 'limited' ? 'warn' : 'quiet';
   return (
@@ -38,11 +39,11 @@ export function RecoveryCard({ recovery, busy, offline, onRetry, onChangeModel, 
       </div>
       {recovery.kind === 'limited' && onAutoResume && <label className="automation-option"><input type="checkbox" checked={!!autoResume} disabled={busy || offline} onChange={event => onAutoResume(event.target.checked)} /> Continue when the limit resets</label>}
       {details && p.raw && <pre className="recovery-raw">{p.raw}</pre>}
-      {(p.raw || onRetry || changeModel) && (
+      {(p.raw || retry || changeModel) && (
         <div className="recovery-actions">
           {p.raw && <button className="ghost" aria-expanded={details} onClick={() => setDetails(!details)}>{details ? 'Hide details' : 'Details'}</button>}
           {changeModel && <button className="ghost" disabled={busy || offline} onClick={changeModel}>Choose model</button>}
-          {onRetry && <button className="primary" disabled={busy || offline} title={offline ? 'The machine is offline.' : undefined} onClick={onRetry}>{p.action}</button>}
+          {retry && <button className="primary" disabled={busy || offline} title={offline ? 'The machine is offline.' : undefined} onClick={retry}>{p.action}</button>}
         </div>
       )}
     </div>

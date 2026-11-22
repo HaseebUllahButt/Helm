@@ -229,6 +229,26 @@ case "$1" in --version) echo "2.1.0 (Claude Code)";; update) echo "network is do
   assert.equal(messages.filter(message => message.includes('network is down')).length, 1);
 });
 
+test('an update logs each cause and exit code once across updater instances', async () => {
+  const m = machine();
+  const failure = join(m.root, 'failure');
+  const binary = join(m.bin, 'claude');
+  writeFileSync(binary, `#!/bin/sh
+case "$1" in
+  --version) echo '2.1.0 (Claude Code)';;
+  update) read -r code cause < '${failure}'; echo "$cause" >&2; exit "$code";;
+esac
+`, { mode: 0o755 });
+  const messages = [];
+  for (const entry of ['3 First cause', '3 Second cause', '3 First cause', '4 First cause']) {
+    writeFileSync(failure, entry + '\n');
+    await m.updater({ log: message => messages.push(message) }).update({ engine: 'claude' });
+  }
+  assert.equal(messages.filter(message => message.includes('First cause')).length, 2);
+  assert.equal(messages.filter(message => message.includes('Second cause')).length, 1);
+  assert.ok(messages.some(message => message.includes('Exit code 4.')));
+});
+
 /** A fake Claude Code as large as the real program, which names the models it knows. */
 function bigClaude(m, from, knows) {
   const vf = join(m.root, 'claude.version');
@@ -265,6 +285,22 @@ test('Claude Code takes the early build when it does not know a model Anthropic 
   assert.equal(claude.version(), '2.1.5');
   assert.deepEqual([r.ok, r.from, r.to, r.changed], [true, '2.1.0', '2.1.5', true]);
   assert.match(r.message, /early build 2\.1\.5.*claude-new-2/);
+});
+
+test('repeated Claude early build failures log once', async () => {
+  const m = machine();
+  bigClaude(m, '2.1.0', ['claude-old-1']);
+  const binary = join(m.bin, 'claude');
+  const source = readFileSync(binary, 'utf8').replace(/  install\)[^\n]*/, '  install) echo "no build" >&2; exit 9;;');
+  writeFileSync(binary, source);
+  const messages = [];
+  const updater = m.updater({
+    currentModels: async () => ['claude-new-2'], earlyVersion: async () => '2.1.5',
+    log: message => messages.push(message),
+  });
+  await updater.update({ engine: 'claude' });
+  await updater.update({ engine: 'claude' });
+  assert.equal(messages.filter(message => message.includes('no build')).length, 1);
 });
 
 test('Claude Code stays on its channel when it knows every model or the early build is not newer', async () => {

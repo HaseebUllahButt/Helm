@@ -1,7 +1,7 @@
 import { errorMessage, missingFolderPath, SAFETY_BLOCK } from '../errors';
 
 /** A task outcome, with a safe message and a way to continue. */
-export interface Problem { title: string; text: string; action: string; changeModel?: boolean; raw?: string }
+export interface Problem { title: string; text: string; action?: string; changeModel?: boolean; raw?: string }
 type Kind = 'limited' | 'error' | 'interrupted' | 'restart';
 
 function tidy(message: string): string {
@@ -51,7 +51,7 @@ export function plainProblem(kind: Kind, message: string): Problem {
     text: `Restore the folder ${folder} on the chat’s machine. Then try again.`, raw,
   };
   if (/No conversation found with session ID/i.test(message)) return {
-    title: 'Saved chat missing', action: 'Try again', text: plainError(message), raw,
+    title: 'Saved chat missing', text: plainError(message), raw,
   };
   if (/\b401\b|unauthori[sz]ed|authentication required|not logged in|missing api key|no api key found/i.test(message)) return {
     title: 'Check this account', action: 'Try again', text: plainError(message), raw,

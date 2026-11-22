@@ -155,8 +155,12 @@ function check(profile) {
  * most `waitMs` - only for a profile never probed before, or for all of them
  * when the caller asked for a refresh.
  */
-export async function authStatuses(profiles, { refresh = false, waitMs = 4000 } = {}) {
+export async function authStatuses(profiles, { refresh = false, waitMs = 4000, cachedOnly = false } = {}) {
   load();
+  if (cachedOnly) return new Map(profiles.map(p => {
+    const hit = cache.get(keyOf(p));
+    return [p.id, hit?.stamp === loginStamp(p) ? hit?.status ?? 'unknown' : 'unknown'];
+  }));
   const waitFor = [];
   for (const p of profiles) {
     const hit = cache.get(keyOf(p));

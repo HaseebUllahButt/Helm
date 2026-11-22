@@ -183,7 +183,6 @@ function hasDetail(it: Item): boolean {
 }
 
 function commandExitText(code?: number): string | undefined {
-  if (code === 124) return 'Command timed out';
   if (code != null && code !== 0) return `Command failed (exit code ${code})`;
 }
 

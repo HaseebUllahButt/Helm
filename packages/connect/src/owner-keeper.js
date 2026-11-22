@@ -291,11 +291,11 @@ export class OwnerKeeper {
       while (agent) {
         try { reply = await this.ask({ ...agent, task }); break; }
         catch (error) {
-          if (!/model.{0,160}(?:not found|does not exist|not available|unavailable|not supported|not enabled)/i.test(error.message)) throw error;
+          if (!/model.{0,160}(?:not found|does not exist|not available|unavailable|not supported|not enabled)|\b(?:do not|don’t|don't) have access to (?:this|the) model\b/i.test(error.message)) throw error;
           if (loadOwner().keeper === false) return finish('turned off');
           const account = agents.find(row => row.id === agent.profileId)?.account ?? agent.profileId;
           refused.add(`${account}/${agent.model}`);
-          if (refused.size === 1) agents = await this.agents(true);
+          if (refused.size === 1) agents = await this.agents();
           agent = pickKeeperAgent(agents, refused);
           if (!agent) throw error;
         }

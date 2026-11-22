@@ -244,19 +244,20 @@ test('the keeper refreshes a rejected model and uses a working small model', asy
     home: () => ({ chats: [{ id: 'c1', last: 4, texts: ['Use short replies.'] }] }),
     lap: () => ({ chats: [] }),
   } });
-  const inventories = [], attempts = [];
-  keeper.agents = async refresh => {
-    inventories.push(!!refresh);
+  let inventories = 0;
+  const attempts = [];
+  keeper.agents = async () => {
+    inventories++;
     return [{ id: 'open', account: 'same-login', engine: 'opencode', available: true,
-      smallModels: refresh ? ['gone-flash', 'current-flash'] : ['gone-flash'] }];
+      smallModels: inventories === 2 ? ['gone-flash', 'current-flash'] : ['gone-flash'] }];
   };
   keeper.ask = async ({ model }) => {
     attempts.push(model);
-    if (model === 'gone-flash') throw new Error('Model not found');
+    if (model === 'gone-flash') throw new Error('You do not have access to this model');
     return 'NO CHANGE';
   };
   assert.equal(await keeper.run(), 'no change');
-  assert.deepEqual(inventories, [false, true]);
+  assert.equal(inventories, 2);
   assert.deepEqual(attempts, ['gone-flash', 'current-flash']);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).read.home.c1, 4);
 });

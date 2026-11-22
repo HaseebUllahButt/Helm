@@ -33,21 +33,25 @@ before(async () => {
       id: 'turn', text: 'Run the command', at: 1000, done: { status: 'error', durationMs: 3000 },
       items: [{ id: 'cmd', kind: 'command', command: 'example', output: 'working', status: 'error', exitCode, startedAt: 1000, doneAt: 4000 }],
     }]} />);
-    window.mountRecovery = (message, models) => {
+    window.mountRecovery = (message, models, offlineHelper = false) => {
       const env = { id: 'here', name: 'Here', online: true };
       const chat = { id: models.length ? 'model' : 'folder', cwd: '/project', title: 'Test chat',
         profileId: 'codex', driver: 'codex', engine: 'codex', status: 'idle',
-        recovery: { kind: 'error', message, at: Date.now() } };
+        recovery: { kind: 'error', message, at: Date.now() },
+        remoteHelpers: offlineHelper ? [{ id: 'helper', machine: 'away', title: 'Offline helper', status: 'blocked' }] : [] };
       const client = {
         on: () => () => {}, subscribe: () => {}, pendingActions: () => [], resumeActions: async () => [],
-        rpc: async (_env, method) => {
+        rpc: async (target, method) => {
+          if (target === 'away') throw Error('Machine offline.');
+          if (method === 'session.list') return { sessions: [] };
           if (method === 'session.events') return { session: chat, events: [], pending: [], last: 0 };
           if (method === 'model.list') return { models, default: models[0] };
           return {};
         },
       };
       root.render(<DrivenSession key={chat.id} client={client} env={env} session={chat}
-        onBack={() => {}} onClosed={() => {}} onArchived={() => {}} onSession={() => {}} />);
+        onBack={() => {}} onClosed={() => {}} onArchived={() => {}} onSession={() => {}}
+        onOpenSession={() => { window.openedHelper = true; }} />);
     };
     root.render(
       <AppErrorBoundary reload={() => window.reloads++}><App /></AppErrorBoundary>);
@@ -104,13 +108,31 @@ test('chat recovery opens the existing model picker and shows a missing folder p
   assert.equal(await card.getByRole('button', { name: 'Choose model' }).count(), 0);
 });
 
-test('the transcript distinguishes a timeout from another command failure', async t => {
+test('the transcript shows exit code 124 without assuming a timeout', async t => {
   const page = await pageFor(t);
   await page.evaluate(() => window.mountCommand(124));
   await page.locator('.work-head').click();
-  await page.getByText('Command timed out', { exact: true }).waitFor();
+  await page.getByText('Command failed (exit code 124)', { exact: true }).waitFor();
   await page.evaluate(() => window.mountCommand(7));
   await page.getByText('Command failed (exit code 7)', { exact: true }).waitFor();
+});
+
+test('a missing saved chat directs the owner to a new chat without a retry button', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.mountRecovery('No conversation found with session ID: test-chat', []));
+  const card = page.locator('.recovery');
+  await card.getByText('Saved chat missing', { exact: true }).waitFor();
+  assert.match(await card.innerText(), /Start a new chat/);
+  assert.equal(await card.getByRole('button', { name: 'Try again' }).count(), 0);
+});
+
+test('a helper waiting for approval has a disabled review button when offline', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.mountRecovery('Test error.', [], true));
+  const review = page.locator('.child-requests button').filter({ hasText: 'Offline helper' });
+  await review.waitFor();
+  assert.match(await review.innerText(), /Review request/);
+  assert.equal(await review.isDisabled(), true);
 });
 
 test('the installed shell remains recoverable even when its entry bundle is missing', async t => {

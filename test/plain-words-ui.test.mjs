@@ -19,7 +19,7 @@ test('a CLI failure keeps the original text for Details', () => {
   const raw = 'claude exited with code 1: No conversation found with session ID: c11b0faa-9520-4551-a2b0-6dd8c3971a7f';
   const p = plainProblem('error', raw);
   assert.equal(p.title, 'Saved chat missing');
-  assert.equal(p.action, 'Try again');
+  assert.equal(p.action, undefined);
   assert.match(p.text, /cannot find its saved chat/);
   assert.equal(p.raw, raw);
   assert.match(plainError('Error: 401 Unauthorized'), /signed out/);

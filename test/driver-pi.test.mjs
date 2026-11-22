@@ -211,7 +211,7 @@ async function onMessage(m) {
   }
   if (scenario === 'ext-command') return ok(m);
   if (scenario === 'omp-ext') { ok(m); return out({ type: 'prompt_result', id: m.id, agentInvoked: false }); }
-  if (scenario === 'retry-exhausted' || scenario === 'omp-provider-error') {
+  if (scenario === 'retry-exhausted' || scenario === 'omp-provider-error' || scenario === 'failed-replay') {
     const messages = [{ role: 'assistant', stopReason: 'error', content: [],
       ...(scenario === 'omp-provider-error' ? { errorMessage: 'The model is at capacity.' } : {}) }];
     const frames = [
@@ -219,10 +219,11 @@ async function onMessage(m) {
       { type: 'agent_start' },
       { type: 'agent_end', messages, willRetry: false },
     ];
-    if (scenario === 'retry-exhausted') frames.push(
+    if (scenario !== 'omp-provider-error') frames.push(
       { type: 'auto_retry_end', success: false, finalError: 'Too many requests' },
       { type: 'agent_settled' },
     );
+    if (scenario === 'failed-replay') frames.push({ type: 'agent_start' });
     process.stdout.write(frames.map(frame => JSON.stringify(frame) + '\\n').join(''));
     return;
   }
@@ -342,13 +343,28 @@ test('pi: an overflow compaction and its retry stay inside the one turn', async 
 for (const [scenario, cls, error] of [
   ['retry-exhausted', PiDriver, 'Too many requests'],
   ['omp-provider-error', OmpDriver, 'The model is at capacity.'],
-]) test(`${scenario} ends the reply as failed with the original cause`, async t => {
+]) test(`${scenario} reports the original cause without changing the turn status`, async t => {
   const { driver, log } = livePi(t, scenario, { cls });
   await driver.send('Answer me');
   const done = await log.until(e => e.type === 'turn.done');
-  assert.equal(done.status, 'error');
-  assert.equal(done.error, error);
+  assert.equal(done.status, 'ok');
+  assert.equal(done.error, undefined);
+  assert.deepEqual(log.of('error').map(({ turnId, message, kind }) => ({ turnId, message, kind })), [
+    { turnId: done.turnId, message: error, kind: 'provider-reply' },
+  ]);
   assert.equal(log.of('turn.done').length, 1);
+});
+
+test('Pi reports the failed reply before the next reply begins in the same read', async t => {
+  const { driver, log } = livePi(t, 'failed-replay');
+  await driver.send('Answer me');
+  await log.until(e => e.type === 'error' && e.kind === 'provider-reply');
+  const events = log.events;
+  const failure = events.findIndex(e => e.type === 'error' && e.kind === 'provider-reply');
+  assert.equal(events[failure].turnId, log.of('turn.start')[0].turnId);
+  assert.equal(events[failure].message, 'Too many requests');
+  assert.ok(events.slice(failure + 1).filter(e => e.type === 'status').every(e => e.status === 'working'));
+  assert.equal(driver.status, 'working');
 });
 
 test('omp: auto compaction after the turn reads as working, then idle', async (t) => {
