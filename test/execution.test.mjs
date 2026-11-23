@@ -273,16 +273,26 @@ test('a supervisor keeps output after its daemon is killed', { timeout: 15000 },
 });
 
 test('heavy work never waits: two heavy commands run at the same time', async () => {
-  const log = join(root, 'order.txt');
-  const code = name => `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(log)},${JSON.stringify(name + ' start\n')});setTimeout(()=>fs.appendFileSync(${JSON.stringify(log)},${JSON.stringify(name + ' end\n')}),350)`;
-  const a = launch(spec(code('a'), { heavy: true }));
-  const b = launch(spec(code('b'), { heavy: true }));
-  a.stdin.end(); b.stdin.end();
-  const messages = []; for (const child of [a,b]) child.on('message', m => messages.push(m));
-  const exits = await Promise.all([once(a, 'close'), once(b, 'close')]);
-  assert.ok(exits.every(([code]) => code === 0));
-  const lines = readFileSync(log, 'utf8').trim().split('\n');
-  assert.deepEqual(lines.slice(0, 2).map(l => l.split(' ')[1]), ['start', 'start'], lines.join(','));
+  // Keep both commands alive until the test has heard from both of them.
+  const commands = ['a', 'b'].map(name => launch(spec(
+    `process.stdin.resume(); console.log(${JSON.stringify(name + ' start')})`, { heavy: true, timeout: 12000 },
+  )));
+  const messages = [];
+  for (const child of commands) child.on('message', m => messages.push(m));
+  const exits = commands.map(child => once(child, 'close'));
+  let completed;
+  try {
+    const started = await Promise.all(commands.map((child, index) => Promise.race([
+      once(child.stdout, 'data').then(([data]) => data.toString().trim()),
+      exits[index].then(([code]) => { throw new Error(`Heavy command exited before it was ready (code ${code}).`); }),
+    ])));
+    assert.deepEqual(started, ['a start', 'b start']);
+    assert.ok(commands.every(child => child.exitCode === null && child.signalCode === null));
+  } finally {
+    for (const child of commands) if (!child.stdin.destroyed) child.stdin.end();
+    completed = await Promise.all(exits);
+  }
+  assert.deepEqual(completed.map(([code]) => code), [0, 0]);
   assert.ok(!messages.some(m => m.status === 'queued'));
 });
 
