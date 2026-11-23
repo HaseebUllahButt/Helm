@@ -142,6 +142,8 @@ and a project copy nobody kept. A helper can run on another machine
 - Leads stay at the first level. Each lead shows its helper count. Click its row to open or close its children.
   A removed remote helper shows **Stopped**. Its saved result stays on the parent.
   A machine disconnect or failed read shows the helper's last known state.
+  **Review request** loads the request from the helper's own machine.
+  If the machine does not answer, use **Try again** when it comes back.
   A lead that ended its turn with children still running shows **Waiting for its helpers**.
   The list reads the same task result as the CLI. It refreshes after remote
   updates and checks again when an older machine misses an update.

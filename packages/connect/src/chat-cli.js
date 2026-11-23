@@ -14,6 +14,7 @@ export class ManagedChat {
   #last = 0;
   #items = new Map();
   #providerFailures = new Set();
+  #commandEchoes = new Map();
   #lastError = null;
   #lastTurnId = null;
   #commandAttempt = null;
@@ -79,6 +80,9 @@ export class ManagedChat {
       switch (event.type) {
         case 'turn.start':
           this.#lastTurnId = event.turnId;
+          if (event.inputId && event.text?.trimStart().startsWith('/')) {
+            this.#commandEchoes.set(event.turnId, { inputId: event.inputId });
+          }
           if (attempt && !attempt.turnId && attempt.text === event.text?.trim()) {
             attempt.turnId = event.turnId;
           }
@@ -99,12 +103,19 @@ export class ManagedChat {
           else if (event.output) this.write(`${safe(event.output).slice(0, 8000)}\n`);
           break;
         case 'turn.done': {
+          const echo = this.#commandEchoes.get(event.turnId);
+          this.#commandEchoes.delete(event.turnId);
           const earlier = this.#lastError;
           const printed = earlier && earlier.message === event.error && (earlier.seq === event.seq - 1
             || earlier.kind === 'command' && earlier.turnId && earlier.turnId === event.turnId);
           if (printed) this.#lastError = null;
-          if (attempt?.turnId && attempt.turnId === event.turnId && event.status === 'error' && event.error) {
-            attempt.error = event.error;
+          if (event.status === 'error' && event.error) {
+            if (attempt?.turnId && (attempt.turnId === event.turnId || attempt.turnId === echo?.inputId)) {
+              attempt.error = event.error;
+            }
+            // A rejected command can close both its CLI turn and the original input.
+            if (echo?.inputId) this.#commandEchoes.set(echo.inputId, { error: event.error });
+            if (echo?.error === event.error) break;
           }
           if (!this.#providerFailures.delete(event.turnId) || event.status !== 'ok') {
             this.write(`\n[${safe(event.status)}]${event.error && !printed ? ` ${safe(event.error)}` : ''}\n`);

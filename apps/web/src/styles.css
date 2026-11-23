@@ -3011,6 +3011,9 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .child-requests button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 9px 12px; color: var(--need-text); }
 .child-requests button span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .child-requests small { display: block; color: var(--text-dim); font-size: var(--t-meta); }
+.child-request-error { padding: 0 12px 8px; color: var(--text-dim); font-size: var(--t-meta); }
+.child-request-error p { margin: 4px 0; }
+.child-request-error button { width: auto; }
 .subagent-request { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 5px 8px; color: var(--need-text); font-size: var(--t-meta); }
 .subagent-request.subagent-open { color: var(--text-dim); }
 .subagent-request.subagent-open:hover { color: var(--text); }
