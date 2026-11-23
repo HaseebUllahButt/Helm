@@ -35,21 +35,19 @@ function fixture() {
   return { mesh, network, link, attach, answer, tick, now: () => clock };
 }
 
-test('a network change discards old latency samples without moving an in-flight write', async () => {
+test('a network change keeps the timing and never moves an in-flight write', async () => {
   const { mesh, link, attach, answer, tick } = fixture();
   const vm = link('https://vm.example');
   const own = link('http://192.168.1.9:8787');
   attach(vm); attach(own);
-  const oldProbe = own.sent.find(f => f.method === 'ping');
+  const probe = own.sent.find(f => f.method === 'ping');
   const write = mesh.call('remote', 'session.send', { text: 'once' });
   const request = own.sent.find(f => f.method === 'session.send');
-  tick(1000);
-  mesh.networkChanged();
   tick(2);
-  const freshProbe = own.sent.filter(f => f.method === 'ping').at(-1);
-  mesh.receive(own, { t: T.RPC_RESULT, id: freshProbe.id, ok: true, result: {} });
-  await new Promise(resolve => setImmediate(resolve));
-  mesh.receive(own, { t: T.RPC_RESULT, id: oldProbe.id, ok: true, result: {} });
+  mesh.networkChanged();
+  // The probe still out is kept, not sent again, and its answer still counts.
+  assert.equal(own.sent.filter(f => f.method === 'ping').length, 1);
+  mesh.receive(own, { t: T.RPC_RESULT, id: probe.id, ok: true, result: {} });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(mesh.estimate(own, 'remote').ms, 2);
   assert.equal(own.sent.filter(f => f.method === 'session.send').length, 1);
