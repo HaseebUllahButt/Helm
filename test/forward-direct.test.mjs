@@ -119,7 +119,7 @@ async function ask(caller, port) {
   return sent[0];
 }
 
-test('a forward goes straight to the machine over the direct channel, not the hub', async (t) => {
+test('a forward goes straight to the machine over the direct channel, not the hub', { timeout: 15_000 }, async (t) => {
   process.env.HELM_SSH_PORT = String(APP);
   t.after(() => { delete process.env.HELM_SSH_PORT; });
   const ch = channel(NEAR);
@@ -133,7 +133,7 @@ test('a forward goes straight to the machine over the direct channel, not the hu
   assert.equal(hub.calls.length, 0);
 });
 
-test('over a direct channel the far machine opens only allowed ports, and only for its own machines', async (t) => {
+test('over a direct channel the far machine opens only allowed ports, and only for its own machines', { timeout: 15_000 }, async (t) => {
   process.env.HELM_SSH_PORT = String(APP);
   t.after(() => { delete process.env.HELM_SSH_PORT; });
   assert.equal((await ask(NEAR, APP)).t, T.TUNNEL_READY);
@@ -147,7 +147,7 @@ test('over a direct channel the far machine opens only allowed ports, and only f
   }
 });
 
-test('a port the far machine does not allow gives the refused page, as through a hub', async (t) => {
+test('a port the far machine does not allow gives the refused page, as through a hub', { timeout: 15_000 }, async (t) => {
   const ch = channel(NEAR);
   const { fwd, hub } = await forward(t, { port: 5432, direct: ch.open });
   const page = await get(fwd.port);
@@ -156,7 +156,7 @@ test('a port the far machine does not allow gives the refused page, as through a
   assert.equal(hub.calls.length, 0);
 });
 
-test('a direct open that cannot start goes to the hub, with no error page', async (t) => {
+test('a direct open that cannot start goes to the hub, with no error page', { timeout: 15_000 }, async (t) => {
   process.env.HELM_SSH_PORT = String(APP);
   t.after(() => { delete process.env.HELM_SSH_PORT; });
   // An older Helm on the far machine refuses every direct stream but copies.
@@ -176,7 +176,108 @@ test('a direct open that cannot start goes to the hub, with no error page', asyn
   assert.equal((await get(c.fwd.port)).text, 'hub');
 });
 
-test('a direct channel that drops closes the forwarded connection on both machines, never replayed', async (t) => {
+/** A loopback app that keeps each connection open and says "hi". */
+async function liveApp(t) {
+  const held = [];
+  const server = createServer((s) => { held.push(s); s.write('hi'); s.on('error', () => {}); });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => { for (const s of held) s.destroy(); server.close(); });
+  process.env.HELM_SSH_PORT = String(server.address().port);
+  t.after(() => { delete process.env.HELM_SSH_PORT; });
+  return { port: server.address().port, held };
+}
+
+/** A far-side link that records what the daemon sends on it. */
+function recorder() {
+  const sent = [];
+  return { sent, link: { id: `dc-rec-${++seq}`, send: (t, extra) => { sent.push({ t, ...extra }); return Promise.resolve(true); } } };
+}
+
+async function until(check, what) {
+  for (let i = 0; i < 400; i++) {
+    const v = check();
+    if (v) return v;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+test('a copy and a forward never share a stream id', { timeout: 15_000 }, async (t) => {
+  const { port } = await liveApp(t);
+  const { sent, link } = recorder();
+  t.after(() => daemon.directChannelGone(link));
+  // A copy holds the id: a forward asking for it is refused.
+  daemon.copyReceiver.streams.set(`${link.id} c1`, { link, sid: 'c1' });
+  t.after(() => daemon.copyReceiver.streams.delete(`${link.id} c1`));
+  daemon.directTunnel(link, { t: T.TUNNEL_OPEN, sid: 'c1', port, flow: 1 }, NEAR);
+  assert.deepEqual(sent.at(-1), { t: T.TUNNEL_CLOSE, sid: 'c1', reason: 'duplicate stream id' });
+  // A forward holds the id: a copy asking for it is refused before it starts.
+  daemon.directTunnel(link, { t: T.TUNNEL_OPEN, sid: 'f1', port, flow: 1 }, NEAR);
+  await until(() => sent.some((f) => f.t === T.TUNNEL_READY && f.sid === 'f1'), 'the forward');
+  daemon.directTunnel(link, { t: T.TUNNEL_OPEN, sid: 'f1', copy: { v: 1 } }, NEAR);
+  assert.deepEqual(sent.at(-1), { t: T.TUNNEL_CLOSE, sid: 'f1', reason: 'duplicate stream id' });
+});
+
+test('an old stream\'s socket closing late never takes the entry of a new stream with its id', { timeout: 15_000 }, async (t) => {
+  const { port, held } = await liveApp(t);
+  const { sent, link } = recorder();
+  const ready = () => sent.filter((f) => f.t === T.TUNNEL_READY && f.sid === 's').length;
+  daemon.directTunnel(link, { t: T.TUNNEL_OPEN, sid: 's', port, flow: 1 }, NEAR);
+  await until(() => ready() === 1 && held.length === 1, 'the first stream');
+  const [old] = held;
+  const oldGone = once(old, 'close');
+  // Closed and opened again at once: the old socket's close comes later.
+  daemon.directTunnel(link, { t: T.TUNNEL_CLOSE, sid: 's' }, NEAR);
+  daemon.directTunnel(link, { t: T.TUNNEL_OPEN, sid: 's', port, flow: 1 }, NEAR);
+  await until(() => ready() === 2 && held.length === 2, 'the second stream');
+  await oldGone;
+  const fresh = held[1];
+  assert.equal(fresh.destroyed, false);
+  // The new stream is still known, so the channel's end ends it too.
+  const freshGone = once(fresh, 'close');
+  daemon.directChannelGone(link);
+  await freshGone;
+});
+
+test('stream bytes to the far machine wait while the direct channel has no room', { timeout: 15_000 }, async (t) => {
+  const { port, held } = await liveApp(t);
+  const ch = channel(NEAR);
+  let room = false, asked = 0;
+  const open = (handlers) => ({ ...ch.open(handlers), room: () => { asked++; return room; } });
+  const { fwd } = await forward(t, { port, direct: open });
+  const client = tcpConnect(fwd.port, '127.0.0.1');
+  client.on('error', () => {});
+  t.after(() => client.destroy());
+  await once(client, 'data');
+  const [server] = held;
+  let got = '';
+  server.on('data', (c) => { got += c; });
+  client.write('upload');
+  await until(() => asked >= 3, 'the sender to ask for room');
+  assert.equal(got, '', 'nothing left while there was no room');
+  room = true;
+  await until(() => got === 'upload', 'the bytes once there is room');
+});
+
+test('after this machine leaves its network, no direct stream opens and open ones end', { timeout: 15_000 }, async (t) => {
+  const { port, held } = await liveApp(t);
+  const { sent, link } = recorder();
+  // One round first: the service writes its own record once, then not again.
+  await daemon.setExtra([]).catch(() => {});
+  daemon.directTunnel(link, { t: T.TUNNEL_OPEN, sid: 'l1', port, flow: 1 }, NEAR);
+  await until(() => held.length === 1, 'a stream');
+  const saved = N.loadNetwork();
+  rmSync(join(process.env.HELM_DIR, 'network.json'));
+  t.after(() => N.saveNetwork(saved));
+  daemon.directTunnel(link, { t: T.TUNNEL_OPEN, sid: 'l2', port, flow: 1 }, NEAR);
+  assert.match(sent.find((f) => f.sid === 'l2')?.reason ?? '', /another machine of this network only/);
+  const gone = once(held[0], 'close');
+  // The next round of the service's own check notices the roster is gone.
+  await daemon.setExtra([]).catch(() => {});
+  await gone;
+});
+
+test('a direct channel that drops closes the forwarded connection on both machines, never replayed', { timeout: 15_000 }, async (t) => {
   const held = new Set();
   const live = createServer((s) => { held.add(s); s.write('hi'); s.on('close', () => held.delete(s)); s.on('error', () => {}); });
   await new Promise((r) => live.listen(0, '127.0.0.1', r));

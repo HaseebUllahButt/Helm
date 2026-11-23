@@ -1087,7 +1087,7 @@ export class Daemon {
       else this.peers?.dropRevoked(net.revoked);
       this.copyReceiver?.dropRevoked(net.revoked);
       this.mesh?.dropRevoked(net.revoked);
-    }
+    } else this.#dropDirectTunnels();
 
     this.#reconcileLinks();
   }
@@ -1871,19 +1871,26 @@ export class Daemon {
    * removed machine loses it at once.
    */
   directTunnel(link, frame, caller) {
-    if (frame?.t === T.TUNNEL_OPEN && frame.copy === undefined) {
+    if (frame?.t === T.TUNNEL_OPEN) {
       if (typeof frame.sid !== 'string' || !frame.sid || frame.sid.length > 64) return;
-      const net = loadNetwork() ?? this.net;
-      if (typeof caller !== 'string' || caller === net?.self || !Object.hasOwn(net?.machines ?? {}, caller)
-          || net.revoked?.[caller] || net.revoked?.[net.self]) {
-        link.send(T.TUNNEL_CLOSE, { sid: frame.sid, reason: 'a direct stream comes from another machine of this network only' });
-        return;
-      }
-      if (this.#tunnels.has(this.#key(link, frame.sid))) {
+      // One id, one stream: a copy and a forward never share one, or the
+      // copy would take the forward's close.
+      const key = this.#key(link, frame.sid);
+      if (this.#tunnels.has(key) || this.copyReceiver?.streams.has(key) || this.copyReceiver?.closing.has(key)) {
         link.send(T.TUNNEL_CLOSE, { sid: frame.sid, reason: 'duplicate stream id' });
         return;
       }
-      return this.#openTunnel(link, frame);
+    }
+    if (frame?.t === T.TUNNEL_OPEN && frame.copy === undefined) {
+      // The roster on disk, not the one kept from the start: after `helm
+      // leave` this machine is in no network and opens nothing.
+      const net = loadNetwork();
+      if (!net?.machines?.[net.self] || typeof caller !== 'string' || caller === net.self
+          || !Object.hasOwn(net.machines, caller) || net.revoked?.[caller] || net.revoked?.[net.self]) {
+        link.send(T.TUNNEL_CLOSE, { sid: frame.sid, reason: 'a direct stream comes from another machine of this network only' });
+        return;
+      }
+      return this.#openTunnel(link, frame, { direct: true });
     }
     this.#tunnelFrame(link, frame, caller);
   }
@@ -1894,25 +1901,38 @@ export class Daemon {
     this.#dropTunnels(link);
   }
 
+  /** This machine left its network: no direct stream outlives that. */
+  #dropDirectTunnels() {
+    for (const [key, tunnel] of this.#tunnels) {
+      if (!tunnel.direct) continue;
+      this.#tunnels.delete(key);
+      this.#endTunnel(tunnel);
+    }
+  }
+
   /**
    * Terminate a tunnel by connecting to a port on this machine's loopback
    * interface. This is how ssh reaches a box behind NAT: the daemon already
    * holds the outbound connection, so nothing has to accept an inbound one.
    */
-  #openTunnel(link, { sid, port, flow, window }) {
+  #openTunnel(link, { sid, port, flow, window }, { direct = false } = {}) {
     const wanted = Number(port) || 22;
     if (!this.#allowedTunnelPorts().includes(wanted)) {
       return link.send(T.TUNNEL_CLOSE, { sid, reason: 'port not allowed' });
     }
     const key = this.#key(link, sid);
     const sock = connectLoopback(wanted);
-    const tunnel = { sock, link, release: beginTransferActivity() };
+    const tunnel = { sock, link, direct, release: beginTransferActivity() };
     this.#tunnels.set(key, tunnel);
+    // The entry under this key, if it is still this stream's: a new stream
+    // can reuse the id while this socket's close is on its way.
+    const mine = () => this.#tunnels.get(key) === tunnel;
     const end = reason => {
       tunnel.release?.();
       tunnel.sender?.stop();
       tunnel.receiver?.stop();
-      if (!this.#tunnels.delete(key)) return;
+      if (!mine()) return;
+      this.#tunnels.delete(key);
       link.send(T.TUNNEL_CLOSE, { sid, reason });
       sock.destroy();
     };
@@ -1937,7 +1957,7 @@ export class Daemon {
     });
     sock.on('error', err => end(err.message));
     sock.on('close', () => {
-      if (tunnel.sender && this.#tunnels.has(key)) tunnel.sender.finish(() => end('closed'));
+      if (tunnel.sender && mine()) tunnel.sender.finish(() => end('closed'));
       else end('closed');
     });
   }

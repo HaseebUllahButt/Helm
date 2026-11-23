@@ -37,10 +37,13 @@ function fakePeers() {
     const peer = {
       signal, sent: [], received: [], closed: false, ready, refuse: null,
       open() { opened(); },
-      send(frame, onStart) {
+      backlog: () => 0,
+      send(frame, onStart, options) {
         if (this.closed || this.refuse === 'unsent') return Promise.reject(Object.assign(new Error('closed'), { unsent: true }));
+        if (this.refuse === 'stuck') return Promise.reject(new Error('direct channel backpressure did not drain'));
         onStart?.();
         this.sent.push(frame);
+        this.options = [...(this.options ?? []), options];
         return Promise.resolve();
       },
       answer(id, result = {}) { onMessage({ t: 'rpcResult', id, ok: true, result }); },
@@ -326,6 +329,41 @@ test('a forward\'s stream goes direct only when requests do, and hears only its 
   assert.equal(closes.length, 1);
   assert.equal(mesh.tunnel('remote', none), null, 'the channel went, so the next stream takes a hub');
   assert.equal(peers.made.length, 1);
+  mesh.stop();
+});
+
+test('an ended stream drops its queued frames but its close, and a frame that cannot go closes the channel', async () => {
+  const { mesh, timed } = fixture();
+  const peer = await timed(5, 600);
+  const none = { onFrame() {}, onClose() {} };
+  const stream = mesh.tunnel('remote', none);
+  await stream.send(T.TUNNEL_OPEN, { port: 1 });
+  await stream.send(T.TUNNEL_CLOSE, {});
+  const [open, close] = peer.options.slice(-2);
+  assert.equal(open.skip(), false, 'live: it goes');
+  stream.close();
+  // An open still queued when the hub took over never reaches the app.
+  assert.equal(open.skip(), true);
+  assert.equal(close.skip(), false, 'the close still goes');
+
+  // A stream frame that could not leave: the far end would hold its socket
+  // while the channel stays up, so the channel goes.
+  const closes = [];
+  const next = mesh.tunnel('remote', { onFrame() {}, onClose: (e) => closes.push(e) });
+  peer.refuse = 'stuck';
+  await assert.rejects(next.send(T.TUNNEL_DATA, { data: Buffer.from('x') }));
+  assert.equal(peer.closed, true);
+  assert.equal(closes.length, 1);
+  mesh.stop();
+});
+
+test('stream bytes wait while the channel has a backlog, so pings do not queue behind video', async () => {
+  const { mesh, timed } = fixture();
+  const peer = await timed(5, 600);
+  const stream = mesh.tunnel('remote', { onFrame() {}, onClose() {} });
+  assert.equal(stream.room(), true);
+  peer.backlog = () => 256 * 1024;
+  assert.equal(stream.room(), false);
   mesh.stop();
 });
 

@@ -94,6 +94,9 @@ for websites that cannot run inside a frame.
   is down, no answer in 3 s) goes to the hub; one that fails later is never
   replayed. A connection stays on the route it opened on, so a screen that
   opened before the channel was up stays on the hub until it reconnects.
+  Stream bytes wait while 256 KiB is queued on the channel, so pings and
+  requests on it never wait behind megabytes of video; a stream frame that
+  cannot be sent closes the channel, which frees the far socket.
 - **Lifetime:** 3 hours unless --keep or --for. A restart reopens the
   same local port. A stop on either machine removes its half and tells the
   other; an away machine is told when it is back (`pending`). A refused

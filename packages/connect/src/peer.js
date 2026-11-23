@@ -4,6 +4,7 @@ import { constants, createDeflateRaw } from 'node:zlib';
 import { nativeDirectConfig } from './direct-config.js';
 import { encodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
 import { CHUNK_AT, CHUNK_TYPE, chunkText } from '../../protocol/frame-chunks.js';
+import { TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
 
 /**
  * Direct connections to clients.
@@ -286,6 +287,10 @@ export class PeerHub {
     peer.transport = {
       id: `dc-${peerId}-${++this.#transportSeq}`,
       send: (t, extra = {}) => this.#sendTunnel(peerId, peer, t, extra),
+      // Stream bytes wait while this much is ahead of them, so an answer
+      // (a ping's) never queues behind megabytes of video (agent.js
+      // #openTunnel asks before each piece).
+      tunnelRoom: () => (peer.tunnelQueued ?? 0) + (peer.channel?.bufferedAmount ?? 0) < TUNNEL_SOCKET_LIMIT,
     };
     this.#peers.set(peerId, peer);
     peer.deadline = setTimeout(() => this.drop(peerId, peer), 20_000);
@@ -488,9 +493,13 @@ export class PeerHub {
   }
 
   #sendTunnel(peerId, peer, t, extra) {
+    let frame;
+    try { frame = encodeTunnelFrame({ t, ...extra }, true); } catch { this.drop(peerId, peer); return Promise.resolve(false); }
+    peer.tunnelQueued = (peer.tunnelQueued ?? 0) + frame.length;
     const run = (peer.sendChain ?? Promise.resolve()).then(async () => {
       let ok = false;
-      try { ok = await sendBuffered(peer.channel, encodeTunnelFrame({ t, ...extra }, true)); } catch {}
+      try { ok = await sendBuffered(peer.channel, frame); } catch {}
+      peer.tunnelQueued -= frame.length;
       if (!ok) this.drop(peerId, peer);
       return ok;
     });

@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { M, T } from '@helm/protocol';
 import { directPeer } from './direct-rpc.js';
+import { TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
 
 const TUNNEL_TYPES = new Set([T.TUNNEL_READY, T.TUNNEL_ACK, T.TUNNEL_DATA, T.TUNNEL_CLOSE]);
 
@@ -269,10 +270,22 @@ export class DirectMesh {
     if (!this.#usable(env) || channel?.state !== 'open') return null;
     const sid = `dt-${randomBytes(8).toString('hex')}`;
     channel.tunnels.set(sid, { onFrame, onClose });
+    let ended = false;
     return {
       sid,
-      send: (t, extra = {}) => channel.peer.send({ ...extra, t, sid }),
-      close: () => { channel.tunnels.delete(sid); },
+      // Once the stream ended, frames still queued are dropped - an open
+      // the hub took over never reaches the app - except its close.
+      send: (t, extra = {}) => channel.peer.send({ ...extra, t, sid }, undefined, { skip: () => ended && t !== T.TUNNEL_CLOSE })
+        .catch((error) => {
+          // A frame that could not go leaves the other machine holding the
+          // stream. Closing the channel makes it let go (agent.js directChannelGone).
+          if (!error?.cancelled && this.channels.get(env) === channel) this.#drop(env);
+          throw error;
+        }),
+      // Room for stream bytes: they wait behind this much, so a ping and
+      // its answer never queue behind megabytes of video.
+      room: () => (channel.peer.backlog?.() ?? 0) < TUNNEL_SOCKET_LIMIT,
+      close: () => { ended = true; channel.tunnels.delete(sid); },
     };
   }
 

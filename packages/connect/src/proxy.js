@@ -48,7 +48,8 @@ async function connectProxy(host, port) {
 /**
  * The same stream as `bridge`, over a direct channel to the machine instead
  * of a hub. `openChannel(handlers)` gives { send(t, extra) -> Promise,
- * close() } or null (hub-mesh.js tunnel); frames for the stream reach
+ * close(), room?() -> whether stream bytes may go now } or null
+ * (hub-mesh.js tunnel); frames for the stream reach
  * handlers.onFrame, a lost channel handlers.onClose. Always with credit.
  * Rejects with `established` as `bridge` does, so a caller can try a hub
  * only when no byte has moved.
@@ -104,7 +105,8 @@ export function bridgeDirect(openChannel, port, { input, output, timeout = 3000 
           release = beginTransferActivity();
           clearTimeout(timer);
           receiver = new TunnelReceiver(output, (bytes) => send(T.TUNNEL_ACK, { bytes }), shutdown, { window: STREAM_WINDOW });
-          sender = new TunnelSender(input, (chunk) => send(T.TUNNEL_DATA, { data: chunk }), shutdown, { window: tunnelWindow(msg.window) });
+          sender = new TunnelSender(input, (chunk) => send(T.TUNNEL_DATA, { data: chunk }), shutdown,
+            { window: tunnelWindow(msg.window), ...(channel.room ? { canSend: channel.room } : {}) });
           input.on('end', end);
           input.on('error', shutdown);
           output.on('error', shutdown);
