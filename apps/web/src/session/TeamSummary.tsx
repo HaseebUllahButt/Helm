@@ -43,28 +43,35 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
           if (!update || update.version <= loadVersion) return m;
           offlineFallbacks.delete(key);
           return { ...m, session: update.session };
-        }).filter((m) => !m.session.archived).map(markOffline);
-        const ordered: TeamMember[] = [];
-        const used = new Set<string>();
-        const visit = (host: string, id: string) => {
-          for (const member of rows) {
-            const key = `${member.envId}/${member.session.id}`;
-            if (used.has(key) || member.session.delegation?.parentId !== id
-              || (member.session.delegation.parentMachine || member.envId) !== host) continue;
-            used.add(key); ordered.push(member);
-            visit(member.envId ?? envId, member.session.id);
-          }
-        };
-        visit(envId, parentId);
+        }).filter((m) => !m.session.archived);
         published = true;
         setTeam(previous => {
-          if (!offlineFallbacks.size) return ordered;
-          const knownRows = new Map(previous.map(m => [`${m.envId}/${m.session.id}`, m.session]));
-          return ordered.map(member => {
-            const key = `${member.envId}/${member.session.id}`;
-            const last = offlineFallbacks.has(key) && knownRows.get(key);
-            return last ? { ...member, session: { ...last, offline: true } } : member;
-          });
+          const keyOf = (member: TeamMember) => `${member.envId}/${member.session.id}`;
+          const knownRows = new Map(previous.map(m => [keyOf(m), m.session]));
+          const readKeys = new Set(rows.map(keyOf));
+          const saved = offlineFallbacks.size ? previous.filter(m => !readKeys.has(keyOf(m))
+            && !updates.get(keyOf(m))?.session.archived) : [];
+          const offlineRows = [...rows, ...saved];
+          const ordered: TeamMember[] = [];
+          const used = new Set<string>();
+          const visit = (host: string, id: string, offlineHost?: string) => {
+            for (const member of offlineHost ? offlineRows : rows) {
+              const key = keyOf(member);
+              if (used.has(key) || member.session.delegation?.parentId !== id
+                || (member.session.delegation.parentMachine || member.envId) !== host) continue;
+              used.add(key);
+              const machine = member.envId ?? envId;
+              const fallback = offlineFallbacks.has(key);
+              const last = fallback ? knownRows.get(key) : undefined;
+              const unavailable = fallback || (!readKeys.has(key) && offlineHost === machine);
+              ordered.push(markOffline(unavailable
+                ? { ...member, session: { ...(last ?? member.session), offline: true } }
+                : member));
+              visit(machine, member.session.id, fallback ? machine : offlineHost);
+            }
+          };
+          visit(envId, parentId);
+          return ordered;
         });
       };
       const reads = new Map<string, Promise<Session[]>>();
