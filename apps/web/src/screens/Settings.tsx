@@ -4,7 +4,8 @@ import { accountsFrom, type Account } from '../accounts';
 import { EngineMark } from '../EngineMark';
 import { PublicLinks } from '../PublicLinks';
 import { DictationKey } from '../DictationKey';
-import { BackIcon, Icon } from '../Icon';
+import { BackIcon, Icon, type IconName } from '../Icon';
+import { useLook } from '../appearance';
 import { Client, type Environment } from '../client';
 import { engineOf } from '../engines';
 import { startSummary } from './common';
@@ -24,10 +25,36 @@ const AppearanceSettings = lazy(() => import('../AppearanceSettings').then((m) =
  * the gear instead of under the machine list, where it outweighed the
  * machines themselves.
  */
+/** Settings' own screens. Classic lists them in one box in this order; the
+ *  New look groups them under names, with a coloured icon each, as Apple's
+ *  Settings does. */
+const GROUPS: { title: string; items: { kind: string; label: string; icon: IconName; color: string }[] }[] = [
+  { title: '', items: [
+    { kind: 'owner', label: 'Your preferences', icon: 'sliders', color: '#8e8e93' },
+    { kind: 'devices', label: 'Devices', icon: 'devices', color: '#2f7cf6' },
+  ] },
+  { title: 'Agents', items: [
+    { kind: 'network-settings', label: 'Agent defaults', icon: 'sparkle', color: '#7a5af8' },
+    { kind: 'tools', label: 'Tools', icon: 'tool', color: '#e8772e' },
+    { kind: 'schedules', label: 'Schedules', icon: 'calendar', color: '#e5484d' },
+  ] },
+  { title: 'Sharing', items: [
+    { kind: 'links', label: 'Spins', icon: 'link', color: '#2b9a66' },
+  ] },
+  { title: 'Helm', items: [
+    { kind: 'usage', label: 'Usage & cost', icon: 'chart', color: '#1190a8' },
+    { kind: 'dashboard', label: 'Dashboard', icon: 'gauge', color: '#5b5bd6' },
+    { kind: 'updates', label: 'Updates', icon: 'download', color: '#6b7280' },
+  ] },
+];
+
+const CLASSIC_ORDER = ['owner', 'devices', 'network-settings', 'links', 'schedules', 'tools', 'usage', 'dashboard', 'updates'];
+
 export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }: {
   client: Client; envs: Environment[]; onBack: () => void; onVoice: (envIds: string[]) => void;
   onOpen: (v: MainView) => void; onUnpair: () => void;
 }) {
+  const look = useLook();
   return (
     <>
       <div className="bar">
@@ -36,51 +63,36 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
       </div>
       <div className="scroll"><div className="pad column">
         <ConnectionCheck client={client} envs={envs} />
-        <div className="rows">
-          <button className="row" onClick={() => onOpen({ kind: 'owner' })}>
-            <span className="grow"><span className="rt">Your preferences</span></span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </button>
-          <button className="row" onClick={() => onOpen({ kind: 'devices' })}>
-            <span className="grow"><span className="rt">Devices</span></span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </button>
-          <button className="row" onClick={() => onOpen({ kind: 'network-settings' })}>
-            <span className="grow"><span className="rt">Agent defaults</span></span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </button>
-          <button className="row" onClick={() => onOpen({ kind: 'links' })}>
-            <span className="grow"><span className="rt">Spins</span></span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </button>
-          <button className="row" onClick={() => onOpen({ kind: 'schedules' })}>
-            <span className="grow"><span className="rt">Schedules</span></span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </button>
-          <button className="row" onClick={() => onOpen({ kind: 'tools' })}>
-            <span className="grow"><span className="rt">Tools</span></span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </button>
-          <button className="row" onClick={() => onOpen({ kind: 'usage' })}>
-            <span className="grow"><span className="rt">Usage & cost</span></span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </button>
-          <button className="row" onClick={() => onOpen({ kind: 'dashboard' })}>
-            <span className="grow"><span className="rt">Dashboard</span></span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </button>
-          <button className="row" onClick={() => onOpen({ kind: 'updates' })}>
-            <span className="grow"><span className="rt">Updates</span></span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </button>
-        </div>
+        {look === 'new' ? GROUPS.map((g) => (
+          <div key={g.title || 'you'} className="set-group">
+            {g.title && <div className="section">{g.title}</div>}
+            <div className="rows">
+              {g.items.map((it) => (
+                <button key={it.kind} className="row set-row" onClick={() => onOpen({ kind: it.kind } as MainView)}>
+                  <span className="set-tile" style={{ background: it.color }}><Icon name={it.icon} size={17} /></span>
+                  <span className="grow"><span className="rt">{it.label}</span></span>
+                  <span className="chev"><Icon name="forward" size={15} /></span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )) : (
+          <div className="rows">
+            {CLASSIC_ORDER.map((k) => GROUPS.flatMap((g) => g.items).find((it) => it.kind === k)!).map((it) => (
+              <button key={it.kind} className="row" onClick={() => onOpen({ kind: it.kind } as MainView)}>
+                <span className="grow"><span className="rt">{it.label}</span></span>
+                <span className="chev"><Icon name="forward" size={15} /></span>
+              </button>
+            ))}
+          </div>
+        )}
 
         <SharedKeys client={client} envs={envs} />
 
         <div className="section">Speech input</div>
         <DictationKey client={client} envs={envs} onSaved={onVoice} />
 
-        <div className="section">appearance</div>
+        <div className="section">Appearance</div>
         <div className="rows">
           <Suspense fallback={<div className="row appearance"><span className="grow"><span className="rt">Appearance</span></span></div>}>
             <AppearanceSettings />

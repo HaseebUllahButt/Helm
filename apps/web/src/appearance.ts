@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from 'react';
+
 /**
  * How this device looks: look, theme, diff colours, chat width, list density.
  *
@@ -21,6 +23,13 @@ export interface Appearance {
 }
 
 const KEY = 'helm.appearance';
+
+/** The look in force now, for code that draws differently per look (icons,
+ *  the settings list). Kept here so a change reaches every icon at once. */
+let currentLook: Look = 'classic';
+const lookListeners = new Set<() => void>();
+const subscribeLook = (f: () => void) => { lookListeners.add(f); return () => { lookListeners.delete(f); }; };
+export const useLook = (): Look => useSyncExternalStore(subscribeLook, () => currentLook);
 export const DEFAULTS: Appearance = { look: 'classic', theme: 'system', diff: 'green', width: 'comfortable', density: 'comfortable' };
 
 export function loadAppearance(): Appearance {
@@ -47,6 +56,7 @@ export function applyAppearance(a: Appearance = loadAppearance()) {
   const theme = resolved(a.theme);
   root.dataset.theme = theme;
   root.dataset.look = a.look;
+  if (a.look !== currentLook) { currentLook = a.look; lookListeners.forEach((f) => f()); }
   root.dataset.diff = a.diff;
   root.dataset.width = a.width;
   root.dataset.density = a.density;
