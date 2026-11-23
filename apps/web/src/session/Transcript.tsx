@@ -9,6 +9,7 @@ import { userMessage } from './userMessage';
 import { splitAgentMessage, helperMessages } from './agentMessage';
 import { stripBrief } from '@helm/protocol/brief';
 import { plainError } from './problem';
+import { isMissingSavedChat } from '../errors';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
 import { ContextCard } from './ContextCard';
 import { TodoCard, isTodoItem, parseTodos } from './Todos';
@@ -182,6 +183,10 @@ function hasDetail(it: Item): boolean {
   return changesOf(it).length > 0 || !!(it.output || it.error);
 }
 
+function commandExitText(code?: number): string | undefined {
+  if (code != null && code !== 0) return `Command failed (exit code ${code})`;
+}
+
 function StepDetail({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
   const command = rawCommand(item);
   const out = (item.output ?? item.text ?? '').replace(/\s+$/, '');
@@ -194,11 +199,12 @@ function StepDetail({ item, byParent }: { item: Item; byParent: Map<string, Item
     </div>
   );
   if (command !== undefined) {
+    const exit = commandExitText(item.exitCode);
     return (
       <div className="step-raw">
         <code className="step-cmd">{command}</code>
         {raw && <pre className="cmd-out">{raw}</pre>}
-        {item.exitCode != null && item.exitCode !== 0 && <div className="step-exit">exit {item.exitCode}</div>}
+        {exit && <div className="step-exit">{exit}</div>}
       </div>
     );
   }
@@ -311,6 +317,7 @@ function Work({ turn, items, byParent, live, label, blocked }: {
 
 function CommandItem({ item }: { item: Item }) {
   const live = item.status === 'streaming';
+  const exit = commandExitText(item.exitCode);
   const out = (item.output ?? item.text ?? '').replace(/\s+$/, '');
   const lines = out ? out.split('\n') : [];
   // Output is folded until asked for: the command says what happened, and
@@ -327,7 +334,7 @@ function CommandItem({ item }: { item: Item }) {
         {/* Helm ran it for helm sudo, after the owner allowed it. */}
         {item.name === 'sudo' && <span className="ameta">as admin</span>}
         {item.status === 'declined' && <span className="ameta">declined</span>}
-        {item.exitCode != null && item.exitCode !== 0 && <span className="ameta bad">exit {item.exitCode}</span>}
+        {exit && <span className="ameta bad">{exit}</span>}
         {live && item.elapsed != null && item.elapsed > 2 && <span className="ameta">{Math.round(item.elapsed)}s</span>}
         {!live && lines.length > 0 && <span className="ameta">{lines.length} {lines.length === 1 ? 'line' : 'lines'}</span>}
         {!live && item.exitCode === 0 && <span className="ameta ok" aria-label="succeeded"><Icon name="check" size={12} /></span>}
@@ -861,7 +868,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
             // nothing else says anything. A bare error turn needs neither.
             !turn.text && turn.items.some((it) => it.kind === 'error') ? null : <div className="turn-meta bad">
               {saidBelow || turn.items.some((it) => it.kind === 'error') || !d.error ? 'Failed' : plainError(d.error)}
-              {failed && onResend && (
+              {failed && onResend && !isMissingSavedChat(d.error) && (
                 // A message that never reached the agent deserves a way to
                 // try again that does not start with retyping it.
                 <button className="resend" onClick={() => onResend(turn)}>Send again</button>

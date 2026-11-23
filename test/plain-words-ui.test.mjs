@@ -18,9 +18,9 @@ const { isBrowserKey } = await load('../apps/web/src/browserKeys.ts');
 test('a CLI failure keeps the original text for Details', () => {
   const raw = 'claude exited with code 1: No conversation found with session ID: c11b0faa-9520-4551-a2b0-6dd8c3971a7f';
   const p = plainProblem('error', raw);
-  assert.equal(p.title, 'Task failed');
-  assert.equal(p.action, 'Try again');
-  assert.match(p.text, /no longer has the chat history/);
+  assert.equal(p.title, 'Saved chat missing');
+  assert.equal(p.action, undefined);
+  assert.match(p.text, /cannot find its saved chat/);
   assert.equal(p.raw, raw);
   assert.match(plainError('Error: 401 Unauthorized'), /signed out/);
   assert.match(plainError('API Error: 529 Overloaded'), /busy/);
@@ -37,7 +37,7 @@ test('a safety block says so in the title and the text', () => {
   const raw = 'This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. If you’re doing authorized security work that requires more cyber permissive safeguards, apply for Daybreak access via https://platform.openai.com/settings/organization/status-and-access before retrying.';
   const p = plainProblem('error', raw);
   assert.equal(p.title, 'Blocked for safety');
-  assert.match(p.text, /blocked this chat for safety/);
+  assert.match(p.text, /blocked this reply for safety/);
   assert.equal(p.raw, raw);
   assert.match(plainError('API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy'), /for safety/);
 });
@@ -57,6 +57,18 @@ test('provider internal errors and rejected models explain how to recover', () =
   assert.equal(plainProblem('error', internal).raw, internal);
   assert.match(plainProblem('error', unavailable).text, /account cannot use this model/);
   assert.equal(plainProblem('error', unavailable).raw, unavailable);
+  assert.equal(plainProblem('error', unavailable).changeModel, true);
+  assert.equal(plainError('The model is at capacity.'), 'This model is busy. Try again later.');
+  assert.match(plainError('an image in the conversation could not be processed'), /JPEG or PNG/);
+  assert.match(plainError('No API key found'), /Set the account key/);
+});
+
+test('a missing folder names the path and says where to restore it', () => {
+  const raw = 'pi exited with code 1: The folder /home/why/offline project does not exist on this machine';
+  const p = plainProblem('error', raw);
+  assert.equal(p.title, 'Chat folder missing');
+  assert.equal(p.text, 'Restore the folder /home/why/offline project on the chat’s machine. Then try again.');
+  assert.equal(p.raw, raw);
 });
 
 test('browser keys are caught; editing and finding keys are not', () => {

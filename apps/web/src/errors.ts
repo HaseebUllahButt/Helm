@@ -18,6 +18,12 @@ function readableMessage(message: string): string | undefined {
 /** A provider's safety filter refused the reply. Same words as SAFETY_BLOCK in packages/connect/src/delegation.js. */
 export const SAFETY_BLOCK = /flagged for possible|content (?:was|has been) flagged|violates? (?:our|the) (?:usage|content) polic|appears to violate|cyber permissive/i;
 
+export function missingFolderPath(message: string): string | undefined {
+  return /\bthe folder ([^\r\n]+?) does not exist on this machine\b/i.exec(message)?.[1].trim();
+}
+
+export const isMissingSavedChat = (message?: string) => /No conversation found with session ID/i.test(message ?? '');
+
 export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot finish this action. Try again.' }: ErrorContext = {}): string {
   const value = error && typeof error === 'object' ? error as { message?: unknown; code?: unknown; status?: unknown; name?: unknown } : {};
   const message = typeof error === 'string' ? error : typeof value.message === 'string' ? value.message : '';
@@ -35,9 +41,15 @@ export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot 
     console.warn('Helm action failed:', error);
   }
 
-  if (/model.*(not supported|not available|unavailable)|does not offer/i.test(text)) return 'This account cannot use this model. Select another model.';
-  if (SAFETY_BLOCK.test(text)) return 'The AI service blocked this chat for safety. Continue in a new chat or with another AI.';
+  const folder = missingFolderPath(message);
+  if (folder) return `The folder ${folder} does not exist on ${machine || 'this machine'}. Pick another folder.`;
+  if (/model.*(not supported|not enabled|not available|unavailable)|does not offer/i.test(text)) return 'This account cannot use this model. Select another model.';
+  if (/model.*at capacity/i.test(text)) return 'This model is busy. Try again later.';
+  if (SAFETY_BLOCK.test(text)) return 'The AI service blocked this reply for safety. Review your request.';
   if (/an internal error occurred/i.test(text)) return 'The AI service did not finish this reply. Try again. Select another model if it fails again.';
+  if (/image in the conversation could not be processed/i.test(text)) return 'The AI service could not read an image in this chat. Send the image again as a JPEG or PNG.';
+  if (isMissingSavedChat(text)) return 'The agent cannot find its saved chat. Start a new chat and copy the details you still need.';
+  if (/can.t reach the API server|no response from API|connection lost mid-response|workspace routing discovery|connection error, send a message|\bEAI_AGAIN\b/i.test(text)) return 'The AI service stopped responding. Check your connection and try again.';
   if (/file is empty/i.test(text)) return 'The file is empty. Select another file.';
   if (/file is [\d.]+ MB|file.*too large/i.test(text)) return 'The file is too large. Select a file smaller than 20 MB.';
   if (/cannot read HEIC/i.test(text)) return 'This browser cannot read HEIC photos. Send a JPEG photo.';
@@ -52,16 +64,15 @@ export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot 
   if (/\b(timeout|timed out|etimedout|delivery_pending)\b|still unconfirmed/i.test(text)) return 'Helm did not get a reply in time. Try again.';
   if (/agent.*(not running|stopped|exited|not alive)|no longer running|not_running|no running agent|session.*(not alive|not running)/i.test(text)) return 'The agent is not running. Send a message to continue the chat.';
   if (/wait until.*(CLI|agent).*finishes|agent.*busy/i.test(text)) return 'Wait for the agent to finish this reply. Try again.';
-  if (/command not found|spawn .*failed/i.test(text)) return `Install the agent on ${machine || 'this machine'}. Try again.`;
+  if (/command not found|spawn .*(?:failed|ENOENT)/i.test(text)) return `Install the agent on ${machine || 'this machine'}. Try again.`;
   if (/unknown_method|delivery_unsupported|unknown method|not supported|no handler/i.test(text)) return `Update Helm on ${machine || 'this machine'}. Try again.`;
   if (/invalid.*key|key.*(invalid|not accept)|does not look like.*key|did not accept.*key/i.test(text)) return 'Check the key. Enter a valid key and try again.';
+  if (/missing api key|no api key found/i.test(text)) return `Set the account key on ${machine || 'this machine'}. Try again.`;
   if (/\b(401|unauthorized|unauthorised)\b|not logged in|sign.?in|log.?in|authentication|credentials|token.*expired/i.test(text)) return `This account is signed out. Sign in again on ${machine || 'this machine'}. Try again.`;
   if (/\b(403|eacces|eperm)\b|permission denied|access denied|not allowed/i.test(text)) return 'Helm does not have access. Check the permissions and try again.';
   if (/\b(enospc|edquot)\b|no space left|disk.*full|quota.*exceeded|needs more free space/i.test(text)) return `Free some space on ${machine || 'this machine'}. Try again.`;
   if (/rate.?limit|\b429\b|usage limit/i.test(text)) return 'The service reached its usage limit. Try again later.';
   if (/context (window|length)|prompt is too long|too many tokens/i.test(text)) return 'This chat is too long. Summarize it or start a new chat.';
-  const folder = /the folder (\S.*?) does not exist on this machine/i.exec(message);
-  if (folder) return `The folder ${folder[1]} does not exist on ${machine || 'this machine'}. Pick another folder.`;
   if (/unknown session: /i.test(text)) return `${where} no longer has this chat. Your message did not send. Start a new chat.`;
   if (/no conversation found|session.*not found/i.test(text)) return 'This machine no longer has the chat history. Send a message to start again.';
   if (/\b(enoent|not_found)\b|no such file|not a file|file.*not found|folder.*not found/i.test(text)) return 'Helm cannot find the file or folder. Check that it still exists.';

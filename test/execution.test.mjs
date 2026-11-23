@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync, watch } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once, EventEmitter } from 'node:events';
@@ -273,16 +273,26 @@ test('a supervisor keeps output after its daemon is killed', { timeout: 15000 },
 });
 
 test('heavy work never waits: two heavy commands run at the same time', async () => {
-  const log = join(root, 'order.txt');
-  const code = name => `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(log)},${JSON.stringify(name + ' start\n')});setTimeout(()=>fs.appendFileSync(${JSON.stringify(log)},${JSON.stringify(name + ' end\n')}),350)`;
-  const a = launch(spec(code('a'), { heavy: true }));
-  const b = launch(spec(code('b'), { heavy: true }));
-  a.stdin.end(); b.stdin.end();
-  const messages = []; for (const child of [a,b]) child.on('message', m => messages.push(m));
-  const exits = await Promise.all([once(a, 'close'), once(b, 'close')]);
-  assert.ok(exits.every(([code]) => code === 0));
-  const lines = readFileSync(log, 'utf8').trim().split('\n');
-  assert.deepEqual(lines.slice(0, 2).map(l => l.split(' ')[1]), ['start', 'start'], lines.join(','));
+  // Keep both commands alive until the test has heard from both of them.
+  const commands = ['a', 'b'].map(name => launch(spec(
+    `process.stdin.resume(); console.log(${JSON.stringify(name + ' start')})`, { heavy: true, timeout: 12000 },
+  )));
+  const messages = [];
+  for (const child of commands) child.on('message', m => messages.push(m));
+  const exits = commands.map(child => once(child, 'close'));
+  let completed;
+  try {
+    const started = await Promise.all(commands.map((child, index) => Promise.race([
+      once(child.stdout, 'data').then(([data]) => data.toString().trim()),
+      exits[index].then(([code]) => { throw new Error(`Heavy command exited before it was ready (code ${code}).`); }),
+    ])));
+    assert.deepEqual(started, ['a start', 'b start']);
+    assert.ok(commands.every(child => child.exitCode === null && child.signalCode === null));
+  } finally {
+    for (const child of commands) if (!child.stdin.destroyed) child.stdin.end();
+    completed = await Promise.all(exits);
+  }
+  assert.deepEqual(completed.map(([code]) => code), [0, 0]);
   assert.ok(!messages.some(m => m.status === 'queued'));
 });
 
@@ -307,24 +317,24 @@ test('output retention is bounded and paged with an explicit truncation marker',
   assert.ok(r.output.length <= 256 * 1024);
 });
 
-test('completed output expires even without another command starting', async t => {
-  const jobs = makeJobs({ retainMs: 30 }); t.after(() => jobs.stop());
-  const request = { id: id(9), ...spec('console.log("saved briefly")') };
+test('completed output expires and the exit details survive a restart', async t => {
+  const jobs = makeJobs(); t.after(() => jobs.stop());
+  const request = { id: id(9), ...spec('console.log("saved briefly"); process.exitCode = 7') };
   jobs.start(request, 'owner');
+  const { output, errors, ...completed } = await result(jobs, request.id);
+  assert.equal(output.trim(), 'saved briefly');
+  assert.equal(errors, '');
   const dir = join(jobs.directory, request.id);
-  await new Promise((resolve, reject) => {
-    const signal = AbortSignal.timeout(5000);
-    const watcher = watch(dir, { signal }, check);
-    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-    function check() {
-      if (!JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).expired) return;
-      watcher.close();
-      resolve();
-    }
-    check();
-  });
-  await assert.rejects(() => jobs.read({ id: id(9) }, 'owner'), /expired/);
-  assert.throws(() => jobs.start(request, 'owner'), /expired/);
+  await jobs.stop();
+  const restarted = new ExecutionJobs({ directory: jobs.directory, retainMs: 0 });
+  t.after(() => restarted.stop());
+  const saved = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+  assert.equal(saved.expired, true);
+  assert.equal(saved.chunks, undefined);
+  const read = await restarted.read({ id: request.id }, 'owner');
+  assert.deepEqual(read, { ...completed, last: 0, chunks: [], more: false, truncated: true });
+  await assert.rejects(() => restarted.read({ id: request.id }, 'other owner'), /not found/);
+  assert.throws(() => restarted.start(request, 'owner'), /expired/);
 });
 
 test('orphaned descendants cannot keep a completed command alive', async () => {
@@ -421,7 +431,7 @@ test('exec-cancel asks once and says whether the command had already finished', 
   assert.match(said, /already finished/);
 });
 
-test('a finished result is kept for an hour by default', t => {
+test('command output is kept for an hour by default', t => {
   const jobs = makeJobs(); t.after(() => jobs.stop());
   assert.equal(jobs.retainMs, 60 * 60_000);
 });
