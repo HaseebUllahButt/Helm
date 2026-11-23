@@ -9,7 +9,7 @@ import { usePageHidden } from './usePageHidden';
 import { Palette, ShortcutsHelp, type PaletteItem, type PaletteSearchResults } from './Palette';
 import { NewChat } from './NewChat';
 import type { Account } from './accounts';
-import { loadAppearance, saveAppearance, type Look, type Theme } from './appearance';
+import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { DrivenSession as DrivenSessionScreen } from './session/DrivenSession';
 import { MoveChat, canMove } from './session/MoveChat';
 import { canChangeFolder } from './session/FolderCard';
@@ -630,12 +630,6 @@ function Shell({ client, conn, onSignOut }: {
       items.push({
         id: `theme:${t}`, group: 'action', title: `Theme: ${name}`, keywords: 'appearance colour',
         run: () => saveAppearance({ ...loadAppearance(), theme: t }),
-      });
-    }
-    for (const [l, name] of [['new', 'New'], ['classic', 'Classic']] as [Look, string][]) {
-      items.push({
-        id: `look:${l}`, group: 'action', title: `Look: ${name}`, keywords: 'appearance style design ui mode',
-        run: () => saveAppearance({ ...loadAppearance(), look: l }),
       });
     }
     items.push({ id: 'a:screen', group: 'action', title: 'Open a screen', sub: 'See and use the desktop of a machine.', keywords: 'remote desktop screen view control rdp vnc', run: () => askScreen.current() });

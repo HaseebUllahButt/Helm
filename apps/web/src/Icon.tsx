@@ -1,6 +1,4 @@
 import { memo } from 'react';
-import { useLook } from './appearance';
-import { PHOSPHOR } from './phosphor';
 /**
  * helm's own icon set: one stroke weight, one 24-unit grid, drawn rather than
  * typed. Text symbols like `⧉ ↻ ⚡ ◎` come from whatever font each phone has,
@@ -16,21 +14,9 @@ export type IconName =
   | 'star' | 'star-on' | 'bolt' | 'quill' | 'model' | 'effort' | 'shield'
   | 'read' | 'edit' | 'run' | 'search' | 'web' | 'tool' | 'ask' | 'plan' | 'think' | 'alert'
   | 'folder' | 'repo' | 'machine' | 'transfer' | 'image' | 'sidebar' | 'canvas' | 'jump' | 'stop'
-  | 'tag' | 'cloud' | 'copy' | 'github' | 'lock' | 'eye' | 'eye-off' | 'expand' | 'shrink' | 'download'
-  | 'sliders' | 'devices' | 'sparkle' | 'calendar' | 'link' | 'chart' | 'gauge' | 'key' | 'mic' | 'power' | 'bell';
+  | 'tag' | 'cloud' | 'copy' | 'github' | 'lock' | 'eye' | 'eye-off' | 'expand' | 'shrink' | 'download';
 
 const PATHS: Record<IconName, JSX.Element> = {
-  sliders: <><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></>,
-  devices: <><rect x="3" y="5" width="13" height="10" rx="1.5" /><path d="M7 19h5" /><rect x="17" y="9" width="4" height="10" rx="1" /></>,
-  sparkle: <path d="M12 3.5l2 5.5 5.5 2-5.5 2-2 5.5-2-5.5-5.5-2 5.5-2z" />,
-  calendar: <><rect x="3.5" y="5" width="17" height="15" rx="2.5" /><path d="M3.5 10h17M8 3v4M16 3v4" /></>,
-  link: <><path d="M10 14a4.2 4.2 0 0 0 6 0l3-3a4.2 4.2 0 0 0-6-6l-1 1" /><path d="M14 10a4.2 4.2 0 0 0-6 0l-3 3a4.2 4.2 0 0 0 6 6l1-1" /></>,
-  chart: <path d="M5 19.5V11M12 19.5V5M19 19.5v-6" />,
-  gauge: <><path d="M12 14l4-4" /><path d="M3.3 19a10 10 0 1 1 17.4 0" /></>,
-  key: <><circle cx="8" cy="15" r="4" /><path d="M11 12l8.5-8.5M16 7l2.5 2.5" /></>,
-  mic: <><rect x="9" y="3.5" width="6" height="11" rx="3" /><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5" /></>,
-  power: <><path d="M12 3.5v8" /><path d="M7 6.5a7 7 0 1 0 10 0" /></>,
-  bell: <><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" /><path d="M10 20.5a2 2 0 0 0 4 0" /></>,
   back: <path d="M15 5l-7 7 7 7" />,
   forward: <path d="M9 5l7 7-7 7" />,
   popout: <><path d="M13.5 4.5h6v6" /><path d="M19.5 4.5L11 13" /><path d="M18 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h4" /></>,
@@ -97,14 +83,6 @@ const PATHS: Record<IconName, JSX.Element> = {
 // Icons sit in every row and header, and take only plain values: they skip
 // drawing again when those are the same.
 export const Icon = memo(function Icon({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {
-  // The New look draws Phosphor's shapes: filled outlines on a 256 grid.
-  if (useLook() === 'new') return (
-    <svg
-      className={`icon${className ? ` ${className}` : ''}`} width={size} height={size} viewBox="0 0 256 256"
-      fill="currentColor" aria-hidden="true" focusable="false"
-      dangerouslySetInnerHTML={{ __html: PHOSPHOR[name] }}
-    />
-  );
   return (
     <svg
       className={`icon${className ? ` ${className}` : ''}`} width={size} height={size} viewBox="0 0 24 24"
