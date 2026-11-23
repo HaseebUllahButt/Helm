@@ -41,7 +41,16 @@ before(async () => {
         remoteHelpers: helper ? [{ id: 'helper', machine: 'away', title: 'Remote helper', status: helper === 'online' ? 'working' : 'blocked' }] : [] };
       const listeners = new Set();
       let helperMissing = false;
+      let hubConnected = true, helperDirect = false;
       window.helperPresence = (online) => listeners.forEach(listener => listener('away', 'presence', { online }));
+      window.helperConnection = (online) => {
+        hubConnected = online;
+        listeners.forEach(listener => listener('', 'connection', { online, reachable: true }));
+      };
+      window.helperTransport = (direct) => {
+        helperDirect = direct;
+        listeners.forEach(listener => listener('away', 'transport', { direct }));
+      };
       window.pollMissingHelper = async () => {
         helperMissing = true;
         listeners.forEach(listener => listener('away', 'session.exit', {}));
@@ -52,6 +61,8 @@ before(async () => {
         { seq: 2, type: 'turn.done', turnId: 'failed', status: 'error', error: message },
       ] : [];
       const client = {
+        get connected() { return hubConnected; },
+        directTo: target => target === 'away' && helperDirect,
         on: listener => { listeners.add(listener); return () => listeners.delete(listener); },
         subscribe: () => {}, pendingActions: () => [], resumeActions: async () => [],
         rpc: async (target, method) => {
@@ -164,6 +175,24 @@ test('a disconnect disables the helper review button before the next read', asyn
   await page.evaluate(() => window.pollMissingHelper());
   assert.equal(await review.count(), 1);
   assert.equal(await review.isDisabled(), true);
+});
+
+test('the helper review button follows the browser routes', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.mountRecovery('Test error.', [], { helper: 'online' }));
+  const review = page.locator('.child-requests button').filter({ hasText: 'Remote helper' });
+  await review.waitFor();
+  assert.equal(await review.isEnabled(), true);
+  const check = (disabled) => page.waitForFunction(value =>
+    document.querySelector('.child-requests button')?.disabled === value, disabled, { timeout: 2000 });
+  await page.evaluate(() => window.helperConnection(false));
+  await check(true);
+  await page.evaluate(() => window.helperTransport(true));
+  await check(false);
+  await page.evaluate(() => window.helperTransport(false));
+  await check(true);
+  await page.evaluate(() => window.helperConnection(true));
+  await check(false);
 });
 
 test('the transcript hides Send again for a missing saved chat', async t => {

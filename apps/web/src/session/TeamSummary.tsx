@@ -1,5 +1,5 @@
 import { errorMessage } from '../errors';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { Client, type Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { useNow } from '../useNow';
@@ -11,6 +11,7 @@ export type TeamMember = { session: Session; depth: number; envId?: string };
 export function useThreadTeam(client: Client, envId: string, parentId: string, remote: NonNullable<Session['remoteHelpers']> = []) {
   const remoteKey = JSON.stringify(remote);
   const [team, setTeam] = useState<TeamMember[]>([]);
+  const [, refreshRoutes] = useReducer(revision => revision + 1, 0);
   const offlineMachines = useRef(new Set<string>()).current;
   useEffect(() => {
     let stale = false;
@@ -118,6 +119,7 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
     void load();
     const off = client.on((machine, kind, payload: any) => {
       const session = payload?.session as Session | undefined;
+      if (kind === 'connection' || (kind === 'transport' && knownMachines.has(machine))) refreshRoutes();
       if (kind === 'presence' && machine) {
         if (payload?.online === false) {
           offlineMachines.add(machine);
@@ -150,7 +152,9 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
     const timer = setInterval(() => void load(), 5000);
     return () => { stale = true; clearInterval(timer); off(); };
   }, [client, envId, parentId, remoteKey, offlineMachines]);
-  return team;
+  if (client.connected !== false) return team;
+  return team.map(member => member.session.offline || client.directTo?.(member.envId ?? envId)
+    ? member : { ...member, session: { ...member.session, offline: true } });
 }
 
 export const helperState = (session: Session) => {
