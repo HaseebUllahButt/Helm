@@ -249,6 +249,24 @@ esac
   assert.ok(messages.some(message => message.includes('Exit code 4.')));
 });
 
+test('different update causes with the same final lines log once each', async () => {
+  const m = machine();
+  const causeFile = join(m.root, 'cause');
+  writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo '2.1.0 (Claude Code)';;
+  update) read -r cause < '${causeFile}'; printf '%s\\n' "$cause" 'update failed' 'see log' 'exiting' >&2; exit 6;;
+esac
+`, { mode: 0o755 });
+  const messages = [];
+  for (const cause of ['Permission denied', 'Disk full', 'Permission denied']) {
+    writeFileSync(causeFile, cause + '\n');
+    await m.updater({ log: message => messages.push(message) }).update({ engine: 'claude' });
+  }
+  assert.equal(messages.length, 2);
+  assert.ok(messages.every(message => message.includes('Exit code 6.')));
+});
+
 test('reading Settings during an update keeps its failure history', async () => {
   const m = machine();
   writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
