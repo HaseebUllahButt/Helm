@@ -81,19 +81,6 @@ export async function listModels(engine, home, environment = {}, launcher = null
   return answer(await refreshModels(key, engine, home, environment, launcher, hit));
 }
 
-/** Read candidates for the keeper without updating the catalogs used by chats. */
-export async function listKeeperModels(engine, home, environment = {}, launcher = null) {
-  if (engine !== 'opencode' && engine !== 'opencode2') {
-    return cache.get(modelsKey(engine, home, launcher))?.value?.models ?? [];
-  }
-  const root = expand(home ?? ENGINES[engine].defaultHome);
-  const bin = ENGINES[engine].bin ?? engine;
-  const env = { ...process.env, ...environment, XDG_CONFIG_HOME: root };
-  const { stdout } = await opencodeExec(bin, ['models'], { timeout: 8_000, env });
-  const refused = await refusedOpencodeKeys(bin, root, environment);
-  return openCodeModelRows(stdout).filter(model => !refused.some(provider => model.startsWith(`${provider}/`)));
-}
-
 const modelsKey = (engine, home, launcher) => {
   const root = expand(home ?? ENGINES[engine]?.defaultHome ?? '~');
   return `${engine}|${root}|${launcher ? [launcher.cmd, ...launcher.args].join(' ') : ''}`;
@@ -805,8 +792,6 @@ async function opencodeExec(bin, args, options) {
   catch { return exec(bin, args, options); }
 }
 
-const openCodeModelRows = stdout => stdout.split('\n').map(line => line.trim()).filter(line => line.includes('/'));
-
 async function opencodeModels(root, bin = 'opencode', environment = {}) {
   let def = null;
   for (const name of ['opencode.jsonc', 'opencode.json']) {
@@ -839,8 +824,8 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
       env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
     }));
   }
-  const listedModels = openCodeModelRows(stdout);
-  const models = def && !listedModels.includes(def) ? [def, ...listedModels] : listedModels;
+  const models = stdout.split('\n').map((l) => l.trim()).filter((l) => l && l.includes('/'));
+  if (def && !models.includes(def)) models.unshift(def);
   const signedOut = await refusedOpencodeKeys(bin, root, environment);
   const refused = (m) => signedOut.some((p) => m.startsWith(`${p}/`));
   // OpenCode lists opencode-go/ before opencode/, so with no configured

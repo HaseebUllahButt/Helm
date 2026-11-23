@@ -339,7 +339,7 @@ test('failed and empty refreshes keep usable models and finish without a retry l
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('OpenCode tries local model rows first and keeps keeper checks out of chat catalogs', async t => {
+test('OpenCode tries usable local model rows before forced refresh, without its background service', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-model-opencode-'));
   const bin = join(dir, 'bin');
   const localHome = join(dir, 'local');
@@ -369,8 +369,7 @@ test('OpenCode tries local model rows first and keeps keeper checks out of chat 
   process.env.PATH = bin + ':' + priorPath;
   process.env.OPENCODE_CALLS_PATH = log;
   try {
-    const { listModels } = await import('../packages/connect/src/models.js');
-    const { agentCatalog } = await import('../packages/connect/src/delegation.js');
+    const { listModels } = await import('../packages/connect/src/models.js?opencode-local-first');
     const modelCalls = () => readFileSync(log, 'utf8').trim().split('\n').filter((l) => l.startsWith('models'));
     const local = await listModels('opencode', localHome);
     assert.deepEqual(local.models, ['provider/local-model']);
@@ -387,22 +386,6 @@ test('OpenCode tries local model rows first and keeps keeper checks out of chat 
     const v1 = await listModels('opencode', v1Home);
     assert.deepEqual(v1.models, ['provider/v1-model']);
     assert.deepEqual(modelCalls().slice(3), ['models --standalone', 'models']);
-
-    mkdirSync(join(localHome, 'opencode'));
-    writeFileSync(join(localHome, 'opencode', 'opencode.json'), JSON.stringify({ model: 'provider/gone-model' }));
-    writeFileSync(join(localHome, 'models.txt'), 'opencode-go/refused-flash\nprovider/new-flash\n');
-    const dataHome = join(dir, 'data');
-    mkdirSync(join(dataHome, 'opencode'), { recursive: true });
-    writeFileSync(join(dataHome, 'opencode', 'auth.json'), JSON.stringify({ 'opencode-go': { type: 'api', key: 'test-key' } }));
-    const probe = t.mock.method(globalThis, 'fetch', async () => ({ status: 401 }));
-    assert.deepEqual((await listModels('opencode', localHome)).models, ['provider/local-model']);
-    const [keeper] = await agentCatalog([{
-      id: 'open', engine: 'opencode', cmd: 'opencode', source: 'custom',
-      env: { XDG_CONFIG_HOME: localHome, XDG_DATA_HOME: dataHome },
-    }], new Map(), { keeper: true, refresh: true });
-    assert.equal(probe.mock.callCount(), 1);
-    assert.deepEqual(keeper.smallModels, ['provider/new-flash']);
-    assert.deepEqual(await listModels('opencode', localHome), local, 'the keeper leaves the chat catalog intact');
   } finally {
     process.env.PATH = priorPath;
     if (priorLog === undefined) delete process.env.OPENCODE_CALLS_PATH;

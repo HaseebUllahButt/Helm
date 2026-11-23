@@ -238,30 +238,6 @@ test('an unreachable machine is read next time; a failed model leaves the index 
   assert.equal(JSON.parse(readFileSync(failing.file, 'utf8')).read.home, undefined);
 });
 
-test('the keeper refreshes a rejected model and uses a working small model', async () => {
-  reset();
-  const { keeper, file } = keeperRig({ words: {
-    home: () => ({ chats: [{ id: 'c1', last: 4, texts: ['Use short replies.'] }] }),
-    lap: () => ({ chats: [] }),
-  } });
-  let inventories = 0;
-  const attempts = [];
-  keeper.agents = async () => {
-    inventories++;
-    return [{ id: 'open', account: 'same-login', engine: 'opencode', available: true,
-      smallModels: inventories === 2 ? ['gone-flash', 'current-flash'] : ['gone-flash'] }];
-  };
-  keeper.ask = async ({ model }) => {
-    attempts.push(model);
-    if (model === 'gone-flash') throw new Error('You do not have access to this model');
-    return 'NO CHANGE';
-  };
-  assert.equal(await keeper.run(), 'no change');
-  assert.equal(inventories, 2);
-  assert.deepEqual(attempts, ['gone-flash', 'current-flash']);
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).read.home.c1, 4);
-});
-
 test('the keeper runs only on its own machine', () => {
   const { keeper } = keeperRig({ words: {} });
   keeper.self = () => 'lap';
