@@ -1883,6 +1883,12 @@ li.marked .usage-share-track { margin-left: 32px; }
 .modal-input { width: 100%; font-size: var(--t-body); padding: 9px 11px; margin-bottom: 14px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .modal-actions button { width: auto; margin: 0; padding: 8px 16px; min-height: 40px; font-size: var(--t-body); }
+.modal-actions.stacked { flex-direction: column; align-items: stretch; gap: 8px; margin-top: 4px; }
+.modal-actions.stacked button { width: 100%; min-height: 44px; }
+.modal-actions.stacked .ghost { background: var(--hover); color: var(--text); }
+.modal-actions.stacked .ghost:hover:not(:disabled) { background: var(--muted); filter: brightness(1.4); }
+.modal-actions.stacked .quiet { background: none; border: 0; color: var(--mutedfg); min-height: 36px; }
+.modal-actions.stacked .quiet:hover:not(:disabled) { color: var(--text); }
 /* A checklist in a sheet (the agent chooser on New session) can be longer
    than the screen; the list scrolls, the sheet does not grow. */
 .sheetlist { max-height: 55dvh; overflow-y: auto; margin-bottom: 12px; }
