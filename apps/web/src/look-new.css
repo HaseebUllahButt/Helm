@@ -1,55 +1,115 @@
 /* The "New" look (Settings > Look > New). The layout is the same as Classic:
    the same sidebar, shelves and screens in the same places. Only the skin
-   changes. From Omarchy: a mono face for details, lowercase shelf names,
-   smaller corners and a thin accent edge on the open panel (its active
-   window border). From Apple: bigger text on phones (17 pt is their phone
-   default). Classic keeps the owner's "no outlines" rule; New is the one
-   place an edge is drawn. */
+   changes, and it should be plain to see.
 
-:root[data-look="new"] {
-  --radius:    7px;
-  --radius-sm: 5px;
-  --radius-md: 6px;
-  --radius-xl: 10px;
-  --slab:      12px;
-  --edge-on:   color-mix(in srgb, var(--primary-q) 50%, transparent);
+   From Omarchy: JetBrains Mono for the whole frame (the font Omarchy uses
+   everywhere), the sidebar and the open panel as two tiles with a gap that
+   shows a theme wallpaper, near-square corners, a dim edge on every tile and
+   an accent edge on the open one (Omarchy's inactive and active window
+   borders), and section names with a rule after them, like btop's panel
+   labels. From Apple: bigger text on phones, and chat text stays in the
+   reading face. Classic keeps the owner's "no outlines" rule; New is the
+   one place edges are drawn. */
+
+/* JetBrains Mono, variable, Latin only, 40 KB, OFL (fonts/jetbrains-mono-OFL.txt). */
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains-mono-latin-var.woff2") format("woff2");
+  font-weight: 100 800; font-style: normal; font-display: swap;
 }
 
-/* Phones: Apple's sizes. Rows 16 px, reading text 17 px. */
+:root[data-look="new"] {
+  --read:      "Geist", var(--system);
+  --sans:      "JetBrains Mono", "Geist", var(--system);
+  --mono:      "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --display:   var(--sans);
+  /* Mono runs wide: one step down keeps rows the same length. */
+  --t-micro:   11px;
+  --t-meta:    12px;
+  --t-body:    13.5px;
+  --radius:    5px;
+  --radius-sm: 4px;
+  --radius-md: 5px;
+  --radius-xl: 6px;
+  --slab:      6px;
+  --edge-on:   var(--primary-q);
+  --edge-off:  color-mix(in srgb, var(--text) 16%, transparent);
+  /* "Needs you" is amber, as in a status bar; Classic keeps it in text colour. */
+  --need:      var(--amber);
+  --need-text: var(--amber-text);
+  --on-need:   #1a1305;
+  --wall: linear-gradient(135deg, #0c0c0e 0%, #17120f 60%, #2a1a0b 100%);
+}
+:root[data-look="new"][data-theme="light"] {
+  --edge-on:  var(--primary-q);
+  --edge-off: rgb(26 29 36 / 16%);
+  --wall: linear-gradient(135deg, #c3d2ec 0%, #e2d6e6 55%, #f1d8c3 100%);
+}
+:root[data-look="new"][data-theme="tokyo"] {
+  --wall: linear-gradient(135deg, #16162e 0%, #3b2a66 50%, #9c4a78 100%);
+}
+
+/* Phones: Apple's sizes, set for the wider mono face. Chat text is 17 px. */
 @media (max-width: 899px) {
   :root[data-look="new"] {
     --t-micro: 12px;
-    --t-meta:  13.5px;
-    --t-body:  16px;
+    --t-meta:  13px;
+    --t-body:  15.5px;
     --t-read:  17px;
   }
 }
 
-/* Shelf and section names read like btop's panel labels. */
+/* Reading stays in the reading face: answers, your messages, the boxes you
+   type in. A whole answer in mono is tiring. */
+:root[data-look="new"] :is(.prose, .md, .bubble, .island-q, .slab textarea, .home-ask textarea) {
+  font-family: var(--read);
+}
+:root[data-look="new"] :is(.md code, .md pre, .md kbd) { font-family: var(--mono); }
+
+/* Section names: lowercase, with a rule to the end of the line. */
 :root[data-look="new"] .section {
-  text-transform: lowercase; letter-spacing: 0;
-  font-family: var(--mono); font-weight: 500;
+  text-transform: lowercase; letter-spacing: 0; font-weight: 600;
+}
+:root[data-look="new"] .section:not(:has(.spacer, .linkish))::after {
+  content: ''; flex: 1; min-width: 12px; height: 1px; background: var(--edge-off);
+}
+:root[data-look="new"] .need-dot { background: var(--need); }
+
+/* Tiles: cards, lists and the message box get the dim edge. */
+:root[data-look="new"] :is(.rows.plain, .pad .rows, .card) {
+  background-image: none; box-shadow: 0 0 0 1px var(--edge-off);
+}
+:root[data-look="new"] .slab { box-shadow: 0 0 0 1px var(--edge-off); }
+:root[data-look="new"] .slab:focus-within { box-shadow: 0 0 0 1px var(--edge-on); }
+:root[data-look="new"] .slab::after { display: none; }
+:root[data-look="new"] .home-ask { border-color: var(--edge-off); }
+:root[data-look="new"] .home-ask:focus-within { border-color: var(--edge-on); }
+:root[data-look="new"] .send { border-radius: var(--radius-md); background: var(--primary-q); color: var(--bg); }
+:root[data-look="new"] .send:hover:not(:disabled) { transform: none; filter: brightness(1.1); }
+:root[data-look="new"] .side-actions .home-search { border-radius: var(--radius); box-shadow: 0 0 0 1px var(--edge-off); border-color: transparent; }
+:root[data-look="new"] .turn.user .bubble { border-radius: 6px; box-shadow: 0 0 0 1px var(--edge-off); }
+:root[data-look="new"] .row.active::after { top: 6px; bottom: 6px; width: 2px; border-radius: 0; background: var(--edge-on); }
+
+/* Tokyo Night's sky: Omarchy's purple dusk at every hour. */
+:root[data-look="new"][data-theme="tokyo"] .sidebar-sunset[data-sky] {
+  --sunset-top: #16162e; --sunset-mid: #2f2550; --sunset-low: #6b3f8f; --sunset-horizon: #c0587a;
+  --sunset-glow: #bb9af7; --sunset-cloud: #f7a8c4; --sunset-sea-top: #1f2335; --sunset-shine: #bb9af7;
+  --sunset-stars: 1;
 }
 
-/* Details in mono: where a chat runs, times, counts, machine load, chips. */
-:root[data-look="new"] :is(
-  .tri-where, .tri-end, .tclock, .need-m, .count,
-  .home-state, .machine .rm, .crumb-folder,
-  .bubble-meta, .turn-meta, .chips .chip-label, .limits-line
-) {
-  font-family: var(--mono); letter-spacing: 0;
-}
-:root[data-look="new"] :is(.tri-where, .need-m, .machine .rm) { font-size: calc(var(--t-meta) - 1px); }
-
-/* Smaller corners where Classic draws its own. */
-:root[data-look="new"] .side-actions .home-search { border-radius: var(--radius); }
-:root[data-look="new"] .turn.user .bubble { border-radius: 10px 10px 4px 10px; }
-
-/* The open panel: a thin edge in the accent color, like Omarchy's active
-   window. Desktop only: on a phone the panel is the whole screen. */
+/* Computer: two tiles over the wallpaper. Same places, same sizes. */
 @media (min-width: 900px) {
-  :root[data-look="new"] .main {
-    border-radius: 10px;
-    box-shadow: 0 0 0 1px var(--edge-on), var(--panel-shadow);
+  :root[data-look="new"] .shell { background: var(--wall); }
+  :root[data-look="new"] .sidebar {
+    height: calc(100% - 16px); margin: 8px 0 8px 8px; border: 0; border-radius: 6px;
+    overflow: hidden; box-shadow: 0 0 0 1px var(--edge-off);
   }
+  :root[data-look="new"] .main {
+    margin: 8px; border-radius: 6px;
+    box-shadow: 0 0 0 1px var(--edge-on), 0 20px 60px -30px rgb(0 0 0 / 60%);
+  }
+  :root[data-look="new"] .main::after { display: none; }
 }
+
+/* The rule takes the spare room, never the name's. */
+:root[data-look="new"] .section.fold .fold-title { flex: none; overflow: visible; }

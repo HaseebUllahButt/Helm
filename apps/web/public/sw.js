@@ -21,6 +21,7 @@ const SHELL = [
   '/', '/index.html', '/manifest.webmanifest',
   '/icon.svg', '/favicon.svg', '/icon-180.png', '/icon-192.png', '/favicon-32.png',
   '/fonts/archivo-semiexpanded-600.woff2', '/fonts/geist-latin-var.woff2',
+  '/fonts/jetbrains-mono-latin-var.woff2',
 ];
 
 /**
