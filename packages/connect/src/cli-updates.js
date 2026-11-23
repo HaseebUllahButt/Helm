@@ -352,13 +352,17 @@ export class CliUpdater {
     return (await Promise.all(ids.map((id) => this.inspect(id, root)))).filter(Boolean);
   }
 
-  async #latest(tool, state) {
+  async #latest(tool) {
     if (tool.method !== 'npm' || !tool.pkg) return null;
-    const hit = state.latest[tool.pkg];
+    const hit = loadState().latest[tool.pkg];
     if (hit && this.now() - hit.at < LATEST_TTL_MS) return hit.version;
     const r = await run('npm', ['view', tool.pkg, 'version'], { timeout: 20_000, env: this.env, platform: this.platform });
     const version = r.ok ? parseVersion(r.out[0]) : null;
-    if (version) state.latest[tool.pkg] = { version, at: this.now() };
+    if (version) {
+      const state = loadState();
+      state.latest[tool.pkg] = { version, at: this.now() };
+      saveState(state);
+    }
     return version ?? hit?.version ?? null;
   }
 
@@ -367,19 +371,21 @@ export class CliUpdater {
   /** Every installed tool: version, how it can be updated, and the last attempt. */
   async versions({ refresh = false } = {}) {
     if (!refresh && this.#shown && this.now() - this.#shown.at < SHOWN_TTL_MS) return this.#view(this.#shown.tools);
-    const state = loadState();
     const found = await this.#inspectAll();
     const tools = [];
     for (const t of found) {
-      const latest = await this.#latest(t, state).catch(() => null);
+      const latest = await this.#latest(t).catch(() => null);
       tools.push({
         engine: t.engine, label: t.label, version: t.version, ...(latest ? { latest, outdated: isNewer(latest, t.version) } : {}),
         method: t.method, canUpdate: t.canUpdate, ...(t.reason ? { reason: t.reason } : {}),
         lastChecked: this.now(),
-        ...(state.engines[t.engine]?.lastResult ? { lastResult: state.engines[t.engine].lastResult } : {}),
       });
     }
-    saveState(state);
+    const { engines } = loadState();
+    for (const tool of tools) {
+      const lastResult = engines[tool.engine]?.lastResult;
+      if (lastResult) tool.lastResult = lastResult;
+    }
     this.#shown = { at: this.now(), tools };
     return this.#view(tools);
   }

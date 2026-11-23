@@ -249,6 +249,32 @@ esac
   assert.ok(messages.some(message => message.includes('Exit code 4.')));
 });
 
+test('reading Settings during an update keeps its failure history', async () => {
+  const m = machine();
+  writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo '2.1.0 (Claude Code)';;
+  update) echo 'Cannot reach the update server' >&2; exit 5;;
+esac
+`, { mode: 0o755 });
+  const { promise: reading, resolve: readStarted } = Promise.withResolvers();
+  const { promise: root, resolve: finishRead } = Promise.withResolvers();
+  const settings = m.updater({ npmRoot: () => { readStarted(); return root; } });
+  const versions = settings.versions({ refresh: true });
+  const messages = [];
+  const updater = m.updater({ log: message => messages.push(message) });
+  await reading;
+  try {
+    await updater.update({ engine: 'claude' });
+  } finally {
+    finishRead(join(m.root, 'npm'));
+  }
+  const { tools } = await versions;
+  assert.equal(tools.find(tool => tool.engine === 'claude').lastResult?.message, 'Cannot reach the update server');
+  await updater.update({ engine: 'claude' });
+  assert.equal(messages.filter(message => message.includes('Cannot reach the update server')).length, 1);
+});
+
 /** A fake Claude Code as large as the real program, which names the models it knows. */
 function bigClaude(m, from, knows) {
   const vf = join(m.root, 'claude.version');
