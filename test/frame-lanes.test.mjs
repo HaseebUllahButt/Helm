@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
 import { FrameLanes, FramePieces, laneKey } from '../packages/protocol/frame-lanes.js';
+import { randomBytes } from 'node:crypto';
 import { encodeTunnelFrame, TunnelFrames } from '../packages/protocol/tunnel-frame.js';
 
 /**
@@ -54,7 +55,11 @@ const arrival = (sock, match) => new Promise(resolve => {
 function heldSocket() {
   const sock = { readyState: 1, written: [], held: [],
     get bufferedAmount() { return this.held.reduce((sum, item) => sum + item.size, 0); },
-    send(data, cb) { this.written.push(data); this.held.push({ size: data.length, cb }); },
+    send(data, opts, cb) {
+      if (typeof opts === 'function') { cb = opts; opts = undefined; }
+      this.written.push(data); this.options.push(opts); this.held.push({ size: data.length, cb });
+    },
+    options: [],
     leave() { while (this.held.length) this.held.shift().cb?.(); } };
   return sock;
 }
@@ -186,4 +191,80 @@ test('a full socket buffer from another writer does not stop the large lane', as
   sock.bufferedAmount = 0;
   assert.equal(await done, undefined);
   assert.equal(sock.sent.length, 3);
+});
+
+test('stream bytes take turns with a large chat list, keep their order, and part one frame at a time', () => {
+  const sock = heldSocket();
+  const lanes = new FrameLanes(sock, { text: () => true, binary: () => true });
+  const list = JSON.stringify({ t: 'rpcResult', id: 'list', result: 'c'.repeat(200_000) });
+  lanes.send(list, { rid: 'list' });
+  const sent = { a: [], b: [] };
+  const video = sid => {
+    const data = randomBytes(64 * 1024);
+    sent[sid].push(data);
+    lanes.send(encodeTunnelFrame({ t: 'tunnel.data', sid, data }, true), { key: `sid:${sid}`, compress: false });
+  };
+  video('a'); video('a'); video('b'); video('a'); video('b');
+  assert.ok(lanes.queuedFor('sid:a') > 3 * 64 * 1024 && lanes.queuedFor('sid:b') > 2 * 64 * 1024);
+  assert.equal(lanes.queuedFor('rpc'), 0);
+  // One write leaves at a time, as on a slow link.
+  while (sock.held.length) sock.held.shift().cb?.();
+  const frames = new TunnelFrames(), pieces = new FramePieces();
+  const got = [], open = new Set();
+  let listDoneAt = -1, firstStreamAt = -1, mostOpen = 0;
+  sock.written.forEach((raw, index) => {
+    if (typeof raw === 'string') {
+      const whole = pieces.take(JSON.parse(raw));
+      if (whole) { assert.equal(whole, list); listDoneAt = index; }
+      assert.equal(sock.options[index], undefined, 'text keeps the socket rule');
+      return;
+    }
+    assert.equal(sock.options[index]?.compress, false, 'video is never deflated');
+    if (firstStreamAt < 0) firstStreamAt = index;
+    open.add(raw.readUInt32BE(4));
+    mostOpen = Math.max(mostOpen, open.size);
+    const frame = frames.decode(raw);
+    if (frame) { open.delete(raw.readUInt32BE(4)); got.push(frame); }
+  });
+  assert.ok(listDoneAt > 0, 'the list arrives whole');
+  assert.ok(firstStreamAt < listDoneAt / 2, 'stream bytes do not wait for the list');
+  assert.equal(mostOpen, 1, 'one part frame at a time');
+  assert.deepEqual(got.map(f => f.sid), ['a', 'b', 'a', 'b', 'a'], 'streams take turns frame by frame');
+  for (const sid of ['a', 'b']) {
+    assert.deepEqual(got.filter(f => f.sid === sid).map(f => f.data), sent[sid], 'each stream keeps its order');
+  }
+  assert.equal(lanes.queued, 0);
+  assert.equal(lanes.queuedFor('sid:a'), 0);
+});
+
+test('short stream frames also take turns while a large frame waits', () => {
+  const sock = heldSocket();
+  const lanes = new FrameLanes(sock, { text: () => true, binary: () => true });
+  const list = JSON.stringify({ t: 'rpcResult', id: 'list', result: 'c'.repeat(200_000) });
+  lanes.send(list, { rid: 'list' });
+  for (let i = 0; i < 40; i++) {
+    lanes.send(encodeTunnelFrame({ t: 'tunnel.data', sid: 'a', data: randomBytes(1024) }, true), { key: 'sid:a', compress: false });
+  }
+  assert.ok(lanes.queuedStreams > 0, 'short stream frames wait in their line');
+  while (sock.held.length) sock.held.shift().cb?.();
+  const pieces = new FramePieces();
+  let listDoneAt = -1;
+  sock.written.forEach((raw, index) => { if (typeof raw === 'string' && pieces.take(JSON.parse(raw))) listDoneAt = index; });
+  // Before, 40 short frames went straight to the socket ahead of every list piece.
+  assert.ok(listDoneAt < sock.written.length - 1, 'the list finishes before the last stream frame');
+  assert.equal(lanes.queuedStreams, 0);
+});
+
+test('a stream of short frames does not hold back another stream', () => {
+  const sock = heldSocket();
+  const lanes = new FrameLanes(sock, { text: () => true, binary: () => true });
+  lanes.send(encodeTunnelFrame({ t: 'tunnel.data', sid: 'b', data: randomBytes(64 * 1024) }, true), { key: 'sid:b', compress: false });
+  for (let i = 0; i < 40; i++) {
+    lanes.send(encodeTunnelFrame({ t: 'tunnel.data', sid: 'a', data: randomBytes(1024) }, true), { key: 'sid:a', compress: false });
+  }
+  while (sock.held.length) sock.held.shift().cb?.();
+  const frames = new TunnelFrames();
+  const order = [];
+  for (const raw of sock.written) { const f = frames.decode(raw); if (f) order.push(f.sid); }
+  assert.ok(order.indexOf('b') < order.length - 1, 'stream b is not last behind every short frame of a');
 });

@@ -41,3 +41,25 @@ test('network reads immediately see external writes, replacements, corruption an
   N.saveNetwork(net); assert.equal(N.loadNetwork().self, net.self);
   fs.unlinkSync(N.NETWORK_FILE); assert.equal(N.loadNetwork(), null);
 });
+
+test('the per-frame removal check sees a removal at once and copies nothing', t => {
+  const net = N.createNetwork({ name: 'hub' });
+  assert.equal(N.isRevoked('phone'), false);
+  let reads = 0;
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (...args) => { if (args[0] === N.NETWORK_FILE) reads++; return read(...args); });
+  t.mock.method(globalThis, 'structuredClone', () => assert.fail('the check must not copy the roster'));
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  for (let i = 0; i < 20; i++) assert.equal(N.isRevoked('phone'), false);
+  assert.equal(reads, 0, 'an unchanged file is not read again');
+  net.revoked.phone = Date.now();
+  const next = join(root, 'revoked.json');
+  fs.writeFileSync(next, JSON.stringify(net)); fs.renameSync(next, N.NETWORK_FILE);
+  assert.equal(N.isRevoked('phone'), true);
+  assert.equal(reads, 1);
+  assert.equal(N.isRevoked('constructor'), false);
+  assert.equal(N.isRevoked(undefined), false);
+  fs.unlinkSync(N.NETWORK_FILE);
+  assert.equal(N.isRevoked('phone'), false);
+});

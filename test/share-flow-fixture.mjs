@@ -113,6 +113,8 @@ export async function setup({ legacy = false, bytes = 12 * 1024 * 1024, uploadDe
   const link = { id: 'loopback', get tunnelWritable() { return machine.bufferedAmount < 256 * 1024; },
     send: (t, extra) => {
       const msg = { t, ...extra };
+      // A machine link sends bytes as base64 to a hub without binaryTunnel.
+      if (Buffer.isBuffer(msg.data)) msg.data = msg.data.toString('base64');
       if (t === T.TUNNEL_READY) metrics.readyFlow = extra.flow;
       if (t === T.TUNNEL_DATA) metrics.sent += Buffer.from(extra.data, 'base64').length;
       if (t === T.TUNNEL_CLOSE) metrics.closes++;
