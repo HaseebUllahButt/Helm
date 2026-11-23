@@ -217,8 +217,7 @@ test('a machine shows private links only to hubs that keep them private', async 
   // A private link's port is tunnel-able, like any shared one.
   const sent = [];
   await d.onFrame({ id: 'hub', send: (tt, extra) => sent.push({ t: tt, ...extra }) }, { t: T.TUNNEL_OPEN, sid: 'p1', port: APP });
-  await new Promise((r) => setTimeout(r, 200));
-  assert.ok(sent.some((f) => f.t === T.TUNNEL_READY));
+  await until(() => sent.some((f) => f.t === T.TUNNEL_READY));
   shares.removeShare('mine'); shares.removeShare('pub');
 });
 
@@ -270,8 +269,7 @@ test('helm forward lets a tunnel go when the browser gives up early, and when it
   await new Promise((r) => s.once('data', r));
   assert.equal(slow.tunnels.size, 1);
   await fwd.close();
-  await new Promise((r) => setTimeout(r, 300));
-  assert.equal(slow.tunnels.size, 0, 'tunnel left open after close');
+  await until(() => slow.tunnels.size === 0, 'tunnel left open after close');
 });
 
 test('helm forward lets each tunnel go when the browser finishes first', async (t) => {
@@ -289,8 +287,7 @@ test('helm forward lets each tunnel go when the browser finishes first', async (
     await new Promise((r) => s.once('data', r));
     s.end();
   }
-  await new Promise((r) => setTimeout(r, 2600));
-  assert.equal(open, 0, 'tunnels still open after the browser finished');
+  await until(() => open === 0, 'tunnels still open after the browser finished', 10_000);
 });
 
 test('a landing path never carries what a Location header cannot', () => {
@@ -308,6 +305,11 @@ test('helm forward takes the next free port unless one was asked for', async (t)
   assert.ok(fwd.port > taken && fwd.port <= taken + 20);
   await assert.rejects(() => startForward(N.loadNetwork(), { target: MACHINE, port: APP, localPort: taken, exact: true, hubs: [] }), { code: 'EADDRINUSE' });
 });
+
+async function until(check, what = 'the state', ms = 5000) {
+  const end = Date.now() + ms;
+  while (!check()) { assert.ok(Date.now() < end, `timed out waiting for ${what}`); await new Promise((r) => setTimeout(r, 5)); }
+}
 
 /** A machine on the hub: answers share.list, dials only its shared ports. */
 async function fakeMachine(id, list, { readyDelay = 0 } = {}) {

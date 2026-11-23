@@ -53,8 +53,8 @@ test('a terminal survives the daemon that started it', opts, async (t) => {
   await until(() => seen.join('').includes('tick-1'));
 
   // The daemon goes away - an upgrade, a crash, `systemctl restart`.
+  // No pause here: the loop still ticking below proves the host kept it.
   first.detach();
-  await new Promise((r) => setTimeout(r, 300));
 
   // Its replacement finds the terminal still there.
   const second = new TerminalHost();

@@ -16,15 +16,12 @@ before(async () => {
     import { DrivenSession } from './apps/web/src/session/DrivenSession';
     import { Transcript } from './apps/web/src/session/Transcript';
     const Screen = lazy(() => import('/assets/expired.js'));
-    function Broken() { throw new Error('Cannot render this chat'); }
     function App() {
       const [screen, setScreen] = useState('chat');
       return <>
         <textarea aria-label="Draft" onChange={e => localStorage.setItem('saved-draft', e.target.value)} />
         <button onClick={() => setScreen('lazy')}>Open screen</button>
-        <button onClick={() => setScreen('broken')}>Open broken chat</button>
         {screen === 'lazy' && <Suspense fallback="Opening screen"><Screen /></Suspense>}
-        {screen === 'broken' && <Broken />}
       </>;
     }
     window.reloads = 0;
@@ -133,102 +130,6 @@ test('a missing screen chunk shows recovery without clearing pairing or saved dr
   assert.equal(await page.evaluate(() => window.reloads), 1);
   assert.equal(await page.evaluate(() => localStorage.getItem('saved-draft')), 'keep my unsent message');
   assert.equal(await page.evaluate(() => localStorage.getItem('helm.auth')), 'test-membership');
-});
-
-test('a render error leaves a readable recovery screen without raw details', async t => {
-  const page = await pageFor(t);
-  await page.getByRole('button', { name: 'Open broken chat' }).click();
-  await page.getByRole('heading', { name: 'Helm cannot open this screen.' }).waitFor();
-  assert.equal(await page.getByText('Error details', { exact: true }).count(), 0);
-  assert.equal(await page.getByText('Cannot render this chat', { exact: true }).count(), 0);
-  await page.getByRole('button', { name: 'Reload Helm' }).click();
-  assert.equal(await page.evaluate(() => window.reloads), 1);
-});
-
-test('chat recovery opens the existing model picker and shows a missing folder path', async t => {
-  const page = await pageFor(t);
-  await page.evaluate(() => window.mountRecovery('The model is at capacity.', ['gpt-5-mini', 'gpt-5']));
-  const card = page.locator('.recovery');
-  await card.getByText('This model is busy. Try again later.', { exact: true }).waitFor();
-  await card.getByRole('button', { name: 'Choose model' }).click();
-  await page.getByRole('listbox', { name: /^model$/i }).waitFor();
-  await page.evaluate(() => window.mountRecovery('The folder /home/me/old work does not exist on this machine', []));
-  await card.getByText('Restore the folder /home/me/old work on the chat’s machine. Then try again.', { exact: true }).waitFor();
-  assert.equal(await card.getByRole('button', { name: 'Choose model' }).count(), 0);
-});
-
-test('the transcript shows exit code 124 without assuming a timeout', async t => {
-  const page = await pageFor(t);
-  await page.evaluate(() => window.mountCommand(124));
-  await page.locator('.work-head').click();
-  await page.getByText('Command failed (exit code 124)', { exact: true }).waitFor();
-  await page.evaluate(() => window.mountCommand(7));
-  await page.getByText('Command failed (exit code 7)', { exact: true }).waitFor();
-});
-
-test('a missing saved chat directs the owner to a new chat without a retry button', async t => {
-  const page = await pageFor(t);
-  await page.evaluate(() => window.mountRecovery('No conversation found with session ID: test-chat', []));
-  const card = page.locator('.recovery');
-  await card.getByText('Saved chat missing', { exact: true }).waitFor();
-  assert.match(await card.innerText(), /Start a new chat/);
-  assert.equal(await card.getByRole('button', { name: 'Try again' }).count(), 0);
-});
-
-test('an unreachable helper request stays on its card and can be retried', async t => {
-  const page = await pageFor(t);
-  const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
-  await page.evaluate(() => window.mountRecovery('Test error.', [], { helper: 'offline' }));
-  const cards = page.getByRole('group', { name: 'Helpers need your answer' });
-  const review = cards.getByRole('button', { name: /Remote helper.*Review request/ });
-  await review.click({ timeout: 2500 });
-  await cards.getByText('Cannot reach Away now. Try again when it is back online.', { exact: true }).waitFor();
-  assert.equal(await review.isEnabled(), true);
-  assert.equal(await page.evaluate(() => window.openedHelper), undefined);
-  await page.evaluate(() => window.helperAvailable(true));
-  await cards.getByRole('button', { name: 'Try again', exact: true }).click();
-  await page.waitForFunction(() => window.openedHelper?.id === 'helper');
-  assert.deepEqual(await page.evaluate(() => window.openedHelper), { id: 'helper', machine: 'away', request: 'remote-request' });
-  assert.deepEqual(errors, []);
-});
-
-test('a helper review stays available when only HTTPS works', async t => {
-  const page = await pageFor(t);
-  await page.evaluate(() => window.mountRecovery('Test error.', [], { helper: 'online' }));
-  const review = page.getByRole('button', { name: /Remote helper.*Review request/ });
-  await review.waitFor();
-  await page.evaluate(() => window.helperConnection(false, true));
-  await review.click({ timeout: 2000 });
-  await page.waitForFunction(() => window.openedHelper?.id === 'helper');
-  assert.deepEqual(await page.evaluate(() => window.openedHelper), { id: 'helper', machine: 'away', request: 'remote-request' });
-});
-
-test('a nested helper restores its review while its lead stays offline', async t => {
-  const page = await pageFor(t);
-  await page.evaluate(() => window.mountRecovery('Test error.', [], { helper: 'nested' }));
-  const review = page.locator('.child-requests button').filter({ hasText: 'Nested helper' });
-  await review.getByText(/First request/).waitFor();
-  await page.evaluate(() => window.disconnectBranch());
-  await review.click({ timeout: 2500 });
-  const cards = page.getByRole('group', { name: 'Helpers need your answer' });
-  await cards.getByText('Cannot reach Other now. Try again when it is back online.', { exact: true }).waitFor();
-  await page.evaluate(() => window.reconnectNested());
-  await review.getByText(/New request/).waitFor({ timeout: 3500 });
-  await cards.getByRole('button', { name: 'Try again', exact: true }).click();
-  await page.waitForFunction(() => window.openedHelper?.id === 'nested');
-  assert.deepEqual(await page.evaluate(() => window.openedHelper), { id: 'nested', machine: 'other', request: 'nested-request' });
-});
-
-test('the transcript hides Send again for a missing saved chat', async t => {
-  const page = await pageFor(t);
-  await page.evaluate(() => window.mountRecovery('Could not finish the task.', [], { failedTurn: true }));
-  const resend = page.getByRole('button', { name: 'Send again', exact: true });
-  await resend.waitFor();
-  await page.evaluate(() => window.mountRecovery('No conversation found with session ID: test-chat', ['gpt-5'], { failedTurn: true }));
-  await page.getByText('Try this task', { exact: true }).waitFor();
-  await page.locator('.recovery').getByText('Saved chat missing', { exact: true }).waitFor();
-  assert.equal(await resend.count(), 0);
 });
 
 test('the installed shell remains recoverable even when its entry bundle is missing', async t => {

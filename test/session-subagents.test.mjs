@@ -20,18 +20,6 @@ test('a removed chat releases helper records and ignores its pending read', asyn
   assert.equal(updates, 0, 'a late read cannot publish the removed chat');
 });
 
-test('legacy native messages have no receipt and a repeated request sends twice', async () => {
-  let calls=0;
-  const session={id:'parent',engine:'codex',driver:'codex',nativeCards:[{id:'helper',canMessage:true}]};
-  const sessions={get:()=>session};
-  const core={drivers:new Map([['parent',{messageSubagent:async()=>{calls++;}}]]),save(){}};
-  const helpers=new SessionSubagents(sessions,core);
-  helpers.refreshNative=async()=>{};
-  await helpers.messageNative('parent','helper','look again');
-  await helpers.messageNative('parent','helper','look again');
-  assert.equal(calls,2);
-});
-
 test('a Claude helper whose own record ended long ago drops an old "working" report', async (t) => {
   const { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');

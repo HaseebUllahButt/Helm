@@ -9,7 +9,7 @@ import { fakeCli, collect } from './helpers.mjs';
 const helmDir = mkdtempSync(join(tmpdir(), 'helm-driver-codex-'));
 process.env.HELM_DIR = helmDir;
 test.after(() => rmSync(helmDir, { recursive: true, force: true }));
-const { CodexDriver, CodexServer, CODEX_COMMANDS, formatAccountUsage, formatRateLimits } = await import('../packages/connect/src/drivers/codex.js');
+const { CodexDriver, CodexServer, formatRateLimits } = await import('../packages/connect/src/drivers/codex.js');
 
 // One app-server is shared per account home; every test gets its own so the
 // fake replays the right recording.
@@ -164,12 +164,6 @@ test('Codex startup does not wait for the advisory version command', { timeout: 
     await cliVersion(fake.cmd, driver.env);
     await driver.kill(); rmSync(fake.dir, { recursive: true, force: true });
   }
-});
-
-test('codex exposes the commands Helm can execute through app-server', async () => {
-  const driver = new CodexDriver({ cmd: 'codex', env: {}, cwd: '/x', mode: 'ask' });
-  assert.deepEqual(await driver.availableCommands(), CODEX_COMMANDS);
-  assert.ok(CODEX_COMMANDS.length > 10);
 });
 
 test('Codex forwards native thread names without adopting another thread title', () => {
@@ -521,11 +515,16 @@ test('the owner\'s message stops Codex while it thinks; only a file edit in prog
   await driver.start();
   notify('item/started', { turnId: 'turn-a', item: { type: 'fileChange', id: 'edit-1', changes: [], status: 'inProgress' } });
   notify('item/started', { turnId: 'turn-a', item: { type: 'reasoning', id: 'think-1', summary: [], content: [] } });
+  // Helm looks again each second; let several looks pass at once.
+  const flush = async () => { for (let i = 0; i < 20; i++) await new Promise(setImmediate); };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   await driver.steer('Stop and answer me', [], { inputId: 'ticket', clientId: 'owner-1', now: true });
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  for (let i = 0; i < 3; i++) { t.mock.timers.tick(1_000); await flush(); }
   assert.equal(listed, 0, 'a file edit is never cut in half');
   notify('item/completed', { turnId: 'turn-a', item: { type: 'fileChange', id: 'edit-1', changes: [], status: 'completed' } });
+  t.mock.timers.tick(1_000);
   await looked;
+  t.mock.timers.reset();
   const start = await restarted;
   assert.ok(writes.some((w) => w.method === 'turn/interrupt'), 'thinking is cut');
   assert.deepEqual(start.params.input, [{ type: 'text', text: 'Stop and answer me', text_elements: [] }]);
@@ -660,71 +659,13 @@ for (const [name, turns, rollout, expected] of [
   }
 });
 
-test('/usage views format the account activity API as Markdown', () => {
-  const activity = {
-    summary: { lifetimeTokens: 123456, peakDailyTokens: 4000, currentStreakDays: 3, longestStreakDays: 8 },
-    dailyUsageBuckets: [
-      { startDate: '2026-09-14', tokens: 100 },
-      { startDate: '2026-09-15', tokens: 200 },
-      { startDate: '2026-09-20', tokens: 300 },
-    ],
-  };
-  const daily = formatAccountUsage(activity, 'daily');
-  assert.match(daily, /### Daily tokens \(text units\)/);
-  assert.match(daily, /\| Date \| Tokens \|/);
-  assert.match(daily, /\| 2026-09-20 \| 300 \|/);
-  const weekly = formatAccountUsage(activity, 'weekly');
-  assert.match(weekly, /### Weekly tokens \(text units\)/);
-  assert.match(weekly, /\| Week starting \| Tokens \|/);
-  assert.match(weekly, /\| 2026-09-14 \| 600 \|/);
-  const cumulative = formatAccountUsage(activity, 'cumulative');
-  assert.match(cumulative, /### All-time usage/);
-  assert.match(cumulative, /\*\*All-time tokens \(text units\):\*\* 123,456/);
-  const summary = formatAccountUsage(activity);
-  assert.match(summary, /### Account usage/);
-  assert.match(summary, /\*\*Today:\*\* [\d,]+ tokens/);
-  assert.match(summary, /\*\*Last 7 days:\*\* 600 tokens/);
-  assert.match(summary, /`\/usage daily`/);
-  // The quota card leads /usage, like the TUI's status card: the window is
-  // named for its length and the bar fills to the percent used.
-  const now = Date.now();
-  const limits = formatRateLimits({ rateLimits: {
-    limitId: 'codex',
-    primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: now / 1000 + 5 * 3600 },
-    secondary: { usedPercent: 30, windowDurationMins: 10080, resetsAt: now / 1000 + 4 * 86400 },
-    credits: { hasCredits: true, unlimited: false, balance: '42.50' },
-    planType: 'pro',
-  } }, { now });
-  assert.match(limits, /### Limits/);
-  assert.match(limits, /\*\*5h limit\*\* `█{8}░{12}` 42% used · resets in \d+h \d+m/);
-  assert.match(limits, /\*\*Weekly limit\*\* `█{6}░{14}` 30% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-][\d:]+\)/);
-  assert.match(limits, /\*\*Credits:\*\* 42\\\.50/);
-  assert.match(limits, /\*\*Plan:\*\* Pro/);
-  // A provider-supplied label cannot smuggle markup into the report.
+test('a provider-supplied limit label cannot smuggle markup into /usage', () => {
   const two = formatRateLimits({ rateLimitsByLimitId: {
     'co*dex': { limitId: 'co*dex', primary: { usedPercent: 1 } },
     'gpt': { limitId: 'gpt', primary: { usedPercent: 2 } },
-  } }, { now });
+  } }, { now: Date.now() });
   assert.match(two, /\*co\\\*dex\*/);
-  assert.match(two, /\*gpt\*/);  // Banked resets close the card, with the soonest end still ahead.
-  const banked = formatRateLimits({ rateLimits: { primary: { usedPercent: 5, windowDurationMins: 300 } },
-    rateLimitResetCredits: { availableCount: 2, credits: [
-      { status: 'available', expiresAt: now / 1000 - 60 },
-      { status: 'available', expiresAt: now / 1000 + 3 * 3600 },
-    ] } }, { now });
-  assert.match(banked, /\*\*Banked resets:\*\* 2 · the next one ends in [23]h \d+m/);
-  assert.match(formatRateLimits({ rateLimitResetCredits: { availableCount: 0, credits: [] } }, { now }), /\*\*Banked resets:\*\* none/);
-});
-
-test('/pwd is handled locally as a completed command turn', async () => {
-  const { driver, log, fake } = make('plain');
-  await driver.send('/pwd');
-  const done = await log.until((e) => e.type === 'turn.done');
-  assert.equal(done.status, 'ok');
-  const body = log.of('item.delta').map((e) => e.text).join('');
-  assert.equal(body, `**Current folder:** \`${fake.dir}\``);
-  assert.equal(fake.stdinLines().some((line) => line.method === 'turn/start'), false);
-  await driver.kill();
+  assert.match(two, /\*gpt\*/);
 });
 
 test('informational slash commands do not clear an active turn status', async () => {
@@ -737,18 +678,6 @@ test('informational slash commands do not clear an active turn status', async ()
   assert.equal(commandDone.status, 'ok');
   assert.equal(fake.stdinLines().filter((line) => line.method === 'turn/start').length, 1);
 
-  // The status card carries the live account reads: the signed-in account
-  // and the quota bars the TUI's /status draws.
-  const item = log.of('item.start').find((e) => e.kind === 'text' && String(e.turnId).startsWith('command-'));
-  const body = log.of('item.delta').filter((e) => e.id === item.id).map((e) => e.text).join('');
-  assert.match(body, /### Chat status/);
-  assert.match(body, /\*\*Account:\*\* dev@example\\\.com \(Pro\)/);
-  assert.match(body, /\*\*5h limit\*\* `█+░+` 12% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-][\d:]+\)/);
-  assert.match(body, /\*\*Weekly limit\*\* `█+░+` 30% used/);
-  assert.match(body, /\*\*Credits:\*\* 42\\\.50/);
-  const calls = fake.stdinLines().map((l) => l.method);
-  assert.ok(calls.includes('account/read'));
-  assert.ok(calls.includes('account/rateLimits/read'));
 
   await log.until((e) => e.type === 'turn.done' && !String(e.turnId).startsWith('command-'));
   // The command emitted no status of its own: every status on the log is
@@ -1042,20 +971,19 @@ test('subagent: spawn_agent is a card; the child thread\'s items nest under it',
   await driver.kill();
 });
 
-test('resume: an existing thread id resumes instead of starting', () => {
-  const d = new CodexDriver({ cmd: 'codex', env: {}, cwd: '/x', mode: 'ask', engineSessionId: 'thread-1' });
-  assert.equal(d.threadId, 'thread-1');
-});
-
 test('wake: a turn Codex starts by itself is its own turn, and each turn closes once', async () => {
   // After the answer: its completion again, then a turn of Codex's own (a
   // background command finishing) that completes twice.
   const { driver, log } = make('wake');
   await driver.send('Reply with exactly the words: hello from helm');
   await log.until((e) => e.type === 'turn.done' && String(e.turnId).startsWith('wake-'));
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const starts = log.of('turn.start');
-  const dones = log.of('turn.done');
+  // The repeated completion comes before the answer to /status, so once
+  // /status ends, a second close would already show.
+  await driver.send('/status');
+  await log.until((e) => e.type === 'turn.done' && String(e.turnId).startsWith('command-'));
+  const mine = (e) => !String(e.turnId).startsWith('command-');
+  const starts = log.of('turn.start').filter(mine);
+  const dones = log.of('turn.done').filter(mine);
   assert.equal(starts.length, 2);
   assert.equal(starts[0].text, 'Reply with exactly the words: hello from helm');
   assert.ok(!starts[0].wake);

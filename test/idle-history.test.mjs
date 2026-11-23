@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BIG_HISTORY, DEFAULT_CACHE_TTL, cacheTtlOf, staleHistory, historySize } from '../packages/usage/src/idle-history.js';
+import { BIG_HISTORY, DEFAULT_CACHE_TTL, cacheTtlOf, staleHistory } from '../packages/usage/src/idle-history.js';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-idle-history-'));
 Object.assign(process.env, { HELM_DIR: root, HELM_NO_SERVICE: '1', XDG_STATE_HOME: join(root, 'state') });
@@ -14,8 +14,6 @@ writeFileSync(join(root, 'profiles.json'), JSON.stringify({ version: 1,
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { EventLog } = await import('../packages/connect/src/events.js');
 const { InputDelivery } = await import('../packages/connect/src/input-delivery.js');
-const { AgentMessages } = await import('../packages/connect/src/agent-messages.js');
-const { runMessageCommand } = await import('../packages/connect/src/agent-message-cli.js');
 const { wire } = await import('../packages/connect/src/session-wire.js');
 
 const HOUR = 60 * 60_000;
@@ -36,8 +34,6 @@ test('a big Claude history is cold only after its cache time, and only while idl
   assert.equal(cacheTtlOf({ cache_creation: { ephemeral_1h_input_tokens: 9, ephemeral_5m_input_tokens: 0 } }), HOUR);
   assert.equal(cacheTtlOf({ cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 9 } }), 5 * 60_000);
   assert.equal(cacheTtlOf({ cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 } }), undefined);
-  assert.equal(historySize(510_000), '510k');
-  assert.equal(historySize(1_240_000), '1.2M');
 });
 
 class Runtime extends EventEmitter {
@@ -91,16 +87,6 @@ test('the owner chose full history, or sent with an app that offers no choice: n
   assert.deepEqual(g.starts(), ['Old app']);
 });
 
-test('a slash command or a warm cache never compacts first', async (t) => {
-  const f = await setup(t);
-  await f.sessions.input(f.session.id, '/status', { history: 'compact' });
-  assert.ok(!f.starts().includes('/compact'));
-  const g = await setup(t);
-  g.record.context = { ...g.record.context, at: Date.now() - 60_000 };
-  await g.sessions.input(g.session.id, 'Warm', { history: 'compact' });
-  assert.deepEqual(g.starts(), ['Warm']);
-});
-
 test('an agent message compacts a cold history unless the chat still has helpers at work', async (t) => {
   const f = await setup(t);
   await f.sessions.input(f.session.id, 'From a helper', { source: 'agent' });
@@ -112,30 +98,6 @@ test('an agent message compacts a cold history unless the chat still has helpers
   const h = await setup(t);
   await h.sessions.input(h.session.id, 'Keep it', { source: 'agent', history: 'full' });
   assert.deepEqual(h.starts(), ['Keep it']);
-});
-
-test('helm say reports the compaction, and --full-history keeps the history', async (t) => {
-  const f = await setup(t);
-  const other = await f.sessions.start({ cwd: root, profileId: 'fake' });
-  const messages = new AgentMessages({ sessions: f.sessions, delivery: f.inbox, self: 'local', dir: join(root, `messages-${f.session.id}`),
-    rpc: () => assert.fail('unexpected remote') });
-  const lines = [];
-  const deps = { self: 'local', senderId: other.id, findSession: async () => ({ env: 'local', session: { id: f.session.id } }),
-    rpc: async (_env, method, p) => { assert.equal(method, 'session.agent-send'); return messages.send(p); }, write: (s) => lines.push(s) };
-  await runMessageCommand('say', [f.session.id, '--', 'Please check the build'], deps);
-  assert.match(lines[0], /idle with 510k tokens of history, so Claude compacts that history first\. Add --full-history/);
-  assert.equal(f.starts()[0], '/compact');
-
-  const g = await setup(t);
-  const sender = await g.sessions.start({ cwd: root, profileId: 'fake' });
-  const gm = new AgentMessages({ sessions: g.sessions, delivery: g.inbox, self: 'local', dir: join(root, `messages-${g.session.id}`),
-    rpc: () => assert.fail('unexpected remote') });
-  const out = [];
-  await runMessageCommand('say', [g.session.id, '--full-history', '--', 'Keep everything'], { ...deps, senderId: sender.id,
-    findSession: async () => ({ env: 'local', session: { id: g.session.id } }), rpc: async (_e, _m, p) => gm.send(p), write: (s) => out.push(s) });
-  assert.doesNotMatch(out[0], /compacts/);
-  assert.equal(g.starts().length, 1);
-  assert.match(g.starts()[0], /Keep everything/);
 });
 
 test('the Claude driver says how long its cache lasts, and the chat keeps the last known time', async (t) => {

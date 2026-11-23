@@ -50,11 +50,14 @@ test('a machine reaches itself through its own hub (role=self allowed, others 40
   assert.equal(self.ok, true, 'role=self loopback attach must be accepted');
   t.after(() => self.ws.close());
 
-  // Give the hub a moment to register the env, then confirm presence.
-  await new Promise((r) => setTimeout(r, 200));
-  const body = await fetch(`http://127.0.0.1:${PORT}/api/network`, {
-    headers: { authorization: `Bearer ${token}` },
-  }).then((r) => r.json());
-  const me = body.machines.find((m) => m.id === selfId);
-  assert.equal(me?.online, true, 'the machine must be online on its own hub');
+  // The hub registers the env just after the socket opens; ask until it shows.
+  const online = async () => {
+    const body = await fetch(`http://127.0.0.1:${PORT}/api/network`, {
+      headers: { authorization: `Bearer ${token}` },
+    }).then((r) => r.json());
+    return body.machines.find((m) => m.id === selfId)?.online === true;
+  };
+  let me = false;
+  for (const end = Date.now() + 5000; !(me = await online()) && Date.now() < end;) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(me, true, 'the machine must be online on its own hub');
 });

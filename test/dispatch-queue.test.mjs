@@ -21,7 +21,14 @@ process.env.HELM_DB = join(root, 'hub.sqlite');
 process.env.HELM_NO_SERVICE = '1';
 
 const PORT = 18637;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Wait for a state the hub writes, polling until it holds. */
+async function until(check, ms = 5000) {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('condition timed out');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 
 const N = await import('@helm/protocol/network');
 const { T, M } = await import('@helm/protocol');
@@ -285,7 +292,9 @@ test('a result from the wrong machine completes nothing', async () => {
   env.send(JSON.stringify({
     t: T.HANDOFF_RESULT, handoffId: params.handoffId, ok: true, receipt: { forged: true },
   }));
-  await sleep(300);
+  // The hub handles one socket's frames in order: the pong comes after the forged result.
+  env.send(JSON.stringify({ t: T.PING }));
+  await waitFrame(env, (m) => m.t === T.PONG);
   const row = q.handoffGet.get(params.handoffId);
   assert.equal(row.status, 'queued');
   assert.equal(row.result, null);
@@ -304,10 +313,7 @@ test("the target's result is remembered, and only the source may read it", async
       t: T.HANDOFF_RESULT, handoffId: params.handoffId, ok: true,
       receipt: { sessionId: 'sess-99', folder: '/work/dir', status: 'running' },
     }));
-    for (let i = 0; i < 40; i += 1) {
-      if (q.handoffGet.get(params.handoffId).status === 'running') break;
-      await sleep(50);
-    }
+    await until(() => q.handoffGet.get(params.handoffId).status === 'running');
     const row = q.handoffGet.get(params.handoffId);
     assert.equal(row.status, 'running');
     assert.equal(JSON.parse(row.result).sessionId, 'sess-99');
@@ -337,10 +343,7 @@ test('a failed result is remembered the same way', async () => {
       t: T.HANDOFF_RESULT, handoffId: params.handoffId, ok: false,
       error: 'the handoff target is not this machine',
     }));
-    for (let i = 0; i < 40; i += 1) {
-      if (q.handoffGet.get(params.handoffId).status === 'failed') break;
-      await sleep(50);
-    }
+    await until(() => q.handoffGet.get(params.handoffId).status === 'failed');
     const st = await rpc(ws, M.DISPATCH_STATUS, { handoffId: params.handoffId });
     assert.equal(st.ok, true);
     assert.equal(st.result.status, 'failed');
@@ -395,7 +398,7 @@ test('the daemon consumes a job frame through its idempotent accept', async () =
   await daemon.onFrame(link, {
     t: T.HANDOFF_JOB, handoffId: params.handoffId, sourceMachineId: OTHER, params,
   });
-  for (let i = 0; i < 40 && !sent.length; i += 1) await sleep(25);
+  await until(() => sent.length);
   assert.equal(sent[0].t, T.HANDOFF_RESULT);
   assert.equal(sent[0].ok, true);
   assert.equal(sent[0].receipt.sessionId, 'sess-1');
@@ -426,10 +429,7 @@ test('a result too large to store is recorded as failed instead', async () => {
       // megabyte is not one receipt any more.
       receipt: { sessionId: 'sess-1', folder: '/w', digest: 'cd'.repeat(32), pad: 'x'.repeat(1_600_000) },
     }));
-    for (let i = 0; i < 40; i += 1) {
-      if (q.handoffGet.get(params.handoffId).status === 'failed') break;
-      await sleep(50);
-    }
+    await until(() => q.handoffGet.get(params.handoffId).status === 'failed');
     const row = q.handoffGet.get(params.handoffId);
     assert.equal(row.status, 'failed');
     assert.match(row.error, /too large/);
@@ -481,10 +481,7 @@ test('a source that was away hears about its finished child on connect', async (
       t: T.HANDOFF_RESULT, handoffId: params.handoffId, ok: true,
       receipt: { sessionId: 'sess-77', folder: '/work/dest', digest: 'cd'.repeat(32) },
     }));
-    for (let i = 0; i < 40; i += 1) {
-      if (q.handoffGet.get(params.handoffId).status === 'running') break;
-      await sleep(50);
-    }
+    await until(() => q.handoffGet.get(params.handoffId).status === 'running');
     assert.equal(q.handoffGet.get(params.handoffId).status, 'running');
 
     // The source daemon was offline for all of that; connecting now is

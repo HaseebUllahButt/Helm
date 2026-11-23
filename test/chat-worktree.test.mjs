@@ -187,9 +187,14 @@ test('the branch takes the chat\'s name while it has no commits and the name is 
   assert.ok(existsSync(a.cwd), 'the folder stays where the agent runs');
 
   const b = await s.start({ cwd: dir, profileId: 'claudea' });
+  const named = [];
+  s.on('session', (o) => { if (o.id === b.id && o.chatWorktree) named.push(o.chatWorktree.branch); });
   s.rename(b.id, 'Fix the login page');
-  await new Promise((r) => setTimeout(r, 300));
-  assert.equal(s.get(b.id).chatWorktree.branch, `helm/chat-${b.id}`, 'the name is taken');
+  // One rename at a time per chat: a free name lands only after the taken one was tried.
+  // A new title each time: the same title twice is no change and is not tried again.
+  let tries = 0;
+  await until(() => { s.rename(b.id, `Second try ${++tries}`); return s.get(b.id).chatWorktree.branch.startsWith('helm/second-try-'); });
+  assert.ok(!named.includes('helm/fix-the-login-page'), 'the name is taken');
 
   const c = await s.start({ cwd: dir, profileId: 'claudea' });
   writeFileSync(join(c.cwd, 'x.txt'), 'x');

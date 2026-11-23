@@ -79,7 +79,8 @@ test('a network change keeps a healthy hub socket and probes it at once', async 
   setup.link.start();
   await setup.ready;
   setup.link.recover();
-  await new Promise(resolve => setTimeout(resolve, 160));
+  // recover() clears the round-trip time; the next pong sets it and cancels the probe timer.
+  while (setup.link.rtt == null) await new Promise(resolve => setTimeout(resolve, 5));
   assert.equal(setup.upgrades(), 1);
   assert.equal(setup.link.connected, true);
 });

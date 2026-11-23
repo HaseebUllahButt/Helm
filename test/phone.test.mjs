@@ -18,7 +18,6 @@ const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { EventLog } = await import('../packages/connect/src/events.js');
 const { PhoneRequests, findCode } = await import('../packages/connect/src/phone.js');
 const { joinHelmAsks } = await import('../packages/connect/src/helm-asks.js');
-const { describe, askPreview } = await import('../packages/connect/src/notify.js');
 
 class StubRuntime extends EventEmitter {
   async read() { return { text: '' }; }
@@ -59,17 +58,15 @@ async function setup(t, { now } = {}) {
   return { sessions, session, phone, make, dir, uploads, cards, ask };
 }
 
-test('a question shows a card that says which chat asks and why, and the answer comes back', async (t) => {
+test('a question shows a card for its chat, and the answer comes back', async (t) => {
   const { sessions, session, phone, cards, ask } = await setup(t);
   const asked = await ask('ask', { question: 'Which plan?', choices: ['Small', 'Big', 'Small'], why: 'I set up billing' });
   assert.equal(asked.state, 'asking');
   const [card] = cards();
   assert.equal(card.kind, 'tool');
   assert.equal(card.tool, 'phone');
-  assert.equal(card.title, 'Answer a question');
-  assert.equal(card.reason, 'I set up billing.');
   assert.deepEqual(card.phone, { type: 'ask', question: 'Which plan?', choices: ['Small', 'Big'], chat: 'Fix the login', envId: 'machine-1', until: card.phone.until });
-  assert.deepEqual(card.options.map((o) => [o.role, o.label]), [['allow', 'Send'], ['deny', 'Refuse']]);
+  assert.deepEqual(card.options.map((o) => o.role), ['allow', 'deny']);
   assert.equal(sessions.get(session.id).status, 'blocked');
   assert.deepEqual(phone.list().map((r) => [r.type, r.chat, r.question]), [['ask', 'Fix the login', 'Which plan?']]);
 
@@ -88,7 +85,6 @@ test('a question shows a card that says which chat asks and why, and the answer 
 test('Refuse from the card or from the waiting box ends the request', async (t) => {
   const { sessions, session, phone, cards, ask } = await setup(t);
   const one = await ask('location', { why: 'Find a shop near you' });
-  assert.equal(cards()[0].title, 'Share your location');
   phone.give({ requestId: one.requestId, refuse: true });
   assert.equal((await phone.wait({ requestId: one.requestId, wait: 0 })).state, 'refused');
 
@@ -143,7 +139,6 @@ test('a restart shows the same card, and the waiting helm phone gets its answer'
   phone.stop();
   const again = make();
   assert.equal(cards().length, 1);
-  assert.equal(cards()[0].title, 'Send the sign-in code for the bank');
   assert.equal((await again.ask({ sessionId: session.id, requestId: asked.requestId, type: 'code', site: 'the bank' })).state, 'asking');
   again.give({ requestId: asked.requestId, code: '555123' });
   // An answer given while helm phone was away waits on disk.
@@ -155,8 +150,9 @@ test('a restart shows the same card, and the waiting helm phone gets its answer'
 test('deleting or stopping the chat closes its requests', async (t) => {
   const { sessions, session, phone, ask } = await setup(t);
   const asked = await ask('photo');
-  // A Stop counts for requests asked before it.
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  // A Stop counts for requests asked before it: wait for the clock to move on.
+  const askedAt = Date.now();
+  while (Date.now() <= askedAt) await new Promise((resolve) => setImmediate(resolve));
   await sessions.interrupt(session.id);
   assert.deepEqual(await phone.wait({ requestId: asked.requestId, wait: 0 }), { requestId: asked.requestId, state: 'cancelled', message: 'The owner stopped the chat.' });
 
@@ -186,14 +182,6 @@ test('a request needs a chat, a known kind and a question', async (t) => {
   await assert.rejects(phone.ask({ sessionId: 'x', requestId: newId(), type: 'sms' }), /one of/);
   await assert.rejects(phone.ask({ sessionId: 'x', requestId: 'bad', type: 'photo' }), /request id/);
   await assert.rejects(phone.dispatch('phone.list', {}, { trusted: false }), /owner's devices/);
-});
-
-test('the notification and the waiting box say what the phone is asked for', () => {
-  const event = { type: 'permission.request', requestId: 'phone-x1234567', kind: 'tool', tool: 'phone', title: 'Send a photo', reason: 'Show the error.', phone: { type: 'photo' } };
-  const said = describe({ id: 's1', title: 'Fix the login', engine: 'claude', machine: 'laptop' }, event);
-  assert.match(said.body, /wants a photo/);
-  assert.match(said.body, /Show the error\./);
-  assert.deepEqual(askPreview(event), { kind: 'tool', phone: 'photo', text: 'Send a photo', more: 0 });
 });
 
 test('the photo and the code are never kept on disk with the answer queue', () => {

@@ -27,21 +27,25 @@ test('an attached session pushes screen deltas, resets on redraw, and is quiet w
   const id = 'pane:w1:p1';
   const pushed = [];
   sessions.on('data', (d) => pushed.push(d));
+  const until = async (check) => {
+    for (let i = 0; i < 500 && !check(); i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(check(), 'timed out waiting for the screen poll');
+  };
 
   const first = await sessions.attach(id, { lines: 50, ansi: true });
   assert.equal(first.text, 'line one\n');
 
   // Idle: several polls, no pushes.
-  await new Promise((r) => setTimeout(r, 400));
+  const idleFrom = rt.reads;
+  await until(() => rt.reads >= idleFrom + 3);
   assert.equal(pushed.length, 0);
-  assert.ok(rt.reads >= 2, 'the daemon should be polling the runtime');
 
   rt.screen = 'line one\nline two\n';
-  await new Promise((r) => setTimeout(r, 400));
+  await until(() => pushed.length === 1);
   assert.deepEqual(pushed.at(-1), { id, text: 'line two\n', reset: false });
 
   rt.screen = 'a whole new screen\n';
-  await new Promise((r) => setTimeout(r, 400));
+  await until(() => pushed.length === 2);
   assert.deepEqual(pushed.at(-1), { id, text: 'a whole new screen\n', reset: true });
 
   sessions.detach(id);

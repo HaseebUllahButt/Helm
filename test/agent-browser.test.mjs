@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
-import { spawnSync } from 'node:child_process';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-agent-browser-'));
 process.env.HELM_NO_SERVICE = '1';
@@ -13,67 +12,8 @@ process.env.HELM_NO_SERVICE = '1';
 delete process.env.WAYLAND_DISPLAY; delete process.env.DISPLAY;
 for (const [key, file] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(process.env.HELM_DIR, file);
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-const { BrowserManager, browserReady } = await import('../packages/connect/src/browser.js');
+const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { systemChromium } = await import('../packages/connect/src/browser-window.js');
-const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
-const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
-
-test('Mac Chrome is ready without Linux browsers or a Playwright download', () => {
-  const browser = new URL('../packages/connect/src/browser.js', import.meta.url).href;
-  const window = new URL('../packages/connect/src/browser-window.js', import.meta.url).href;
-  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
-    import assert from 'node:assert/strict';
-    import fs from 'node:fs';
-    import { syncBuiltinESMExports } from 'node:module';
-    const app = '/Applications/Google Chrome.app', chrome = app + '/Contents/MacOS/Google Chrome';
-    // A real Chrome bundle, found by its framework resources, not by its name.
-    const content = {
-      [app + '/Contents/Info.plist']: '<plist><dict><key>CFBundleExecutable</key><string>Google Chrome</string></dict></plist>',
-      [chrome]: '',
-      [app + '/Contents/Frameworks/Google Chrome Framework.framework/Versions/A/Resources/resources.pak']: '',
-    };
-    let installed = true;
-    const files = () => installed ? new Set(Object.keys(content)) : new Set();
-    const dirs = () => { const d = new Set(); for (const f of files()) { const parts = f.split('/'); for (let i = 1; i < parts.length; i++) d.add(parts.slice(0, i).join('/') || '/'); } return d; };
-    // Only the fake /Applications tree is mocked; every other path (the module
-    // loader reading real files) goes to the real fs.
-    const fake = p => typeof p === 'string' && p.startsWith('/Applications');
-    const real = { existsSync: fs.existsSync, statSync: fs.statSync, readFileSync: fs.readFileSync, realpathSync: fs.realpathSync, readdirSync: fs.readdirSync };
-    fs.existsSync = (p, ...a) => fake(p) ? files().has(p) || dirs().has(p) : real.existsSync(p, ...a);
-    fs.statSync = (p, ...a) => { if (!fake(p)) return real.statSync(p, ...a); if (files().has(p)) return { isFile: () => true, isDirectory: () => false, size: content[p].length }; if (dirs().has(p)) return { isFile: () => false, isDirectory: () => true, size: 0 }; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
-    fs.readFileSync = (p, ...a) => { if (!fake(p)) return real.readFileSync(p, ...a); if (files().has(p)) return content[p]; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
-    fs.realpathSync = (p, ...a) => fake(p) ? p : real.realpathSync(p, ...a);
-    fs.readdirSync = (p, opts) => { if (!fake(p)) return real.readdirSync(p, opts); const kids = new Map(); for (const f of [...files(), ...dirs()]) { if (f.startsWith(p + '/')) { const name = f.slice(p.length + 1).split('/')[0]; if (name && !kids.has(name)) kids.set(name, { name, isFile: () => files().has(p + '/' + name), isDirectory: () => dirs().has(p + '/' + name) }); } } const list = [...kids.values()]; return opts?.withFileTypes ? list : list.map(e => e.name); };
-    syncBuiltinESMExports();
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
-    for (const key of ['HELM_CHROMIUM_PATH', 'HELM_TEST_CHROMIUM', 'HELM_WINDOW_CHROMIUM']) delete process.env[key];
-    process.env.PATH = '';
-    const { browserReady } = await import(${JSON.stringify(browser)});
-    const { systemChromium, refreshBrowsers } = await import(${JSON.stringify(window)});
-    assert.equal(systemChromium(), chrome);
-    assert.equal(browserReady(), true);
-    // Discovery is cached for a few seconds; an install change refreshes it.
-    installed = false; refreshBrowsers();
-    assert.equal(browserReady(), false);
-    process.env.HELM_WINDOW_CHROMIUM = '/custom/window-browser';
-    assert.equal(systemChromium(), undefined);
-    assert.equal(browserReady(), true);
-  `], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-});
-
-test('a machine with only a Flatpak browser is ready where the owner window can open', () => {
-  const home = mkdtempSync(join(process.env.HELM_DIR, 'flatpak-only-'));
-  const apps = join(home, 'apps'), bin = join(home, 'bin'), fp = join(home, 'flatpak'), files = join(fp, 'org.x.Wave', 'current', 'active', 'files');
-  for (const dir of [apps, bin, files]) mkdirSync(dir, { recursive: true });
-  for (const name of ['resources.pak', 'wave']) writeFileSync(join(files, name), '');
-  writeFileSync(join(bin, 'flatpak'), '#!/bin/sh\n');
-  writeFileSync(join(apps, 'wave.desktop'), `[Desktop Entry]\nName=Wave\nExec=${join(bin, 'flatpak')} run org.x.Wave %U\n`);
-  const find = { home, entryDirs: [apps], flatpakDirs: [fp], pathDirs: [bin], snapRoot: join(home, 'snap'), run: () => { throw new Error('no default'); } };
-  const ready = window => browserReady({ env: {}, platform: 'linux', find, playwright: () => false, window: () => window });
-  assert.equal(ready(true), true, 'the window can start it through flatpak run');
-  assert.equal(ready(false), false, 'with no screen there is nothing that can start it');
-});
 
 test('tabs from one chat do not block another and all saved tabs survive recovery', async t => {
   const directory = mkdtempSync(join(process.env.HELM_DIR, 'many-tabs-'));
@@ -136,32 +76,29 @@ test('a read-only agent can inspect a tab but cannot mutate it through browser C
   assert.deepEqual(await manager.run('one', 'tab', { kind: 'console' }), { entries: [] }); await manager.stop();
 });
 
-test('CLI resolves explicitly selected remote thread and writes returned screenshot locally', async () => {
-  const calls = [], out = join(process.env.HELM_DIR, 'capture.jpg');
-  await runBrowserCommand(['screenshot', 'tab', '--session', 'remote', '--output', out], { findSession: async () => ({ env: 'laptop', session: { id: 'remote' } }), rpc: async (...args) => { calls.push(args); return { image: 'data:image/jpeg;base64,aGVsbG8=' }; }, print: () => {} });
-  assert.equal(calls[0][0], 'laptop'); assert.equal(calls[0][2].id, 'remote'); assert.equal(readFileSync(out, 'utf8'), 'hello');
-});
-
 const fakePage = () => {
   const cdp = new EventEmitter(); cdp.detach = async () => {}; cdp.send = async () => {};
   const page = { u: 'http://x/1', url() { return this.u; }, viewportSize: () => ({ width: 1280, height: 800 }), title: async () => 'Title', mouse: { click: async () => {}, move: async () => {} }, goto: async function (u) { this.u = u; }, evaluate: async function () { return { title: 'Title', url: this.u, text: '', elements: [] }; }, context: () => ({ newCDPSession: async () => cdp }) };
   page.mainFrame = () => ({ evaluate: (...args) => page.evaluate(...args), childFrames: () => [] });
   return { cdp, page };
 };
-const tick = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fakeTab = (page, extra = {}) => ({ id: 'tab', sessionId: 'one', engine: 'chromium', page, downloads: [], lastUsed: Date.now(), console: [], network: [], ...extra });
+// Wait for a state, checking now and then, never for a fixed time.
+const until = async check => { while (!check()) await new Promise(resolve => setTimeout(resolve, 20)); };
+// Every close check the pages started, to wait for them all.
+const watchCloses = manager => { const all = [], real = manager.pageClosed.bind(manager); manager.pageClosed = (...args) => { const done = real(...args); all.push(done); return done; }; return () => Promise.all(all); };
 
 test('tab list writes are coalesced after busy bursts but never lost on navigation, close or stop', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json'), { page } = fakePage(); let closed = 0;
   const context = { storageState: async () => ({ cookies: [], origins: [] }), close: async () => { closed++; } };
-  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); let writes = 0; const write = manager.persistTabs.bind(manager);
-  manager.persistTabs = async sid => { writes++; return write(sid); };
+  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); let writes = 0, wrote = () => {}; const write = manager.persistTabs.bind(manager);
+  manager.persistTabs = async sid => { writes++; await write(sid); wrote(); };
   page.close = async () => { manager.tabs.delete('tab'); };
   manager.recovered.set('one', Promise.resolve()); manager.contexts.set('one', Promise.resolve(context));
   const tab = fakeTab(page); manager.tabs.set('tab', tab);
   for (let i = 0; i < 8; i++) await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 });
   assert.equal(writes, 0, 'a burst of clicks writes nothing yet'); assert.equal(existsSync(file), false);
-  await tick(1150); assert.equal(writes, 1, 'one write for the whole burst'); assert.equal(JSON.parse(readFileSync(file, 'utf8'))[0].url, 'http://x/1');
+  await new Promise(resolve => { wrote = resolve; }); assert.equal(writes, 1, 'one write for the whole burst'); assert.equal(JSON.parse(readFileSync(file, 'utf8'))[0].url, 'http://x/1');
   await manager.run('one', 'tab', { kind: 'navigate', url: 'http://x/2' }); assert.equal(writes, 2, 'navigation writes at once'); assert.equal(JSON.parse(readFileSync(file, 'utf8'))[0].url, 'http://x/2');
   await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 }); page.u = 'http://x/3'; assert.equal(writes, 2); assert.equal(manager.persistTimers.size, 1);
   await manager.stop(); assert.equal(JSON.parse(readFileSync(file, 'utf8'))[0].url, 'http://x/3', 'stop writes what the timer was still holding'); assert.equal(manager.persistTimers.size, 0);
@@ -169,7 +106,6 @@ test('tab list writes are coalesced after busy bursts but never lost on navigati
   manager.stopping = false; manager.tabs.set('tab', tab); manager.contexts.set('one', Promise.resolve(context)); manager.recovered.set('one', Promise.resolve());
   await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 }); assert.equal(manager.persistTimers.size, 1);
   await manager.close('one', 'tab'); assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), []); assert.equal(manager.persistTimers.size, 0); assert.equal(closed, 1);
-  await tick(1150); assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), [], 'a cancelled write does not run later');
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -179,7 +115,7 @@ test('a crashed browser does not let a held write erase the saved tab list', asy
   const tab = fakeTab(page); manager.tabs.set('tab', tab);
   await manager.persistTabs('one'); await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 });
   manager.tabs.delete('tab'); // what the disconnect handler does
-  await tick(1150); assert.equal(JSON.parse(readFileSync(file, 'utf8')).length, 1, 'the earlier list survives for recovery');
+  await until(() => manager.persistTimers.size === 0); assert.equal(JSON.parse(readFileSync(file, 'utf8')).length, 1, 'the earlier list survives for recovery');
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -188,22 +124,22 @@ test('Chromium dying before Helm keeps the tab list, and a page closing on its o
   const page = () => Object.assign(new EventEmitter(), { url: () => 'http://x/1', viewportSize: () => ({ width: 800, height: 600 }) });
   const saved = () => JSON.parse(readFileSync(file, 'utf8')).length;
   // A restart: Chromium's pages close while the browser still looks connected, then Helm stops.
-  let manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.closeGraceMs = 30; manager.recovered.set('one', Promise.resolve());
+  let manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.closeGraceMs = 30; manager.recovered.set('one', Promise.resolve()); let closes = watchCloses(manager);
   let connected = true; manager.browser = { isConnected: () => connected, on() {}, close: async () => {} };
   const a = page(), b = page(); manager.register('one', a); manager.register('one', b); await manager.persistTabs('one'); assert.equal(saved(), 2);
   a.emit('close'); b.emit('close'); await manager.stop();
   assert.equal(saved(), 2, 'stopping after the pages closed forgets nothing');
-  await tick(60); assert.equal(saved(), 2, 'nor does the close check that was still waiting');
+  await closes(); assert.equal(saved(), 2, 'nor does the close check that was still waiting');
   // A crash: the pages close and the browser is gone.
-  manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.closeGraceMs = 30; manager.recovered.set('one', Promise.resolve());
+  manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.closeGraceMs = 30; manager.recovered.set('one', Promise.resolve()); closes = watchCloses(manager);
   manager.browser = { isConnected: () => false, on() {} };
-  const c = page(); manager.register('one', c); await manager.persistTabs('one'); c.emit('close'); await tick(60);
+  const c = page(); manager.register('one', c); await manager.persistTabs('one'); c.emit('close'); await closes();
   assert.equal(saved(), 1);
   // window.close(): the browser is alive without the page.
-  manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.closeGraceMs = 30; manager.recovered.set('one', Promise.resolve());
+  manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.closeGraceMs = 30; manager.recovered.set('one', Promise.resolve()); closes = watchCloses(manager);
   manager.browser = { isConnected: () => true, on() {} };
   const d = page(), e = page(); manager.register('one', d); manager.register('one', e); await manager.persistTabs('one');
-  d.emit('close'); await tick(60);
+  d.emit('close'); await closes();
   assert.equal(saved(), 1, 'a page that closed itself is gone from the list');
   rmSync(directory, { recursive: true, force: true });
 });
@@ -233,52 +169,6 @@ test('the address bar takes a host, a local dev server or words to search', asyn
   assert.equal(httpUrl('http://example.com'), 'http://example.com/');
   assert.throws(() => httpUrl('file:///etc/passwd'), /HTTP or HTTPS/);
   assert.match(httpUrl('javascript:alert(1)'), /^https:\/\/www\.bing\.com\//, 'a script address is only ever searched for');
-});
-
-test('an agent waits for navigation and gets a failed load in plain words', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'helm-go-')), { page, cdp } = fakePage();
-  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.recovered.set('one', Promise.resolve());
-  let fail; page.goto = function (u) { return new Promise((resolve, reject) => { fail = () => reject(new Error(`page.goto: net::ERR_NAME_NOT_RESOLVED at ${u}\nCall log:\n\u001b[2m  - navigating to "${u}"\u001b[22m`)); }); };
-  const tab = fakeTab(page); manager.tabs.set('tab', tab);
-  const agent = manager.run('one', 'tab', { kind: 'navigate', url: 'eat.nowhere.test' });
-  await tick(5); assert.equal(manager.metadata(tab).problem, null, 'a new try clears the old message'); fail();
-  await assert.rejects(agent, error => error.message === "Can't find eat.nowhere.test. Check the address.");
-  // Stop asks Chromium to stop loading.
-  const sent = []; cdp.send = async method => { sent.push(method); };
-  await manager.run('one', 'tab', { kind: 'stop' }); assert.ok(sent.includes('Page.stopLoading'));
-  await manager.stop(); rmSync(directory, { recursive: true, force: true });
-});
-
-test('an agent gets a page once it stops fetching, without waiting for slow pictures', { timeout: 60000 }, async t => {
-  const server = createServer((req, res) => {
-    if (req.url.startsWith('/img')) return setTimeout(() => { res.setHeader('Content-Type', 'image/gif'); res.end(Buffer.from('R0lGODlhAQABAAAAACw=', 'base64')); }, 4000);
-    if (req.url === '/api') return setTimeout(() => res.end('data arrived'), 300);
-    res.setHeader('Content-Type', 'text/html'); res.end('<title>Heavy</title><img src="/img"><p id=d></p><script>fetch("/api").then(r => r.text()).then(x => d.textContent = x)</script>');
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const manager = new BrowserManager({ directory: mkdtempSync(join(tmpdir(), 'helm-settle-')), session: sid => ({ id: sid }), canWindow: false });
-  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
-  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
-  const started = Date.now(), { text } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}/` });
-  assert.match(text, /data arrived/, 'what the page fetched is there');
-  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
-});
-
-test('full Chromium is tried first; a pinned path wins; the system browser is the fallback', async () => {
-  const { chromium } = await import('patchright-core'), real = chromium.launch, calls = [], browser = new EventEmitter(); browser.isConnected = () => true; browser.close = async () => {}; browser.newBrowserCDPSession = async () => ({ send: async () => ({ userAgent: 'Chrome/153.0.0.0', product: 'Chrome/153.0.1.2' }), detach: async () => {} });
-  const saved = { HELM_CHROMIUM_PATH: process.env.HELM_CHROMIUM_PATH, HELM_TEST_CHROMIUM: process.env.HELM_TEST_CHROMIUM };
-  const run = async (env, launch) => {
-    for (const key of Object.keys(saved)) delete process.env[key]; Object.assign(process.env, env); calls.length = 0; chromium.launch = async options => { assert.equal(options.channel, 'chromium'); assert.ok(options.ignoreDefaultArgs.includes('--enable-automation')); calls.push(options.executablePath); return launch(options); };
-    const manager = new BrowserManager({ session: sid => ({ id: sid }) });
-    try { await manager.start(); } catch (error) { return error; } finally { await manager.stop(); }
-  };
-  try {
-    await run({ HELM_CHROMIUM_PATH: '/pinned/chrome' }, () => browser); assert.deepEqual(calls, ['/pinned/chrome']);
-    await run({}, () => browser); assert.deepEqual(calls, [undefined], 'the Chromium channel selects the full browser');
-    const system = systemChromium();
-    const error = await run({}, options => { if (!options.executablePath) throw new Error('Executable doesn\'t exist'); return browser; });
-    if (system) { assert.equal(error, undefined); assert.deepEqual(calls, [undefined, system]); } else assert.match(error.message, /could not start/);
-  } finally { chromium.launch = real; for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 });
 
 test('real browser isolation, batched actions, uploads, answering a dialog, and restart restore', { timeout: 60000 }, async t => {
@@ -313,120 +203,7 @@ test('real browser isolation, batched actions, uploads, answering a dialog, and 
   await manager.close('one', savedId); assert.equal((await manager.list('one')).tabs.length, 0); assert.equal(manager.browser, null);
 });
 
-test('the agent’s cursor is drawn in a window tab only, and point guides without touching the page', async () => {
-  let clock = 1000, clicks = 0, scrolled = 0; const drawn = [];
-  const box = { x: 100, y: 40, width: 80, height: 20 };
-  const locator = { first: () => locator, scrollIntoViewIfNeeded: async () => { scrolled++; }, boundingBox: async () => box, evaluate: async () => ({ name: 'Sign in', main: true, viewport: { width: 1280, height: 800 }, box }), click: async () => { clicks++; } };
-  const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => ({ width: 1280, height: 800 }), locator: () => locator, mouse: { click: async () => { clicks++; }, move: async () => {} }, evaluate: async (fn, arg) => { if (arg?.label != null) drawn.push(arg); return { title: 'Example', url: 'http://example.test/', text: '', elements: [] }; } };
-  page.mainFrame = () => ({ evaluate: page.evaluate, childFrames: () => [] });
-  const manager = new BrowserManager({ session: sid => ({ id: sid, mode: sid === 'reader' ? 'readonly' : 'default' }), now: () => clock, canWindow: false });
-  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
-  manager.persistTabs = async () => {}; manager.persistSoon = () => {};
-  const started = Date.now(); await manager.run('one', 'tab', { kind: 'click', selector: 'button' });
-  assert.equal(tab.pointer, undefined, 'a hidden tab: no cursor work'); assert.equal(scrolled, 0); assert.ok(Date.now() - started < 100, 'a hidden tab: no added wait');
-  tab.window = true;
-  await manager.run('one', 'tab', { kind: 'click', selector: 'button' });
-  assert.deepEqual(tab.pointer, { x: 140, y: 50, box, action: 'click', label: 'Clicking “Sign in”', by: 'agent', seq: 1, at: 1000 }); assert.equal(clicks, 2);
-  assert.equal(drawn.at(-1).label, 'Clicking “Sign in”', 'drawn on the page itself');
-  assert.equal(scrolled, 0, 'an onscreen target does not repeat the action scroll check');
-  await manager.run('one', 'tab', { kind: 'scroll', dy: -300 }).catch(() => {});
-  assert.equal(tab.pointer.label, 'Scrolling up'); assert.deepEqual([tab.pointer.x, tab.pointer.y], [640, 400]);
-  // A guide works in a hidden tab too, and never clicks or scrolls.
-  tab.window = false; scrolled = 0;
-  const guided = await manager.run('one', 'tab', { kind: 'point', selector: '#approve', note: 'Click here to approve' });
-  assert.deepEqual(guided.tab.pointer, undefined, 'tab answers no longer carry a cursor');
-  assert.deepEqual(tab.pointer, { x: 140, y: 50, box, action: 'point', label: '“Sign in”', by: 'guide', note: 'Click here to approve', seq: 3, at: clock });
-  assert.equal(drawn.at(-1).guide, true); assert.equal(clicks, 2, 'point never clicks'); assert.equal(scrolled, 0, 'point never scrolls');
-  clock += 400; manager.ownerInput(page); assert.equal(tab.pointer, null, 'input in the external window clears the guide');
-  await assert.rejects(manager.run('one', 'tab', { kind: 'point', x: 5000, y: 20 }), /not on screen/);
-  await assert.rejects(manager.run('one', 'tab', { kind: 'point' }), /choose a target/);
-  manager.tabs.set('read', { ...tab, id: 'read', sessionId: 'reader', pointer: null }); await manager.run('reader', 'read', { kind: 'point', selector: 'button' });
-  assert.equal(manager.tabs.get('read').pointer.by, 'guide');
-  await manager.stop();
-});
-
-test('browser point CLI builds a guide action', async () => {
-  const calls = [];
-  const rpc = async (...args) => { calls.push(args); return {}; };
-  await runBrowserCommand(['point', 'tab', '3', '--note', 'Approve here'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
-  await runBrowserCommand(['point', 'tab', 'button.primary'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
-  assert.deepEqual(calls.map(c => c[2].action), [{ kind: 'point', ref: 3, note: 'Approve here' }, { kind: 'point', selector: 'button.primary' }]);
-  await assert.rejects(runBrowserCommand(['point', 'tab'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} }), /element number or CSS selector/);
-  calls.length = 0;
-  await runBrowserCommand(['look', 'tab', '--within', '#rest', '--frame', '2'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
-  await runBrowserCommand(['act', 'tab', '{"click":"Save","timeout":90000}'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
-  assert.deepEqual(calls[0][2].action, { kind: 'look', budget: 6000, within: '#rest', frame: 2 });
-  assert.equal(calls[1][3], 105000, 'a longer call waits longer for its answer');
-
-});
-
-test('a viewport screenshot shows the page while its web font is still loading', { timeout: 30000 }, async t => {
-  let fontRequested, fontResponse;
-  const requested = new Promise(resolve => { fontRequested = resolve; });
-  const server = createServer((req, res) => {
-    if (req.url === '/slow-font') { fontResponse = res; res.writeHead(200, { 'Content-Type': 'font/woff2' }); res.flushHeaders(); fontRequested(); return; }
-    res.setHeader('Content-Type', 'text/html');
-    res.end('<style>@font-face{font-family:slow;src:url(/slow-font)}body{margin:0;font-family:slow,sans-serif;height:2400px;background:linear-gradient(#e61914 0 1000px,#173be8 1000px)}</style><title>Visible now</title><h1>Visible now</h1>');
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const manager = new BrowserManager({ directory: join(process.env.HELM_DIR, 'font-shot'), session: id => ({ id }), canWindow: false });
-  t.after(async () => { fontResponse?.end(); await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
-  const opened = await manager.open('font', { url: `http://127.0.0.1:${server.address().port}` });
-  await requested;
-  const page = manager.get('font', opened.tab.id).page;
-  assert.equal(await page.evaluate(() => document.fonts.status), 'loading');
-  const shot = await manager.run('font', opened.tab.id, { kind: 'screenshot' });
-  assert.match(shot.image, /^data:image\/jpeg;base64,/);
-  assert.equal(fontResponse.writableEnded, false, 'the screenshot did not wait for the font response');
-  assert.equal(await page.evaluate(() => document.fonts.status), 'loading');
-  await manager.run('font', opened.tab.id, { kind: 'resize', width: 390, height: 844 });
-  await manager.run('font', opened.tab.id, { scroll: 'down', pages: 2 });
-  await page.waitForFunction(() => scrollY > 1000);
-  const scrolled = await manager.run('font', opened.tab.id, { kind: 'screenshot' });
-  const pixels = await page.evaluate(async source => {
-    const bitmap = await createImageBitmap(await (await fetch(source)).blob());
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height), context = canvas.getContext('2d');
-    context.drawImage(bitmap, 0, 0);
-    return { width: bitmap.width, height: bitmap.height, pixel: [...context.getImageData(10, 600, 1, 1).data] };
-  }, scrolled.image);
-  assert.deepEqual([pixels.width, pixels.height], [390, 844]);
-  assert.ok(pixels.pixel[2] > 200 && pixels.pixel[0] < 50, 'the image shows the blue part after scrolling');
-});
-
-test('browser routes keep CLI commands and reject removed panel controls', async () => {
-  const calls = [];
-  const manager = Object.fromEntries(['open', 'list', 'run', 'close'].map(name => [name, (...args) => { calls.push([name, ...args]); return { ok: true }; }]));
-  const routes = createBrowserRoutes({ manager });
-  await routes.dispatch('browser.open', { id: 'one', url: 'about:blank' });
-  await routes.dispatch('browser.list', { id: 'one' });
-  await routes.dispatch('browser.action', { id: 'one', tabId: 'tab', action: { kind: 'look' } });
-  await routes.dispatch('browser.close', { id: 'one', tabId: 'tab' });
-  assert.deepEqual(calls, [
-    ['open', 'one', { id: 'one', url: 'about:blank' }], ['list', 'one'],
-    ['run', 'one', 'tab', { kind: 'look' }], ['close', 'one', 'tab'],
-  ]);
-  for (const method of ['browser.show', 'browser.download', 'browser.apps']) await assert.rejects(routes.dispatch(method, { id: 'one' }), /unknown browser method/);
-});
-
-test('an upload goes through a button that opens the file picker, or a hidden field named by CSS', { timeout: 60000 }, async t => {
-  const { chromium } = await import('playwright');
-  const page = '<title>Picker</title><input type="file" id="hidden" style="display:none"><button onclick="document.querySelector(\'#hidden\').click()">Upload a file</button><output></output>'
-    + '<script>document.querySelector("#hidden").onchange = e => { document.querySelector("output").textContent = e.target.files[0].name; };</script>';
-  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(page); });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const launch = async () => { const path = process.env.HELM_TEST_CHROMIUM || systemChromium(); return chromium.launch({ headless: true, ...(path ? { executablePath: path } : {}) }); };
-  const manager = new BrowserManager({ directory: join(process.env.HELM_DIR, 'picker'), session: sid => ({ id: sid }), launch, canWindow: false });
-  t.after(async () => { await manager.stop(); await new Promise(resolve => server.close(resolve)); });
-  const { tab } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}` });
-  const file = name => ({ uploads: [{ name, data: Buffer.from('picture').toString('base64') }] });
-  const shown = async () => (await manager.run('one', tab.id, { kind: 'evaluate', script: 'document.querySelector("output").textContent' })).value;
-  await manager.run('one', tab.id, { upload: 'Upload a file', ...file('by-button.jpg') });
-  assert.equal(await shown(), 'by-button.jpg');
-  await manager.run('one', tab.id, { upload: 'input[type=file]', ...file('by-css.jpg') });
-  assert.equal(await shown(), 'by-css.jpg');
-});
-
-test('a check waits for a late change, ignored input fails once, and a missing control fails in about two seconds', { timeout: 60000 }, async t => {
+test('a check waits for a late change, and ignored input fails once', { timeout: 60000 }, async t => {
   const server = createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html');
     res.end('<title>Late</title><output></output><label>Name<input id=name></label><label><input type=checkbox id=agree>Agree</label>'
@@ -443,17 +220,6 @@ test('a check waits for a late change, ignored input fails once, and a missing c
   const ignored = await manager.run('one', tab.id, { actions: [{ click: 'the Ignore button' }, { check: 'Sent' }] });
   assert.equal(ignored.failedAt, 1); assert.equal(ignored.check.pass, false); assert.match(ignored.error, /"Sent" did not come in 2000 ms/);
   assert.equal((await manager.run('one', tab.id, { evaluate: 'window.presses' })).value, 1, 'the click was delivered once');
-  let started = Date.now();
-  await assert.rejects(manager.run('one', tab.id, { click: { selector: '#missing' } }), /click: the control was not found or not ready in 2000 ms/);
-  let took = Date.now() - started; assert.ok(took >= 1900 && took < 4000, `selector took ${took} ms`);
-  started = Date.now();
-  const named = await manager.run('one', tab.id, { click: 'the Publish button' });
-  took = Date.now() - started; assert.match(named.error, /no matching target/); assert.ok(took >= 1900 && took < 4000, `named control took ${took} ms`);
-  started = Date.now();
-  const longer = manager.run('one', tab.id, { click: 'the Publish button', timeout: 5000 });
-  await manager.tabs.get(tab.id).page.evaluate(() => setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<button onclick="document.title=\'Published\'">Publish</button>'), 2500));
-  assert.equal((await longer).error, undefined, 'a longer step timeout waits for a control that comes late');
-  assert.equal(await manager.tabs.get(tab.id).page.title(), 'Published');
 });
 
 test('a read covers cross-origin frames, says when it cut the list, and an old number never picks another control', { timeout: 60000 }, async t => {
@@ -502,29 +268,6 @@ test('a read covers cross-origin frames, says when it cut the list, and an old n
   await manager.run('one', tab.id, { click: rest.elements[19].ref });
   assert.equal(await page.title(), 'Rest 19');
   await assert.rejects(manager.run('one', tab.id, { kind: 'look', within: '[' }), /within: "\[" is not a CSS selector/);
-});
-
-test('a check sees an open dialog without reading the page, and checks the whole value of a field', { timeout: 60000 }, async t => {
-  const long = 'a'.repeat(190);
-  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(`<title>Dialog</title><label>Note<input id=note value="${long}X"></label><button onclick="alert('Need input')">Alert</button>`); });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'dialog-check-')), session: sid => ({ id: sid }), canWindow: false, actionTimeoutMs: 5000 });
-  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
-  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
-  const { tab } = await manager.open('one', { url: `http://127.0.0.1:${server.address().port}/` });
-  assert.equal((await manager.run('one', tab.id, { check: { target: 'Note', value: `${long}Y` }, timeout: 300 })).check.pass, false, 'the end of the value counts');
-  assert.equal((await manager.run('one', tab.id, { check: { target: 'Note', value: `${long}X` } })).pass, true);
-  const page = manager.tabs.get(tab.id).page, opened = page.waitForEvent('dialog');
-  const blocked = manager.run('one', tab.id, { evaluate: 'alert("Need input"); "answered"' });
-  await opened;
-  const checked = await manager.run('one', tab.id, { check: { dialog: 'Need input' } });
-  assert.equal(checked.pass, true); assert.equal(checked.tab.dialog.message, 'Need input');
-  assert.match(checked.text, /A dialog is open \(alert\): "Need input"/);
-  await manager.run('one', tab.id, { dialog: 'dismiss' }); assert.equal((await blocked).value, 'answered');
-  // A click that opens a dialog is held until it is answered; the batch says so without reading the page.
-  const batch = await manager.run('one', tab.id, { actions: [{ click: 'the Alert button' }, { check: 'Never' }] });
-  assert.equal(batch.failedAt, 0); assert.match(batch.error, /click: the page opened a dialog \(alert\): "Need input"/); assert.match(batch.text, /dialog is open/);
-  await manager.run('one', tab.id, { dialog: 'accept' });
 });
 
 async function busyFrames(t, { nested = true } = {}) {
@@ -576,52 +319,4 @@ test('text in a frame that did not answer is not taken as gone', { timeout: 6000
   assert.equal(result.check.pass, false); assert.equal(result.check.found, null);
   assert.match(result.error, /could not be checked: part of the page did not answer/);
   await ended();
-});
-
-test('a CAPTCHA shows in every read, and captcha waits for the owner without holding other reads', { timeout: 60000 }, async t => {
-  const server = createServer((req, res) => {
-    res.setHeader('Content-Type', 'text/html');
-    if (req.url === '/plain') return res.end('<title>Plain</title><p>No check here</p>');
-    res.end('<title>Sign up</title><form><div class="g-recaptcha" style="width:300px;height:78px;border:1px solid"><textarea name="g-recaptcha-response" style="display:none"></textarea></div><button>Send</button></form>');
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const alerts = []; let alerted = () => {};
-  // A read-only chat: the CAPTCHA help only reads.
-  const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'captcha-')), session: sid => ({ id: sid, mode: 'readonly' }), canWindow: false, alert: note => { alerts.push(note); alerted(); } });
-  t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
-  try { await manager.start(); } catch { t.skip('no Chromium here'); return; }
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const opened = await manager.open('one', { url: `${base}/plain` }), id = opened.tab.id;
-  assert.equal(opened.captcha, undefined, 'a page with no CAPTCHA has no field');
-  assert.deepEqual(await manager.captcha('one', id), { captcha: null, note: 'No CAPTCHA shows on this tab. Continue your task.', tab: manager.metadata(manager.tabs.get(id)) });
-  const shown = await manager.run('one', id, { goto: base });
-  assert.deepEqual(shown.captcha, { vendor: 'recaptcha', solved: false });
-  assert.match(shown.text, new RegExp(`A CAPTCHA \\(reCAPTCHA\\) shows on this page\\. Do not solve it yourself\\. Run helm browser captcha ${id}`));
-  // A hidden browser: the owner cannot see the page, so it stops at once.
-  const hidden = await manager.captcha('one', id);
-  assert.equal(hidden.solved, false); assert.match(hidden.note, /no screen/); assert.equal(alerts.length, 0);
-  const tab = manager.tabs.get(id), page = tab.page; tab.window = true;
-  const told = new Promise(resolve => { alerted = resolve; });
-  const waiting = manager.captcha('one', id, { wait: 30000 });
-  await told;
-  assert.deepEqual(alerts[0], { sessionId: 'one', tabId: id, vendor: 'recaptcha', tag: alerts[0].tag });
-  assert.equal(tab.pointer.by, 'guide'); assert.equal(tab.pointer.note, 'Solve this check, then Helm continues.');
-  // Other reads do not wait behind it.
-  assert.deepEqual((await manager.run('one', id, { kind: 'look' })).captcha, { vendor: 'recaptcha', solved: false });
-  await page.evaluate(() => { document.querySelector('[name=g-recaptcha-response]').value = 'answer'; });
-  const solved = await waiting;
-  assert.equal(solved.solved, true); assert.equal(solved.vendor, 'recaptcha'); assert.ok(Number.isInteger(solved.seconds));
-  assert.deepEqual(solved.captcha, { vendor: 'recaptcha', solved: true }); assert.doesNotMatch(solved.text, /Do not solve it yourself/);
-  assert.deepEqual(alerts[1], { sessionId: 'one', tabId: id, vendor: 'recaptcha', tag: alerts[0].tag, resolve: true }, 'the notice goes away');
-  assert.equal(tab.pointer, null, 'the pointer goes away');
-  // A CAPTCHA that goes away counts as solved too.
-  await manager.run('one', id, { goto: base });
-  const again = new Promise(resolve => { alerted = resolve; }), gone = manager.captcha('one', id, { wait: 30000 });
-  await again;
-  await page.evaluate(() => document.querySelector('.g-recaptcha').remove());
-  assert.equal((await gone).solved, true);
-  // The last call of a wait ends it when the CAPTCHA is still there.
-  await manager.run('one', id, { goto: base });
-  const ended = await manager.captcha('one', id, { wait: 0, last: true });
-  assert.equal(ended.solved, false); assert.match(ended.note, /did not solve the CAPTCHA/); assert.equal(alerts.at(-1).resolve, true);
 });

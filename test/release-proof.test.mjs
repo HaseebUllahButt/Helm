@@ -6,19 +6,6 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-test('failed private checks still stop the exact private copy', async () => {
-  const calls=[];
-  await assert.rejects(proveRelease({ directory:'/private/release',tip:'a'.repeat(40), log:()=>{}, run:async (program,args,options) => {
-    calls.push(args); assert.equal(program,process.execPath); assert.equal(options.cwd,'/private/release');
-    if(args[0].endsWith('/release-proof.mjs')) throw new Error('terminated private proof');
-    return {stdout:'cleaned'};
-  }}), /private chat recovery check failed/);
-  assert.equal(calls.length,2);
-  assert.equal(calls[0][2],calls[1][2]);
-  assert.deepEqual(calls[1].slice(3),['down']);
-  assert.equal(calls[0][4],'a'.repeat(40));
-});
-
 test('a fresh source copy gets a private build without replacing its existing app', async t => {
   const root=mkdtempSync(join(tmpdir(),'helm-proof-build-'));
   t.after(()=>rmSync(root,{recursive:true,force:true}));

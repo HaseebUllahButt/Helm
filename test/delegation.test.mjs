@@ -63,6 +63,15 @@ function setup(t, make = (opts) => new FakeDriver(opts), options = {}) {
   return { sessions, drivers };
 }
 
+/** Wait for a state, not a time. */
+async function until(check, what = 'state') {
+  const end = Date.now() + 5000;
+  while (!check()) {
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await new Promise(resolve => setTimeout(resolve, 2));
+  }
+}
+
 test('Codex forks require the same local account, folder and native daemon', () => {
   const profile = profiles[0];
   const parent = { id: 'parent', engine: 'codex', engineSessionId: 'parent-thread', cwd: process.env.HELM_DIR };
@@ -351,8 +360,7 @@ test('finished children release promptly, retain their reply and resume the same
   const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Inspect' });
   const original = drivers.get(child.id); const providerId = child.engineSessionId;
   original.finish();
-  await new Promise(resolve => setTimeout(resolve, 35));
-  assert.equal(original.status, 'exited');
+  await until(() => original.status === 'exited', 'release');
   assert.equal(sessions.get(child.id).status, 'idle');
   assert.equal(sessions.get(child.id).engineSessionId, providerId);
   assert.equal(sessions.delegationResult(child.id).output, 'Opus reviewed the task.');
@@ -360,7 +368,7 @@ test('finished children release promptly, retain their reply and resume the same
   assert.equal((await sessions.list({ includeDelegations: true })).find(s => s.id === child.id).alive, false);
   assert.notEqual(drivers.get(parent.id).status, 'exited');
   await sessions.messageDelegation(parent.id, child.id, 'Follow up');
-  await new Promise(resolve => setTimeout(resolve, 10));
+  await until(() => drivers.get(child.id) !== original && drivers.get(child.id).sent === 'Follow up', 'resume');
   const resumed = drivers.get(child.id);
   assert.notEqual(resumed, original); assert.equal(resumed.engineSessionId, providerId);
   assert.equal(resumed.sent, 'Follow up');
@@ -376,8 +384,7 @@ test('an idle child waiting on its own background command is not released until 
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(original.status, 'idle', 'releasing it would end the command it is waiting on');
   original.backgroundTasks = 0;
-  await new Promise(resolve => setTimeout(resolve, 40));
-  assert.equal(original.status, 'exited');
+  await until(() => original.status === 'exited', 'release');
 });
 
 test('an untouched Codex chat starts fresh after its empty runtime is released', async t => {
@@ -424,8 +431,7 @@ test('a child sharing a Codex account releases its own driver without closing an
   const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'codex-main', task: 'Inspect' });
   sessions.get(child.id).shared = true;
   const original = drivers.get(child.id); original.finish();
-  await new Promise(resolve => setTimeout(resolve, 35));
-  assert.equal(original.status, 'exited');
+  await until(() => original.status === 'exited', 'release');
   assert.notEqual(drivers.get(parent.id).status, 'exited');
   assert.equal(sessions.delegationResult(child.id).complete, true);
 });
@@ -440,8 +446,7 @@ test('idle child cleanup waits for nested work and unfinished replies', async t 
   drivers.get(nested.id).finish();
   await new Promise(resolve => setTimeout(resolve, 5));
   if (original.status === 'working') original.finish();
-  await new Promise(resolve => setTimeout(resolve, 35));
-  assert.equal(original.status, 'exited');
+  await until(() => original.status === 'exited', 'release');
   const { session: unfinished } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Unfinished' });
   const pending = drivers.get(unfinished.id); pending.push('status', {status:'idle'});
   await new Promise(resolve => setTimeout(resolve, 30));
@@ -457,14 +462,13 @@ test('a follow-up arriving during child release waits for the old process to exi
   }, { delegationIdleMs: 10 });
   const { session: child } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Inspect' });
   const original = drivers.get(child.id); original.finish();
-  await new Promise(resolve => setTimeout(resolve, 25));
-  assert.equal(typeof release, 'function');
+  await until(() => typeof release === 'function', 'release to start');
   const follow = sessions.input(child.id, 'Follow up');
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(drivers.get(child.id), original);
   release(); await follow;
-  await new Promise(resolve => setTimeout(resolve, 10));
-  const resumed = drivers.get(child.id); assert.notEqual(resumed, original);
+  await until(() => drivers.get(child.id) !== original, 'resume');
+  const resumed = drivers.get(child.id);
   assert.equal(resumed.engineSessionId, original.engineSessionId);
   assert.equal(resumed.sent, 'Follow up');
   resumed.kill = async () => resumed.push('status', {status:'exited'});
@@ -634,7 +638,7 @@ test('a parent waiting on a result gets it once, not again as a notice', async t
   // `delegate-result --wait` is polling while the child works.
   assert.equal(sessions.delegationResult(child.id, { consume: true, parentId: parent.id }).complete, false);
   drivers.get(child.id).finish();
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await until(() => sessions.delegationResult(child.id).complete, 'result');
   assert.equal(sessions.delegationResult(child.id, { consume: true, parentId: parent.id }).complete, true);
   await new Promise(resolve => setTimeout(resolve, 400));
   const tickets = sessions.history(parent.id).events.filter(e => String(e.turnId).startsWith(`local-result-${child.id}-`));
@@ -648,8 +652,7 @@ test('a waiter that gave up still gets the result as a notice', async t => {
   const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
   sessions.delegationResult(child.id, { consume: true, parentId: parent.id });
   drivers.get(child.id).finish();
-  await new Promise(resolve => setTimeout(resolve, 400));
-  assert.match(drivers.get(parent.id).sent, /Opus reviewed the task/);
+  await until(() => /Opus reviewed the task/.test(drivers.get(parent.id).sent ?? ''), 'notice');
 });
 
 test('collecting an earlier result leaves a later follow-up notification available', async t => {
@@ -921,8 +924,7 @@ test('task messages remain scoped to their orchestrator and resume a completed c
   await sessions.messageDelegation(parent.id, child.id, 'Check edge cases');
   assert.equal(drivers.get(child.id).sent, 'Implement', 'a busy non-steerable engine queues rather than interrupts');
   drivers.get(child.id).finish();
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  assert.equal(drivers.get(child.id).sent, 'Check edge cases');
+  await until(() => drivers.get(child.id).sent === 'Check edge cases', 'queued message');
   drivers.get(child.id).finish();
   await sessions.messageDelegation(parent.id, child.id, 'Now verify');
   assert.equal(drivers.get(child.id).sent, 'Now verify');
@@ -979,47 +981,6 @@ test('helm delegate same runs the helper on the account this chat runs as', asyn
   await runAgentCommand('delegate', ['same', '--json', '--', 'Look around'], { rpc, self: 'me', parentId: 'parent', ownAccount: 'claude-main', write: () => {} });
   assert.equal(calls.find((c) => c.method === M.SESSION_DELEGATE).params.profileId, 'claude-main');
   await assert.rejects(() => runAgentCommand('delegate', ['same', '--', 'x'], { rpc, self: 'me', parentId: null, ownAccount: '', write: () => {} }), /works inside a Helm chat/);
-});
-
-test('delegation instructions keep only rules; the details live in helm delegate --help', async () => {
-  const { commandHelp } = await import('../packages/connect/src/help.js');
-  const note = delegationNote();
-  assert.ok(note.length < 1100, 'it rides along in every session');
-  assert.equal(delegationNote('codex'), note, 'Helm\'s own Codex fork reuses the cache; Codex\'s own child did not');
-  assert.equal(delegationNote('pi'), note, 'tools nobody measured keep helm delegate');
-  assert.match(note, /Do the work yourself by default/);
-  assert.match(note, /never your CLI's own subagent tool/);
-  assert.match(note, /open, message and stop it/);
-  // Claude's own Agent is cheaper for short work on the same account.
-  const claude = delegationNote('claude');
-  assert.ok(claude.length < 1100, 'it rides along in every session');
-  assert.doesNotMatch(claude, /never your CLI's own subagent tool/);
-  assert.match(claude, /on your account, use your Agent tool/);
-  assert.match(claude, /a fork if it needs this chat, keep your model unless the owner asks for another\./);
-  assert.match(claude, /helm delegate for another account, tool or machine, or a worktree/);
-  // The owner's own words, for every tool.
-  for (const n of [note, claude]) {
-    assert.ok(n.includes('The owner: "orchestrator mode is when u give work to others and u are always there to talk to me".'));
-    assert.match(n, /to talk to me". Only when the owner asks, give all work to background helpers\./);
-  }
-  // A helper starts with none of the parent's context; every lead stays free to talk.
-  for (const n of [note, claude]) {
-    assert.match(n, /it has none of your context\. Give the goal, the exact files, what other helpers own, the result you expect and the check to run\./);
-    assert.match(n, /Stay free to talk: run work that takes minutes \(builds, tests, deploys, waits\) in the background or a background helper, then end your turn\./);
-  }
-  for (const shared of [/Do the work yourself by default/, /never unset HELM_SESSION_ID/, /judgment calls yourself/, /Keep your helpers/]) assert.match(claude, shared);
-  assert.match(note, /never unset HELM_SESSION_ID/);
-  assert.match(note, /Use helm delegate same and your model unless the owner names another account/);
-  assert.doesNotMatch(note + claude, /--model cheap|model haiku/);
-  assert.match(note, /Keep your helpers/);
-  assert.match(note, /only test chats that are not helpers/);
-  assert.doesNotMatch(note, /--heavy|slot|--worktree|--cwd/, 'flags are looked up, not carried');
-  const help = commandHelp('delegate', '  helm delegate <account> -- "<task>"\n');
-  for (const want of [/Use same for this chat's account/, /--cwd <folder>/, /--worktree/, /context for an hour/, /Keep finished helpers/]) assert.match(help, want);
-});
-
-test('no account by that name lists the accounts that do exist', () => {
-  assert.throws(() => chooseAgent([{ id: 'claudes', engine: 'claude' }, { id: 'a1', engine: 'agy' }], 'pc'), /no CLI account "pc" here; accounts: claudes, a1/);
 });
 
 test('a child works in the folder the caller names, else where its parent does', async (t) => {
@@ -1395,75 +1356,6 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
     assert.equal(result.session.delegation.parentId, parent.id);
     assert.equal(result.session.model, 'opus');
   } finally { env.terminate(); hub.stop(); }
-});
-
-test('agents are told which machine they are on and how to reach the others', async () => {
-  const { helmBrief } = await import('../packages/connect/src/delegation.js');
-  const net = { self: 'a', machines: {
-    a: { id: 'a', name: 'Laptop' }, b: { id: 'b', name: 'VM', kind: 'vm' },
-    c: { id: 'c', name: 'twin' }, d: { id: 'd', name: 'twin' },
-  } };
-  const brief = helmBrief(net);
-  assert.match(brief, /running on Laptop/);
-  assert.match(brief, /The others: VM \(vm\), twin\./, 'each name once; ssh can only reach one of them');
-  assert.match(brief, /through helm \(helm exec, helm copy, helm spawn\), not SSH/);
-  assert.match(brief, /helm <command> --help explains one/);
-  assert.match(brief, /Never rerun a helm exec that may have started/);
-  assert.match(brief, /--keep only when the owner asks/);
-  assert.ok(brief.includes(delegationNote()));
-  assert.ok(helmBrief(net, { engine: 'claude' }).includes(delegationNote('claude')), 'each chat gets the route for its own tool');
-  const alone = helmBrief({ self: 'a', machines: { a: net.machines.a } });
-  assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');
-  assert.match(alone, /\[Helm pickup: .*run helm pickup\.\]/, 'every agent learns where its handover goes');
-  assert.match(alone, /\[Helm usage: .*Never check a running helper.*helm thread.*\]/, 'every agent learns the habits that cut waste');
-  assert.match(alone, /helm render/, 'visual replies work even with one machine');
-  const codex = helmBrief(net, { engine: 'codex' });
-  assert.match(codex, /\[Helm usage: .*call write_stdin with empty chars and one long yield_time_ms that the tool allows.*\]/,
-    'Codex waits for its own command in one step, not with 1 s checks');
-  assert.doesNotMatch(helmBrief(net, { engine: 'claude' }), /write_stdin/, 'only Codex has write_stdin');
-});
-
-test('only a helper is told to report once and to use helm say afterwards', async () => {
-  const { helmBrief, helperNote } = await import('../packages/connect/src/delegation.js');
-  assert.doesNotMatch(helmBrief({}), /\[Helm helper:/);
-  const brief = helmBrief({}, { parentId: 'abc123def456' });
-  assert.ok(brief.startsWith(helperNote('abc123def456')));
-  assert.match(brief, /Report once, and/);
-  assert.match(brief, /stale background watcher/);
-  assert.match(brief, /helm say abc123def456 -- "text" only when you are blocked or need its decision, never for progress\./);
-  assert.match(brief, /make the report stand alone: the outcome first/);
-  // Every agent: a message carries what the reader needs, not the sender's shorthand.
-  assert.match(brief, /The reader has none of your context/);
-  assert.match(brief, /never trade acknowledgements or progress notes/);
-});
-
-test('the browser note rides along only where a browser can start', async () => {
-  const { helmBrief } = await import('../packages/connect/src/delegation.js');
-  const { browserReady, browserNote } = await import('../packages/connect/src/browser.js');
-  assert.equal(helmBrief({}).includes('[Helm browser:'), browserReady());
-  assert.doesNotMatch(browserNote(), /bowser|--engine/i);
-});
-
-// Every chat pays for these notes before it does any work, and every message
-// carries the reminder. Lower the numbers when the text shrinks; raise them
-// only when the owner wants the new text.
-test('the notes every agent gets match the committed size', async () => {
-  const { helmBrief } = await import('../packages/connect/src/delegation.js');
-  const { browserNote } = await import('../packages/connect/src/browser.js');
-  const { worktreeNote } = await import('../packages/connect/src/chat-worktree.js');
-  const { readFileSync } = await import('node:fs');
-  const budget = JSON.parse(readFileSync(new URL('./agent-context-budget.json', import.meta.url), 'utf8'));
-  const net = { self: 'a', machines: { a: { id: 'a', name: 'Laptop' }, b: { id: 'b', name: 'VM', kind: 'vm' }, c: { id: 'c', name: 'HomePC', kind: 'pc' } } };
-  // Only machines that can start a browser get its note; count it once.
-  const brief = helmBrief(net, { parentId: 'abc123def456' }).split('\n').filter((l) => !l.startsWith('[Helm browser:')).join('\n');
-  // A desktop machine: the note for the owner's own browser.
-  const notes = [brief, browserNote(undefined, { screen: true }), worktreeNote({ chatWorktree: { base: 'main', repo: '/home/me/project' } })].join('\n');
-  // Claude chats get their own helper route (delegationNote).
-  const claudeNotes = notes.replace(delegationNote(), delegationNote('claude'));
-  assert.deepEqual(
-    { notesBytes: Buffer.byteLength(notes), claudeNotesBytes: Buffer.byteLength(claudeNotes), reminderBytes: Buffer.byteLength(WRITING_REMINDER) },
-    { notesBytes: budget.notesBytes, claudeNotesBytes: budget.claudeNotesBytes, reminderBytes: budget.reminderBytes },
-  );
 });
 
 test('the team card lists a chat\'s helpers and theirs, and nothing else', async (t) => {

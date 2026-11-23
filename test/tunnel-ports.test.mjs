@@ -35,6 +35,15 @@ async function ask(daemon, port) {
   return { sent, settled: () => sent.find((f) => f.t === T.TUNNEL_CLOSE) };
 }
 
+/** Wait until the daemon has either opened or closed the tunnel. */
+async function answered(sent, ms = 5000) {
+  const stop = Date.now() + ms;
+  while (!sent.some((f) => f.t === T.TUNNEL_READY || f.t === T.TUNNEL_CLOSE)) {
+    if (Date.now() > stop) throw new Error('the daemon never answered');
+    await new Promise((r) => setImmediate(r));
+  }
+}
+
 test('a port nobody asked to expose is refused, not dialled', async () => {
   const daemon = new Daemon({ port: 18787 });
   for (const port of [5432, 6379, 8787, 80, 3000]) {
@@ -52,7 +61,7 @@ test('ssh still gets through', async () => {
 
   const daemon = new Daemon({ port: 18787 });
   const { settled, sent } = await ask(daemon, 22022);
-  await new Promise((r) => setTimeout(r, 200));
+  await answered(sent);
 
   assert.notEqual(settled()?.reason, 'port not allowed');
   assert.ok(sent.some((f) => f.t === T.TUNNEL_READY), 'the connection was made');
@@ -78,7 +87,7 @@ test('a frame with no port at all still means ssh', async (t) => {
   // not keep the test process alive.
   t.after(() => daemon.stop());
   const { sent } = await ask(daemon, undefined);
-  await new Promise((r) => setTimeout(r, 200));
+  await answered(sent);
   const close = sent.find((f) => f.t === T.TUNNEL_CLOSE);
   assert.notEqual(close?.reason, 'port not allowed');
 });

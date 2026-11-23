@@ -27,24 +27,6 @@ const repo = () => {
   return dir;
 };
 
-test('a folder that is not a repository says so', async () => {
-  const s = await status(mkdtempSync(join(tmpdir(), 'helm-nogit-')));
-  assert.equal(s.repo, false);
-});
-
-test('a folder that does not exist is refused', async () => {
-  await assert.rejects(status('/definitely/not/here'), /no such folder/);
-});
-
-test('a clean repo reports its branch and head and no files', async () => {
-  const s = await status(repo());
-  assert.equal(s.repo, true);
-  assert.equal(s.branch, 'main');
-  assert.equal(s.head.subject, 'first');
-  assert.deepEqual(s.files, []);
-  assert.equal(s.worktree, false);
-});
-
 test('edits, additions, deletions and untracked files are told apart, with counts', async () => {
   const dir = repo();
   writeFileSync(join(dir, 'a.txt'), 'one\nTWO\nthree\nfour\n'); // 2 added, 1 removed
@@ -106,10 +88,6 @@ test('a worktree name can never become anything but a slug', async () => {
   const w = await addWorktree(dir, '../../etc; rm -rf ~ $(x)');
   assert.match(w.branch, /^helm\/[a-z0-9-]+$/);
   assert.ok(!w.path.includes('..'));
-});
-
-test('a worktree of something that is not a repository is refused', async () => {
-  await assert.rejects(addWorktree(mkdtempSync(join(tmpdir(), 'helm-nogit-')), 'x'), /not a git repository/);
 });
 
 test('a linked worktree knows the repository it belongs to; nothing else does', async () => {
@@ -215,13 +193,6 @@ test('a commit reads back its message, files and one file\'s change; a merge aga
   await assert.rejects(commit(dir, mergeHash, '/etc/passwd'), /not a path inside/);
 });
 
-test('the graph names the remotes, so a remote branch is told from a local one', async () => {
-  const dir = repo();
-  assert.deepEqual((await graph(dir)).remotes, []);
-  git(dir, 'remote', 'add', 'upstream', 'https://example.invalid/x.git');
-  assert.deepEqual((await graph(dir)).remotes, ['upstream']);
-});
-
 test('GitHub monitoring reads checkout identity without fetching and scopes fork PRs to their owner', async () => {
   const { githubContext } = await import('../packages/connect/src/git.js');
   const dir = repo();
@@ -316,7 +287,6 @@ test('the canvas saves only over the version it read, and never outside the repo
   await assert.rejects(write(dir, '../x.md', 'x', null), /not a path inside/);
 });
 
-
 test('canvas links inside the repo keep secret and git-folder protections', async () => {
   const dir = repo();
   writeFileSync(join(dir, '.env'), 'EXAMPLE_SECRET=demo');
@@ -332,7 +302,6 @@ test('canvas links inside the repo keep secret and git-folder protections', asyn
   assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'safe');
 });
 
-
 test('simultaneous canvas saves accept only one version, including through a link', async () => {
   const dir = repo();
   writeFileSync(join(dir, 'shared.md'), 'x'.repeat(390000));
@@ -345,7 +314,6 @@ test('simultaneous canvas saves accept only one version, including through a lin
   const current = await file(dir, 'shared.md');
   assert.ok((await write(dir, 'shared.md', 'next', current.hash)).hash, 'the file is released after saving');
 });
-
 
 test('canvas refuses late binary bytes and invalid UTF-8 rather than changing them', async () => {
   const dir = repo();

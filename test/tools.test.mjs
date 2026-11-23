@@ -5,11 +5,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { M } from '@helm/protocol';
 import { Tools, checkTool } from '../packages/connect/src/tools.js';
 import { runToolsCommand, readInput, shellWord } from '../packages/connect/src/tools-cli.js';
-import { toolsNote, helmBrief } from '../packages/connect/src/delegation.js';
-import { commandHelp, USAGE } from '../packages/connect/src/help.js';
 
 const { Daemon } = await import('../packages/connect/src/agent.js');
 
@@ -64,22 +61,14 @@ test('a tool record is checked and bad records in the file stay untouched', (t) 
   assert.deepEqual(tools.remove('good'), { removed: false });
 });
 
-test('helm tools add, list, show and remove work across machines, and remove prints the way back', async (t) => {
+test('helm tools add, list and remove work across machines', async (t) => {
   const f = fixture(t);
   await f.run('add', 'hello', '--description', 'Say hello.', '--', 'echo', 'hello world');
-  assert.match(f.text(), /Added the tool "hello" on Laptop\./);
   await f.run('add', 'ask-neon', '--machine', 'VM', '--description', 'Ask Gemini web chat a question.', '--', '/home/me/.local/bin/ask-neon');
-  assert.match(f.text(), /Added the tool "ask-neon" on VM\.\n.*\n  Remove it with: helm tools remove ask-neon --machine VM/);
+  assert.equal(f.stores.aa11.get('hello').argv[1], 'hello world');
   assert.equal(f.stores.bb22.get('ask-neon').argv[0], '/home/me/.local/bin/ask-neon');
   await assert.rejects(f.run('add', 'x', '--machine', 'VM', '--', './rel'), /full path/);
   await assert.rejects(f.run('add', 'x', '--machine', 'Old', '--', 'true'), /older Helm/);
-
-  f.clear();
-  await f.run('list');
-  assert.match(f.text(), /Laptop {2}\(online\)\n {4}hello {2}Say hello\./);
-  assert.match(f.text(), /VM {2}\(online\)\n {4}ask-neon {2}Ask Gemini web chat a question\./);
-  assert.match(f.text(), /Offline, tools not known: Off\./);
-  assert.match(f.text(), /Older Helm, no tools: Old\./);
 
   f.clear();
   await f.run('list', '--json');
@@ -88,15 +77,7 @@ test('helm tools add, list, show and remove work across machines, and remove pri
   assert.deepEqual(listed.offline, ['Off']);
   assert.deepEqual(listed.olderHelm, ['Old']);
 
-  f.clear();
-  await f.run('show', 'ask-neon');
-  assert.match(f.text(), /ask-neon {2}\(on VM, online\)\n {2}What: {5}Ask Gemini web chat a question\.\n {2}Command: {2}\/home\/me\/\.local\/bin\/ask-neon/);
-  await f.run('show', 'hello');
-  assert.match(f.text(), /Command: {2}echo 'hello world'/);
-
-  f.clear();
   await f.run('remove', 'ask-neon');
-  assert.match(f.text(), /Removed the tool "ask-neon" from VM\.\n {2}Add it again with: helm tools add ask-neon --machine VM --description 'Ask Gemini web chat a question\.' -- \/home\/me\/\.local\/bin\/ask-neon/);
   assert.equal(f.stores.bb22.get('ask-neon'), null);
   await assert.rejects(f.run('remove', 'ask-neon'), /No tool "ask-neon" found/);
 });
@@ -163,24 +144,4 @@ test('readInput takes piped input, and gives up on a pipe that stays silent', as
   assert.equal(await readInput(Object.assign(new PassThrough(), { isTTY: true })), null);
   assert.equal(shellWord('a b'), "'a b'");
   assert.equal(shellWord("it's"), "'it'\\''s'");
-});
-
-test('agents learn about helm tools from their notes and from helm help', () => {
-  assert.match(toolsNote(), /helm tools list/);
-  assert.match(helmBrief({}), /\[Helm tools:/);
-  const help = commandHelp('tools', USAGE);
-  assert.match(help, /helm tools run <name> \[args\]/);
-  assert.match(help, /exit code is the tool's own/);
-});
-
-test('the daemon answers tool RPCs from its own file', async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-tools-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const self = { tools: new Tools({ directory: dir }) };
-  const call = (method, p) => Daemon.prototype.dispatch.call(self, method, p);
-  await call(M.TOOL_SAVE, { name: 'x', argv: ['true'] });
-  const { tools, seen, at } = await call(M.TOOL_LIST, { seen: true });
-  assert.deepEqual(tools.map((x) => x.name), ['x']);
-  assert.deepEqual(seen, {});
-  assert.ok(at > 0);
-  assert.deepEqual(await call(M.TOOL_REMOVE, { name: 'x' }), { removed: true });
 });

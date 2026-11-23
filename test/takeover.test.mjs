@@ -117,7 +117,6 @@ test('a Pi tool step landing is a safe point, even though Pi records it as a too
   const waiting = safePoint({ transcript: path, pid: process.pid, signal: cancel.signal, status: () => 'working' });
   try {
     appendFileSync(path, JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'bash' }] } }) + '\n');
-    await new Promise((r) => setTimeout(r, 200));
     appendFileSync(path, JSON.stringify({ type: 'message', message: { role: 'toolResult', content: [{ type: 'text', text: 'done' }] } }) + '\n');
     assert.deepEqual(await waiting, { wasWorking: true });
   } finally {

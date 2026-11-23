@@ -54,40 +54,20 @@ test('a repeated Codex token_count is not a second turn', async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('1-hour cache writes are priced at 2x input, and Opus 5.5 has a price', () => {
-  const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 1e6, cacheWrite1h: 1e6 };
-  assert.equal(priceBucket('claude', 'claude-opus-5', tokens, '2026-09-20').total, 10);
-  const fiveMin = { ...tokens, cacheWrite1h: 0 };
-  assert.equal(priceBucket('claude', 'claude-opus-5', fiveMin, '2026-09-20').total, 6.25);
-  const opus55 = priceBucket('claude', 'claude-opus-5-5', { input: 1e6, output: 1e6, cacheRead: 1e6 }, '2026-09-20');
-  assert.ok(opus55, 'claude-opus-5-5 must not be unpriced');
-  assert.ok(Math.abs(opus55.total - 24.2) < 1e-9);
-  // Claude through another CLI is still Claude.
-  assert.ok(priceBucket('devin', 'claude-opus-5', { input: 1e6 }, '2026-09-20'));
-});
-
-test('Codex gpt-6.1-sol has a price, and Sol is priced by the day it was used', () => {
-  const sol61 = priceBucket('codex', 'gpt-6.1-sol', { input: 1e6, output: 1e6, cacheRead: 1e6 }, '2026-10-06');
-  assert.ok(sol61, 'gpt-6.1-sol must not be unpriced');
-  assert.ok(Math.abs(sol61.total - 12.1) < 1e-9);
-  const sol = (date) => priceBucket('codex', 'gpt-5.6-sol', { input: 1e6, output: 1e6, cacheRead: 1e6 }, date).total;
-  assert.ok(Math.abs(sol('2026-08-20') - 35.5) < 1e-9, 'before the promo: the old card');
-  assert.ok(Math.abs(sol('2026-08-21') - 24.4) < 1e-9, 'from the promo on: the cut card');
-});
-
-test('GPT 6.1 Terra usage has a cost across model names', () => {
-  const tokens = { input: 1e6, output: 1e6, cacheRead: 1e6 };
-  for (const [engine, model] of [
-    ['codex', 'gpt-6.1-terra'],
-    ['codex', 'gpt-6.1-terra-2026-10-27'],
-    ['opencode', 'openai/gpt-6.1-terra'],
-    ['devin', 'gpt-6-1-terra-high'],
+test('model names from other CLIs price as the model they are', () => {
+  const t = { input: 1e6, output: 1e6, cacheRead: 1e6 };
+  for (const [engine, model, as] of [
+    ['devin', 'gpt-6-1-sol-high', 'gpt-6.1-sol'],
+    ['devin', 'gpt-6-1-terra-high', 'gpt-6.1-terra'],
+    ['opencode', 'openai/gpt-6.1-terra', 'gpt-6.1-terra'],
+    ['codex', 'gpt-6.1-terra-2026-10-27', 'gpt-6.1-terra'],
   ]) {
-    assert.deepEqual(priceBucket(engine, model, tokens, '2026-10-27'), {
-      input: 1, output: 5, cacheWrite: 0, cacheRead: 0.05, total: 6.05,
-    }, `${engine}: ${model}`);
+    const want = priceBucket('codex', as, t, '2026-10-27');
+    assert.ok(want, as);
+    assert.deepEqual(priceBucket(engine, model, t, '2026-10-27'), want, `${engine}: ${model}`);
   }
-  assert.equal(priceBucket('codex', 'gpt-6.2-terra', tokens, '2026-10-27'), null);
+  assert.ok(priceBucket('devin', 'claude-opus-5', t, '2026-10-27'), 'Claude through another CLI is still Claude');
+  assert.equal(priceBucket('devin', 'swe-2-medium', t, '2026-10-27'), null, 'unknown models stay unpriced');
 });
 
 test('an old transcript that is resumed is counted again', async () => {

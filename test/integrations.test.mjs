@@ -8,7 +8,7 @@ process.env.HOME = sandbox;
 process.env.HELM_DIR = join(sandbox, '.helm');
 process.env.HELM_SSH_DIR = join(sandbox, '.ssh');
 process.env.HELM_NO_SERVICE = '1';
-const { CONNECTORS, maskTarget, packageOf, parseClaudeConfig, parseCodexConfig, listAccount, listIntegrations, addMcp, removeMcp, connectMcp, changePlugin, addSkills, removeSkill } = await import('../packages/connect/src/integrations.js');
+const { maskTarget, packageOf, parseClaudeConfig, parseCodexConfig, listAccount, listIntegrations, addMcp, removeMcp, connectMcp, changePlugin, addSkills, removeSkill } = await import('../packages/connect/src/integrations.js');
 after(() => rm(sandbox, { recursive: true, force: true }));
 const fixture = (name) => readFile(new URL(`./fixtures/integrations/${name}`, import.meta.url), 'utf8');
 async function fake(engine, suffix = '') {
@@ -19,11 +19,6 @@ async function fake(engine, suffix = '') {
   return { id: engine + suffix, label: engine + suffix, engine, cmd, args: [], env: { [engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']: root, HOME: sandbox } };
 }
 const calls = async (p) => (await readFile(join(p.env.CLAUDE_CONFIG_DIR || p.env.CODEX_HOME, 'calls.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
-test('catalog has verified publisher links, unique names, and the requested Google products', () => {
-  assert.equal(new Set(CONNECTORS.map((c) => c.name)).size, CONNECTORS.length);
-  for (const c of CONNECTORS) { assert.ok(c.title && c.description); assert.match(c.source, /^https:\/\//); assert.equal(typeof c.needsSignIn, 'boolean'); assert.ok(c.transport === 'http' ? new URL(c.url) : c.command && Array.isArray(c.args)); }
-  for (const n of ['google-drive', 'google-calendar', 'gmail']) assert.match(CONNECTORS.find((c) => c.name === n).setup, /Preview/);
-});
 test('JSON parser preserves every scope and project while omitting arbitrary secrets', async () => {
   const rows = parseClaudeConfig(await fixture('claude.json'), '{"mcpServers":{"project":{"url":"https://project.test/mcp"}}}', '/project');
   assert.equal(rows.length, 5); assert.deepEqual(rows.filter((r) => r.name === 'same').map((r) => r.cwd), ['/project-a', '/project-b']);

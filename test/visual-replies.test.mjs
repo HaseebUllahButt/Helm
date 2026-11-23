@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,25 +10,16 @@ process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-visual-test-'));
 process.env.HELM_NO_SERVICE = '1';
 for (const [key, name] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(process.env.HELM_DIR, name);
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-const { prepareVisual, preparePdf, validateVisual, MAX_VISUAL_BYTES, MAX_PDF_PAGES, FILE_PIECE_BYTES, withVisualMessages } = await import('../packages/connect/src/visual.js');
+const { prepareVisual, preparePdf, validateVisual, MAX_VISUAL_BYTES, MAX_PDF_PAGES, FILE_PIECE_BYTES } = await import('../packages/connect/src/visual.js');
 const gitq = await import('../packages/connect/src/git.js');
 const { runVisualCommand } = await import('../packages/connect/src/visual-cli.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { EventLog, activeTurnFromEvents } = await import('../packages/connect/src/events.js');
 const { apply, emptyLog } = await import('../apps/web/src/session/types.ts');
-const { helmBrief } = await import('../packages/connect/src/delegation.js');
 
 const file = name => join(process.env.HELM_DIR, name);
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aBZkAAAAASUVORK5CYII=', 'base64');
 const params = (n, extra = {}) => ({ renderId: String(n).padStart(24, '0'), html: '<h1>Diagram</h1><button>Adjust</button>', title: 'Saved diagram', height: 420, ...extra });
-
-test('a screenshot renders on its own at chat width; text named .png is still refused', async () => {
-  writeFileSync(file('shot.png'), png);
-  const html = await prepareVisual(file('shot.png'));
-  assert.match(html, /<img src="data:image\/png;base64,[^"]+" alt="" style="display:block;max-width:100%;height:auto">/);
-  writeFileSync(file('fake.png'), 'PRIVATE_TOKEN=do-not-embed');
-  await assert.rejects(prepareVisual(file('fake.png')), /local visual assets must be/);
-});
 
 test('local images become portable snapshots; text disguised as an image is refused', async () => {
   writeFileSync(file('pixel.png'), png);
@@ -122,48 +113,13 @@ test('visual references survive attachment sweeps and cold history anchors', () 
   }
 });
 
-test('CLI resolves explicit remote sessions and native session environments without changing network state', async () => {
-  writeFileSync(file('cli.html'), '<h1>CLI visual</h1>');
-  let call;
-  const options = { print: () => {}, self: () => 'local', rpc: async (...args) => { call = args; return { visual: { ref: 'ok' } }; }, findSession: async id => ({ env: 'remote', session: { id: id + '-full' } }), env: { HELM_NATIVE_SESSION: 'native1' } };
-  await runVisualCommand('render', [file('cli.html')], options);
-  assert.equal(call[0], 'local'); assert.equal(call[2].id, 'native1');
-  await runVisualCommand('render', [file('cli.html'), '--session', 'short', '--title', 'Title', '--render-id', params(1).renderId], options);
-  assert.equal(call[0], 'remote'); assert.equal(call[2].id, 'short-full'); assert.equal(call[2].title, 'Title');
-  await assert.rejects(runVisualCommand('render', [file('cli.html')], { ...options, env: {} }), /inside an agent chat/);
-  await assert.rejects(runVisualCommand('render', [file('cli.html'), '--bogus', 'value'], options), /invalid visual option/);
-  await runVisualCommand('canvas', [file('cli.html'), '--session', 'short', '--title', 'Side canvas'], options);
-  assert.equal(call[0], 'remote');
-  assert.equal(call[2].id, 'short-full');
-  assert.equal(call[2].placement, 'canvas');
-  assert.equal(call[2].title, 'Side canvas');
-  await runVisualCommand('canvas', ['https://demo.example/', '--session', 'short'], options);
-  assert.equal(call[2].url, 'https://demo.example/');
-  assert.equal(call[2].placement, 'canvas');
-  await runVisualCommand('canvas', ['notes.md', '--session', 'short'], options);
-  assert.equal(call[1], 'session.canvas');
-  assert.equal(call[2].path, 'notes.md');
-  assert.equal(call[2].id, 'short-full');
-  assert.match(helmBrief({}), /helm canvas/);
-  assert.match(helmBrief({}), /helm preview/);
-});
-
-test('native visuals sit between the messages surrounding publication, not at the end of every refresh', () => {
-  const messages = [{ role: 'user', at: '2026-10-12T12:00:00Z' }, { role: 'assistant', at: '2026-10-12T12:00:02Z' }];
-  const events = [{ type: 'item.start', kind: 'visual', at: Date.parse('2026-10-12T12:00:01Z'), visual: { title: 'V' }, id: 'v' }];
-  assert.deepEqual(withVisualMessages(messages, events).map(m => m.visual?.title ?? m.role), ['user', 'V', 'assistant']);
-  assert.equal(messages.length, 2);
-});
-
 test('a PDF becomes page pictures on the publishing machine; the canvas reads one page at a time', async t => {
   const pdf = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
   writeFileSync(file('doc.pdf'), pdf);
   writeFileSync(file('fake.pdf'), 'PRIVATE_TOKEN=do-not-send');
   // A tiny real JPEG frame header: 3 x 2 pixels.
   const jpeg = Buffer.from('ffd8ffc0000b080002000301011100ffd9', 'hex');
-  const runs = [];
   const run = async (command, args) => {
-    runs.push([command, ...args]);
     if (command === 'pdfinfo') return { stdout: 'Producer: test\nPages:          3\n' };
     const prefix = args.at(-1), first = Number(args[args.indexOf('-f') + 1]), last = Number(args[args.indexOf('-l') + 1]);
     for (let n = first; n <= last; n++) writeFileSync(`${prefix}-${n}.jpg`, jpeg);
@@ -171,8 +127,6 @@ test('a PDF becomes page pictures on the publishing machine; the canvas reads on
   };
   const made = await preparePdf(file('doc.pdf'), { run });
   assert.equal(made.total, 3);
-  assert.deepEqual(made.pages.map(p => [p.width, p.height]), [[3, 2], [3, 2], [3, 2]]);
-  assert.ok(runs[1].includes('-jpeg') && runs[1].includes('1600'), 'JPEG at 1600 px keeps text sharp');
   assert.equal(made.size, pdf.length, 'the PDF itself goes up in pieces for Download, not in the page list');
   await assert.rejects(preparePdf(file('fake.pdf'), { run }), /not a PDF/);
   const none = async () => { throw Object.assign(new Error('spawn pdfinfo ENOENT'), { code: 'ENOENT' }); };

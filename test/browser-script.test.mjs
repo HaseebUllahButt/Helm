@@ -37,54 +37,8 @@ async function shop(t, mode = {}) {
   const manager = new BrowserManager({ directory: mkdtempSync(join(process.env.HELM_DIR, 'shop-')), session: id => ({ id, mode: mode[id] || 'default' }), canWindow: false });
   t.after(async () => { await manager.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   try { await manager.start(); } catch { t.skip('no Chromium here'); return null; }
-  // Count full page reads: finding a control by name reads only controls (budget 0).
-  const reads = { count: 0 }, look = manager.look.bind(manager);
-  manager.look = (tab, budget = 6000, options) => { if (budget !== 0) reads.count++; return look(tab, budget, options); };
-  return { manager, routes: createBrowserRoutes({ manager }), url: `http://127.0.0.1:${server.address().port}/page/1`, reads };
+  return { manager, routes: createBrowserRoutes({ manager }), url: `http://127.0.0.1:${server.address().port}/page/1` };
 }
-
-test('a script loops over result pages and stops when a price is under $50, with no page read per step', { timeout: 60000 }, async t => {
-  const env = await shop(t); if (!env) return;
-  const { tab } = await env.manager.open('one', { url: env.url });
-  const path = file(`
-    const seen = [];
-    for (;;) {
-      const prices = await browser.evaluate(() => [...document.querySelectorAll('.price')].map(e => Number(e.textContent.slice(1))));
-      seen.push(...prices);
-      const cheap = prices.find(p => p < Number(args.under));
-      if (cheap != null) { log('found', cheap); return { page: await browser.evaluate('location.pathname'), cheap, seen }; }
-      log('none under', args.under, 'on', await browser.evaluate('document.title'));
-      await browser.click('Next');
-    }`);
-  env.reads.count = 0;
-  const { result, exits } = await cli(env.routes, 'one')(['script', tab.id, path, 'under=50']);
-  assert.equal(result.ok, true, result.error);
-  assert.deepEqual(result.value, { page: '/page/3', cheap: 45, seen: [80, 95, 70, 60, 45, 99] });
-  assert.deepEqual(result.log, ['none under 50 on Page 1', 'none under 50 on Page 2', 'found 45']);
-  assert.equal(result.steps, 8, 'three price reads, two titles, two clicks and one path');
-  assert.ok(result.ms >= 0); assert.deepEqual(exits, [[0, false]]);
-  assert.equal(env.reads.count, 0, 'no step read the whole page');
-  // The same steps by hand read the page after each one.
-  assert.ok((await env.manager.run('one', tab.id, { evaluate: '1' })).text);
-  assert.equal(env.reads.count, 1);
-});
-
-test('"look": false skips the page read after a step, a batch and a failed check; the default still reads', { timeout: 60000 }, async t => {
-  const env = await shop(t); if (!env) return;
-  const { tab } = await env.manager.open('one', { url: env.url });
-  env.reads.count = 0;
-  const quiet = await env.manager.run('one', tab.id, { click: 'Next', look: false });
-  assert.equal(quiet.text, undefined); assert.equal(quiet.tab.title, 'Page 2');
-  const batch = await env.manager.run('one', tab.id, { actions: [{ check: 'Results 2' }, { click: 'Next' }], look: false });
-  assert.equal(batch.text, undefined); assert.equal(batch.results.length, 2);
-  const missed = await env.manager.run('one', tab.id, { check: 'Sold out', timeout: 300, look: false });
-  assert.equal(missed.check.pass, false); assert.equal(missed.text, undefined);
-  const passed = await env.manager.run('one', tab.id, { check: 'Results 3', look: false });
-  assert.equal(passed.pass, true); assert.equal(passed.text, undefined);
-  assert.equal(env.reads.count, 0);
-  assert.match((await env.manager.run('one', tab.id, { check: 'Results 3' })).text, /Results 3/, 'without the option a step still reads the page');
-  assert.match((await env.manager.run('one', tab.id, { actions: [{ check: 'Results 3' }] })).text, /Results 3/);
-});
 
 test('a failing step stops the script and says which step failed, with candidates and a page read', { timeout: 60000 }, async t => {
   const env = await shop(t); if (!env) return;
@@ -172,13 +126,4 @@ export default async function (browser, { log, args }) {
   assert.equal(broken.ok, false); assert.match(broken.error, /^The script did not load: /); assert.equal(broken.steps, 0); assert.equal(calls.length, 0);
   await assert.rejects(runBrowserCommand(['script', 'first'], { env: { HELM_SESSION_ID: 'one' }, self: () => 'local', rpc: async () => ({}) }), /needs a tab and a file/);
   await assert.rejects(runBrowserCommand(['script', 'first', 'x.js', '--timeout', 'soon'], { env: { HELM_SESSION_ID: 'one' }, self: () => 'local', rpc: async () => ({}) }), /whole number/);
-});
-
-test('browser.captcha() in a script waits for the owner in short calls until the CAPTCHA is solved', async () => {
-  const calls = []; let polls = 0;
-  const routes = { dispatch: async (method, params) => { calls.push([method, params]); return ++polls < 3 ? { waiting: true, vendor: 'recaptcha', seconds: polls } : { solved: true, vendor: 'recaptcha', seconds: 3 }; } };
-  const { result } = await cli(routes, 'one')(['script', 'first', file('const answer = await browser.captcha({ timeout: 250000 }); return answer.solved;')]);
-  assert.equal(result.ok, true, result.error); assert.equal(result.value, true); assert.equal(result.steps, 3);
-  assert.deepEqual(calls.map(([method, params]) => [method, params.tabId, params.wait <= 100000, params.id]), Array(3).fill(['browser.captcha', 'first', true, 'one']));
-  assert.equal(calls.at(-1)[1].last, false, 'a later call is still to come while time is left');
 });

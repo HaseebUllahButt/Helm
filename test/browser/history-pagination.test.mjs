@@ -114,3 +114,14 @@ test('a failed earlier read can be retried and clears its error after revealing 
   assert.equal(await page.evaluate(() => window.state.error), '');
   assert.equal(calls.filter(call => call.before).length, 2);
 });
+
+test('a catch-up read that brings nothing new leaves every message as it was', async t => {
+  const { page } = await device(t, { done: true });
+  await page.getByRole('button', { name: 'Earlier in this chat', exact: true }).click();
+  await page.waitForFunction(() => !window.state.loadingEarlier && !window.state.earlier);
+  await page.evaluate(() => { window.kept = window.state.log.turns.slice(); });
+  await page.evaluate(() => window.state.refresh());
+  await page.waitForFunction(() => !window.state.syncing);
+  assert.equal(await page.evaluate(() => window.state.log.turns.every((turn, i) => turn === window.kept[i])
+    && window.state.log.turns.length === window.kept.length), true);
+});

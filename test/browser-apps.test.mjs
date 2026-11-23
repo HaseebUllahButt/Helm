@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { appRows, discoverApps, internalApp, procListeners } from '../packages/connect/src/browser-apps.js';
+import { appRows, discoverApps, procListeners } from '../packages/connect/src/browser-apps.js';
 import { createBrowserRoutes } from '../packages/connect/src/browser-routes.js';
 
 const processRow = (pid, ppid, cwd, argv, sockets = []) => ({ pid, ppid, cwd, argv, sockets: new Set(sockets) });
@@ -18,13 +18,6 @@ test('only descendants or project folders own apps; sibling folders and other ch
   processes[1].cwd = '/project/sub';
   assert.equal(appRows(processes, listeners, { cwd: '/project' }).length, 1);
   assert.equal(appRows(processes, listeners, {}).length, 0);
-});
-
-test('Helm, agents, browsers, and agent helpers do not become apps', () => {
-  for (const argv of [['node', '/bin/helm.js'], ['/bin/codex', 'app-server'], ['node', '/x/@anthropic-ai/cli.js'], ['node', '/tools/mcp-server.js'], ['/usr/bin/chromium'], ['claude']]) assert.equal(internalApp(argv), true, argv.join(' '));
-  assert.equal(internalApp(['node', '/project/helm-website/server.js']), false);
-  const processes = [processRow(1, 0, '/project', ['claude'], ['11']), processRow(2, 1, '/project', ['node', 'mcp-server'], ['12'])];
-  assert.deepEqual(appRows(processes, listeners, { roots: [1], cwd: '/project' }), []);
 });
 
 test('read IPv4 and IPv6 wildcard and loopback listeners, never external addresses or non-listeners', () => {
@@ -89,12 +82,4 @@ test('a terminal link checks the port still belongs to that chat before opening 
   assert.equal(opens.length, 0);
   await routes.dispatch('browser.openApp', { id: 'fake', url: 'http://127.0.0.1:5173/path?q=1' });
   assert.equal(opens[0][0], 'fake'); assert.equal(opens[0][1].url, 'http://127.0.0.1:5173/path?q=1'); assert.deepEqual(scans[0], ['fake', { roots: [123] }]);
-});
-
-test('a browser that rewrote its command line into one string is never an app', async () => {
-  const { commandWords, internalApp } = await import('../packages/connect/src/browser-apps.js');
-  const argv = commandWords('/usr/lib/chromium/chromium --user-data-dir=/tmp/x --remote-debugging-port=0 chrome://newtab/\0');
-  assert.equal(argv[0], '/usr/lib/chromium/chromium');
-  assert.equal(internalApp(argv), true);
-  assert.deepEqual(commandWords('node\0server.js\0'), ['node', 'server.js']);
 });

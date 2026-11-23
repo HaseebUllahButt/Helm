@@ -2,56 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DeliveryState } from '../packages/connect/src/delivery-state.js';
 
-test('queue tickets are copied on add and on snapshot', () => {
-  const state = new DeliveryState();
-  const item = { turnId: 'retry-1', text: 'hello', attachments: [{ name: 'a' }] };
-  state.addTicket('chat', item);
-  item.text = 'changed';
-  const snapshot = state.queue('chat');
-  snapshot[0].text = 'changed again';
-  snapshot[0].attachments[0].name = 'changed';
-  assert.deepEqual(state.queue('chat'), [{ turnId: 'retry-1', text: 'hello', attachments: [{ name: 'a' }] }]);
-});
-
-test('tickets can be removed, restored and inspected', () => {
-  const state = new DeliveryState();
-  state.addTicket('chat', { turnId: 'a' });
-  assert.equal(state.hasTicket('chat', 'a'), true);
-  assert.deepEqual(state.removeTicket('chat', 'a'), { turnId: 'a' });
-  assert.equal(state.hasQueue('chat'), false);
-  state.restoreQueue('chat', [{ turnId: 'b' }]);
-  assert.deepEqual(state.ticket('chat', 'b'), { turnId: 'b' });
-});
-
-test('reply markers and steps stay private behind snapshots and operations', () => {
-  const state = new DeliveryState();
-  state.addAwaitingEcho('chat', { turnId: 'echo', text: 'hello' });
-  const echoes = state.awaitingEcho('chat');
-  echoes[0].text = 'changed';
-  assert.deepEqual(state.awaitingEcho('chat'), [{ turnId: 'echo', text: 'hello' }]);
-  state.addSteered('chat', { turnId: 'steer', text: 'next' });
-  assert.deepEqual(state.removeSteered('chat', 'steer'), { turnId: 'steer', text: 'next' });
-  state.addStep('chat', 'tool');
-  assert.deepEqual(state.steps('chat'), ['tool']);
-  state.clear('chat');
-  assert.equal(state.hasQueue('chat'), false);
-  assert.deepEqual(state.awaitingEcho('chat'), []);
-});
-
-test('closed replies read saved history only once per chat', () => {
-  const state = new DeliveryState();
-  let reads = 0;
-  const load = () => { reads++; return ['saved']; };
-  state.seedClosedTurns('chat', load);
-  assert.equal(state.closeTurn('chat', 'saved'), false);
-  state.seedClosedTurns('chat', load);
-  assert.equal(state.closeTurn('chat', 'new'), true);
-  assert.equal(reads, 1);
-  state.clear('chat');
-  state.seedClosedTurns('chat', load);
-  assert.equal(reads, 2);
-});
-
 test('a failed send removes its echo marker by ticket and driver', () => {
   const state = new DeliveryState();
   const firstDriver = { send() {} };

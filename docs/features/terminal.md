@@ -19,7 +19,7 @@ Helm restart. Whoever typed last sets the size.
   pty part is built from source; without it `helm status` says "herdr panes
   (slow)".
 - **Tests:** `test/terminal-browser`, `terminal-host`, `pty`,
-  `shared-terminal`, `proc-host`, `pane-keys`.
+  `shared-terminal`, `proc-host`.
 
 ## Local app links
 
@@ -45,11 +45,11 @@ reason and "Try again" show there. Its first screen comes back with the start
   session.list` ids like `pane:wD:p1`, marked `adopted`). Never open, type
   into or close them. A Helm upgrade does not restart the terminal host; a
   dead one can show nothing.
-- **Tests:** `test/herdr`, `native-hosts`, `reattach`.
+- **Tests:** `test/native-hosts`, `reattach`.
 
 ## "View in terminal" from a chat
 - **Not yet driven;** the fake agent runs no commands.
-- **Tests:** `test/native-cli-tray`; `test/browser/native-cli-tray`.
+- **Tests:** `test/native-cli-tray`.
 
 ## One memory group each (Linux with systemd)
 Each terminal, agent process and Codex daemon runs in its own systemd scope

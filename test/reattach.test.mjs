@@ -35,6 +35,7 @@ class FakeDriver extends EventEmitter {
   }
   push(type, payload) { if (type === 'status') this.status = payload.status; this.emit('event', { type, ...payload }); }
   async start() {
+    this.starts = (this.starts ?? 0) + 1;
     if (FakeDriver.failStarts.has(this.env.HELM_SESSION_ID)) throw new Error('codex live thread read failed: Codex thread/read timed out');
     this.started = true;
   }
@@ -67,7 +68,16 @@ const setup = (name, extra = {}) => {
   };
   return { make, drivers };
 };
-const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+/** Wait until the chats reach a state; fail after a few seconds. */
+async function until(fn, ms = 5000) {
+  const stop = Date.now() + ms;
+  while (!fn()) {
+    if (Date.now() > stop) throw new Error('timed out waiting for the chat');
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  // Let the last answer's follow-up work finish before checking what stayed the same.
+  await new Promise(setImmediate);
+}
 
 test('a failed reconnect leaves an idle chat idle and quiet, but holds and marks one that was working', async () => {
   const { make, drivers } = setup('idle-vs-busy');
@@ -77,14 +87,14 @@ test('a failed reconnect leaves an idle chat idle and quiet, but holds and marks
   drivers.get(idle.id).finish('t1');
   const busy = await first.start({ cwd: '/tmp', profileId: 'claudea' });
   await first.input(busy.id, 'work on it');
-  await settle();
+  await until(() => first.get(busy.id).status === 'working');
   assert.equal(first.get(busy.id).status, 'working');
   await first.stop();
 
   FakeDriver.failStarts.add(idle.id); FakeDriver.failStarts.add(busy.id);
   const again = await make();
   await again.resume();
-  await settle();
+  await until(() => drivers.get(idle.id)?.starts && again.get(busy.id).recovery?.kind === 'error');
   const quiet = again.get(idle.id);
   assert.equal(quiet.status, 'idle');
   assert.equal(quiet.recovery, undefined, 'nothing was in flight, so nothing failed');
@@ -97,7 +107,7 @@ test('a failed reconnect leaves an idle chat idle and quiet, but holds and marks
 
   // The next retry reaches the agent: the mark goes and the queue moves.
   FakeDriver.failStarts.clear();
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await until(() => again.get(busy.id).recovery === undefined);
   assert.equal(again.get(busy.id).recovery, undefined, 'a retry that connects clears the mark');
   assert.notEqual(again.get(busy.id).queuePaused, true);
   await again.stop();
@@ -115,7 +125,7 @@ test('a mark left by an earlier restart clears when the chat has nothing in flig
   FakeDriver.failStarts.add(s.id);
   const again = await make();
   await again.resume();
-  await settle();
+  await until(() => drivers.get(s.id)?.starts && again.get(s.id).recovery === undefined);
   assert.equal(again.get(s.id).recovery, undefined);
   assert.notEqual(again.get(s.id).queuePaused, true);
   FakeDriver.failStarts.clear();
@@ -251,20 +261,20 @@ test('a turn that reports tokens but no price is priced at list rates, and a Cla
   await sessions.input(codex.id, 'price me');
   const usage = { input: 12_000, output: 800, cacheRead: 10_000, inputIncludesCache: true };
   drivers.get(codex.id).finish('t1', { usage });
-  await settle();
   const expected = priceTurn('codex', 'gpt-5.5', usage);
+  await until(() => sessions.get(codex.id).costUsd > 0);
   assert.ok(expected > 0, 'the table prices this model');
   assert.equal(sessions.get(codex.id).costUsd, expected);
   // A second turn adds to it.
   await sessions.input(codex.id, 'again');
   drivers.get(codex.id).finish('t2', { usage });
-  await settle();
+  await until(() => sessions.get(codex.id).costUsd !== expected);
   assert.equal(sessions.get(codex.id).costUsd, Math.round(expected * 2 * 1e6) / 1e6);
   // Claude says what it cost itself; its tokens are not priced a second time.
   const claude = await sessions.start({ cwd: '/tmp', profileId: 'claudea', model: 'claude-opus-5-5' });
   await sessions.input(claude.id, 'hello');
   drivers.get(claude.id).finish('t1', { costTotalUsd: 0.25, usage: { input: 5000, output: 500 } });
-  await settle();
+  await until(() => sessions.get(claude.id).costUsd > 0);
   assert.equal(sessions.get(claude.id).costUsd, 0.25);
   // An unknown model stays unpriced rather than wrong.
   assert.equal(priceTurn('codex', 'gpt-made-up', usage), null);

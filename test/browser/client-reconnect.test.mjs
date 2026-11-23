@@ -27,7 +27,7 @@ before(async () => {
 after(async () => { await browser?.close(); });
 
 async function hub(context, reach = 1) {
-  const state = { delay: 0, upgradeDelay: 0, sockets: [], calls: [] };
+  const state = { delay: 0, upgradeDelay: 0, upgrades: 0, sockets: [], calls: [] };
   const timers = new Set();
   const later = (callback, delay) => {
     const timer = setTimeout(() => { timers.delete(timer); callback(); }, delay);
@@ -63,9 +63,9 @@ async function hub(context, reach = 1) {
     } else response.end('<!doctype html><title>Connection test</title>');
   });
   const sockets = new WebSocketServer({ noServer: true });
-  server.on('upgrade', (request, socket, head) => later(() => {
+  server.on('upgrade', (request, socket, head) => (state.upgrades++, later(() => {
     sockets.handleUpgrade(request, socket, head, connection => sockets.emit('connection', connection));
-  }, state.upgradeDelay));
+  }, state.upgradeDelay)));
   sockets.on('connection', socket => {
     state.sockets.push(socket);
     socket.on('message', raw => {
@@ -159,8 +159,9 @@ test('a frozen browser tab reconnects on resume after losing its idle hub socket
   const page = await pageFor(context, home);
   const protocol = await page.context().newCDPSession(page);
   await protocol.send('Page.setWebLifecycleState', { state: 'frozen' });
+  const closed = new Promise(resolve => home.sockets[0].once('close', resolve));
   home.sockets[0].terminate();
-  await new Promise(resolve => setTimeout(resolve, 200));
+  await closed;
   await protocol.send('Page.setWebLifecycleState', { state: 'active' });
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
   await page.waitForFunction(() => window.client.connected, undefined, { timeout: 3000 });
@@ -177,7 +178,9 @@ test('real browser keeps pending writes on the old socket during a slow hub upgr
     window.result = window.client.rpc('vm', 'session.input', { data: 'once' });
     window.client.learn([location.origin, url]);
   }, remote.url);
-  await page.waitForTimeout(200);
+  const end = Date.now() + 3000;
+  while (!remote.upgrades && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(remote.upgrades, 1);
   assert.equal(await page.evaluate(() => window.client.connected), true);
   assert.equal(await page.evaluate(() => window.client.relay), local.url);
   await page.waitForFunction(url => window.client.relay === url, remote.url);

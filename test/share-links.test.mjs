@@ -109,8 +109,9 @@ test('a page and its files share a few tunnels, and an idle close does not hang 
   // The app drops idle keep-alive connections (Node does after 5s); the
   // next request must get a fresh tunnel, not a dead one.
   app.keepAliveTimeout = 100;
+  const idleClosed = new Promise((r) => app.once('request', (req) => req.socket.once('close', r)));
   await request('app.links.test', '/warm');
-  await new Promise((r) => setTimeout(r, 400));
+  await idleClosed;
   const after = await Promise.race([request('app.links.test', '/after-idle'), new Promise((r) => setTimeout(() => r({ status: 'hung' }), 5000))]);
   assert.equal(after.status, 200);
   app.keepAliveTimeout = 5000;
@@ -238,7 +239,7 @@ test('a machine opens tunnels only to ports it shared, and hides hashes from mem
   await assert.rejects(() => d.dispatch(M.SHARE_ADD, { name: 'mine', port: 9 }), /already shared/);
   sent.length = 0;
   await d.onFrame(link, { t: T.TUNNEL_OPEN, sid: 's2', port: APP });
-  await new Promise((r) => setTimeout(r, 200));
+  for (let i = 0; i < 200 && !sent.some((f) => f.t === T.TUNNEL_READY); i++) await new Promise((r) => setTimeout(r, 10));
   assert.ok(sent.some((f) => f.t === T.TUNNEL_READY));
 
   const member = await d.dispatch(M.SHARE_LIST, { forHub: true }, 'phone-id');

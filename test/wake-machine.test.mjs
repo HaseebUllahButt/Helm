@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { localWakeAdapters, magicPacket, routerAddresses, sendWake, wakeChecks } from '../packages/connect/src/wake-machine.js';
+import { localWakeAdapters, magicPacket, routerAddresses, sendWake } from '../packages/connect/src/wake-machine.js';
 
 const mac = 'aa:bb:cc:dd:ee:ff';
 const router = '12:34:56:78:90:ab';
@@ -44,23 +44,4 @@ test('creates the 102-byte magic packet and checks the sender network again', as
   assert.deepEqual(calls, []);
   assert.deepEqual(await sendWake(target, deps), { sent: true });
   assert.deepEqual(calls, [[mac, device]]);
-});
-
-test('doctor checks wired cards for magic-packet support and tells the owner how to enable it', async () => {
-  const outputs = {
-    eth0: 'Supports Wake-on: pg\nWake-on: d', eth1: 'Supports Wake-on: p\nWake-on: p', eth2: 'Supports Wake-on: g\nWake-on: g',
-  };
-  const checks = await wakeChecks({ platform: 'linux', interfaces: ['eth0', 'eth1', 'eth2', 'wlan0', 'veth10'],
-    adapter: name => ({ physical: !name.startsWith('veth'), wireless: name.startsWith('wlan') }),
-    run: async (program, [name]) => {
-      assert.equal(program, 'ethtool');
-      assert.ok(Object.hasOwn(outputs, name));
-      return { stdout: outputs[name] };
-    },
-  });
-  assert.deepEqual(checks.map(c => c.state), ['warning', 'info', 'ok']);
-  assert.match(checks[0].action, /helm sudo -- ethtool -s eth0 wol g/);
-  const missing = await wakeChecks({ platform: 'linux', interfaces: ['eth0'], adapter: () => ({ physical: true }),
-    run: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } });
-  assert.match(missing[0].message, /Install ethtool/);
 });

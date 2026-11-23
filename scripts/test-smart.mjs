@@ -30,7 +30,7 @@
 // stays usable.
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -278,6 +278,46 @@ export function passKeys({ root, tests, git, lines }, settings) {
   return new Map(tests.map((t) => [t, createHash('sha256').update(`${tree}\0${t}`).digest('hex')]));
 }
 
+// Only a few test runs use the machine at once; the others wait their turn.
+// HELM_TEST_SLOTS sets how many (default 2).
+async function takeSlot() {
+  // A run started by a test inside a run that holds a slot uses that slot.
+  if (process.env.HELM_TEST_SLOT_HELD) return () => {};
+  const slots = Math.max(1, Number(process.env.HELM_TEST_SLOTS) || 2);
+  const dir = path.join(process.env.XDG_RUNTIME_DIR || '/tmp', 'helm-test-slots');
+  mkdirSync(dir, { recursive: true });
+  let ns = '';
+  try { ns = readlinkSync('/proc/self/ns/pid') } catch {}
+  const holderAlive = (slot) => {
+    let owner = '';
+    try { owner = readFileSync(path.join(slot, 'owner'), 'utf8') } catch {}
+    let age = 0;
+    try { age = Date.now() - statSync(slot).mtimeMs } catch { return false }
+    if (!owner) return age < 5000; // the holder is still writing its name
+    const [ownerNs, pid] = [owner.slice(0, owner.lastIndexOf(' ')), Number(owner.slice(owner.lastIndexOf(' ') + 1))];
+    // A run in another process space cannot be checked; trust it for 30 minutes.
+    if (ownerNs !== ns) return age < 30 * 60_000;
+    try { process.kill(pid, 0); return true } catch (error) { return error.code === 'EPERM' }
+  };
+  let told = false;
+  for (;;) {
+    for (let i = 0; i < slots; i++) {
+      const slot = path.join(dir, `slot-${i}`);
+      try { mkdirSync(slot) } catch {
+        // A run that ended without freeing its slot: take the slot over now.
+        if (!holderAlive(slot)) { rmSync(slot, { recursive: true, force: true }); i--; }
+        continue;
+      }
+      writeFileSync(path.join(slot, 'owner'), `${ns} ${process.pid}`);
+      const free = () => { try { rmSync(slot, { recursive: true, force: true }) } catch { /* best effort on exit */ } };
+      process.once('exit', free);
+      return () => { process.off('exit', free); free(); };
+    }
+    if (!told) { console.log(`Waiting: ${slots} other test runs are using the machine.`); told = true }
+    await new Promise((done) => setTimeout(done, 2000));
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const sel = selectTests({ args });
@@ -346,6 +386,8 @@ async function main() {
   });
   const summary = ['check summary'];
   let failed = false;
+  const freeSlot = await takeSlot();
+  env.HELM_TEST_SLOT_HELD = '1';
 
   if (withTypes && types) {
     // Incremental: an unchanged web app checks in about a second.
@@ -400,6 +442,7 @@ async function main() {
   if (!tests.length) summary.push('  no test files picked');
   if (gaps.length || shared.length) summary.push(`  not covered: ${gaps.length + shared.length} changed files (see above)`);
   summary.push(...later);
+  freeSlot();
   console.log(`\n${summary.join('\n')}`);
   process.exitCode = failed ? 1 : 0;
 }

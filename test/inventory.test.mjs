@@ -358,3 +358,12 @@ test('a remembered chat opening still sees a first message written after the las
   appendFileSync(file, JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'more' } }) + '\n');
   assert.equal((await inventory(profile)).find((r) => r.cwd === '/work/new')?.title, 'Ship the logo');
 });
+
+// `opencode` can be OpenCode 2, and both share one database. A helper run as
+// `opencode` but found as `opencode2` must match its own record, or it shows
+// twice in Finished.
+test('an OpenCode 2 chat found by the finder matches a helper run as opencode', async () => {
+  const { conversationKey } = await import('../packages/connect/src/engines.js');
+  assert.equal(conversationKey('opencode2', 'ses_1'), conversationKey('opencode', 'ses_1'));
+  assert.notEqual(conversationKey('opencode', 'ses_1'), conversationKey('opencode', 'ses_2'));
+});

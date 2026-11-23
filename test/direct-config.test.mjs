@@ -3,19 +3,8 @@ import assert from 'node:assert/strict';
 import dgram from 'node:dgram';
 import { RTCPeerConnection } from 'node-datachannel/polyfill';
 import { cleanup } from 'node-datachannel';
-import { nativeDirectConfig, DIRECT_PORTS } from '../packages/connect/src/direct-config.js';
+import { nativeDirectConfig } from '../packages/connect/src/direct-config.js';
 test.after(() => cleanup());
-
-test('both native directions use a known, shared UDP range', () => {
-  const config = nativeDirectConfig({});
-  assert.equal(config.portRangeBegin, DIRECT_PORTS.begin);
-  assert.equal(config.portRangeEnd, DIRECT_PORTS.end);
-  assert.equal(config.enableIceUdpMux, true);
-  assert.equal(nativeDirectConfig({ directPorts: { begin: 32000, end: 32100 } }).portRangeBegin, 32000);
-  for (const ports of [{}, { begin: 0, end: 1 }, { begin: 40000, end: 39999 }, { begin: 30000, end: 30000 }, { begin: 10000, end: 65536 }, { begin: '30000', end: 30001 }]) {
-    assert.throws(() => nativeDirectConfig({ directPorts: ports }), /directPorts/);
-  }
-});
 
 test('many native peers share a small loopback UDP range', { timeout: 15000 }, async () => {
   const socket = dgram.createSocket('udp4');

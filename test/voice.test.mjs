@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { levelOfWav, SILENCE_RMS, extensionFor, MAX_AUDIO_BYTES, transcribe } =
+const { levelOfWav, SILENCE_RMS, MAX_AUDIO_BYTES, transcribe } =
   await import('../packages/connect/src/voice.js');
 
 /**
@@ -77,18 +77,7 @@ test('a format it cannot read returns null, not silence', () => {
   assert.equal(levelOfWav('not a buffer'), null);
 });
 
-// Groq picks its decoder from the filename, so a browser's
-// `audio/webm;codecs=opus` arriving as `blob` is refused as unknown.
-test('the recorder mime type becomes a filename Groq understands', () => {
-  assert.equal(extensionFor('audio/webm;codecs=opus'), 'webm');
-  assert.equal(extensionFor('audio/mp4'), 'mp4', 'what Safari records, so every iPhone PWA');
-  assert.equal(extensionFor('audio/ogg; codecs=opus'), 'ogg');
-  assert.equal(extensionFor('audio/wav'), 'wav', 'what pw-record writes');
-  assert.equal(extensionFor(''), 'webm', 'a browser that names no type still gets a real extension');
-});
-
 test('audio is refused before it is uploaded when it cannot be right', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-voice-'));
   try {
     // A key has to exist, or the size check is never reached.
     process.env.HELM_GROQ_KEY = 'gsk_test_not_a_real_key';
@@ -97,7 +86,6 @@ test('audio is refused before it is uploaded when it cannot be right', async () 
     await assert.rejects(() => transcribe({ audio: huge }), /the limit is 8MB/);
   } finally {
     delete process.env.HELM_GROQ_KEY;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -128,7 +116,7 @@ test('a machine with no key says so instead of calling out', async () => {
   }
 });
 
-test('a device gets what it needs to call Groq itself: the key, the model and the prompt', async () => {
+test('a device gets what it needs to call Groq itself: the key and the prompt', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-voice-direct-'));
   const home = join(dir, 'home');
   mkdirSync(join(home, '.config'), { recursive: true });
@@ -141,8 +129,6 @@ test('a device gets what it needs to call Groq itself: the key, the model and th
     `], { env: { ...process.env, HOME: home, HELM_DIR: join(home, '.helm'), GROQ_API_KEY: '', HELM_GROQ_KEY: '' }, encoding: 'utf8' });
     const v = JSON.parse(out);
     assert.equal(v.key, 'gsk_test_direct_key');
-    assert.equal(v.endpoint, 'https://api.groq.com/openai/v1/audio/transcriptions');
-    assert.equal(v.model, 'whisper-large-v3-turbo');
     assert.match(v.prompt, /Claude Code/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

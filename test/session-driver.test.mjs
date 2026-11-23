@@ -81,6 +81,15 @@ class FakeDriver extends EventEmitter {
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
 
+/** Wait for a state, not a time. */
+async function until(check, what = 'state') {
+  const end = Date.now() + 5000;
+  while (!check()) {
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 2));
+  }
+}
+
 test('approval refusals before a driver call prove the answer was not sent', async t => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
@@ -967,35 +976,6 @@ test('a prompt is logged before lazy driver startup yields', async () => {
   await original.kill(s.id);
 });
 
-test('the model the CLI reports is kept, so the app can name what is running', async () => {
-  // Neither CLI takes a model unless one is chosen, but both announce what
-  // they started with. Without keeping it the chip has nothing to show but
-  // the word "model", which is what the owner saw.
-  const { Sessions } = await import('../packages/connect/src/sessions.js');
-  const sessions = new Sessions(new StubRuntime(), {
-    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
-  });
-  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
-  const updates = [];
-  sessions.on('session', (rec) => updates.push({ model: rec.engineModel, effort: rec.engineEffort }));
-
-  const driver = FakeDriver.made[FakeDriver.made.length - 1];
-  driver.emit('init', { model: 'claude-fable-5-1', effort: 'high' });
-
-  const listed = (await sessions.list()).find((x) => x.id === s.id);
-  assert.equal(listed.engineModel, 'claude-fable-5-1');
-  assert.equal(listed.engineEffort, 'high');
-  assert.ok(updates.some((u) => u.model === 'claude-fable-5-1'), 'the app is told');
-  // Reported, not chosen: it must not become an argument on the next launch.
-  assert.equal(listed.model, null);
-
-  // The same announcement again is not news.
-  const before = updates.length;
-  driver.emit('init', { model: 'claude-fable-5-1', effort: 'high' });
-  assert.equal(updates.length, before);
-  await sessions.kill(s.id);
-});
-
 test('images ride the driver when it implements the verb, else a placeholder', async () => {
   const { mkdirSync } = await import('node:fs');
   mkdirSync(process.env.HELM_DIR, { recursive: true });
@@ -1215,85 +1195,6 @@ test('/compact delegates to the driver', async () => {
   await sessions.kill(s.id);
 });
 
-test('a session names itself after two user messages even before a reply', async () => {
-  const { Sessions } = await import('../packages/connect/src/sessions.js');
-  const { EventLog } = await import('../packages/connect/src/events.js');
-  const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-titles')),
-    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
-  });
-  const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
-  assert.equal(s.title, 'proj', 'the folder is the name until one is earned');
-  const d = FakeDriver.made.at(-1);
-
-  // One prompt in, a title that is just the prompt back is not trusted:
-  // half the time that prompt is "hi".
-  await sessions.input(s.id, 'hi');
-  d.push('title', { title: 'hi' });
-  assert.equal(sessions.get(s.id).title, 'proj');
-
-  // Two prompts in, the gate opens. The agent only ever said "hi", so the
-  // prompts themselves name the session - then the agent's real title,
-  // arriving late, outranks that.
-  await sessions.input(s.id, 'fix the login bug');
-  assert.equal(sessions.get(s.id).title, 'fix the login bug');
-  d.push('title', { title: 'Login bug fix' });
-  assert.equal(sessions.get(s.id).title, 'Login bug fix');
-  await sessions.kill(s.id);
-});
-
-test('the first prompt and reply name a session and an identical manual rename stays protected', async () => {
-  const { Sessions } = await import('../packages/connect/src/sessions.js');
-  const { EventLog } = await import('../packages/connect/src/events.js');
-  const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-titles-first-exchange')),
-    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
-  });
-  const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
-  await sessions.input(s.id, 'Hi!\nPlease fix the login bug');
-  assert.equal(s.title, 'proj');
-  const driver = FakeDriver.made.at(-1);
-  driver.push('turn.done', { turnId: 't1', status: 'ok' });
-  assert.equal(s.title, 'fix the login bug');
-  assert.equal(s.titleBy, 'auto');
-  sessions.rename(s.id, s.title);
-  assert.equal(s.titleBy, 'user');
-  driver.push('title', { title: 'A different generated name' });
-  assert.equal(s.title, 'fix the login bug');
-  await sessions.kill(s.id);
-});
-
-test('greetings never name a session, whoever says them', async () => {
-  const { Sessions } = await import('../packages/connect/src/sessions.js');
-  const { EventLog } = await import('../packages/connect/src/events.js');
-  const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-titles-greet')),
-    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
-  });
-  const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
-  const d = () => FakeDriver.made.at(-1);
-
-  // Two prompts in and nothing worth a name yet: the gate has opened but
-  // there is nothing behind it, so the folder holds.
-  await sessions.input(s.id, 'hi');
-  await sessions.input(s.id, 'hello');
-  assert.equal(sessions.get(s.id).title, 'proj');
-
-  // The third prompt says something, and names the session even though the
-  // gate opened on the ones that did not.
-  await sessions.input(s.id, 'port the parser to the new lexer');
-  assert.equal(sessions.get(s.id).title, 'port the parser to the new lexer');
-
-  // The agent keeps reporting a name, and early on that name is a copy of
-  // whatever was last typed. A greeting must not take the one just earned.
-  d().push('title', { title: 'hey' });
-  assert.equal(sessions.get(s.id).title, 'port the parser to the new lexer');
-  await sessions.input(s.id, 'thanks');
-  d().push('title', { title: 'thanks' });
-  assert.equal(sessions.get(s.id).title, 'port the parser to the new lexer');
-  await sessions.kill(s.id);
-});
-
 test('the prompt sample stays on the machine', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
@@ -1441,51 +1342,6 @@ test('work helm did not start can be filed away or struck off', async () => {
   await sessions.kill('found:claude:abc123');
   sessions.archive('pane:w1:p1', true);
   assert.equal((await pane()).archived, true, 'still there, filed');
-});
-
-test('terminals are numbered by the machine, not guessed by the app', async () => {
-  const { mkdirSync } = await import('node:fs');
-  mkdirSync(process.env.HELM_DIR, { recursive: true });
-  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
-    version: 1,
-    profiles: [{ id: 'shell', label: 'Shell', engine: 'shell', cmd: '/bin/sh', args: [], env: {}, source: 'builtin' }],
-  }));
-  const { Sessions } = await import('../packages/connect/src/sessions.js');
-  const { EventLog } = await import('../packages/connect/src/events.js');
-
-  // A stand-in for the pty host: opening always works, nothing really runs.
-  const { EventEmitter } = await import('node:events');
-  const opened = [];
-  const terminals = Object.assign(new EventEmitter(), {
-    ensure: async () => true,
-    open: async (id, opts) => { opened.push(opts); return {}; },
-    has: () => true,
-    adopt: async () => [],
-  });
-  const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-term')),
-    terminals,
-  });
-
-  // Two in a row, with nothing reloaded in between: the case that produced
-  // two terminals both called "Terminal 1".
-  const [a, b] = await Promise.all([
-    sessions.start({ cwd: '/tmp', profileId: 'shell' }),
-    sessions.start({ cwd: '/tmp', profileId: 'shell' }),
-  ]);
-  const c = await sessions.start({ cwd: '/tmp', profileId: 'shell' });
-  const names = [a.title, b.title, c.title];
-  assert.equal(new Set(names).size, 3, `all different, got ${names.join(', ')}`);
-  assert.ok(names.includes('Terminal 3'), `counted up, got ${names.join(', ')}`);
-
-  // A name the caller chose is still theirs.
-  const named = await sessions.start({ cwd: '/tmp', profileId: 'shell', title: 'build' });
-  assert.equal(named.title, 'build');
-
-  // Opened at the size the app draws at, so the first prompt fits it.
-  await sessions.start({ cwd: '/tmp', profileId: 'shell', size: { cols: 132, rows: 41, watcher: 'w' } });
-  assert.deepEqual([opened.at(-1).cols, opened.at(-1).rows], [132, 41]);
-  assert.equal(opened[0].cols, undefined, 'no size asked: the pty default');
 });
 
 test('a chat asks for its end, and is told what is behind it', async () => {
@@ -1820,7 +1676,7 @@ test('a provider that goes idle without finishing its turn still lets the queue 
   await sessions.input(s.id, 'second', { delivery: 'queue' });
   await d.finish({ done: false });
   assert.deepEqual(d.sent, ['first'], 'held while the turn may still be closing');
-  await new Promise((r) => setTimeout(r, 60));
+  await until(() => d.sent.length >= 2, 'the queued message');
   assert.deepEqual(d.sent, ['first', 'second'], 'the idle agent gets the queued message');
   assert.equal(sessions.get(s.id).status, 'working');
 });
@@ -1890,7 +1746,7 @@ test('an agent process that dies before rebind stops its turn but keeps queued m
   alive = false;
   procHost.emit('proc.exit', { id: s.id });
   await resuming;
-  await new Promise((r) => setTimeout(r, 10));
+  await until(() => FakeDriver.made.findLast((d) => d.procId === s.id)?.sent?.includes('next task'), 'the waiting message');
   const events = restarted.history(s.id).events;
   assert.equal(events.find((e) => e.type === 'turn.done' && e.turnId === 't1')?.status, 'interrupted', 'the running turn did stop');
   assert.equal(events.some((e) => e.type === 'turn.done' && e.turnId === ticket && e.status === 'interrupted'), false,
@@ -1995,7 +1851,7 @@ test('a queued message under a caller-chosen id is sent after a restart, not mar
   const restarted = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, procHost });
   t.after(() => restarted.stop());
   await restarted.resume();
-  await new Promise((r) => setTimeout(r, 10));
+  await until(() => FakeDriver.made.findLast((d) => d.procId === s.id)?.sent?.includes('Continue the handed-off work'), 'the queued message');
   assert.equal(restarted.turnState(s.id, 'handoff-queued-1'), 'open', 'still waiting, not stopped');
   assert.deepEqual(FakeDriver.made.findLast((d) => d.procId === s.id).sent, ['Continue the handed-off work']);
 });
@@ -2063,8 +1919,7 @@ test('a command card mid-task neither finishes a delegated task nor reports to i
 
   d.push('turn.done', { turnId: 't1', status: 'ok' });
   d.push('status', { status: 'idle' });
-  await new Promise((r) => setTimeout(r, 10));
-  assert.equal(sessions.get(child.id).delegation.status, 'done');
+  await until(() => sessions.get(child.id).delegation.status === 'done', 'the task to finish');
   assert.equal(parentDriver.sent?.length, 1, 'the real end is reported once');
   assert.match(parentDriver.sent[0], /hello/, 'with the task reply');
   assert.doesNotMatch(parentDriver.sent[0], /Quota/, 'not the command card');

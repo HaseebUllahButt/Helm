@@ -39,9 +39,10 @@ test('an unwatched terminal reports how long it has been quiet', { skip: !pty &&
   const { terminals } = await sizer(context);
   terminals.view('t', { cols: 80, rows: 24, viewer: 'laptop', persistent: true });
   assert.equal(terminals.unwatchedQuiet('t'), 0);
+  context.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   terminals.unview('t', 'laptop');
-  await new Promise((r) => setTimeout(r, 30));
-  assert.ok(terminals.unwatchedQuiet('t') >= 20);
+  context.mock.timers.tick(30);
+  assert.ok(terminals.unwatchedQuiet('t') >= 30);
 });
 
 test('closing a terminal reports its end exactly once', { skip: !pty && 'no pty' }, async (context) => {
