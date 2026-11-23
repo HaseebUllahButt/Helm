@@ -13,6 +13,8 @@ import { authStatuses } from './auth.js';
 import { wire } from './session-wire.js';
 import { clip } from './session-text.js';
 import { acceptAttachments } from './session-attachments.js';
+import { waitingFolder } from './chat-folder.js';
+import { expand } from './paths.js';
 
 const UNHOMED_DELEGATION_MS = 24 * 60 * 60_000;
 const ACTIVE = ['starting', 'working', 'blocked'];
@@ -192,7 +194,7 @@ export class SessionDelegation {
   }
 
   /** A task owned by its orchestrator, with durable output and configurable permissions. */
-  async delegate({ id, cwd, profileId, model, mode, effort, task, attachments = [], callerThreadId, worktree = false, hidden = false, tour = false, remoteParent = null }) {
+  async delegate({ id, cwd, profileId, model, mode, effort, task, attachments = [], callerThreadId, worktree = false, hidden = false, tour = false, remoteParent = null, keyPermit, keySource }) {
     if (typeof task !== 'string' || !task.trim() || (!tour && task.length > 32_000)) {
       throw new Error('a subagent task must contain 1–32000 characters');
     }
@@ -215,6 +217,8 @@ export class SessionDelegation {
     // A folder named by the caller wins (`--cwd`: a worktree beside the
     // parent's checkout); otherwise the child works where its parent does.
     let folder = cwd ?? parent?.cwd ?? (remoteParent ? remoteHelperFolder(remoteParent) : undefined);
+    // A parent whose folder is missing works in an empty one (session-folders.js); so does its helper.
+    if (!cwd && parent?.folderLost && !existsSync(expand(folder)) && existsSync(waitingFolder(parent.id))) folder = waitingFolder(parent.id);
     if (typeof folder !== 'string' || !folder.trim()) throw new Error('delegation needs a working folder');
     // No depth cap (the owner's rule: no hidden limits on agents). Depth is
     // still counted for display, and a chain that leads back to itself - a
@@ -238,7 +242,7 @@ export class SessionDelegation {
     // reuse its cache. Explicit and saved helper choices still win.
     // Another engine uses its own account default.
     const defaults = subagentPrefs(profile);
-    model ||= defaults.model || (parentEngine === profile.engine
+    model ||= defaults.model || (profile.source !== 'local-model' && parentEngine === profile.engine
       ? (parent ? parent.engineModel || parent.model : remoteParent.model) : null) || undefined;
     effort ||= defaults.effort;
     const selectedMode = delegationMode(profile.engine, parentMode, mode, defaults.mode || startPrefs(profile)?.mode, parentEngine);
@@ -260,7 +264,7 @@ export class SessionDelegation {
       ...(checkout ? { worktree: { path: checkout.path, branch: checkout.branch, base: checkout.base, repo: checkout.repo } } : {}),
       ...(hidden && !parent ? { hidden: true } : {}) };
     const child = await this.#sessions.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
-      title: clip(task.trim().split('\n')[0], 80), delegation, helperWorktree: checkout });
+      title: clip(task.trim().split('\n')[0], 80), delegation, helperWorktree: checkout, keyPermit, keySource });
     if (parent && (parent.stopGeneration ?? 0) !== parentGeneration) {
       await this.#sessions.kill(child.id);
       throw new Error('the parent stopped before this task could start');

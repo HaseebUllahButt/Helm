@@ -46,11 +46,13 @@ import { Canvas, chatPages, useCanvas } from './Canvas';
 import { CanvasContext, type VisualReader, visualPart } from './VisualReply';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
 import { MovedNotice } from './MoveChat';
+import { FolderCard } from './FolderCard';
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
   grok: 'Grok', cursor: 'Cursor', vibe: 'Mistral Vibe', pi: 'Pi', omp: 'OMP',
   agy: 'Antigravity CLI', antigravity: 'Antigravity', gemini: 'Gemini', kimi: 'Kimi', muse: 'Muse',
+  webchat: 'Web chat',
 };
 
 type Attachment = { name: string; mime: string; data: string; url: string };
@@ -80,7 +82,7 @@ function lastEditedDir(turns: Turn[]): string {
   return '';
 }
 
-export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onSendFolder, onMove, onOpenMachineSession, onOpenNative, reviewChildren }: {
+export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onSendFolder, onMove, onFolder, onOpenMachineSession, onOpenNative, reviewChildren }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account and so apply on all of them. */
   machines?: Environment[];
@@ -100,6 +102,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   onSendTask?: () => void;
   /** Move this chat, with its conversation, to another machine. */
   onMove?: () => void;
+  /** Pick another folder for this chat. Absent where a chat has no folder of its own. */
+  onFolder?: () => void;
   onSendFolder?: () => void;
   onOpenMachineSession?: (machineId: string, session: Session) => void;
 }) {
@@ -888,6 +892,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename chat</button>
             {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
             {onMove && <button onClick={onMove}>Move to another machine</button>}
+            {onFolder && <button disabled={!env.online} onClick={onFolder}>Change folder</button>}
             {!session.brain && onSendTask && !session.external && (
               <button disabled={!env.online} onClick={onSendTask}>Send to another machine</button>
             )}
@@ -982,6 +987,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         )}
         {/* A reply you stopped already says so in the chat ("You stopped
             after…"); a card asking to continue it was one more thing to dismiss. */}
+        {session.folderLost && !working && (
+          <FolderCard key={session.folderLost.at} lost={session.folderLost} busy={busy} offline={!env.online} onPick={onFolder}
+            onUse={(cwd) => void call(async () => onSession((await client.rpc<{ session: Session }>(env.id, 'session.folder', { id: session.id, cwd }, 30_000)).session))} />
+        )}
         {session.recovery && session.recovery.kind !== 'interrupted' && !working && !pending && (
           <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} autoResume={session.autoResumeLimited}
             onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(errorMessage(e))); }} />

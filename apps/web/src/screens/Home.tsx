@@ -13,6 +13,7 @@ import { ago } from './common';
 import { useAccountLimits } from '../AccountLimits';
 import { balanced } from '../balancer';
 import { loadPhrase, useMachineStats } from '../machineStats';
+import { MachineWakeRow } from '../MachineWakeRow';
 import { whenPhrase } from '../session/limits';
 
 /** The Helm brain's row on Home, under the machines. */
@@ -55,7 +56,8 @@ export function Home({ client, machines, brain, near, onOpenMachine, onDashboard
   /** The chat opens now; `message` is sent once its agent is up. */
   onStart: (info: StartInfo, run: () => Promise<Session>, message: string) => void;
 }) {
-  const online = machines.filter((m) => m.env.online).map((m) => m.env);
+  const envs = machines.map((m) => m.env);
+  const online = envs.filter((env) => env.online);
   const [picked, setPicked] = useState<string | null>(() => near ?? savedPick());
   const machine = online.find((e) => e.id === picked) ?? online.find((e) => e.id === savedPick()) ?? online[0] ?? null;
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -90,7 +92,7 @@ export function Home({ client, machines, brain, near, onOpenMachine, onDashboard
   const limits = useAccountLimits(client, machine ? [machine] : []);
   const moved = !hand && usual ? balanced(shown, usual, machine ? limits.reports[machine.id]?.accounts : [], limits.now) : null;
   const agent = hand ?? moved?.account ?? usual;
-  const loads = useMachineStats(client, machines.map((m) => m.env), 15_000);
+  const loads = useMachineStats(client, envs, 15_000);
 
   // The agent's models, thinking levels and permissions, as a chat asks for them.
   useEffect(() => {
@@ -239,19 +241,21 @@ export function Home({ client, machines, brain, near, onOpenMachine, onDashboard
       {machines.length ? (
         <div className="rows plain">
           {machines.map(({ env: e, running: run, waiting: wait }) => (
-            <button key={e.id} type="button" className={`row tall machine${e.online ? '' : ' offline'}`} onClick={() => onOpenMachine(e.id)}>
-              <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-              <span className="grow">
-                <span className="rt"><span className="rt-text">{e.name}</span></span>
-                <span className="rm">
-                  {!e.online ? (e.lastSeen ? `Offline · seen ${ago(e.lastSeen)}` : 'Never connected')
-                    : loadPhrase(loads[e.id]) ? `${run ? `${run} running` : 'Idle'} · ${loadPhrase(loads[e.id])}`
-                    : run ? `${run} running` : 'Nothing is running.'}
+            <MachineWakeRow key={e.id} client={client} env={e} machines={envs}>
+              <button type="button" className={`row tall machine${e.online ? '' : ' offline'}`} onClick={() => onOpenMachine(e.id)}>
+                <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+                <span className="grow">
+                  <span className="rt"><span className="rt-text">{e.name}</span></span>
+                  <span className="rm">
+                    {!e.online ? (e.lastSeen ? `Offline · seen ${ago(e.lastSeen)}` : 'Never connected')
+                      : loadPhrase(loads[e.id]) ? `${run ? `${run} running` : 'Idle'} · ${loadPhrase(loads[e.id])}`
+                      : run ? `${run} running` : 'Nothing is running.'}
+                  </span>
                 </span>
-              </span>
-              {wait > 0 && <span className="badge" title={`${wait} ${wait === 1 ? 'needs' : 'need'} you`}>{wait}</span>}
-              <span className="chev"><Icon name="forward" size={15} /></span>
-            </button>
+                {wait > 0 && <span className="badge" title={`${wait} ${wait === 1 ? 'needs' : 'need'} you`}>{wait}</span>}
+                <span className="chev"><Icon name="forward" size={15} /></span>
+              </button>
+            </MachineWakeRow>
           ))}
         </div>
       ) : (

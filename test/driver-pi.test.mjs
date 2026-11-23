@@ -138,6 +138,7 @@ test('omp shares the pi driver', () => {
 const LIVE_PI = `
 import { appendFileSync } from 'node:fs';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let stopped = null;
 if (process.argv.includes('--version')) {
   await sleep(Number(process.env.FAKE_VERSION_MS ?? 0));
   console.log(process.env.FAKE_VERSION ?? '0.82.1');
@@ -149,6 +150,9 @@ const COMPACT_MS = Number(process.env.FAKE_COMPACT_MS ?? 150);
 const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
 const state = { streaming: process.env.FAKE_STREAMING === '1', compacting: false };
 const answers = new Map();
+// Steered messages not read yet, and the wake-up for a reply waiting on one.
+const steers = [];
+let steered = null;
 let buf = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => {
@@ -186,19 +190,56 @@ async function onMessage(m) {
     case 'get_state': return ok(m, { sessionId: 'live', isStreaming: state.streaming, isCompacting: state.compacting });
     case 'get_commands': return ok(m, { commands: [] });
     case 'get_available_thinking_levels': return ok(m, { levels: ['low', 'high'] });
-    case 'abort': return ok(m);
+    case 'abort':
+      ok(m);
+      if (scenario === 'steer-stop') stopped?.();
+      return;
+    case 'clear_queue': return ok(m, { steering: steers.splice(0), followUp: [] });
     case 'compact':
       await compaction('', 'manual', false);
       return ok(m, { summary: 's' });
     case 'prompt': break;
     default: return out({ id: m.id, type: 'response', command: m.type, success: false, error: 'unknown' });
   }
+  if (m.streamingBehavior === 'steer') {
+    if (scenario === 'steer-refuse') return out({ id: m.id, type: 'response', command: 'prompt', success: false, error: 'not now' });
+    ok(m, { disposition: 'queued' });
+    if (scenario === 'steer-exit') process.exit(1);
+    if (scenario === 'omp-steer-error') { out({ id: m.id, type: 'response', command: 'prompt', success: false, error: 'image too big' }); return steered?.(); }
+    steers.push(m.message);
+    return steered?.();
+  }
   if (scenario === 'ext-command') return ok(m);
   if (scenario === 'omp-ext') { ok(m); return out({ type: 'prompt_result', id: m.id, agentInvoked: false }); }
   ok(m);
   state.streaming = true;
   out({ type: 'agent_start' });
-  if (scenario === 'dialogs') {
+  if (scenario.startsWith('steer') || scenario === 'omp-steer-error') {
+    // One step: a tool runs; the steer arrives while it does; the agent
+    // reads it once the tool is done, before its next model call.
+    out({ type: 'turn_start' });
+    out({ type: 'tool_execution_start', toolCallId: 't1', toolName: 'bash', args: { command: 'sleep 1' } });
+    const stop = new Promise((r) => { stopped = r; });
+    const next = await Promise.race([new Promise((r) => { steered = r; }).then(() => 'steer'), stop.then(() => 'stop')]);
+    if (next === 'stop' || scenario === 'steer-stop') {
+      if (next !== 'stop') await stop;
+      out({ type: 'tool_execution_end', toolCallId: 't1', toolName: 'bash', result: { content: [] }, isError: true });
+      out({ type: 'agent_end', messages: [{ role: 'assistant', stopReason: 'aborted', content: [] }], willRetry: false });
+      state.streaming = false;
+      out({ type: 'agent_settled' });
+      return;
+    }
+    out({ type: 'tool_execution_end', toolCallId: 't1', toolName: 'bash', result: { content: [{ type: 'text', text: 'done' }] }, isError: false });
+    out({ type: 'turn_end' });
+    if (scenario === 'omp-steer-error') { await sleep(20); text('answer'); out({ type: 'agent_end', messages: [], willRetry: false }); state.streaming = false; return; }
+    for (const t of steers.splice(0)) {
+      const message = { role: 'user', content: [{ type: 'text', text: t }] };
+      out({ type: 'message_start', message });
+      out({ type: 'message_end', message });
+    }
+    text('answer');
+    out({ type: 'agent_end', messages: [], willRetry: false });
+  } else if (scenario === 'dialogs') {
     await Promise.all([confirm('d1'), confirm('d2')]);
     text('done');
     out({ type: 'agent_end', messages: [], willRetry: false });
@@ -414,4 +455,83 @@ test('pi: a cycle the agent starts by itself is its own turn, open through a qui
   assert.equal(driver.status, 'idle');
   const texts = log.of('item.start').filter((e) => e.kind === 'text').map((e) => e.turnId);
   assert.deepEqual(texts, [first.turnId, wake.turnId, wake.turnId]);
+});
+
+// -------------------------------------------------- steering (live fake)
+//
+// Pi (1.5.2, core/agent-session.js) and OMP queue a prompt sent with
+// streamingBehavior 'steer' and read it after the tool calls of the
+// current step, before the next model call, echoing it as a user
+// message_start. That echo is the read.
+
+test('pi: a steered message goes in as a steer and is read when the agent echoes it', async (t) => {
+  const { driver, log } = livePi(t, 'steer');
+  await driver.send('long task');
+  await log.until((e) => e.type === 'item.start' && e.id === 't1');
+  await driver.steer('also check the docs', [], { inputId: 'local-1' });
+  const read = await log.until((e) => e.type === 'input.consumed');
+  assert.deepEqual(read, { type: 'input.consumed', text: 'also check the docs', inputId: 'local-1' });
+  // Read after the step's tool is done, and before the answer that follows it.
+  const order = log.events.map((e) => e.type === 'item.done' && e.id === 't1' ? 'tool.done' : e.type);
+  assert.ok(order.indexOf('tool.done') < order.indexOf('input.consumed'));
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.equal(log.of('turn.start').length, 1, 'a steer is not a turn of its own');
+  assert.equal(log.of('input.failed').length, 0);
+});
+
+test('pi: a steer the agent refuses comes back as not sent', async (t) => {
+  const { driver, log } = livePi(t, 'steer-refuse');
+  await driver.send('long task');
+  await log.until((e) => e.type === 'item.start' && e.id === 't1');
+  await assert.rejects(driver.steer('later', [], { inputId: 'local-2' }), (err) => err.deliveryNotSent === true && /not now/.test(err.message));
+  assert.equal(log.of('input.consumed').length + log.of('input.failed').length, 0);
+});
+
+test('pi: no steer goes to an agent that is not replying', async (t) => {
+  const { driver } = livePi(t, 'plain');
+  await assert.rejects(driver.steer('hello'), (err) => err.deliveryNotSent === true);
+});
+
+test('pi: a steered message fails by name when the agent exits before reading it', async (t) => {
+  const { driver, log } = livePi(t, 'steer-exit');
+  await driver.send('long task');
+  await log.until((e) => e.type === 'item.start' && e.id === 't1');
+  await driver.steer('one more thing', [], { inputId: 'local-3' }).catch(() => {});
+  const failed = await log.until((e) => e.type === 'input.failed');
+  assert.equal(failed.inputId, 'local-3');
+  assert.match(failed.error, /Pi exited before reading this message/);
+  assert.equal(log.of('input.failed').length, 1);
+});
+
+test('pi: a stop takes unread steered messages back from the agent', async (t) => {
+  const { driver, log } = livePi(t, 'steer-stop', { env: { FAKE_VERSION: '1.5.2' } });
+  await driver.send('long task');
+  await log.until((e) => e.type === 'item.start' && e.id === 't1');
+  await driver.steer('never mind', [], { inputId: 'local-4' });
+  assert.equal(driver.dropsHandedOnInterrupt, true);
+  await driver.interrupt();
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'interrupted');
+  // Dropped quietly: Helm puts it back in line itself.
+  assert.equal(log.of('input.consumed').length + log.of('input.failed').length, 0);
+});
+
+test('pi: an older pi without clear_queue keeps handed messages through a stop', async (t) => {
+  const { driver } = livePi(t, 'plain', { env: { FAKE_VERSION: '0.82.1' } });
+  await driver.start();
+  assert.equal(driver.dropsHandedOnInterrupt, false);
+});
+
+test('omp: a steer that fails after omp accepted it fails by name', async (t) => {
+  const { driver, log } = livePi(t, 'omp-steer-error', { cls: OmpDriver });
+  await driver.send('long task');
+  await log.until((e) => e.type === 'item.start' && e.id === 't1');
+  await driver.steer('see this picture', [], { inputId: 'local-5' });
+  const failed = await log.until((e) => e.type === 'input.failed');
+  assert.equal(failed.inputId, 'local-5');
+  assert.equal(failed.error, 'image too big');
+  await log.until((e) => e.type === 'turn.done');
+  assert.equal(log.of('input.consumed').length, 0);
+  assert.equal(driver.dropsHandedOnInterrupt, false, 'omp has no way to drop a queued message');
 });

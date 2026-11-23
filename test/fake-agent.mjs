@@ -18,6 +18,7 @@
 //                         a prompt "say-file: <path>" replies with that
 //                         file's text (Markdown, diagrams) before "done.";
 //                         a prompt "fail: <text>" ends the turn with that error
+//   session/cancel        ends the waiting prompt with stopReason cancelled
 //   stdin ending          exits, like a real CLI
 if (process.argv.includes('--version')) {
   console.log('devin 3000.10.21');
@@ -30,6 +31,8 @@ const ask = process.env.FAKE_ASK === '1';
 const out = (m) => process.stdout.write(JSON.stringify(m) + '\n');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const askReply = new Map();
+/** sessionId -> ends the prompt that is waiting out FAKE_TURN_MS */
+const cancels = new Map();
 
 let buf = '';
 process.stdin.setEncoding('utf8');
@@ -81,7 +84,9 @@ async function onMessage(m) {
       }
       const sayFile = /(?:^|\n)say-file: ([^\n]+)/.exec(prompt)?.[1].trim();
       if (sayFile) out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `\n\n${readFileSync(sayFile, 'utf8')}\n\n` } } } });
-      await sleep(delay);
+      const cancelled = await Promise.race([sleep(delay).then(() => false), new Promise((r) => cancels.set(sid, () => r(true)))]);
+      cancels.delete(sid);
+      if (cancelled) return reply({ stopReason: 'cancelled' });
       const fail = /(?:^|\n)fail: ([^\n]+)/.exec(prompt)?.[1].trim();
       if (fail) return out({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: fail } });
       if (ask) {
@@ -109,6 +114,7 @@ async function onMessage(m) {
       return reply({ stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5 } });
     }
     case 'session/cancel':
+      cancels.get(m.params?.sessionId)?.();
       return;
     default:
       if (m.id !== undefined) out({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: `no ${m.method}` } });

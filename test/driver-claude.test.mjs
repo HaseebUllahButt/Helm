@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { MADE_WAY_NOTE } from '../packages/protocol/brief.js';
 import assert from 'node:assert/strict';
 import { rmSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -852,6 +853,43 @@ test('interrupt: stops the turn and reports it as interrupted, not as an error',
   assert.equal(sent.request.subtype, 'interrupt');
   assert.equal(sent.request.cancel_queued, true);
   await driver.kill();
+});
+
+test('the owner\'s message mid-reply stops Claude\'s step and goes at once, or moves the command to the background where Claude can', async (t) => {
+  // [capabilities, stops the step]: Claude 2.1.329 in -p mode cannot move a command, so Send now stops it.
+  for (const [capabilities, stops] of [[['interrupt_send_now_v1', 'background_tasks_moves_bash_v1'], false], [['interrupt_send_now_v1'], true], [[], null]]) {
+    const { driver, writes, send } = await modelControl(t);
+    const events = [];
+    driver.on('event', (e) => events.push(e));
+    send({ type: 'system', subtype: 'init', session_id: 'existing-conversation', capabilities, tools: [] });
+    await driver.send('build it');
+    send({ type: 'user', isReplay: true, uuid: 'turn-1', message: { role: 'user', content: [{ type: 'text', text: 'build it' }] } });
+    writes.length = 0;
+    assert.equal(driver.steersNow, stops !== null);
+    await driver.steer('Stop and look at this', [], { inputId: 'ticket-1', clientId: 'msg-1', now: true });
+    const message = writes.find((w) => w.type === 'user');
+    const sendNow = writes.find((w) => w.type === 'control_request' && w.request.subtype === 'interrupt');
+    if (stops === null) {
+      // An older Claude reads it when the step ends.
+      assert.equal(sendNow, undefined);
+      assert.equal(message.message.content[0].text, 'Stop and look at this');
+      continue;
+    }
+    // Only a stopped step needs the note to go back to the work.
+    assert.equal(message.message.content[0].text, stops ? `Stop and look at this\n\n${MADE_WAY_NOTE}` : 'Stop and look at this');
+    assert.deepEqual(sendNow.request, { subtype: 'interrupt', send_now: true, message_uuid: 'msg-1' });
+    send({ type: 'control_response', response: { subtype: 'success', request_id: sendNow.request_id, response: { send_now: 'stopped' } } });
+    await new Promise(setImmediate);
+    // Claude ended the turn to read the message next: that is not a failure.
+    send({ type: 'result', subtype: 'error_during_execution', is_error: true, session_id: 'existing-conversation' });
+    const done = events.find((e) => e.type === 'turn.done');
+    assert.equal(done.status, 'ok');
+    assert.equal(done.error, undefined);
+    // The message runs next under its own ticket.
+    send({ type: 'user', isReplay: true, uuid: 'msg-1', message: message.message });
+    const next = events.findLast((e) => e.type === 'turn.start');
+    assert.equal(next.inputId, 'ticket-1');
+  }
 });
 
 test('Stop also stops the commands and watches Claude left running; a stop for the next message does not', async (t) => {

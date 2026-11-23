@@ -44,6 +44,15 @@ const MAX_OUTPUT = 32_000;
 /** A diff is read in a fold on a phone, and `events.js` caps it there too. */
 const MAX_DIFF = 8_000;
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
+/**
+ * Codex reads a steer only when the tool call in flight returns, and a
+ * command wait can hold it for 30 s (exec_command) or 5 min (an empty
+ * write_stdin). How long the owner's message may wait on one before Helm
+ * moves the turn on, and how often it looks again while Codex thinks.
+ */
+const READ_SOON_MS = 1_000;
+/** The end of a command's output Helm hands back after a move: the stopped wait's share is lost to Codex. */
+const MOVE_OUTPUT = 2_000;
 
 /**
  * Codex's slash commands live in its TUI, not in app-server. Unlike Claude
@@ -791,6 +800,16 @@ export class CodexDriver extends Driver {
   #restored = new Set();
   /** { clientId, inputId, turnId, text } handed to the running turn that Codex has not used yet. */
   #steers = [];
+  /** Codex turn id -> called when its completion arrives: a turn Helm moved on for a message. */
+  #movedTurns = new Map();
+  /** Codex turns Helm moved on: their completions close nothing. */
+  #movedAway = new Set();
+  /** The turn whose owner's messages Helm is watching (`#readSoon`). */
+  #readSoonTurn = null;
+  /** The owner pressed Stop while a turn was being moved on. */
+  #moveStop = false;
+  /** Settles when a move in progress has its next turn (or failed). */
+  #moving = null;
   #nativeTurnStarts = new Set();
   #nativeSubscribed = false;
   /** turn/start or review/start calls awaiting their reply. */
@@ -1072,7 +1091,13 @@ export class CodexDriver extends Driver {
   async #reconcileSavedTurn(turns, revision) {
     const saved = this.openTurn?.();
     if (!saved || saved.startsWith('local-')) return null;
-    const provider = [...this.#shownTurns].find(([, shown]) => shown === saved)?.[0] ?? saved;
+    // A turn Helm moved on for a message goes on under Codex's newest id for it.
+    if (![...this.#shownTurns.values()].includes(saved)) {
+      for (const e of this.resumeEvents?.() ?? []) {
+        if (e.type === 'turn.recover' && e.turnId === saved && e.providerTurnId) this.#shownTurns.set(e.providerTurnId, saved);
+      }
+    }
+    const provider = [...this.#shownTurns].findLast(([, shown]) => shown === saved)?.[0] ?? saved;
     const known = turns?.find((turn) => turn.id === provider);
     const outcome = known ? TURN_OUTCOME[known.status] ?? null : await codexTurnOutcome(this.transcript, provider);
     if (!outcome || outcome === 'running') return saved;
@@ -1564,9 +1589,15 @@ export class CodexDriver extends Driver {
    * wait for the turn it was typed behind. It is the same input blocks a
    * turn/start takes; there is deliberately no status or turn event here -
    * the running turn's stream covers what the message becomes.
+   *
+   * `now`: the owner wants it read at once. Codex reads a steer only when
+   * the tool call in flight returns, so a long command wait would hold it.
+   * Then Helm moves the turn on (`#moveOn`); the command keeps running.
    */
-  async steer(text, attachments = [], { inputId, clientId } = {}) {
+  async steer(text, attachments = [], { inputId, clientId, now = false } = {}) {
     await this.start();
+    // A message sent while the turn is moved on goes to the next one.
+    await this.#moving?.catch(() => {});
     if (!this.#turnId) throw new Error('codex has no active turn to steer');
     const input = text ? [{ type: 'text', text, text_elements: [] }] : [];
     // Labelled in order, so "[Image #2]" in the message names this one.
@@ -1579,7 +1610,7 @@ export class CodexDriver extends Driver {
     if (!input.length) input.push({ type: 'text', text: '(empty message)', text_elements: [] });
     // Recorded before the call: Codex can report using it before it answers.
     const entry = {
-      clientId: clientId ?? randomUUID(), inputId, turnId: this.#turnId,
+      clientId: clientId ?? randomUUID(), inputId, turnId: this.#turnId, input, now,
       text: input.filter((b) => b.type === 'text').map((b) => b.text).join('\n'),
     };
     this.#steers.push(entry);
@@ -1594,6 +1625,163 @@ export class CodexDriver extends Driver {
       if (index >= 0) this.#steers.splice(index, 1);
       throw new Error(res.error.message);
     }
+    if (now) void this.#readSoon(entry.turnId);
+  }
+
+  /**
+   * Watch a turn while the owner's message in it is unread, and move the
+   * turn on: the commands keep running, the rest of the step stops. Only a
+   * file edit in progress is waited out.
+   */
+  async #readSoon(turnId) {
+    if (this.#readSoonTurn === turnId || this.nativeSocket || this.monitorOnly) return;
+    this.#readSoonTurn = turnId;
+    try {
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, READ_SOON_MS));
+        if (this.killed || !this.#server || this.#turnId !== turnId) return;
+        if (!this.#steers.some((entry) => entry.now && entry.turnId === turnId)) return;
+        this.#moving = this.#moveOn(turnId);
+        const moved = await this.#moving.finally(() => { this.#moving = null; });
+        if (moved !== 'wait') return;
+      }
+    } catch (err) {
+      this.log(`Could not give Codex the message at once: ${err.message}`);
+    } finally {
+      if (this.#readSoonTurn === turnId) this.#readSoonTurn = null;
+    }
+  }
+
+  /**
+   * Codex's commands outlive its turn: an interrupt stops the wait, not the
+   * command, and the command stays in Codex's background list (measured on
+   * codex-cli 0.171.0). So when only such commands hold a turn, Helm stops
+   * the turn and starts the next one with the unread messages. Codex drops
+   * a steer it did not read when its turn stops, so they are sent again.
+   * The chat shows one turn throughout. Returns 'wait' to look again,
+   * 'moved', or 'no' when this Codex cannot do it.
+   */
+  async #moveOn(turnId) {
+    this.#moveStop = false;
+    if (this.pending.size || this.#opening || this.status !== 'working') return 'wait';
+    // The owner asked for a stop (2026-11-20: "interrupt chat and then send
+    // message"): thinking, writing and tool calls are cut. A file edit is
+    // written in a moment and never cut in half.
+    const editing = () => [...this.#items.values()].some((item) => item.kind === 'edit');
+    if (editing()) return 'wait';
+    const running = [...this.#items].filter(([, item]) => item.kind === 'command').map(([id]) => id);
+    const listed = await this.#server.call('thread/backgroundTerminals/list', { threadId: this.threadId }, 10_000);
+    if (listed.error || !Array.isArray(listed.result?.data)) return 'no';
+    const before = new Map(listed.result.data.map((t) => [t.itemId, t]));
+    // A command outside the list would end with the turn.
+    if (!running.every((id) => before.has(id))) return 'wait';
+    if (this.#turnId !== turnId || this.pending.size || this.#opening || this.status !== 'working'
+      || editing() || [...this.#items].some(([id, item]) => item.kind === 'command' && !running.includes(id))
+      || !this.#steers.some((entry) => entry.now && entry.turnId === turnId)) return 'wait';
+    if (this.#moveStop) return 'no';
+
+    const shown = this.#shownTurns.get(turnId) ?? turnId;
+    const stopped = new Promise((resolve) => this.#movedTurns.set(turnId, resolve));
+    this.#movedAway.add(turnId);
+    if (this.#movedAway.size > 200) this.#movedAway.delete(this.#movedAway.values().next().value);
+    // Nothing between the two turns may read as the chat going idle.
+    this.#opening++;
+    try {
+      const interrupt = await this.#server.call('turn/interrupt', { threadId: this.threadId, turnId });
+      if (interrupt.error) {
+        this.#movedTurns.delete(turnId);
+        this.#movedAway.delete(turnId);
+        this.log(`Codex did not stop its step for the message: ${interrupt.error.message}`);
+        return 'no';
+      }
+      let timer;
+      const ended = await Promise.race([stopped.then(() => true),
+        new Promise((resolve) => { timer = setTimeout(resolve, 10_000, false); })]);
+      clearTimeout(timer);
+      if (!ended) {
+        this.#movedTurns.delete(turnId);
+        this.#movedAway.delete(turnId);
+        this.log('Codex did not stop its step for the message in 10 s.');
+        return 'no';
+      }
+      // The old turn's checklist would never close; the next turn sends its own.
+      if (this.#items.delete(`plan-${turnId}`)) this.push('item.done', { id: `plan-${turnId}`, status: 'ok' });
+      if (this.#moveStop) {
+        this.#turnId = null;
+        this.#closedTurns.add(shown);
+        this.push('turn.done', { turnId: shown, status: 'interrupted' });
+        this.push('status', { status: 'idle' });
+        return 'no';
+      }
+      // What Codex read before it stopped is in the conversation already.
+      const unread = this.#steers.filter((entry) => entry.turnId === turnId);
+      const after = await this.#server.call('thread/backgroundTerminals/list', { threadId: this.threadId }, 10_000);
+      const still = new Map((after.result?.data ?? []).map((t) => [t.itemId, t]));
+      const note = this.#moveNote(running.map((id) => before.get(id)), still);
+      const [first, ...rest] = unread;
+      for (const entry of rest) entry.joined = first.clientId;
+      const policy = this.#policy();
+      const params = {
+        threadId: this.threadId,
+        input: unread.flatMap((entry) => entry.input),
+        ...(first ? { clientUserMessageId: first.clientId } : {}),
+        additionalContext: { helm: { kind: 'application', value: note } },
+        approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer,
+        sandboxPolicy: policy.sandboxPolicy,
+        ...(this.model ? { model: this.model } : {}),
+        ...(this.effort ? { effort: this.effort } : {}),
+        ...(this.speed ? { serviceTier: this.speed } : {}),
+        summary: THINKING_NOTES,
+      };
+      let res = await this.#callThread('turn/start', params);
+      // An older Codex can refuse the note; the message matters more.
+      if (res.error && /additionalContext|unknown field/i.test(res.error.message)) {
+        delete params.additionalContext;
+        res = await this.#callThread('turn/start', params);
+      }
+      if (res.error) {
+        // The step stopped and nothing took its place: say so, as a Stop would.
+        for (const entry of unread) {
+          if (this.#steers.includes(entry)) this.#steers.splice(this.#steers.indexOf(entry), 1);
+          this.push('input.failed', { text: entry.text, inputId: entry.inputId, error: `Codex did not take this message: ${res.error.message}` });
+        }
+        this.#turnId = null;
+        this.#closedTurns.add(shown);
+        this.push('turn.done', { turnId: shown, status: 'interrupted' });
+        this.push('status', { status: this.pending.size ? 'blocked' : 'idle' });
+        return 'no';
+      }
+      const next = res.result.turn.id;
+      this.#turnId = next;
+      this.#knownTurns.add(next);
+      this.#shownTurns.set(next, shown);
+      this.push('turn.recover', { turnId: shown, providerTurnId: next });
+      for (const entry of unread) entry.turnId = next;
+      this.log(`codex: moved the turn on so the message is read now; ${still.size} command(s) still run`);
+      if (this.#moveStop) void this.interrupt();
+      return 'moved';
+    } finally {
+      this.#opening--;
+    }
+  }
+
+  /**
+   * What Codex learns with the moved turn. Its own record says the owner
+   * stopped the turn and the stopped wait's output is gone, so Helm says
+   * why, what still runs, and gives back the end of each command's output.
+   */
+  #moveNote(commands, still) {
+    const lines = ["Helm stopped your last step to give you the owner's message at once. The owner did not stop you."];
+    for (const command of commands) {
+      const output = this.#items.get(command.itemId)?.output ?? '';
+      const tail = output.length > MOVE_OUTPUT ? `…${output.slice(-MOVE_OUTPUT)}` : output;
+      lines.push(still.has(command.itemId)
+        ? `This command still runs as session ${command.processId}: ${command.command}`
+        : `This command stopped: ${command.command}`);
+      if (tail.trim()) lines.push(`Its last output, from Helm (you may have seen part of it):\n${tail}`);
+    }
+    lines.push('Do what the message asks first. Then continue your earlier work. To read new output from a command that still runs, call write_stdin with its session ID and empty chars.');
+    return lines.join('\n');
   }
 
   async answer(requestId, decision) {
@@ -1651,6 +1839,8 @@ export class CodexDriver extends Driver {
 
   async interrupt({ background = false } = {}) {
     if (!this.#server) return;
+    // A Stop while Helm moves the turn on for a message ends it there.
+    if (this.#moving) this.#moveStop = true;
     const stops = [];
     if (this.#turnId) {
       this.#interrupting = true;
@@ -1819,10 +2009,16 @@ export class CodexDriver extends Driver {
       case 'item/reasoning/summaryPartAdded':
         if (p.summaryIndex > 0) this.push('item.delta', { id: p.itemId, text: '\n\n' });
         return;
+      case 'item/commandExecution/outputDelta': {
+        // The end of it goes back to Codex if a move stops the wait reading it.
+        const known = this.#items.get(p.itemId);
+        if (known?.kind === 'command' && p.delta) known.output = ((known.output ?? '') + p.delta).slice(-2 * MOVE_OUTPUT);
+        if (p.delta) this.push('item.delta', { id: p.itemId, text: p.delta });
+        return;
+      }
       case 'item/agentMessage/delta':
       case 'item/reasoning/textDelta':
       case 'item/reasoning/summaryTextDelta':
-      case 'item/commandExecution/outputDelta':
         if (p.delta) this.push('item.delta', { id: p.itemId, text: p.delta });
         return;
       case 'item/fileChange/patchUpdated':
@@ -1848,6 +2044,13 @@ export class CodexDriver extends Driver {
       case 'turn/completed': {
         this.#turnStateRevision++;
         const t = p.turn ?? {};
+        // Stopped by Helm to give a message: the chat's turn goes on, also
+        // when this completion is heard again.
+        if (t.id && this.#movedAway.has(t.id)) {
+          this.#movedTurns.get(t.id)?.();
+          this.#movedTurns.delete(t.id);
+          return;
+        }
         const status = t.status === 'interrupted' ? 'interrupted' : t.status === 'failed' ? 'error' : 'ok';
         this.#interrupting = false;
         const last = this.#usage?.last;
@@ -2040,7 +2243,13 @@ export class CodexDriver extends Driver {
           return;
         }
         const [entry] = this.#steers.splice(i, 1);
-        this.push('input.consumed', { text, inputId: entry.inputId });
+        const together = this.#steers.some((e) => e.joined === entry.clientId);
+        this.push('input.consumed', { text: together ? entry.text : text, inputId: entry.inputId });
+        // Messages sent again together after a move are read together.
+        for (let j; (j = this.#steers.findIndex((e) => e.joined === entry.clientId)) >= 0;) {
+          const [joined] = this.#steers.splice(j, 1);
+          this.push('input.consumed', { text: joined.text, inputId: joined.inputId });
+        }
         return;
       }
       // One agent spawning another (spawn_agent | send_input | resume_agent

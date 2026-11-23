@@ -23,6 +23,11 @@ import { Driver, checkVersion, assertFolder, waitForExit, cliVersion, semverLess
  * in place of `compaction_*`, and `prompt_result` for a prompt that never
  * reached the model.
  *
+ * A message typed during a reply goes in as a steer (`steer()`): both
+ * read it once the current step - the model's message and every tool
+ * call in it - is done, before the next model call, and echo it as a
+ * user `message_start`. That echo is when it is read.
+ *
  * When the session is busy is the agent's to say, never guessed from a
  * quiet stream. agent_end is not the end where the CLI has agent_settled
  * (pi >= 0.80.4): compaction and its retry run after it. A compaction is
@@ -45,6 +50,11 @@ const isDriverTurn = (turnId) => /^(turn|wake)-/.test(String(turnId));
 
 const contentText = (content) =>
   Array.isArray(content) ? content.map((b) => (b?.type === 'text' ? b.text : '')).filter(Boolean).join('\n') : '';
+
+/** Helm attachments as pi's ImageContent; other kinds are dropped. */
+const imagesOf = (attachments) => (attachments ?? [])
+  .filter((a) => String(a?.mime ?? '').startsWith('image/') && a?.data)
+  .map((a) => ({ type: 'image', data: a.data, mimeType: a.mime }));
 
 class PiRpcDriver extends Driver {
   #pipe = null;
@@ -75,6 +85,10 @@ class PiRpcDriver extends Driver {
   #inFlight = new Set();
   /** prompt call id -> turnId, for omp's prompt_result */
   #promptCalls = new Map();
+  /** messages steered into the running reply and not read yet, oldest first */
+  #steers = [];
+  /** clear_queue drops queued messages (pi >= spec.clearQueueSince) */
+  #clearsQueue = false;
   /**
    * This CLI ends a cycle with agent_settled, so agent_end is not the end.
    * Learnt from the version (pi >= spec.settledSince) or from the first
@@ -127,9 +141,11 @@ class PiRpcDriver extends Driver {
     // Whether agent_end is the end has to be known before the first one
     // arrives, so start waits for the answer. It runs beside the spawn and
     // is cached per binary, so only a daemon's first start pays for it.
-    const settles = this.spec.settledSince && !this.#settles
+    const settles = (this.spec.settledSince && !this.#settles) || this.spec.clearQueueSince
       ? cliVersion(this.cmd, this.env).then((v) => {
-          if (v && !semverLess(v, this.spec.settledSince)) this.#settles = true;
+          if (!v) return;
+          if (this.spec.settledSince && !semverLess(v, this.spec.settledSince)) this.#settles = true;
+          if (this.spec.clearQueueSince) this.#clearsQueue = !semverLess(v, this.spec.clearQueueSince);
         }, () => {})
       : null;
 
@@ -278,6 +294,9 @@ class PiRpcDriver extends Driver {
         this.#manualCompact = false;
         this.#inFlight.clear();
         this.#promptCalls.clear();
+        for (const { text, inputId } of this.#steers.splice(0)) {
+          this.push('input.failed', { text, inputId, error: `${this.spec.label} exited before reading this message.` });
+        }
         if (this.#compacting) {
           this.push('item.done', { id: this.#compacting, status: 'error' });
           this.#compacting = null;
@@ -379,9 +398,7 @@ class PiRpcDriver extends Driver {
   }
 
   async sendWithAttachments(text, attachments) {
-    const images = (attachments ?? [])
-      .filter((a) => String(a?.mime ?? '').startsWith('image/') && a?.data)
-      .map((a) => ({ type: 'image', data: a.data, mimeType: a.mime }));
+    const images = imagesOf(attachments);
     if (!images.length) return this.send(text || '(empty message)');
     await this.#bringUp();
     return this.#prompt(text, { message: text || '', images });
@@ -449,6 +466,69 @@ class PiRpcDriver extends Driver {
   acceptsImages() { return true; }
 
   /**
+   * A message for the reply in flight, read after the current step (see
+   * the header). It goes as a prompt with streamingBehavior 'steer', not
+   * as the `steer` command: if the reply ends first, the prompt starts a
+   * cycle of its own instead of waiting unread for the next prompt. Read
+   * when the agent echoes it; failed if the agent refuses it or exits.
+   */
+  async steer(text, attachments = [], { inputId } = {}) {
+    if (!this.#pipe || !this.#working) {
+      throw Object.assign(new Error(`${this.spec.label} has no reply to add this message to.`), { deliveryNotSent: true });
+    }
+    const images = imagesOf(attachments);
+    const message = text || (images.length ? '' : '(empty message)');
+    const callId = `helm-${++this.#seq}`;
+    // Recorded before the call: the echo can come before the answer.
+    const entry = { text: message, inputId, callId, sent: null, taken: false };
+    this.#steers.push(entry);
+    entry.sent = this.#call('prompt', {
+      message, ...(images.length ? { images } : {}), streamingBehavior: 'steer',
+    }, { timeout: 0, id: callId });
+    const r = await entry.sent;
+    if (!this.#steers.includes(entry)) return; // read already, or failed with the exit
+    if (r?.success) {
+      entry.taken = true;
+      // An input handler took it: no echo will come, and no reply waits for it.
+      if (r.data?.disposition === 'handled') this.#steerRead(entry);
+      return;
+    }
+    this.#steers.splice(this.#steers.indexOf(entry), 1);
+    throw Object.assign(new Error(r?.error ?? `${this.spec.label} did not take the message.`), { deliveryNotSent: !!r });
+  }
+
+  /** The agent read a steered message: from here it is part of the conversation. */
+  #steerRead(entry) {
+    const at = this.#steers.indexOf(entry);
+    if (at < 0) return;
+    this.#steers.splice(at, 1);
+    this.push('input.consumed', { text: entry.text, inputId: entry.inputId });
+  }
+
+  /** The echo of a steered message - the oldest one with this text. */
+  #onUserMessage(message) {
+    if (!this.#steers.length) return;
+    const text = (typeof message?.content === 'string' ? message.content : contentText(message?.content)).trim();
+    const entry = this.#steers.find((e) => e.text.trim() === text);
+    if (entry) this.#steerRead(entry);
+  }
+
+  /**
+   * Pi keeps steered messages it has not read through an abort, and puts
+   * them in front of the next prompt. Helm takes them back on a stop, so
+   * Pi must drop them too. OMP has no way to drop them: it runs them in a
+   * new cycle after the abort.
+   */
+  get dropsHandedOnInterrupt() { return this.#clearsQueue; }
+
+  /**
+   * Pi reads a steer only after the tool batch, so the owner's message stops
+   * the step and goes as the next prompt (owner, 2026-11-20). OMP's steer
+   * already moves a running bash to the background and is read at once.
+   */
+  get stopsForNow() { return this.engine !== 'omp'; }
+
+  /**
    * Answer an extension dialog. The wire shape depends on the method the
    * extension called: confirm wants `confirmed`, select/input/editor want
    * `value`, and any of them may take `cancelled`.
@@ -490,7 +570,27 @@ class PiRpcDriver extends Driver {
   async interrupt() {
     if (!this.#pipe) return;
     this.#interrupting = true;
+    if (this.#steers.length && this.#clearsQueue) await this.#dropSteers();
+    if (!this.#pipe) return;
     this.#write({ type: 'abort' });
+  }
+
+  /**
+   * Take the unread steered messages back from Pi before an abort. What
+   * clear_queue returns was still unread; anything else steered was read
+   * before it (Pi answers commands in order) even if no echo matched.
+   */
+  async #dropSteers() {
+    await Promise.all(this.#steers.map((e) => e.sent));
+    if (!this.#steers.length || !this.#pipe) return;
+    const r = await this.#call('clear_queue');
+    if (!r?.success) return;
+    const unread = [...(r.data?.steering ?? [])].map((t) => String(t).trim());
+    for (const entry of [...this.#steers]) {
+      const at = unread.indexOf(entry.text.trim());
+      if (at >= 0) { unread.splice(at, 1); this.#steers.splice(this.#steers.indexOf(entry), 1); }
+      else this.#steerRead(entry);
+    }
   }
 
   #takeState(d) {
@@ -585,7 +685,14 @@ class PiRpcDriver extends Driver {
     // A command response, correlated by id.
     if (m.type === 'response') {
       const resolve = m.id !== undefined ? this.#calls.get(m.id) : null;
-      if (resolve) { this.#calls.delete(m.id); resolve(m); }
+      if (resolve) { this.#calls.delete(m.id); resolve(m); return; }
+      // omp answers a prompt at once and reports a later failure as a
+      // second response under the same id.
+      const steer = m.success === false && m.id !== undefined ? this.#steers.find((e) => e.callId === m.id) : null;
+      if (steer) {
+        this.#steers.splice(this.#steers.indexOf(steer), 1);
+        this.push('input.failed', { text: steer.text, inputId: steer.inputId, error: m.error || `${this.spec.label} did not take the message.` });
+      }
       return;
     }
     switch (m.type) {
@@ -624,6 +731,7 @@ class PiRpcDriver extends Driver {
       case 'turn_start': case 'turn_end':
         return; // the model+tool loop inside one agent cycle
       case 'message_start':
+        if (m.message?.role === 'user') this.#onUserMessage(m.message);
         this.#msgSeq += 1;
         this.#blocks = new Map();
         this.#seen = new Set();
@@ -867,6 +975,11 @@ class PiRpcDriver extends Driver {
   #settled(all = false) {
     this.#working = false;
     const status = this.#interrupting ? 'interrupted' : 'ok';
+    // Both agents read every steered message they took before a cycle
+    // ends on its own. One still here was read under other words - an
+    // extension input handler can rewrite it. One not answered yet starts
+    // a cycle of its own, and its echo comes there.
+    if (!this.#interrupting) for (const entry of this.#steers.filter((e) => e.taken)) this.#steerRead(entry);
     this.#interrupting = false;
     // agent_settled: nothing the agent accepted is still queued - a followUp
     // drained inside the same cycle is answered too. A prompt still on its
@@ -923,7 +1036,8 @@ export class PiDriver extends PiRpcDriver {
     // agent_settled arrived in pi 0.80.4. get_state's isStreaming is true
     // from the moment a prompt is accepted for the model, which is what
     // makes it a fair test of "handled without the model".
-    super({ engine: 'pi', label: 'Pi', settledSince: '0.80.4', stateProbe: true }, opts);
+    // clear_queue arrived in pi 0.84.4.
+    super({ engine: 'pi', label: 'Pi', settledSince: '0.80.4', clearQueueSince: '0.84.4', stateProbe: true }, opts);
   }
 }
 

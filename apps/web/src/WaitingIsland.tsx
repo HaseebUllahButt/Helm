@@ -10,9 +10,12 @@ import { plainDetail } from './session/PermissionSheet';
 import type { Decision, Permission } from './session/types';
 import { whereOf } from './screens/ThreadRows';
 import { notificationContext } from '@helm/protocol/notifications';
+import { PhoneSheet } from './session/PhoneSheet';
+import { PHONE_WANTS } from './session/phoneShare';
 
 /** "has a question", "wants to run a command" - what a waiting thread wants. */
 export function askAction(ask: Session['ask']): string {
+  if (ask?.phone) return PHONE_WANTS[ask.phone] ?? 'needs your phone';
   switch (ask?.kind) {
     case 'question': return 'has a question';
     case 'command': return 'wants to run a command';
@@ -106,20 +109,25 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
     return () => { live = false; };
   }, [mode === 'closed', w?.envId, s?.id, requestId, s?.updatedAt]);
 
+  /** The chat got its answer: say so, then go on to the next one. */
+  const moveOn = (said: string) => {
+    if (!w) return;
+    const done = answerKey(w);
+    const next = list[index + 1] ?? list[index - 1];
+    setFlash(said);
+    setTimeout(() => {
+      setAnswered((a) => new Set(a).add(done));
+      setFlash('');
+      if (next) setCur(keyOf(next));
+      else setMode('closed');
+    }, FLASH_MS);
+  };
   const answer = async (decision: Decision, said: string) => {
     if (!w || !perm || busy) return;
     setBusy(true); setError('');
     try {
       await client.rpc(w.envId, 'session.answer', { id: w.s.id, requestId: perm.requestId, decision });
-      const done = answerKey(w);
-      const next = list[index + 1] ?? list[index - 1];
-      setFlash(said);
-      setTimeout(() => {
-        setAnswered((a) => new Set(a).add(done));
-        setFlash('');
-        if (next) setCur(keyOf(next));
-        else setMode('closed');
-      }, FLASH_MS);
+      moveOn(said);
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
@@ -131,7 +139,8 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
   };
   const question = choice(perm);
   // A helm sudo card that asks for the admin password is answered in its chat.
-  const allow = perm && perm.kind !== 'question' && perm.kind !== 'edit' && !perm.passwordNeeded ? perm.options.find((o) => o.role === 'allow') : undefined;
+  // A helm phone card answers with its own buttons (PhoneSheet).
+  const allow = perm && perm.kind !== 'question' && perm.kind !== 'edit' && !perm.passwordNeeded && !perm.phone ? perm.options.find((o) => o.role === 'allow') : undefined;
   const always = allow && perm?.kind !== 'plan' ? perm?.options.find((o) => o.role === 'allow-always') : undefined;
   const deny = allow ? perm?.options.find((o) => o.role === 'deny') : undefined;
   const pickAnswer = (label: string) => question && void answer(
@@ -190,7 +199,8 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
         </div>
         {shown && <div className="island-body" key={keyOf(w!)}>
           <p className="island-where">{[eng.label, want.toLowerCase(), whereOf(s), w!.machine].filter(Boolean).join(' · ')}</p>
-          {question ? <>
+          {perm?.phone ? <PhoneSheet key={perm.requestId} permission={perm} variant="island" envId={w!.envId} onSent={moveOn} />
+          : question ? <>
             <p className="island-q">{question.question}</p>
             <div className="island-opts">
               {question.options.map((o, i) => (
@@ -213,7 +223,7 @@ export function WaitingIsland({ client, items, ping, pick, onOpen }: {
           {error && <p className="error" role="alert">{error}</p>}
           <div className="island-acts">
             {allow && <button className="island-yes" disabled={busy} onClick={sayYes}>
-              {perm?.kind === 'plan' ? 'Go ahead' : 'Allow once'}{mode === 'open' && <kbd>Ctrl ↵</kbd>}
+              {perm?.ownLabels ? allow.label : perm?.kind === 'plan' ? 'Go ahead' : 'Allow once'}{mode === 'open' && <kbd>Ctrl ↵</kbd>}
             </button>}
             {/* A card Helm asks itself (helm sudo) names its own answers. */}
             {always && <button disabled={busy} onClick={() => void answer({ option: 'always' }, perm?.ownLabels ? always.label : 'Always allowed')}>{perm?.ownLabels ? always.label : 'Always allow'}</button>}

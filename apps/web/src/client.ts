@@ -27,11 +27,14 @@ export interface Environment {
    */
   kind?: 'pc' | 'vm' | 'nas';
   online: boolean;
+  /** Machines with a saved local network in common, in sending order. */
+  wakeVia?: string[];
   lastSeen: number | null;
   /** Where this machine's own hub answers - the direct path to it. */
   endpoints?: string[];
   info: {
     host?: string;
+    sharedKeys?: boolean;
     platform?: string;
     arch?: string;
     /** 'pty' when terminals are helm's own; 'panes' is the slow fallback. */
@@ -44,6 +47,8 @@ export interface Environment {
     helperAttachments?: boolean;
     /** Runs helpers for chats on other machines (helm delegate --machine). */
     remoteHelpers?: boolean;
+    /** Can send a wake signal on a local network. */
+    wakeSender?: boolean;
     runtime?: { version: string };
     /** Which helm this machine runs; null where it is not a git checkout. */
     version?: { commit: string; full?: string; time?: number; dirty?: boolean; dir?: string; branch: string; subject: string; updatable: boolean } | null;
@@ -72,6 +77,7 @@ export interface Profile {
   env?: Record<string, string>;
   envFrom?: string[];
   source: string;
+  localModel?: { model: string };
   /** Set when the account is launched through a wrapper script that picks its login. */
   wraps?: string;
   /** authenticated / unknown - signed-out profiles never reach the app. */
@@ -122,6 +128,8 @@ export interface Session {
   /** Claude Code's own subagents (its Agent/Task tool), read from its files; no Helm session behind them. */
   nativeCards?: NativeAgent[];
   autoResumeLimited?: boolean;
+  /** The chat's folder is missing and Helm could not find it; the agent works in an empty folder. `candidates`: repos that look like it. */
+  folderLost?: { path: string; at: number; candidates?: string[] };
   recovery?: { kind: 'limited' | 'error' | 'interrupted' | 'restart'; message: string; at: number; resetAt?: number | null; autoResumeError?: string; autoResumeCancelled?: boolean };
   /** How full the conversation's context is after its latest reply (Claude, Codex). */
   context?: { used: number; window: number; at: number; /** The model that replied (`claude-opus-5-5`). */ model?: string; /** The model's whole window, before the account's "compact at" size cuts it down. */ full?: number; /** Just compacted; the new size comes with the next reply. */ compacted?: boolean; /** How long Claude keeps it cached, in ms. */ ttl?: number };
@@ -164,7 +172,7 @@ export interface Session {
   /** Prompts waiting on a person, for the list view. */
   pending?: number;
   /** What the newest of those prompts is about - the question's first line. */
-  ask?: { kind: 'question' | 'command' | 'edit' | 'plan' | 'tool'; text: string; more: number; requestId?: string; whole?: boolean } | null;
+  ask?: { kind: 'question' | 'command' | 'edit' | 'plan' | 'tool'; text: string; more: number; requestId?: string; whole?: boolean; phone?: string } | null;
   adopted?: boolean;
   /** Archived threads stay on the machine but are hidden from active groups. */
   archived?: boolean;
@@ -2602,7 +2610,7 @@ export class Client {
    * clicked. Only the page's own origin can answer for this computer.
    */
   desktopWait(body: { window: string; focused: boolean; envId: string | null; sessionId: string | null }, signal: AbortSignal) {
-    return this.httpAt<{ open: { envId: string | null; sessionId: string | null } | null; desktop: boolean }>(
+    return this.httpAt<{ open: { envId: string | null; sessionId: string | null; view?: string } | null; desktop: boolean }>(
       location.origin, '/api/desktop/wait', { method: 'POST', body: JSON.stringify(body), signal });
   }
 

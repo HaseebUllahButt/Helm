@@ -88,6 +88,9 @@ export class OpencodeDriver extends AcpDriver {
 
   /** A waiting message joins the running loop at its next step. */
   async steer(text, attachments = [], options = {}) { return this.sendDuringTurn(text, attachments, options); }
+
+  /** The owner's message stops the step and goes at once (owner, 2026-11-20); an agent's joins the loop. */
+  get stopsForNow() { return true; }
 }
 
 /**
