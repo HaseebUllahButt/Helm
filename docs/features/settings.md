@@ -6,6 +6,12 @@
   sub-screen `$V click "<name>"`, then `$V click Back`. Theme: `$V click
   Dark; $V eval "document.documentElement.dataset.theme"` gives `"dark"`;
   `$V click Auto` after.
+- **Look and themes (owner, 2026-11-24):** Look is Classic or New; themes
+  are Auto, Dark, Light and Tokyo Night. New keeps every screen where it is
+  and changes only the skin (`look-new.css`). Navy was dropped: a device
+  that saved Navy opens in Tokyo Night. Both are also in search ("Look:",
+  "Theme:"). `$V click New` hits New chat; click the Look group's button
+  with `$V eval`, then `dataset.look` gives `"new"`.
 - **Traps:** appearance is kept per device. An installed app keeps the old
   icon and style until closed and reopened.
   Optional screens load when opened. A failed app file leaves Back and

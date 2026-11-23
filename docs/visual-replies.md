@@ -50,7 +50,7 @@ chromium` or `HELM_CHROMIUM_PATH`); render does not.
   2026-11-02): `--chart-1` to `--chart-8` in a fixed order, `--grid`,
   `--axis`, and status `--good`/`--warning`/`--serious`/`--critical`. Each
   has a dark and a light step (`CHART_DARK`/`CHART_LIGHT`), checked with
-  the skill's `validate_palette.js` on Helm's dark, navy and light
+  the skill's `validate_palette.js` on Helm's dark and light
   backgrounds. Do not swap one colour by eye: the order is what keeps
   neighbours apart for colour-blind readers. The chart rules agents get
   are in `helm render --help`.

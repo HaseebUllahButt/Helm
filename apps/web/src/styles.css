@@ -47,7 +47,7 @@
 
 /* ===========================================================================
    helm
-   Graphite by default, with an optional navy palette. Theme colours use
+   Graphite by default, with light and Tokyo Night palettes. Theme colours use
    shared tokens so surfaces, text, and controls change together.
    =========================================================================== */
 
@@ -88,7 +88,7 @@
      accent. */
   --hi:        #e6e6e6;
   /* "All good" for statuses: online, done, new. A bright white with a soft
-     halo, so it reads lit rather than grey. Light and navy keep green. */
+     halo, so it reads lit rather than grey. Light and Tokyo Night keep green. */
   --ok:        #f7f7f7;
   --ok-glow:   0 0 6px rgb(255 255 255 / 45%);
   --edge:      rgb(235 235 235 / 9%);
@@ -188,41 +188,45 @@
   color-scheme: dark;
 }
 
-/* Optional navy palette; the default dark theme stays graphite. */
-:root[data-theme="navy"] {
+/* Tokyo Night, the palette Omarchy ships under that name: blue-grey
+   surfaces and a soft blue accent. The fill for switches and the send
+   button is the darker blue, so white text on it stays above 4.5:1. */
+:root[data-theme="tokyo"] {
   --hi: var(--primary-q);
   --ok: var(--emerald);
   --ok-glow: none;
-  --bg: #081b26;
-  --card: #102c38;
-  --sidebar: #102c38;
-  --raised: #193e4b;
-  --code-bg: #06141d;
-  --muted: rgb(134 214 219 / 4%);
-  --accent: rgb(134 214 219 / 7%);
-  --hover: rgb(134 214 219 / 8%);
-  --select: rgb(85 215 194 / 16%);
-  --edge: rgb(134 214 219 / 9%);
-  --edge-2: rgb(134 214 219 / 15%);
-  --input: rgb(134 214 219 / 14%);
-  --text: #edf8f7;
-  --text-80: rgb(237 248 247 / 86%);
-  --text-dim: #b8d8dc;
-  --mutedfg: #a0c4cb;
-  --icon: #90b9c3;
-  --primary: #117c78;
-  --primary-t: #4acbbb;
-  --primary-q: #65dfcb;
-  --amber: #f2bd66;
-  --amber-text: #f2bd66;
-  --sky: #8bd5f1;
-  --emerald: #91ddae;
-  --red: #f19b89;
-  --scroll: rgb(134 214 219 / 10%);
-  --scroll-h: rgb(134 214 219 / 16%);
-  --dot-off: rgb(134 214 219 / 22%);
-  --pill-fg: #081b26;
-  --link: #88e3d8;
+  --bg: #1a1b26;
+  --card: #1f2335;
+  --sidebar: #16161e;
+  --raised: #24283b;
+  --code-bg: #13141c;
+  --muted: rgb(169 177 214 / 4%);
+  --accent: rgb(169 177 214 / 7%);
+  --hover: rgb(169 177 214 / 8%);
+  --select: rgb(122 162 247 / 16%);
+  --edge: rgb(169 177 214 / 10%);
+  --edge-2: rgb(169 177 214 / 16%);
+  --input: rgb(169 177 214 / 14%);
+  --text: #c0caf5;
+  --text-80: rgb(192 202 245 / 86%);
+  --text-dim: #a9b1d6;
+  --mutedfg: #9aa3cf;
+  --icon: #8f98c4;
+  --primary: #3d59a1;
+  --primary-t: #7aa2f7;
+  --primary-q: #7aa2f7;
+  --amber: #e0af68;
+  --amber-text: #e0af68;
+  --sky: #7dcfff;
+  --emerald: #9ece6a;
+  --red: #f7768e;
+  --scroll: rgb(169 177 214 / 10%);
+  --scroll-h: rgb(169 177 214 / 16%);
+  --dot-off: rgb(169 177 214 / 24%);
+  --pill-fg: #1a1b26;
+  --link: #7aa2f7;
+  --hl-comment: #7a82ab; --hl-keyword: #bb9af7; --hl-string: #9ece6a; --hl-number: #ff9e64;
+  --hl-title: #7aa2f7; --hl-type: #2ac3de; --hl-meta: #7a82ab; --hl-del: #f7768e;
 }
 
 
@@ -1753,7 +1757,7 @@ pre.snippet {
   --dash-card: #0e0e0e; --dash-edge: rgb(255 255 255 / 8%); --dash-rule: rgb(255 255 255 / 6%);
   --dash-track: rgb(255 255 255 / 9%); --dash-ink: var(--hi);
 }
-:root:is([data-theme="light"], [data-theme="navy"]) .pad.usage {
+:root:is([data-theme="light"], [data-theme="tokyo"]) .pad.usage {
   --dash-card: var(--card); --dash-edge: var(--edge); --dash-rule: var(--edge);
   --dash-track: color-mix(in oklab, var(--primary) 14%, transparent); --dash-ink: var(--primary-t);
 }
@@ -4289,14 +4293,14 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
   --raised: #19191a;
   --shadow: 0 0 0 1px rgb(255 255 255 / 7%), inset 0 1px 0 rgb(255 255 255 / 5%), 0 24px 56px -20px rgb(0 0 0 / 80%), 0 2px 8px rgb(0 0 0 / 35%);
 }
-:root[data-theme="navy"] {
-  --panel: #081b26;
-  --glow: radial-gradient(ellipse 70% 45% at 50% -6%, rgb(200 240 240 / 6%), rgb(200 240 240 / 0) 70%);
-  --ring: rgb(134 214 219 / 7%);
-  --ring-2: rgb(134 214 219 / 12%);
-  --ring-focus: rgb(134 214 219 / 22%);
-  --lit: inset 0 1px 0 rgb(200 240 240 / 5%);
-  --sheen: linear-gradient(180deg, rgb(200 240 240 / 2.4%), rgb(200 240 240 / 0) 64px);
+:root[data-theme="tokyo"] {
+  --panel: #1a1b26;
+  --glow: radial-gradient(ellipse 70% 45% at 50% -6%, rgb(122 162 247 / 6%), rgb(122 162 247 / 0) 70%);
+  --ring: rgb(169 177 214 / 8%);
+  --ring-2: rgb(169 177 214 / 13%);
+  --ring-focus: rgb(122 162 247 / 30%);
+  --lit: inset 0 1px 0 rgb(192 202 245 / 5%);
+  --sheen: linear-gradient(180deg, rgb(192 202 245 / 2.4%), rgb(192 202 245 / 0) 64px);
   --panel-shadow: 0 0 0 1px var(--ring), 0 30px 80px -40px rgb(0 0 0 / 80%);
   --lift: 0 18px 44px -22px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 25%);
 }
