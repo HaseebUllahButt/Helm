@@ -28,7 +28,8 @@ import { openAppWindow } from './desktop.js';
 export const SOURCE_DIR = fileURLToPath(new URL('../../../native/screen/', import.meta.url));
 const stateDir = () => join(HELM_DIR, 'screen');
 const stateFile = () => join(stateDir(), 'engine.json');
-export const IDLE_MS = 15 * 60_000;
+// The owner closes the window when done; a minute covers a reload or a quick reopen.
+export const IDLE_MS = 60_000;
 // Change it with the engine's options below, so a running engine restarts with them.
 const ENGINE_OPTIONS = 2;
 
@@ -220,7 +221,7 @@ export class Screens {
   }
 
   begin() {
-    this.#sweep = setInterval(() => { void this.#checkIdle(); }, 60_000);
+    this.#sweep = setInterval(() => { void this.#checkIdle(); }, 10_000);
     this.#sweep.unref?.();
   }
 

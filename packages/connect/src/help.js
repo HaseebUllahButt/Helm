@@ -418,7 +418,7 @@ const DETAILS = {
   Only the owner opens a screen: in the Helm app, press Ctrl+Shift+R
   and pick a machine. Agents cannot open a screen.
     helm screen          Show if this machine can show its screen, and if it is on.
-    helm screen stop     Stop it now. It also stops after 15 minutes with no viewer.
+    helm screen stop     Stop it now. It also stops 1 minute after the window closes.
   Linux only for now: X11, or Wayland on niri, sway or Hyprland.
   The first open builds the screen program. When packages are missing,
   the app asks the owner to set them up.`,
