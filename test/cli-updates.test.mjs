@@ -265,6 +265,32 @@ esac
   }
   assert.equal(messages.length, 2);
   assert.ok(messages.every(message => message.includes('Exit code 6.')));
+  assert.match(messages[0], /Permission denied/);
+  assert.match(messages[1], /Disk full/);
+});
+
+test('timestamps and progress numbers do not turn an old update failure into a new one', async () => {
+  const m = machine();
+  const output = join(m.root, 'update-output');
+  writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo '2.1.0 (Claude Code)';;
+  update) while IFS= read -r line; do echo "$line"; done < '${output}'; exit 6;;
+esac
+`, { mode: 0o755 });
+  const messages = [];
+  for (const [time, progress, cause] of [
+    ['12:34:56', ['10%', '20%'], 'Disk full (error 28)'],
+    ['14:34:56', ['50%'], 'Disk full (error 28)'],
+    ['15:34:56', ['35%'], 'Disk full (error 122)'],
+  ]) {
+    const log = [...progress.map(value => `[${time}] Downloading ${value}`), `[2026-11-23T${time}.456Z] ${cause}`];
+    writeFileSync(output, log.join('\r\n') + '\r\n');
+    await m.updater({ log: message => messages.push(message) }).update({ engine: 'claude' });
+  }
+  assert.equal(messages.length, 2);
+  assert.match(messages[0], /Disk full \(error 28\)/);
+  assert.match(messages[1], /Disk full \(error 122\)/);
 });
 
 test('different update causes on stdout log once each with the same stderr warning', async () => {

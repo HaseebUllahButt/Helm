@@ -1103,7 +1103,6 @@ export class Client {
   }
 
   get connected() { return this.ws?.readyState === WebSocket.OPEN; }
-  get reachable() { return this.connected || this.told?.reachable === true; }
 
   /**
    * Keep trying to connect until it works or the client is closed.

@@ -1,5 +1,5 @@
 import { errorMessage } from '../errors';
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Client, type Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { useNow } from '../useNow';
@@ -7,121 +7,94 @@ import { useNow } from '../useNow';
 /** `envId`: a helper that runs on another machine (helm delegate --machine). */
 export type TeamMember = { session: Session; depth: number; envId?: string };
 
+type TeamRead = { sessions: Session[]; offline: boolean };
+
 /** Read the tree by chat ID and machine. Account names and titles are not keys. */
 export function useThreadTeam(client: Client, envId: string, parentId: string, remote: NonNullable<Session['remoteHelpers']> = []) {
   const remoteKey = JSON.stringify(remote);
   const [team, setTeam] = useState<TeamMember[]>([]);
-  const [, refreshRoutes] = useReducer(revision => revision + 1, 0);
+  const remembered = useRef<TeamMember[]>([]);
   const offlineMachines = useRef(new Set<string>()).current;
-  const helperLinks = useRef(new Map<string, NonNullable<Session['remoteHelpers']>>()).current;
   useEffect(() => {
     let stale = false;
     let loading = false;
     let again = false;
     let version = 0;
+    let published = false;
     const updates = new Map<string, { version: number; session: Session }>();
     const known = new Set([`${envId}/${parentId}`]);
     const knownMachines = new Set([envId]);
+    const keyOf = (member: TeamMember) => `${member.envId}/${member.session.id}`;
     const markOffline = (member: TeamMember) => member.envId && offlineMachines.has(member.envId) && !member.session.offline
       ? { ...member, session: { ...member.session, offline: true } } : member;
-    // Until the first full read, an update is kept for it and not shown alone:
-    // a list with one helper looks complete and hides the one that failed.
-    let published = false;
+    const publish = (members: TeamMember[]) => {
+      remembered.current = members;
+      setTeam(members.map(markOffline));
+    };
     const load = async () => {
       if (loading) { again = true; return; }
       loading = true;
       const loadVersion = version;
-      const next: TeamMember[] = [];
-      const offlineFallbacks = new Set<string>();
-      const publish = () => {
-        if (stale) return;
-        const extra = [...updates].filter(([key, update]) => update.version > loadVersion
-          && !next.some((m) => `${m.envId}/${m.session.id}` === key))
-          .map(([key, update]) => ({ session: update.session, envId: key.split('/')[0], depth: Math.max(0, (update.session.delegation?.depth ?? 1) - 1) }));
-        const rows = [...next, ...extra].map((m) => {
-          const key = `${m.envId}/${m.session.id}`;
-          const update = updates.get(key);
-          if (!update || update.version <= loadVersion) return m;
-          offlineFallbacks.delete(key);
-          return { ...m, session: update.session };
-        }).filter((m) => !m.session.archived);
-        published = true;
-        setTeam(previous => {
-          const keyOf = (member: TeamMember) => `${member.envId}/${member.session.id}`;
-          const knownRows = new Map(previous.map(m => [keyOf(m), m.session]));
-          const readKeys = new Set(rows.map(keyOf));
-          const saved = offlineFallbacks.size ? previous.filter(m => !readKeys.has(keyOf(m))
-            && !updates.get(keyOf(m))?.session.archived) : [];
-          const offlineRows = [...rows, ...saved];
-          const ordered: TeamMember[] = [];
-          const used = new Set<string>();
-          const visit = (host: string, id: string, offlineHost?: string) => {
-            for (const member of offlineHost ? offlineRows : rows) {
-              const key = keyOf(member);
-              if (used.has(key) || member.session.delegation?.parentId !== id
-                || (member.session.delegation.parentMachine || member.envId) !== host) continue;
-              used.add(key);
-              const machine = member.envId ?? envId;
-              const fallback = offlineFallbacks.has(key);
-              const last = fallback ? knownRows.get(key) : undefined;
-              const unavailable = fallback || (!readKeys.has(key) && offlineHost === machine);
-              ordered.push(markOffline(unavailable
-                ? { ...member, session: { ...(last ?? member.session), offline: true } }
-                : member));
-              visit(machine, member.session.id, fallback ? machine : offlineHost);
-            }
-          };
-          visit(envId, parentId);
-          return ordered;
-        });
-      };
-      const reads = new Map<string, Promise<Session[]>>();
+      const reads = new Map<string, Promise<TeamRead>>();
       const read = (machine: string, id: string) => {
         knownMachines.add(machine);
         const key = `${machine}/${id}`;
-        if (!reads.has(key)) reads.set(key, client.rpc<{ sessions: Session[] }>(machine, 'session.list', { parentId: id, nested: true }).then((r) => r.sessions ?? []));
+        if (!reads.has(key)) {
+          const fetchList = async (): Promise<TeamRead> => {
+            try {
+              client.subscribe?.(machine);
+              const { sessions } = await client.rpc<{ sessions: Session[] }>(machine, 'session.list', { parentId: id, nested: true });
+              return { sessions: sessions ?? [], offline: false };
+            } catch {
+              return { sessions: remembered.current.filter(m => m.envId === machine).map(m => m.session), offline: true };
+            }
+          };
+          reads.set(key, fetchList());
+        }
         return reads.get(key)!;
       };
       const visited = new Set([`${envId}/${parentId}`]);
-      const collect = async (machine: string, id: string, depth: number, hints: NonNullable<Session['remoteHelpers']> = []) => {
-        client.subscribe?.(machine);
-        let rows: Session[] = [];
-        try { rows = await read(machine, id); }
-        catch { /* Keep the last known cards when a machine cannot answer. */ }
-        const walk = async (host: string, owner: string, level: number, list: Session[], links: NonNullable<Session['remoteHelpers']>) => {
-          const children = list.filter((s) => !s.archived && s.delegation?.parentId === owner
-            && (!s.delegation.parentMachine || s.delegation.parentMachine === host));
-          const add = async (session: Session, where: string, available: Session[]) => {
-            const key = `${where}/${session.id}`;
-            if (visited.has(key)) return;
-            visited.add(key); known.add(key);
-            next.push({ session, depth: level, envId: where });
-            if (!session.offline) helperLinks.set(key, session.remoteHelpers ?? []);
-            // Read each nested helper on its own machine even if its lead cannot answer.
-            const links = session.removed ? [] : helperLinks.get(key) ?? session.remoteHelpers ?? [];
-            await walk(where, session.id, level + 1, available, links);
-          };
-          await Promise.all([
-            ...children.map((child) => add(child, host, list)),
-            ...links.filter((h) => !h.archived).map(async (link) => {
-            client.subscribe?.(link.machine);
-            let found: Session[] = [];
-            let answered = false;
-            try { found = await read(link.machine, owner); answered = true; }
-            catch { /* The saved state remains visible offline. */ }
-            const child = found.find((s) => s.id === link.id && s.delegation?.parentMachine === host);
-            const offline = !link.removed && (!answered || offlineMachines.has(link.machine));
-            const removed = !offline && (answered || link.removed);
-            if (!child && offline) offlineFallbacks.add(`${link.machine}/${link.id}`);
-            await add(child ?? { ...link.result?.session, id: link.id, title: link.title || 'Helper', status: removed ? 'interrupted' : link.status || 'idle', engine: link.result?.session?.engine || '', cwd: link.result?.session?.cwd || '', profileId: link.result?.session?.profileId || '', offline, removed,
-              team: removed ? undefined : link.team, delegation: { parentId: owner, parentMachine: host, status: removed ? 'interrupted' : link.status, task: '', depth: level + 1 } } as unknown as Session, link.machine, found);
-          })]);
+      const walk = async (host: string, owner: string, depth: number, list: TeamRead, links: NonNullable<Session['remoteHelpers']>): Promise<TeamMember[]> => {
+        const add = async (session: Session, machine: string, source: TeamRead): Promise<TeamMember[]> => {
+          const key = `${machine}/${session.id}`;
+          if (visited.has(key) || session.archived) return [];
+          visited.add(key); known.add(key);
+          const row = source.offline && !session.removed ? { ...session, offline: true } : session;
+          // Walk saved rows too. A helper farther down can still answer on its own machine.
+          const nested = session.removed ? [] : await walk(machine, session.id, depth + 1, source, session.remoteHelpers ?? []);
+          return [{ session: row, depth, envId: machine }, ...nested];
         };
-        await walk(machine, id, depth, rows, hints);
+        const children = list.sessions.filter(s => s.delegation?.parentId === owner
+          && (!s.delegation.parentMachine || s.delegation.parentMachine === host));
+        const branches = await Promise.all([
+          ...children.map(child => add(child, host, list)),
+          ...links.filter(link => !link.archived).map(async link => {
+            const source = await read(link.machine, owner);
+            const child = source.sessions.find(s => s.id === link.id && s.delegation?.parentMachine === host);
+            if (child && !(source.offline && link.removed)) return add(child, link.machine, source);
+            const removed = !source.offline || !!link.removed;
+            const status = removed ? 'interrupted' : link.status || 'idle';
+            return add({ ...link.result?.session, id: link.id, title: link.title || 'Helper', status,
+              engine: link.result?.session?.engine || '', cwd: link.result?.session?.cwd || '', profileId: link.result?.session?.profileId || '',
+              offline: !removed && source.offline, removed, team: removed ? undefined : link.team,
+              delegation: { parentId: owner, parentMachine: host, status, task: '', depth: depth + 1 },
+            } as Session, link.machine, source);
+          }),
+        ]);
+        return branches.flat();
       };
       try {
-        await collect(envId, parentId, 0, JSON.parse(remoteKey));
-        publish();
+        const rows = await walk(envId, parentId, 0, await read(envId, parentId), JSON.parse(remoteKey));
+        if (stale) return;
+        const next = new Map(rows.map(row => [keyOf(row), row]));
+        for (const [key, update] of updates) {
+          if (update.version <= loadVersion) continue;
+          const row = next.get(key);
+          if (row) next.set(key, { ...row, session: update.session });
+          else next.set(key, { session: update.session, envId: key.split('/')[0], depth: Math.max(0, (update.session.delegation?.depth ?? 1) - 1) });
+        }
+        published = true;
+        publish([...next.values()].filter(m => !m.session.archived));
       } finally {
         loading = false;
         if (again && !stale) { again = false; void load(); }
@@ -129,45 +102,38 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
     };
     void load();
     const off = client.on((machine, kind, payload: any) => {
-      const session = payload?.session as Session | undefined;
-      if (kind === 'connection' || (kind === 'transport' && knownMachines.has(machine))) refreshRoutes();
       if (kind === 'presence' && machine) {
         if (payload?.online === false) {
           offlineMachines.add(machine);
-          if (knownMachines.has(machine)) setTeam(now => now.map(markOffline));
+          if (knownMachines.has(machine)) setTeam(remembered.current.map(markOffline));
         } else if (payload?.online === true) {
           offlineMachines.delete(machine);
           if (knownMachines.has(machine)) void load();
         }
       }
-      if (kind === 'connection' && payload?.online || kind === 'session.exit') void load();
-      if (kind === 'session.update' && session) {
-        const key = `${machine}/${session.id}`;
+      if ((kind === 'connection' && payload?.online) || kind === 'session.exit') void load();
+      const session = kind === 'session.update' ? payload?.session as Session | undefined : undefined;
+      if (!session) return;
+      const key = `${machine}/${session.id}`;
+      const owner = `${session.delegation?.parentMachine || machine}/${session.delegation?.parentId}`;
+      if (key === `${envId}/${parentId}`) void load();
+      else if (known.has(key) || known.has(owner)) {
+        known.add(key);
         updates.set(key, { version: ++version, session });
-        const owner = `${session.delegation?.parentMachine || machine}/${session.delegation?.parentId}`;
-        if (key === `${envId}/${parentId}`) void load();
-        else if (known.has(key) || known.has(owner)) {
-          known.add(key);
-          if (session.archived) helperLinks.delete(key);
-          else if (!session.offline) helperLinks.set(key, session.remoteHelpers ?? []);
-          if (!published) return;
-          setTeam((now) => {
-            const previous = now.find((m) => m.envId === machine && m.session.id === session.id);
-            const parent = now.find((m) => `${m.envId}/${m.session.id}` === owner);
-            return [...now.filter((m) => !(m.envId === machine && m.session.id === session.id)),
-              ...(!session.archived ? [markOffline({ session, envId: machine, depth: previous?.depth ?? (parent ? parent.depth + 1 : 0) })] : [])];
-          });
-          if (session.remoteHelpers?.length) void load();
-        }
+        // Wait for the first list before showing changes to individual helpers.
+        if (!published) return;
+        const previous = remembered.current.find(m => keyOf(m) === key);
+        const parent = remembered.current.find(m => keyOf(m) === owner);
+        const member = { session, envId: machine, depth: previous?.depth ?? (parent ? parent.depth + 1 : 0) };
+        publish([...remembered.current.filter(m => keyOf(m) !== key), ...(!session.archived ? [member] : [])]);
+        if (session.remoteHelpers?.length) void load();
       }
     });
     // Older machines and lost broadcasts must also converge to the CLI state.
     const timer = setInterval(() => void load(), 5000);
     return () => { stale = true; clearInterval(timer); off(); };
-  }, [client, envId, parentId, remoteKey, offlineMachines, helperLinks]);
-  if (client.connected !== false || client.reachable) return team;
-  return team.map(member => member.session.offline || client.directTo?.(member.envId ?? envId)
-    ? member : { ...member, session: { ...member.session, offline: true } });
+  }, [client, envId, parentId, remoteKey, offlineMachines]);
+  return team;
 }
 
 export const helperState = (session: Session) => {
