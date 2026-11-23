@@ -34,6 +34,8 @@ before(async () => {
           }
           if(method==='session.events') return {session:null,events:[],pending:[],last:0};
           if(method==='model.list') return {models:[],modes:[]};
+          // A machine answers with its load or says it has no such request; never an empty answer.
+          if(method==='machine.stats') throw new Error('unknown method machine.stats');
           if(method==='profile.list') return {profiles:[{id:'claude',engine:'claude',cmd:'claude'}]};
           if(method==='project.list') return {projects:[]};
           return {};

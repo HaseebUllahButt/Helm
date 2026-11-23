@@ -28,6 +28,8 @@ before(async()=>{
       token:'helm1.'+btoa(JSON.stringify({net:'send-test',sub:'fixture'}))+'.test',relay:'http://send-shell.test',
       environments:async()=>({environments:[source,target]}),openDirect:async()=>{},route:async()=>null,watchLatency:()=>()=>{},subscribe:()=>{},
       on:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},
+      // Set by the real constructor, which this stub skips: the chat list the device holds.
+      lists:new Map(),
       rpc:async(env,method,params)=>{
         window.calls.push({env,method,params});
         if(method==='send.list')return {jobs:env==='source'?jobs:[]};
@@ -45,6 +47,8 @@ before(async()=>{
         if(method==='session.events')return {session:window.sessions[params.id],events:[],pending:[],last:0};
         if(method==='session.watch')return {last:0};
         if(method==='model.list')return {models:[],modes:[]};
+        // A machine answers with its load or says it has no such request; never an empty answer.
+        if(method==='machine.stats')throw new Error('unknown method machine.stats');
         if(method==='git.status')return {repo:false,files:[]};
         if(method==='session.messages')return {messages:[]};
         if(method==='session.attach')return {pty:true,text:''};
