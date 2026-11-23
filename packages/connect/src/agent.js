@@ -1814,8 +1814,10 @@ export class Daemon {
     };
     sock.on('connect', () => {
       const negotiated = flow === 1;
-      // `window`: what this end takes. An older initiator ignores it.
-      link.send(T.TUNNEL_READY, { sid, ...(negotiated ? { flow: 1, window: STREAM_WINDOW } : {}) });
+      // `window`: what this end takes. Offered only when the open carried an
+      // offer, so an older hub that drops it keeps both directions at 512 KiB.
+      const offer = negotiated && window !== undefined ? { window: STREAM_WINDOW } : {};
+      link.send(T.TUNNEL_READY, { sid, ...(negotiated ? { flow: 1, ...offer } : {}) });
       if (negotiated) {
         tunnel.receiver = new TunnelReceiver(sock,
           bytes => link.send(T.TUNNEL_ACK, { sid, bytes }), err => end(err.message), { window: STREAM_WINDOW });
