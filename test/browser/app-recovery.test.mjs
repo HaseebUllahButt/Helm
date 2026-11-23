@@ -38,9 +38,15 @@ before(async () => {
       const chat = { id: models.length ? 'model' : 'folder', cwd: '/project', title: 'Test chat',
         profileId: 'codex', driver: 'codex', engine: 'codex', status: 'idle',
         recovery: { kind: 'error', message, at: Date.now() },
-        remoteHelpers: helper ? [{ id: 'helper', machine: 'away', title: 'Remote helper', status: 'blocked' }] : [] };
+        remoteHelpers: helper ? [{ id: 'helper', machine: 'away', title: 'Remote helper', status: helper === 'online' ? 'working' : 'blocked' }] : [] };
       const listeners = new Set();
+      let helperMissing = false;
       window.helperPresence = (online) => listeners.forEach(listener => listener('away', 'presence', { online }));
+      window.pollMissingHelper = async () => {
+        helperMissing = true;
+        listeners.forEach(listener => listener('away', 'session.exit', {}));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      };
       const events = failedTurn ? [
         { seq: 1, type: 'turn.start', turnId: 'failed', text: 'Try this task' },
         { seq: 2, type: 'turn.done', turnId: 'failed', status: 'error', error: message },
@@ -51,6 +57,7 @@ before(async () => {
         rpc: async (target, method) => {
           if (target === 'away' && method === 'session.list') {
             if (helper === 'offline') throw Error('Machine offline.');
+            if (helperMissing) return { sessions: [] };
             return { sessions: [{ id: 'helper', title: 'Remote helper', status: 'blocked', engine: 'codex',
               delegation: { parentId: chat.id, parentMachine: env.id, status: 'blocked' } }] };
           }
@@ -154,6 +161,9 @@ test('a disconnect disables the helper review button before the next read', asyn
   assert.equal(await review.isEnabled(), true);
   await page.evaluate(() => window.helperPresence(false));
   await page.waitForFunction(() => document.querySelector('.child-requests button')?.disabled, null, { timeout: 1500 });
+  await page.evaluate(() => window.pollMissingHelper());
+  assert.equal(await review.count(), 1);
+  assert.equal(await review.isDisabled(), true);
 });
 
 test('the transcript hides Send again for a missing saved chat', async t => {

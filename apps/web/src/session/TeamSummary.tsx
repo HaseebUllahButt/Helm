@@ -30,14 +30,18 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
       loading = true;
       const loadVersion = version;
       const next: TeamMember[] = [];
+      const offlineFallbacks = new Set<string>();
       const publish = () => {
         if (stale) return;
         const extra = [...updates].filter(([key, update]) => update.version > loadVersion
           && !next.some((m) => `${m.envId}/${m.session.id}` === key))
           .map(([key, update]) => ({ session: update.session, envId: key.split('/')[0], depth: Math.max(0, (update.session.delegation?.depth ?? 1) - 1) }));
         const rows = [...next, ...extra].map((m) => {
-          const update = updates.get(`${m.envId}/${m.session.id}`);
-          return update && update.version > loadVersion ? { ...m, session: update.session } : m;
+          const key = `${m.envId}/${m.session.id}`;
+          const update = updates.get(key);
+          if (!update || update.version <= loadVersion) return m;
+          offlineFallbacks.delete(key);
+          return { ...m, session: update.session };
         }).filter((m) => !m.session.archived).map(markOffline);
         const ordered: TeamMember[] = [];
         const used = new Set<string>();
@@ -52,7 +56,15 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
         };
         visit(envId, parentId);
         published = true;
-        setTeam(ordered);
+        setTeam(previous => {
+          if (!offlineFallbacks.size) return ordered;
+          const knownRows = new Map(previous.map(m => [`${m.envId}/${m.session.id}`, m.session]));
+          return ordered.map(member => {
+            const key = `${member.envId}/${member.session.id}`;
+            const last = offlineFallbacks.has(key) && knownRows.get(key);
+            return last ? { ...member, session: { ...last, offline: true } } : member;
+          });
+        });
       };
       const reads = new Map<string, Promise<Session[]>>();
       const read = (machine: string, id: string) => {
@@ -86,8 +98,11 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
             try { found = await read(link.machine, owner); answered = true; }
             catch { /* The saved state remains visible offline. */ }
             const child = found.find((s) => s.id === link.id && s.delegation?.parentMachine === host);
-            await add(child ?? { ...link.result?.session, id: link.id, title: link.title || 'Helper', status: answered || link.removed ? 'interrupted' : link.status || 'idle', engine: link.result?.session?.engine || '', cwd: link.result?.session?.cwd || '', profileId: link.result?.session?.profileId || '', offline: !answered && !link.removed, removed: answered || link.removed,
-              team: answered || link.removed ? undefined : link.team, delegation: { parentId: owner, parentMachine: host, status: answered || link.removed ? 'interrupted' : link.status, task: '', depth: level + 1 } } as unknown as Session, link.machine, found);
+            const offline = !link.removed && (!answered || offlineMachines.has(link.machine));
+            const removed = !offline && (answered || link.removed);
+            if (!child && offline) offlineFallbacks.add(`${link.machine}/${link.id}`);
+            await add(child ?? { ...link.result?.session, id: link.id, title: link.title || 'Helper', status: removed ? 'interrupted' : link.status || 'idle', engine: link.result?.session?.engine || '', cwd: link.result?.session?.cwd || '', profileId: link.result?.session?.profileId || '', offline, removed,
+              team: removed ? undefined : link.team, delegation: { parentId: owner, parentMachine: host, status: removed ? 'interrupted' : link.status, task: '', depth: level + 1 } } as unknown as Session, link.machine, found);
           })]);
         };
         await walk(machine, id, depth, rows, hints);
