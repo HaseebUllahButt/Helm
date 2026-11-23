@@ -2036,7 +2036,7 @@ export class Daemon {
     // A screen shows and drives the whole desktop: the owner only.
     if (method.startsWith('screen.')) {
       if (!this.#selfOrOwner(caller)) throw new Error('Only this machine and the owner\'s devices can open its screen.');
-      if (method === M.SCREEN_STATUS) return this.screens.status();
+      if (method === M.SCREEN_STATUS) return this.screens.status({ quick: p?.quick === true });
       if (method === M.SCREEN_SETUP) {
         // Admin rights with no card: only a press of Set up on the owner's
         // own device, never this machine's helm command (an agent's).

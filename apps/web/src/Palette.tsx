@@ -26,6 +26,8 @@ export interface PaletteItem {
   keywords?: string;
   /** Newest first when there is nothing typed. */
   at?: number;
+  /** Shown grey: it cannot be done now; `run` says why. */
+  off?: boolean;
   run: () => void;
 }
 
@@ -159,7 +161,7 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
               <div key={item.id}>
                 {head && <div className="palette-group">{GROUP[item.group]}</div>}
                 <button
-                  role="option" id={`${listId}-${i}`} tabIndex={-1} aria-selected={i === selected} className={`palette-row${i === selected ? ' on' : ''}`}
+                  role="option" id={`${listId}-${i}`} tabIndex={-1} aria-selected={i === selected} className={`palette-row${i === selected ? ' on' : ''}${item.off ? ' off' : ''}`}
                   onMouseMove={() => select(i)} onClick={() => go(item)}
                 >
                   {item.engine ? <EngineMark engine={engineOf(item.engine).cls} /> : <span className="pglyph"><Icon name={item.group === 'machine' ? 'machine' : 'forward'} size={15} /></span>}

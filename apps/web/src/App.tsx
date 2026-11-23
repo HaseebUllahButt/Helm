@@ -2,7 +2,7 @@ import { errorMessage } from './errors';
 import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice } from './session/voice';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from './Modal';
-import { openScreen, showScreen } from './screen';
+import { openScreen, showScreen, screenReady, type ScreenReady } from './screen';
 import { useNow } from './useNow';
 import { isUnread, markSeen, seenHere, unseenFinish, useSeenVersion } from './threadStatus';
 import { usePageHidden } from './usePageHidden';
@@ -1174,12 +1174,21 @@ function Shell({ client, conn, onSignOut }: {
   const [screenPicker, setScreenPicker] = useState(false);
   const [screenNote, setScreenNote] = useState<{ text: string; busy?: boolean } | null>(null);
   const [screenSetup, setScreenSetup] = useState<{ envId: string; name: string; packages: string[]; canInstall: boolean; keys?: boolean; busy?: boolean } | null>(null);
+  // Each machine says first whether its screen can open, so the menu
+  // lists those first and tells why for the rest.
+  const [screenReadiness, setScreenReadiness] = useState<Record<string, ScreenReady>>({});
   const askScreen = useRef<() => void>(() => {});
   askScreen.current = () => {
     setPalette(false);
     if (!hereId) {
       setScreenNote({ text: 'Screens open in the Helm app on a computer with Helm. This window does not run on one of your machines.' });
       return;
+    }
+    const others = envs.filter((e) => e.id !== hereId);
+    setScreenReadiness(Object.fromEntries(others.map((e) => [e.id, { state: 'checking' } as ScreenReady])));
+    for (const e of others) {
+      void screenReady(client, { machine: e.id, name: e.name, online: !!e.online })
+        .then((ready) => setScreenReadiness((now) => ({ ...now, [e.id]: ready })));
     }
     setScreenPicker(true);
   };
@@ -1881,11 +1890,17 @@ function Shell({ client, conn, onSignOut }: {
       {screenPicker && <Palette heading="Open a screen" placeholder="Pick a machine" engineOf={engineOf}
         none="No other machine is online. A screen shows another machine, not this one." 
         onClose={() => setScreenPicker(false)}
-        items={envs.filter((e) => e.online && e.id !== hereId).map((e) => ({
-          id: `screen:${e.id}`, group: 'machine' as const, title: e.name,
-          sub: 'see and use its desktop', keywords: 'device machine screen desktop',
-          run: () => void openScreenOn(e.id),
-        }))} />}
+        items={envs.filter((e) => e.id !== hereId)
+          .map((e) => ({ e, ready: screenReadiness[e.id] ?? { state: 'checking' } as ScreenReady }))
+          // Machines that can show a screen first, then the rest with the reason.
+          .sort((a, b) => Number(a.ready.state === 'off') - Number(b.ready.state === 'off'))
+          .map(({ e, ready }) => ({
+            id: `screen:${e.id}`, group: 'machine' as const, title: e.name, off: ready.state === 'off',
+            sub: ready.state === 'off' ? ready.sub : ready.state === 'checking' ? 'checking…'
+              : ready.setup ? 'see and use its desktop · first open sets it up' : 'see and use its desktop',
+            keywords: 'device machine screen desktop',
+            run: () => { if (ready.state === 'off') setScreenNote({ text: ready.note }); else void openScreenOn(e.id); },
+          }))} />}
       {screenSetup && (
         <Confirm stacked enterConfirms busy={screenSetup.busy}
           title={!screenSetup.canInstall ? `${screenSetup.name} needs packages`
