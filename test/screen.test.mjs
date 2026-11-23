@@ -57,7 +57,11 @@ test('the display comes from the user manager, which knows the desktop', async (
   assert.deepEqual(x.env, { DISPLAY: ':1', XDG_RUNTIME_DIR: runtime, XAUTHORITY: '/tmp/a' });
   const gnome = await findDisplay({ platform: 'linux', env: {}, session: { WAYLAND_DISPLAY: 'wayland-1', XDG_RUNTIME_DIR: runtime, XDG_CURRENT_DESKTOP: 'ubuntu:GNOME' } });
   assert.match(gnome.error, /does not let Helm see the screen/);
-  assert.match((await findDisplay({ platform: 'linux', env: {}, session: {} })).error, /Nobody is signed in/);
+  const none = await findDisplay({ platform: 'linux', env: {}, session: {} });
+  assert.match(none.error, /No desktop is open/);
+  assert.equal(none.reason, 'no-desktop');
+  assert.equal(gnome.reason, 'desktop-kind');
+  assert.equal((await findDisplay({ platform: 'darwin' })).reason, 'platform');
   assert.match((await findDisplay({ platform: 'win32' })).error, /Linux machines only for now.*Windows/);
 });
 

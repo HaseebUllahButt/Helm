@@ -341,7 +341,7 @@ export const M = {
   LOCAL_MODELS_JOB: 'models.job',
   LOCAL_MODELS_OPEN: 'models.open',
   LOCAL_MODELS_ENDPOINT: 'models.endpoint',
-  SCREEN_STATUS: 'screen.status',  // {} -> { supported, backend?, built?, running?, needsSetup?, packages?, error? }  owner only
+  SCREEN_STATUS: 'screen.status',  // { quick? } -> { supported, backend?, built?, running?, needsSetup?, packages?, error?, reason? }  owner only
   SCREEN_SETUP: 'screen.setup',    // {} -> status  installs the build packages as admin, then builds the engine; owner only
   SCREEN_START: 'screen.start',    // {} -> { port, token } | { needs: 'setup', packages } | { error }  this machine's real screen; owner only
   SCREEN_STOP: 'screen.stop',      // {} -> { stopped }

@@ -108,7 +108,7 @@ export function installCommand(family, packages) {
  */
 export async function findDisplay({ env = process.env, platform = process.platform, uid = process.getuid?.(), session = null } = {}) {
   if (platform !== 'linux') {
-    return { error: `Helm shows screens of Linux machines only for now. This machine runs ${platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : platform}.` };
+    return { reason: 'platform', error: `Helm shows screens of Linux machines only for now. This machine runs ${platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : platform}.` };
   }
   if (!session) {
     session = {};
@@ -125,7 +125,7 @@ export async function findDisplay({ env = process.env, platform = process.platfo
   if (wayland && existsSync(join(runtime, wayland))) {
     // These do not offer the wlroots screen copy that the engine uses.
     if (/gnome|kde|plasma|cosmic/i.test(desktop)) {
-      return { error: `${desktop} on Wayland does not let Helm see the screen. Sign in to an X11 session, or use niri, sway or Hyprland.` };
+      return { reason: 'desktop-kind', error: `${desktop} on Wayland does not let Helm see the screen. Sign in to an X11 session, or use niri, Sway or Hyprland.` };
     }
     return { backend: 'wayland', display: wayland, desktop, env: { WAYLAND_DISPLAY: wayland, XDG_RUNTIME_DIR: runtime } };
   }
@@ -134,7 +134,7 @@ export async function findDisplay({ env = process.env, platform = process.platfo
     const xauth = pick('XAUTHORITY');
     return { backend: 'x11', display: x, desktop, env: { DISPLAY: x, XDG_RUNTIME_DIR: runtime, ...(xauth ? { XAUTHORITY: xauth } : {}) } };
   }
-  return { error: 'Nobody is signed in to a desktop on this machine.' };
+  return { reason: 'no-desktop', error: 'No desktop is open on this machine. Sign in to a desktop there, then try again.' };
 }
 
 /** A hash of the engine source: a new source builds a new engine. */
@@ -254,11 +254,13 @@ export class Screens {
   }
 
   /** What the owner's screen menu shows for this machine. */
-  async status() {
+  /** `quick`: only whether a screen can open, for the screen menu; no package check. */
+  async status({ quick = false } = {}) {
     const display = await findDisplay();
-    if (display.error) return { supported: false, error: display.error };
+    if (display.error) return { supported: false, error: display.error, reason: display.reason };
     const built = existsSync(this.#enginePath(display.backend));
     const running = this.#running();
+    if (quick) return { supported: true, backend: display.backend, desktop: display.desktop, built, running: !!running, needsSetup: !built || this.#needsKeys(display.backend) };
     const missing = built ? null : await this.#missing(display.backend);
     return {
       supported: true, backend: display.backend, display: display.display, desktop: display.desktop,
@@ -330,7 +332,7 @@ export class Screens {
   /** Start the engine on this machine's real screen, or reuse the one that runs. */
   async start({ withoutKeys = false } = {}) {
     const display = await findDisplay();
-    if (display.error) return { error: display.error };
+    if (display.error) return { error: display.error, reason: display.reason };
     const keys = display.backend !== 'wayland' || this.keysReady();
     if (!keys && !withoutKeys) {
       const missing = existsSync(this.#enginePath(display.backend)) ? null : await this.#missing(display.backend);
