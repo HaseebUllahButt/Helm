@@ -6,16 +6,10 @@
   sub-screen `$V click "<name>"`, then `$V click Back`. Theme: `$V click
   Dark; $V eval "document.documentElement.dataset.theme"` gives `"dark"`;
   `$V click Auto` after.
-- **Look and themes (owner, 2026-11-24):** Look is Classic or New; themes
-  are Auto, Dark, Light and Tokyo Night. New keeps every screen where it is
-  and adds Apple polish (owner, 2026-11-24): Phosphor icons (`phosphor.ts`),
-  grouped Settings with coloured icons, a large Home title, soft floating
-  boxes and a round accent send button (`look-new.css`). The sidebar keeps
-  Classic's look. The owner rejected an Omarchy copy (mono font, tiles over
-  a wallpaper): do not bring it back. Navy was dropped: a device
-  that saved Navy opens in Tokyo Night. Both are also in search ("Look:",
-  "Theme:"). `$V click New` hits New chat; click the Look group's button
-  with `$V eval`, then `dataset.look` gives `"new"`.
+- **Themes (owner, 2026-11-24):** Auto, Dark, Light and Tokyo Night. Navy
+  was dropped: a device that saved Navy opens in Tokyo Night. Also in
+  search ("Theme:"). The owner tried and rejected a second "New" look
+  (Omarchy tiles, then Apple polish); do not bring one back unasked.
 - **Traps:** appearance is kept per device. An installed app keeps the old
   icon and style until closed and reopened.
   Optional screens load when opened. A failed app file leaves Back and
