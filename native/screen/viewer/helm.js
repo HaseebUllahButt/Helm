@@ -1,16 +1,23 @@
 // Helm's additions to the screen-relay viewer. viewer.js stays as screen-relay
 // ships it; this file only uses what it exports (window.relayViewer).
 //
-// One clear way in and one way out, because the owner's desktop runs on
-// shortcuts:
-// - A card on open: "Take over" goes fullscreen and locks the keyboard, so
-//   Super, Alt+Tab and the browser's own keys reach the other machine. On
-//   Wayland the browser asks the desktop to let shortcuts through (niri, sway
-//   and Hyprland allow it). "Only watch" sends nothing.
-// - Super+Ctrl+Esc gives the keys back. niri reserves that key itself on the
-//   owner's machines, so it works even when the page never sees it; leaving
-//   fullscreen does the same. A bar then offers "Take over again".
-// screen-relay's own toolbar stays for scaling and screenshots.
+// The window works like a virtual machine's window, because the owner's
+// desktop runs on shortcuts:
+// - It opens with control on: keys and the mouse go to the other machine at
+//   once. No card to click first.
+// - Super keys and the browser's own keys (Ctrl+W, Ctrl+T) need fullscreen
+//   plus the browser's keyboard lock. On Wayland the lock asks the desktop
+//   to let shortcuts through (niri, sway and Hyprland allow it). The window
+//   tries at once; a browser that wants a click first gets it from the
+//   first click or key press, and that click is not sent on.
+// - Super+Ctrl+Esc gives the keys back. niri keeps that key for itself on
+//   the owner's machines, so the page never sees it there: niri just stops
+//   letting shortcuts through. When the owner comes back to the window, the
+//   page locks the keyboard again, so niri lets shortcuts through again.
+// - Where the page sees Super+Ctrl+Esc, or the owner leaves fullscreen, the
+//   window stays in control but keeps Super keys here. A bar offers to send
+//   all keys again.
+// screen-relay's own toolbar stays for scaling, screenshots and watch only.
 (() => {
   const params = new URLSearchParams(location.search);
   const name = params.get('name') || 'Remote';
@@ -18,6 +25,7 @@
   const canvas = document.getElementById('screen');
   const viewer = window.relayViewer;
   const lockable = !!navigator.keyboard?.lock;
+  const watchOnly = params.get('view') === '1';
 
   const el = (tag, attrs = {}, text = '') => {
     const node = document.createElement(tag);
@@ -26,30 +34,16 @@
     return node;
   };
 
-  // The card on open, and again from the bar.
-  const card = el('div', { id: 'helm-card', role: 'dialog', 'aria-label': `Use ${name}` });
-  card.append(
-    el('div', { class: 'helm-title' }, name),
-    el('p', {}, lockable
-      ? `Take over: all your keys and the mouse go to ${name}, Super shortcuts too. The window fills the screen.`
-      : `Take over: your keys and the mouse go to ${name}. This browser keeps Super shortcuts; use Chrome, Edge or Brave for them.`),
-  );
-  const take = el('button', { type: 'button', class: 'helm-primary' }, 'Take over');
-  const watch = el('button', { type: 'button', class: 'helm-ghost' }, 'Only watch');
-  const actions = el('div', { class: 'helm-actions' });
-  actions.append(watch, take);
-  card.append(actions, el('p', { class: 'helm-quiet' }, 'To get your keys back, press Super+Ctrl+Esc.'));
-
-  // The bar while the keys are back on this computer.
+  // The bar while Super keys stay on this computer.
   const bar = el('div', { id: 'helm-bar', role: 'status' });
   const barText = el('span');
-  const again = el('button', { type: 'button', class: 'helm-primary' }, 'Take over again');
+  const again = el('button', { type: 'button', class: 'helm-primary' }, 'Send all keys');
   bar.append(barText, again);
   bar.hidden = true;
 
   const hint = el('div', { id: 'helm-hint', role: 'status' });
   hint.hidden = true;
-  document.body.append(card, bar, hint);
+  document.body.append(bar, hint);
   let hintTimer = 0;
   const say = (text, ms = 3500) => {
     hint.textContent = text;
@@ -57,57 +51,116 @@
     clearTimeout(hintTimer);
     hintTimer = setTimeout(() => { hint.hidden = true; }, ms);
   };
-
-  let locked = false;
   const showBar = (text) => { barText.textContent = text; bar.hidden = false; };
 
-  async function takeOver() {
-    card.hidden = true;
-    bar.hidden = true;
-    viewer?.setViewOnly(false);
-    if (lockable) {
-      try {
-        if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
-        await navigator.keyboard.lock();
-        locked = true;
-        say(`All keys go to ${name}. Super+Ctrl+Esc gives them back.`);
-      } catch {
-        say(`Your keys go to ${name}. The browser kept Super shortcuts.`);
+  // wanted: the owner wants all keys there. locked: the browser holds them.
+  let wanted = lockable && !watchOnly;
+  let locked = false;
+  let grabbing = false;
+  let swallowUp = -1;
+
+  // gesture: a click or key asked for it. If even that fails, stop asking,
+  // so later clicks reach the screen.
+  async function grab({ quiet = false, gesture = false } = {}) {
+    if (!lockable || grabbing) return false;
+    grabbing = true;
+    try {
+      if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
+      await navigator.keyboard.lock();
+      locked = true;
+      wanted = true;
+      bar.hidden = true;
+      canvas?.focus();
+      if (!quiet) say(`All keys go to ${name}. Super+Ctrl+Esc gives them back.`);
+      return true;
+    } catch {
+      if (gesture && !document.fullscreenElement) {
+        wanted = false;
+        showBar(`The browser did not fill the screen, so it keeps Super keys. Other keys go to ${name}.`);
       }
-    } else say(`Your keys go to ${name}.`);
+      return false;
+    } finally { grabbing = false; }
+  }
+
+  async function giveBack(text) {
+    navigator.keyboard?.unlock?.();
+    locked = false;
+    wanted = false;
+    if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+    showBar(text);
     canvas?.focus();
   }
 
-  async function giveBack(text = `Your keys work here again. You only watch ${name} now.`) {
-    navigator.keyboard?.unlock?.();
-    locked = false;
-    // Nothing goes there until Take over again, not even a click by mistake.
-    viewer?.setViewOnly(true);
-    if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
-    showBar(text);
-  }
+  if (watchOnly) showBar(`You only watch ${name}. Nothing you press goes there.`);
+  else viewer?.setViewOnly(false);
+  if (!lockable && !watchOnly) say(`Your keys go to ${name}. This browser keeps Super keys; Chrome, Edge or Brave send them too.`, 6000);
+  canvas?.focus();
+  // Some browsers allow fullscreen with no click. Others wait for the first one.
+  if (wanted) void grab();
 
-  take.addEventListener('click', () => { void takeOver(); });
-  again.addEventListener('click', () => { void takeOver(); });
-  watch.addEventListener('click', () => {
-    card.hidden = true;
-    viewer?.setViewOnly(true);
-    showBar(`You only watch ${name}. Nothing you press goes there.`);
-  });
-  // Capture phase on window: before the viewer sends the key on.
-  window.addEventListener('keydown', (e) => {
-    if (e.code !== 'Escape' || !e.ctrlKey || !e.metaKey) return;
+  again.addEventListener('click', () => { void grab({ gesture: true }); });
+
+  // Capture phase on window: these run before the viewer sends anything on.
+  window.addEventListener('pointerdown', (e) => {
+    if (!wanted || locked || document.fullscreenElement || e.target !== canvas) return;
+    // This click only fills the screen; the layout changes under it, so it
+    // would land somewhere else on the other machine.
     e.preventDefault();
     e.stopImmediatePropagation();
-    if (bar.hidden && card.hidden) void giveBack();
+    swallowUp = e.pointerId;
+    void grab({ gesture: true });
   }, true);
+  window.addEventListener('pointerup', (e) => {
+    if (e.pointerId !== swallowUp) return;
+    swallowUp = -1;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
+
+  const typing = (t) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+  const keys = (e) => {
+    if (e.code === 'Escape' && e.ctrlKey && e.metaKey) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.type === 'keydown' && lockable && !watchOnly && bar.hidden) void giveBack(`Super keys work here again. Other keys still go to ${name}.`);
+      return;
+    }
+    if (e.type === 'keydown' && wanted && !locked && !document.fullscreenElement && !watchOnly) void grab({ gesture: true });
+    // A key pressed while a toolbar button has focus still goes to the screen.
+    if (e.target !== canvas && canvas && !typing(e.target) && !e.target?.closest?.('#helm-bar')) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      canvas.focus();
+      canvas.dispatchEvent(new KeyboardEvent(e.type, {
+        key: e.key, code: e.code, location: e.location, repeat: e.repeat,
+        ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey,
+        bubbles: true, cancelable: true,
+      }));
+    }
+  };
+  window.addEventListener('keydown', keys, true);
+  window.addEventListener('keyup', keys, true);
+
   document.addEventListener('fullscreenchange', () => {
-    if (document.fullscreenElement || !locked) return;
-    // Left fullscreen another way (a long Esc press): the lock ends with it.
-    void giveBack();
+    if (document.fullscreenElement) return;
+    if (locked || wanted) {
+      // The owner left fullscreen (a long Esc press): the lock ends with it.
+      navigator.keyboard?.unlock?.();
+      locked = false;
+      wanted = false;
+      showBar(`Super keys work here again. Other keys still go to ${name}.`);
+    }
   });
-  // The owner went to another window (niri's own Super+Ctrl+Esc, then a
-  // workspace key): the keys are theirs again, so say so.
-  window.addEventListener('blur', () => { if (locked) void giveBack(); });
-  take.focus();
+  // The owner went to another window. niri's Super+Ctrl+Esc turned off the
+  // lock without telling the page, so take it again on the way back: a new
+  // lock lets shortcuts through again.
+  window.addEventListener('blur', () => {
+    if (!locked) return;
+    navigator.keyboard?.unlock?.();
+    locked = false;
+  });
+  window.addEventListener('focus', () => {
+    canvas?.focus();
+    if (wanted && !locked && document.fullscreenElement) void grab({ quiet: true });
+  });
 })();

@@ -115,3 +115,31 @@ test('desktop shortcuts need a kernel keyboard this account may use', () => {
   assert.match(UINPUT_RULE_FILE, /^\/etc\/udev\/rules\.d\/(?:[0-6]\d|7[0-2])-/, "uaccess works only before 73-seat-late");
   assert.match(UINPUT_COMMAND, /udevadm trigger --action=add --name-match=uinput/);
 });
+
+test('the engine paces by the viewer, not by the tunnel on its own machine', async () => {
+  const { engineArgs } = await import('../packages/connect/src/screen.js');
+  const args = engineArgs({ port: 4000, tokenFile: '/t', backend: 'wayland', viewerDir: '/v' });
+  // Without it the engine reads its loopback TCP numbers and sends 2-3 frames per round trip.
+  assert.ok(args.includes('--behind-tls-proxy'));
+  assert.equal(args[args.indexOf('--backend') + 1], 'wayland');
+  assert.equal(args[args.indexOf('--port') + 1], '4000');
+  assert.ok(Number(args[args.indexOf('--bitrate-max') + 1]) >= 8_000_000);
+});
+
+test('screens open in their own profile that may fill the display and take the keys', async () => {
+  const { seedScreenProfile, SCREEN_SITE } = await import('../packages/connect/src/desktop.js');
+  const dir = join(base, 'screen-window');
+  mkdirSync(join(dir, 'Default'), { recursive: true });
+  writeFileSync(join(dir, 'Default', 'Preferences'), JSON.stringify({ keep: 1, profile: { name: 'x', content_settings: { exceptions: { keyboard_lock: { 'https://a.example:443,*': { setting: 2 } } } } } }));
+  assert.equal(seedScreenProfile(dir), true);
+  const prefs = JSON.parse(readFileSync(join(dir, 'Default', 'Preferences'), 'utf8'));
+  assert.equal(SCREEN_SITE, 'http://127.0.0.1:*,*');
+  for (const name of ['automatic_fullscreen', 'keyboard_lock', 'brave_webcompat_keyboard']) {
+    assert.deepEqual(prefs.profile.content_settings.exceptions[name][SCREEN_SITE], { setting: 1 }, name);
+  }
+  // What was there stays.
+  assert.equal(prefs.keep, 1);
+  assert.equal(prefs.profile.name, 'x');
+  assert.deepEqual(prefs.profile.content_settings.exceptions.keyboard_lock['https://a.example:443,*'], { setting: 2 });
+  assert.equal(prefs.browser.custom_chrome_frame, false);
+});
