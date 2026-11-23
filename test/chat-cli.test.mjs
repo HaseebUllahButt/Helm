@@ -40,12 +40,12 @@ class Provider extends Driver {
   async interrupt() { this.interrupted = true; }
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
-function backend() {
+function backend(ProviderClass = Provider) {
   const drivers = [];
   const runtime = new EventEmitter(); runtime.listLive = async () => new Map(); runtime.watch = () => {};
   const sessions = new Sessions(runtime, {
     events: new EventLog(join(process.env.HELM_DIR, randomUUID())),
-    makeDriver: (engine, options) => { const driver = new Provider({ engine, ...options }); drivers.push(driver); return driver; },
+    makeDriver: (engine, options) => { const driver = new ProviderClass({ engine, ...options }); drivers.push(driver); return driver; },
   });
   class Connection extends EventEmitter {
     constructor() {
@@ -278,6 +278,39 @@ test('a failed command given to helm chat at launch prints once and exits with f
     assert.equal(process.exitCode, 1);
     assert.doesNotMatch(printed, /> $/);
   } finally { process.exitCode = before; }
+});
+
+test('helm chat prints each failed Codex review once in live output and history', async () => {
+  const cause = 'Cannot start the review.';
+  class ReviewProvider extends Provider {
+    async send(text) {
+      const turnId = randomUUID();
+      this.push('turn.start', { turnId, text });
+      this.push('turn.done', { turnId, status: 'error', error: cause });
+      this.push('status', { status: 'idle' });
+      throw new Error(cause);
+    }
+  }
+  const { sessions, Connection } = backend(ReviewProvider);
+  const connection = new Connection();
+  const { session } = await openChat(['codex', '--quick'], { rpc: connection.rpc.bind(connection) });
+  const input = new PassThrough(), output = new PassThrough();
+  let live = '', history = '';
+  output.on('data', chunk => { live += chunk; });
+  try {
+    const running = runChat(['--attach', session.id], { connection, input, output });
+    input.end('/review\n/review\n');
+    await running;
+    const log = sessions.history(session.id).events;
+    assert.equal(log.filter(event => event.type === 'turn.start' && event.inputId).length, 2);
+    assert.equal(log.filter(event => event.type === 'turn.done' && event.error === cause).length, 4);
+    const reopened = new Connection();
+    const chat = new ManagedChat(reopened, session.id, { write: text => { history += text; } });
+    try { await chat.sync(); }
+    finally { chat.close(); reopened.close(); }
+    assert.equal(live.split(cause).length - 1, 2, live);
+    assert.equal(history.split(cause).length - 1, 2, history);
+  } finally { await sessions.kill(session.id); }
 });
 
 test('persistent controller RPC carries answers and events; disconnect rejects calls without replay', async () => {

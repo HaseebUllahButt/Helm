@@ -240,7 +240,21 @@ export function classifyInstall(engine, realPath, {
 
 // ----------------------------------------------------------------- processes
 
-const outputLines = text => stripAnsi(text ?? '').split('\n').map(line => line.trim()).filter(Boolean);
+const outputLines = text => stripAnsi(text ?? '').split(/[\r\n]+/).map(line => line.trim()).filter(Boolean);
+const timestamp = /^\[?(?:\d{4}-\d{2}-\d{2}[T ])?\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\]?\s*/i;
+const progress = /\b(?:progress|downloading|fetching|installing|extracting|verifying)\b/i;
+const progressNumber = /\b\d+(?:\.\d+)?(?:\s*%|\s*\/\s*\d+|\s*[kmgt]?i?B(?:\/s)?\b)/gi;
+
+function normalizeFailure(lines) {
+  const output = [];
+  for (const line of lines) {
+    const text = line.replace(timestamp, '').trim();
+    if (!text || /^[#=>.\s]*\d+(?:\.\d+)?\s*%$/.test(text)) continue;
+    const normalized = progress.test(text) ? text.replace(progressNumber, '').replace(/\s+/g, ' ').trim() : text;
+    if (normalized && (normalized === text || normalized !== output.at(-1))) output.push(normalized);
+  }
+  return output;
+}
 
 /** Run a program with an argument list (never a shell string) and collect what it says. */
 function run(cmd, args, { timeout, env = process.env, platform = process.platform } = {}) {
@@ -253,11 +267,9 @@ function run(cmd, args, { timeout, env = process.env, platform = process.platfor
     const child = execFile(viaNode ? process.execPath : cmd, viaNode ? [npmCli, ...args] : args,
       { timeout, env, maxBuffer: 2 << 20, windowsHide: true },
       (error, stdout, stderr) => {
-        const output = outputLines(stdout);
-        const errors = outputLines(stderr);
+        const output = [...outputLines(stdout), ...outputLines(stderr)];
         resolve({
-          ok: !error, code: error ? error.code ?? null : 0, ms: Date.now() - started, out: [...output, ...errors],
-          diagnostics: errors.length ? errors : output,
+          ok: !error, code: error ? error.code ?? null : 0, ms: Date.now() - started, out: output,
           timedOut: !!error && (error.killed === true || error.signal === 'SIGTERM'),
         });
       });
@@ -267,10 +279,11 @@ function run(cmd, args, { timeout, env = process.env, platform = process.platfor
 }
 
 const tail = (lines, n = 3) => lines.slice(-n).join(' · ').slice(0, 300);
+const failureOutput = result => [result.timedOut && 'The update timed out.', ...result.out].filter(Boolean).join(' · ');
 
 function rememberFailure(entry, stage, version, result) {
   const seen = entry.failures?.[stage] ?? [];
-  const key = createHash('sha256').update(JSON.stringify([version, result.code, result.timedOut, result.diagnostics])).digest('hex');
+  const key = createHash('sha256').update(JSON.stringify([version, result.code, normalizeFailure(result.out)])).digest('hex');
   if (seen.includes(key)) return false;
   entry.failures = { ...entry.failures, [stage]: [...seen, key] };
   return true;
@@ -457,7 +470,8 @@ export class CliUpdater {
     const cmd = tool.command.cmd ?? tool.path;
     const r = await run(cmd, tool.command.args, { timeout: UPDATE_TIMEOUT_MS, env: this.env, platform: this.platform });
     let to = r.ok ? await this.#version(tool.path) : tool.version;
-    let message = r.timedOut ? 'the update took too long and was stopped' : tail(r.out);
+    const failure = r.ok ? '' : failureOutput(r);
+    let message = r.ok ? tail(r.out) : failure.slice(0, 300);
     let ms = r.ms;
     let early;
     if (r.ok && id === 'claude') {
@@ -480,7 +494,7 @@ export class CliUpdater {
     saveState(state);
     if (logEarly) this.log(early.log);
     if (logUpdate) {
-      this.log(`${tool.label}: ${r.ok ? (result.changed ? `updated ${result.from} -> ${result.to}` : 'already up to date') : `update ${failureLog(r, result.message)}`}`);
+      this.log(`${tool.label}: ${r.ok ? (result.changed ? `updated ${result.from} -> ${result.to}` : 'already up to date') : `update ${failureLog(r, failure)}`}`);
     }
     return { ...base, ...result };
   }
@@ -503,12 +517,13 @@ export class CliUpdater {
       : { cmd: tool.path, args: ['install', next] };
     const r = await run(command.cmd, command.args, { timeout: UPDATE_TIMEOUT_MS, env: this.env, platform: this.platform });
     const to = r.ok ? await this.#version(tool.path) : null;
+    const failure = r.ok ? '' : failureOutput(r);
     return {
       ms: r.ms, to, run: r, version: `${have} -> ${next}`,
-      log: `Claude Code: ${r.ok ? `early build ${to} for ${missing.join(', ')}` : `early build ${next} ${failureLog(r, r.timedOut ? 'The update timed out.' : tail(r.out))}`}`,
+      log: `Claude Code: ${r.ok ? `early build ${to} for ${missing.join(', ')}` : `early build ${next} ${failureLog(r, failure)}`}`,
       message: r.ok
         ? `Installed early build ${to}, because this version did not know ${missing.join(', ')}`
-        : `Could not install early build ${next}: ${r.timedOut ? 'it took too long' : tail(r.out)}`,
+        : `Could not install early build ${next}: ${failure.slice(0, 300)}`,
     };
   }
 
