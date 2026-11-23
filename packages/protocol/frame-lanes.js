@@ -158,7 +158,7 @@ export class FrameLanes {
       this.#write(data, done, compress);
       return;
     }
-    const entry = { pieces: this.#cut(data, rid), key, done, left: bytes, compress };
+    const entry = { pieces: this.#cut(data, rid), key, done, left: bytes, bytes, compress };
     if (stream) this.#streamBytes += bytes;
     if (stream) {
       const line = this.#streams.get(key);
@@ -179,6 +179,9 @@ export class FrameLanes {
     const stream = this.#stream ?? this.#streams.values().next().value?.[0];
     if (!stream) return this.#other[0];
     if (!this.#other.length) return stream;
+    // A frame near the joiner's limit goes alone: a stream part next to it
+    // could push the joiner over JOIN_LIMIT and lose the frame.
+    if (this.#other[0].bytes > JOIN_LIMIT - 1024 * 1024) return this.#other[0];
     return this.#streamTurn ? stream : this.#other[0];
   }
 
