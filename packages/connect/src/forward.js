@@ -102,6 +102,8 @@ export async function startForward(net, {
     // Bytes the browser sends before the tunnel is up wait in the socket:
     // nothing reads it until the bridge does.
     sock.pause();
+    // A live stream's small pieces (video, keys, acks) leave at once.
+    sock.setNoDelay(true);
     sock.on('error', () => {});
     const list = hubList();
     const order = preferred ? [preferred, ...list.filter((h) => h !== preferred)] : list;
