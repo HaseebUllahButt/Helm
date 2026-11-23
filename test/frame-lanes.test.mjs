@@ -236,3 +236,21 @@ test('stream bytes take turns with a large chat list, keep their order, and part
   assert.equal(lanes.queued, 0);
   assert.equal(lanes.queuedFor('sid:a'), 0);
 });
+
+test('short stream frames also take turns while a large frame waits', () => {
+  const sock = heldSocket();
+  const lanes = new FrameLanes(sock, { text: () => true, binary: () => true });
+  const list = JSON.stringify({ t: 'rpcResult', id: 'list', result: 'c'.repeat(200_000) });
+  lanes.send(list, { rid: 'list' });
+  for (let i = 0; i < 40; i++) {
+    lanes.send(encodeTunnelFrame({ t: 'tunnel.data', sid: 'a', data: randomBytes(1024) }, true), { key: 'sid:a', compress: false });
+  }
+  assert.ok(lanes.queuedStreams > 0, 'short stream frames wait in their line');
+  while (sock.held.length) sock.held.shift().cb?.();
+  const pieces = new FramePieces();
+  let listDoneAt = -1;
+  sock.written.forEach((raw, index) => { if (typeof raw === 'string' && pieces.take(JSON.parse(raw))) listDoneAt = index; });
+  // Before, 40 short frames went straight to the socket ahead of every list piece.
+  assert.ok(listDoneAt < sock.written.length - 1, 'the list finishes before the last stream frame');
+  assert.equal(lanes.queuedStreams, 0);
+});

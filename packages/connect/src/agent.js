@@ -308,13 +308,13 @@ export class Link {
   }
 
   /**
-   * Whether one tunnel stream may queue more. Only this stream's own frames
-   * held back count, not a chat list or another stream's: the large lane
-   * lets stream frames pass those (frame-lanes.js).
+   * Whether tunnel streams may queue more. Only stream frames held back
+   * count, not a chat list: the large lane lets stream frames pass those
+   * (frame-lanes.js). All streams share the one budget.
    */
-  tunnelRoom(sid) {
+  tunnelRoom() {
     return this.#ws?.readyState === WebSocket.OPEN
-      && (this.#ws.bufferedAmount ?? 0) + this.#out.queuedFor(`sid:${sid}`) < TUNNEL_SOCKET_LIMIT;
+      && (this.#ws.bufferedAmount ?? 0) + this.#out.queuedStreams < TUNNEL_SOCKET_LIMIT;
   }
 
   async #open() {
@@ -1826,7 +1826,7 @@ export class Daemon {
         tunnel.sender = new TunnelSender(sock,
           chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk }), err => end(err.message),
           { window: tunnelWindow(window),
-            canSend: () => (link.tunnelRoom ? link.tunnelRoom(sid) : link.tunnelWritable !== false) });
+            canSend: () => (link.tunnelRoom ? link.tunnelRoom() : link.tunnelWritable !== false) });
       } else {
         sock.on('data', chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }));
       }

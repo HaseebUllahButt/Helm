@@ -104,6 +104,7 @@ export class FrameLanes {
   /** The tunnel frame part sent, which must finish before another starts. */
   #stream = null;
   #streamTurn = false;
+  #streamBytes = 0;
   /** lane key -> { count, bytes } of the frames this queue holds back. */
   #keys = new Map();
   #queued = 0;
@@ -136,6 +137,8 @@ export class FrameLanes {
   get queued() { return this.#queued; }
   /** Bytes this queue still holds back for one lane key. */
   queuedFor(key) { return this.#keys.get(key)?.bytes ?? 0; }
+  /** Bytes this queue holds back for all tunnel streams together. */
+  get queuedStreams() { return this.#streamBytes; }
 
   /**
    * Send one encoded frame.
@@ -149,12 +152,15 @@ export class FrameLanes {
   send(data, { key = null, rid, done, compress } = {}) {
     if (this.#sock.readyState !== 1) { done?.(new Error('socket closed')); return; }
     const bytes = size(data);
-    if (bytes <= PIECE && !(key && this.#keys.has(key))) {
+    const stream = !!key?.startsWith('sid:');
+    // A short stream frame still takes its turn while other frames wait.
+    if (bytes <= PIECE && !(key && this.#keys.has(key)) && !(stream && this.#other.length)) {
       this.#write(data, done, compress);
       return;
     }
     const entry = { pieces: this.#cut(data, rid), key, done, left: bytes, compress };
-    if (key?.startsWith('sid:')) {
+    if (stream) this.#streamBytes += bytes;
+    if (stream) {
       const line = this.#streams.get(key);
       if (line) line.push(entry); else this.#streams.set(key, [entry]);
     } else this.#other.push(entry);
@@ -246,6 +252,7 @@ export class FrameLanes {
         entry.left -= sent;
         this.#queued -= sent;
         if (entry.key) this.#keys.get(entry.key).bytes -= sent;
+        if (stream) this.#streamBytes -= sent;
         if (last) this.#finish(entry);
         else if (stream) this.#stream = entry;
         this.#write(piece, last ? entry.done : undefined, entry.compress);
@@ -261,6 +268,7 @@ export class FrameLanes {
     const lost = [...this.#other.splice(0), ...[...this.#streams.values()].flat()];
     this.#streams.clear();
     this.#stream = null;
+    this.#streamBytes = 0;
     this.#keys.clear();
     this.#queued = 0;
     for (const entry of lost) entry.done?.(error);
