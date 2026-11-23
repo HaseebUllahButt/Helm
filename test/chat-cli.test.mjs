@@ -249,6 +249,37 @@ test('helm chat prints one cause when a command fails in its events and input re
   assert.match(printed, /\[error\]/);
 });
 
+test('a failed command given to helm chat at launch prints once and exits with failure', async () => {
+  const connection = new EventEmitter();
+  const input = new PassThrough(), output = new PassThrough();
+  const cause = 'Cannot list permissions.';
+  const events = [];
+  connection.close = () => {};
+  connection.rpc = async (method) => {
+    if (method === M.AGENT_LIST) return { agents: [{ id: 'codex', engine: 'codex', available: true }] };
+    if ([M.SESSION_START, M.SESSION_CONNECT].includes(method)) return { session: { id: 's', engine: 'codex', quick: true } };
+    if (method === M.SESSION_EVENTS) return { events, last: events.length, pending: [] };
+    if (method === M.SESSION_INPUT) {
+      events.push(
+        { seq: 1, type: 'turn.start', turnId: 'cmd', text: '/permissions' },
+        { seq: 2, type: 'turn.done', turnId: 'cmd', status: 'error', error: cause },
+      );
+      throw new Error(cause);
+    }
+    return {};
+  };
+  let printed = '';
+  output.on('data', chunk => { printed += chunk; });
+  const before = process.exitCode;
+  input.end();
+  try {
+    await runChat(['codex', '--quick', '--', '/permissions'], { connection, input, output });
+    assert.equal(printed.split(cause).length - 1, 1, printed);
+    assert.equal(process.exitCode, 1);
+    assert.doesNotMatch(printed, /> $/);
+  } finally { process.exitCode = before; }
+});
+
 test('persistent controller RPC carries answers and events; disconnect rejects calls without replay', async () => {
   class Socket extends EventEmitter {
     sent = [];

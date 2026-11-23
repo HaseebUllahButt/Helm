@@ -7,6 +7,7 @@ import { parseAgentArgs, chooseAgent } from './delegation.js';
 const HELP = '\n/allow [request] · /always [request] · /deny [request]\n/answer [request] <question number> <choice number or text>\n/stop: Stop the current step. · /detach: Leave the agent running. · /end: Delete the Helm chat.\nOther text and commands that start with / go to the agent.\n';
 // Provider text is data, not terminal escape sequences.
 const safe = (value) => String(value ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+const COMMAND_FAILURE_SHOWN = Symbol('command failure shown');
 
 /** A thin controller of the same session and native request IDs the app uses. */
 export class ManagedChat {
@@ -156,7 +157,7 @@ export class ManagedChat {
     if (!request || (kind && request.kind !== kind)) throw new Error('choose a pending request ID; it may have been answered on another device');
     return request;
   }
-  async line(text) {
+  async line(text, { reportCommandFailure = false } = {}) {
     if (this.#closed) return;
     const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     const command = match?.[1];
@@ -197,7 +198,7 @@ export class ManagedChat {
     }
     if (!text.trim()) return;
     const params = { id: this.id, data: text };
-    if (!command) {
+    if (!command || !reportCommandFailure) {
       await this.connection.rpc(M.SESSION_INPUT, params);
       return;
     }
@@ -208,6 +209,7 @@ export class ManagedChat {
       // The command's failure can already be in the chat log while its live events are on the way.
       if (attempt.error !== error.message) await this.sync().catch(() => {});
       if (attempt.error !== error.message) throw error;
+      return COMMAND_FAILURE_SHOWN;
     } finally {
       if (this.#commandAttempt === attempt) this.#commandAttempt = null;
     }
@@ -257,7 +259,11 @@ export async function runChat(args, { connection, input = process.stdin, output 
     chat = new ManagedChat(connection, session.id, { write: (text) => output.write(text), detach: () => finish() });
     await connection.rpc(M.SESSION_WATCH, { id: session.id, watchId });
     await chat.sync();
-    if (opened.prompt) await chat.line(opened.prompt);
+    const line = text => chat.line(text, { reportCommandFailure: true });
+    if (opened.prompt && await line(opened.prompt) === COMMAND_FAILURE_SHOWN) {
+      process.exitCode = 1;
+      return;
+    }
     renew = setInterval(() => {
       void connection.rpc(M.SESSION_WATCH, { id: session.id, watchId }).then(() => chat.sync()).catch(lost);
     }, 20_000);
@@ -268,7 +274,7 @@ export async function runChat(args, { connection, input = process.stdin, output 
     reader.on('SIGINT', () => { output.write(`\nDetached. Reconnect: helm chat --attach ${session.id}\n`); finish(); });
     reader.on('close', () => { readerClosed = true; void pending.finally(() => finish()); });
     reader.on('line', (text) => {
-      pending = pending.then(() => chat.line(text)).catch((error) => output.write(`\n${safe(error.message)}\n`)).then(() => {
+      pending = pending.then(() => line(text)).catch((error) => output.write(`\n${safe(error.message)}\n`)).then(() => {
         if (!stopped && !readerClosed) reader.prompt();
       });
     });
