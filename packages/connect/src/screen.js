@@ -29,6 +29,9 @@ export const SOURCE_DIR = fileURLToPath(new URL('../../../native/screen/', impor
 const stateDir = () => join(HELM_DIR, 'screen');
 const stateFile = () => join(stateDir(), 'engine.json');
 export const IDLE_MS = 15 * 60_000;
+// Change it with the engine's options below, so a running engine restarts with them.
+const ENGINE_OPTIONS = 2;
+
 export const SCREEN_URL = /^http:\/\/127\.0\.0\.1:\d{2,5}\/\?name=[^#\s]*#token=[0-9a-f]{64}$/;
 
 // Only screen-relay's own virtual desktop needs these; Helm shows the real one.
@@ -179,6 +182,23 @@ function freePort() {
  */
 export const screenForwardId = (source, target) => createHash('sha256').update(`screen:${source}:${target}`).digest('hex').slice(0, 16);
 
+/** What the engine starts with. Change ENGINE_OPTIONS with it. */
+export function engineArgs({ port, tokenFile, backend, viewerDir }) {
+  return [
+    '--bind', '127.0.0.1', '--port', String(port), '--token-file', tokenFile,
+    // The engine writes to Helm's tunnel on this machine's loopback. Its
+    // TCP numbers then show a link of a few microseconds, so it let only
+    // two or three pictures travel at once: about 3 a second on a 360 ms
+    // path (measured 2026-11-23). --behind-tls-proxy makes it ignore those
+    // numbers and pace by the viewer's own acknowledgements, which come
+    // back over the real path (flow.hpp, "without transport").
+    '--behind-tls-proxy',
+    // A cap still keeps a slow link from filling with one big burst.
+    '--fps', '60', '--bitrate-min', '500000', '--bitrate-start', '3000000', '--bitrate-max', '16000000',
+    '--backend', backend, '--viewer-dir', viewerDir,
+  ];
+}
+
 export class Screens {
   #building = null;
   #sweep = null;
@@ -316,8 +336,9 @@ export class Screens {
       return { needs: 'setup', keys: true, packages: missing?.packages ?? [], canInstall: !missing || !!missing.command };
     }
     const running = this.#running();
-    // An engine started before the keyboard rule keeps the old keys: start a new one.
-    const stale = running && keys && running.keys === false;
+    // An engine started before the keyboard rule keeps the old keys, and one
+    // started with older options keeps them too: start a new one.
+    const stale = running && ((keys && running.keys === false) || running.options !== ENGINE_OPTIONS);
     if (running && !stale && running.display === display.display && await this.#answers(running.port, running.token)) {
       this.#idleSince = null;
       return { port: running.port, token: running.token, backend: running.backend };
@@ -339,14 +360,7 @@ export class Screens {
     const logFd = openSync(logFile, 'w', 0o600);
     let child;
     try {
-      child = spawn(engine, [
-        '--bind', '127.0.0.1', '--port', String(port), '--token-file', tokenFile,
-        // The engine writes to Helm's tunnel on this machine, so it cannot see
-        // how slow the real path is and would send 40 Mbps bursts that wait
-        // in the tunnel. A lower cap keeps keys and the picture in step.
-        '--fps', '60', '--bitrate-min', '500000', '--bitrate-start', '3000000', '--bitrate-max', '8000000',
-        '--backend', display.backend, '--viewer-dir', viewerDir,
-      ], { env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG ?? 'C.UTF-8', ...display.env }, stdio: ['ignore', logFd, logFd], detached: true });
+      child = spawn(engine, engineArgs({ port, tokenFile, backend: display.backend, viewerDir }), { env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG ?? 'C.UTF-8', ...display.env }, stdio: ['ignore', logFd, logFd], detached: true });
     } finally { closeSync(logFd); }
     child.unref();
     const exited = new Promise((resolve) => child.once('exit', resolve));
@@ -362,7 +376,7 @@ export class Screens {
       try { said = readFileSync(logFile, 'utf8').trim().split('\n').filter((l) => !/^\[|x264 \[info\]/.test(l)).slice(-2).join(' '); } catch { /* no log */ }
       return { error: `The screen program did not start${said ? `: ${said}` : '.'}` };
     }
-    writeFileSync(stateFile(), JSON.stringify({ pid: child.pid, port, token, backend: display.backend, display: display.display, keys, startedAt: this.now() }), { mode: 0o600 });
+    writeFileSync(stateFile(), JSON.stringify({ pid: child.pid, port, token, backend: display.backend, display: display.display, keys, options: ENGINE_OPTIONS, startedAt: this.now() }), { mode: 0o600 });
     this.#idleSince = null;
     this.log(`screen: engine on port ${port} (${display.backend} ${display.display})`);
     return { port, token, backend: display.backend, width: caps.width, height: caps.height };

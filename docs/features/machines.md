@@ -64,12 +64,21 @@ owner's home or network to bypass this check.
   opens only from a page on a loopback address (the Helm app on a
   computer), because the forward listens on that computer's 127.0.0.1.
   A phone gets a note instead.
-- **Keys:** the window opens on a card: Take over (fullscreen plus keyboard
-  lock, so Super keys reach the other machine) or Only watch. Super+Ctrl+Esc,
-  leaving fullscreen or going to another window gives the keys back and
-  switches to watch only, with a "Take over again" bar. niri reserves
-  Super+Ctrl+Esc on the owner's machines. A hidden test browser has no
-  keyboard lock, so only Brave or Chrome proves the Super keys.
+- **Keys:** the window works like a virtual machine's window. It opens
+  full screen with control on and the keyboard locked, so Super keys and
+  the browser's own keys (Ctrl+W) reach the other machine. No click first:
+  screens open in their own browser profile (`~/.helm/screen-window`,
+  `seedScreenProfile` in desktop.js) that allows 127.0.0.1 pages automatic
+  fullscreen and keyboard lock. Brave hides keyboard lock behind its Shields
+  (`navigator.keyboard.lock` is missing); its `brave_webcompat_keyboard`
+  setting brings it back (tested 2026-11-23, Brave 1.99). A browser that
+  still asks for a click gets it from the first click or key; that click is
+  not sent on. On niri, Super+Ctrl+Esc (the owner's binding) turns the lock
+  off without telling the page; going to another window and back locks
+  again. Where the page sees Super+Ctrl+Esc, or after leaving fullscreen,
+  control stays on, Super keys stay here, and a bar offers "Send all keys".
+  A hidden test browser has no keyboard lock: prove it in a visible browser
+  on a test display (Xvfb).
 - **Desktop shortcuts on Wayland:** niri never runs its own binds for keys
   from a Wayland virtual keyboard (tested 2026-11-19: `wtype` Super+Esc did
   not open the overview). So the engine presses keys through a kernel
@@ -78,10 +87,15 @@ owner's home or network to bypass this check.
   (`70-helm-screen.rules`) so the signed-in person may use it. Until then a
   Wayland screen asks for Set up; "Open without shortcuts" skips it.
 - **Speed:** every frame goes through a hub, so the delay is the path to the
-  hub and back (about 0.2 to 0.9 s from why through the VM). The owner's
+  hub and back (about 0.4 to 0.9 s from why through the VM). The owner's
   router blocks devices on its Wi-Fi from reaching each other, so why and
   Laptop cannot use a direct path. The engine writes to Helm's tunnel on its
-  own machine and cannot see that path, so Helm caps it at 8 Mbps.
+  own machine, so its TCP numbers show a loopback link. With them it let
+  two or three pictures travel at once: about 3 a second on a 360 ms path.
+  Helm starts it with `--behind-tls-proxy`, which makes it pace by the
+  viewer's acknowledgements instead (13 a second in the same test, the test
+  machine's own limit). `ENGINE_OPTIONS` in screen.js restarts an engine
+  started with older options.
 - **Linux only** for now: X11, or Wayland on niri, sway or Hyprland. GNOME
   and KDE on Wayland lack the screen copy the engine uses.
 - **Prove (driven 2026-11-19):** `$V open --desktop; $V key

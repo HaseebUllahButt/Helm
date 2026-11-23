@@ -19,6 +19,12 @@ import { fragmentTunnelFrame } from './tunnel-frame.js';
  * a large frame with its key. Replies have no key: each answers its own
  * request.
  *
+ * Tunnel streams (`sid:` keys) wait in their own line, apart from chat
+ * lists and replies: the two lines take turns piece by piece, so a live
+ * video never waits behind a 2 MB chat list. Streams take turns frame by
+ * frame. One frame of each line is part sent at a time, so a joiner never
+ * holds more than two part frames from this socket (receivers keep eight).
+ *
  * Pieces go only to a peer that asked for them (`lanes=1` on the hub URL,
  * `lanes: 1` in the hub's welcome; `chunks=1` for the web app's text
  * pieces). Any other peer gets each frame whole, as before.
@@ -91,7 +97,15 @@ export class FrameLanes {
   #binary;
   #maxPieces;
   #low;
-  #large = [];
+  /** Large frames that are not tunnel bytes, first in, first out. */
+  #other = [];
+  /** Tunnel frames: stream key -> its frames. The first key goes next. */
+  #streams = new Map();
+  /** The tunnel frame part sent, which must finish before another starts. */
+  #stream = null;
+  #streamTurn = false;
+  #streamBytes = 0;
+  /** lane key -> { count, bytes } of the frames this queue holds back. */
   #keys = new Map();
   #queued = 0;
   #pumping = false;
@@ -121,6 +135,10 @@ export class FrameLanes {
   get bufferedAmount() { return (this.#sock.bufferedAmount ?? 0) + this.#queued; }
   /** Bytes this queue still holds back. */
   get queued() { return this.#queued; }
+  /** Bytes this queue still holds back for one lane key. */
+  queuedFor(key) { return this.#keys.get(key)?.bytes ?? 0; }
+  /** Bytes this queue holds back for all tunnel streams together. */
+  get queuedStreams() { return this.#streamBytes; }
 
   /**
    * Send one encoded frame.
@@ -129,18 +147,58 @@ export class FrameLanes {
    * @param {string|null} [opts.key]  frames with the same key keep their order (laneKey)
    * @param {string} [opts.rid]       the request a reply answers, named on each text piece
    * @param {(error?: Error) => void} [opts.done]  called once its last byte left this process, or it failed
+   * @param {boolean} [opts.compress]  false: never deflate it (tunnel-frame.js frameCompress)
    */
-  send(data, { key = null, rid, done } = {}) {
+  send(data, { key = null, rid, done, compress } = {}) {
     if (this.#sock.readyState !== 1) { done?.(new Error('socket closed')); return; }
     const bytes = size(data);
-    if (bytes <= PIECE && !(key && this.#keys.has(key))) {
-      this.#write(data, done);
+    const stream = !!key?.startsWith('sid:');
+    // A short stream frame still takes its turn while other frames wait.
+    if (bytes <= PIECE && !(key && this.#keys.has(key)) && !(stream && this.#waiting)) {
+      this.#write(data, done, compress);
       return;
     }
-    this.#large.push({ pieces: this.#cut(data, rid), key, done, bytes });
+    const entry = { pieces: this.#cut(data, rid), key, done, left: bytes, bytes, compress };
+    if (stream) this.#streamBytes += bytes;
+    if (stream) {
+      const line = this.#streams.get(key);
+      if (line) line.push(entry); else this.#streams.set(key, [entry]);
+    } else this.#other.push(entry);
     this.#queued += bytes;
-    if (key) this.#keys.set(key, (this.#keys.get(key) ?? 0) + 1);
+    if (key) {
+      const held = this.#keys.get(key);
+      if (held) { held.count++; held.bytes += bytes; } else this.#keys.set(key, { count: 1, bytes });
+    }
     this.#pump();
+  }
+
+  get #waiting() { return this.#other.length > 0 || this.#streams.size > 0; }
+
+  /** The frame the next piece comes from; the lines take turns. */
+  #next() {
+    const stream = this.#stream ?? this.#streams.values().next().value?.[0];
+    if (!stream) return this.#other[0];
+    if (!this.#other.length) return stream;
+    // A frame near the joiner's limit goes alone: a stream part next to it
+    // could push the joiner over JOIN_LIMIT and lose the frame.
+    // A stream frame already part sent finishes first.
+    if (this.#other[0].bytes > JOIN_LIMIT - 1024 * 1024) return this.#stream ?? this.#other[0];
+    return this.#streamTurn ? stream : this.#other[0];
+  }
+
+  /** A frame has left: take it off its line, and its stream goes last. */
+  #finish(entry) {
+    if (entry.key?.startsWith('sid:')) {
+      this.#stream = null;
+      const line = this.#streams.get(entry.key);
+      line.shift();
+      this.#streams.delete(entry.key);
+      if (line.length) this.#streams.set(entry.key, line);
+    } else this.#other.shift();
+    if (entry.key) {
+      const held = this.#keys.get(entry.key);
+      if (--held.count <= 0) this.#keys.delete(entry.key);
+    }
   }
 
   #cut(data, rid) {
@@ -157,7 +215,7 @@ export class FrameLanes {
     return wholePieces([data]);
   }
 
-  #write(data, done) {
+  #write(data, done, compress) {
     this.#writes++;
     let called = false;
     const after = (error) => {
@@ -165,9 +223,10 @@ export class FrameLanes {
       called = true;
       this.#writes--;
       done?.(error ?? undefined);
-      if (this.#large.length) this.#pump();
+      if (this.#waiting) this.#pump();
     };
-    try { this.#sock.send(data, after); }
+    // `ws` reads a missing option as "compress": pass one only to say no.
+    try { if (compress === false) this.#sock.send(data, { compress: false }, after); else this.#sock.send(data, after); }
     catch (error) { after(error); }
   }
 
@@ -175,7 +234,7 @@ export class FrameLanes {
     if (this.#pumping) return;
     this.#pumping = true;
     try {
-      while (this.#large.length) {
+      while (this.#waiting) {
         if (this.#sock.readyState !== 1) { this.#drop(new Error('socket closed')); return; }
         if ((this.#sock.bufferedAmount ?? 0) >= this.#low) {
           // Bytes another writer put there (a ping, a close) bring no
@@ -186,19 +245,21 @@ export class FrameLanes {
           }
           return;
         }
-        const entry = this.#large[0];
+        const entry = this.#next();
+        const stream = entry.key?.startsWith('sid:');
+        this.#streamTurn = !stream;
         const before = entry.pieces.left();
         const { piece, last } = entry.pieces.next();
         const left = last ? 0 : entry.pieces.left();
-        this.#queued -= Math.min(before - left, this.#queued);
-        if (last) {
-          this.#large.shift();
-          if (entry.key) {
-            const count = this.#keys.get(entry.key) - 1;
-            if (count > 0) this.#keys.set(entry.key, count); else this.#keys.delete(entry.key);
-          }
-        }
-        this.#write(piece, last ? entry.done : undefined);
+        // Parts carry headers: count each frame's own size, no more.
+        const sent = last ? entry.left : Math.min(before - left, entry.left);
+        entry.left -= sent;
+        this.#queued -= sent;
+        if (entry.key) this.#keys.get(entry.key).bytes -= sent;
+        if (stream) this.#streamBytes -= sent;
+        if (last) this.#finish(entry);
+        else if (stream) this.#stream = entry;
+        this.#write(piece, last ? entry.done : undefined, entry.compress);
       }
     } finally {
       this.#pumping = false;
@@ -208,7 +269,10 @@ export class FrameLanes {
   #drop(error) {
     clearTimeout(this.#wake);
     this.#wake = null;
-    const lost = this.#large.splice(0);
+    const lost = [...this.#other.splice(0), ...[...this.#streams.values()].flat()];
+    this.#streams.clear();
+    this.#stream = null;
+    this.#streamBytes = 0;
     this.#keys.clear();
     this.#queued = 0;
     for (const entry of lost) entry.done?.(error);

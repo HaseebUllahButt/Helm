@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { encodeTunnelFrame, decodeTunnelFrame, fragmentTunnelFrame, TunnelFrames } from '../packages/protocol/tunnel-frame.js';
+import { deflateRawSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
+import { encodeTunnelFrame, decodeTunnelFrame, fragmentTunnelFrame, TunnelFrames, compressible, frameCompress } from '../packages/protocol/tunnel-frame.js';
 
 test('binary tunnel bytes round-trip with a JSON fallback for older hops', () => {
   const data = randomBytes(65536), frame = { t: 'tunnel.data', sid: 'copy-1', data };
@@ -49,4 +51,22 @@ test('binary decoding rejects corrupt headers, fragment indexes, duplicates and 
   assert.throws(() => decoder.decode(parts[0]));
   decoder.clear();
   for (const part of parts) decoder.decode(part);
+});
+
+test('video and encrypted tunnel bytes skip deflate; text and other frames keep it', () => {
+  const random = randomBytes(65536);
+  const page = Buffer.from('<div class="row">hello world, a web page from a dev server</div>\n'.repeat(1000)).subarray(0, 65536);
+  const gzip = deflateRawSync(readFileSync(new URL('../packages/connect/src/agent.js', import.meta.url)));
+  assert.equal(compressible(random), false);
+  assert.equal(compressible(gzip), false, 'already compressed');
+  assert.equal(compressible(page), true);
+  assert.equal(compressible(Buffer.alloc(65536)), true);
+  assert.equal(compressible(Buffer.from('tiny')), false, 'too small to gain anything');
+  const video = { t: 'tunnel.data', sid: 's', data: random };
+  assert.equal(frameCompress(video, encodeTunnelFrame(video, true)), false);
+  assert.equal(frameCompress(video, encodeTunnelFrame(video, false)), undefined, 'base64 to an older hop deflates as before');
+  const text = { t: 'tunnel.data', sid: 's', data: page };
+  assert.equal(frameCompress(text, encodeTunnelFrame(text, true)), undefined);
+  const list = { t: 'rpcResult', id: 'x', result: 'a'.repeat(5000) };
+  assert.equal(frameCompress(list, encodeTunnelFrame(list, true)), undefined);
 });

@@ -2,7 +2,7 @@ import { StartReceipts } from './start-receipts.js';
 import { assertRestoreReviewed } from './restore-guard.js';
 import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
-import { encodeTunnelFrame, decodeTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
+import { encodeTunnelFrame, decodeTunnelFrame, frameCompress, TunnelFrames } from '../../protocol/tunnel-frame.js';
 import { FrameLanes, FramePieces, laneKey } from '../../protocol/frame-lanes.js';
 import { createHash } from 'node:crypto';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
@@ -56,7 +56,7 @@ import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfe
 import { Handoffs } from './handoffs.js';
 import { TaskTransfers } from './task-transfer.js';
 import { ChatMoves } from './chat-move.js';
-import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
+import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT, STREAM_WINDOW, tunnelWindow } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { CliUpdater } from './cli-updates.js';
 import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, rebuildStaleApp, watchCheckout } from './update.js';
@@ -298,12 +298,23 @@ export class Link {
   send(t, extra = {}) {
     if (this.#ws?.readyState === WebSocket.OPEN) {
       const frame = { t, ...extra };
-      this.#out.send(encodeTunnelFrame(frame, this.binaryTunnel === true), { key: laneKey(frame) });
+      const encoded = encodeTunnelFrame(frame, this.binaryTunnel === true);
+      this.#out.send(encoded, { key: laneKey(frame), compress: frameCompress(frame, encoded) });
     }
   }
 
   get tunnelWritable() {
     return this.#ws?.readyState === WebSocket.OPEN && this.#out.bufferedAmount < TUNNEL_SOCKET_LIMIT;
+  }
+
+  /**
+   * Whether tunnel streams may queue more. Only stream frames held back
+   * count, not a chat list: the large lane lets stream frames pass those
+   * (frame-lanes.js). All streams share the one budget.
+   */
+  tunnelRoom() {
+    return this.#ws?.readyState === WebSocket.OPEN
+      && (this.#ws.bufferedAmount ?? 0) + this.#out.queuedStreams < TUNNEL_SOCKET_LIMIT;
   }
 
   async #open() {
@@ -1784,7 +1795,7 @@ export class Daemon {
    * interface. This is how ssh reaches a box behind NAT: the daemon already
    * holds the outbound connection, so nothing has to accept an inbound one.
    */
-  #openTunnel(link, { sid, port, flow }) {
+  #openTunnel(link, { sid, port, flow, window }) {
     const wanted = Number(port) || 22;
     if (!this.#allowedTunnelPorts().includes(wanted)) {
       return link.send(T.TUNNEL_CLOSE, { sid, reason: 'port not allowed' });
@@ -1803,13 +1814,19 @@ export class Daemon {
     };
     sock.on('connect', () => {
       const negotiated = flow === 1;
-      link.send(T.TUNNEL_READY, { sid, ...(negotiated ? { flow: 1 } : {}) });
+      // `window`: what this end takes. Offered only when the open carried an
+      // offer, so an older hub that drops it keeps both directions at 512 KiB.
+      const offer = negotiated && window !== undefined ? { window: STREAM_WINDOW } : {};
+      link.send(T.TUNNEL_READY, { sid, ...(negotiated ? { flow: 1, ...offer } : {}) });
       if (negotiated) {
         tunnel.receiver = new TunnelReceiver(sock,
-          bytes => link.send(T.TUNNEL_ACK, { sid, bytes }), err => end(err.message));
+          bytes => link.send(T.TUNNEL_ACK, { sid, bytes }), err => end(err.message), { window: STREAM_WINDOW });
+        // Bytes stay bytes: the link sends them binary to a hub that takes
+        // that, and as base64 to one that does not (tunnel-frame.js).
         tunnel.sender = new TunnelSender(sock,
-          chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }), err => end(err.message),
-          { canSend: () => link.tunnelWritable !== false });
+          chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk }), err => end(err.message),
+          { window: tunnelWindow(window),
+            canSend: () => (link.tunnelRoom ? link.tunnelRoom() : link.tunnelWritable !== false) });
       } else {
         sock.on('data', chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }));
       }

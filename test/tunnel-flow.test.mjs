@@ -9,7 +9,8 @@ import { WebSocketServer } from 'ws';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TunnelSender, TunnelReceiver, TUNNEL_WINDOW, TUNNEL_CHUNK, COPY_WINDOW } from '../packages/connect/src/tunnel-flow.js';
+import { TunnelSender, TunnelReceiver, TUNNEL_WINDOW, TUNNEL_CHUNK, COPY_WINDOW, STREAM_WINDOW, tunnelWindow } from '../packages/connect/src/tunnel-flow.js';
+import { decodeTunnelFrame } from '../packages/protocol/tunnel-frame.js';
 import { T } from '@helm/protocol';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-flow-'));
@@ -251,4 +252,84 @@ test('relay keeps a busy transfer alive without pong and still reaps idle connec
     t.mock.timers.tick(30_000);
     assert.equal(terminated, true, 'silent sockets must still be cleaned up');
   } finally { layer.wss.clients.delete(socket); layer.stop(); }
+});
+
+test('a stream window is what the other end said it takes, and 512 KiB when it said nothing', () => {
+  assert.equal(tunnelWindow(undefined), TUNNEL_WINDOW);
+  assert.equal(tunnelWindow('4194304'), TUNNEL_WINDOW);
+  assert.equal(tunnelWindow(1024), TUNNEL_WINDOW);
+  assert.equal(tunnelWindow(STREAM_WINDOW), STREAM_WINDOW);
+  assert.equal(tunnelWindow(STREAM_WINDOW * 8), STREAM_WINDOW);
+});
+
+/**
+ * A forward from a browser machine (the hub's `client` socket) to an app
+ * on the daemon's machine that streams and never waits. Nobody acknowledges,
+ * so the daemon sends one window of bytes and stops.
+ */
+async function stream(t, { window, binary }) {
+  const sockets = new Set();
+  const app = tcpServer(sock => {
+    sockets.add(sock); sock.on('close', () => sockets.delete(sock)); sock.on('error', () => {});
+    sock.write(randomBytes(STREAM_WINDOW + 1024 * 1024));
+  });
+  await new Promise(r => app.listen(0, '127.0.0.1', r));
+  process.env.HELM_SSH_PORT = String(app.address().port);
+  const daemon = new Daemon({ port: 18787 });
+  const layer = createWsLayer();
+  const target = { readyState: 1, binaryTunnel: true, send: raw => daemon.onFrame(link, decodeTunnelFrame(raw)) };
+  const link = { id: 'test', send: (type, extra) => layer.routeTunnel(target, { t: type, ...extra }) };
+  const frames = [];
+  let bytes = 0, full;
+  const filled = new Promise(r => { full = r; });
+  const expected = window ? STREAM_WINDOW : TUNNEL_WINDOW;
+  const client = { readyState: 1, binaryTunnel: binary, send(raw, opts, cb) {
+    const frame = decodeTunnelFrame(raw);
+    frames.push({ frame, raw, opts: typeof opts === 'function' ? undefined : opts });
+    if (frame.t === T.TUNNEL_DATA) {
+      bytes += Buffer.isBuffer(frame.data) ? frame.data.length : Buffer.from(frame.data, 'base64').length;
+      if (bytes >= expected) full();
+    }
+  } };
+  layer.online.set('target', target);
+  t.after(() => {
+    for (const sock of sockets) sock.destroy();
+    daemon.stop(); layer.online.clear(); layer.stop(); app.close();
+    delete process.env.HELM_SSH_PORT;
+  });
+  layer.routeTunnel(client, { t: T.TUNNEL_OPEN, sid: 'browser', env: 'target', port: app.address().port, flow: 1, ...(window ? { window } : {}) });
+  await filled;
+  // The daemon yields with setImmediate between bursts: give it many turns
+  // to show it stops at the window.
+  for (let i = 0; i < 50; i++) await new Promise(r => setImmediate(r));
+  return { frames, bytes, expected };
+}
+
+test('a new forward goes binary, never deflated, with the 4 MiB window both ends said', async t => {
+  const { frames, bytes, expected } = await stream(t, { window: STREAM_WINDOW, binary: true });
+  assert.equal(bytes, expected);
+  const ready = frames.find(f => f.frame.t === T.TUNNEL_READY).frame;
+  assert.equal(ready.flow, 1);
+  assert.equal(ready.window, STREAM_WINDOW, 'the machine says what it takes');
+  const data = frames.filter(f => f.frame.t === T.TUNNEL_DATA);
+  assert.ok(data.every(f => Buffer.isBuffer(f.raw) && f.opts?.compress === false));
+});
+
+test('an older forward or hub (no window, no binary) gets base64 and 512 KiB, as before', async t => {
+  const { frames, bytes, expected } = await stream(t, { binary: false });
+  assert.equal(bytes, expected);
+  assert.ok(frames.filter(f => f.frame.t === T.TUNNEL_DATA).every(f => typeof f.raw === 'string'));
+});
+
+test('the hub passes a stream window on to the far machine only when it is a number', () => {
+  const layer = createWsLayer();
+  const received = [];
+  layer.online.set('target', { readyState: 1, send: raw => received.push(JSON.parse(raw)) });
+  const client = { readyState: 1, send() {} };
+  try {
+    layer.routeTunnel(client, { t: T.TUNNEL_OPEN, sid: 'a', env: 'target', flow: 1, window: STREAM_WINDOW });
+    layer.routeTunnel(client, { t: T.TUNNEL_OPEN, sid: 'b', env: 'target', flow: 1, window: 'big' });
+    layer.routeTunnel(client, { t: T.TUNNEL_OPEN, sid: 'c', env: 'target', flow: 1 });
+    assert.deepEqual(received.map(f => f.window), [STREAM_WINDOW, undefined, undefined]);
+  } finally { layer.online.clear(); layer.stop(); }
 });

@@ -181,9 +181,38 @@ const wmClass = (url, profile) => `chrome-${new URL(url).hostname}__-${profile}`
  * @param {{ url: string, browser?: string, profile?: string }} opts
  */
 /**
- * Open a page in a window of its own in the Helm app (a remote screen): no
- * tabs, no address bar. The window profile is one browser, so a second
- * --app= opens one more window in the app that runs.
+ * Remote screens open in a browser profile of their own, so these settings
+ * never reach the Helm app window or the owner's browser. Only screen links
+ * (screen.js SCREEN_URL) open there. Each setting is for pages on this
+ * computer's 127.0.0.1, where the screen's forward listens:
+ * - automatic_fullscreen: the screen fills the display with no click first.
+ * - keyboard_lock: the page may take Super keys and the browser's own keys.
+ * - brave_webcompat_keyboard: Brave hides the keyboard lock behind its
+ *   Shields; this lets these pages use it (tested with Brave 1.99).
+ */
+const screenProfile = () => join(HELM_DIR, 'screen-window');
+export const SCREEN_SITE = 'http://127.0.0.1:*,*';
+const SCREEN_SETTINGS = ['automatic_fullscreen', 'keyboard_lock', 'brave_webcompat_keyboard'];
+
+/** Write the screen profile's settings while no browser holds it. True when written. */
+export function seedScreenProfile(dir = screenProfile()) {
+  if (profileInUse(dir)) return false;
+  const prefs = readPrefs(dir) ?? {};
+  const exceptions = { ...prefs.profile?.content_settings?.exceptions };
+  for (const name of SCREEN_SETTINGS) exceptions[name] = { ...exceptions[name], [SCREEN_SITE]: { setting: 1 } };
+  mkdirSync(join(dir, 'Default'), { recursive: true });
+  writeFileSync(prefsFile(dir), JSON.stringify({
+    ...prefs,
+    browser: { ...prefs.browser, custom_chrome_frame: false },
+    profile: { ...prefs.profile, content_settings: { ...prefs.profile?.content_settings, exceptions } },
+  }));
+  return true;
+}
+
+/**
+ * Open a remote screen in a window of its own: no tabs, no address bar.
+ * The screen profile is one browser, so a second --app opens one more
+ * window in the browser that runs (its settings are already in).
  * `env` carries the desktop's display: a user service may start without it.
  */
 export function openAppWindow(url, { env = process.env } = {}) {
@@ -195,10 +224,10 @@ export function openAppWindow(url, { env = process.env } = {}) {
   } catch { /* no launcher yet */ }
   bin ??= BROWSERS.map(which).find(Boolean);
   if (!bin) return false;
-  const dir = windowProfile();
-  seedWindowProfile(dir);
+  const dir = screenProfile();
+  seedScreenProfile(dir);
   try {
-    spawn(bin, [`--user-data-dir=${dir}`, '--profile-directory=Default', '--no-first-run', '--disable-extensions', `--app=${url}`],
+    spawn(bin, [`--user-data-dir=${dir}`, '--profile-directory=Default', '--no-first-run', '--no-default-browser-check', '--disable-extensions', `--app=${url}`],
       { env, detached: true, stdio: 'ignore' }).unref();
     return true;
   } catch { return false; }
