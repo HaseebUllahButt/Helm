@@ -1,11 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, writeFileSync, chmodSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
 import { PiDriver, OmpDriver } from '../packages/connect/src/drivers/pi.js';
+import { ManagedChat } from '../packages/connect/src/chat-cli.js';
 
 // The pi-family fixtures are written by hand from a recorded `omp --mode
 // rpc` session: commands answer as `{type:"response", command:<type>}` and
@@ -190,6 +192,14 @@ async function onMessage(m) {
     case 'get_state': return ok(m, { sessionId: 'live', isStreaming: state.streaming, isCompacting: state.compacting });
     case 'get_commands': return ok(m, { commands: [] });
     case 'get_available_thinking_levels': return ok(m, { levels: ['low', 'high'] });
+    case 'set_thinking_level':
+      if (scenario === 'failed-follow-up') {
+        out({ type: 'agent_start' });
+        text('follow-up answer');
+        out({ type: 'agent_end', messages: [] });
+        out({ type: 'agent_settled' });
+      }
+      return ok(m);
     case 'abort':
       ok(m);
       if (scenario === 'steer-stop') stopped?.();
@@ -211,6 +221,18 @@ async function onMessage(m) {
   }
   if (scenario === 'ext-command') return ok(m);
   if (scenario === 'omp-ext') { ok(m); return out({ type: 'prompt_result', id: m.id, agentInvoked: false }); }
+  if (scenario === 'failed-follow-up') {
+    if (m.streamingBehavior === 'followUp') return ok(m);
+    state.streaming = true;
+    const frames = [
+      { id: m.id, type: 'response', command: m.type, success: true },
+      { type: 'agent_start' },
+      { type: 'agent_end', messages: [{ role: 'assistant', stopReason: 'error', content: [], errorMessage: 'Too many requests' }] },
+      { type: 'auto_retry_end', success: false, finalError: 'Too many requests' },
+    ];
+    process.stdout.write(frames.map(frame => JSON.stringify(frame) + '\\n').join(''));
+    return;
+  }
   if (scenario === 'retry-exhausted' || scenario === 'omp-provider-error' || scenario === 'failed-replay') {
     const messages = [{ role: 'assistant', stopReason: 'error', content: [],
       ...(scenario === 'omp-provider-error' ? { errorMessage: 'The model is at capacity.' } : {}) }];
@@ -335,6 +357,7 @@ test('pi: an overflow compaction and its retry stay inside the one turn', async 
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
   assert.equal(log.of('turn.done').length, 1);
+  assert.equal(log.of('error').length, 0, 'a reply that succeeds after compaction has no error');
   const retried = log.of('item.start').find((e) => e.kind === 'text');
   assert.equal(retried.turnId, done.turnId, 'the retried answer belongs to the turn');
   assert.deepEqual(log.of('status').map((e) => e.status), ['working', 'idle']);
@@ -365,6 +388,27 @@ test('Pi reports the failed reply before the next reply begins in the same read'
   assert.equal(events[failure].message, 'Too many requests');
   assert.ok(events.slice(failure + 1).filter(e => e.type === 'status').every(e => e.status === 'working'));
   assert.equal(driver.status, 'working');
+});
+
+test('a Pi follow-up before settlement keeps the failure on the first reply', async t => {
+  const { driver, log } = livePi(t, 'failed-follow-up');
+  await driver.send('First message');
+  await driver.send('Follow-up message');
+  // The fake agent starts its follow-up only after Helm sees it was accepted.
+  await driver.setEffort('high');
+
+  const [first, second] = log.of('turn.start');
+  assert.deepEqual(log.of('turn.done').map(e => e.turnId), [first.turnId, second.turnId]);
+  assert.deepEqual(log.of('error').map(e => [e.turnId, e.message]), [[first.turnId, 'Too many requests']]);
+  const events = log.events.map((event, i) => ({ ...event, seq: i + 1 }));
+  const connection = new EventEmitter();
+  connection.rpc = async () => ({ events, last: events.length, pending: [] });
+  let output = '';
+  const chat = new ManagedChat(connection, 's', { write: text => { output += text; } });
+  t.after(() => chat.close());
+  await chat.sync();
+  assert.match(output, /\[error\] Too many requests/);
+  assert.equal(output.match(/\[ok\]/g)?.length, 1);
 });
 
 test('omp: auto compaction after the turn reads as working, then idle', async (t) => {
