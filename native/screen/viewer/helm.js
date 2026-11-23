@@ -165,9 +165,18 @@
   });
   // The toolbar's Release control: the keys must come back here too, or the
   // lock keeps shortcuts that the viewer then drops.
+  // Take control there sends all keys again.
+  let watching = false;
   if (controlButton) new MutationObserver(() => {
-    if (controlButton.getAttribute('aria-pressed') !== 'false' || !(locked || wanted)) return;
-    void giveBack(`You only watch ${name}. Your keys work here.`);
+    const control = controlButton.getAttribute('aria-pressed') !== 'false';
+    if (!control && !watching) {
+      watching = true;
+      void giveBack(`You only watch ${name}. Your keys work here.`);
+    } else if (control && watching) {
+      watching = false;
+      bar.hidden = true;
+      if (lockable) void grab({ gesture: true });
+    }
   }).observe(controlButton, { attributes: true, attributeFilter: ['aria-pressed'] });
   window.addEventListener('focus', () => {
     canvas?.focus();
