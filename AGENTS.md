@@ -63,6 +63,23 @@ and say which items applied:
 
 ## Testing
 
+Helm keeps a small test suite. Most fixes need no new test.
+
+- Write a test only for behavior that can break and hurt the owner: lost or
+  bad data, saving and loading, message delivery, sessions, process start and
+  stop, permissions, git, parsing outside formats, and race fixes.
+- Do not test: what the code shape already guarantees, small or obvious
+  logic, text and labels, smoke runs, "the mock was called" checks, wiring,
+  or static markup.
+- Add a case to an existing test before you make a new file. Test at one
+  layer only, the lowest one that fails without the fix.
+- Write a browser test only when the check needs a real browser: layout,
+  scroll, focus, or pointer and key input. Otherwise write a fast unit test.
+- For a visual bug, show a before and after screenshot. Add no test.
+- A test that fails at random gets fixed or deleted. Never rerun it to see
+  if it passes.
+- `npm run check` lets two test runs use the machine at once. Others wait
+  their turn. Do not get around this.
 - While you work, run the test files you touch by name:
   `npm run test:smart -- test/a.test.mjs`. Rerun only failed files.
 - Run `npm run check` once before you commit. It type-checks the web app when

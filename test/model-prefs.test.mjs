@@ -127,28 +127,6 @@ test('what a phone sends is not trusted to be a model name', async () => {
   assert.equal(modelPrefs(oc), null);
 });
 
-test('applyModelPrefs trims the picker but keeps the tail in reach', async () => {
-  const { applyModelPrefs } = await import('../packages/connect/src/settings.js');
-  const list = { default: 'cli-def', models: ['a', 'b', 'c', 'd'] };
-
-  const out = applyModelPrefs(list, { default: 'c', approved: ['a', 'c'] });
-  assert.deepEqual(out.models, ['a', 'c']);
-  assert.deepEqual(out.more, ['b', 'd']);
-  assert.equal(out.default, 'c', 'the configured default outranks the CLI one');
-
-  // `all` is what the settings editor asks for: everything, unsplit.
-  assert.deepEqual(applyModelPrefs(list, { default: 'c', approved: ['a'] }, { all: true }).models, ['a', 'b', 'c', 'd']);
-
-  // A default that is not approved still lands in the picker.
-  assert.deepEqual(applyModelPrefs(list, { default: 'd', approved: ['a'] }).models, ['a', 'd']);
-
-  // An approved set that matched nothing is stale; a long list beats an empty one.
-  assert.deepEqual(applyModelPrefs(list, { default: null, approved: ['zzz'] }).models, ['a', 'b', 'c', 'd']);
-
-  // No prefs at all leaves the list untouched.
-  assert.equal(applyModelPrefs(list, null), list);
-});
-
 test('a new session starts with the account default; a pick always wins', async t => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { saveModelPrefs } = await import('../packages/connect/src/settings.js');
@@ -193,7 +171,6 @@ test('a new session uses machine-held CLI defaults and starts notifications on',
   assert.equal(picked.speed, 'normal');
 });
 
-
 test('a single default change preserves newer choices from another screen', async () => {
   const { saveStartPrefs, startPrefs } = await import('../packages/connect/src/settings.js');
   const profile = { engine: 'codex', cmd: 'codex', env: { CODEX_HOME: '/private-default-test' } };
@@ -205,4 +182,28 @@ test('a single default change preserves newer choices from another screen', asyn
   assert.deepEqual(startPrefs(profile), { effort: 'high', mode: 'read' });
   saveStartPrefs(profile, {});
   assert.equal(startPrefs(profile), null);
+});
+
+test('a picker change keeps the fields it does not mention and leaves model defaults alone', async () => {
+  const { pickerPrefs, savePickerPrefs, saveModelPrefs, modelPrefs, loadSettings } = await import('../packages/connect/src/settings.js');
+  savePickerPrefs({ hidden: ['grok||', 'cursor||'] });
+  savePickerPrefs({ last: 'codex|~/.codex-personal|' });
+  savePickerPrefs({ favs: { codex: ['gpt-6-luna'] } });
+  savePickerPrefs({ favs: { claude: ['claude-fable-5-1'] } });
+  savePickerPrefs({ agent: 'claude|~/.claude-personal|' });
+  savePickerPrefs({ last: 'codex|~/.codex-personal|' });
+  assert.deepEqual(pickerPrefs(), {
+    hidden: ['grok||', 'cursor||'],
+    last: 'codex|~/.codex-personal|',
+    agent: 'claude|~/.claude-personal|',
+    favs: { codex: ['gpt-6-luna'], claude: ['claude-fable-5-1'] },
+  });
+  // It is the machine's file, read fresh: what another device sees.
+  assert.deepEqual(loadSettings().picker.hidden, ['grok||', 'cursor||']);
+  const codex = { engine: 'codex', env: {} };
+  saveModelPrefs(codex, { default: 'gpt-6-luna', approved: [] });
+  savePickerPrefs({ hidden: ['x'] });
+  assert.equal(modelPrefs(codex).default, 'gpt-6-luna');
+  assert.deepEqual(loadSettings().picker.hidden, ['x']);
+  assert.deepEqual(pickerPrefs().favs.codex, ['gpt-6-luna']);
 });

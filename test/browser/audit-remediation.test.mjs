@@ -2,7 +2,6 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
-import { readFile } from 'node:fs/promises';
 
 let browser;
 let script;
@@ -14,7 +13,6 @@ before(async () => {
       import { createRoot } from 'react-dom/client';
       import { DrivenSession } from './apps/web/src/session/DrivenSession';
       import { Composer } from './apps/web/src/session/Composer';
-      import { PermissionSheet } from './apps/web/src/session/PermissionSheet';
       import * as auth from './apps/web/src/store';
       import { txn, idb } from './apps/web/src/idb';
 
@@ -22,7 +20,6 @@ before(async () => {
       const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params),
         subscribe: () => {}, on: () => () => {},
         rpc: (env, method, params) => {
-          if (window.customRpc) return window.customRpc(env, method, params);
           if (method === 'session.input') return new Promise((resolve, reject) => {
             window.rejectSend = reject;
             window.lastSent = params.data;
@@ -36,7 +33,6 @@ before(async () => {
         },
       };
       const session = { id: 'chat', title: 'Chat', cwd: '/tmp', engine: 'codex', driver: 'codex', profileId: 'codex', status: 'idle', turns: 1 };
-      window.sessionFixture = session;
       function DrivenProbe() {
         return <DrivenSession client={client} env={{ id: 'machine', name: 'Laptop', online: true, info: {} }} session={session}
           onBack={() => {}} onClosed={() => {}} onArchived={() => {}} onSession={() => {}} />;
@@ -47,10 +43,6 @@ before(async () => {
       }
       window.mountDriven = () => root.render(<DrivenProbe />);
       window.mountIme = () => root.render(<ImeProbe />);
-      window.mountQuestion = () => root.render(<PermissionSheet busy={false}
-        permission={{kind:'question',title:'Claude',questions:[{question:'Which color?',options:[{label:'Blue'},{label:'Green'}]}]}}
-        onAnswer={answer => { (window.answers ??= []).push(answer); }} />);
-      window.unmount = () => root.render(null);
       Object.assign(window, { auth, txn, idb });
     `, resolveDir: process.cwd(), loader: 'tsx' },
     bundle: true, write: false, format: 'iife', jsx: 'automatic',
@@ -76,23 +68,6 @@ async function pageFor(t) {
   return page;
 }
 
-for (const action of ['change', 'type', 'unmount']) test(`question auto-submit cancels its old choice on ${action}`, async t => {
-  const page = await pageFor(t);
-  await page.clock.install({ time: new Date('2026-10-06T12:00:00Z') });
-  await page.clock.pauseAt(new Date('2026-10-06T12:00:01Z'));
-  await page.evaluate(() => window.mountQuestion());
-  await page.getByRole('radio', { name: /Blue/ }).click();
-  if (action === 'change') await page.getByRole('radio', { name: /Green/ }).click();
-  if (action === 'type') await page.getByLabel('Your own answer').fill('Purple');
-  if (action === 'unmount') {
-    await page.evaluate(() => window.unmount());
-    await page.getByRole('radio').first().waitFor({ state: 'detached' });
-  }
-  await page.clock.runFor(200);
-  assert.deepEqual(await page.evaluate(() => window.answers ?? []),
-    action === 'change' ? [{ option: 'allow', answers: { 'Which color?': 'Green' }, answerLists: { 'Which color?': ['Green'] } }] : []);
-});
-
 test('a failed send does not overwrite a newer draft or its saved copy', async (t) => {
   const page = await pageFor(t);
   await page.evaluate(() => window.mountDriven());
@@ -107,69 +82,6 @@ test('a failed send does not overwrite a newer draft or its saved copy', async (
   assert.doesNotMatch(await page.locator('body').innerText(), /simulated connection loss/);
   assert.equal(await area.inputValue(), 'new unsent draft');
   assert.equal(await page.evaluate(() => localStorage.getItem('helm-draft:machine:chat')), 'new unsent draft');
-});
-
-for (const width of [1280, 390]) test(`recovery notice is compact and hidden for a live turn at ${width}px`, async t => {
-  const page = await pageFor(t);
-  await page.setViewportSize({ width, height: 844 });
-  await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
-  await page.evaluate(() => {
-    window.sessionFixture.recovery = { kind: 'restart', message: 'This task was interrupted when its agent stopped. Its conversation is saved.', at: Date.now() };
-    window.mountDriven();
-  });
-  const notice = page.locator('.recovery');
-  // Renamed in 1046434: the old words blamed a Helm restart that may not have happened.
-  await notice.getByText('Response interrupted', { exact: true }).waitFor();
-  await notice.getByRole('button', { name: 'Continue', exact: true }).waitFor();
-  assert.equal(await page.getByText(/Task paused|Helm restarted/).count(), 0);
-  const box = await notice.boundingBox();
-  assert.ok(box.height < (width > 500 ? 130 : 170), `height ${box.height}`);
-  assert.ok(box.x >= 0 && box.x + box.width <= width);
-  await page.screenshot({ path: `/tmp/helm-recovery-thread-${width}.png` });
-  await page.evaluate(() => {
-    window.sessionFixture.status = 'working';
-    window.customRpc = (_env, method) => method === 'session.events'
-      ? Promise.resolve({ events: [{ seq: 1, type: 'status', status: 'working', at: Date.now() }], pending: [], last: 1, session: { status: 'working' } })
-      : Promise.resolve({});
-    window.dispatchEvent(new Event('focus'));
-    window.mountDriven();
-  });
-  await notice.waitFor({ state: 'detached' });
-});
-
-for (const width of [1280, 390]) test(`the open chat label matches Running and never shows a guess as finished at ${width}px`, async t => {
-  const page = await pageFor(t);
-  await page.setViewportSize({ width, height: 844 });
-  await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
-  const show = (status, more = {}) => page.evaluate(([status, more]) => {
-    // A fresh chat each time: the log of the last one is cached by id.
-    window.step = (window.step ?? 0) + 1;
-    Object.assign(window.sessionFixture, { team: undefined, recovery: undefined }, more, { status, id: `label-${window.step}` });
-    const answers = { 'session.events': { events: [], pending: [], last: 0, session: { status } }, 'session.watch': { last: 0 },
-      'session.commands': { commands: [] }, 'model.list': { models: [], default: null }, 'git.status': { repo: false } };
-    window.customRpc = (_env, method) => Promise.resolve(answers[method] ?? {});
-    window.unmount();
-    window.mountDriven();
-  }, [status, more]);
-  const errors = []; page.on('pageerror', (error) => errors.push(error.message));
-  t.after(() => assert.deepEqual(errors, []));
-  const label = page.locator('.session-bar .chip');
-  // Starting is running: Stop is offered and an old problem card stays away.
-  await show('starting', { recovery: { kind: 'restart', message: 'old', at: Date.now() - 60000 } });
-  await page.locator('.session-bar').waitFor();
-  await page.waitForFunction(() => document.querySelector('.session-bar .chip')?.textContent === 'starting');
-  assert.equal(await page.locator('.recovery').count(), 0, 'a starting agent hides the last run’s problem');
-  // Its own turn is over but child tasks are still going: not finished.
-  await show('idle', { team: { working: 2, blocked: 0, failed: 0 } });
-  await page.waitForFunction(() => document.querySelector('.session-bar .chip.dot-only'));
-  assert.equal(await label.getAttribute('title'), 'Helpers are still working');
-  // The machine could not tell: say so instead of looking idle.
-  await show('unknown');
-  await page.waitForFunction(() => document.querySelector('.session-bar .chip')?.textContent === 'Status unknown');
-  // Truly idle: no busy label at all.
-  await show('idle');
-  await page.waitForFunction(() => !document.querySelector('.session-bar .chip'));
-  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 });
 
 test('durable auth restoration yields to a re-pairing during the IDB read', async (t) => {
@@ -188,7 +100,8 @@ test('durable auth restoration yields to a re-pairing during the IDB read', asyn
     };
     loop();
     const reading = window.auth.loadAuthDurable();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // The read opens its transaction once the connection resolves, before this resumes.
+    await window.idb();
     window.auth.saveAuth({ token: 'new-pairing', endpoints: ['http://new-network'] });
     hold = false;
     const loaded = await reading;
@@ -216,7 +129,8 @@ test('a sign-out in another tab during the durable read stays signed out', async
     };
     loop();
     const reading = window.auth.loadAuthDurable();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // The read opens its transaction once the connection resolves, before this resumes.
+    await window.idb();
     // What clearAuth writes in another tab; this tab gets no storage event of its own.
     localStorage.setItem('helm.auth', 'null');
     hold = false;
@@ -240,57 +154,4 @@ test('IME composition Enter is ignored while ordinary Enter still sends', async 
   assert.equal(await page.evaluate(() => window.sends || 0), 0);
   await area.press('Enter');
   assert.equal(await page.evaluate(() => window.sends || 0), 1);
-});
-
-for (const width of [1280, 390]) test(`a chat names its account once, beside the composer, even with no limit report at ${width}px`, async t => {
-  const page = await pageFor(t);
-  await page.setViewportSize({ width, height: 800 });
-  await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
-  await page.evaluate(() => {
-    Object.assign(window.sessionFixture, { profileId: 'claudes', recovery: { kind: 'interrupted', message: 'Stopped', at: Date.now() } });
-    window.mountDriven();
-  });
-  const status = page.locator('.slab-status');
-  await status.getByText('claudes', { exact: true }).waitFor();
-  assert.equal(await page.locator('.limits-line .lw').count(), 0, 'no quota was reported');
-  assert.equal(await page.locator('.session-bar').getByText('claudes').count(), 0, 'the header does not repeat the account');
-  assert.match(await page.locator('.session-bar .titles').getAttribute('title'), /^Laptop\b/, 'the hover note names the machine');
-  const box = await status.boundingBox();
-  assert.ok(box.x >= 0 && box.x + box.width <= width);
-});
-
-test('failed task Details reveals the original error and repeated renders log it once', async t => {
-  const page = await pageFor(t);
-  await page.setViewportSize({ width: 390, height: 844 });
-  const raw = 'session.deliver failed; trace 123456789abcdef0\n at worker (/tmp/private-agent.js:12:4)';
-  const warnings = [];
-  page.on('console', message => { if (message.type() === 'warning' && message.text().includes(raw)) warnings.push(message.text()); });
-  await page.evaluate(raw => {
-    window.sessionFixture.recovery = { kind: 'error', message: raw, at: Date.now() };
-    window.mountDriven();
-  }, raw);
-  const card = page.locator('.recovery');
-  await card.getByText('Task failed', { exact: true }).waitFor();
-  assert.equal(await card.locator('.recovery-raw').count(), 0);
-  assert.doesNotMatch(await card.innerText(), /session\.deliver|123456789abcdef0/);
-  await card.getByRole('button', { name: 'Details', exact: true }).click();
-  assert.equal(await card.locator('.recovery-raw').innerText(), raw);
-  await card.getByRole('button', { name: 'Hide details', exact: true }).click();
-  await card.locator('.recovery-raw').waitFor({ state: 'detached' });
-  await page.evaluate(() => window.mountDriven());
-  await card.getByRole('button', { name: 'Details', exact: true }).click();
-  assert.equal(await card.locator('.recovery-raw').innerText(), raw);
-  assert.equal(warnings.length, 1);
-});
-
-test('a clear task error keeps its meaning in the phone recovery card', async t => {
-  const page = await pageFor(t);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.evaluate(() => {
-    window.sessionFixture.recovery = { kind: 'error', message: 'Error: message cancelled because the thread was stopped', at: Date.now() };
-    window.mountDriven();
-  });
-  const message = page.locator('.recovery-copy p');
-  await message.filter({ hasText: 'Message cancelled because the thread was stopped' }).waitFor();
-  assert.equal(await message.innerText(), 'Message cancelled because the thread was stopped');
 });

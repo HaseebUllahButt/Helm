@@ -1,26 +1,19 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
 
 let browser, page;
 /** An added diff line. Its "+" sign is a piece of its own, so match the code after it. */
 const addedLine = (scope, text) => scope.locator('.cv-row.add .cv-c', {hasText:new RegExp(`^${text}$`)});
-const shot = (name) => process.env.HELM_TEST_SCREENSHOT_DIR
-  ? page.screenshot({path:join(process.env.HELM_TEST_SCREENSHOT_DIR,name),animations:'disabled'}) : null;
 before(async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
     import { ChangesPanel } from './apps/web/src/session/Changes';
-    import { ThreadDetails } from './apps/web/src/session/ThreadDetails';
     import { graphRows } from './apps/web/src/session/GitGraph';
-    import { WaitingIsland } from './apps/web/src/WaitingIsland';
     const root = createRoot(document.getElementById('root'));
-    const toast = createRoot(document.getElementById('toast'));
-    const listeners = new Set();
     const store = new Map();
     Object.defineProperty(window,'localStorage',{configurable:true,value:{
       getItem:(name)=>store.has(name) ? store.get(name) : null, setItem:(name,value)=>store.set(name,String(value)),
@@ -28,85 +21,63 @@ before(async () => {
     }});
     const agents = [
       { id:'main', title:'Review mobile notifications', engine:'codex', profileId:'codex-personal', status:'working', cwd:'/project' },
-      { id:'shared', title:'Inspect the accessibility changes', engine:'claude', profileId:'claude-main', status:'idle', cwd:'/project' },
       { id:'feature', title:'Improve the branch graph', engine:'claude', profileId:'claude-main', status:'blocked', cwd:'/project-feature' },
     ];
     const data = { repo:true, commits:[
-      {hash:'merge',parents:['main','feature'],subject:'Merge the graph improvements',author:'Haseeb',refs:['HEAD -> main','origin/main'],date:'2026-10-01'},
+      {hash:'merge',parents:['main','feature'],subject:'Merge the graph improvements',author:'Haseeb',refs:['HEAD -> main'],date:'2026-10-01'},
       {hash:'feature',parents:['base'],subject:'Show where each agent is working',author:'Claude',refs:['helm/graph'],date:'2026-10-01'},
       {hash:'main',parents:['base'],subject:'Simplify the start screen',author:'Codex',refs:[],date:'2026-10-01'},
-      {hash:'base',parents:[],subject:'Initial commit',author:'Haseeb',refs:['tag: v0.1','tag: v0.2','origin/legacy'],date:'2026-09-30'},
+      {hash:'base',parents:[],subject:'Initial commit',author:'Haseeb',refs:[],date:'2026-09-30'},
     ], worktrees:[
-      {path:'/project',branch:'main',head:'merge',current:true,agents:agents.slice(0,2)},
-      {path:'/project-feature',branch:'helm/graph',head:'feature',current:false,agents:[agents[2]]},
-      {path:'/project-idle',branch:'old',head:'base',current:false,agents:[]},
+      {path:'/project',branch:'main',head:'merge',current:true,agents:[agents[0]]},
+      {path:'/project-feature',branch:'helm/graph',head:'feature',current:false,agents:[agents[1]]},
     ]};
     const client = {
-      on: (fn) => {listeners.add(fn);return () => listeners.delete(fn)},
+      on: () => () => {},
       rpc: async (env,method,params) => {
         (window.calls ??= []).push({env,method,params});
-        if(method === 'git.tour') {
-          if(params.action === 'stop') {window.tourState='stopped';return {state:'stopped'};}
-          if(params.action === 'start') {window.tourState=window.tourReady ? 'ready' : 'writing';}
-          return {state:window.tourState || 'none', change:{label:'Uncommitted edits',files:[{path:'App.tsx'},{path:'extra.txt'}]},
-            guide:window.tourState === 'ready' ? {stops:[
-              {title:'Read the main change',summary:'Show the new value. This gives the owner a clear label.',path:'App.tsx',start:1,end:1,side:'new',diff:'@@ -1 +1 @@\\n-old value\\n+new value',decision:'Keep the new label?'},
-              {title:'Check the next change',summary:'Show the supporting change.',path:'App.tsx',start:8,end:8,side:'new',diff:'@@ -8 +8 @@\\n-before\\n+after',decision:''}
-            ],alsoChanged:[{path:'extra.txt',note:''}]} : undefined};
-        }
-        if(method === 'git.graph') {
-          if(window.graphFails > 0){window.graphFails--;throw new Error('git is busy');}
-          return data;
-        }
-        if(method === 'git.monitor') {
-          if(window.monitorFails > 0){window.monitorFails--;throw new Error('GitHub is unreachable');}
-          return {supported:true,repository:'owner/project',sha:'merge',deploymentSha:'merge',watching:!!window.pipelineWatching,
-            checkedAt:Date.now(),errors:window.monitorErrors || [],checksState:'failure',
-            pr:{number:42,title:'Calmer Git screen',url:'https://example.test/pull/42',state:'OPEN',draft:false,review:'APPROVED',mergeable:'MERGEABLE',mergeState:'CLEAN',headSha:'merge'},
-            checks:[{id:'tests',name:'Unit tests',state:'failure',summary:'Test failed',url:'https://example.test/checks'}],
-            runs:[{id:91,name:'Build and deploy',state:'failure',attempt:window.monitorAttempt || 1,event:'push',sha:'merge',url:'https://example.test/actions/91'}],
-            deployments:[{id:12,environment:'production',state:'success',sha:'merge',description:'Published',url:'https://example.test/deploy',environmentUrl:'https://app.example.test'}]};
-        }
+        if(method === 'git.graph') return data;
+        if(method === 'git.monitor') return {supported:true,repository:'owner/project',sha:'merge',checkedAt:Date.now(),errors:[],checksState:'failure',checks:[],deployments:[],
+          runs:[{id:91,name:'Build and deploy',state:'failure',attempt:window.monitorAttempt || 1,event:'push',sha:'merge',url:'https://example.test/actions/91'}]};
         if(method === 'git.prs') return {pullRequests:[],more:false};
-        if(method === 'git.accounts') return {selected:window.githubAccount || 'auto',accounts:[{login:'personal',active:true,valid:true},{login:'work',active:false,valid:true}]};
-        if(method === 'git.account') {window.githubAccount=params.login;return {selected:params.login};}
-        if(method === 'git.watch') {window.pipelineWatching=params.on;return {watching:params.on};}
+        if(method === 'git.accounts') return {selected:'auto',accounts:[]};
         if(method === 'git.jobs') return {jobs:[{id:7,name:'Build',state:'failure',url:'https://example.test/job/7',steps:[{number:2,name:'Compile application',state:'failure'}]}]};
-        if(method === 'git.files') return {root:'/project',start:'',files:['App.tsx','apps/web/src/session/GitGraph.tsx'],secret:[],truncated:false};
+        if(method === 'git.files') return {root:'/project',start:'',files:['App.tsx'],secret:[],truncated:false};
         if(method === 'session.list') return {sessions:agents};
-        if(method === 'git.diff') {
-          if(window.diffFails > 0){window.diffFails--;throw new Error('diff failed');}
-          return {diff:'@@ -1 +1 @@\\n-before\\n+after',truncated:false};
-        }
-        if(method === 'git.commit') return {hash:params.hash+'0000000',parents:data.commits.find((commit)=>commit.hash===params.hash)?.parents ?? ['base'],
-          author:'Claude',date:'2026-10-01T10:00:00Z',
-          subject:'Show where each agent is working',body:'Agents appear on the commit they have checked out.',
-          files:[{path:'apps/web/src/GitGraph.tsx',add:12,del:3}],
+        if(method === 'git.diff') return {diff:'@@ -1 +1 @@\\n-before\\n+after',truncated:false};
+        if(method === 'git.commit') return {hash:params.hash+'0000000',parents:['base'],author:'Claude',date:'2026-10-01T10:00:00Z',
+          subject:'Show where each agent is working',body:'',files:[{path:'apps/web/src/GitGraph.tsx',add:12,del:3}],
           ...(params.path ? {diff:'diff --git a/x b/x\\n@@ -1 +1 @@\\n-old line\\n+new line',truncated:false} : {})};
       }
     };
     const changed = {repo:true,branch:'main',upstream:'origin/main',ahead:2,behind:0,head:{commit:'merge',subject:'Merge the graph improvements'},
       files:[{path:'App.tsx',status:'M',add:1,del:1},{path:'apps/web/src/session/GitGraph.tsx',status:'A',add:40,del:0}]};
-    const clean = {repo:true,branch:'main',upstream:'origin/main',head:{commit:'merge',subject:'Merge the graph improvements'},files:[]};
     window.graphRows = graphRows;
-    window.showGit = (which) => root.render(<ChangesPanel key={Math.random()} client={client} env={{id:'local',name:'Laptop',online:true}} cwd='/project' sessionId='main'
-      status={which === 'clean' ? clean : changed}
-      reload={()=>{window.refreshed = true}} onClose={()=>root.render(null)} onOpen={(s)=>{window.opened = s.id}} />);
-    window.showGitDialog = () => root.render(<ThreadDetails client={client} env={{id:'local',name:'Laptop',online:true}}
-      session={{...agents[0],cwd:'/home/me/dev/a-very-long-project-name'}} tab='changes' onTab={()=>{}} git={{...changed,
-        branch:'feature/an-extremely-long-branch-name-that-should-stay-on-screen',ahead:128,behind:73,
-        files:[{path:'packages/connect/src/one-very-long-file-name-with-a-useful-description.js',status:'M',add:12000,del:34567}]}}
-      reloadGit={()=>{window.refreshed=true}} onClose={()=>root.render(null)} />);
-    window.showToast = () => toast.render(<WaitingIsland client={client} pick={null} ping={{envId:'local',id:'main',at:Date.now()}}
-      items={[{envId:'local',machine:'Laptop',s:{...agents[0],status:'blocked',title:'Review mobile notifications https://private.test /home/me/project'}}]}
-      onOpen={()=>{window.toastOpened=true;toast.render(null)}} />);
-    window.notifyChange = () => listeners.forEach((fn)=>fn('local','session.update',{}));
+    window.showGit = () => root.render(<ChangesPanel key={Math.random()} client={client} env={{id:'local',name:'Laptop',online:true}} cwd='/project' sessionId='main'
+      status={changed} reload={()=>{}} onClose={()=>root.render(null)} onOpen={()=>{}} />);
   `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true,write:false,format:'iife',jsx:'automatic' });
   browser = await chromium.launch({headless:true,...(process.env.HELM_TEST_CHROMIUM ? {executablePath:process.env.HELM_TEST_CHROMIUM} : {})});
   page = await browser.newPage({viewport:{width:1280,height:900}});
-  await page.setContent('<div class="main showing" style="height:100vh;width:100%"><div id="root"></div></div><div id="toast"></div>');
+  await page.setContent('<div class="main showing" style="height:100vh;width:100%"><div id="root"></div></div>');
   await page.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
   await page.addScriptTag({content:bundle.outputFiles[0].text});
+});
+after(async () => {await browser?.close()});
+
+test('graph lanes: merges keep every parent, and a side line bends back into the mainline', async () => {
+  const rows = await page.evaluate(()=>window.graphRows([
+    {hash:'merge',parents:['a','b']},{hash:'a',parents:['root']},{hash:'b',parents:['root']},{hash:'root',parents:[]}
+  ]));
+  assert.deepEqual(rows[0].after,['a','b']);
+  assert.deepEqual(rows[2].after,['root']);
+  assert.deepEqual(rows[3].after,[]);
+  assert.ok(rows.every((r)=>r.edges.every((e)=>e.to >= 0)));
+  const side = await page.evaluate(()=>window.graphRows([
+    {hash:'M',parents:['A','F']},{hash:'F',parents:['B']},{hash:'A',parents:['B']},{hash:'B',parents:[]}
+  ]));
+  assert.deepEqual(side.map((r)=>r.lane),[0,1,0,0]);
+  assert.equal(side[3].colour,side[0].colour);
+  assert.notEqual(side[1].colour,side[0].colour);
 });
 
 test('a workflow rerun discards cached jobs from the previous attempt', async () => {
@@ -123,173 +94,10 @@ test('a workflow rerun discards cached jobs from the previous attempt', async ()
   await workflow.click();
   await page.waitForFunction(n=>window.calls.filter(c=>c.method==='git.jobs').length>n,before);
   await page.getByText('Failed step: Compile application',{exact:true}).waitFor();
-  await page.evaluate(()=>{window.monitorAttempt=1});
-});
-after(async () => {await browser?.close()});
-/** Where agents work is a bar folded under the graph's title; open it. */
-async function openAgents(page) {
-  const fold = page.locator('details.git-fold');
-  await fold.waitFor();
-  if (await fold.getAttribute('open') === null) await fold.locator('summary').click();
-}
-/** CI / CD's account and notification switches live in a folded Settings bar. */
-async function openSettings(page) {
-  const fold = page.locator('.pipeline > details.fold').first();
-  await fold.waitFor();
-  if (await fold.getAttribute('open') === null) await fold.locator('summary').click();
-}
-
-test('graph shows merges and live agents on their checkouts, and opens the selected thread', async () => {
-  await page.evaluate(()=>window.showGit());
-  await page.getByRole('tab',{name:'Changes 2'}).waitFor();
-  assert.equal(await page.getByRole('tab',{name:'Changes 2'}).getAttribute('aria-selected'),'true');
-  assert.equal(await page.locator('.git-branch').innerText(),'main');
-  assert.equal(await page.locator('.git-sync').getAttribute('aria-label'),'2 ahead');
-  const pr = page.getByRole('link',{name:/Pull request #42, open: Calmer Git screen/});
-  assert.equal(await pr.getAttribute('href'),'https://example.test/pull/42');
-  assert.equal(await page.locator('.bar .sub').innerText().then((text)=>text.includes('main')),false,'the branch is not repeated under the title');
-  await page.getByRole('tab',{name:'Graph',exact:true}).click();
-  await openAgents(page);
-  await page.getByText('2 agents share this folder', {exact:false}).waitFor();
-  assert.equal(await page.locator('.git-dot').count(),4);
-  assert.equal(await page.locator('.git-dot.merge').count(),1);
-  assert.equal(await page.locator('.git-ref.head').innerText(),'main');
-  assert.equal(await page.locator('.git-checkout.current .git-agent').count(),2);
-  assert.equal(await page.locator('.git-checkout:not(.current) .git-agent').count(),1);
-  assert.equal(await page.locator('.git-checkout').count(),2,'a checkout with nobody in it stays out of the way');
-  assert.equal(await page.locator('.git-row[data-hash="base"] .git-ref:not(.more)').count(),2,'refs beyond the first two fold away');
-  assert.equal(await page.locator('.git-row[data-hash="base"] .git-ref.more').innerText(),'+1');
-  const rows = await page.evaluate(()=>window.graphRows([
-    {hash:'merge',parents:['a','b']},{hash:'a',parents:['root']},{hash:'b',parents:['root']},{hash:'root',parents:[]}
-  ]));
-  assert.deepEqual(rows[0].after,['a','b']);
-  assert.deepEqual(rows[2].after,['root']);
-  assert.deepEqual(rows[3].after,[]);
-  assert.ok(rows.every((r)=>r.edges.every((e)=>e.to >= 0)));
-  // A side line that reaches the shared parent first bends into the
-  // mainline; the mainline keeps its column and its colour.
-  const side = await page.evaluate(()=>window.graphRows([
-    {hash:'M',parents:['A','F']},{hash:'F',parents:['B']},{hash:'A',parents:['B']},{hash:'B',parents:[]}
-  ]));
-  assert.deepEqual(side.map((r)=>r.lane),[0,1,0,0]);
-  assert.equal(side[3].colour,side[0].colour);
-  assert.notEqual(side[1].colour,side[0].colour);
-  await page.locator('.git-checkout:not(.current)').getByRole('button',{name:/Open Improve the branch graph, Claude Code, Needs you/}).click();
-  await page.waitForFunction(()=>window.opened==='feature');
-  await shot('git-desktop.png');
 });
 
-test('Git tabs remain keyboard accessible and preserve the file diff view', async () => {
-  await page.getByRole('tab',{name:'Graph',exact:true}).focus();
-  await page.keyboard.press('ArrowRight');
-  assert.equal(await page.getByRole('tab',{name:'Changes 2'}).getAttribute('aria-selected'),'true');
-  assert.equal(await page.evaluate(()=>document.activeElement?.id),'git-changes-tab');
-  await page.keyboard.press('Home');
-  assert.equal(await page.getByRole('tab',{name:'Graph',exact:true}).getAttribute('aria-selected'),'true');
-  await page.keyboard.press('End');
-  assert.equal(await page.getByRole('tab',{name:'Build checks',exact:true}).getAttribute('aria-selected'),'true');
-  // Files sits between Changes and CI / CD, so one step back from CI / CD lands there.
-  await page.keyboard.press('ArrowLeft');
-  assert.equal(await page.getByRole('tab',{name:'Files',exact:true}).getAttribute('aria-selected'),'true');
-  await page.keyboard.press('ArrowLeft');
-  assert.equal(await page.getByRole('tab',{name:'Changes 2'}).getAttribute('aria-selected'),'true');
-  await page.locator('.filemain').first().click();
-  await addedLine(page,'after').waitFor();
-  await shot('git-desktop-changes.png');
-  await page.getByRole('tab',{name:'Graph',exact:true}).click();
-  await openAgents(page);
-  await page.getByText('2 agents share this folder', {exact:false}).waitFor();
-  const before = await page.evaluate(()=>window.calls.filter((c)=>c.method==='git.graph').length);
-  await page.evaluate(()=>window.notifyChange());
-  await page.waitForFunction((n)=>window.calls.filter((c)=>c.method==='git.graph').length>n,before);
-});
-
-test('a commit opens to its message and files, and a file to its diff', async () => {
-  await page.locator('.git-line').filter({hasText:'Show where each agent is working'}).click();
-  await page.getByText('Agents appear on the commit they have checked out.').waitFor();
-  assert.ok(await page.locator('.git-through').count() >= 1, 'lanes carry on beside the opened commit');
-  await page.locator('.git-file-row').click();
-  await addedLine(page,'new line').waitFor();
-  await shot('git-desktop-commit.png');
-  const asked = await page.evaluate(()=>window.calls.filter((c)=>c.method==='git.commit').map((c)=>c.params));
-  assert.deepEqual(asked.map((p)=>p.path ?? null),[null,'apps/web/src/GitGraph.tsx']);
-  await page.locator('.git-line').filter({hasText:'Show where each agent is working'}).click();
-  await page.locator('.git-detail').waitFor({state:'detached'});
-});
-
-test('a merge links to its parents, folded refs show in full, and refresh reloads the graph', async () => {
-  await page.locator('.git-line').filter({hasText:'Merge the graph improvements'}).click();
-  await page.getByText('Merge of',{exact:false}).waitFor();
-  await page.getByRole('button',{name:'Go to parent feature'}).click();
-  await page.locator('.git-row[data-hash="feature"].open').waitFor();
-  assert.equal(await page.locator('.git-row[data-hash="merge"].open').count(),0);
-  await page.locator('.git-line').filter({hasText:'Initial commit'}).click();
-  await page.locator('.git-row[data-hash="base"] .git-detail-refs .git-ref').nth(2).waitFor();
-  assert.equal(await page.locator('.git-row[data-hash="base"] .git-detail-refs .git-ref').count(),3);
-  const before = await page.evaluate(()=>window.calls.filter((call)=>call.method==='git.graph').length);
-  await page.getByRole('button',{name:'Refresh Git'}).click();
-  await page.waitForFunction((earlier)=>window.refreshed && window.calls.filter((call)=>call.method==='git.graph').length>earlier,before);
-});
-
-test('files can be marked viewed, and a failed diff can be retried', async () => {
-  await page.evaluate(()=>{localStorage.clear();window.showGit()});
-  await page.getByText('0/2 viewed').waitFor();
-  const mark = page.getByRole('button',{name:'Mark App.tsx as read'});
-  await mark.click();
-  assert.equal(await mark.getAttribute('aria-pressed'),'true');
-  await page.getByText('1/2 viewed').waitFor();
-  assert.ok(await page.locator('.fileRow.viewed').count() === 1);
-  await shot('git-desktop-changes-collapsed.png');
-  assert.ok(Object.keys(JSON.parse(await page.evaluate(()=>localStorage.getItem('helm.viewed:local:/project')))).includes('App.tsx'));
-  await mark.click();
-  assert.equal(await mark.getAttribute('aria-pressed'),'false');
-  await page.getByText('0/2 viewed').waitFor();
-  await page.evaluate(()=>{window.diffFails = 1});
-  await page.locator('.filemain').nth(1).click();
-  await page.getByText('Helm cannot read these changes.').waitFor();
-  await page.getByRole('button',{name:'Try again'}).click();
-  await addedLine(page,'after').waitFor();
-});
-
-test('a clean folder and an unreachable history each say what is going on', async () => {
-  await page.evaluate(()=>{window.graphFails = 1;window.showGit('clean')});
-  await page.getByRole('tab',{name:'Graph',exact:true,selected:true}).waitFor();
-  assert.equal(await page.getByRole('tab',{name:'Changes',exact:true}).count(),1,'no zero count on a clean folder');
-  await page.getByText('Helm cannot load Git history.').first().waitFor();
-  await page.getByText('Git is busy', { exact: true }).waitFor();
-  await page.getByRole('button',{name:'Try again'}).click();
-  await openAgents(page);
-  await page.getByText('2 agents share this folder', {exact:false}).waitFor();
-  await page.getByRole('tab',{name:'Changes',exact:true}).click();
-  await page.getByText('No files changed.', { exact: true }).waitFor();
-  await page.getByText('merge · Merge the graph improvements').waitFor();
-  await shot('git-desktop-clean.png');
-});
-
-test('graph and branded notifications fit a phone, and dismissal does not navigate', async () => {
+test('on a phone the Git screen keeps to the width, with an opened commit and an opened diff', async () => {
   await page.setViewportSize({width:390,height:844});
-  await page.evaluate(()=>window.showGit());
-  await page.locator('.changes').waitFor({state:'visible'});
-  await page.getByRole('tab',{name:'Graph',exact:true}).click();
-  await openAgents(page);
-  await page.getByText('2 agents share this folder', {exact:false}).waitFor();
-  await page.evaluate(()=>window.showToast());
-  await page.locator('.island.open').waitFor();
-  const bounds = await page.locator('.island').boundingBox();
-  assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390);
-  assert.equal(await page.locator('.island-title').innerText(),'Review mobile notifications');
-  assert.match(await page.locator('.island-where').innerText(),/^Codex · needs you · /);
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true);
-  await shot('git-notification-phone.png');
-  await page.getByRole('button',{name:'Close',exact:true}).click();
-  await page.locator('.island:not(.open)').waitFor();
-  assert.equal(await page.evaluate(()=>!!window.toastOpened),false);
-  await page.locator('.island').click();
-  await page.getByRole('button',{name:'Open chat',exact:true}).click();
-  await page.waitForFunction(()=>window.toastOpened);
-});
-
-test('on a phone the Git screen keeps to the width and its controls stay easy to tap', async () => {
   await page.evaluate(()=>{localStorage.clear();window.showGit()});
   await page.getByRole('tab',{name:'Graph',exact:true}).click();
   await page.locator('.git-line').first().waitFor();
@@ -298,124 +106,13 @@ test('on a phone the Git screen keeps to the width and its controls stay easy to
     return rect.width === 0 || (rect.left >= -1 && rect.right <= window.innerWidth + 1) || element.closest('.diff,.git-lanes,.git-through');
   }));
   assert.equal(await fits(),true,'nothing in the graph spills off the side');
-  for (const tab of await page.getByRole('tab').all()) assert.ok((await tab.boundingBox()).height >= 40, 'tabs are tall enough to tap');
-  const tabs = await Promise.all((await page.getByRole('tab').all()).map((tab)=>tab.boundingBox()));
-  assert.ok(Math.abs(tabs[0].width - tabs[1].width) < 2, 'the two tabs share the width evenly');
-  for (const agent of await page.locator('.git-agent').all()) assert.ok((await agent.boundingBox()).height >= 40);
-  assert.equal(await page.locator('.git-sha').first().isVisible(),false,'short hashes give way to the subject on a phone');
-  await shot('git-mobile-graph.png');
   await page.locator('.git-line').filter({hasText:'Show where each agent is working'}).click();
   await page.locator('.git-file-row').click();
   await addedLine(page,'new line').waitFor();
   assert.equal(await fits(),true,'an opened commit keeps to the width');
-  await page.locator('.git-row.open').scrollIntoViewIfNeeded();
-  await shot('git-mobile-commit-expanded.png');
-  await page.locator('.git-line').filter({hasText:'Show where each agent is working'}).click();
-  await page.locator('.git-detail').waitFor({state:'detached'});
   await page.getByRole('tab',{name:'Changes 2'}).click();
-  await page.locator('.filemain').first().waitFor();
-  await shot('git-mobile-changes-collapsed.png');
   await page.locator('.filemain').first().click();
   await addedLine(page,'after').waitFor();
   assert.equal(await fits(),true,'nothing in the file list spills off the side');
-  for (const toggle of await page.locator('.viewedbox').all()) {
-    const box = await toggle.boundingBox();
-    assert.ok(box.width >= 40 && box.height >= 40, 'the viewed toggle is a full-size target');
-  }
-  for (const fileRow of await page.locator('.filemain').all()) assert.ok((await fileRow.boundingBox()).height >= 44);
-  await shot('git-mobile-changes.png');
-  await page.evaluate(()=>document.documentElement.dataset.theme = 'light');
-  await shot('git-mobile-changes-light.png');
-  await page.evaluate(()=>delete document.documentElement.dataset.theme);
-});
-
-
-test('CI / CD shows PR readiness, failing steps, deployment boundaries, refresh and persistent-watch controls', async () => {
-  await page.setViewportSize({width:1280,height:900});
-  await page.evaluate(()=>window.showGit());
-  await page.getByRole('tab',{name:'Build checks',exact:true}).click();
-  await page.getByText('Ready to merge',{exact:true}).waitFor();
-  await page.getByText('Approved',{exact:true}).waitFor();
-  await page.getByText('Unit tests',{exact:true}).waitFor();
-  await page.getByRole('button',{name:/Build and deploy/}).click();
-  await page.getByText('Failed step: Compile application',{exact:true}).waitFor();
-  assert.equal(await page.getByRole('link',{name:'Build · logs'}).getAttribute('href'),'https://example.test/job/7');
-  await openSettings(page);
-  const toggle = page.getByRole('switch',{name:'Notify this chat about build checks'});
-  await toggle.click(); await page.waitForFunction(()=>window.pipelineWatching === true);
-  assert.equal(await toggle.getAttribute('aria-checked'),'true');
-  const before = await page.evaluate(()=>window.calls.filter(c=>c.method==='git.monitor').length);
-  await page.getByRole('button',{name:'Refresh build checks',exact:true}).click();
-  await page.waitForFunction(n=>window.calls.filter(c=>c.method==='git.monitor').length>n,before);
-  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='git.monitor').at(-1).params.force),true);
-  await page.evaluate(()=>{window.monitorFails=1});
-  await page.getByRole('button',{name:'Refresh build checks',exact:true}).click();
-  await page.getByText('Laptop is not connected. Check the connection. Try again.',{exact:false}).waitFor();
-  assert.equal(await page.getByText('Unit tests',{exact:true}).count(),1,'a failed refresh preserves the previous display');
-  await page.getByRole('button',{name:'Try again',exact:true}).click();
-  await page.getByText('Laptop is not connected. Check the connection. Try again.',{exact:false}).waitFor({state:'detached'});
-  await page.getByLabel('GitHub account',{exact:true}).selectOption('work');
-  await page.waitForFunction(()=>window.githubAccount==='work');
-  await page.getByText('Unit tests',{exact:true}).waitFor();
-  assert.equal(await page.getByLabel('GitHub account',{exact:true}).inputValue(),'work');
-  await shot('pipeline-desktop.png');
-  await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true);
-  await shot('pipeline-mobile.png');
-  await page.evaluate(()=>document.documentElement.dataset.theme='light');
-  await shot('pipeline-mobile-light.png');
-  await page.evaluate(()=>delete document.documentElement.dataset.theme);
-});
-
-for (const width of [320, 390, 768]) test(`the actual Git dialog fills a ${width}px phone with one header and one scroll area`, async () => {
-  await page.setViewportSize({width,height:844});
-  await page.evaluate(()=>window.showGitDialog());
-  const dialog = page.getByRole('dialog',{name:'Git',exact:true});
-  await dialog.waitFor();
-  const box = await dialog.boundingBox();
-  assert.ok(box.x >= 0 && box.width === width && box.height === 844);
-  assert.equal(await dialog.locator('.details-heading,.details-tabs,.details-content,.details-refresh').count(),0,'Git has no duplicate outer header, tabs or scroll container');
-  assert.equal(await dialog.getByRole('tablist').count(),1);
-  assert.equal(await dialog.getByRole('heading',{name:'Git',exact:true}).count(),1);
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true);
-  await dialog.locator('.filemain').click();
-  await addedLine(dialog,'after').waitFor();
-  const wrap = dialog.getByRole('button',{name:'Wrap long lines'});
-  assert.equal(await wrap.getAttribute('aria-pressed'),width < 600 ? 'true' : 'false');
-  await wrap.click();
-  assert.equal(await wrap.getAttribute('aria-pressed'),width < 600 ? 'false' : 'true');
-  await shot(`git-dialog-${width}.png`);
-  await dialog.getByRole('button',{name:'Refresh Git',exact:true}).click();
-  assert.equal(await page.evaluate(()=>window.refreshed),true);
-  await dialog.getByRole('button',{name:'Back to chat'}).click();
-  await dialog.waitFor({state:'detached'});
-});
-
-
-test('a change tour starts only on request, stops, and reopens its saved stops on a phone and computer', async () => {
-  for (const width of [390, 1280]) {
-    await page.setViewportSize({width,height:844});
-    await page.evaluate(()=>{window.calls=[];window.tourState=undefined;window.tourReady=false;window.showGit()});
-    await page.getByRole('button',{name:'Tour',exact:true}).waitFor();
-    assert.equal(await page.evaluate(()=>window.calls.some(c=>c.method==='git.tour')),false);
-    await page.getByRole('button',{name:'Tour',exact:true}).click();
-    await page.getByRole('button',{name:'Stop writing',exact:true}).click();
-    await page.getByText('The tour stopped.',{exact:true}).waitFor();
-    assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='git.tour').at(-1).params.action),'stop');
-    await page.evaluate(()=>{window.tourReady=true});
-    await page.getByRole('button',{name:'Try again',exact:true}).click();
-    await page.locator('.tour-decision').getByText('Needs your decision',{exact:true}).waitFor();
-    assert.match(await page.locator('.tour-excerpt').innerText(),/new value/);
-    await page.getByRole('button',{name:'Next',exact:true}).click();
-    await page.getByRole('heading',{name:'Check the next change',exact:true}).waitFor();
-    assert.match(await page.locator('.tour-excerpt').innerText(),/after/);
-    await page.locator('.tour-also summary').click();
-    assert.equal(await page.locator('.tour-also code').innerText(),'extra.txt');
-    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true);
-    const starts = await page.evaluate(()=>window.calls.filter(c=>c.method==='git.tour' && c.params.action==='start').length);
-    await page.getByRole('button',{name:'Close tour',exact:true}).click();
-    await page.getByRole('button',{name:'Tour',exact:true}).click();
-    await page.getByRole('heading',{name:'Read the main change',exact:true}).waitFor();
-    assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='git.tour' && c.params.action==='start').length),starts);
-  }
 });

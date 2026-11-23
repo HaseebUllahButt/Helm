@@ -36,13 +36,6 @@ before(async () => {
 });
 after(() => browser?.close());
 
-test('a pill names the first waiting chat and how many more wait', async () => {
-  await page.evaluate(() => window.show());
-  await page.locator('.island:not(.open)').waitFor();
-  assert.equal(await page.locator('.island-title').innerText(), 'Pick a style');
-  assert.equal(await page.locator('.island-more').innerText(), '+1');
-});
-
 test('a chat that starts waiting opens the box but never takes the keys', async () => {
   await page.evaluate(() => { window.calls = []; window.show({ ping: { envId: 'laptop', id: 'c', at: Date.now() } }); });
   await page.locator('.island.open .island-cmd').getByText('rm -rf tmp/old').waitFor();

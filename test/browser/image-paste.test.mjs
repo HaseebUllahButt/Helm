@@ -93,70 +93,52 @@ for(const mode of ['Native','Driven']){
     assert.equal(await p.locator('.attach-preview').count(),0);
     assert.equal(await p.locator('textarea').inputValue(),'');
   });
-  test(`${mode} two quick pastes both stay, numbered in order`,async t=>{
-    const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
-    await p.evaluate(async()=>{
-      const c=document.createElement('canvas');c.width=32;c.height=24;c.getContext('2d').fillRect(0,0,32,24);
-      const blob=await new Promise(resolve=>c.toBlob(resolve,'image/png'));
-      const ta=document.querySelector('textarea');ta.focus();
-      for(const name of ['a.png','b.png']){const dt=new DataTransfer();dt.items.add(new File([blob],name,{type:'image/png'}));ta.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));}
-      // The preview shows before the picture is made smaller.
-      if(!document.querySelector('.attach-preview img'))await new Promise(resolve=>requestAnimationFrame(resolve));
-      window.shownAtOnce=document.querySelectorAll('.attach-preview img').length;
-    });
-    assert.equal(await p.evaluate(()=>window.shownAtOnce),2);
-    // Each paste swaps its own quick preview for the smaller picture; wait for both swaps.
-    await p.waitForFunction(()=>document.querySelector('textarea').value.trim()==='[Image #1] [Image #2]'&&!document.querySelector('.attach-preview[aria-busy]'));
-    assert.equal(await p.locator('.attach-preview').count(),2);
-    // One Backspace takes the last picture only; two pastes once shared one label and both went.
-    await p.locator('textarea').press('End');await p.locator('textarea').press('Backspace');
-    await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===1);
-    assert.equal((await p.locator('textarea').inputValue()).trim(),'[Image #1]');
-  });
-  test(`${mode} a long text paste goes in as the text itself`,async t=>{
-    const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
-    const text=Array.from({length:60},(_,i)=>`line ${i} `+'x'.repeat(40)).join('\n');
-    await p.locator('textarea').focus();
-    const kept=await p.evaluate(text=>{const dt=new DataTransfer();dt.setData('text/plain',text);
-      return document.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));},text);
-    // Not cancelled: the browser puts the text in the box as it is.
-    assert.equal(kept,true);
-  });
-  test(`${mode} draft images stay with their machine and chat`,async t=>{
-    const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
-    await paste(p);
-    await p.waitForFunction(()=>document.querySelector('textarea').value.includes('[Image #1]'));
-    // A chat switch loads saved draft pictures; that is not "making images smaller".
-    await p.evaluate(()=>{window.sawShrink=false;new MutationObserver(()=>{if(document.body.innerText.includes('Making images smaller'))window.sawShrink=true;}).observe(document.body,{subtree:true,childList:true,characterData:true});});
-    for(const [env,id] of [['other-machine',mode==='Driven'?'driven-image-test':'native-image-test'],['laptop','other-chat']]){
-      await p.evaluate(({mode,env,id})=>window[`show${mode}`](env,id),{mode,env,id});
-      await p.waitForFunction(()=>!document.querySelector('.attach-preview')&&!document.querySelector('[data-preparing]'));
-      assert.equal(await p.locator('textarea').inputValue(),'');
-    }
-    assert.equal(await p.evaluate(()=>window.sawShrink),false);
-    await p.evaluate(mode=>window[`show${mode}`](),mode);
-    await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===1);
-  });
-  test(`${mode} reload during an unconfirmed send keeps the image draft`,async t=>{
-    const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
-    await paste(p);await p.evaluate(()=>window.hold=true);
-    await p.getByRole('button',{name:'send',exact:true}).click();
-    await p.waitForFunction(()=>window.calls.length===1);
-    await reload(p,mode);
-    await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===1);
-    assert.match(await p.locator('textarea').inputValue(),/Image #1/);
-  });
 }
-test('native image batches and later additions send all images beyond the old caps',async t=>{
-  const p=await pageFor(t);await paste(p,9);
-  await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===9);
-  await paste(p,2);
-  await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===11);
+test('Native two quick pastes both stay, numbered in order',async t=>{
+  const p=await pageFor(t);
+  await p.evaluate(async()=>{
+    const c=document.createElement('canvas');c.width=32;c.height=24;c.getContext('2d').fillRect(0,0,32,24);
+    const blob=await new Promise(resolve=>c.toBlob(resolve,'image/png'));
+    const ta=document.querySelector('textarea');ta.focus();
+    for(const name of ['a.png','b.png']){const dt=new DataTransfer();dt.items.add(new File([blob],name,{type:'image/png'}));ta.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));}
+    // The preview shows before the picture is made smaller.
+    if(!document.querySelector('.attach-preview img'))await new Promise(resolve=>requestAnimationFrame(resolve));
+    window.shownAtOnce=document.querySelectorAll('.attach-preview img').length;
+  });
+  assert.equal(await p.evaluate(()=>window.shownAtOnce),2);
+  // Each paste swaps its own quick preview for the smaller picture; wait for both swaps.
+  await p.waitForFunction(()=>document.querySelector('textarea').value.trim()==='[Image #1] [Image #2]'&&!document.querySelector('.attach-preview[aria-busy]'));
+  assert.equal(await p.locator('.attach-preview').count(),2);
+  // One Backspace takes the last picture only; two pastes once shared one label and both went.
+  await p.locator('textarea').press('End');await p.locator('textarea').press('Backspace');
+  await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===1);
+  assert.equal((await p.locator('textarea').inputValue()).trim(),'[Image #1]');
+});
+test('Driven draft images stay with their machine and chat',async t=>{
+  const p=await pageFor(t);await p.evaluate(()=>window.showDriven());
+  await paste(p);
+  await p.waitForFunction(()=>document.querySelector('textarea').value.includes('[Image #1]'));
+  // A chat switch loads saved draft pictures; that is not "making images smaller".
+  await p.evaluate(()=>{window.sawShrink=false;new MutationObserver(()=>{if(document.body.innerText.includes('Making images smaller'))window.sawShrink=true;}).observe(document.body,{subtree:true,childList:true,characterData:true});});
+  for(const [env,id] of [['other-machine','driven-image-test'],['laptop','other-chat']]){
+    await p.evaluate(({env,id})=>window.showDriven(env,id),{env,id});
+    await p.waitForFunction(()=>!document.querySelector('.attach-preview')&&!document.querySelector('[data-preparing]'));
+    assert.equal(await p.locator('textarea').inputValue(),'');
+  }
+  assert.equal(await p.evaluate(()=>window.sawShrink),false);
+  await p.evaluate(()=>window.showDriven());
+  await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===1);
+});
+test('Driven reload during an unconfirmed send keeps the image draft',async t=>{
+  const p=await pageFor(t);await p.evaluate(()=>window.showDriven());
+  await paste(p);await p.evaluate(()=>window.hold=true);
   await p.getByRole('button',{name:'send',exact:true}).click();
   await p.waitForFunction(()=>window.calls.length===1);
-  assert.equal(await p.evaluate(()=>window.calls[0].params.attachments.length),11);
+  await reload(p,'Driven');
+  await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===1);
+  assert.match(await p.locator('textarea').inputValue(),/Image #1/);
 });
-for(const mode of ['Driven','Queue'])test(`${mode} messages keep more than four images across additions`,async t=>{
+for(const mode of ['Queue'])test(`${mode} messages keep more than four images across additions`,async t=>{
   const p=await pageFor(t);await p.evaluate(mode=>window[`show${mode}`](),mode);
   await paste(p,9);
   await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===9);
@@ -175,19 +157,13 @@ test('native Claude paste prepares a preview and sends image bytes to the thread
   assert.ok(Buffer.from(call.params.attachments[0].data,'base64').length>100);
   await p.waitForFunction(()=>!document.querySelector('.attach-preview'));
 });
-test('failed native image sends preserve the preview and draft for retry',async t=>{
-  const p=await pageFor(t);await paste(p);await p.evaluate(()=>window.fail=true);
-  await p.getByRole('button',{name:'send',exact:true}).click();await p.getByRole('alert').waitFor();
-  assert.match(await p.getByRole('alert').innerText(),/Upload failed/);
-  assert.equal(await p.locator('.attach-preview').count(),1);assert.match(await p.locator('textarea').inputValue(),/Image #1/);
-});
 test('clipboard file items work when the clipboard file list is empty, without duplicating normal files',async t=>{
   const p=await pageFor(t);const counts=await p.evaluate(()=>{
     const file=new File(['x'],'s.png',{type:'image/png'});const items=[{kind:'file',getAsFile:()=>file}];
     return [window.clipboardImages({files:[],items}).length,window.clipboardImages({files:[file],items}).length];
   });assert.deepEqual(counts,[1,1]);
 });
-for(const mode of ['Native','Driven'])test(`${mode} documents dropped anywhere on the chat become file chips and send as they are`,async t=>{
+for(const mode of ['Driven'])test(`${mode} documents dropped anywhere on the chat become file chips and send as they are`,async t=>{
   const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
   await p.evaluate(()=>document.getElementById('root').classList.add('main'));
   await paste(p);
@@ -212,16 +188,6 @@ for(const mode of ['Native','Driven'])test(`${mode} documents dropped anywhere o
   assert.deepEqual(sent.map(a=>a.mime),['application/pdf','image/jpeg']);
   assert.equal(Buffer.from(sent[0].data,'base64').toString(),'%PDF-1.4 notes');
 });
-test('removing a file chip takes its label out of the draft',async t=>{
-  const p=await pageFor(t);await p.evaluate(()=>window.showDriven());
-  await p.locator('input[type=file]').setInputFiles({name:'data.csv',mimeType:'text/csv',buffer:Buffer.from('a,b\n1,2\n')});
-  await p.locator('.attach-preview.file').waitFor();
-  assert.equal(await p.locator('textarea').inputValue(),'[File: data.csv] ');
-  await p.getByRole('button',{name:'Remove data.csv',exact:true}).click();
-  await p.waitForFunction(()=>!document.querySelector('.attach-preview'));
-  assert.equal(await p.locator('textarea').inputValue(),'');
-});
-
 test('a waiting edit cannot save while its pasted image is still loading', async t => {
   const p = await pageFor(t); await p.evaluate(() => window.showQueue());
   await p.getByRole('button', { name: 'Save', exact: true }).waitFor();

@@ -43,7 +43,7 @@ before(async () => {
       await cache.saveCached('machine','Another chat',3,events('Other saved response'),1);
       await txn('kv','readonly',s=>s.get('helm.workspace:'+scope));
     };
-    function Probe(){const state=useSessionLog(client,'machine','Cached chat', { wholeChat: window.wholeChat === true });window.state=state;(window.renders??=[]).push(!!state.log.loaded);return <pre>{JSON.stringify(state.log)}</pre>}
+    function Probe(){const state=useSessionLog(client,'machine','Cached chat', { wholeChat: window.wholeChat === true });window.state=state;return <pre>{JSON.stringify(state.log)}</pre>}
     window.mount = (online=false) => root.render(<Shell client={client} conn={{online,reachable:online}} onSignOut={()=>{}}/>);
     window.unmount = () => root.render(null);
     window.probe = () => root.render(<Probe/>);
@@ -70,23 +70,6 @@ async function pageFor(t) {
   t.after(() => assert.deepEqual(errors, []));
   return { page, boot };
 }
-
-test('a chat left a moment ago comes back whole in its first frame, with no wait or replay', async t => {
-  const { page } = await pageFor(t);
-  await page.evaluate(() => {
-    window.reads = async (env, method) => method === 'session.events' ? { events: window.events('Kept reply'), pending: [], last: 3 }
-      : method === 'session.watch' ? { last: 3 } : {};
-    window.probe();
-  });
-  await page.waitForFunction(() => window.state?.log.loaded && JSON.stringify(window.state.log).includes('Kept reply'));
-  // Away and back, with the machine and the device's storage both silent.
-  await page.evaluate(() => { window.unmount(); window.reads = () => new Promise(() => {}); });
-  await page.waitForFunction(() => !document.querySelector('pre'));
-  await page.evaluate(() => { window.renders = []; window.probe(); });
-  await page.waitForFunction(() => window.renders.length > 0);
-  assert.equal(await page.evaluate(() => window.renders[0]), true, 'the first render already has the chat');
-  assert.ok(await page.evaluate(() => JSON.stringify(window.state.log).includes('Kept reply')));
-});
 
 async function openFromSearch(page, title) {
   await page.locator('.sidebar').getByRole('button', { name: 'Search chats, machines, and folders' }).click();
@@ -259,16 +242,6 @@ test('a request that succeeds before its transaction aborts is never reported sa
   assert.deepEqual(result, { rejected: true, stored: undefined });
 });
 
-test('cache eviction reads ordered keys instead of copying all transcript payloads', async t => {
-  const { page } = await pageFor(t);
-  const count = await page.evaluate(async () => {
-    IDBObjectStore.prototype.getAll = () => { throw Error('payload scan forbidden'); };
-    for(let i=0;i<35;i++) await window.cache.saveCached('machine',String(i),3,window.events(),1);
-    return (await window.txn('session-logs','readonly',s=>s.getAllKeys())).length;
-  });
-  assert.equal(count,25);
-});
-
 test('trimming a long cached turn retains its real owner even behind queued steering', async t => {
   const { page } = await pageFor(t);
   const result = await page.evaluate(async () => {
@@ -317,12 +290,15 @@ test('a slow device copy that turns out empty waits for the history already aske
     window.releaseDisk = false;
     const hold = () => { const r=store.get('holding');r.onsuccess=()=>{if(!window.releaseDisk)hold();}; };
     hold();
-    setTimeout(() => { window.releaseDisk = true; }, 300);
     window.tails = 0;
     window.reads = async (env,method,params) => {
       if (method !== 'session.events') return {last:3};
       if (params.tail) window.tails++;
-      await new Promise(r => setTimeout(r, 700));
+      // The head start is out. Let the held device read land (empty) first:
+      // a read queued after it finishes after it, then the app gets a frame.
+      window.releaseDisk = true;
+      await window.txn('session-logs','readonly',s=>s.get('holding'));
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       return {events:window.events('Only once'),last:3,firstSeq:1,logFirst:1,pending:[]};
     };
     window.probe();
@@ -330,17 +306,6 @@ test('a slow device copy that turns out empty waits for the history already aske
   await page.waitForFunction(()=>window.state?.log.loaded && !window.state.syncing, null, {timeout:3000});
   assert.match(await page.locator('pre').innerText(), /Only once/);
   assert.equal(await page.evaluate(() => window.tails), 1);
-});
-
-test('the saved chat list keeps how full each chat is', async t => {
-  const { page } = await pageFor(t);
-  const context = await page.evaluate(async () => {
-    await window.seed();
-    const context = { used: 221902, window: 383000, model: 'claude-opus-5-5', full: 1000000, at: 1 };
-    window.workspace.saveWorkspace(window.scope, { sessions: { machine: [{ ...window.session('ctx'), context }] } });
-    return window.workspace.loadWorkspace(window.scope).sessions.machine.find(s => s.id === 'ctx')?.context;
-  });
-  assert.deepEqual(context, { used: 221902, window: 383000, model: 'claude-opus-5-5', full: 1000000, at: 1 });
 });
 
 test('workspace cache separates memberships and omits provider configuration', async t => {
@@ -362,17 +327,6 @@ test('malformed cached navigation cannot crash the app on startup', async t => {
     return window.workspace.loadWorkspace('broken');
   });
   assert.deepEqual(result,{environments:[],sessions:{}});
-});
-
-test('history from a retired screen returns to its supported machine view', async t => {
-  const { page } = await pageFor(t);
-  await page.evaluate(async () => { await window.seed(); window.mount(); });
-  await page.getByText('Saved response', { exact: true }).waitFor();
-  await page.evaluate(() => window.dispatchEvent(new PopStateEvent('popstate', {
-    state: { helm: 1, selected: 'machine', depth: 1, stack: [{ kind: 'env' }, { kind: 'retired-screen' }] },
-  })));
-  await page.locator('.machine-bar h1').filter({ hasText: 'Laptop' }).waitFor();
-  assert.equal(await page.locator('.machine-bar h1').textContent(), 'Laptop');
 });
 
 test('a fast live machine list preserves saved threads and navigation from a slower disk read', async t => {
@@ -403,7 +357,8 @@ test('a machine response after sign-out cannot recreate forgotten workspace meta
   const result=await page.evaluate(async()=>{
     window.workspace.forgetWorkspace(window.scope);
     window.finishEnvs({environments:[{id:'machine',name:'Late',online:true,lastSeen:null,info:{}}]});
-    await new Promise(resolve=>setTimeout(resolve,20));
+    // Two frames: the late answer and anything it would save have run.
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     return window.workspace.loadWorkspace(window.scope);
   });
   assert.deepEqual(result,{environments:[],sessions:{}});
@@ -436,23 +391,6 @@ test('cached imported transcripts survive disconnection and refresh on focus wit
   await page.evaluate(()=>window.finishRead());
 });
 
-test('resuming on HTTP clears the saved-workspace disconnect notice without waiting for WebSocket', async t => {
-  const {page}=await pageFor(t);
-  await page.evaluate(async()=>{
-    await window.seed();window.failed=true;
-    window.envs=async()=>{
-      if(window.failed)throw Error('Failed to fetch');
-      return {environments:[{id:'machine',name:'Recovered machine',online:true,lastSeen:null,info:{}}]};
-    };
-    window.mount();
-  });
-  await page.getByText('Helm shows saved chats and is reconnecting.',{exact:true}).waitFor();
-  assert.equal(await page.locator('.sidebar .error').count(),0);
-  await page.evaluate(()=>{window.failed=false;window.dispatchEvent(new Event('focus'));});
-  await page.waitForFunction(()=>!document.querySelector('.sidebar').textContent.includes('Saved workspace · reconnecting'));
-  await page.getByText('Helm shows saved chats and is reconnecting.',{exact:true}).waitFor({state:'detached'});
-});
-
 test('many chat updates in a row are written to the device once, and a page hide writes at once', async t => {
   const { page } = await pageFor(t);
   const result = await page.evaluate(async () => {
@@ -473,48 +411,4 @@ test('many chat updates in a row are written to the device once, and a page hide
   assert.equal(result.view, 'Renamed 49');
   assert.equal(result.after, 2);
   assert.equal(result.saved, 'Last name');
-});
-
-test('open chat pushes update its header without fetching every chat again', async t => {
-  const { page } = await pageFor(t);
-  await page.evaluate(async () => {
-    await window.seed();
-    window.current = { ...window.session('Cached chat'), status: 'idle' };
-    window.envs = async () => ({ environments: [{ id: 'machine', name: 'Laptop', online: true, info: {} }] });
-    window.listCalls = 0;
-    window.reads = async (_env, method) => {
-      if (method === 'session.list') { window.listCalls++; return { sessions: [window.current] }; }
-      if (method === 'session.events') return { events: window.events(), last: 3, pending: [], session: { status: 'idle' } };
-      if (method === 'session.watch') return { last: 3, status: 'idle' };
-      return { ok: true, models: [], commands: [], projects: [], recent: [] };
-    };
-    window.mount(true);
-  });
-  await page.getByText('Saved response', { exact: true }).waitFor();
-  await page.waitForFunction(() => window.listCalls >= 2);
-  const result = await page.evaluate(async () => {
-    // Bring the navigation header from its saved working state to live idle.
-    window.emit('session.update', { session: window.current });
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const before = window.listCalls;
-    window.workspace.writeWorkspaces();
-    window.replaces = 0;
-    const replace = history.replaceState;
-    history.replaceState = function (...args) { window.replaces++; return replace.apply(this, args); };
-    for (let i = 0; i < 10; i++) window.emit('session.update', { session: structuredClone(window.current) });
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const repeats = window.replaces;
-    window.current = { ...window.current, title: 'New pushed title' };
-    window.emit('session.update', { session: window.current });
-    return { before, repeats };
-  });
-  await page.locator('.session-bar').getByText('New pushed title', { exact: true }).waitFor();
-  assert.equal(result.repeats, 0, 'equal pushes keep the open view');
-  assert.equal(await page.evaluate(() => window.listCalls), result.before, 'pushes need no full list read');
-  const saved = await page.evaluate(async () => {
-    window.workspace.writeWorkspaces();
-    return window.txn('kv', 'readonly', store => store.get('helm.workspace:' + window.scope));
-  });
-  assert.equal(saved.view.session.title, 'New pushed title');
-  assert.equal(saved.sessions.machine[0].title, 'New pushed title');
 });

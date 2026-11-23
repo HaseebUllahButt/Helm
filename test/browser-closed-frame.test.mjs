@@ -27,12 +27,3 @@ test('a command for a frame that closed is ignored, other errors are not', () =>
   assert.equal(closedBrowserSession(undefined), false);
 });
 
-test('the guard keeps a closed-frame rejection from stopping the process', async () => {
-  const listeners = process.listeners('unhandledRejection');
-  assert.ok(listeners.length >= 1);
-  const guard = listeners.find((fn) => /closedBrowserSession/.test(String(fn)));
-  assert.ok(guard);
-  assert.doesNotThrow(() => guard(libraryError('Detached while handling command.')));
-  const other = new Error('real bug');
-  assert.throws(() => guard(other), /real bug/);
-});

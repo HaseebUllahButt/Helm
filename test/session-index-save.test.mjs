@@ -22,7 +22,8 @@ test('a burst of changes is written once, compact, and nothing is lost', async (
   const sessions = open();
   for (let i = 0; i < 50; i++) sessions.markSeen('a');
   assert.equal(statSync(file).mtimeMs, before, 'the changes wait for one write');
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  const end = Date.now() + 5000;
+  while (statSync(file).mtimeMs === before && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(saved()[0].seenAt > 1, 'the write comes by itself soon after');
   assert.ok(!readFileSync(file, 'utf8').includes('\n'), 'no indentation');
 

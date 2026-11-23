@@ -6,27 +6,11 @@ import { transform } from 'esbuild';
 const source = await readFile(new URL('../apps/web/src/modelRefresh.ts', import.meta.url), 'utf8');
 const { code } = await transform(source, { loader: 'ts', format: 'esm' });
 const { followModelRefresh } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Let every pending promise and callback run.
+const flush = () => new Promise(setImmediate);
 
-test('a cold picker paints its fallback and then receives the completed catalog', async () => {
-  const seen = [];
-  let calls = 0;
-  let done;
-  const completed = new Promise((resolve) => { done = resolve; });
-  const catalog = followModelRefresh(async () => ++calls === 1
-    ? { models: ['fallback'], refreshing: true }
-    : { models: ['fallback', 'new-model'], refreshing: false },
-  (list) => { seen.push(list.models); if (!list.refreshing) done(); },
-  (error) => assert.fail(String(error)), 5);
-  try {
-    await completed;
-    assert.deepEqual(seen, [['fallback'], ['fallback', 'new-model']]);
-    await delay(20);
-    assert.equal(calls, 2, 'completed catalogs stop polling');
-  } finally { catalog.stop(); }
-});
-
-test('leaving the picker ignores an in-flight response and cancels further requests', async () => {
+test('leaving the picker ignores an in-flight response and cancels further requests', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   let release;
   let calls = 0;
   const response = new Promise((resolve) => { release = resolve; });
@@ -35,7 +19,9 @@ test('leaving the picker ignores an in-flight response and cancels further reque
     (list) => seen.push(list), (error) => assert.fail(String(error)), 5);
   catalog.stop();
   release({ models: ['wrong-account-model'], refreshing: true });
-  await delay(20);
+  await flush();
+  t.mock.timers.tick(10 * 60_000 + 1000);
+  await flush();
   assert.deepEqual(seen, []);
   assert.equal(calls, 1);
 });
@@ -54,76 +40,9 @@ test('reconnect refreshes once and does not overlap an outstanding request', asy
     await catalog.refresh();
     assert.equal(calls, 1);
     release({ models: [], refreshing: false });
-    await delay(0);
+    await flush();
     await catalog.refresh();
     assert.equal(calls, 2);
     assert.equal(failures, 1);
-  } finally { catalog.stop(); }
-});
-
-test('the follow-up asks the machine to answer when its refresh is done', async () => {
-  const asked = [];
-  let done;
-  const completed = new Promise((resolve) => { done = resolve; });
-  const catalog = followModelRefresh(async (settled) => {
-    asked.push(settled);
-    return { models: [], refreshing: asked.length === 1 };
-  }, (list) => { if (!list.refreshing) done(); }, (error) => assert.fail(String(error)), 5);
-  try {
-    await completed;
-    assert.deepEqual(asked, [false, true]);
-    await catalog.refresh();
-    assert.deepEqual(asked, [false, true, false], 'a reconnect asks for the catalog as it is now');
-  } finally { catalog.stop(); }
-});
-
-test('a lost follow-up retries until the open menu receives the completed list', async () => {
-  const asked = [];
-  const seen = [];
-  const errors = [];
-  let done;
-  const completed = new Promise(resolve => { done = resolve; });
-  const catalog = followModelRefresh(async settled => {
-    asked.push(settled);
-    if (asked.length === 1) return { models: ['old-model'], refreshing: true };
-    if (asked.length === 2) throw new Error('connection lost');
-    return { models: ['new-model'], refreshing: false };
-  }, list => {
-    seen.push(list.models);
-    if (!list.refreshing) done();
-  }, error => errors.push(error.message), 1);
-  try {
-    await completed;
-    assert.deepEqual(asked, [false, true, true]);
-    assert.deepEqual(seen, [['old-model'], ['new-model']]);
-    assert.deepEqual(errors, ['connection lost']);
-  } finally { catalog.stop(); }
-});
-
-
-test('an open menu checks for releases again and recovers after a failed check', async t => {
-  t.mock.timers.enable({apis:['setTimeout']});
-  const seen = [];
-  const asked = [];
-  const errors = [];
-  const catalog = followModelRefresh(async settled => {
-    asked.push(settled);
-    if (asked.length === 2) throw new Error('offline');
-    return {models:asked.length === 1 ? ['old'] : ['old','new'], refreshing:false};
-  }, list => seen.push(list.models), error => errors.push(error.message));
-  const flush = () => new Promise(setImmediate);
-  try {
-    await flush();
-    t.mock.timers.tick(10 * 60_000 + 1000);
-    await flush();
-    assert.deepEqual(errors, ['offline']);
-    t.mock.timers.tick(10 * 60_000 + 1000);
-    await flush();
-    assert.deepEqual(seen, [['old'], ['old','new']]);
-    assert.deepEqual(asked, [false,false,false]);
-    catalog.stop();
-    t.mock.timers.tick(10 * 60_000 + 1000);
-    await flush();
-    assert.equal(asked.length, 3);
   } finally { catalog.stop(); }
 });

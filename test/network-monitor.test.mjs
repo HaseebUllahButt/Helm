@@ -42,6 +42,7 @@ test('VPN on/off and waking with unchanged addresses trigger recovery once each'
 });
 
 test('kernel event bursts are coalesced and polling still works without an event watcher', async context => {
+  const until = async (ok) => { while (!ok()) await new Promise(resolve => setTimeout(resolve, 5)); };
   const watcher = new EventEmitter(); watcher.stdout = new EventEmitter();
   let killed = 0; watcher.kill = () => killed++;
   let signature = 'wifi', changes = 0;
@@ -49,15 +50,16 @@ test('kernel event bursts are coalesced and polling still works without an event
   context.after(() => monitor.stop());
   await monitor.start();
   signature = 'vpn';
+  // The burst arms one timer; once its check has run, nothing else is due.
   for (let i = 0; i < 20; i++) watcher.stdout.emit('data', 'changed');
-  await new Promise(resolve => setTimeout(resolve, 250));
+  await until(() => changes >= 1);
   assert.equal(changes, 1);
   monitor.stop();
   assert.equal(killed, 1);
   const fallback = new NetworkMonitor(() => changes++, { sample: async () => signature, observe: () => { throw new Error('no ip'); }, every: 20 });
   context.after(() => fallback.stop());
   await fallback.start(); signature = 'wifi';
-  await new Promise(resolve => setTimeout(resolve, 60));
+  await until(() => changes >= 2);
   assert.equal(changes, 2);
 });
 

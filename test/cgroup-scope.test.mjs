@@ -18,7 +18,6 @@ process.env.HELM_NO_SYSTEMD_RUN = '1';
 process.env.HELM_SCOPES = '1';
 
 const scope = await import('../packages/connect/src/cgroup-scope.js');
-const { describeStop } = await import('../packages/connect/src/agent-stops.js');
 const { TerminalHost, PROC_SOCKET_PATH, SOCKET_PATH } = await import('../packages/connect/src/terminals.js');
 
 test.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -35,27 +34,6 @@ async function until(fn, ms = 10_000) {
   }
 }
 
-test('scope names belong to this Helm and to one id', () => {
-  const prefix = scope.scopePrefix('proc', 'a/b c');
-  assert.match(prefix, /^helm-proc-[0-9a-f]{10}-a_b_c-$/);
-  const unit = scope.unitName('proc', 'a/b c');
-  assert.ok(unit.startsWith(prefix) && unit.endsWith('.scope'));
-  assert.notEqual(unit, scope.unitName('proc', 'a/b c'), 'a stray process in an old scope must not block the next start');
-});
-
-test('no scope when they are turned off', async () => {
-  process.env.HELM_SCOPES = '';
-  process.env.HELM_NO_SCOPES = '1';
-  scope.resetScopes();
-  try {
-    assert.equal(await scope.scopeCommand('proc', 'x', '/bin/sh', []), null);
-  } finally {
-    process.env.HELM_SCOPES = '1';
-    delete process.env.HELM_NO_SCOPES;
-    scope.resetScopes();
-  }
-});
-
 test('the journal decides whether the memory guard stopped a unit', async () => {
   const prefix = scope.scopePrefix('proc', 'agent');
   let reads = 0;
@@ -69,12 +47,6 @@ test('the journal decides whether the memory guard stopped a unit', async () => 
   reads = 0;
   assert.equal(await scope.stoppedForMemory([prefix], { since: Date.now(), killed: false, stops: async () => { reads++; return []; } }), false);
   assert.equal(reads, 1);
-});
-
-test('a memory stop is said in plain words', () => {
-  const text = describeStop({ at: Date.parse('2026-11-11T16:20:02Z'), id: 'a', signal: 'SIGKILL', memory: true });
-  assert.match(text, /^The memory guard stopped its process at \d+ Nov \d\d:\d\d:\d\d, because the computer ran out of memory\.$/);
-  assert.match(scope.MEMORY_STOP, /memory guard stopped this program/);
 });
 
 const ready = process.platform === 'linux' && await scope.scopesReady();

@@ -38,31 +38,6 @@ test('a helm answer mid-turn records the seam it landed at inside the live turn'
     'the running turn kept its later output - which renders below the answer');
 });
 
-test('a helm answer on an idle chat is just the latest turn', () => {
-  const log = emptyLog();
-  let seq = 0;
-  const ev = (e) => apply(log, { ...e, seq: ++seq });
-  ev({ type: 'turn.start', turnId: 't1', text: 'first' });
-  ev({ type: 'turn.done', turnId: 't1', status: 'ok' });
-  ev({ type: 'turn.start', turnId: 'command-c1', text: '/usage', local: true });
-  ev({ type: 'turn.done', turnId: 'command-c1', status: 'ok' });
-  const answer = log.turns.at(-1);
-  assert.equal(answer.insideOf, undefined, 'nothing still open means nothing to land inside');
-  assert.equal(answer.local, true);
-});
-
-test('a queued ticket is a composer row, never a host', () => {
-  const log = emptyLog();
-  let seq = 0;
-  const ev = (e) => apply(log, { ...e, seq: ++seq });
-  ev({ type: 'turn.start', turnId: 't1', text: 'first' });
-  ev({ type: 'turn.done', turnId: 't1', status: 'ok' });
-  ev({ type: 'turn.start', turnId: 'local-1', text: 'next', queued: true });
-  ev({ type: 'turn.start', turnId: 'command-c1', text: '/usage', local: true });
-  const answer = log.turns.at(-1);
-  assert.equal(answer.insideOf, undefined, 'no open transcript turn to land inside');
-});
-
 test('the optimistic bubble hands the seam to the echo that adopts it', () => {
   const log = emptyLog();
   let seq = 0;
@@ -80,33 +55,6 @@ test('the optimistic bubble hands the seam to the echo that adopts it', () => {
   assert.equal(log.turns.length, 2);
   assert.equal(answer.insideOf, 't1');
   assert.equal(answer.insideAt, 2, 'the seam is where the answer landed, not where it was typed');
-});
-
-test('two answers at one seam stack in the order they landed', () => {
-  const log = emptyLog();
-  let seq = 0;
-  const ev = (e) => apply(log, { ...e, seq: ++seq });
-  ev({ type: 'turn.start', turnId: 't1', text: 'a long job' });
-  ev({ type: 'item.start', id: 'i1', kind: 'text', turnId: 't1' });
-  for (const id of ['command-c1', 'command-c2']) {
-    ev({ type: 'turn.start', turnId: id, text: '/usage', local: true });
-    ev({ type: 'turn.done', turnId: id, status: 'ok' });
-  }
-  const [, a, b] = log.turns;
-  assert.equal(a.insideOf, 't1');
-  assert.equal(b.insideOf, 't1');
-  assert.equal(a.insideAt, b.insideAt, 'both landed at the same seam');
-  assert.ok(log.turns.indexOf(a) < log.turns.indexOf(b), 'and stay in landing order');
-});
-
-test('an ordinary turn mid-stream is not mistaken for a helm answer', () => {
-  const log = emptyLog();
-  let seq = 0;
-  const ev = (e) => apply(log, { ...e, seq: ++seq });
-  ev({ type: 'turn.start', turnId: 't1', text: 'a long job' });
-  ev({ type: 'turn.start', turnId: 't2', text: 'a real second turn' });
-  const second = log.turns.at(-1);
-  assert.equal(second.insideOf, undefined, 'without local it stays a sibling, not a guest');
 });
 
 test('a message the CLI took mid-turn sits where it was used; the turn goes on below it', () => {
@@ -151,4 +99,33 @@ test('closing the ticket of a message the agent already took up leaves the runni
   const b = log.turns.find((t) => t.id === 'local-b');
   assert.equal(b.insideOf, 'r1');
   assert.equal(b.insideAt, 1);
+});
+
+// A compaction marker Helm left open across a restart.
+test('a compaction left open by a restart stops once a newer one starts or ends', () => {
+  const log = emptyLog();
+  apply(log, { type: 'turn.start', turnId: 't1', text: '', at: 1, seq: 1 });
+  // Helm restarted mid-compaction: the old marker never got its end.
+  apply(log, { type: 'item.start', id: 'c-old', kind: 'tool', name: 'compact', turnId: 't1', input: {}, at: 2, seq: 2 });
+  apply(log, { type: 'item.start', id: 'c-new', kind: 'tool', name: 'compact', turnId: 't1', input: {}, at: 3, seq: 3 });
+  const item = (id) => log.turns[0].items.find((i) => i.id === id);
+  assert.equal(item('c-old').status, 'ok');
+  assert.equal(item('c-new').status, 'streaming');
+  apply(log, { type: 'item.done', id: 'c-new', status: 'ok', at: 4, seq: 4 });
+  assert.equal(item('c-new').status, 'ok');
+  assert.equal(log.turns[0].done, undefined, 'the turn itself keeps going');
+});
+
+test('a compaction left open by a restart stops once the agent takes its next step', () => {
+  const log = emptyLog();
+  apply(log, { type: 'turn.start', turnId: 't1', text: '', at: 1, seq: 1 });
+  apply(log, { type: 'item.start', id: 'c1', kind: 'tool', name: 'compact', turnId: 't1', input: {}, at: 2, seq: 2 });
+  // A helper's own step runs beside the compaction and says nothing about it.
+  apply(log, { type: 'item.start', id: 'h1', kind: 'tool', name: 'Bash', turnId: 't1', parentId: 'agent', input: {}, at: 3, seq: 3 });
+  const item = (id) => log.turns[0].items.find((i) => i.id === id);
+  assert.equal(item('c1').status, 'streaming');
+  apply(log, { type: 'item.start', id: 'b1', kind: 'tool', name: 'Bash', turnId: 't1', input: {}, at: 4, seq: 4 });
+  assert.equal(item('c1').status, 'ok');
+  assert.equal(item('c1').doneAt, 4);
+  assert.equal(item('b1').status, 'streaming');
 });

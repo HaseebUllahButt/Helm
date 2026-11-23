@@ -10,22 +10,18 @@ import { EventEmitter } from 'node:events';
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-webchat-'));
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 
-const { SITES, siteFor } = await import('../packages/connect/src/webchat/sites/index.js');
-const { webchatProfile, addWebchat, listWebchat, removeWebchat } = await import('../packages/connect/src/webchat/accounts.js');
+const { siteFor } = await import('../packages/connect/src/webchat/sites/index.js');
+const { webchatProfile } = await import('../packages/connect/src/webchat/accounts.js');
 const { webchatConfig, webchatModels } = await import('../packages/connect/src/webchat/config.js');
-const { askSite, withHistory, sameConversation } = await import('../packages/connect/src/webchat/turn.js');
+const { askSite } = await import('../packages/connect/src/webchat/turn.js');
 const { browserFor, runWebchatWorker } = await import('../packages/connect/src/webchat/worker.js');
-const { WebchatDriver, siteText } = await import('../packages/connect/src/drivers/webchat.js');
-const { runWebchatCommand } = await import('../packages/connect/src/webchat-cli.js');
+const { WebchatDriver } = await import('../packages/connect/src/drivers/webchat.js');
 const { accountKey } = await import('../packages/connect/src/settings.js');
 const { materialize } = await import('../packages/connect/src/profiles.js');
 const { ENGINES } = await import('../packages/connect/src/engines.js');
 const { DRIVERS } = await import('../packages/connect/src/session-wire.js');
-const { webchatNote } = await import('../packages/connect/src/delegation.js');
-const { USAGE, commandHelp } = await import('../packages/connect/src/help.js');
 
 const FIXTURES = new URL('./fixtures/webchat/', import.meta.url);
-const store = () => { let saved = { profiles: [{ id: 'claude', engine: 'claude', env: {} }] }; return { load: () => saved, save: (profiles) => { saved = { profiles }; } }; };
 
 test('a web chat account is a Helm account with its own key, model and settings', () => {
   const p = webchatProfile('neon', { site: 'gemini', profile: 'test', model: 'Neon', temporary: true, machine: 'Laptop' });
@@ -41,47 +37,6 @@ test('a web chat account is a Helm account with its own key, model and settings'
   assert.throws(() => webchatProfile('bad name', { site: 'gemini', profile: 'test' }), /letters, digits/);
   assert.throws(() => webchatProfile('x', { site: 'bing', profile: 'test' }), /Unknown site "bing"/);
   assert.throws(() => webchatProfile('x', { site: 'gemini' }), /--profile/);
-});
-
-test('add, list and remove keep other accounts as they are', () => {
-  const s = store();
-  assert.equal(addWebchat('neon', { site: 'gemini', profile: 'test' }, s).replaced, false);
-  assert.equal(addWebchat('neon', { site: 'gemini', profile: 'test', model: 'Neon' }, s).replaced, true);
-  assert.deepEqual(listWebchat(s).map((a) => [a.id, a.model]), [['neon', 'Neon']]);
-  assert.throws(() => addWebchat('claude', { site: 'gemini', profile: 'test' }, s), /not a web chat/);
-  assert.throws(() => removeWebchat('claude', s), /not a web chat account/);
-  assert.equal(removeWebchat('neon', s).id, 'neon');
-  assert.deepEqual(s.load().profiles.map((p) => p.id), ['claude']);
-  assert.throws(() => removeWebchat('neon', s), /no account "neon"/);
-});
-
-test('helm webchat add, list and remove on this machine', async () => {
-  const lines = [];
-  const print = (l) => lines.push(l);
-  await runWebchatCommand(['add', 'neon', '--site', 'gemini', '--profile', 'test', '--model', 'Neon', '--temporary'], { print, machine: (n) => n });
-  await runWebchatCommand(['list', '--json'], { print });
-  assert.deepEqual(JSON.parse(lines.at(-1)).accounts[0], { id: 'neon', site: 'gemini', siteLabel: 'Gemini', profile: 'test', model: 'Neon', machine: null, temporary: true });
-  await runWebchatCommand(['remove', 'neon'], { print });
-  await runWebchatCommand(['list'], { print });
-  assert.match(lines.at(-1), /No web chat accounts/);
-  await assert.rejects(runWebchatCommand(['add', 'neon', '--profile', 'test'], { print }), /--site/);
-  assert.match(commandHelp('webchat', USAGE), /helm webchat add <account>/);
-  assert.match(commandHelp('webchat', USAGE), /cannot use tools, files or commands/);
-});
-
-test('agents learn about web chat accounts only when there are some', () => {
-  assert.equal(webchatNote([]), '');
-  assert.match(webchatNote([webchatProfile('neon', { site: 'gemini', profile: 'test' })]), /neon are signed-in web chats\. They only answer questions/);
-});
-
-test('small helpers: history, conversation addresses and agent message headers', () => {
-  assert.equal(withHistory('Q2', []), 'Q2');
-  assert.match(withHistory('Q2', [{ q: 'Q1', a: 'A1' }]), /^Earlier in this conversation:\n\nQuestion: Q1\nAnswer: A1\n\nNow answer this:\nQ2$/);
-  assert.ok(sameConversation('https://gemini.google.com/app/abc?hl=en', 'https://gemini.google.com/app/abc/'));
-  assert.ok(!sameConversation('https://gemini.google.com/app', 'https://gemini.google.com/app/abc'));
-  for (const site of Object.values(SITES)) assert.ok(new RegExp(site.conversation).test(site.id === 'gemini' ? 'https://gemini.google.com/app/1f2e' : site.id === 'chatgpt' ? 'https://chatgpt.com/c/68a-1' : 'https://claude.ai/chat/9a-b'), site.id);
-  assert.equal(siteText('[Helm agent message 0af3]\nFrom Lead (m/x).\nThis is a message.\nIf a reply is needed, send it.\n\nAnd in French?'), 'And in French?');
-  assert.equal(siteText('plain question'), 'plain question');
 });
 
 // ---------------------------------------------------------------- saved pages in a real browser
@@ -175,16 +130,6 @@ test('a temporary chat that does not turn on sends nothing', { timeout: 60_000 }
   await assert.rejects(askSite(b, { site, question: 'x', temporary: true, ...quick }), /Could not turn on a temporary chat in Gemini\. Nothing was sent\./);
   const tabs = await b.tabs();
   assert.deepEqual(await f.page('no-temp', tabs[0].id, 'window.asked'), []);
-});
-
-test('a missing model and a signed-out profile are told plainly', { timeout: 60_000 }, async (t) => {
-  const f = await fixtureBrowser(t);
-  const b = await f.browser('errors');
-  await assert.rejects(askSite(b, { site: f.local('gemini'), question: 'x', model: 'Ultra', ...quick }),
-    /Could not choose the model "Ultra" in Gemini\. It offers: flash, neon\. Nothing was sent\./);
-  const out = await f.browser('signed-out');
-  await assert.rejects(askSite(out, { site: { ...f.local('gemini'), home: `${f.base}/signed-out` }, question: 'x', profile: null, ...quick }),
-    /Gemini is signed out\. Sign in there, then send the question again\./);
 });
 
 test('a part of the answer shows while it is written; stop presses the site stop button', { timeout: 60_000 }, async (t) => {

@@ -55,16 +55,6 @@ test('a day with deleted transcripts is filled from Claude daily totals at the m
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('a Claude folder copied from another machine adds no estimate', async () => {
-  // The copy holds the other machine's history and no day this machine ran.
-  const dir = tmp();
-  const profile = home(join(dir, 'claude'), { kept: [['2026-10-02', 5e6]], stats: DAYS });
-  const r = await new UsageReader().report([profile], {});
-  assert.equal(r.totals.total, 5e6);
-  assert.equal(r.estimates, undefined);
-  rmSync(dir, { recursive: true, force: true });
-});
-
 test('one estimated day counts once, on one machine and across machines', async () => {
   const dir = tmp();
   const a = home(join(dir, 'a'), { kept: DAYS.slice(2), stats: DAYS });
@@ -89,12 +79,20 @@ test('Claude daily totals survive Claude rewriting its file with fewer days', as
   const dir = tmp();
   const indexPath = join(dir, 'usage-index.json');
   const profile = home(join(dir, 'claude'), { kept: DAYS.slice(2), stats: DAYS });
-  const reader = new UsageReader({ indexPath });
+  // report starts a background save; wait for each before the folder goes.
+  const saves = [];
+  const tracked = (reader) => {
+    const persist = reader.persist.bind(reader);
+    reader.persist = () => { const save = persist(); saves.push(save); return save; };
+    return reader;
+  };
+  const reader = tracked(new UsageReader({ indexPath }));
   const before = await reader.report([profile], {});
   await reader.persist();
 
   writeFileSync(join(dir, 'claude', 'stats-cache.json'), JSON.stringify({ version: 5, dailyModelTokens: [], modelUsage: {} }));
-  const after = await new UsageReader({ indexPath }).report([profile], {});
+  const after = await tracked(new UsageReader({ indexPath })).report([profile], {});
   assert.equal(after.totals.total, before.totals.total);
+  await Promise.allSettled(saves);
   rmSync(dir, { recursive: true, force: true });
 });

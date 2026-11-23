@@ -89,8 +89,7 @@ until `text` starts with "helm / Search anything".
 - **Rules:** a machine sends a chat update only when it changes what the
   app holds. Status goes at once; counter-only changes share one update
   per chat per 0.5 s (`session-updates.js`).
-- **Tests:** `test/browser/sidebar`, `sidebar-shelves`, `sidebar-metadata`,
-  `offline-cache`; `test/seen-sync`, `pin`, `inventory`, `inventory-active`,
+- **Tests:** `test/browser/sidebar`, `sidebar-shelves`, `offline-cache`; `test/inventory`, `inventory-active`,
   `session-updates`.
 
 ## Rename, archive, delete
@@ -118,8 +117,7 @@ until `text` starts with "helm / Search anything".
   (driven 2026-10-26): open a chat, empty its box, `$V key Delete`; the
   question names that chat; `$V key Delete` again and it stays; `$V key
   Enter` and it is gone.
-- **Tests:** `test/browser/ui`; `test/delete-stays-deleted`, `titles`,
-  `slash-title`.
+- **Tests:** `test/browser/ui`; `test/delete-stays-deleted`, `slash-title`.
 
 ## Continue in a new chat
 - **Prove (driven):** on a finished chat in a folder,
@@ -144,7 +142,7 @@ until `text` starts with "helm / Search anything".
   streams. Helpers, the brain and terminals are never found.
 - **Traps:** a sleeping machine's screen is empty, not its last list.
 - **Tests:** `test/browser/ui`, `global-keys`, `sidebar`, `palette-search`;
-  `test/palette`, `machine-kind`, `search-index`.
+  `test/machine-kind`, `search-index`.
 
 ## Helm brain
 - **Reach:** the row under the machines on Home, or "Helm brain" in search.

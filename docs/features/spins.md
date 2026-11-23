@@ -23,7 +23,7 @@ for websites that cannot run inside a frame.
   A link made from a chat (`HELM_SESSION_ID`) on its own machine notes that
   chat; deleting the chat stops it. Kept links never belong to a chat.
 - **Tests:** `test/share-links`, `share-private`, `share-expiry`,
-  `share-flow`, `share-recovery`, `share-input`, `tunnel-flow`, `tunnel-ports`, `caddy`, `proxy`;
+  `share-flow`, `share-recovery`, `share-input`, `tunnel-flow`, `tunnel-ports`, `proxy`;
   `test/browser/private-links`.
 
 ## The webhook Spin

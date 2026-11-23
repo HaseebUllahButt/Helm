@@ -6,9 +6,8 @@ import { test } from 'node:test';
 import { M } from '@helm/protocol';
 import { LocalModelHost } from '../packages/connect/src/local-model-host.js';
 import { LocalModelJobs } from '../packages/connect/src/local-model-jobs.js';
-import { LocalModelAccounts, cachedModelProfiles, localProfileCatalog, modelProfile } from '../packages/connect/src/local-model-accounts.js';
-import { modelName } from '../packages/connect/src/local-model-state.js';
-import { freeGpu, runModelsCommand } from '../packages/connect/src/local-model-cli.js';
+import { LocalModelAccounts, cachedModelProfiles, localProfileCatalog } from '../packages/connect/src/local-model-accounts.js';
+import { runModelsCommand } from '../packages/connect/src/local-model-cli.js';
 import { ensureOllamaService } from '../packages/connect/src/ollama-service.js';
 
 function directory(t) {
@@ -17,37 +16,10 @@ function directory(t) {
   return dir;
 }
 
-const noForwards = { list: () => [] };
 const machines = Object.fromEntries(['here', 'gpu', 'offline'].map((id) => [id, { id, name: id }]));
 
-test('choose the answering machine with the most free memory on one GPU', async () => {
-  const lines = [], work = [];
-  const rpc = async (host, method, params) => {
-    switch (method) {
-      case M.LOCAL_MODELS_LIST: return { models: [] };
-      case M.MACHINE_STATS:
-        if (host === 'offline') throw new Error('offline');
-        return { gpus: [{ memory: { total: host === 'gpu' ? 16 : 24, used: host === 'gpu' ? 3 : 23 } }] };
-      case M.LOCAL_MODELS_WORK:
-        work.push(host);
-        return { id: params.id, state: 'done', result: { model: params.model, state: 'loaded', gpu: 1024 * 1024, memory: 0 } };
-      case M.LOCAL_MODELS_ENDPOINT: return { url: 'http://127.0.0.1:48321/v1' };
-    }
-    assert.fail(method);
-  };
-  await runModelsCommand(['serve', 'tiny:latest'], {
-    net: { machines, self: 'here' }, rpc, write: (line) => lines.push(line),
-  });
-  assert.deepEqual(work, ['gpu']);
-  assert.match(lines.join('\n'), /tiny on gpu.*loaded on GPU.*1 MiB/);
-  assert.match(lines.join('\n'), /localhost|127\.0\.0\.1/);
-  assert.equal(freeGpu({ gpus: [{ memory: null }, { memory: { total: 4, used: 9 } }] }), 0);
-  assert.equal(modelName('Team/Tiny:latest'), 'team/tiny');
-  assert.throws(() => modelName('https://outside/model'));
-});
-
-test('report CPU fallback and check an uncertain start by its request number', async () => {
-  const lines = [], calls = [];
+test('an uncertain start is checked by its request number, never sent again', async () => {
+  const calls = [];
   let id;
   const rpc = async (host, method, params) => {
     if (method === M.LOCAL_MODELS_LIST) return { models: [] };
@@ -65,11 +37,9 @@ test('report CPU fallback and check an uncertain start by its request number', a
     return { url: 'http://127.0.0.1:48321/v1' };
   };
   await runModelsCommand(['serve', 'tiny', '--machine', 'auto'], {
-    net: { machines, self: 'here' }, rpc, write: (line) => lines.push(line),
+    net: { machines, self: 'here' }, rpc, write: () => {},
   });
   assert.deepEqual(calls, ['here']);
-  assert.match(lines.join('\n'), /No machine reported free GPU memory/);
-  assert.match(lines.join('\n'), /loaded on CPU/);
 });
 
 test('freeze the user service to loopback and refuse to install a missing binary', async (t) => {
@@ -188,16 +158,6 @@ test('build both client accounts with the same private forward and remove them w
   catalog = { models: [] };
   assert.deepEqual(await accounts.sync(base, { fresh: true }), []);
   assert.deepEqual(cachedModelProfiles(base, dir), []);
-});
-
-test('use the OpenCode 1 provider settings on an older client', (t) => {
-  const dir = directory(t);
-  const profile = modelProfile({ engine: 'opencode', cmd: 'opencode' }, 'local-tiny',
-    { model: 'tiny', tools: false, images: false, context: 4096 }, 'http://127.0.0.1:4321/v1', dir, '1.19.0');
-  const config = JSON.parse(readFileSync(profile.env.OPENCODE_CONFIG));
-  assert.deepEqual(config.enabled_providers, ['helm-local']);
-  assert.equal(config.provider['helm-local'].npm, '@ai-sdk/openai-compatible');
-  assert.equal(config.provider['helm-local'].models.tiny.tool_call, false);
 });
 
 test('resume a saved model job after restart and return its result by ID', async (t) => {

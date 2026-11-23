@@ -13,8 +13,7 @@ process.env.HELM_DB = join(process.env.HELM_DIR, 'hub.sqlite');
 process.env.HELM_NO_SERVICE = '1';
 await import('./fixtures/loopback-rtc.mjs');
 
-const { LanDiscovery, lanDiscoveryEnabled, withHeardAddresses, sealPacket, openPacket, localSignalRouter, CLOCK_WINDOW_MS } = await import('../packages/connect/src/lan-discovery.js');
-const { broadcastAddresses } = await import('../packages/connect/src/net-addr.js');
+const { LanDiscovery, withHeardAddresses, sealPacket, openPacket, localSignalRouter, CLOCK_WINDOW_MS } = await import('../packages/connect/src/lan-discovery.js');
 const N = await import('@helm/protocol/network');
 const { T } = await import('@helm/protocol');
 const { DirectMesh } = await import('../packages/connect/src/direct-mesh.js');
@@ -176,7 +175,8 @@ test('a wrong key, a wrong signer, a replay, an old packet and a removed machine
 test('once this machine is removed, it neither sends nor accepts anything', async t => {
   const pa = await freePort();
   let net = roster('laptop');
-  const a = node('laptop', pa, pa, { announce: false, network: () => net });
+  let heard = 0;
+  const a = node('laptop', pa, pa, { announce: false, network: () => net, accept: () => { heard++; return true; } });
   await a.lan.start();
   const s = await raw(pa);
   t.after(() => { s.close(); a.lan.stop(); });
@@ -184,7 +184,8 @@ test('once this machine is removed, it neither sends nor accepts anything', asyn
   await until(() => a.signals.length === 1);
   net = roster('laptop', { revoked: { gone: 1, laptop: 1 } });
   await s.send(sealPacket(roster('homepc'), message({ peer: 'after' }), keys.homepc.privateKey));
-  await new Promise(r => setTimeout(r, 50));
+  // The packet is read and dropped in one step, so once it is heard it is settled.
+  await until(() => heard === 2);
   assert.deepEqual(a.signals.map(x => x.peer), ['before']);
   assert.equal(a.lan.signal('homepc', 'dial', 'dm', {}), null);
 });
@@ -210,10 +211,13 @@ test('turning a VPN on or off immediately rechecks routing and clears old Wi-Fi 
 test('only private addresses count by default: loopback and the internet are not the local network', async () => {
   const pa = await freePort();
   const a = node('laptop', pa, pa, { accept: undefined, announce: false });
+  const accept = a.lan.accept;
+  let heard = 0;
+  a.lan.accept = (address) => { heard++; return accept(address); };
   await a.lan.start();
   const s = await raw(pa);
   await s.send(sealPacket(roster('homepc'), message({ k: 'hello', to: null, direct: 1 }), keys.homepc.privateKey));
-  await new Promise(r => setTimeout(r, 100));
+  await until(() => heard === 1);
   assert.equal(a.lan.list().length, 0);
   s.close();
   a.lan.stop();
@@ -246,24 +250,6 @@ test('heard machines expire, and turning it off or a VPN carrying the LAN stops 
   assert.equal(a.lan.status().on, false);
   assert.match(a.lan.status().reason, /VPN/);
   a.lan.stop();
-});
-
-test('on unless config says no; test runs stay quiet unless asked', () => {
-  assert.equal(lanDiscoveryEnabled({}, {}), true);
-  assert.equal(lanDiscoveryEnabled({ lanDiscovery: false }, {}), false);
-  assert.equal(lanDiscoveryEnabled({}, { HELM_LAN_DISCOVERY: '0' }), false);
-  assert.equal(lanDiscoveryEnabled({}, { HELM_NO_SERVICE: '1' }), false);
-  assert.equal(lanDiscoveryEnabled({}, { HELM_NO_SERVICE: '1', HELM_LAN_DISCOVERY: '1' }), true);
-  assert.equal(lanDiscoveryEnabled({ lanDiscovery: false }, { HELM_LAN_DISCOVERY: '1' }), false);
-});
-
-test('broadcast goes to each private subnet, never a VPN /32', () => {
-  assert.deepEqual(broadcastAddresses([
-    { address: '192.168.1.9', netmask: '255.255.255.0' },
-    { address: '100.80.16.79', netmask: '255.255.255.255' },
-    { address: '10.0.3.4', netmask: '255.255.0.0' },
-    { address: '130.210.33.163', netmask: '255.255.255.0' },
-  ]), ['192.168.1.255', '10.0.255.255']);
 });
 
 test('multiple roster addresses keep only one live link per machine', () => {

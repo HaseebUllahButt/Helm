@@ -183,9 +183,12 @@ process.stdin.on('data', (d) => {
       await sleep(60);
       out({ event: 'step_update', step_update: { step_index: 2, state: 'DONE', step_type: 'agent_response', text_delta: 'background started' } });
       await sleep(500);
-      out({ event: 'step_update', step_update: { step_index: 3, state: 'DONE', step_type: 'agent_response', text_delta: 'background finished' } });
-      out({ event: 'result', result: { status: 'SUCCESS', conversation_id: 'conv-live' } });
-      out({ event: 'result', result: { status: 'SUCCESS', conversation_id: 'conv-live' } });
+      // One write, so the repeated result arrives with the first one.
+      process.stdout.write([
+        { event: 'step_update', step_update: { step_index: 3, state: 'DONE', step_type: 'agent_response', text_delta: 'background finished' } },
+        { event: 'result', result: { status: 'SUCCESS', conversation_id: 'conv-live' } },
+        { event: 'result', result: { status: 'SUCCESS', conversation_id: 'conv-live' } },
+      ].map((m) => JSON.stringify(m) + '\\n').join(''));
     })();
   }
 });
@@ -299,7 +302,8 @@ test('agy: work it starts by itself is its own turn, open through a quiet gap un
   assert.equal(driver.status, 'working');
   const done = await log.until((e) => e.type === 'turn.done' && e.turnId === wake.turnId);
   assert.equal(done.status, 'ok');
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // The repeated result came in the same chunk, so it is already read.
+  await new Promise(setImmediate);
   assert.deepEqual(log.of('turn.done').map((e) => e.turnId), [first.turnId, wake.turnId], 'each turn closes once, the repeated result closes nothing');
   assert.equal(driver.status, 'idle');
   const texts = log.of('item.start').filter((e) => e.kind === 'text').map((e) => e.turnId);

@@ -14,7 +14,7 @@
 - **Prove a failed file (driven 2026-10-23):** block the preferences app file
   in the private browser, open Your preferences, use Back, then Reload Helm.
   Reopen Your preferences after the reload; the editor appears.
-- **Tests:** `test/browser/global-keys`, `ui`, `appearance`, `deferred-screen`.
+- **Tests:** `test/browser/global-keys`, `ui`.
 
 ## Your preferences and the keeper
 - **Reach:** Settings → Your preferences.
@@ -42,7 +42,7 @@
   minutes late. Costs are API prices, not money spent. Pi and OMP chats
   carry the cost Pi wrote down, so a free model shows $0, not "unpriced".
 - **Tests:** `test/browser/usage`; `test/usage`, `usage-sync`,
-  `cost-accounting`, `devin-usage`, `other-pricing`, `token-rate`.
+  `cost-accounting`, `devin-usage`.
 
 ## Dashboard and the limit balancer
 - **Reach:** Ctrl/⌘+Shift+D, the palette ("Dashboard"), Settings →
@@ -70,7 +70,7 @@
 - **Not yet driven;** the fake agent reports tiny usage and no limits. The
   "Compact at" setting applies to every chat on the account, on every
   machine. The meter uses a new size at once; Claude confirms it with its
-  next reply. Test: `test/browser/context-limit`.
+  next reply.
 - **Codex banked resets:** only `account/rateLimits/read` names them, so
   `usage.limits` asks a private `codex app-server` at most every 15 minutes,
   and only for Codex accounts with chats. To drive it, add a codex profile
@@ -78,8 +78,7 @@
   (Ctrl+Shift+4): the account shows "2 banked resets · the next one ends …".
 - **Traps:** Claude's live limit check returns 403 on the laptop; values
   can come from saved reports.
-- **Tests:** `test/browser/chat-limits`, `context-meter`, `compaction`;
-  `test/account-limits`, `limits-line`, `context-limit`, `context-usage`,
+- **Tests:** `test/account-limits`, `limits-line`, `context-limit`, `context-usage`,
   `usage-recovery`.
 
 ## Updates
@@ -109,7 +108,7 @@
 - **Prove restart:** start a private `fake-slow` chat, run `$V restart`,
   and confirm it finishes. Repeat with `fake-ask`: approve after restart
   and confirm the same request completes.
-- **Tests:** `test/browser/app-update`, `coding-tools`; `test/self-update`,
+- **Tests:** `test/browser/app-update`; `test/self-update`,
   `version-sync`, `cli-updates`.
 
 ## Connectors & skills
@@ -123,5 +122,5 @@
   `skills/`).
 - **Traps:** a skill reachable by two links shows once, and Remove clears
   both.
-- **Tests:** `test/browser/integrations`; `test/integrations`. Design:
+- **Tests:** `test/integrations`. Design:
   [`docs/integrations.md`](../integrations.md).

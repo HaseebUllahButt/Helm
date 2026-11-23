@@ -43,6 +43,7 @@ async function fixture({ delay = 0, old = false } = {}) {
 const { spawn:importSpawn } = await import('node:child_process');
 const finished = async(f,path,extra={})=> { const {job}=f.engine.start({path,targetMachineId:'bb22',...extra},'phone'); const result=await f.engine.wait(job.id); assert.equal(result.phase,'done', result.error); return result; };
 test.after(()=>rmSync(root,{recursive:true,force:true}));
+const until = async (check, what='state') => { const end=Date.now()+15000; while(!check()) { if(Date.now()>end) throw new Error(`timed out waiting for ${what}`); await new Promise(r=>setTimeout(r,10)); } };
 
 test('encrypted tunnel publishes atomically, preserves modes/symlinks/env, and uses a warm socket for delta re-sends',async()=> {
   const f=await fixture(); try {
@@ -58,8 +59,7 @@ test('encrypted tunnel publishes atomically, preserves modes/symlinks/env, and u
     const delta=await finished(f,source); assert.equal(delta.changed.files,1); assert.equal(readFileSync(join(delta.target.path,'app'),'utf8'),'second edit');
     assert.equal(readFileSync(join(delta.target.path,'node_modules','dep'),'utf8'),'installed there'); assert.equal(readFileSync(join(delta.target.path,'notes.md'),'utf8'),'agent work');
     assert.deepEqual(f.metrics(),{opens:1,credentials:1});
-    await new Promise(r=>setTimeout(r,300));
-    assert.ok(f.events.some(e=>e.job.phase==='done'));
+    await until(()=>f.events.some(e=>e.job.phase==='done'),'done event');
     for (const id of new Set(f.events.map(e=>e.job.id))) { const times=f.events.filter(e=>e.job.id===id).map(e=>e.job.updatedAt); for(let i=1;i<times.length;i++) assert.ok(times[i]>=times[i-1]); } assert.equal(f.engine.list({},'phone').jobs.length,3);
   } finally { await f.close(); }
 });
@@ -127,10 +127,9 @@ test('cancel stops both ends; persisted interrupted jobs resume the same stage a
   const f=await fixture({delay:100}); try {
     const source=join(f.dir,'resume'); mkdirSync(source); writeFileSync(join(source,'data'),randomBytes(5*1024*1024));
     const {job}=f.engine.start({path:source,targetMachineId:'bb22'},'phone');
-    while(f.engine.status({jobId:job.id},'phone').job.phase!=='sending') await new Promise(r=>setTimeout(r,10));
-    await new Promise(r=>setTimeout(r,300));
+    await until(()=>{ const now=f.engine.status({jobId:job.id},'phone').job; return now.phase==='sending'&&now.bytes.sent>0; },'bytes sent');
     const cancelled=await f.engine.cancel({jobId:job.id},'phone'); assert.equal(cancelled.job.phase,'cancelled'); assert.equal(existsSync(join(f.home,'resume')),false);
-    await new Promise(r=>setTimeout(r,200));
+    await until(()=>!f.receiver.streams.size&&!f.receiver.closing.size,'receiver closed');
     f.engine.retry({jobId:job.id},'phone'); const resumed=await f.engine.wait(job.id); assert.equal(resumed.phase,'done',resumed.error); assert.deepEqual(readFileSync(join(resumed.target.path,'data')),readFileSync(join(source,'data')));
     const record=JSON.parse(readFileSync(join(f.options.directory,`${job.id}.json`))); record.job.phase='sending'; writeFileSync(join(f.options.directory,`${job.id}.json`),JSON.stringify(record));
     const restarted=new SendEngine(f.options); assert.equal(restarted.status({jobId:job.id},'phone').job.phase,'interrupted'); restarted.retry({jobId:job.id},'phone'); const recovered=await restarted.wait(job.id); assert.equal(recovered.phase,'done',recovered.error); await restarted.stop();
@@ -210,8 +209,7 @@ test('a SIGKILL of the source process leaves no published folder and a fresh pro
   try {
     const source=join(f.dir,'killed-source');mkdirSync(source);writeFileSync(join(source,'data'),randomBytes(3*1024*1024));
     const next=launch({type:'start',path:source});const {job}=await next(m=>m.type==='started');
-    await next(m=>m.type==='progress'&&m.job.bytes.sent>0);
-    await new Promise(r=>setTimeout(r,400));
+    await next(m=>m.type==='progress'&&m.job.bytes.sent>=256*1024);
     child.kill('SIGKILL');await new Promise(r=>child.once('close',r));
     assert.equal(existsSync(join(f.home,'killed-source')),false);
     while(f.receiver.streams.size||f.receiver.closing.size) await new Promise(r=>setTimeout(r,20));

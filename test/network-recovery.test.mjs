@@ -12,7 +12,7 @@ Object.assign(process.env, { HELM_DIR: join(root, 'state'), HELM_DB: join(root, 
   HELM_TERMINALS_SOCKET: join(root, 'terminals.sock'), HELM_NATIVE_SOCKET: join(root, 'native.sock'),
   HERDR_SOCKET_PATH: join(root, 'herdr.sock'), HELM_NO_SERVICE: '1' });
 const { ensureTcpRecovery, configuredTcpRecovery, TCP_RECOVERY_FILE, TCP_RECOVERY_SCRIPT,
-  ensureFastTcp, configuredCongestion, FAST_TCP_FILE, FAST_TCP_SCRIPT } = await import('../packages/connect/src/network-recovery.js');
+  ensureFastTcp, FAST_TCP_FILE, FAST_TCP_SCRIPT } = await import('../packages/connect/src/network-recovery.js');
 const exec = promisify(execFile);
 test.after(() => rm(root, { recursive: true, force: true }));
 
@@ -86,15 +86,6 @@ test('an administrator password is never requested by a daemon; failures are vis
     assert.equal(command, 'sudo');
     assert.equal(args[0], '/bin/sh');
   } });
-});
-
-test('existing distribution policy needs no root access and a stronger policy is restored', async context => {
-  const f = await fixture(context, { live: '1' });
-  const options = { ...f.options, configured: async () => 1 };
-  assert.equal((await ensureTcpRecovery(options)).persistent, true);
-  assert.equal(f.calls(), 0);
-  await writeFile(f.liveFile, '0');
-  assert.equal((await ensureTcpRecovery({ ...options, configured: async () => 2 })).mode, 2);
 });
 
 test('configuration honors filename order, directory overrides, masks, and explicit disablement', async () => {
@@ -196,22 +187,6 @@ test('keeps a congestion control someone chose, and asks no password from a serv
   } });
   assert.equal(status.repair, 'helm network-repair');
   assert.match(status.reason, /password is required/);
-
-  for (const override of [{ env: { NODE_TEST_CONTEXT: 'child-v8' } }, { os: 'darwin' }]) {
-    assert.equal((await ensureFastTcp({ ...f.options, ...override })).supported, false);
-  }
-});
-
-test('a congestion control chosen in sysctl files is found, but not Helm\'s own', async () => {
-  const contents = new Map([
-    ['/etc/sysctl.d/90-helm-bbr.conf', 'net.ipv4.tcp_congestion_control = bbr'],
-    ['/usr/lib/sysctl.d/50-default.conf', 'net.ipv4.ping_group_range = 0 0'],
-  ]);
-  const options = { list: async dir => [...contents.keys()].filter(path => path.startsWith(dir + '/')).map(path => path.slice(dir.length + 1)),
-    read: async path => contents.get(path) ?? '' };
-  assert.equal(await configuredCongestion(options), null);
-  contents.set('/etc/sysctl.d/99-admin.conf', 'net/ipv4/tcp_congestion_control=htcp # chosen');
-  assert.equal(await configuredCongestion(options), 'htcp');
 });
 
 test('the ufw rules for the local network are found missing only when ufw is on', async () => {

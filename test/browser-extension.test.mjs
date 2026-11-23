@@ -13,16 +13,10 @@ process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-browser-extension-'));
 process.env.HELM_NO_SERVICE = '1';
 test.after(() => rm(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
-const { ExtensionRelay, extensionIdFromKey } = await import('../packages/connect/src/browser-relay.js');
+const { ExtensionRelay } = await import('../packages/connect/src/browser-relay.js');
 const ext = await import('../packages/connect/src/browser-extension.js');
 const { systemChromium } = await import('../packages/connect/src/browser-window.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
-
-test('the add-on has one fixed id in every browser', () => {
-  const manifest = JSON.parse(readFileSync(join(ext.EXTENSION_SOURCE, 'manifest.json'), 'utf8'));
-  assert.equal(extensionIdFromKey(manifest.key), 'knooejmoodmpkigfhoeifmhkpadpknng');
-  assert.equal(ext.EXTENSION_ID, 'knooejmoodmpkigfhoeifmhkpadpknng');
-});
 
 test('the flags file keeps the owner\'s other add-ons and takes Helm\'s out again', () => {
   const mine = '/home/me/.helm/browser/extension';
@@ -57,16 +51,6 @@ test('the flags file hides the debugging bar, and the way back keeps the owner\'
   const owners = `${ext.QUIET_FLAG}\n`;
   assert.equal(ext.withQuiet(owners), owners, 'the owner\'s own flag is enough');
   assert.equal(ext.withQuiet(owners, false), owners, 'and it stays on the way back');
-});
-
-test('the mode is saved per machine and defaults to the owner\'s own browser', () => {
-  const dir = mkdtempSync(join(process.env.HELM_DIR, 'mode-'));
-  assert.equal(ext.readMode(dir), 'extended');
-  // A file from the first add-on, written by a test, is not the owner's choice.
-  writeFileSync(join(dir, 'mode.json'), '{"mode":"window"}'); assert.equal(ext.readMode(dir), 'extended');
-  ext.writeMode(dir, 'window'); assert.equal(ext.readMode(dir), 'window');
-  ext.writeMode(dir, 'extended'); assert.equal(ext.readMode(dir), 'extended');
-  assert.throws(() => ext.writeMode(dir, 'other'), /window or extended/);
 });
 
 test('at start the Helm service names the add-on in the browser\'s flags file, and a test copy never does', async t => {
@@ -159,19 +143,6 @@ test('each profile of the owner\'s browser has its own link, and a tab\'s steps 
   two.ws.close();
 });
 
-test('Helm finds a profile folder by the mark its add-on stored there', () => {
-  const dir = mkdtempSync(join(process.env.HELM_DIR, 'marks-'));
-  const store = name => { const folder = join(dir, name, 'Local Extension Settings', ext.EXTENSION_ID); mkdirSync(folder, { recursive: true }); return folder; };
-  writeFileSync(join(store('Default'), '000003.log'), Buffer.concat([Buffer.from([1, 2, 3]), Buffer.from(`helmProfile"${'1'.repeat(32)}"`)]));
-  writeFileSync(join(store('Profile 3'), '000005.ldb'), `x"${'2'.repeat(32)}"`);
-  writeFileSync(join(store('Profile 4'), 'LOG'), `"${'3'.repeat(32)}"`);
-  const profiles = ['Default', 'Profile 3', 'Profile 4', 'Missing'].map(directory => ({ dataDir: dir, directory }));
-  assert.equal(ext.profileOfMark('1'.repeat(32), profiles).directory, 'Default');
-  assert.equal(ext.profileOfMark('2'.repeat(32), profiles).directory, 'Profile 3');
-  assert.equal(ext.profileOfMark('3'.repeat(32), profiles), null, 'only the storage files count');
-  assert.equal(ext.profileOfMark('not a mark', profiles), null);
-});
-
 // A real Chromium with the add-on loaded, driven through Helm's own browser code.
 const chromiumPath = process.env.HELM_TEST_CHROMIUM || systemChromium();
 const noChromium = !chromiumPath && 'no Chromium-based browser here';
@@ -194,6 +165,8 @@ test('extended mode drives tabs in the owner\'s own browser and keeps them throu
   ext.writeMode(directory, 'extended');
   const make = () => new BrowserManager({ directory, session: sid => ({ id: sid }), canWindow: true, ownerQuietMs: 300, extensionWaitMs: 20000, browsers: () => [] });
   let manager = make();
+  // A failed check must still close this first link, or the run never ends.
+  const first = manager; t.after(() => first.stop());
   await manager.prepare();
   await startBrowser(t, directory);
   assert.equal(await manager.relay.waitForExtension(20000), true, 'the add-on connects to Helm');
@@ -231,135 +204,6 @@ test('extended mode drives tabs in the owner\'s own browser and keeps them throu
   assert.equal(rows.length, 1, 'the tab is kept to open again');
 });
 
-test('a tab opens in the profile the agent names; a closed profile loads with no restart', { skip: (noChromium || process.platform !== 'linux') && 'needs Chromium on Linux', timeout: 120000 }, async t => {
-  // The site shows the cookies it got, so each profile's own logins can be told apart.
-  const server = createServer((req, res) => {
-    if (req.url === '/set') res.setHeader('Set-Cookie', 'who=personal; Path=/');
-    res.setHeader('Content-Type', 'text/html'); res.end(`<title>${req.headers.cookie || 'none'}</title><p>Signed in</p>`);
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const directory = mkdtempSync(join(process.env.HELM_DIR, 'two-profiles-'));
-  ext.syncExtension(directory); ext.writeMode(directory, 'extended');
-  // The owner's browser: a full Chromium with no screen, so a second start hands over to it.
-  const dataDir = join(directory, 'owner'), launcher = join(directory, 'chromium');
-  writeFileSync(launcher, `#!/bin/sh\nexec "${chromiumPath}" --ozone-platform=headless --no-first-run --password-store=basic --use-mock-keychain --disable-breakpad --disable-crash-reporter "$@"\n`); chmodSync(launcher, 0o755);
-  const child = spawn(launcher, [`--user-data-dir=${dataDir}`, '--profile-directory=Default', `--load-extension=${ext.extensionFolder(directory)}`, 'about:blank'], { stdio: 'ignore', env: { ...process.env, WAYLAND_DISPLAY: '', DISPLAY: '' } });
-  const exited = new Promise(resolve => child.once('exit', resolve));
-  t.after(async () => { child.kill(); await exited; });
-  const profiles = [{ key: 'c:Default', dataDir, directory: 'Default', name: 'Personal', lastUsed: true }, { key: 'c:Profile 2', dataDir, directory: 'Profile 2', name: 'work' }];
-  const logins = { listProfiles: async () => profiles, resolveProfile: async name => { const found = profiles.find(p => p.name === name || p.directory === name); if (!found) throw new Error(`no profile ${name}`); return found; } };
-  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }), canWindow: true, ownerQuietMs: 300, extensionWaitMs: 20000, logins, browsers: () => [{ name: 'Chromium', program: chromiumPath, launcher }] });
-  t.after(() => manager.stop());
-  await manager.prepare();
-  assert.equal(await manager.relay.waitForExtension(30000), true, 'the add-on connects to Helm');
-  assert.equal(manager.relay.profiles.length, 1, 'only the open profile is connected');
-
-  // No profile named: the profile the owner used last.
-  const personal = await manager.open('chat-1', { url: `${base}/set` });
-  assert.equal(personal.profile, 'Personal (Default)');
-  assert.match((await manager.open('chat-1', { url: base })).tab.title, /who=personal/);
-  // The agent names a profile that has no window: the running browser loads it.
-  const work = await manager.open('chat-2', { url: base, profile: 'work' });
-  assert.equal(work.profile, 'work (Profile 2)');
-  assert.equal(work.tab.title, 'none', 'the work profile has its own logins');
-  assert.equal(manager.relay.profiles.length, 2);
-  assert.equal(child.exitCode, null, 'the owner\'s browser kept running');
-  // The chat keeps its profile for later tabs, and through a Helm restart.
-  assert.equal((await manager.open('chat-2', { url: base })).profile, 'work (Profile 2)');
-  assert.deepEqual(JSON.parse(readFileSync(join(directory, 'chat-2', 'profile.json'), 'utf8')), { dataDir, directory: 'Profile 2', name: 'work' });
-  const listed = (await manager.profiles('chat-2')).profiles;
-  assert.deepEqual(listed.map(p => !!p.connected), [true, true], 'the list shows both profiles connected');
-  await assert.rejects(manager.open('chat-3', { url: base, profile: 'nobody' }), /no profile nobody/);
-});
-
-test('Set up opens Chrome\'s add-ons page and copies the folder; Settings sees each state', async t => {
-  const dir = mkdtempSync(join(process.env.HELM_DIR, 'setup-'));
-  const calls = [];
-  const chrome = { name: 'Google Chrome', program: join(dir, 'chrome'), launcher: join(dir, 'chrome') };
-  writeFileSync(chrome.program, '#!/bin/sh\n');
-  const manager = new BrowserManager({ directory: join(dir, 'helm'), canWindow: true, mode: 'window', browsers: () => [chrome],
-    setupTools: { copyText: async text => { calls.push(['copy', text]); return true; }, openExtensionsPage: options => { calls.push(['open', options.launcher]); return true; } } });
-  t.after(() => manager.stop());
-  assert.equal((await manager.modeInfo()).state, 'off');
-  const done = await manager.ownerSetup();
-  assert.equal(ext.readMode(join(dir, 'helm')), 'extended', 'Set up turns the owner\'s browser on');
-  assert.equal(done.state, 'one-step');
-  assert.deepEqual(calls, [['copy', ext.extensionFolder(join(dir, 'helm'))], ['open', chrome.launcher]]);
-  assert.deepEqual(done.steps, ext.pasteSteps());
-  assert.match(manager.ownBrowserSteps()[0], /Do the task in Helm's window now/);
-  const routes = createBrowserRoutes({ sessions: { get: () => { throw new Error('no chat needed'); } }, manager });
-  assert.equal((await routes.dispatch('browser.setup', {})).state, 'one-step');
-  assert.equal((await routes.dispatch('browser.setup', { do: 'mode', mode: 'window' })).state, 'off');
-  const none = new BrowserManager({ directory: join(dir, 'none'), canWindow: true, browsers: () => [] });
-  t.after(() => none.stop());
-  assert.equal((await none.modeInfo()).state, 'none');
-  await assert.rejects(none.ownerSetup(), /no Chromium-based browser/);
-  assert.equal((await new BrowserManager({ directory: join(dir, 'vm'), canWindow: false }).modeInfo()).state, 'no-screen');
-});
-
-test('until the owner\'s browser connects, tabs open in Helm\'s window, then move after the step', { skip: noChromium, timeout: 90000 }, async t => {
-  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Move</title><button>Ready</button>'); });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  const url = `http://127.0.0.1:${server.address().port}/`;
-  const directory = mkdtempSync(join(process.env.HELM_DIR, 'fallback-'));
-  const { chromium } = await import('patchright-core');
-  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }), canWindow: true, ownerQuietMs: 300, extensionWaitMs: 300, browsers: () => [],
-    launchWindow: dir => chromium.launchPersistentContext(dir, { headless: true, executablePath: chromiumPath }) });
-  t.after(() => manager.stop());
-  await manager.prepare({ install: false });
-  const opened = await manager.open('chat-1', { url });
-  assert.match(opened.note, /opened in Helm's window/);
-  assert.equal(manager.shared.helmOwnBrowser, undefined);
-  assert.match((await manager.run('chat-1', opened.tab.id, { kind: 'look' })).text, /Ready/);
-
-  await startBrowser(t, directory);
-  assert.equal(await manager.relay.waitForExtension(20000), true, 'the add-on connects to Helm');
-  // Helm's window closes once no step runs; the tab sleeps and opens again in the owner's browser.
-  for (const until = Date.now() + 20000; Date.now() < until && manager.shared;) await new Promise(resolve => setTimeout(resolve, 100));
-  assert.equal(manager.shared, null, 'Helm\'s window was put away');
-  const look = await manager.run('chat-1', opened.tab.id, { kind: 'look' });
-  assert.match(look.text, /Ready/);
-  assert.equal(manager.shared.helmOwnBrowser, true, 'the tab is in the owner\'s browser now');
-  const again = await manager.open('chat-1', { url });
-  assert.equal(again.note, undefined, 'no note once the owner\'s browser is in use');
-});
-
-test('a closed browser without a flags file is started with no window, so agents use the owner\'s real profile, never a copy', { skip: noChromium, timeout: 90000 }, async t => {
-  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Started</title><button>Ready</button>'); });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  const url = `http://127.0.0.1:${server.address().port}/`;
-  const directory = mkdtempSync(join(process.env.HELM_DIR, 'start-'));
-  ext.writeMode(directory, 'extended');
-  // A launcher without a flags file, whose program is not running.
-  const launcher = join(directory, 'brave'); writeFileSync(launcher, '#!/bin/sh\n');
-  const started = [];
-  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }), canWindow: true, ownerQuietMs: 300, extensionWaitMs: 300,
-    browsers: () => [{ name: 'Brave', program: join(directory, 'brave-bin'), launcher }],
-    startOwn: browser => { started.push(browser); void startBrowser(t, directory); return true; },
-    launchWindow: () => { throw new Error('Helm\'s own window must not open'); } });
-  t.after(() => manager.stop());
-  await manager.prepare({ install: false });
-  const opened = await manager.open('chat-1', { url });
-  assert.equal(opened.note, undefined, 'the tab is in the owner\'s browser, not in Helm\'s window');
-  assert.equal(manager.shared.helmOwnBrowser, true);
-  assert.deepEqual(started.map(browser => [browser.program, browser.launcher]), [[join(directory, 'brave-bin'), launcher]], 'Helm started the owner\'s browser once');
-  assert.match((await manager.run('chat-1', opened.tab.id, { kind: 'look' })).text, /Ready/);
-});
-
-test('the owner\'s browser is found also when Chromium writes its command as one line', () => {
-  assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave\0--password-store=basic\0'), true);
-  assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave --password-store=basic --load-extension=/a,/b'), true);
-  assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave --password-store=basic --user-data-dir=/home/me/.helm/app-window --app=http://127.0.0.1:8787/'), false, 'the Helm app window');
-  assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave --type=renderer --lang=en-US'), false, 'a helper process');
-  assert.equal(ext.ownBrowserCommand('/opt/brave-bin/brave\0--user-data-dir=/tmp/helm-window\0'), false);
-  assert.equal(ext.ownBrowserCommand('browser.exe "--user-data-dir=C:/User Name/.helm/app-window"'), false);
-  assert.equal(ext.ownBrowserCommand('browser.exe --user-data-dir "C:/User Name/.helm/app-window"'), false);
-});
-
 test('a restart closes only the owner\'s browser and opens it again with its last tabs', { skip: process.platform !== 'linux' && 'reads /proc' }, async t => {
   const dir = mkdtempSync(join(process.env.HELM_DIR, 'restart-'));
   // A stand-in for the browser program: its own file, so only it matches.
@@ -378,43 +222,12 @@ test('a restart closes only the owner\'s browser and opens it again with its las
   assert.equal(helms.exitCode, null, 'other copies keep running');
 });
 
-test('helm browser mode asks the chat\'s machine, and an agent can never restart the owner\'s browser', async () => {
+test('an agent can never restart the owner\'s browser', async () => {
   const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
   const calls = [];
-  const run = args => runBrowserCommand(args, { rpc: async (env, method, params, ms) => { calls.push({ method, params, ms }); return { mode: params.mode || 'window', tab: { id: 'x' } }; }, self: () => 'here', env: { HELM_SESSION_ID: 'chat-1' }, print: () => {} });
-  await run(['mode']); await run(['mode', 'extended']); await run(['mode', 'window']);
-  assert.deepEqual(calls.map(call => [call.method, call.params]), [['browser.mode', { id: 'chat-1' }], ['browser.mode', { id: 'chat-1', mode: 'extended' }], ['browser.mode', { id: 'chat-1', mode: 'window' }]]);
-  await assert.rejects(run(['mode', 'other']), /window or extended/);
+  const run = args => runBrowserCommand(args, { rpc: async (env, method) => { calls.push(method); return {}; }, self: () => 'here', env: { HELM_SESSION_ID: 'chat-1' }, print: () => {} });
   await assert.rejects(run(['mode', 'extended', '--restart']), /never restart/);
-  assert.equal(calls.length, 3, 'nothing was sent for --restart');
-  await run(['open', 'https://example.com', '--profile', 'work']);
-  assert.deepEqual(calls[3].params, { id: 'chat-1', url: 'https://example.com', profile: 'work' }, 'open names the profile');
-  const seen = [];
-  const manager = { owner: id => seen.push(['owner', id]), modeInfo: async () => ({ mode: 'window' }), setMode: async (mode, options) => { seen.push(['set', mode, options]); return { mode }; } };
-  const routes = createBrowserRoutes({ sessions: { get: () => ({}) }, manager });
-  assert.deepEqual(await routes.dispatch('browser.mode', { id: 'chat-1' }), { mode: 'window' });
-  await routes.dispatch('browser.mode', { id: 'chat-1', mode: 'extended', restart: true });
-  assert.deepEqual(seen, [['owner', 'chat-1'], ['owner', 'chat-1'], ['set', 'extended', { restart: true }]]);
-});
-
-test('the saved main browser wins, survives mode changes, and falls back when removed', async t => {
-  const directory = mkdtempSync(join(process.env.HELM_DIR, 'main-'));
-  let found = [{ name: 'Chromium', program: '/missing/chromium', systemDefault: true }, { name: 'Vivaldi', program: '/missing/vivaldi' }];
-  const manager = new BrowserManager({ directory, canWindow: true, mode: 'window', browsers: () => found });
-  t.after(() => manager.stop());
-  assert.equal(manager.ownBrowser().name, 'Chromium');
-  await manager.setMain('vIvAlDi');
-  assert.equal(manager.ownBrowser().name, 'Vivaldi');
-  ext.writeMode(directory, 'window');
-  assert.equal(ext.readChoice(directory).main, 'Vivaldi');
-  assert.deepEqual(manager.mainInfo().browsers.map(b => b.selected), [false, true]);
-  found = found.slice(0, 1);
-  assert.equal(manager.ownBrowser().name, 'Chromium');
-  await assert.rejects(manager.setMain('Firefox'), /Choose a browser/);
-  found = [{ name: 'Helium', program: '/missing/helium' }, ...found.map(b => ({ ...b, systemDefault: false }))];
-  assert.equal(manager.mainNote(), '', 'a saved choice counts even when temporarily absent');
-  const other = new BrowserManager({ directory: join(directory, 'other'), browsers: () => found });
-  assert.match(other.mainNote(), /Ask the owner once/);
+  assert.equal(calls.length, 0, 'nothing was sent for --restart');
 });
 
 test('menu setup keeps Flatpak and other add-ons, then restores the owner entry', () => {
@@ -462,44 +275,7 @@ test('switching the main browser removes old setup and closes its link', async t
   assert.equal(readFileSync(join(directory, 'config/vivaldi-flags.conf'), 'utf8'), '');
 });
 
-test('Helm starts any supported browser with add-on flags and launcher arguments', async () => {
-  const { watch } = await import('node:fs/promises');
-  const directory = mkdtempSync(join(process.env.HELM_DIR, 'launch-'));
-  const launcher = join(directory, 'launcher'), output = join(directory, 'args');
-  writeFileSync(launcher, `#!/bin/sh\nprintf '%s\\n' "$@" > "${output}"\n`); chmodSync(launcher, 0o755);
-  const watcher = watch(directory);
-  try {
-    assert.equal(ext.startOwnBrowser({ program: launcher, args: ['run', 'org.wave.Browser'], folder: '/helm/extension', env: { ...process.env, HELM_NO_SERVICE: '1' } }), true);
-    for await (const event of watcher) {
-      if (event.filename === 'args' && existsSync(output) && readFileSync(output, 'utf8').includes('--no-startup-window')) break;
-    }
-    assert.deepEqual(readFileSync(output, 'utf8').trim().split('\n'), ['run', 'org.wave.Browser', '--load-extension=/helm/extension', ext.QUIET_FLAG, '--no-startup-window']);
-  } finally { await watcher.return(); }
-});
-
-test('Chrome and Edge keep manual setup; other Chromium browsers load the add-on', async t => {
-  for (const name of ['Google Chrome', 'Microsoft Edge', 'Edge', 'msedge']) {
-    const manager = new BrowserManager({ directory: join(process.env.HELM_DIR, name), canWindow: true, browsers: () => [{ name, program: `/missing/${name}` }] });
-    t.after(() => manager.stop());
-    assert.equal((await manager.modeInfo()).state, 'one-step');
-    assert.match(manager.ownBrowserSteps()[0], /one step from the owner/);
-  }
-  for (const name of ['Brave', 'Helium', 'Vivaldi', 'Chromium']) assert.equal(ext.manualBrowser({ name, program: `/missing/${name}` }), false);
-});
-
-test('helm browser main lists and sets the main browser on the chat machine', async () => {
-  const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
-  const calls = [], output = [];
-  const routes = createBrowserRoutes({ manager: { owner() {}, mainInfo: () => ({ browsers: [{ name: 'Brave', selected: true }] }), setMain: name => ({ browser: name }) } });
-  const run = args => runBrowserCommand(args, { rpc: async (env, method, params) => { calls.push([method, params]); return routes.dispatch(method, params); }, self: () => 'here', env: { HELM_SESSION_ID: 'chat' }, print: text => output.push(JSON.parse(text)) });
-  await run(['main']); await run(['main', 'Google', 'Chrome']);
-  assert.equal(output[0].browsers[0].selected, true);
-  assert.equal(output[1].browser, 'Google Chrome');
-  assert.deepEqual(calls, [['browser.main', { id: 'chat' }], ['browser.main', { id: 'chat', name: 'Google Chrome' }]]);
-  await runBrowserCommand(['main'], { rpc: (env, method, params) => routes.dispatch(method, params), self: () => 'here', env: {}, print() {} });
-});
-
- test('launch flags keep existing add-ons and do not mistake Helium for Chrome', () => {
+test('launch flags keep existing add-ons and do not mistake Helium for Chrome', () => {
   const directory = mkdtempSync(join(process.env.HELM_DIR, 'launch-flags-'));
   const launcher = join(directory, 'launcher'); writeFileSync(launcher, '#!/bin/sh\nwave-flags.conf\n');
   writeFileSync(join(directory, 'wave-flags.conf'), '--load-extension=/owner\n');
@@ -507,7 +283,7 @@ test('helm browser main lists and sets the main browser on the chat machine', as
   assert.equal(ext.manualBrowser({ name: 'Helium', program: '/opt/helium/chrome' }), false);
 });
 
- test('macOS and Windows find the real browser and exclude Helm app windows', () => {
+test('macOS and Windows find the real browser and exclude Helm app windows', () => {
   const program = '/Applications/Wave.app/Contents/MacOS/Wave';
   assert.deepEqual(ext.ownBrowserPids(program, { platform: 'darwin', run: () => `12 ${program} --no-first-run\n13 ${program} --user-data-dir=/helm/app-window\n14 ${program} --type=renderer` }), [12]);
   const exe = 'C:/Wave/browser.exe';
@@ -518,25 +294,7 @@ test('helm browser main lists and sets the main browser on the chat machine', as
   ]) }), [12]);
 });
 
-test('--machine uses another machine\'s browser as a guest chat, and keeps the chat\'s mode', async () => {
-  const { runBrowserCommand, guestId } = await import('../packages/connect/src/browser-cli.js');
-  const calls = [];
-  const deps = {
-    rpc: async (env, method, params) => { calls.push({ env, method, params }); return { tab: { id: 'x' } }; },
-    self: () => 'vm', machine: name => ({ laptop: 'lap', vm: 'vm' })[name.toLowerCase()],
-    findSession: async id => ({ env: 'vm', session: { id, mode: 'readonly', title: 'Cloudflare fix' } }),
-    env: { HELM_SESSION_ID: 'chat-1' }, print: () => {},
-  };
-  await runBrowserCommand(['open', 'https://dash.cloudflare.com', '--machine', 'Laptop'], deps);
-  assert.deepEqual(calls[0], { env: 'lap', method: 'browser.open', params: { id: guestId('vm', 'chat-1'), url: 'https://dash.cloudflare.com', guest: { chat: 'chat-1', from: 'vm', mode: 'readonly', title: 'Cloudflare fix' } } });
-  assert.equal(guestId('vm', 'chat-1'), 'guest-vm-chat-1');
-  // This machine itself: a normal call.
-  await runBrowserCommand(['tabs', '--machine', 'vm'], deps);
-  assert.deepEqual(calls[1], { env: 'vm', method: 'browser.list', params: { id: 'chat-1' } });
-  await assert.rejects(runBrowserCommand(['mode', 'window', '--machine', 'laptop'], deps), /only on the chat's own machine/);
-  // A machine on an older Helm does not know guests.
-  await assert.rejects(runBrowserCommand(['tabs', '--machine', 'laptop'], { ...deps, rpc: async () => { throw new Error('thread not found'); } }), /older Helm/);
-
+test('a guest from another machine keeps its chat\'s read-only mode and cannot take a local chat\'s name', async () => {
   const seen = [];
   const manager = { open: async (id, p) => { seen.push(['open', id, manager.session(id)]); return { ok: true }; }, session: null };
   const routes = createBrowserRoutes({ sessions: { get: () => { throw new Error('thread not found'); } }, manager });

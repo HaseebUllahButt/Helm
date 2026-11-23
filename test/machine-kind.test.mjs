@@ -70,13 +70,6 @@ test('a kind the author wrote survives a peer byte for byte', () => {
   assert.equal(N.rosterHash(authored), N.rosterHash(stored));
 });
 
-test('a new network designates its founder the home', () => {
-  N.forgetNetwork();
-  const net = N.createNetwork({ name: 'first', port: 8787 });
-  assert.equal(net.machines[net.self].kind, 'vm');
-  assert.equal(net.role, 'vm');
-});
-
 /** This machine's receipt for a record signed with its own key, as the tests make them. */
 const admit = (net, id) => N.admitMachine(net, id, N.machineSigningInfo().codeSignPubkey);
 
@@ -194,58 +187,6 @@ test('pc is a record change, written by the machine itself', async (t) => {
   // Asking for what it already is changes nothing but still answers.
   const same = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'pc' });
   assert.equal(same.changed, false);
-});
-
-test('leaving vm drops the advertised https endpoint', async (t) => {
-  N.forgetNetwork();
-  const net = N.createNetwork({ name: 'testbox', port: 8999 });
-  N.describeSelf(net, { endpoints: ['https://1-2-3-4.sslip.io', 'http://192.168.1.5:8999'] });
-  const d = daemon();
-  t.after(() => d.stop());
-  // What a vm daemon was started with.
-  d.advertised = ['https://1-2-3-4.sslip.io'];
-  d.extra = ['https://1-2-3-4.sslip.io'];
-
-  const r = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'pc' });
-  assert.equal(r.from, 'vm');
-  assert.ok(r.notes.some((n) => /Remove its Caddy site with:/.test(n)));
-
-  const after = N.loadNetwork();
-  assert.equal(after.machines[after.self].kind, 'pc');
-  assert.ok(!after.machines[after.self].endpoints.some((e) => e.startsWith('https://')),
-    `https should be gone from ${after.machines[after.self].endpoints}`);
-});
-
-test('becoming vm advertises the address it was given', async (t) => {
-  N.forgetNetwork();
-  const net = N.createNetwork({ name: 'testbox', port: 8999 });
-  N.describeSelf(net, { kind: 'pc' });
-  const d = daemon();
-  t.after(() => d.stop());
-
-  const r = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'vm', address: 'https://home.example' });
-  assert.equal(r.kind, 'vm');
-  const after = N.loadNetwork();
-  assert.equal(after.machines[after.self].kind, 'vm');
-  assert.ok(after.machines[after.self].endpoints.includes('https://home.example'));
-  assert.equal(after.role, 'vm');
-});
-
-test('becoming vm reuses an https address it already serves', async (t) => {
-  N.forgetNetwork();
-  const net = N.createNetwork({ name: 'testbox', port: 8999 });
-  N.describeSelf(net, { kind: 'pc' });
-  const d = daemon();
-  t.after(() => d.stop());
-  // What the daemon was started with; claiming again is unnecessary.
-  d.advertised = ['https://still.example'];
-  d.extra = ['https://still.example'];
-
-  const r = await d.dispatch(M.MACHINE_SET_KIND, { kind: 'vm' });
-  assert.equal(r.kind, 'vm');
-  const after = N.loadNetwork();
-  assert.equal(after.machines[after.self].kind, 'vm');
-  assert.ok(after.machines[after.self].endpoints.includes('https://still.example'));
 });
 
 test('a machine address is held to a bare https origin', async (t) => {

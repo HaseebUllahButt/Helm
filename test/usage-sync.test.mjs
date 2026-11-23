@@ -48,10 +48,19 @@ test('a hub answers usage.report for a sleeping machine from its last rollup', a
   };
   const env = await connect('?name=vm&info=%7B%7D&role=self');
   assert.ok(env, 'the machine must attach');
+  // The hub stores the rollup as the frame arrives, before it reads the close.
   env.send(JSON.stringify({ t: 'usage.sync', buckets, accounts: [], scan: {}, at: pushedAt }));
-  await new Promise((r) => setTimeout(r, 200));
   env.close();
-  await new Promise((r) => setTimeout(r, 200));
+  const online = async () => {
+    const body = await fetch(`http://127.0.0.1:${PORT}/api/network`, {
+      headers: { authorization: `Bearer ${token}` },
+    }).then((r) => r.json());
+    return body.machines.find((m) => m.id === selfId)?.online === true;
+  };
+  for (const end = Date.now() + 5000; await online();) {
+    assert.ok(Date.now() < end, 'the hub must see the machine leave');
+    await new Promise((r) => setTimeout(r, 20));
+  }
 
   // Now a client asks - the hub folds the remembered rollup for the window
   // asked, exactly as the daemon would have, and says it is a memory.

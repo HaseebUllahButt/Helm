@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, appendFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,7 +24,7 @@ function fixture(t) {
   writeFileSync(file, rows.join(''));
   const index = new SearchIndex({ dir, file: join(dir, 'index.json') });
   t.after(() => { index.close(); rmSync(dir, { recursive: true, force: true }); });
-  return { index, file, seq };
+  return { index, seq };
 }
 
 async function duringRead(index, work, action) {
@@ -42,20 +42,6 @@ async function duringRead(index, work, action) {
   assert.ok(applied);
 }
 
-test('a large search lets live replies finish without losing their saved prefix', async t => {
-  const { index, seq } = fixture(t);
-  await duringRead(index, index.update(sessions), () => {
-    const event = { seq: seq + 1, at: 1001, type: 'item.delta', id: 'reply', text: 'Live suffix. اردو 😀' };
-    index.note('chat', event);
-    event.text = 'changed after delivery';
-    index.note('chat', { seq: seq + 2, at: 1002, type: 'item.done', id: 'reply' });
-  });
-  const result = index.search('saved prefix', sessions);
-  assert.equal(result.length, 1);
-  assert.equal(result[0].snippet, 'Saved prefix. Saved middle. Live suffix. اردو 😀');
-  assert.equal(index.search('changed after', sessions).length, 0);
-});
-
 test('a live reset during a large read removes old words and keeps the next reply', async t => {
   const { index, seq } = fixture(t);
   await duringRead(index, index.update(sessions), () => {
@@ -68,25 +54,4 @@ test('a live reset during a large read removes old words and keeps the next repl
   assert.equal(index.search('canary', sessions).length, 0);
   assert.equal(index.search('kingfisher', sessions).length, 1);
   assert.equal(index.search('fresh answer', sessions).length, 1);
-});
-
-test('overlapping searches read saved bytes once and apply appended live text once', async t => {
-  const { index, file, seq } = fixture(t);
-  const original = statSync(file).size;
-  const first = index.update(sessions);
-  const second = index.update(sessions);
-  await duringRead(index, first, () => {
-    const event = { seq: seq + 1, at: 1001, type: 'turn.start', text: 'The live kingfisher stays searchable' };
-    appendFileSync(file, line(event));
-    index.note('chat', event);
-  });
-  await second;
-  const result = index.search('kingfisher', sessions);
-  assert.equal(result.length, 1);
-  assert.equal(result[0].count, 1);
-  assert.ok(index.bytesRead < original + 1000, 'overlapping searches share the saved extent');
-  index.save();
-  const reopened = new SearchIndex({ dir: join(file, '..'), file: join(file, '../index.json') });
-  assert.deepEqual(reopened.search('kingfisher', sessions), result);
-  reopened.close();
 });

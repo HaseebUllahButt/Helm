@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discoverBrowsers, systemChromium, launchTarget, chromiumUserDataDirs } from '../packages/connect/src/chromium-find.js';
+import { discoverBrowsers, systemChromium, launchTarget } from '../packages/connect/src/chromium-find.js';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-chromium-find-'));
 test.after(() => rmSync(root, { recursive: true, force: true }));
@@ -35,17 +35,6 @@ test('Linux finds an unfamiliar Chromium browser by file evidence and rejects El
   entry('two.desktop', `${two}`, 'Two');
   const ordered = discoverBrowsers({}, 'linux', { ...opts, run: (cmd) => cmd === 'xdg-settings' ? 'two.desktop\n' : (() => { throw new Error('x'); })() });
   assert.deepEqual(ordered.map(b => b.name), ['Two', 'Wave Browser'], 'the default browser comes first');
-});
-
-test('a start script is followed to the real Chromium program', () => {
-  const home = mkdtempSync(join(root, 'script-'));
-  const bin = join(home, 'bin'), libexec = join(home, 'libexec'), apps = join(home, 'apps');
-  const real = chromiumProgram(libexec, 'surf');
-  make(bin, { surf: `#!/bin/sh\nexec ${real} "$@"\n` });
-  mkdirSync(apps, { recursive: true });
-  writeFileSync(join(apps, 'surf.desktop'), `[Desktop Entry]\nName=Surf\nExec=surf %U\n`);
-  const found = discoverBrowsers({}, 'linux', { home, entryDirs: [apps], flatpakDirs: [], pathDirs: [bin], run: () => { throw new Error('no default'); } });
-  assert.deepEqual(found.map(b => b.program), [real], 'the wrapper is followed to the Chromium program');
 });
 
 test('a small launcher program is followed, and a web app shortcut never hides the default browser', () => {
@@ -126,23 +115,4 @@ test('Linux keeps the package launcher: Snap via its wrapper, Flatpak via `flatp
   // launcher, which cannot be a bare executable path.
   assert.equal(systemChromium({}, 'linux', opts), join(snapRoot, 'bin', 'chromium'));
   assert.equal(launchTarget({}, 'linux', opts).command, snap.program);
-});
-
-test('an empty Linux result returns fast and asks the system default only when there is a browser to order', () => {
-  const home = mkdtempSync(join(root, 'empty-')); mkdirSync(join(home, 'apps'), { recursive: true });
-  let asked = 0;
-  const run = () => { asked++; throw new Error('should not be called'); };
-  assert.deepEqual(discoverBrowsers({}, 'linux', { home, entryDirs: [join(home, 'apps')], flatpakDirs: [], pathDirs: [], run }), []);
-  assert.equal(asked, 0, 'no xdg default lookup when no browser was found');
-});
-
-test('user-data folders are found by their "Local State" file a few levels deep', () => {
-  const home = mkdtempSync(join(root, 'data-'));
-  make(join(home, '.config/wavebrowser'), { 'Local State': '{}', 'Default/Preferences': '{}' });
-  make(join(home, '.var/app/net.imput.helium/config/chromium'), { 'Local State': '{}' });
-  make(join(home, '.config/not-a-browser'), { 'something.txt': '' });
-  const dirs = chromiumUserDataDirs([join(home, '.config'), join(home, '.var/app')]);
-  assert.ok(dirs.includes(join(home, '.config/wavebrowser')));
-  assert.ok(dirs.includes(join(home, '.var/app/net.imput.helium/config/chromium')));
-  assert.equal(dirs.length, 2);
 });

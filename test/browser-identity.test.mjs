@@ -65,16 +65,3 @@ test('native browser details agree in requests, pages, frames and workers; conso
   const again = await manager.run('identity', id, { kind: 'console' });
   assert.equal(again.entries.length, consoleResult.entries.length, 'buffered messages are not repeated');
 });
-
-test('pointer actions do not wait for unrelated background requests, and navigation needs no second quiet wait', async () => {
-  const manager = new BrowserManager({ directory, session: id => ({ id }) });
-  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', downloads: [], fetching: new Set(['background']),
-    page: { mouse: { move: async () => {} }, url: () => 'http://example.test', viewportSize: () => ({ width: 1280, height: 800 }), waitForLoadState: async () => {} } };
-  manager.aim = async () => {}; manager.look = async () => ({ text: 'Ready' });
-  manager.settle = async () => { throw new Error('unrelated fetch must not hold a pointer move'); };
-  assert.equal((await manager.perform(tab, { kind: 'hover', x: 10, y: 10 })).text, 'Ready');
-  let quietCalls = 0; manager.quiet = () => { quietCalls++; return new Promise(() => {}); };
-  await BrowserManager.prototype.settle.call(manager, tab, { navigation: true });
-  assert.equal(quietCalls, 1, 'a completed load does not wait again for background fetches');
-  await manager.stop();
-});

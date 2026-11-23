@@ -87,15 +87,16 @@ test('the settings add Helm to each hook Claude has, waiting long only for a que
 
 test('a question waits for the answer; a notice does not', async () => {
   const seen = [];
-  let answer;
+  let answer, asked;
+  const arrived = new Promise((r) => { asked = r; });
   const h = await startHookServer((native, event, reply) => {
     seen.push([native, event.hook_event_name]);
-    if (event.hook_event_name === 'PermissionRequest') answer = reply; else reply(null);
+    if (event.hook_event_name === 'PermissionRequest') { answer = reply; asked(); } else reply(null);
   }, path);
   try {
     assert.equal(await sendHook('native-1', { hook_event_name: 'Stop' }, { path }), null);
     const waiting = sendHook('native-1', { hook_event_name: 'PermissionRequest', tool_name: 'Write' }, { path });
-    await new Promise((r) => setTimeout(r, 50));
+    await arrived;
     const out = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
     answer(out);
     assert.deepEqual(await waiting, out);
@@ -104,17 +105,18 @@ test('a question waits for the answer; a notice does not', async () => {
 });
 
 test('a hook that goes away tells Helm the question was answered elsewhere', async () => {
-  let closed = false;
-  const h = await startHookServer((native, event, reply) => { reply.onClose(() => { closed = true; }); }, path);
+  let asked, closed;
+  const arrived = new Promise((r) => { asked = r; });
+  const gone = new Promise((r) => { closed = r; });
+  const h = await startHookServer((native, event, reply) => { reply.onClose(closed); asked(); }, path);
   try {
     const { createConnection } = await import('node:net');
     const sock = createConnection(path);
     await new Promise((r) => sock.on('connect', r));
     sock.write(JSON.stringify({ native: 'n', event: { hook_event_name: 'PermissionRequest' } }) + '\n');
-    await new Promise((r) => setTimeout(r, 50));
+    await arrived;
     sock.destroy();
-    await new Promise((r) => setTimeout(r, 50));
-    assert.equal(closed, true);
+    await gone;
   } finally { h.close(); }
 });
 

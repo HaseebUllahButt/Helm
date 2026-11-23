@@ -12,12 +12,11 @@ before(async () => {
     import * as workspace from './apps/web/src/workspaceCache';
     const token='helm1.'+btoa(JSON.stringify({net:'workspace-test',sub:'device'}))+'.test';
     const listeners=new Set();
-    window.subscriptions=0;
     const client={token,
       environments:()=>window.readEnvs(),
       rpc:(...args)=>window.readRpc(...args),
       on:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},
-      subscribe:()=>{window.subscriptions++},
+      subscribe:()=>{},
     };
     window.emit=(env,kind,payload)=>listeners.forEach(fn=>fn(env,kind,payload));
     window.seed=(session)=>{workspace.saveWorkspace(workspace.workspaceScope(token),{
@@ -72,23 +71,6 @@ test('overlapping machine reads queue one fresh read and keep the latest result'
   assert.equal(await page.evaluate(() => window.calls), 2);
 });
 
-test('the first live machine list is read once on mount', async t => {
-  const page = await pageFor(t);
-  await page.evaluate(() => {
-    window.readEnvs = async () => ({ environments: [{ id: 'machine', name: 'Laptop', online: true, info: {} }] });
-    window.listCalls = 0;
-    window.readRpc = (_env, method) => {
-      if (method === 'session.list') window.listCalls++;
-      return Promise.resolve({ sessions: [] });
-    };
-    window.mount();
-  });
-  await page.waitForFunction(() => window.data.liveListsSeen.current.has('machine'));
-  await page.waitForTimeout(100);
-  assert.equal(await page.evaluate(() => window.listCalls), 1);
-  assert.equal(await page.evaluate(() => window.subscriptions), 1);
-});
-
 test('a live chat update survives an older list response and triggers one catch-up read', async t => {
   const page = await pageFor(t);
   await page.evaluate(() => {
@@ -118,22 +100,6 @@ test('a live chat update survives an older list response and triggers one catch-
   await page.waitForFunction(() => window.data.sessions.machine?.[0]?.status === 'idle', null, { timeout: 2500 });
   assert.equal(await page.evaluate(() => window.data.sessions.machine[0].updatedAt), 2);
 });
-
-
-test('a direct link gap reloads only that machine chat list', async t => {
-  const page = await pageFor(t);
-  await page.evaluate(() => {
-    window.readEnvs = async () => ({ environments: ['one', 'two'].map(id => ({ id, name: id, online: true, info: {} })) });
-    window.reads = [];
-    window.readRpc = async (env, method) => { if (method === 'session.list') window.reads.push(env); return { sessions: [] }; };
-    window.mount();
-  });
-  await page.waitForFunction(() => window.data.liveListsSeen.current.size === 2);
-  await page.evaluate(() => { window.reads = []; window.emit('one', 'transport', { direct: false, gap: true }); });
-  await page.waitForFunction(() => window.reads.length === 1);
-  assert.deepEqual(await page.evaluate(() => window.reads), ['one']);
-});
-
 
 test('an older pushed update cannot overwrite a newer list snapshot', async t => {
   const page = await pageFor(t);

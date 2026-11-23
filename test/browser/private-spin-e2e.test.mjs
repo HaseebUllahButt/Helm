@@ -116,6 +116,7 @@ for (const [index, host] of [undefined, '127.0.0.1', '::1', '0.0.0.0'].entries()
     await page.getByText(`Sign in to open ${name}, shared from Laptop.`, { exact: true }).waitFor();
     if (process.env.HELM_SPIN_SHOT_DIR && index === 0) await page.screenshot({ path: join(process.env.HELM_SPIN_SHOT_DIR, 'spin-sign-in.png') });
     await page.locator('input[type=password]').fill('test-pairing-code');
+    const hmrConnected = page.waitForEvent('console', { predicate: (message) => message.text().includes('[vite] connected') });
     await page.getByRole('button', { name: 'Pair this device', exact: true }).click();
     await page.getByText('Shared page ready', { exact: true }).waitFor();
     assert.equal(page.url(), exact);
@@ -123,7 +124,7 @@ for (const [index, host] of [undefined, '127.0.0.1', '::1', '0.0.0.0'].entries()
     assert.equal(member.domain, `${name}.home.test`);
     assert.equal(member.httpOnly, true);
     assert.equal(member.secure, true);
-    await page.waitForTimeout(500);
+    await hmrConnected;
     writeFileSync(join(appRoot, 'main.js'), main('Live reload works'));
     await page.getByText('Live reload works', { exact: true }).waitFor();
     // The spin's cookie opens it immediately, without returning to Helm.

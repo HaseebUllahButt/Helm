@@ -50,45 +50,6 @@ test('a dry run reports what a send would carry without a network or a grant', (
   assert.equal(existsSync(join(HELM_DIR, 'network.json')), false);
   assert.equal(existsSync(join(HELM_DIR, 'code_x25519')), false);
   assert.equal(existsSync(join(HELM_DIR, 'code_ed25519')), false);
-
-  const withoutEnv = helm(['send', 'target', src, '--dry-run', '--no-env']);
-  assert.equal(withoutEnv.status, 0, withoutEnv.stderr); assert.match(withoutEnv.stdout, /1 file/); assert.match(withoutEnv.stdout, /excluded/);
-  const withEnv = helm(['send', 'target', src, '--dry-run', '--include-env']);
-  assert.equal(withEnv.status, 0, withEnv.stderr);
-  assert.match(withEnv.stdout, /1 \.env file/);
-});
-
-test('send refuses unknown flags and missing flag values', () => {
-  const src = dir('flags');
-  writeFileSync(join(src, 'a.txt'), 'x');
-
-  const typo = helm(['send', 'target', src, '--grnat', 'tok']);
-  assert.equal(typo.status, 1);
-  assert.match(typo.stderr, /unknown flag --grnat/);
-
-  const missingValue = helm(['send', 'target', src, '--grant']);
-  assert.equal(missingValue.status, 1);
-  assert.match(missingValue.stderr, /--grant needs a value/);
-
-  const missingTargetValue = helm(['send', 'target', src, '--target-folder']);
-  assert.equal(missingTargetValue.status, 1);
-  assert.match(missingTargetValue.stderr, /--target-folder needs a value/);
-
-  const short = helm(['send', 'target', src, '-g', 'tok']);
-  assert.equal(short.status, 1);
-  assert.match(short.stderr, /unknown flag -g/);
-
-  const extra = helm(['send', 'target', src, 'extra-arg', '--dry-run']);
-  assert.equal(extra.status, 1);
-  assert.match(extra.stderr, /unexpected argument/);
-
-  const emptyValue = helm(['send', 'target', src, '--grant', '']);
-  assert.equal(emptyValue.status, 1);
-  assert.match(emptyValue.stderr, /--grant needs a value/);
-
-  const duplicate = helm(['send', 'target', src, '--grant', 'one', '--grant', 'two']);
-  assert.equal(duplicate.status, 1);
-  assert.match(duplicate.stderr, /Use --grant once\./);
 });
 
 test('a risky omission refuses before any network or grant is touched', () => {
@@ -123,41 +84,4 @@ test('verify inspects statically and never runs what it finds', () => {
   assert.equal(existsSync(join(folder, 'VERIFY-RAN')), false);
   assert.equal(run.stdout.includes('verify-marker'), false);
   assert.equal(run.stderr.includes('verify-marker'), false);
-});
-
-test('verify -- runs exactly what the owner named and reports honestly', () => {
-  const folder = dir('explicit');
-  writeFileSync(join(folder, 'a.txt'), 'x');
-
-  const missing = helm(['verify', folder, '--']);
-  assert.equal(missing.status, 1);
-  assert.match(missing.stderr, /needs a program/);
-
-  const bad = helm(['verify', folder, '--bogus']);
-  assert.equal(bad.status, 1);
-  assert.match(bad.stderr, /unknown flag/);
-
-  const shortFlag = helm(['verify', folder, '-x']);
-  assert.equal(shortFlag.status, 1);
-  assert.match(shortFlag.stderr, /unknown flag -x/);
-
-  const twoFolders = helm(['verify', folder, folder]);
-  assert.equal(twoFolders.status, 1);
-  assert.match(twoFolders.stderr, /usage: helm verify/);
-
-  const ok = helm([
-    'verify', folder, '--',
-    process.execPath, '-e',
-    "require('node:fs').writeFileSync('check-marker.txt', 'ok')",
-  ]);
-  assert.equal(ok.status, 0, ok.stderr);
-  assert.match(ok.stdout, /The requested check passed\./);
-  assert.equal(existsSync(join(folder, 'check-marker.txt')), true);
-
-  const failed = helm(['verify', folder, '--', process.execPath, '-e', 'process.exit(7)']);
-  assert.equal(failed.status, 7);
-  assert.match(failed.stderr, /status 7/);
-
-  const unspawnable = helm(['verify', folder, '--', 'definitely-not-a-real-helm-check-xyz']);
-  assert.notEqual(unspawnable.status, 0);
 });

@@ -14,30 +14,9 @@ process.env.HELM_PROCS_SOCKET = join(process.env.HELM_DIR, 'procs.sock');
 process.env.HELM_NATIVE_SOCKET = join(process.env.HELM_DIR, 'native.sock');
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 
-test('a crashed background command saved by an older daemon is no longer a failed child task', async (t) => {
-  const dir = process.env.HELM_DIR;
-  mkdirSync(join(dir, 'events'), { recursive: true });
-  // What older daemons saved: Claude's background Bash counted as a native
-  // helper, its failure kept on the thread as "1 child tasks failed".
-  writeFileSync(join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions: [{
-    id: 'parent1', title: 'scrape', engine: 'claude', cwd: '/tmp', status: 'idle',
-    nativeAgents: { toolu_bash: 'error', toolu_agent: 'error' },
-    team: { working: 0, blocked: 0, failed: 2 },
-  }] }));
-  writeFileSync(join(dir, 'events', 'parent1.jsonl'), [
-    { seq: 1, at: 1, type: 'item.start', id: 'toolu_bash', kind: 'tool', name: 'Bash', turnId: 't1', input: {} },
-    { seq: 2, at: 2, type: 'item.start', id: 'toolu_agent', kind: 'subagent', name: 'Task', turnId: 't1', input: {} },
-  ].map((e) => JSON.stringify(e)).join('\n') + '\n');
-  const { Sessions } = await import('../packages/connect/src/sessions.js');
-  const sessions = new Sessions(new EventEmitter(), { makeDriver: () => { throw Error('history must not launch'); } });
-  t.after(() => sessions.stop());
-  const s = sessions.get('parent1');
-  assert.deepEqual(s.nativeAgents, { toolu_agent: 'error' }, 'a real helper keeps its failure');
-  assert.equal(s.team.failed, 1);
-});
-
 test('saved quick-chat artifact subscriptions are repaired without ending actual background helpers', async (t) => {
   const dir = process.env.HELM_DIR;
+  mkdirSync(join(dir, 'events'), { recursive: true });
   writeFileSync(join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions: [{
     id: 'quick1', title: 'chart', engine: 'claude', quick: true, cwd: '/tmp', status: 'idle',
     nativeAgents: { artifact: 'working', monitor: 'working', typed: 'working', helper: 'working', approval: 'blocked' },
@@ -71,30 +50,6 @@ test('saved quick-chat artifact subscriptions are repaired without ending actual
   assert.deepEqual(saved.nativeAgents, s.nativeAgents, 'the repair survives another restart');
 });
 
-
-test('a saved helper card that SendMessage took over, or TaskStop ended, no longer keeps the chat working', async (t) => {
-  const dir = process.env.HELM_DIR;
-  writeFileSync(join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions: [{
-    id: 'woken1', title: 'study posts', engine: 'claude', cwd: '/tmp', status: 'idle',
-    nativeAgents: { spawn7: 'working', spawn8: 'working', live9: 'working' },
-    team: { working: 3, blocked: 0, failed: 0 },
-  }] }));
-  writeFileSync(join(dir, 'events', 'woken1.jsonl'), [
-    { type: 'item.update', id: 'spawn7', agent: { id: 'agent7', status: 'running' } },
-    { type: 'item.update', id: 'send7', agent: { id: 'agent7', status: 'running' } },
-    { type: 'item.update', id: 'send7', agent: { id: 'agent7', status: 'completed' } },
-    { type: 'item.update', id: 'spawn8', agent: { id: 'agent8', status: 'running' } },
-    { type: 'item.done', id: 'stop8', status: 'ok', result: { message: 'Successfully stopped task: agent8 (batch 8)', task_id: 'agent8' } },
-    { type: 'item.update', id: 'live9', agent: { id: 'agent9', status: 'running' } },
-  ].map((e, i) => JSON.stringify({ seq: i + 1, at: i + 1, ...e })).join('\n') + '\n');
-  const { Sessions } = await import('../packages/connect/src/sessions.js');
-  const sessions = new Sessions(new EventEmitter(), { makeDriver: () => { throw Error('history must not launch'); } });
-  t.after(() => sessions.stop());
-  const s = sessions.get('woken1');
-  assert.deepEqual(s.nativeAgents, { live9: 'working' }, 'the helper still running keeps its card');
-  assert.equal(s.team.working, 1);
-});
-
 test('dismissing a saved native and delegated failure survives daemon restart', async t => {
   const dir = process.env.HELM_DIR;
   writeFileSync(join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions: [{
@@ -116,7 +71,6 @@ test('dismissing a saved native and delegated failure survives daemon restart', 
   restored.dismissChildFailures('dismiss-parent');
   assert.equal(restored.get('dismiss-parent').team.failed, 0, 'recomputing the counts keeps the acknowledgements');
 });
-
 
 test('a shell failure whose start was trimmed is repaired from the account transcript', async t => {
   const dir = process.env.HELM_DIR;

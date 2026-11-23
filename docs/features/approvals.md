@@ -70,7 +70,7 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 - **Trap:** **Allow anyway** permits one retry. It does not mean the action ran.
   A denial is already final for that attempt, so its card must not stop a live turn.
 - **Tests:** `test/driver-codex`, `native-codex`, `modes`, `session-settings`,
-  `events`; `test/browser/codex-review`.
+  `events`.
 
 ## Questions
 - **Keys:** Ctrl/⌘+Alt+1 through 9 choose an answer. Ordinary digits remain
@@ -101,7 +101,7 @@ Pick **fake-ask** in New chat: every message asks to run `echo hi` first.
 - **Prove (driven 2026-10-28):** start two fake-ask chats with
   `$V rpc session.start` and `session.input`, then
   `$V click "<title>"` in the sidebar: the box opens with "2 of 2".
-- **Tests:** `test/browser/sidebar`, `sidebar-shelves`, `chat-home`; `test/seen-sync`.
+- **Tests:** `test/browser/sidebar`, `sidebar-shelves`.
 
 ## The waiting box
 - **Rules (owner, 2026-10-28):** every waiting chat except the open one is

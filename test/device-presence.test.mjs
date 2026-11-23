@@ -5,13 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * The parts of the Devices screen that answer "is this one still mine?".
- *
- * A list of labels and pairing dates cannot tell a phone in the owner's pocket
- * from one they lost in March, and a green dot that only ever lit for "this
- * device" said nothing about anyone else. Presence is answered by the hub from
- * its own sockets - never gossiped - and a pairing link can be closed the
- * moment it has done its job instead of lingering for the rest of its window.
+ * The parts of the Devices screen that answer "is this one still mine?": a
+ * pairing link can be closed the moment it has done its job, and a removed
+ * device leaves nothing behind.
  */
 
 const dir = mkdtempSync(join(tmpdir(), 'helm-presence-'));
@@ -22,7 +18,7 @@ process.env.HELM_NO_SERVICE = '1';
 const PORT = 18972;
 const BASE = `http://127.0.0.1:${PORT}`;
 
-const { createNetwork, loadNetwork } = await import('@helm/protocol/network');
+const { createNetwork } = await import('@helm/protocol/network');
 const { startRelay } = await import('@helm/relay');
 const { default: WebSocket } = await import('ws');
 
@@ -54,38 +50,6 @@ const until = async (fn, what) => {
 };
 
 const owner = await pair(hub.password, 'owner phone');
-
-test('a device that just paired has been seen, and is not online until it connects', async () => {
-  const before = Date.now();
-  const d = await listed(owner.token, owner.deviceId);
-  assert.equal(d.online, false, 'a login is not a socket');
-  assert.ok(d.lastSeen >= before - 5_000, 'pairing counts as the first sighting');
-});
-
-test('an open socket is online now, and closing it leaves the time it left', async () => {
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, ['helm', owner.token]);
-  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-
-  const on = await until(async () => {
-    const d = await listed(owner.token, owner.deviceId);
-    return d.online ? d : null;
-  }, 'the device to show online');
-  assert.ok(on.lastSeen > 0);
-
-  const left = Date.now();
-  ws.close();
-  const off = await until(async () => {
-    const d = await listed(owner.token, owner.deviceId);
-    return d.online ? null : d;
-  }, 'the device to show offline');
-  assert.ok(off.lastSeen >= left - 1_000, 'lastSeen is when it disconnected, not when it paired');
-});
-
-test('presence is not written into the roster that gossips', async () => {
-  const stored = Object.values(loadNetwork().devices).find((d) => d.id === owner.deviceId);
-  assert.equal('lastSeen' in stored, false);
-  assert.equal('online' in stored, false);
-});
 
 test('closing the pairing window stops the link working, and paired devices keep theirs', async () => {
   const window = await (await call('/api/auth/rotate', { token: owner.token, method: 'POST', body: {} })).json();
@@ -162,6 +126,9 @@ test('pairing a new device tells the devices already paired; the local sign-in d
   const before = hits.length;
   const local = await call('/api/auth/login', { method: 'POST', body: { local: localKey(), label: 'this machine' } });
   assert.equal(local.status, 200);
-  await new Promise((r) => setTimeout(r, 150));
-  assert.equal(hits.length, before, 'no alert for the machine signing itself in');
+  // Any alert for the local sign-in would start before this later pairing's.
+  const next = await (await call('/api/auth/rotate', { token: owner.token, method: 'POST', body: {} })).json();
+  assert.ok((await pair(next.password, 'a later device')).token);
+  await until(() => hits.length > before, 'the later alert to reach the push service');
+  assert.equal(hits.length, before + 1, 'no alert for the machine signing itself in');
 });

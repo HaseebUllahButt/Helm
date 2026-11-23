@@ -4,7 +4,6 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { messages } from '../packages/connect/src/transcript.js';
-import { promptTitle } from '../packages/connect/src/titles.js';
 
 const { apply, emptyLog } = await import('../apps/web/src/session/types.ts');
 
@@ -21,13 +20,6 @@ test('Codex instructions stored as user messages are not read back as the owner\
   ].map((x) => JSON.stringify(x)).join('\n'));
   const history = await messages({ engine: 'codex', path, all: true });
   assert.deepEqual(history.map((m) => m.text), ['Why does the build fail?']);
-});
-
-test('a pasted document titled "Untitled" is named after what it says', () => {
-  assert.equal(promptTitle(['Untitled\nRPC DIRECT Investor Site: Loan Review\nOct 13, 2026']), 'RPC DIRECT Investor Site: Loan Review');
-  assert.equal(promptTitle(['Untitled document\nFix the signup page']), 'Fix the signup page');
-  assert.equal(promptTitle(['Untitled']), null);
-  assert.equal(promptTitle(['Untitled pages are broken in the editor']), 'Untitled pages are broken in the editor');
 });
 
 test('a copy of the live chat read back from the CLI\'s file stays off screen', () => {

@@ -44,7 +44,7 @@ test('aborting a share mid-transfer frees the stream and daemon socket', { timeo
   const f = await setup(); t.after(() => f.close());
   const req = f.request(); req.end();
   const [res] = await once(req, 'response');
-  res.pause(); await sleep(80);
+  res.pause(); await until(() => f.metrics.produced > 0);
   req.destroy(); res.destroy();
   await until(() => f.streams.size === 0 && f.appSockets.size === 0 && !hasActiveTransfers());
   assert.ok(f.metrics.hubCloses >= 1);
@@ -76,21 +76,24 @@ test('an older daemon that omits ready.flow still serves a whole response', { ti
 
 test('a paced sender yields between bursts and waits for shared websocket capacity', async () => {
   const input = new PassThrough();
-  let queued = TUNNEL_SOCKET_LIMIT, frames = 0;
+  let queued = TUNNEL_SOCKET_LIMIT, frames = 0, refused = 0;
   const sender = new TunnelSender(input, chunk => { queued += Math.ceil(chunk.length / 3) * 4; frames++; }, assert.fail,
-    { canSend: () => queued < TUNNEL_SOCKET_LIMIT });
+    { canSend: () => { const room = queued < TUNNEL_SOCKET_LIMIT; if (!room) refused++; return room; } });
+  // Settled: the sender was refused room a few more times, or has nothing left to try.
+  const settled = () => { const mark = refused; return until(() => refused >= mark + 3 || !sender.pumpTimer); };
   try {
     input.write(Buffer.alloc(TUNNEL_WINDOW * 2));
-    await sleep(20);
+    await until(() => refused >= 3);
     assert.equal(frames, 0);
     queued = 0;
     await until(() => frames >= 2);
     assert.ok(queued <= TUNNEL_SOCKET_LIMIT + Math.ceil(TUNNEL_CHUNK / 3) * 4);
-    const before = frames; await sleep(20); assert.equal(frames, before);
+    await settled();
+    const before = frames; await settled(); assert.equal(frames, before);
     queued = 0; sender.ack(sender.sent);
     await until(() => frames > before);
     sender.stop(); queued = 0;
-    const stopped = frames; await sleep(20); assert.equal(frames, stopped);
+    const stopped = frames; await settled(); assert.equal(frames, stopped);
   } finally { sender.stop(); input.destroy(); }
 });
 
