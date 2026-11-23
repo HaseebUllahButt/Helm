@@ -125,6 +125,12 @@ owner's home or network to bypass this check.
 - **Not this computer:** the menu, search and the machine page leave out
   the computer that runs the window: its screen would only show itself.
   With no other machine online the menu says so.
+- **Menu asks first:** on open, the menu calls `screen.status { quick }` on
+  each machine (no package check). Machines that can show a screen come
+  first. The rest are grey with the reason: no desktop open, desktop not
+  supported, not Linux, older Helm, offline. Picking one says what to do
+  instead (sign in to a desktop there, or Ctrl+Shift+T for its terminal).
+  An answer that takes over 8 s counts as "can open".
 - **Stops:** the engine stops 1 minute after the last viewer goes, with
   the forwards that carry it.
 - **Prove (driven 2026-11-23):** `$V open --desktop; $V key
