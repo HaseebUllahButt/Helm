@@ -257,7 +257,6 @@ function run(cmd, args, { timeout, env = process.env, platform = process.platfor
         const errors = outputLines(stderr);
         resolve({
           ok: !error, code: error ? error.code ?? null : 0, ms: Date.now() - started, out: [...output, ...errors],
-          diagnostics: errors.length ? errors : output,
           timedOut: !!error && (error.killed === true || error.signal === 'SIGTERM'),
         });
       });
@@ -270,7 +269,7 @@ const tail = (lines, n = 3) => lines.slice(-n).join(' · ').slice(0, 300);
 
 function rememberFailure(entry, stage, version, result) {
   const seen = entry.failures?.[stage] ?? [];
-  const key = createHash('sha256').update(JSON.stringify([version, result.code, result.timedOut, result.diagnostics])).digest('hex');
+  const key = createHash('sha256').update(JSON.stringify([version, result.code, result.timedOut, result.out])).digest('hex');
   if (seen.includes(key)) return false;
   entry.failures = { ...entry.failures, [stage]: [...seen, key] };
   return true;

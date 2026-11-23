@@ -13,6 +13,7 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [, refreshRoutes] = useReducer(revision => revision + 1, 0);
   const offlineMachines = useRef(new Set<string>()).current;
+  const helperLinks = useRef(new Map<string, NonNullable<Session['remoteHelpers']>>()).current;
   useEffect(() => {
     let stale = false;
     let loading = false;
@@ -95,7 +96,10 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
             if (visited.has(key)) return;
             visited.add(key); known.add(key);
             next.push({ session, depth: level, envId: where });
-            await walk(where, session.id, level + 1, available, session.remoteHelpers ?? []);
+            if (!session.offline) helperLinks.set(key, session.remoteHelpers ?? []);
+            // Read each nested helper on its own machine even if its lead cannot answer.
+            const links = session.removed ? [] : helperLinks.get(key) ?? session.remoteHelpers ?? [];
+            await walk(where, session.id, level + 1, available, links);
           };
           await Promise.all([
             ...children.map((child) => add(child, host, list)),
@@ -144,6 +148,8 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
         if (key === `${envId}/${parentId}`) void load();
         else if (known.has(key) || known.has(owner)) {
           known.add(key);
+          if (session.archived) helperLinks.delete(key);
+          else if (!session.offline) helperLinks.set(key, session.remoteHelpers ?? []);
           if (!published) return;
           setTeam((now) => {
             const previous = now.find((m) => m.envId === machine && m.session.id === session.id);
@@ -158,8 +164,8 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
     // Older machines and lost broadcasts must also converge to the CLI state.
     const timer = setInterval(() => void load(), 5000);
     return () => { stale = true; clearInterval(timer); off(); };
-  }, [client, envId, parentId, remoteKey, offlineMachines]);
-  if (client.connected !== false) return team;
+  }, [client, envId, parentId, remoteKey, offlineMachines, helperLinks]);
+  if (client.connected !== false || client.reachable) return team;
   return team.map(member => member.session.offline || client.directTo?.(member.envId ?? envId)
     ? member : { ...member, session: { ...member.session, offline: true } });
 }

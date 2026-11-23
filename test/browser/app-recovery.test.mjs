@@ -40,12 +40,25 @@ before(async () => {
         recovery: { kind: 'error', message, at: Date.now() },
         remoteHelpers: helper ? [{ id: 'helper', machine: 'away', title: 'Remote helper', status: helper === 'online' ? 'working' : 'blocked' }] : [] };
       const listeners = new Set();
+      const nested = helper === 'nested';
       let helperMissing = false;
-      let hubConnected = true, helperDirect = false;
+      let hubConnected = true, hubReachable = true, helperDirect = false;
+      let leadOnline = true, nestedOnline = true;
       window.helperPresence = (online) => listeners.forEach(listener => listener('away', 'presence', { online }));
-      window.helperConnection = (online) => {
+      window.helperConnection = (online, reachable = online) => {
         hubConnected = online;
-        listeners.forEach(listener => listener('', 'connection', { online, reachable: true }));
+        hubReachable = reachable;
+        listeners.forEach(listener => listener('', 'connection', { online, reachable }));
+      };
+      window.disconnectBranch = () => {
+        leadOnline = nestedOnline = false;
+        window.helperPresence(false);
+        listeners.forEach(listener => listener('other', 'presence', { online: false }));
+        listeners.forEach(listener => listener('away', 'session.exit', {}));
+      };
+      window.reconnectNested = () => {
+        nestedOnline = true;
+        listeners.forEach(listener => listener('other', 'presence', { online: true }));
       };
       window.helperTransport = (direct) => {
         helperDirect = direct;
@@ -62,15 +75,24 @@ before(async () => {
       ] : [];
       const client = {
         get connected() { return hubConnected; },
+        get reachable() { return hubReachable; },
         directTo: target => target === 'away' && helperDirect,
         on: listener => { listeners.add(listener); return () => listeners.delete(listener); },
         subscribe: () => {}, pendingActions: () => [], resumeActions: async () => [],
         rpc: async (target, method) => {
           if (target === 'away' && method === 'session.list') {
-            if (helper === 'offline') throw Error('Machine offline.');
+            if (helper === 'offline' || !leadOnline) throw Error('Machine offline.');
             if (helperMissing) return { sessions: [] };
-            return { sessions: [{ id: 'helper', title: 'Remote helper', status: 'blocked', engine: 'codex',
-              delegation: { parentId: chat.id, parentMachine: env.id, status: 'blocked' } }] };
+            const status = nested ? 'working' : 'blocked';
+            return { sessions: [{ id: 'helper', title: 'Remote helper', status, engine: 'codex',
+              remoteHelpers: nested ? [{ id: 'nested', machine: 'other', status: 'blocked' }] : [],
+              delegation: { parentId: chat.id, parentMachine: env.id, status } }] };
+          }
+          if (target === 'other' && method === 'session.list') {
+            if (!nestedOnline) throw Error('Machine offline.');
+            return { sessions: [{ id: 'nested', title: 'Nested helper', status: 'blocked', engine: 'pi',
+              ask: { kind: 'command', text: leadOnline ? 'First request' : 'New request' },
+              delegation: { parentId: 'helper', parentMachine: 'away', status: 'blocked' } }] };
           }
           if (method === 'session.list') return { sessions: [] };
           if (method === 'session.events') return { session: chat, events, pending: [], last: events.length };
@@ -80,7 +102,7 @@ before(async () => {
       };
       root.render(<DrivenSession key={chat.id} client={client} env={env} session={chat}
         onBack={() => {}} onClosed={() => {}} onArchived={() => {}} onSession={() => {}}
-        onOpenSession={() => { window.openedHelper = true; }} />);
+        onOpenSession={(session, machine) => { window.openedHelper = { id: session.id, machine }; }} />);
     };
     root.render(
       <AppErrorBoundary reload={() => window.reloads++}><App /></AppErrorBoundary>);
@@ -175,6 +197,29 @@ test('a disconnect disables the helper review button before the next read', asyn
   await page.evaluate(() => window.pollMissingHelper());
   assert.equal(await review.count(), 1);
   assert.equal(await review.isDisabled(), true);
+});
+
+test('a helper review stays available when only HTTPS works', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.mountRecovery('Test error.', [], { helper: 'online' }));
+  const review = page.getByRole('button', { name: /Remote helper.*Review request/ });
+  await review.waitFor();
+  await page.evaluate(() => window.helperConnection(false, true));
+  await review.click({ timeout: 2000 });
+  assert.deepEqual(await page.evaluate(() => window.openedHelper), { id: 'helper', machine: 'away' });
+});
+
+test('a nested helper restores its review while its lead stays offline', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.mountRecovery('Test error.', [], { helper: 'nested' }));
+  const review = page.locator('.child-requests button').filter({ hasText: 'Nested helper' });
+  await review.getByText(/First request/).waitFor();
+  await page.evaluate(() => window.disconnectBranch());
+  await review.locator('xpath=self::button[@disabled]').waitFor();
+  await page.evaluate(() => window.reconnectNested());
+  await review.getByText(/New request/).waitFor({ timeout: 2000 });
+  await review.click({ timeout: 2000 });
+  assert.deepEqual(await page.evaluate(() => window.openedHelper), { id: 'nested', machine: 'other' });
 });
 
 test('the helper review button follows the browser routes', async t => {

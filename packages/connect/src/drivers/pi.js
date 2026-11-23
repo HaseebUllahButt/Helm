@@ -519,7 +519,11 @@ class PiRpcDriver extends Driver {
     const entry = this.#steers.find((e) => e.text.trim() === text);
     if (entry) { this.#steerRead(entry); return; }
     const at = Math.max(0, this.#turnQueue.indexOf(this.#replyTurnId ?? this.#turnId));
-    const reply = this.#turnQueue.slice(at).find(id => this.#replyPrompts.get(id) === text);
+    const prompts = this.#turnQueue.slice(at).filter(id => this.#replyPrompts.has(id));
+    // Pi extensions can change the text. Without a possible steer, Pi reads
+    // the remaining prompts in order.
+    const reply = prompts.find(id => this.#replyPrompts.get(id) === text)
+      ?? (this.engine === 'pi' && !this.#steers.length ? prompts[0] : undefined);
     if (!reply) return;
     this.#replyPrompts.delete(reply);
     this.#replyTurnId = reply;

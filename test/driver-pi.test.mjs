@@ -199,8 +199,9 @@ async function onMessage(m) {
         out({ type: 'agent_end', messages: [] });
         out({ type: 'agent_settled' });
       }
-      if (scenario === 'failed-inner-follow-up') {
-        out({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: 'Follow-up message' }] } });
+      if (scenario.startsWith('failed-inner-follow-up')) {
+        const prompt = scenario.endsWith('-rewritten') ? 'Follow-up edited by an extension' : 'Follow-up message';
+        out({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: prompt }] } });
         out({ type: 'turn_start' });
         const failed = { role: 'assistant', stopReason: 'error', content: [], errorMessage: 'The follow-up model refused.' };
         out({ type: 'message_end', message: failed });
@@ -229,7 +230,7 @@ async function onMessage(m) {
   }
   if (scenario === 'ext-command') return ok(m);
   if (scenario === 'omp-ext') { ok(m); return out({ type: 'prompt_result', id: m.id, agentInvoked: false }); }
-  if (scenario === 'failed-inner-follow-up') {
+  if (scenario.startsWith('failed-inner-follow-up')) {
     if (m.streamingBehavior === 'followUp') return ok(m);
     state.streaming = true;
     out({ type: 'agent_start' });
@@ -445,6 +446,16 @@ test('a Pi follow-up within the same cycle keeps its own provider failure', asyn
   assert.deepEqual(log.of('turn.done').map(e => e.turnId), [first.turnId, second.turnId]);
   assert.match(output, /\[error\] The follow-up model refused\./);
   assert.equal(output.match(/\[ok\]/g)?.length, 1);
+});
+
+test('a Pi follow-up rewritten by an extension keeps its own provider failure', async t => {
+  const { driver, log } = livePi(t, 'failed-inner-follow-up-rewritten');
+  await driver.send('First message');
+  await driver.send('Follow-up message');
+  await driver.setEffort('high');
+  const [first, second] = log.of('turn.start');
+  assert.deepEqual(log.of('turn.done').map(e => e.turnId), [first.turnId, second.turnId]);
+  assert.deepEqual(log.of('error').map(e => [e.turnId, e.message]), [[second.turnId, 'The follow-up model refused.']]);
 });
 
 test('omp: auto compaction after the turn reads as working, then idle', async (t) => {
