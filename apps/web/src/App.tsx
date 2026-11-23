@@ -599,7 +599,8 @@ function Shell({ client, conn, onSignOut }: {
           run: () => setNewChat({ envId: e.id }),
         });
         items.push({ id: `integrations:${e.id}`, group: 'action', title: `Connectors & skills on ${e.name}`, keywords: 'mcp servers plugins integrations', run: () => navigate([{ kind: 'env' }, { kind: 'integrations' }], e.id) });
-        items.push({ id: `screen:${e.id}`, group: 'action', title: `Screen of ${e.name}`, keywords: 'remote desktop screen view control rdp vnc', run: () => { if (hereId) void openScreenOn(e.id); else askScreen.current(); } });
+        // A screen of the computer you sit at would only show itself.
+        if (e.id !== hereId) items.push({ id: `screen:${e.id}`, group: 'action', title: `Screen of ${e.name}`, keywords: 'remote desktop screen view control rdp vnc', run: () => { if (hereId) void openScreenOn(e.id); else askScreen.current(); } });
         items.push({
           id: `send:${e.id}`, group: 'action', title: `Send a project from ${e.name}`,
           keywords: 'transfer env copy move folder', run: () => navigate([{ kind: 'env' }, { kind: 'transfer-browse' }], e.id),
@@ -1198,6 +1199,7 @@ function Shell({ client, conn, onSignOut }: {
     const here = envs.find((e) => e.id === hereId);
     if (!env || !here) return;
     setScreenPicker(false);
+    if (env.id === here.id) { setScreenNote({ text: `You use ${env.name} now. Pick another machine to see its screen.` }); return; }
     setScreenNote({ text: `Opening the screen of ${env.name}…`, busy: true });
     const r = await openScreen(client, { machine: env.id, name: env.name, here: here.id, hereName: here.name, withoutKeys });
     if ('needs' in r) { setScreenNote(null); setScreenSetup({ envId: env.id, name: env.name, packages: r.packages, canInstall: r.canInstall, keys: r.keys }); return; }
@@ -1715,7 +1717,7 @@ function Shell({ client, conn, onSignOut }: {
             onUsage={() => push({ kind: 'usage', envId: env.id })}
             onOpen={(s) => push({ kind: 'session', session: s })}
             onNewTerminal={() => newTerminal.current(env.id, '~')}
-            onScreen={() => { if (hereId) void openScreenOn(env.id); else askScreen.current(); }}
+            onScreen={env.id === hereId ? undefined : () => { if (hereId) void openScreenOn(env.id); else askScreen.current(); }}
           />
         ) : view.kind === 'integrations' ? (
           <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
@@ -1877,19 +1879,24 @@ function Shell({ client, conn, onSignOut }: {
       )}
       {palette && <Palette items={paletteItems()} search={searchSaid} onClose={() => setPalette(false)} engineOf={engineOf} />}
       {screenPicker && <Palette heading="Open a screen" placeholder="Pick a machine" engineOf={engineOf}
+        none="No other machine is online. A screen shows another machine, not this one." 
         onClose={() => setScreenPicker(false)}
-        items={envs.filter((e) => e.online).map((e) => ({
+        items={envs.filter((e) => e.online && e.id !== hereId).map((e) => ({
           id: `screen:${e.id}`, group: 'machine' as const, title: e.name,
-          sub: e.id === hereId ? 'this computer' : 'see and use its desktop', keywords: 'device machine screen desktop',
+          sub: 'see and use its desktop', keywords: 'device machine screen desktop',
           run: () => void openScreenOn(e.id),
         }))} />}
       {screenSetup && (
-        <Confirm title={`Set up the screen of ${screenSetup.name}?`} confirmLabel="Set up" busy={screenSetup.busy} enterConfirms
+        <Confirm stacked enterConfirms busy={screenSetup.busy}
+          title={!screenSetup.canInstall ? `${screenSetup.name} needs packages`
+            : screenSetup.packages.length ? `Set up the screen of ${screenSetup.name}?` : `Turn on shortcuts for ${screenSetup.name}?`}
+          confirmLabel={!screenSetup.canInstall ? 'OK' : screenSetup.packages.length ? 'Set up and open' : 'Turn on shortcuts'}
+          busyLabel="Setting up…"
           other={screenSetup.keys && !screenSetup.packages.length ? { label: 'Open without shortcuts', onClick: () => { const { envId } = screenSetup; setScreenSetup(null); void openScreenOn(envId, true); } } : undefined}
           body={screenSetup.canInstall
             ? screenSetup.packages.length
-              ? <>Helm installs the missing build packages on {screenSetup.name} as admin, then builds the screen program.{screenSetup.keys ? ' It also lets the screen press desktop shortcuts there.' : ''} This takes 1 to 3 minutes.</>
-              : <>Helm lets the screen act as a keyboard on {screenSetup.name}, so its desktop shortcuts work. This needs admin rights once. Without it, typing works, but shortcuts like Super+T do not.</>
+              ? <>Helm installs the missing packages on {screenSetup.name} and builds the screen program. This needs admin rights once and takes 1 to 3 minutes.</>
+              : <>Super shortcuts, like Super+T, need admin rights on {screenSetup.name} once. Typing and the mouse work without it.</>
             : <>{screenSetup.name} needs a C++ compiler, make, pkg-config, x264, libwebsockets and the display libraries. Helm cannot install them on this Linux. Install them, then try again.</>}
           onCancel={() => { if (!screenSetup.busy) setScreenSetup(null); }}
           onConfirm={() => { if (screenSetup.canInstall) void setUpScreen(); else setScreenSetup(null); }} />

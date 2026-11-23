@@ -57,12 +57,14 @@ function score(item: PaletteItem, q: string): number {
   return total;
 }
 
-export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhere', placeholder = 'Search chats, machines, and actions' }: {
+export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhere', placeholder = 'Search chats, machines, and actions', none }: {
   items: PaletteItem[]; onClose: () => void; engineOf: (id?: string) => { cls: string };
   /** Asks the machines which chats said these words; the answers are listed under "Said in chats". */
   search?: (query: string, onResults?: (results: PaletteSearchResults) => void) => Promise<PaletteSearchResults>;
   /** The same box, narrowed to one job (Ctrl+Shift+T: pick a device for a terminal). */
   heading?: string; placeholder?: string;
+  /** What the box says when it has nothing to list at all. */
+  none?: string;
 }) {
   const dialog = useDialog(onClose);
   const listId = useId();
@@ -150,7 +152,7 @@ export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhe
         <div className="palette-list" ref={list} role="listbox" id={listId} aria-label="Search results">
           {shown.length === 0 && (asking
             ? <div className="empty quiet" role="status">Helm is searching your chats.</div>
-            : !failedMachines.length && <div className="empty quiet">No matches. Search for a machine, folder, chat name, or chat text.</div>)}
+            : !failedMachines.length && <div className="empty quiet">{none && !items.length ? none : 'No matches. Search for a machine, folder, chat name, or chat text.'}</div>)}
           {shown.map((item, i) => {
             const head = i === 0 || shown[i - 1].group !== item.group;
             return (

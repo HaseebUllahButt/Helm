@@ -122,11 +122,18 @@ owner's home or network to bypass this check.
   started with older options.
 - **Linux only** for now: X11, or Wayland on niri, sway or Hyprland. GNOME
   and KDE on Wayland lack the screen copy the engine uses.
-- **Prove (driven 2026-11-19):** `$V open --desktop; $V key
-  Control+Shift+KeyR` shows "Open a screen" with this machine as "this
-  computer". Click it: a machine with no build packages shows "Set up the
-  screen of …". Never press Set up in a copy: it installs packages on the
-  real machine. The live picture needs two real machines.
+- **Not this computer:** the menu, search and the machine page leave out
+  the computer that runs the window: its screen would only show itself.
+  With no other machine online the menu says so.
+- **Stops:** the engine stops 1 minute after the last viewer goes, with
+  the forwards that carry it.
+- **Prove (driven 2026-11-23):** `$V open --desktop; $V key
+  Control+Shift+KeyR` shows "Open a screen" and "No other machine is
+  online". The copy has one machine, so to see the Set up box, let the
+  picker list this machine for a moment (App.tsx screenPicker filter): it
+  shows "Turn on shortcuts for …" with stacked buttons. Never press it in a
+  copy: it changes the real machine. The live picture needs two real
+  machines.
 - **Tests:** `test/screen.test.mjs`.
 
 ## Check installation and connections
