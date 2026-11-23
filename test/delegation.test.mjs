@@ -994,18 +994,18 @@ test('delegation instructions keep only rules; the details live in helm delegate
   const claude = delegationNote('claude');
   assert.ok(claude.length < 1100, 'it rides along in every session');
   assert.doesNotMatch(claude, /never your CLI's own subagent tool/);
-  assert.match(claude, /on your account, short or long, use your Agent tool/);
-  assert.match(claude, /a fork if it needs this chat, keep your model unless the owner asks for another, run_in_background false\./);
+  assert.match(claude, /on your account, use your Agent tool/);
+  assert.match(claude, /a fork if it needs this chat, keep your model unless the owner asks for another\./);
   assert.match(claude, /helm delegate for another account, tool or machine, or a worktree/);
   // The owner's own words, for every tool.
   for (const n of [note, claude]) {
     assert.ok(n.includes('The owner: "orchestrator mode is when u give work to others and u are always there to talk to me".'));
-    assert.match(n, /to talk to me". Use it only when the owner asks for it\./);
+    assert.match(n, /to talk to me". Only when the owner asks, give all work to background helpers\./);
   }
-  // A helper starts with none of the parent's context; an orchestrator stays free.
+  // A helper starts with none of the parent's context; every lead stays free to talk.
   for (const n of [note, claude]) {
     assert.match(n, /it has none of your context\. Give the goal, the exact files, what other helpers own, the result you expect and the check to run\./);
-    assert.match(n, /Then start helpers in the background, never wait on them, end your turn/);
+    assert.match(n, /Stay free to talk: run work that takes minutes \(builds, tests, deploys, waits\) in the background or a background helper, then end your turn\./);
   }
   for (const shared of [/Do the work yourself by default/, /never unset HELM_SESSION_ID/, /judgment calls yourself/, /Keep your helpers/]) assert.match(claude, shared);
   assert.match(note, /never unset HELM_SESSION_ID/);
@@ -1332,6 +1332,7 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
   const { Daemon } = await import('../packages/connect/src/agent.js');
   const { T } = await import('@helm/protocol');
   const { primeModels } = await import('../packages/connect/src/models.js');
+  const { ownNode } = await import('../packages/connect/src/own-node.js');
   primeModels('codex', '~/.codex', null, { default: 'gpt-test', models: ['gpt-test'] });
   const largeCatalog = Array.from({ length: 6000 }, (_, i) => `catalog-model-${i}`);
   primeModels('claude', '~/.claude-test', null, { default: 'opus', models: ['opus', 'sonnet', ...largeCatalog],
@@ -1370,9 +1371,9 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
     await once(env, 'message');
     const bin = fileURLToPath(new URL('../packages/connect/bin/helm.js', import.meta.url));
     const invoke = (args) => new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [bin, ...args], { env: { ...process.env, HELM_SESSION_ID: parent.id, CODEX_THREAD_ID: parent.engineSessionId }, cwd: process.env.HELM_DIR });
+      const child = spawn(ownNode(), [bin, ...args], { env: { ...process.env, HELM_SESSION_ID: parent.id, CODEX_THREAD_ID: parent.engineSessionId }, cwd: process.env.HELM_DIR });
       let out = '', err = '';
-      const timer = setTimeout(() => { child.kill(); reject(new Error('CLI timed out')); }, 15_000);
+      const timer = setTimeout(() => { child.kill(); reject(new Error(`helm ${args[0]} timed out`)); }, 30_000);
       child.stdout.on('data', (text) => { out += text; });
       child.stderr.on('data', (text) => { err += text; });
       child.on('error', (error) => { clearTimeout(timer); reject(error); });

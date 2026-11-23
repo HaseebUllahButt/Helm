@@ -49,6 +49,8 @@ import { NativeSessions } from './session-native.js';
 import { DriverEvents } from './session-driver-events.js';
 import { SessionDelivery } from './session-delivery.js';
 import { SessionWorktrees } from './session-worktrees.js';
+import { SessionFolders } from './session-folders.js';
+import { realFolder } from './chat-folder.js';
 import { runSetup } from './chat-worktree.js';
 import { projectKeysFor } from './project-key.js';
 
@@ -291,6 +293,7 @@ export class Sessions extends EventEmitter {
   #driverEvents;
   #delivery;
   #worktrees;
+  #folders;
   #makeParts() {
     const sessions = this;
     const core = {
@@ -317,6 +320,7 @@ export class Sessions extends EventEmitter {
       bindDriver: this.#bindDriver.bind(this),
       settled: this.#settled.bind(this),
       reap: this.#reap.bind(this),
+      release: this.#release.bind(this),
     };
     core.titles = this.#titles = new SessionTitles(this, core);
     core.rewinder = this.#rewinder = new SessionRewind(this, core);
@@ -330,6 +334,7 @@ export class Sessions extends EventEmitter {
     core.driverEvents = this.#driverEvents = new DriverEvents(this, core);
     core.delivery = this.#delivery = new SessionDelivery(this, core);
     core.worktrees = this.#worktrees = new SessionWorktrees(this, core);
+    core.folders = this.#folders = new SessionFolders(this, core);
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
@@ -896,6 +901,13 @@ export class Sessions extends EventEmitter {
     let setupStarted = false;
     try {
       const session = await this.#start({ ...options, onStartSetup: () => { setupStarted = true; } });
+      if (options.keyPermit) {
+        try { await this.sharedKeys.attach(options.keyPermit, options.keySource, session); }
+        catch (error) {
+          await this.kill(session.id);
+          throw error;
+        }
+      }
       if (options.reservedSessionId) this.#saveStart(session.id);
       return session;
     } catch (error) {
@@ -924,14 +936,18 @@ export class Sessions extends EventEmitter {
     if (quick && cwd) throw new Error('a sketch has no folder: send quick or cwd, not both');
     if (!quick && !cwd) throw new Error('which folder? send cwd, or quick for a chat with no folder');
     this.#rewinder.assertRewindUnlocked(null, cwd ? expand(cwd) : null);
-    const profiles = await getProfiles();
-    const profile = profiles.find((p) => p.id === profileId);
+    const profile = await this.#profileFor(profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
+    if (brain && ENGINES[profile.engine]?.answersOnly) throw new Error(`${profile.label || profile.engine} only answers questions; it cannot be the brain`);
     if (quick && (brain || delegation || !ENGINES[profile.engine]?.driver)) {
       throw new Error(`${profile.label || profile.engine} cannot start a sketch: only agents helm drives can`);
     }
     // The account's configured default is what a new session starts with; a
     // model chosen up front always wins.
+    if (profile.localModel) {
+      if (model && model !== profile.localModel.selector) throw new Error(`Choose ${profile.localModel.selector} for this local account.`);
+      model = profile.localModel.selector;
+    }
     if (!model) {
       // A model released since a picker was last opened still becomes the
       // default before this chat starts - from the held catalogue only, so a
@@ -1145,7 +1161,10 @@ export class Sessions extends EventEmitter {
       cwd = quickDir(id);
       mkdirSync(cwd, { recursive: true, mode: 0o700 });
     }
-    const dir = expand(cwd);
+    // The folder itself, not a symlink to it: the CLI files its history
+    // under the real path, and a symlink removed later left the chat with
+    // a path that no longer led anywhere.
+    const dir = realFolder(expand(cwd));
     const session = {
       id,
       driver: profile.engine,
@@ -1352,6 +1371,17 @@ export class Sessions extends EventEmitter {
     return { ok: true };
   }
 
+  async #profileFor(id, engine) {
+    const profiles = await getProfiles();
+    const saved = profiles.find((p) => p.id === id);
+    if (!this.localModelAccounts || !id?.startsWith('local-') || (saved && !saved.localModel)) return saved;
+    const active = await this.localModelAccounts.sync(profiles.filter((p) => !p.localModel));
+    const profile = active.find((p) => p.id === id && (!engine || p.engine === engine))
+      ?? (engine === 'pi' ? active.find((p) => p.id === `${id}@pi` && p.engine === engine) : null);
+    if (!profile) throw new Error(`The model account ${id} is unavailable. Check helm models list.`);
+    return profile;
+  }
+
   /**
    * The live driver for a session, starting (or resuming) one if needed.
    *
@@ -1387,15 +1417,22 @@ export class Sessions extends EventEmitter {
       s.engineSessionId = null;
       this.#save();
     }
-    const profiles = await getProfiles();
-    const profile = profiles.find((p) => p.id === s.profileId);
+    const profile = await this.#profileFor(s.profileId, s.engine);
     if (!profile) throw new Error(`the account for this session (${s.profileId}) is gone`);
     const spec = materialize(profile);
     // A quick chat's folder is helm's own; if it went missing (cleaned by
     // hand), an empty one is as good as the old one.
     if (s.quick && isQuickDir(s.cwd)) mkdirSync(expand(s.cwd), { recursive: true, mode: 0o700 });
     // A chat's own worktree is removed once merged; reopened, it is rebuilt.
-    await this.#worktrees.ensure(s);
+    // When it cannot be, the chat still starts, as for any missing folder.
+    try { await this.#worktrees.ensure(s); }
+    catch (err) {
+      if (existsSync(expand(s.cwd))) throw err;
+      this.log(`[${s.id}] ${err.message}`);
+    }
+    // Where the agent starts: the chat's folder, where it moved to, or an
+    // empty folder while it is missing (session-folders.js).
+    const runIn = s.external ? s.cwd : await this.#folders.prepare(s, profile);
     // The brain's tools are the `helm` command, so which `helm` it finds is
     // the whole question. Give it this daemon's own, ahead of the installed
     // one: a machine that has not been upgraded yet would otherwise hand the
@@ -1414,10 +1451,10 @@ export class Sessions extends EventEmitter {
       HELM_SESSION_ID: s.id,
       HELM_PROFILE_ID: s.profileId,
       HELM_ENGINE: s.engine,
-      HELM_CWD: s.cwd,
+      HELM_CWD: runIn,
     };
     d = this.makeDriver(s.driver, {
-      cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
+      cmd: spec.cmd, env: spec.env, args: spec.args, cwd: runIn,
       model: s.nativeSocket && !s.nativeManaged ? null : s.model, effort: s.nativeSocket && !s.nativeManaged ? null : s.effort,
       // A reported native policy is for display. Rejoining must not turn it
       // into a policy override; the provider terminal owns that configuration.
@@ -1490,6 +1527,34 @@ export class Sessions extends EventEmitter {
 
   #settled(id) {
     clearTimeout(this.#deliveryState.clearSettling(id));
+  }
+
+  /**
+   * Stop an idle agent so its next start reads the chat's record again (a
+   * new folder). False, and nothing stopped, while it has work in hand.
+   */
+  async #release(s) {
+    await this.#retiring.get(s.id);
+    const d = this.#drivers.get(s.id);
+    if (!d) return true;
+    if (d.status !== 'idle' || s.status !== 'idle' || d.pending?.size || d.backgroundTasks > 0
+      || this.#deliveryState.isSending(s.id) || this.#deliveryState.hasQueue(s.id)
+      || this.events.pending(s.id).length || this.events.activeTurn(s.id)) return false;
+    clearTimeout(this.#reapers.get(s.id));
+    this.#reapers.delete(s.id);
+    const retiring = Promise.resolve().then(() => d.kill()).then(() => {
+      if (this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
+      if (this.#index.has(s.id)) this.emit('session', { ...wire(s), alive: false });
+    }).finally(() => { if (this.#retiring.get(s.id) === retiring) this.#retiring.delete(s.id); });
+    this.#retiring.set(s.id, retiring);
+    await retiring.catch((err) => this.log(`[${s.id}] could not stop the agent: ${err.message}`));
+    return !this.#drivers.has(s.id);
+  }
+
+  /** Point a chat at another folder; `all` moves the other chats of its folder too. */
+  async changeFolder(id, folder, options) {
+    const result = await this.#folders.change(id, folder, options);
+    return { ...result, session: wire(result.session) };
   }
 
   /** Finished children release their runtime quickly; their conversation stays resumable. */
@@ -1828,7 +1893,7 @@ export class Sessions extends EventEmitter {
     let s;
     try { s = this.get(id); }
     catch (error) { error.deliveryNotSent = true; throw error; }
-    // A card Helm asked itself (helm sudo): Helm answers it, not the agent.
+    // A card Helm asked itself (helm sudo, helm phone, shared keys): Helm answers it, not the agent.
     if (this.helmAsks?.owns(requestId)) return this.helmAsks.answer(id, requestId, decision ?? {});
     const ask = this.#natives.hookAsks.get(requestId);
     const asked = this.events.pending(id).find((request) => request.requestId === requestId);
@@ -2152,6 +2217,12 @@ export class Sessions extends EventEmitter {
     }
     if (s.nativeCli) return this.#natives.nativeWrite(s, nativeSettingCommand(s.engine, 'model', model));
     if (!s.driver) throw new Error('not a headless session');
+    if (s.profileId?.startsWith('local-')) {
+      const profile = await this.#profileFor(s.profileId, s.engine);
+      if (profile?.localModel && model !== profile.localModel.selector) {
+        throw new Error(`Choose ${profile.localModel.selector} for this local account.`);
+      }
+    }
     const value = model || null;
     const d = this.#drivers.get(id);
     if (ask && !d?.modelSwitchSignal) return { ok: false, noSignal: true, session: s };

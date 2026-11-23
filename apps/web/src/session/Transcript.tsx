@@ -523,10 +523,14 @@ function TodoStep({ item }: { item: Item }) {
 }
 
 /** A failure uses the same safe messages as other app screens. */
-function ErrorLine({ text }: { text: string }) {
+function ErrorLine({ text, note, own }: { text: string; note?: boolean; own?: boolean }) {
+  if (note) return <div className="act errline note">
+    <span className="aicon"><Icon name="folder" size={15} /></span>
+    <span className="alabel wrap">{text}</span>
+  </div>;
   return <div className="act bad errline">
     <span className="aicon bad"><Icon name="alert" size={15} /></span>
-    <span className="alabel wrap">{plainError(text)}</span>
+    <span className="alabel wrap">{own ? text : plainError(text)}</span>
   </div>;
 }
 
@@ -582,7 +586,7 @@ function ItemContent({ item, byParent, commandOutput }: { item: Item; byParent: 
     case 'command': return <CommandItem item={item} />;
     case 'edit': return <EditItem item={item} />;
     case 'subagent': return <SubagentItem item={item} byParent={byParent} />;
-    case 'error': return <ErrorLine text={item.text ?? ''} />;
+    case 'error': return <ErrorLine text={item.text ?? ''} note={item.tone === 'note'} own={item.own} />;
     default: return null;
   }
 }
@@ -1126,7 +1130,7 @@ export function Transcript({ place, turns, status, loaded, empty, earlier, loadi
   const saidBelow = new Set<string>();
   turns.forEach((t, i) => {
     const next = turns[i + 1];
-    if (next && !next.text && next.items.some((it) => it.kind === 'error')) saidBelow.add(t.id);
+    if (next && !next.text && next.items.some((it) => it.kind === 'error' && it.tone !== 'note')) saidBelow.add(t.id);
   });
   const eagerTurns = new Set(turns.slice(-4));
   const view = (t: Turn, items?: Item[], head = true, tail = true, key: string = t.id) => (

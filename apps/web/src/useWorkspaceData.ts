@@ -53,7 +53,7 @@ export function useWorkspaceData(client: Client, connected: boolean) {
   const sessionRequests = useRef(new Set<string>());
   const envRequest = useRef(false);
   const envAgain = useRef(false);
-  const pushedPresence = useRef(new Map<string, { online: boolean; name?: string }>());
+  const pushedPresence = useRef(new Map<string, { online: boolean; name?: string; wakeSender?: boolean }>());
   const relist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const listRetries = useRef<Record<string, number>>({});
   const pushedDuringList = useRef<Record<string, Map<string, Session>>>({});
@@ -92,7 +92,8 @@ export function useWorkspaceData(client: Client, connected: boolean) {
         if (!active.current) return;
         result.environments = result.environments.map(env => {
           const presence = pushedPresence.current.get(env.id);
-          return presence ? { ...env, online: presence.online, name: presence.name ?? env.name } : env;
+          return presence ? { ...env, online: presence.online, name: presence.name ?? env.name,
+            info: presence.wakeSender === undefined ? env.info : { ...env.info, wakeSender: presence.wakeSender } } : env;
         });
         liveEnvsSeen.current = true;
         setEnvs((current) => keepUnchanged(current, result.environments));
@@ -166,10 +167,13 @@ export function useWorkspaceData(client: Client, connected: boolean) {
     relist.current[envId] = setTimeout(() => loadSessions(envId), delay);
   }, [loadSessions]);
 
-  const setPresence = useCallback((envId: string, online: boolean, name?: string) => {
-    if (envRequest.current) pushedPresence.current.set(envId, { online, name: name ?? pushedPresence.current.get(envId)?.name });
-    setEnvs((list) => list.some((env) => env.id === envId && (env.online !== online || (name ?? env.name) !== env.name))
-      ? list.map((env) => env.id === envId ? { ...env, online, name: name ?? env.name } : env)
+  const setPresence = useCallback((envId: string, online: boolean, name?: string, wakeSender?: boolean) => {
+    const seen = pushedPresence.current.get(envId);
+    if (envRequest.current) pushedPresence.current.set(envId, { online, name: name ?? seen?.name, wakeSender: wakeSender ?? seen?.wakeSender });
+    setEnvs((list) => list.some((env) => env.id === envId && (env.online !== online || (name ?? env.name) !== env.name
+      || wakeSender !== undefined && Boolean(env.info.wakeSender) !== wakeSender))
+      ? list.map((env) => env.id === envId ? { ...env, online, name: name ?? env.name,
+        info: wakeSender === undefined ? env.info : { ...env.info, wakeSender } } : env)
       // The same word again (the offline check repeats it every 10 s): nothing to redraw.
       : list);
   }, []);
@@ -188,8 +192,9 @@ export function useWorkspaceData(client: Client, connected: boolean) {
     loadEnvs();
     return client.on((envId, kind, payload) => {
       if (kind === 'presence') {
-        if (envId && payload?.env) setPresence(envId, !!payload.online, payload.name);
-        else loadEnvs();
+        if (envId && payload?.env) setPresence(envId, !!payload.online, payload.name,
+          payload.info ? payload.info.wakeSender === true : undefined);
+        if (payload?.wakeChanged || !envId || !payload?.env) loadEnvs();
       }
       if (kind === 'connection' && (payload.online || payload.reachable)) loadEnvs();
       if (kind === 'transport' && payload?.gap && envId) loadSessions(envId);

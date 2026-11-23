@@ -437,6 +437,145 @@ test('answering one Codex approval keeps the next request blocked', async t => {
   assert.equal(driver.status, 'working');
 });
 
+test('the owner\'s message moves a Codex turn on when only a background command holds it', async (t) => {
+  let listed = 0, inBackground = false;
+  let secondLook;
+  const looked = new Promise((resolve) => { secondLook = resolve; });
+  let started;
+  const restarted = new Promise((resolve) => { started = resolve; });
+  const { driver, log, notify, writes } = scriptedCodex(t, {
+    openTurn: 'turn-a',
+    reply(request, say) {
+      switch (request.method) {
+        case 'thread/read': return { result: { thread: { status: { type: 'active', activeFlags: [] }, turns: [{ id: 'turn-a', status: 'inProgress' }] } } };
+        case 'turn/steer': return { result: { turnId: 'turn-a' } };
+        case 'thread/backgroundTerminals/list':
+          if (++listed === 2) secondLook();
+          return { result: { data: inBackground ? [{ itemId: 'cmd-1', processId: '4242', command: 'npm test', cwd: '/work' }] : [], nextCursor: null } };
+        case 'turn/interrupt':
+          // Codex drops the unread steer and closes the turn; the command runs on.
+          say('thread/status/changed', { status: { type: 'idle' } });
+          say('turn/completed', { turn: { id: 'turn-a', status: 'interrupted' } });
+          return { result: {} };
+        case 'turn/start':
+          started(request);
+          say('turn/started', { turn: { id: 'turn-b' } });
+          return { result: { turn: { id: 'turn-b' } } };
+      }
+    },
+  });
+  await driver.start();
+  notify('item/started', { turnId: 'turn-a', item: { type: 'commandExecution', id: 'cmd-1', command: 'npm test', cwd: '/work', status: 'inProgress' } });
+  notify('item/commandExecution/outputDelta', { turnId: 'turn-a', itemId: 'cmd-1', delta: '12 tests passed\n' });
+  await driver.steer('Look at the README too', [], { inputId: 'ticket', clientId: 'owner-1', now: true });
+  // A command Codex would stop with the turn keeps the message waiting.
+  await looked;
+  assert.equal(writes.some((w) => w.method === 'turn/interrupt'), false);
+  inBackground = true;
+  const start = await restarted;
+  assert.deepEqual(start.params.input, [{ type: 'text', text: 'Look at the README too', text_elements: [] }]);
+  assert.equal(start.params.clientUserMessageId, 'owner-1');
+  const note = start.params.additionalContext.helm;
+  assert.equal(note.kind, 'application');
+  assert.match(note.value, /still runs as session 4242: npm test/);
+  assert.match(note.value, /12 tests passed/);
+  await log.until((e) => e.type === 'turn.recover');
+  const shown = log.of('item.start').find((e) => e.id === 'cmd-1').turnId;
+  assert.deepEqual(log.of('turn.recover').map(({ turnId, providerTurnId }) => ({ turnId, providerTurnId })), [{ turnId: shown, providerTurnId: 'turn-b' }]);
+  // One turn throughout: the stopped step neither ends it nor idles the chat.
+  assert.equal(log.of('turn.done').length, 0);
+  assert.equal(log.of('status').some((e) => e.status === 'idle'), false);
+  assert.equal(log.of('turn.start').filter((e) => e.turnId !== shown).length, 0);
+  notify('item/started', { turnId: 'turn-b', item: { type: 'userMessage', id: 'u1', clientUserMessageId: 'owner-1', content: [{ type: 'text', text: 'Look at the README too' }] } });
+  assert.deepEqual(log.of('input.consumed').map((e) => e.inputId), ['ticket']);
+  notify('turn/completed', { turn: { id: 'turn-a', status: 'interrupted' } });
+  assert.equal(log.of('turn.done').length, 0, 'a repeated completion of the stopped turn closes nothing');
+  notify('turn/completed', { turn: { id: 'turn-b', status: 'completed' } });
+  assert.deepEqual(log.of('turn.done').map((e) => [e.turnId, e.status]), [[shown, 'ok']]);
+  assert.equal(driver.status, 'idle');
+});
+
+test('the owner\'s message stops Codex while it thinks; only a file edit in progress is waited out', async (t) => {
+  let listed = 0, secondLook, started;
+  const looked = new Promise((resolve) => { secondLook = resolve; });
+  const restarted = new Promise((resolve) => { started = resolve; });
+  const { driver, notify, writes } = scriptedCodex(t, {
+    openTurn: 'turn-a',
+    reply(request, say) {
+      switch (request.method) {
+        case 'thread/read': return { result: { thread: { status: { type: 'active', activeFlags: [] }, turns: [{ id: 'turn-a', status: 'inProgress' }] } } };
+        case 'turn/steer': return { result: { turnId: 'turn-a' } };
+        case 'thread/backgroundTerminals/list':
+          if (++listed === 1) secondLook();
+          return { result: { data: [], nextCursor: null } };
+        case 'turn/interrupt':
+          say('turn/completed', { turn: { id: 'turn-a', status: 'interrupted' } });
+          return { result: {} };
+        case 'turn/start':
+          started(request);
+          say('turn/started', { turn: { id: 'turn-b' } });
+          return { result: { turn: { id: 'turn-b' } } };
+      }
+    },
+  });
+  await driver.start();
+  notify('item/started', { turnId: 'turn-a', item: { type: 'fileChange', id: 'edit-1', changes: [], status: 'inProgress' } });
+  notify('item/started', { turnId: 'turn-a', item: { type: 'reasoning', id: 'think-1', summary: [], content: [] } });
+  await driver.steer('Stop and answer me', [], { inputId: 'ticket', clientId: 'owner-1', now: true });
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  assert.equal(listed, 0, 'a file edit is never cut in half');
+  notify('item/completed', { turnId: 'turn-a', item: { type: 'fileChange', id: 'edit-1', changes: [], status: 'completed' } });
+  await looked;
+  const start = await restarted;
+  assert.ok(writes.some((w) => w.method === 'turn/interrupt'), 'thinking is cut');
+  assert.deepEqual(start.params.input, [{ type: 'text', text: 'Stop and answer me', text_elements: [] }]);
+});
+
+test('a Stop while Helm moves a Codex turn on ends the turn there', async (t) => {
+  let interrupts = 0;
+  const { driver, log, notify, writes } = scriptedCodex(t, {
+    openTurn: 'turn-a',
+    reply(request, say) {
+      switch (request.method) {
+        case 'thread/read': return { result: { thread: { status: { type: 'active', activeFlags: [] }, turns: [{ id: 'turn-a', status: 'inProgress' }] } } };
+        case 'turn/steer': return { result: { turnId: 'turn-a' } };
+        case 'thread/backgroundTerminals/list':
+          return { result: { data: [{ itemId: 'cmd-1', processId: '4242', command: 'npm test', cwd: '/work' }], nextCursor: null } };
+        case 'turn/interrupt':
+          // The owner presses Stop while the move waits for the turn to end.
+          if (++interrupts === 1) {
+            void driver.interrupt();
+            say('turn/completed', { turn: { id: 'turn-a', status: 'interrupted' } });
+          }
+          return { result: {} };
+      }
+    },
+  });
+  await driver.start();
+  notify('item/started', { turnId: 'turn-a', item: { type: 'commandExecution', id: 'cmd-1', command: 'npm test', cwd: '/work', status: 'inProgress' } });
+  await driver.steer('Look at the README too', [], { inputId: 'ticket', now: true });
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'interrupted');
+  assert.equal(driver.status, 'idle');
+  assert.equal(writes.some((w) => w.method === 'turn/start'), false);
+});
+
+test('after a restart, a moved Codex turn goes on under its newest Codex id', async (t) => {
+  const { driver, log, notify } = scriptedCodex(t, {
+    openTurn: 'turn-a',
+    reply(request) {
+      if (request.method === 'thread/read') return { result: { thread: { status: { type: 'active', activeFlags: [] },
+        turns: [{ id: 'turn-a', status: 'interrupted' }, { id: 'turn-b', status: 'inProgress' }] } } };
+    },
+  });
+  driver.resumeEvents = () => [{ type: 'turn.start', turnId: 'turn-a' }, { type: 'turn.recover', turnId: 'turn-a', providerTurnId: 'turn-b' }];
+  await driver.start();
+  assert.equal(log.of('turn.done').length, 0, 'the stopped step does not close the turn');
+  assert.equal(driver.status, 'working');
+  notify('turn/completed', { turn: { id: 'turn-b', status: 'completed' } });
+  assert.deepEqual(log.of('turn.done').map((e) => [e.turnId, e.status]), [['turn-a', 'ok']]);
+});
+
 test('a late completion of an older turn does not mark the newer turn idle', async (t) => {
   const { driver, log, notify, writes } = scriptedCodex(t, {
     openTurn: 'turn-a',

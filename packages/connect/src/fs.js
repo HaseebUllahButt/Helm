@@ -240,6 +240,16 @@ export async function warmIndex({ force = false } = {}) {
 }
 
 /**
+ * Every indexed folder as a full path, walked again first: a folder that
+ * just moved is where a missing chat folder is looked for (chat-folder.js).
+ */
+export async function indexedFolders() {
+  await restoreIndex();
+  await warmIndex({ force: true });
+  return indexDirs.map((d) => ({ path: expand(d.path), repo: d.repo }));
+}
+
+/**
  * Match `query` against every indexed directory.
  *
  * Every whitespace-separated word must appear in the path, so "dev helm"

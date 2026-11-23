@@ -11,7 +11,7 @@ import { defaultMode } from './modes.js';
 import { opencodeServiceSessions, opencodeServiceActive } from './opencode-service.js';
 import { hostedProcId } from './hosted-process.js';
 import { messageDelivery } from '@helm/protocol/message-delivery';
-import { stripBrief, withReminder } from '@helm/protocol/brief';
+import { MADE_WAY_NOTE, stripBrief, withReminder } from '@helm/protocol/brief';
 import { DRIVERS, wire } from './session-wire.js';
 import { staleHistory } from '@helm/usage/idle-history';
 import { acceptAttachments, acceptImages, driverTakesImages, saveUploads } from './session-attachments.js';
@@ -550,8 +550,9 @@ export class SessionDelivery {
    * message ends with the writing reminder (brief.js).
    */
   #promptOf(s, d, item) {
-    const said = item.referenceContext ? `${item.text}\n\n${item.referenceContext}` : item.text;
-    if (item.text.trimStart().startsWith('/')) return said;
+    const words = item.referenceContext ? `${item.text}\n\n${item.referenceContext}` : item.text;
+    const said = item.madeWay ? `${words}\n\n${MADE_WAY_NOTE}` : words;
+    if (item.text.trimStart().startsWith('/')) return words;
     // Hidden chats are Helm's own workers (titles, the keeper); their replies are data.
     const remind = (text) => (this.#sessions.delegationBrief && !s.delegation?.hidden ? withReminder(text) : text);
     if (!item.introduce) return remind(said);
@@ -767,7 +768,7 @@ export class SessionDelivery {
    * `turn.deliver` lands for a steer instead of a close; `turn.accept`
    * follows when the CLI says it used the message.
    */
-  async sendNow(id, turnId) {
+  async sendNow(id, turnId, { stop = false } = {}) {
     this.#core.rewinder.assertRewindUnlocked(id);
     const s = this.#sessions.get(id);
     const item = (this.#core.deliveryState.queue(id) ?? []).find((x) => x.turnId === turnId);
@@ -780,7 +781,7 @@ export class SessionDelivery {
       const d = this.#core.drivers.get(id) ?? await this.#core.driver(s);
       this.#checkDelivery(s, item);
       const busy = s.status === 'working' || s.status === 'blocked';
-      if (busy && this.#canSteer(d, item)) {
+      if (busy && !stop && this.#canSteer(d, item)) {
         await this.#steerOne(s, d, item);
         return { ok: true, found: true, sent: true };
       }
@@ -797,6 +798,7 @@ export class SessionDelivery {
       this.#checkDelivery(s, item);
       const deliveredItem = this.#core.deliveryState.removeTicket(id, turnId);
       if (!deliveredItem) return { ok: true, found: false, sent: false };
+      if (busy && !beside) deliveredItem.madeWay = true;
       // The reply cut short to make room is not a task the owner stopped.
       if (busy && !beside && s.recovery?.kind === 'interrupted') {
         delete s.recovery;
@@ -890,17 +892,24 @@ export class SessionDelivery {
    * oldest first (`messageDelivery`): Claude and Codex while a tool step
    * runs - each reads it when the step ends, what typing into the CLI does -
    * and OpenCode whenever its loop is running. Other CLIs read input only
-   * between turns, so theirs wait for the pump. An explicit hold, a slash
-   * command or /compact is for between turns, so it and everything behind
-   * it waits for the turn to end; so does a message the CLI refused once.
+   * between turns: the owner's message stops the reply and goes at once
+   * (`#makeWay`), and an agent's waits for the pump. An explicit hold, a
+   * slash command or /compact is for between turns, so it and everything
+   * behind it waits for the turn to end; so does a message the CLI refused once.
    */
   async handOver(s) {
     if (this.#core.deliveryState.isSending(s.id) || s.queuePaused || s.stoppedAt) return;
     const d = this.#core.drivers.get(s.id);
     const timing = messageDelivery(s.engine).timing;
-    if (timing === 'turn' || typeof d?.steer !== 'function') return;
-    const ready = () => !s.queuePaused && !s.stoppedAt && (timing === 'tool'
-      ? ['working', 'blocked'].includes(s.status) && this.#core.deliveryState.hasSteps(s.id)
+    if (timing === 'turn' || typeof d?.steer !== 'function') return this.#makeWay(s, d);
+    // A CLI that reads the owner's message only after its step stops the step instead.
+    // Where it cannot (a helper, an approval card), the message joins the step as before.
+    if (d.stopsForNow && await this.#makeWay(s, d, { stop: true })) return;
+    // A CLI that takes the owner's message at once (`steersNow`) needs no
+    // step to hand it to; an agent's message still waits for one.
+    const ready = (item) => !s.queuePaused && !s.stoppedAt && (timing === 'tool'
+      ? ['working', 'blocked'].includes(s.status) && (this.#core.deliveryState.hasSteps(s.id)
+        || (s.status === 'working' && !!d.steersNow && !!item && item.source !== 'agent'))
       : s.status === 'working');
     const eligible = (item) => !!item && item.delivery !== 'queue' && !item.nativeRejected && !item.referenceContext
       && this.#canSteer(d, item);
@@ -912,12 +921,12 @@ export class SessionDelivery {
         : item.source === 'agent' && eligible(item) && q.slice(0, i).every((held) => held.delivery === 'queue'));
       return at < 0 ? undefined : q[at];
     };
-    if (!ready() || !next()) return;
+    if (!ready(next()) || !next()) return;
     this.#core.deliveryState.setSending(s.id);
     try {
       for (;;) {
         const item = next();
-        if (!eligible(item) || !ready()) break;
+        if (!eligible(item) || !ready(item)) break;
         try { await this.#steerOne(s, d, item); }
         catch (err) {
           // The turn ended under it: the pump sends it as the next turn.
@@ -927,6 +936,25 @@ export class SessionDelivery {
       }
     } finally {
       this.#releaseSending(s);
+    }
+  }
+
+  /**
+   * The owner wants a message read at once, and this CLI reads input only
+   * between turns: stop the reply and send it, the way Send now does. The
+   * message tells the agent to go back to the stopped work. A helper
+   * waits: stopped, it would report itself stopped to its lead. So does an
+   * approval card, where Decline is the way to end the turn.
+   */
+  async #makeWay(s, d, { stop = false } = {}) {
+    if (s.status !== 'working' || s.delegation || s.nativeCli || typeof d?.interrupt !== 'function') return false;
+    const first = this.#core.deliveryState.queue(s.id)?.[0];
+    if (!first || first.source === 'agent' || first.delivery === 'queue' || first.nativeRejected
+      || first.compact != null || first.text.trimStart().startsWith('/')) return false;
+    try { return (await this.sendNow(s.id, first.turnId, { stop })).sent; }
+    catch (err) {
+      this.#sessions.log(`[${s.id}] could not stop the reply for a message: ${err.message}`);
+      return false;
     }
   }
 
@@ -952,7 +980,7 @@ export class SessionDelivery {
     const entry = { turnId: item.turnId, text: prompt, item: ticket };
     this.#core.deliveryState.addSteered(s.id, entry);
     try {
-      await d.steer(prompt, item.images, { inputId: item.turnId, clientId });
+      await d.steer(prompt, item.images, { inputId: item.turnId, clientId, now: item.source !== 'agent' });
     } catch (err) {
       const currentTicket = err?.deliveryNotSent ? this.#core.deliveryState.steeredTicket(s.id, item.turnId) : null;
       // A Stop while the call was out has already removed the ticket.

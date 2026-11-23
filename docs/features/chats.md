@@ -58,6 +58,25 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   $V restart                            # the first approval and second message stay
   $V click Approve; $V wait "TOOL APPROVAL"   # "second" was delivered and asks again
   ```
+- **Rule (owner, 2026-11-20):** the owner's message must reach the agent
+  at once. A CLI that reads input mid-reply gets it at its next read
+  point. Claude gets it at once, also while it only writes, through its
+  Send now (`interrupt` with `send_now`). Where Claude can move the running
+  command to the background it does; 2.1.329 in `-p` mode cannot, so the
+  step stops (owner: "it should interrupt chat and then send message") and
+  the message carries `MADE_WAY_NOTE`. Driven 2026-11-20 with the real CLI
+  and a fake API: read 0.1 s after the send, turn ended ok. Codex reads a steer only when its tool
+  call returns (a command wait holds it up to 5 min). After 1 s Helm stops
+  the turn and starts the next one with the message and a note naming each
+  command that still runs; thinking and writing are cut, only a file edit
+  in progress is waited out. Codex commands outlive `turn/interrupt`
+  (0.171.0), so commands keep running. Pi and OpenCode read a message
+  only after the step (`stopsForNow`): the step stops, as below. OMP's
+  steer moves a running bash to the background and is read at once, so
+  it keeps the steer. Every other CLI has its reply stopped
+  and the message sent, with a hidden note to go back to the stopped work
+  (`MADE_WAY_NOTE`). Agents' messages, helpers, approvals and held
+  messages still wait for the reply to end.
 - **Traps:** each CLI reads a mid-reply message at a different moment
   (Codex after its next step, Claude after its current tools). Save the send
   boundary before calling a CLI. A lost reply does not prove delivery or
@@ -144,6 +163,30 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   (`cache_creation.ephemeral_5m_input_tokens`). Send once, wait 5 minutes:
   the chip reads "Compact 512k"; send: a `/compact` turn, then the message.
 - **Tests:** `test/idle-history`, `driver-claude`, `agent-messages`.
+
+## A chat's folder moves or goes
+- **What the owner sees:** a chat never fails because its folder moved. Found
+  again (renamed, moved, a symlink removed, a fresh clone): one quiet line,
+  "The folder ~/a is missing. Helm found it at ~/b, so this chat works there
+  now." Not found: the agent still answers, in an empty folder of Helm's, and
+  a "Folder missing" card above the message box offers "Pick folder" and any
+  repo that looks like it. "Change folder" is in the chat's ⋯ menu and the
+  sidebar row's ⋯ menu; agents use `helm chat-folder <id> <folder>`.
+- **Rules:** the record keeps the real path (symlinks resolved), the folder's
+  inode and its git identity (`project-key.js`). Search order: the folder the
+  AI recorded, the same inode, then exactly one repo with the same identity;
+  several repos become choices, never a guess. A change moves every chat in
+  the old folder and below it, and a saved project, as one T3 Code project
+  moves its threads; `--only` moves one. A chat that works keeps its folder
+  until its step ends. A chat that never ran keeps the plain "folder does not
+  exist" error. Helm writes nothing into the owner's folder. There is no
+  separate project record: chats are grouped by folder path, and moving all
+  chats of a path gives the same result without a new kind of record.
+- **Traps:** Claude's `--resume` looks only under the folder's own place in
+  `projects/`, so Helm hard-links the conversation there before the start
+  (`chat-folder.js`); a copy would split the history in two. The empty folder
+  is under `~/.helm/folder-missing/`; it is never taken as where a folder went.
+- **Tests:** `test/chat-folder`, `chat-worktree`, `chat-move`.
 
 ## @ chats and / commands
 - **Trap:** a new Claude sends `init` only with the first message. The `/`

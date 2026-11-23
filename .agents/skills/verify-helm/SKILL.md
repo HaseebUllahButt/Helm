@@ -83,7 +83,7 @@ its own copy, named after its Helm session; `--name <name>` picks another.
 - `click` prefers exact matches and skips things under a sheet or menu.
   `open` always reloads. `text` can miss an open menu; `wait` does not read
   text boxes.
-- The fake agent ignores Stop, never asks questions, and asks again after
+- The fake agent stops while it waits, never asks questions, and asks again after
   "Always allow". Prove those with a real chat or the tests.
 - The folder step does not take a full path; use the sketch row.
 - Never stop Helm processes by name (`pkill -f`, `systemctl stop

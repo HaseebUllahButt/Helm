@@ -1,0 +1,13 @@
+<!doctype html><title>Claude</title>
+<button data-testid="model-selector-dropdown" id="picker"><span>Sonnet 5.5</span></button>
+<div id="menu" hidden>
+  <div role="menuitem" data-name="Opus 5.5"><div>Opus 5.5</div><div>Most capable</div></div>
+  <div role="menuitem" data-name="Sonnet 5.5"><div>Sonnet 5.5</div><div>Smart and fast</div></div>
+</div>
+<div id="chat"></div>
+<div contenteditable="true" class="ProseMirror" aria-label="Write your prompt to Claude"></div>
+<button aria-label="Send message" id="send">Send</button>
+<script>window.FAKE = { editor: '.ProseMirror', send: '#send', picker: '#picker', streaming: true,
+  replyTag: '.font-claude-response', reply: '<div class="font-claude-response" data-text></div>',
+  stop: ['aria-label', 'Stop response'], tempParam: 'incognito', saved: '/claude/chat/', savedPath: '/claude/chat/1234-abcd' };</script>
+<script src="/fake-chat.js"></script>

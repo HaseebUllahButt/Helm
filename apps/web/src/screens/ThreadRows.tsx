@@ -121,8 +121,10 @@ export function PagedRows<T extends { s: { id: string } }>({ items, isSelected, 
  * The ⋯ on a thread row: continue, rename, pin, move, archive, delete. One component, so
  * the sidebar's rows and the machine screen's rows offer the same things.
  */
-export function ThreadActions({ s, onContinue, onRename, onPin, onArchive, onDelete, onMove, ending: askedToEnd, setEnding: setAskedToEnd, extra = [], buttonClass = 'rowend' }: {
+export function ThreadActions({ s, onContinue, onRename, onPin, onArchive, onDelete, onMove, onFolder, ending: askedToEnd, setEnding: setAskedToEnd, extra = [], buttonClass = 'rowend' }: {
   s: Session; onContinue?: () => void; onRename?: (title: string) => void; onPin?: () => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void;
+  /** Pick another folder for the chat. */
+  onFolder?: () => void;
   /** The delete question, when the row asks it (its Delete key). */
   ending?: boolean; setEnding?: (on: boolean) => void;
   /** Items that come first, such as what a waiting chat needs. */
@@ -161,6 +163,9 @@ export function ThreadActions({ s, onContinue, onRename, onPin, onArchive, onDel
           )}
           {onMove && (
             <button onClick={() => { setMenu(false); onMove(); }}>Move to another machine</button>
+          )}
+          {onFolder && (
+            <button onClick={() => { setMenu(false); onFolder(); }}>Change folder</button>
           )}
           {onArchive && (
             <button onClick={() => { setMenu(false); onArchive(); }}>
@@ -218,7 +223,7 @@ export function NeedCard({ s, machine, selected = false, onOpen, onPick, onDismi
   onDismiss: () => Promise<void>;
   /** Open the chat at the helper that failed or waits. */
   onReview?: () => void;
-  actions?: { onContinue?: () => void; onRename?: (title: string) => void; onPin?: () => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void };
+  actions?: { onContinue?: () => void; onRename?: (title: string) => void; onPin?: () => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void; onFolder?: () => void };
 }) {
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState('');
@@ -273,7 +278,7 @@ export const HomeRow = memo(function HomeRow({ s, machine, onOpen, note, selecte
   /** One line: the title, its status and the agent. */
   slim?: boolean;
   /** Rename, archive, delete - the same ⋯ the machine screen's rows have. */
-  actions?: { onContinue?: () => void; onRename?: (title: string) => void; onPin?: () => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void };
+  actions?: { onContinue?: () => void; onRename?: (title: string) => void; onPin?: () => void; onArchive?: () => void; onDelete?: () => void; onMove?: () => void; onFolder?: () => void };
 }) {
   useSeenVersion();
   const eng = engineOf(s.engine);

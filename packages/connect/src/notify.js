@@ -20,7 +20,20 @@ const whoWhere = (session, action) => [`${agentLabel(session?.engine)} ${action}
  * title is the chat, which is what the owner knows it by. A question is the
  * agent's own words and goes under it; a command or a file stays in the chat.
  */
+/** helm phone (phone.js): what the owner's phone is asked for. */
+export const PHONE_ACTIONS = { ask: 'asks you a question', photo: 'wants a photo', location: 'wants your location', code: 'wants a sign-in code' };
+
 export function describe(session, event) {
+  if (event.phone) {
+    const asked = notificationLine(event.phone.question ?? event.reason ?? '');
+    return {
+      title: notificationContext(session),
+      body: [whoWhere(session, PHONE_ACTIONS[event.phone.type] ?? 'needs your phone'), asked].filter(Boolean).join('\n'),
+      tag: `helm-${session?.id ?? 'session'}-${event.requestId ?? event.seq ?? ''}`,
+      envId: session?.envId ?? null,
+      sessionId: session?.id ?? null,
+    };
+  }
   const question = event.kind === 'question' || !!event.question || !!event.questions?.length;
   const action = question ? 'has a question'
     : event.kind === 'plan' ? 'has a plan for you to check'
@@ -48,6 +61,8 @@ export function askPreview(event) {
     const t = String(v ?? '').split('\n').find((l) => l.trim())?.replace(/\s+/g, ' ').trim() ?? '';
     return t.length > 120 ? `${t.slice(0, 119)}…` : t;
   };
+  // helm phone: the card is answered on its own, so the notice says what it wants.
+  if (event.phone) return { kind: 'tool', phone: event.phone.type, text: line(event.phone.question || event.title), more: 0 };
   const question = event.kind === 'question' || !!event.questions?.length;
   const kind = question ? 'question' : ['command', 'edit', 'plan'].includes(event.kind) ? event.kind : 'tool';
   // helm sudo (sudo.js): the notice says the command runs as admin.

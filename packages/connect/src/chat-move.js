@@ -36,8 +36,9 @@ const BUSY = new Set(['starting', 'working', 'blocked']);
 const line = (value, max) => typeof value === 'string' && value.length > 0
   && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 
-/** Claude names a project folder after its path, every other character a dash. */
-export const claudeKey = (cwd) => cwd.replace(/[^a-zA-Z0-9]/g, '-');
+import { claudeKey } from './chat-folder.js';
+
+export { claudeKey };
 
 const homeOf = (profile) => expand(profile?.env?.[ENGINES[profile.engine]?.homeEnv] ?? ENGINES[profile.engine]?.defaultHome);
 
