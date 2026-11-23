@@ -46,7 +46,7 @@ test('new native chats learn model, effort and actual permissions; refresh retai
     const options=await daemon.dispatch(M.MODEL_LIST,{id:'native-pi'});
     assert.deepEqual(options.modes,BASH_GUARD_MODES);
     const changing = sessions.setMode('native-pi','guard-off');
-    await new Promise(resolve => setTimeout(resolve,100));
+    for(let i=0;i<500&&host.writes.length<2;i++) await new Promise(resolve => setTimeout(resolve,10));
     assert.equal(sessions.get('native-pi').mode,'guard','sending the toggle is not confirmation');
     assert.deepEqual(host.writes,['\x1b[200~/bash-guard\x1b[201~','\r']);
     await sendHook('native-pi',{hook_event_name:'HelmSettings',model:'anthropic/model',effort:'low',mode:'guard-off',permissionControl:'bash-guard'});

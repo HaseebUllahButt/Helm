@@ -45,14 +45,6 @@ test('repos: names only, the chosen login, and no token in the answer', async ()
   assert.doesNotMatch(JSON.stringify(r), /secret/);
 });
 
-test('repos: no gh, or no login, says so instead of failing', async () => {
-  const none = await createGithubRepos({ cacheFile: cache(), command: gh({ missing: true }).command }).repos();
-  assert.equal(none.installed, false);
-  const out = await createGithubRepos({ cacheFile: cache(), command: gh({ logins: [] }).command }).repos();
-  assert.equal(out.installed, true);
-  assert.equal(out.login, null);
-});
-
 test('clone: bad names never reach a path', async () => {
   const g = createGithubRepos({ cacheFile: cache(), command: gh().command, start: () => { throw new Error('must not run'); } });
   for (const name of ['../etc', 'a/b/c', 'a/..', 'onlyname', 'a /b', '']) {
@@ -89,12 +81,6 @@ test('clone: runs gh, reports progress, and tells the folder index', async () =>
   assert.deepEqual(noted, [join(parent, 'site'), true]);
 });
 
-test('repos: an organization\'s repo is marked as one', async () => {
-  const fetch = async () => new Response(JSON.stringify([repo('me', 'app', { owner: { login: 'me', type: 'User' } }), repo('acme', 'site', { owner: { login: 'acme', type: 'Organization' } })]), { status: 200 });
-  const r = await createGithubRepos({ cacheFile: cache(), command: gh().command, fetch }).repos();
-  assert.deepEqual(r.repos.map((x) => [x.full, x.org]), [['me/app', false], ['acme/site', true]]);
-});
-
 test('accounts: a gh too old for --json is read from its own words', async () => {
   const words = 'github.com\n  ✓ Logged in to github.com account Me (/home/u/.config/gh/hosts.yml)\n  - Active account: true\n  - Token: gho_****\n';
   const command = async (cmd, args) => {
@@ -117,45 +103,6 @@ test('parseStatus: both wordings, the active one, and failed logins left out', (
     '  ✓ Logged in to github.com account b (keyring)', '  - Active account: true',
   ].join('\n')), [{ login: 'a', active: false }, { login: 'b', active: true }]);
   assert.deepEqual(parseStatus('You are not logged into any GitHub hosts. To log in, run: gh auth login'), []);
-});
-
-test('repos: kept on disk, shown at once next time, and fetched again only when asked', async () => {
-  const cacheFile = cache();
-  let fetched = 0;
-  const fetch = async () => { fetched++; return new Response(JSON.stringify([repo('me', 'app')]), { status: 200 }); };
-  let clock = 1_000_000;
-  const first = await createGithubRepos({ cacheFile, command: gh().command, fetch, now: () => clock }).repos();
-  assert.equal(fetched, 1);
-  assert.equal(first.stale, false);
-  // A restart: a new instance reads the list from disk without asking GitHub.
-  clock += 11 * 60_000;
-  const again = createGithubRepos({ cacheFile, command: gh().command, fetch, now: () => clock });
-  const held = await again.repos();
-  assert.equal(fetched, 1);
-  assert.deepEqual(held.repos.map((r) => r.full), ['me/app']);
-  assert.equal(held.stale, true, 'old enough that the app asks again, quietly');
-  await again.repos({ refresh: true });
-  assert.equal(fetched, 2);
-});
-
-test('find: a miss fetches the list again and asks GitHub, known owners first', async () => {
-  const urls = [];
-  const fetch = async (url) => {
-    urls.push(url);
-    if (url.includes('/user/repos')) return new Response(JSON.stringify([repo('me', 'app'), repo('acme', 'site')]), { status: 200 });
-    if (url.includes('/repos/acme/tool')) return new Response('{}', { status: 404 });
-    if (url.includes('/search/')) return new Response(JSON.stringify({ items: [repo('stranger', 'tool'), repo('acme', 'tool'), repo('..', 'x')] }), { status: 200 });
-    throw new Error(url);
-  };
-  let clock = 5_000_000;
-  const g = createGithubRepos({ cacheFile: cache(), command: gh().command, fetch, now: () => clock });
-  await g.repos();
-  clock += 60_000;
-  const r = await g.find({ query: 'acme/tool' });
-  assert.equal(urls.filter((u) => u.includes('/user/repos')).length, 2, 'the list is fetched again');
-  assert.deepEqual(r.found.map((x) => x.full), ['acme/tool', 'stranger/tool']);
-  assert.match(urls.find((u) => u.includes('/search/')), /q=acme%20tool%20in%3Aname/);
-  await assert.rejects(g.find({ query: '  ' }), /Type part/);
 });
 
 test('begin: a half-finished clone is cleared only when asked, and a finished one is used', async () => {

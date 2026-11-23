@@ -12,7 +12,6 @@ import { M } from '@helm/protocol';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-execution-'));
 test.after(() => rmSync(root, { recursive: true, force: true }));
-const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const spec = (code, extra = {}) => ({ argv: [process.execPath, '-e', code], cwd: root, timeout: 5000, ...extra });
 const launch = args => startWork(args, { env: { ...process.env, HELM_DIR: root } });
 const id = n => n.toString(16).padStart(32, '0');

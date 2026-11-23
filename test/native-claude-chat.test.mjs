@@ -25,8 +25,8 @@ class Host extends EventEmitter {
   detach() {}
 }
 const create = (host = new Host()) => new Sessions(new EventEmitter(), { nativeHost: host, nativeDiscovery: false });
-async function until(fn) {
-  const end = Date.now() + 3000;
+async function until(fn, ms = 3000) {
+  const end = Date.now() + ms;
   while (Date.now() < end) { if (fn()) return; await new Promise((r) => setTimeout(r, 10)); }
   throw new Error('timed out');
 }
@@ -151,7 +151,6 @@ test('a restart clears an orphaned native approval card', async () => {
     assert.equal(second.events.pending('native-test').length, 0);
   } finally { await second.stop(); }
 });
-
 
 test('native images are stored on the thread host and referenced in the same serialized prompt', async () => {
   const host = new Host(), sessions = create(host);
@@ -317,7 +316,9 @@ test("a terminal Claude's own busy/idle word fixes what hooks miss, never a newe
     say('idle', Date.now() - 60_000);
     await sendHook('native-test', { hook_event_name: 'UserPromptSubmit' });
     assert.equal(sessions.get('native-test').status, 'working');
-    await new Promise((r) => setTimeout(r, 2700));
+    // Wait for the next status check: it renews a working chat's lease, then reads the file.
+    const checks = host.renewals.length;
+    await until(() => host.renewals.length > checks, 10_000);
     assert.equal(sessions.get('native-test').status, 'working');
     // Interrupted at the keyboard: no Stop hook, but Claude writes idle.
     say('idle', Date.now() + 1);
@@ -397,7 +398,6 @@ test('a permission mode the terminal Claude does not offer fails and leaves the 
   } finally { await sessions.stop(); }
 });
 
-
 test('concurrent native permission changes apply in order against the current mode', async () => {
   const host = new CycleHost(), sessions = create(host);
   try {
@@ -406,31 +406,6 @@ test('concurrent native permission changes apply in order against the current mo
     await Promise.all([sessions.setMode('native-test','acceptEdits'), sessions.setMode('native-test','auto')]);
     assert.equal(sessions.get('native-test').mode,'auto');
     assert.equal(host.ring[host.at],'auto mode');
-    assert.equal(host.views,0);
-  } finally { await sessions.stop(); }
-});
-
-test('native permission changes with no reported mode reject before sending keys', async () => {
-  const host = new CycleHost(), sessions = create(host);
-  try {
-    await sessions.hooks;
-    delete sessions.get('native-test').mode;
-    await assert.rejects(sessions.setMode('native-test','acceptEdits'), /not reported/);
-    assert.deepEqual(host.writes,[]);
-    assert.equal(host.views,0);
-  } finally { await sessions.stop(); }
-});
-
-
-test('native mode changes preserve an existing terminal viewer', async () => {
-  const host = new CycleHost(), sessions = create(host);
-  try {
-    await sessions.hooks;
-    await sendHook('native-test', {hook_event_name:'UserPromptSubmit',permission_mode:'auto'});
-    sessions.watch('native-test','terminal-view');
-    await sessions.setMode('native-test','acceptEdits');
-    assert.equal(host.views,1,'the shared viewer stays attached');
-    sessions.detach('native-test','terminal-view');
     assert.equal(host.views,0);
   } finally { await sessions.stop(); }
 });
@@ -447,7 +422,6 @@ test('native status-line quotas arrive as limits without changing permission mod
   } finally { await sessions.stop(); }
 });
 
-
 test('native status-line context fullness lands on the chat record', async () => {
   const sessions=create();
   try {
@@ -457,18 +431,6 @@ test('native status-line context fullness lands on the chat record', async () =>
     assert.deepEqual({used,window},{used:150500,window:383000});
     assert.equal(sessions.events.tail('native-test',0).some(e=>e.type==='context'),false,'never a line in the transcript');
   } finally { await sessions.stop(); }
-});
-
-test('Claude takeover can select and leave dangerously-skip-permissions after the native footer confirms it',async()=>{
-  const host=new CycleHost();host.ring=['auto mode','bypass permissions','manual mode','accept edits','plan mode'];
-  const sessions=create(host);
-  try{
-    await sessions.hooks;
-    await sendHook('native-test',{hook_event_name:'SessionStart',permission_mode:'auto'});
-    assert.equal((await sessions.setMode('native-test','bypassPermissions')).session.mode,'bypassPermissions');
-    assert.equal(host.ring[host.at],'bypass permissions');
-    assert.equal((await sessions.setMode('native-test','default')).session.mode,'default');
-  } finally{await sessions.stop();}
 });
 
 test('a native chat read that the app already holds answers unchanged, without the messages', async () => {

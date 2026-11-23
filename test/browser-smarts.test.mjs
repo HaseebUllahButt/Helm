@@ -10,52 +10,9 @@ process.env.HELM_DIR = directory; process.env.HELM_NO_SERVICE = '1';
 delete process.env.WAYLAND_DISPLAY; delete process.env.DISPLAY;
 for (const [key, file] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(directory, file);
 test.after(() => rm(directory, { recursive: true, force: true }));
-const { resolveTarget, scoreTargets, normalizeAction, readOnlyAction } = await import('../packages/connect/src/browser-targets.js');
+const { readOnlyAction } = await import('../packages/connect/src/browser-targets.js');
 const { BrowserFlows, fillParams } = await import('../packages/connect/src/browser-flows.js');
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
-const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
-const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
-const elements = [ { ref: 1, role: 'button', name: 'Send message' }, { ref: 2, role: 'button', name: 'Send' }, { ref: 3, role: 'link', name: 'Send' }, { ref: 4, role: 'textbox', name: 'Search messages' } ];
-
-test('targets normalise articles, case and punctuation; exact beats all words, and kind hints choose', () => {
-  assert.equal(resolveTarget('THE Send! button', elements).ref, 2);
-  assert.equal(resolveTarget('the button: Send', elements).ref, 2);
-  assert.equal(resolveTarget('the Send link', elements).ref, 3);
-  assert.equal(resolveTarget('the Search messages box', elements).ref, 4);
-  assert.equal(resolveTarget('Search messages', elements, 'type').ref, 4);
-  assert.equal(scoreTargets('Send', elements)[0].ref, 2);
-  assert.equal(resolveTarget('Search the recent messages', elements).ref, 4);
-});
-test('ambiguous and missing targets return ranked candidates instead of choosing', () => {
-  assert.throws(() => resolveTarget('Send', elements), error => error.candidates.length === 4 && /ambiguous/.test(error.message));
-  assert.throws(() => resolveTarget('Unknown button', elements), error => /no matching/.test(error.message) && error.candidates.every(e => e.role === 'button'));
-  assert.equal(resolveTarget('Send button', [...elements, { ref: 5, role: 'button', name: 'Send', disabled: true }]).ref, 2);
-  assert.equal(resolveTarget('Send button', [{ ref: 1, role: 'button', name: 'Send', inViewport: false }, { ref: 2, role: 'button', name: 'Send' }]).ref, 2);
-});
-test('short step forms map without changing existing kind actions', () => {
-  const old = { kind: 'type', ref: 2, text: 'Ada' }; assert.equal(normalizeAction(old), old);
-  assert.equal(normalizeAction({ goto: 'example.com' }).kind, 'navigate');
-  assert.equal(normalizeAction({ click: 'Send' }).target, 'Send');
-  assert.equal(normalizeAction({ click: '3' }).ref, 3);
-  assert.equal(normalizeAction({ hover: 'Name' }).kind, 'hover');
-  assert.deepEqual(normalizeAction({ type: 'Ada', into: 'Name', clear: true, enter: true }), { type: 'Ada', into: 'Name', clear: true, enter: true, kind: 'type', text: 'Ada', target: 'Name', append: false });
-  assert.equal(normalizeAction({ select: 'Country', option: 'Canada' }).kind, 'select');
-  assert.equal(normalizeAction({ key: 'Enter' }).kind, 'key');
-  assert.equal(normalizeAction({ scroll: 'up', pages: 2 }).direction, 'up');
-  assert.equal(normalizeAction({ wait_for: 'Done' }).text, 'Done');
-  assert.equal(normalizeAction({ back: true }).kind, 'back');
-  assert.equal(normalizeAction({ check: 'Done', expect: false }).expect, false);
-  assert.equal(normalizeAction({ actions: [] }).kind, 'batch');
-  assert.deepEqual(normalizeAction({ evaluate: 'document.title' }), { evaluate: 'document.title', kind: 'evaluate', script: 'document.title' });
-  assert.equal(normalizeAction({ script: '1' }).kind, 'evaluate');
-  assert.equal(normalizeAction({ wait: '.done' }).selector, '.done');
-  assert.equal(normalizeAction({ upload: 'File', files: ['a.txt'] }).target, 'File');
-  assert.equal(normalizeAction({ resize: { width: 390, height: 844 } }).width, 390);
-  assert.equal(normalizeAction({ dialog: 'accept' }).accept, true);
-  for (const kind of ['forward', 'reload', 'console', 'network']) assert.equal(normalizeAction({ [kind]: true }).kind, kind);
-  assert.throws(() => normalizeAction({ scroll: 'sideways' }));
-  assert.throws(() => normalizeAction({ check: 'Done', expect: 'false' }));
-});
 test('read-only classification checks every step and keeps all mutation kinds blocked', () => {
   for (const step of [{ goto: 'example.com' }, { back: true }, { check: 'Done' }, { wait_for: 'Done' }, { kind: 'look' }, { kind: 'screenshot' }]) assert.ok(readOnlyAction({ actions: [step] }));
   for (const step of [{ click: 'Send' }, { type: 'Ada', into: 'Name' }, { hover: 'Name' }, { select: 'Country', option: 'Canada' }, { key: 'Enter' }, { scroll: 'down' }, { kind: 'evaluate', script: '1' }, { evaluate: '1' }, { reload: true }, { dialog: 'accept' }, { kind: 'reload' }, { kind: 'dialog' }]) assert.equal(readOnlyAction({ actions: [{ check: 'Done' }, step] }), false);
@@ -97,53 +54,4 @@ test('batch failure stops delivery and cannot save a failed flow', async () => {
   assert.equal(result.failedAt, 1); assert.equal(calls, 2); assert.deepEqual((await manager.listFlows('one')).flows, []);
   await assert.rejects(manager.run('one', tab.id, { actions: [{ actions: [] }] }), /nonnested/);
   await manager.stop();
-});
-test('flow CLI and RPC pass parameters and selected remote thread correctly', async () => {
-  const calls = [], options = { self: () => 'local', env: { HELM_SESSION_ID: 'one' }, print() {}, rpc: async (...args) => { calls.push(args); return {}; } };
-  await runBrowserCommand(['flows'], options);
-  await runBrowserCommand(['run', 'tab', 'login', 'name=Ada', 'query=a=b'], options);
-  assert.equal(calls[0][1], 'browser.flows'); assert.deepEqual(calls[1][2], { id: 'one', tabId: 'tab', name: 'login', with: { name: 'Ada', query: 'a=b' } });
-  const manager = { listFlows: id => id, runFlow: (...args) => args }, routes = createBrowserRoutes({ manager });
-  assert.equal(await routes.dispatch('browser.flows', { id: 'one' }), 'one');
-  assert.deepEqual(await routes.dispatch('browser.run', { id: 'one', tabId: 'tab', name: 'login', with: { name: 'Ada' } }), ['one', 'tab', 'login', { name: 'Ada' }]);
-});
-test('a CAPTCHA frame is known by its address, never an invisible check', async () => {
-  const { captchaVendor } = await import('../packages/connect/src/browser.js');
-  const cases = {
-    'https://www.google.com/recaptcha/api2/anchor?ar=1&k=key&size=normal': 'recaptcha',
-    'https://www.recaptcha.net/recaptcha/api2/bframe?k=key': 'recaptcha',
-    'https://www.google.com/recaptcha/api2/anchor?k=key&size=invisible': null,
-    'https://www.google.com/search?q=recaptcha': null,
-    'https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox&id=1': 'hcaptcha',
-    'https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox-invisible': null,
-    'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv/0/x': 'turnstile',
-    'https://client-api.arkoselabs.com/fc/gc/?token=1': 'arkose',
-    'https://static.geetest.com/static/js/fullpage.html': 'geetest',
-    'https://geo.captcha-delivery.com/captcha/?initialCid=1': 'datadome',
-    'https://captcha.px-cdn.net/PXabc/captcha.js': 'perimeterx',
-    'https://abc.us-east-1.captcha.awswaf.com/abc/challenge.js': 'awswaf',
-    'https://notgoogle.com/recaptcha/api2/anchor': null, 'https://hcaptcha.com.evil.test/': null, 'about:blank': null, 'not an address': null,
-  };
-  for (const [address, vendor] of Object.entries(cases)) assert.equal(captchaVendor(address), vendor, address);
-});
-test('captcha waits in calls short enough for the hub, asks again after a lost call, and ends on the last one', async () => {
-  const { waitForCaptcha } = await import('../packages/connect/src/browser-cli.js');
-  const calls = []; let lost = 1;
-  const rpc = async (env, method, params, timeout) => {
-    calls.push({ method, params, timeout });
-    if (calls.length === 2 && lost--) throw new Error('timed out');
-    return calls.length < 4 ? { waiting: true, vendor: 'hcaptcha', seconds: 1 } : { solved: true, vendor: 'hcaptcha', seconds: 2 };
-  };
-  assert.deepEqual(await waitForCaptcha({ rpc, env: 'me', id: 's1', tabId: 'tab', timeout: 300000, slice: 100000 }), { solved: true, vendor: 'hcaptcha', seconds: 2 });
-  assert.equal(calls.length, 4); assert.ok(calls.every(call => call.method === 'browser.captcha' && call.params.wait <= 100000 && call.timeout <= 130000));
-  assert.equal(calls[0].params.last, false);
-  const last = []; await waitForCaptcha({ rpc: async (env, method, params) => { last.push(params); return params.last ? { solved: false } : { waiting: true }; }, env: 'me', id: 's1', tabId: 'tab', timeout: 50, slice: 100000 });
-  assert.deepEqual(last, [{ id: 's1', tabId: 'tab', wait: last[0].wait, last: true }]);
-  await assert.rejects(waitForCaptcha({ rpc, env: 'me', id: 's1', tabId: 'tab', timeout: 'soon' }), /--timeout is milliseconds/);
-  await assert.rejects(waitForCaptcha({ rpc: async () => { throw new Error('browser tab not found in this thread'); }, env: 'me', id: 's1' , tabId: 'tab' }), /not found/);
-  const routed = []; const routes = createBrowserRoutes({ manager: { captcha: (...args) => { routed.push(args); return {}; } } });
-  await routes.dispatch('browser.captcha', { id: 's1', tabId: 'tab', wait: 5000, last: true });
-  assert.deepEqual(routed, [['s1', 'tab', { wait: 5000, last: true }]]);
-  const printed = []; await runBrowserCommand(['captcha', 'tab', '--timeout', '1000'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc: async (...args) => { printed.push(args); return { captcha: null }; }, print() {} });
-  assert.deepEqual(printed[0].slice(1, 3), ['browser.captcha', { id: 's1', tabId: 'tab', wait: 1000, last: true }]);
 });

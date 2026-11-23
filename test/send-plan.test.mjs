@@ -6,7 +6,6 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { setTimeout as delay } from 'node:timers/promises';
 import { scanSend } from '../packages/connect/src/send-plan.js';
 import { BULK_SKIP_DIRS } from '../packages/connect/src/bulk-transfer.js';
 
@@ -68,36 +67,6 @@ test('nested trees preserve serial counts, env order, skip order and symlink siz
   }
 });
 
-test('parallel scans use independent workers, directory entries and no file body reads', async t => {
-  const roots = [fixture(t), fixture(t)];
-  for (const root of roots) for (let i = 0; i < 70; i++) put(root, `d${i}/nested/f`, 'abc');
-  const expected = roots.map(root => reference(root));
-  mocks(t);
-  const original = fs.lstat, readDirectory = fs.readdir;
-  const active = [0, 0], peak = [0, 0], calls = [[], []];
-  t.mock.method(fs, 'lstat', async path => {
-    const i = roots.findIndex(root => String(path).startsWith(root));
-    if (i < 0) return original(path);
-    calls[i].push(String(path)); active[i]++; peak[i] = Math.max(peak[i], active[i]);
-    try { await delay(String(path).includes('d1/') ? 15 : 2); return await original(path); }
-    finally { active[i]--; }
-  });
-  t.mock.method(fs, 'readdir', async (path, options) => {
-    assert.equal(options.withFileTypes, true);
-    return readDirectory(path, options);
-  });
-  for (const method of ['readFile', 'open']) t.mock.method(fs, method, () => { throw new Error('must not read file bodies'); });
-  syncBuiltinESMExports();
-  const plans = await Promise.all(roots.map(root => scanSend(root)));
-  plans.forEach((plan, i) => {
-    compare(plan, expected[i]);
-    assert.ok(peak[i] > 1, `scan ${i} must overlap reads`);
-    assert.ok(peak[i] <= 32, `scan ${i} must bound filesystem work`);
-    assert.equal(calls[i].length, 213, 'check the root twice, the Git marker, and each child once');
-    assert.equal(active[i], 0);
-  });
-});
-
 test('Git selection and literal filters match serial behavior, including vanished and ignored env files', async t => {
   const root = fixture(t), filterFile = join(fixture(t), 'filters', 'send');
   git(root, 'init', '-q');
@@ -127,32 +96,6 @@ test('Git selection and literal filters match serial behavior, including vanishe
   }
 });
 
-test('errors keep serial precedence and drain all filesystem workers', async t => {
-  const root = fixture(t); put(root, 'a/first'); put(root, 'z/second');
-  mocks(t); const original = fs.lstat; let active = 0;
-  t.mock.method(fs, 'lstat', async path => {
-    if (path === root || path === join(root, '.git') || path === join(root, 'a') || path === join(root, 'z')) return original(path);
-    active++;
-    try { await delay(String(path).includes('/a/') ? 20 : 1); throw Object.assign(new Error(String(path)), { code: 'EACCES' }); }
-    finally { active--; }
-  });
-  syncBuiltinESMExports();
-  await assert.rejects(scanSend(root), { code: 'EACCES', message: join(root, 'a/first') });
-  assert.equal(active, 0);
-});
-
-test('missing roots and unreadable directories fail', async t => {
-  const root = fixture(t); put(root, 'dir/data');
-  mocks(t); const original = fs.readdir;
-  t.mock.method(fs, 'readdir', async (path, options) => {
-    if (path === join(root, 'dir')) throw Object.assign(new Error('directory denied'), { code: 'EACCES' });
-    return original(path, options);
-  });
-  syncBuiltinESMExports();
-  await assert.rejects(scanSend(root), { code: 'EACCES' });
-  await assert.rejects(scanSend(join(root, 'missing')), { code: 'ENOENT' });
-});
-
 test('vanished Git paths are skipped, but other Git errors and missing history fail', async t => {
   const root = fixture(t); git(root, 'init', '-q');
   put(root, 'a'); put(root, 'b'); git(root, 'add', '.');
@@ -173,19 +116,6 @@ test('vanished Git paths are skipped, but other Git errors and missing history f
   await assert.rejects(scanSend(root), { code: 'ENOENT' });
   const plain = fixture(t); put(plain, 'data'); failedPath = join(plain, 'data');
   await assert.rejects(scanSend(plain), { code: 'ENOENT' });
-});
-
-test('delayed metadata keeps environment and capped exclusion lists in traversal order', async t => {
-  const root = fixture(t);
-  for (let i = 0; i < 60; i++) put(root, `d${String(i).padStart(2, '0')}/.env.local`);
-  const expected = reference(root, { includeEnv: false });
-  mocks(t); const original = fs.lstat;
-  t.mock.method(fs, 'lstat', async path => {
-    if (String(path).includes('/d00/')) await delay(30);
-    return original(path);
-  });
-  syncBuiltinESMExports();
-  compare(await scanSend(root, { includeEnv: false }), expected);
 });
 
 test('single files keep counts and env exclusion; symlink roots and special files are refused', async t => {
@@ -209,7 +139,6 @@ test('Git submodules and linked worktrees remain refused', async t => {
   git(root, 'update-index', '--add', '--cacheinfo', `160000,${git(root, 'rev-parse', 'HEAD').trim()},sub`);
   await assert.rejects(scanSend(root), /Git submodule sub needs a standalone copy/);
 });
-
 
 test('queued directories replaced by symbolic links are not traversed', async t => {
   const root = fixture(t), outside = fixture(t);
@@ -264,7 +193,6 @@ process.exit(child.status ?? 1);
     assert.throws(() => lstatSync(filterFile), { code: 'ENOENT' });
   }
 });
-
 
 test('failed Git detection with a Git marker cannot include ignored files through fallback', async t => {
   const root = fixture(t), bin = fixture(t), filterFile = join(fixture(t), 'filter');

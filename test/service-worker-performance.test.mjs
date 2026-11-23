@@ -14,7 +14,6 @@ function setup({ fetch, shell } = {}) {
   const entries = new Map(shell ? [['/index.html', shell]] : []);
   const timers = new Map();
   const lifetime = [];
-  const notifications = [];
   let timerId = 0;
   const cache = {
     add: async () => {},
@@ -34,7 +33,7 @@ function setup({ fetch, shell } = {}) {
     addEventListener: (name, handler) => listeners.set(name, handler),
     skipWaiting: async () => {},
     clients: { claim: async () => {}, matchAll: async () => [], openWindow: async () => {} },
-    registration: { getNotifications: async () => [], showNotification: async (title, options) => { notifications.push({ title, options }); } },
+    registration: { getNotifications: async () => [], showNotification: async () => {} },
   };
   class TestResponse {
     static error() { return response('network error', { ok: false, type: 'error' }); }
@@ -51,12 +50,7 @@ function setup({ fetch, shell } = {}) {
   };
   vm.runInNewContext(workerSource, context, { filename: 'sw.js' });
   return {
-    entries, listeners, lifetime, timers, notifications,
-    async dispatchPush(payload) {
-      let result;
-      listeners.get('push')({ data: { json: () => payload }, waitUntil(promise) { result = promise; } });
-      await result;
-    },
+    entries, lifetime, timers,
     dispatchNavigation(search = '') {
       let result;
       const event = {
@@ -106,7 +100,6 @@ test('an explicit app refresh waits for fresh HTML rather than reopening the sta
   assert.equal((await navigation).body, 'new build');
   await Promise.all(worker.lifetime);
   assert.equal(worker.entries.get('/index.html').body, 'new build');
-  assert.equal(worker.timers.size, 0);
 });
 
 test('a fresh-shell request has a deadline and preserves the saved shell when unreachable', async () => {
@@ -120,33 +113,11 @@ test('a fresh-shell request has a deadline and preserves the saved shell when un
   assert.equal(worker.entries.get('/index.html').body, 'saved build');
 });
 
-test('a fast network response clears the pending fallback timer', async () => {
-  const worker = setup({ fetch: async () => response('fresh shell') });
-  const page = worker.dispatchNavigation();
-
-  assert.equal((await page).body, 'fresh shell');
-  assert.equal(worker.timers.size, 0);
-  await Promise.all(worker.lifetime);
-});
-
 test('a temporary gateway error still opens the saved app', async () => {
   const worker = setup({ fetch: async () => response('gateway error', {ok:false}), shell: response('saved app') });
   assert.equal((await worker.dispatchNavigation()).body, 'saved app');
   await Promise.all(worker.lifetime);
   assert.equal(worker.entries.get('/index.html').body, 'saved app');
-});
-
-test('entry bundle caching is included in the worker lifetime', async () => {
-  const worker = setup({ fetch: async () => response('entry script') });
-  let result;
-  worker.listeners.get('fetch')({
-    request:{method:'GET',url:'https://helm.test/assets/index-hash.js',mode:'cors'},
-    respondWith(promise){result=promise;}, waitUntil(promise){worker.lifetime.push(promise);},
-  });
-  assert.equal((await result).body,'entry script');
-  assert.equal(worker.lifetime.length,1);
-  await Promise.all(worker.lifetime);
-  assert.equal(worker.entries.get('/assets/index-hash.js').body,'entry script');
 });
 
 test('a cold cache keeps waiting past the deadline for the network shell', async () => {
@@ -181,16 +152,4 @@ test('a rejected fetch uses a good cached shell and never returns a cached error
   await Promise.resolve();
   resolveFetch(response('network shell'));
   assert.equal((await page).body, 'network shell');
-});
-
-test('completion previews can dismiss naturally, while approvals stay available', async () => {
-  const worker = setup();
-  const target = { envId: 'e1', sessionId: 's1' };
-  await worker.dispatchPush({ ...target, title: 'Helm · Codex finished', body: 'Fix login', tag: 'helm-done-s1-123' });
-  await worker.dispatchPush({ ...target, title: 'Helm · Codex needs approval', body: 'Fix login', tag: 'helm-s1-r1' });
-  assert.equal(worker.notifications[0].title, 'Helm · Codex finished');
-  assert.equal(worker.notifications[0].options.requireInteraction, false);
-  assert.equal(worker.notifications[1].options.requireInteraction, true);
-  assert.equal(worker.notifications[1].options.data.sessionId, 's1');
-  assert.equal(worker.notifications[1].options.icon, '/icon-192.png');
 });

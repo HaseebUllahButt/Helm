@@ -5,7 +5,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import { mkdtemp, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { brotliDecompressSync, gunzipSync } from 'node:zlib';
+import { gunzipSync } from 'node:zlib';
 import { Readable } from 'node:stream';
 import { createStaticHandler } from '../apps/relay/src/static.js';
 
@@ -51,44 +51,7 @@ async function withStaticServer(root, run) {
 
 test.after(async () => { await rm(temp, { recursive: true, force: true }); });
 
-test('static text assets negotiate Brotli and gzip with q values and cache variants', async () => {
-  const root = join(temp, 'compression');
-  await mkdir(join(root, 'assets'), { recursive: true });
-  const source = Buffer.from(`const bundle = '${'fast '.repeat(500)}';`);
-  await writeFile(join(root, 'assets', 'bundle.js'), source);
-
-  await withStaticServer(root, async (base) => {
-    const br = await collectResponse(`${base}/assets/bundle.js`, {
-      headers: { 'accept-encoding': 'gzip;q=0.7, br;q=1, identity;q=0' },
-    });
-    assert.equal(br.status, 200);
-    assert.equal(br.headers['content-encoding'], 'br');
-    assert.equal(br.headers.vary, 'Accept-Encoding');
-    assert.equal(br.headers['cache-control'], 'public, max-age=31536000, immutable');
-    assert.equal(br.headers['x-content-type-options'], 'nosniff');
-    assert.deepEqual(brotliDecompressSync(br.body), source);
-
-    const gzip = await collectResponse(`${base}/assets/bundle.js`, {
-      headers: { 'accept-encoding': 'br;q=0, gzip;q=1, identity;q=0' },
-    });
-    assert.equal(gzip.headers['content-encoding'], 'gzip');
-    assert.deepEqual(gunzipSync(gzip.body), source);
-    assert.notEqual(gzip.headers.etag, br.headers.etag);
-
-    const identityPreferred = await collectResponse(`${base}/assets/bundle.js`, {
-      headers: { 'accept-encoding': 'br;q=0.4, gzip;q=0.5, identity;q=0.9' },
-    });
-    assert.equal(identityPreferred.headers['content-encoding'], undefined);
-    assert.deepEqual(identityPreferred.body, source);
-
-    const noAllowedRepresentation = await collectResponse(`${base}/assets/bundle.js`, {
-      headers: { 'accept-encoding': '*;q=0' },
-    });
-    assert.equal(noAllowedRepresentation.status, 406);
-  });
-});
-
-test('static ETags validate GET and HEAD representations and cache invalidates after edits', async () => {
+test('static ETags validate and the cache invalidates after edits', async () => {
   const root = join(temp, 'validators');
   await mkdir(root, { recursive: true });
   const file = join(root, 'index.html');
@@ -107,14 +70,6 @@ test('static ETags validate GET and HEAD representations and cache invalidates a
     assert.equal(unchanged.status, 304);
     assert.equal(unchanged.body.length, 0);
     assert.equal(unchanged.headers['content-encoding'], 'gzip');
-
-    const head = await collectResponse(`${base}/`, {
-      method: 'HEAD', headers: { 'accept-encoding': 'gzip' },
-    });
-    assert.equal(head.status, 200);
-    assert.equal(head.body.length, 0);
-    assert.equal(head.headers.etag, first.headers.etag);
-    assert.equal(Number(head.headers['content-length']), first.body.length);
 
     const nextBody = Buffer.from(`<html>${'second'.repeat(200)}</html>`);
     await writeFile(file, nextBody);

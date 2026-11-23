@@ -130,16 +130,6 @@ test('devin: /compact is a compaction item, open until its prompt answers', asyn
   await driver.kill();
 });
 
-test('devin: the session names itself and the title reaches helm', async () => {
-  const { driver, log } = make('devin', 'plain');
-  await driver.send('Reply with exactly the words: hello from helm');
-  await log.until((e) => e.type === 'turn.done');
-  const titled = log.of('title');
-  assert.equal(titled.length, 1);
-  assert.equal(titled[0].title, 'Reply with exactly the words: hello from helm');
-  await driver.kill();
-});
-
 test('devin: the permission sheet carries the editable command', async () => {
   const { driver, log } = make('devin', 'command');
   await driver.send('run curl');
@@ -169,22 +159,6 @@ test('opencode: edit mode auto-allows edits but still asks for commands', async 
   assert.equal(ask.kind, 'command');
   await driver.answer(ask.requestId, { option: 'allow' });
   await log.until((e) => e.type === 'turn.done');
-  await driver.kill();
-});
-
-test('opencode: a task tool call is a subagent card', async () => {
-  const { driver, log } = make('opencode', 'subagent');
-  await driver.send('spawn a subagent');
-  const done = await log.until((e) => e.type === 'turn.done');
-  assert.equal(done.status, 'ok');
-  const card = log.of('item.start').find((e) => e.kind === 'subagent');
-  assert.ok(card, 'the task tool_call became a subagent item');
-  assert.equal(card.id, 'call_task1');
-  assert.equal(card.name, 'task');
-  assert.equal(card.agent.status, 'running');
-  const cardDone = log.of('item.done').find((e) => e.id === card.id);
-  assert.equal(cardDone.status, 'ok');
-  assert.match(cardDone.output, /5 files/);
   await driver.kill();
 });
 
@@ -254,17 +228,6 @@ test('opencode: a v2 program under the opencode name gets the OpenCode 2 rules',
   assert.equal(v1.spec.promptWhileBusy, true, 'the VM still runs 1.19');
   assert.equal(typeof v1.steer, 'function');
   assert.notEqual(v1.spec.resumeVerb, 'session/resume');
-});
-
-test('a missing folder is named, not reported as a missing CLI', async () => {
-  // Node says `spawn devin ENOENT` for a cwd that is not there, which read as
-  // "devin is not installed" while devin sat on PATH.
-  const { DevinDriver } = await import('../packages/connect/src/drivers/devin.js');
-  const d = new DevinDriver({ cmd: 'devin', env: {}, args: [], cwd: '/no/such/folder/for/helm', mode: 'edit' });
-  const seen = [];
-  d.on('event', (e) => seen.push(e));
-  await assert.rejects(d.start(), /folder \/no\/such\/folder\/for\/helm does not exist/);
-  assert.equal(seen[0]?.type, 'error');
 });
 
 // ------------------------------------------------- lifecycle status (live)

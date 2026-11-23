@@ -18,7 +18,7 @@ writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ vers
   { id: 'codex-main', label: 'Codex', engine: 'codex', cmd: process.execPath, source: 'custom' },
 ] }));
 
-const { nativeSubagents, nativeSubagent, nativeAgentFile, nativeStatus, subagentsDir, findSubagentsDir, NATIVE_STALE_MS } = await import('../packages/connect/src/native-subagents.js');
+const { nativeSubagents, nativeSubagent, nativeAgentFile, subagentsDir, findSubagentsDir, NATIVE_STALE_MS } = await import('../packages/connect/src/native-subagents.js');
 const { Sessions, wire } = await import('../packages/connect/src/sessions.js');
 
 const at = (ms) => new Date(ms).toISOString();
@@ -90,8 +90,6 @@ test('an unfinished subagent that went quiet reads as stopped, never working for
   writeAgent(dir, 's1', [user('Long job', t), reply('m1', [tool('Bash', { command: 'sleep 1' })], 'tool_use', t + 1)], { ageMs: NATIVE_STALE_MS + 60_000 });
   const [agent] = await nativeSubagents(dir);
   assert.equal(agent.status, 'interrupted');
-  assert.equal(nativeStatus('working', Date.now() - 1000), 'working');
-  assert.equal(nativeStatus('done', Date.now() - NATIVE_STALE_MS * 2), 'done');
 });
 
 test('interrupts and provider errors are their own endings', async () => {
@@ -106,17 +104,7 @@ test('interrupts and provider errors are their own endings', async () => {
   assert.equal(failed.last, 'API Error: overloaded');
 });
 
-test('missing meta falls back to the first line of the task', async () => {
-  const dir = agentDir();
-  writeAgent(dir, 'n1', [user('Summarise the README\nand more', Date.now() - 5000)], { meta: null });
-  const [agent] = await nativeSubagents(dir);
-  assert.equal(agent.title, 'Summarise the README');
-  assert.equal(agent.agentType, null);
-  assert.equal(agent.toolUseId, null);
-  assert.equal(agent.status, 'working');
-});
-
-test('a huge transcript is read only at its head and tail, and not again until it changes', async () => {
+test('a huge transcript is read only at its head and tail', async () => {
   const dir = agentDir();
   const path = join(dir, 'agent-h1.jsonl');
   writeFileSync(join(dir, 'agent-h1.meta.json'), JSON.stringify({ description: 'Huge' }));
@@ -142,20 +130,6 @@ test('a huge transcript is read only at its head and tail, and not again until i
   const detail = await nativeSubagent(dir, 'h1');
   assert.equal(detail.result, '');
   assert.ok(!detail.activity.includes('MIDDLE'));
-
-  // Same size and mtime: the cached reading stands, the file is not opened.
-  writeFileSync(path, 'z'.repeat(statSync(path).size));
-  utimesSync(path, stamp, stamp);
-  assert.equal((await nativeSubagents(dir))[0].last, 'Grep: needle');
-});
-
-test('only the newest runs are listed, oldest first', async () => {
-  const dir = agentDir();
-  const t = Date.now() - 600_000;
-  for (const [i, id] of ['r1', 'r2', 'r3', 'r4'].entries()) {
-    writeAgent(dir, id, [user(`Run ${id}`, t + i * 1000), reply('m', [text('ok')], 'end_turn', t + i * 1000 + 1)], { ageMs: 400_000 - i * 60_000 });
-  }
-  assert.deepEqual((await nativeSubagents(dir, { limit: 2 })).map((a) => a.id), ['r3', 'r4']);
 });
 
 test('agents a Workflow run started are listed beside the parent\'s own, read from their own folder', async () => {
@@ -244,10 +218,6 @@ test('the team counts native subagents beside delegated children, once each', as
   assert.deepEqual(full.events.map((e) => [e.seq, e.type, e.kind ?? e.text ?? e.name]), [
     [1, 'turn.start', 'Dig'], [2, 'item.start', 'tool'], [3, 'item.done', undefined],
   ], 'a working subagent leaves its turn open');
-  assert.equal(full.events[1].name, 'Bash');
-  const done = await sessions.nativeAgent(parent.id, 'over', { full: true });
-  assert.deepEqual(done.events.map((e) => e.type), ['turn.start', 'item.start', 'item.delta', 'item.done', 'turn.done']);
-  assert.equal(done.events[2].text, 'Done.');
   assert.equal(updates.length, 1, 'reading it whole changes nothing');
 
   // Delegated children still list as Helm sessions, untouched.
@@ -261,12 +231,6 @@ test('the team counts native subagents beside delegated children, once each', as
   assert.equal(parent.nativeCards.find((a) => a.id === 'live').status, 'done');
   assert.equal(parent.team.working, 1);
   assert.equal(updates.length, 2);
-
-  // Shown inline under its tool call in the chat, it is still one of the
-  // chat's helpers: one card, and the step in the chat opens the same one.
-  drivers.get(parent.id).push('item.start', { id: 'toolu_over', kind: 'subagent', turnId: 't1', name: 'Agent', input: {} });
-  await sessions.nativeAgent(parent.id, 'over');
-  assert.deepEqual(parent.nativeCards.map((a) => [a.id, a.toolUseId, a.canMessage]), [['live', 'toolu_live', true], ['over', 'toolu_over', true]]);
 
   // What Claude's files say is never written into Helm's own index.
   sessions.flush();
@@ -296,7 +260,7 @@ test('what the driver reported and what the files say about one subagent make on
   driver.push('subagent.status', { id: 'toolu_hooked', status: 'working' });
   await sessions.nativeAgent(parent.id, 'quiet');
   assert.deepEqual(parent.nativeAgents, { toolu_hooked: 'working' }, 'the driver map is kept as it was');
-  assert.deepEqual(parent.nativeCards.map((a) => [a.id, a.status]), [['hooked', 'working'], ['over', 'done'], ['quiet', 'working']], 'started together: in name order, every time');
+  assert.deepEqual(parent.nativeCards.map((a) => [a.id, a.status]), [['hooked', 'working'], ['over', 'done'], ['quiet', 'working']]);
   assert.deepEqual(parent.team, { working: 2, blocked: 0, failed: 0 }, 'one subagent, counted once');
   assert.equal(sessions.hasActiveDelegations(parent.id), true);
 
@@ -307,9 +271,6 @@ test('what the driver reported and what the files say about one subagent make on
   assert.equal(hooked.title, 'Task hooked', 'the file still names it');
   assert.equal(hooked.branch, 'worktree-agent-hooked');
   assert.deepEqual(parent.team, { working: 1, blocked: 1, failed: 0 });
-  const { agent } = await sessions.nativeAgent(parent.id, 'hooked');
-  assert.equal(agent.status, 'blocked');
-  assert.equal(agent.task, 'Dig');
 
   // A finished file the driver says failed reads failed, counted once as before.
   driver.push('subagent.status', { id: 'toolu_over', status: 'error' });

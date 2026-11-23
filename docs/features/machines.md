@@ -135,8 +135,7 @@ owner's home or network to bypass this check.
   hide a failed local service. A home health reply proves only its web response.
 - Reports omit addresses, keys, account data, and raw errors. A route count
   does not prove a missing machine is asleep. Check that machine separately.
-- **Tests:** `test/doctor`, `connection-history`, `help`;
-  `test/browser/connection-check`.
+- **Tests:** `test/doctor`, `connection-history`, `connection-report`.
 
 ## Send a project or a task to another machine
 - **Prove (driven 2026-10-21):** use two private Helm copies, each with its
@@ -242,5 +241,4 @@ owner's home or network to bypass this check.
 - **Traps:** keep the fixture's working folder outside `/tmp` (histories
   there are hidden).
 - **Tests:** `test/takeover`, `native-cli`, `native-launchers`,
-  `native-claude-chat`, `external-open`; `test/browser/external-open`,
-  `native-cli-tray`.
+  `native-claude-chat`, `external-open`.

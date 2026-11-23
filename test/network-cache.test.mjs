@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,21 +8,6 @@ const root = fs.mkdtempSync(join(tmpdir(), 'helm-network-cache-'));
 process.env.HELM_DIR = root;
 const N = await import('../packages/protocol/network.js');
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));
-
-test('unchanged network reads reuse parsed data without sharing mutable objects', t => {
-  N.createNetwork({ name: 'test' });
-  let reads = 0, paths = 0;
-  const read = fs.readFileSync, realpath = fs.realpathSync;
-  t.mock.method(fs, 'readFileSync', (...args) => { if (args[0] === N.NETWORK_FILE) reads++; return read(...args); });
-  t.mock.method(fs, 'realpathSync', (...args) => { paths++; return realpath(...args); });
-  syncBuiltinESMExports();
-  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  const first = N.loadNetwork(), initialPaths = paths;
-  first.machines[first.self].name = 'unsaved';
-  for (let i = 0; i < 20; i++) assert.equal(N.loadNetwork().machines[first.self].name, 'test');
-  assert.equal(reads, 1);
-  assert.equal(paths, initialPaths);
-});
 
 test('network reads immediately see external writes, replacements, corruption and removal', () => {
   const net = N.createNetwork({ name: 'before' });

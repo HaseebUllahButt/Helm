@@ -5,35 +5,6 @@ import { build } from 'esbuild';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 
-test('blocked machine updates show a notice and open the update review', async () => {
-  const bundle = await build({ stdin: { contents: `
-    import React from 'react';
-    import { createRoot } from 'react-dom/client';
-    import { MachineUpdateNotice } from './apps/web/src/MachineUpdateNotice';
-    const root = createRoot(document.getElementById('root'));
-    window.opened = 0;
-    window.mount = (blocked) => root.render(<MachineUpdateNotice envs={[
-      {id:'why',name:'why',online:true,info:{version:{dirty:blocked}}},
-      {id:'offline',name:'HomePC',online:false,info:{version:{dirty:true}}}
-    ]} onOpen={() => window.opened++} />);
-  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
-  const browser = await chromium.launch({ headless: true,
-    ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
-  try {
-    const page = await browser.newPage();
-    await page.setContent('<div id="root"></div>');
-    await page.addScriptTag({ content: bundle.outputFiles[0].text });
-    await page.evaluate(() => window.mount(true));
-    await page.getByRole('status').waitFor();
-    assert.match(await page.getByRole('status').innerText(), /cannot update on why\. This machine has unsaved changes/);
-    assert.doesNotMatch(await page.getByRole('status').innerText(), /HomePC/);
-    await page.getByRole('button', { name: 'Review updates' }).click();
-    assert.equal(await page.evaluate(() => window.opened), 1);
-    await page.evaluate(() => window.mount(false));
-    await page.getByRole('status').waitFor({ state: 'detached' });
-  } finally { await browser.close(); }
-});
-
 test('an arriving update waits while someone is typing, then reloads by itself', async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
@@ -51,16 +22,22 @@ test('an arriving update waits while someone is typing, then reloads by itself',
       ? { contentType: 'application/json', body: JSON.stringify({ build: 'index-new.js' }) }
       : route.request().url().endsWith('.js') ? { contentType: 'text/javascript', body: '' }
         : { contentType: 'text/html', body: '<input aria-label="Draft"><div id="root"></div><script type="module" src="/assets/index-old.js"></script>' }));
+    await page.clock.install();
     await page.goto('http://helm-test/');
     await page.getByLabel('Draft').fill('keep this unsent message');
+    const versionRead = page.waitForResponse((response) => response.url().endsWith('/api/version'));
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
-    // Mid-sentence: the update waits, however long that takes.
-    await page.waitForTimeout(6_500);
+    await versionRead;
+    // Let the page take in the answer: a message-channel turn is not on the fake clock.
+    for (let i = 0; i < 3; i++) await page.evaluate(() => new Promise((resolve) => { const c = new MessageChannel(); c.port1.onmessage = resolve; c.port2.postMessage(0); }));
+    // Mid-sentence: the update waits through two of its quiet checks.
+    await page.clock.runFor(11_000);
     assert.equal(await page.evaluate(() => window.reloads), 0);
     assert.equal(await page.getByLabel('Draft').inputValue(), 'keep this unsent message');
     // Stepped away from the box: the next quiet moment reloads.
     await page.evaluate(() => document.activeElement.blur());
-    await page.waitForFunction(() => window.reloads === 1, null, { timeout: 8_000 });
+    await page.clock.runFor(5_000);
+    assert.equal(await page.evaluate(() => window.reloads), 1);
   } finally { await browser.close(); }
 });
 

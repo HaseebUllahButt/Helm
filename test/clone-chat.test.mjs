@@ -69,7 +69,14 @@ const setup = async (name) => {
   };
   return { make, drivers, cloner };
 };
-const tick = () => new Promise((r) => setTimeout(r, 20));
+/** Wait until the chat reaches a state; fail after a few seconds. */
+async function until(fn, ms = 5000) {
+  const stop = Date.now() + ms;
+  while (!fn()) {
+    if (Date.now() > stop) throw new Error('timed out waiting for the chat');
+    await new Promise((r) => setImmediate(r));
+  }
+}
 
 test('the chat is there at once; a message waits for the repo, then goes to the agent', async () => {
   const { make, drivers, cloner } = await setup('wait');
@@ -91,7 +98,7 @@ test('the chat is there at once; a message waits for the repo, then goes to the 
   assert.deepEqual(await sessions.discardEmpty(s.id), { ok: true, discarded: false }, 'leaving it keeps it');
 
   cloner.job.finish('done');
-  await tick();
+  await until(() => drivers[0]?.sent?.length);
   const after = sessions.get(s.id);
   assert.equal(after.clone.state, 'done');
   assert.equal(after.engineSessionId, 'engine-clone');
@@ -107,13 +114,12 @@ test('an unused chat is kept while its clone runs or failed, and goes once the r
   const s = await sessions.start({ cwd: target, profileId: 'claudea', clone: { repo: 'me/unused' } });
   assert.deepEqual(await sessions.discardEmpty(s.id), { ok: true, discarded: false }, 'kept while the clone runs');
   cloner.job.finish('failed', 'No network.');
-  await tick();
+  await until(() => sessions.get(s.id).clone.state === 'failed');
   assert.deepEqual(await sessions.discardEmpty(s.id), { ok: true, discarded: false }, 'kept to try again');
 
   await sessions.retryClone(s.id);
   cloner.job.finish('done');
-  await tick();
-  assert.equal(sessions.get(s.id).clone.state, 'done');
+  await until(() => sessions.get(s.id).clone.state === 'done');
   assert.deepEqual(await sessions.discardEmpty(s.id), { ok: true, discarded: true }, 'an unused chat goes once the repo is in');
   assert.throws(() => sessions.get(s.id), /unknown session/);
   assert.ok(existsSync(target), 'the cloned folder stays');
@@ -126,7 +132,7 @@ test('a failed clone says why and tries again; deleting the chat stops a clone',
   const target = join(process.env.HELM_DIR, 'work', 'site');
   const s = await sessions.start({ cwd: target, profileId: 'claudea', clone: { repo: 'acme/site' } });
   cloner.job.finish('failed', 'GitHub says that repo is not there, or this account cannot see it.');
-  await tick();
+  await until(() => sessions.get(s.id).clone.state === 'failed' && sessions.get(s.id).status === 'idle');
   assert.equal(sessions.get(s.id).clone.state, 'failed');
   assert.match(sessions.get(s.id).clone.error, /not there/);
   assert.equal(sessions.get(s.id).status, 'idle');
@@ -135,8 +141,7 @@ test('a failed clone says why and tries again; deleting the chat stops a clone',
   assert.equal(cloner.calls.at(-1).partialOk, true);
   assert.equal(sessions.get(s.id).clone.state, 'cloning');
   cloner.job.finish('done');
-  await tick();
-  assert.equal(sessions.get(s.id).clone.state, 'done');
+  await until(() => sessions.get(s.id).clone.state === 'done' && drivers.length);
   assert.equal(drivers.length, 1);
 
   const other = await sessions.start({ cwd: join(process.env.HELM_DIR, 'work', 'big'), profileId: 'claudea', clone: { repo: 'acme/big' } });
@@ -157,14 +162,13 @@ test('a restart mid-clone starts the clone again, and a waiting message still go
   assert.equal(again.get(s.id).clone.state, 'failed', 'before resume the chat says the clone stopped');
   assert.match(again.get(s.id).clone.error, /restarted/);
   await again.resume();
-  await tick();
-  assert.equal(cloner.calls.length, 2);
+  await until(() => cloner.calls.length === 2 && again.get(s.id).clone.state === 'cloning');
   assert.deepEqual(cloner.calls.at(-1), { repo: 'me/cut', target, login: undefined, partialOk: true });
   const back = again.get(s.id);
   assert.equal(back.clone.state, 'cloning');
   assert.equal(back.clone.restarted, undefined);
   cloner.job.finish('done');
-  await tick();
+  await until(() => drivers.at(-1)?.sent?.length);
   assert.equal(again.get(s.id).clone.state, 'done');
   assert.deepEqual(drivers.at(-1).sent, ['look around']);
   await again.stop();
@@ -178,9 +182,8 @@ test('a clone that cannot start again after a restart says why', async () => {
   const again = make();
   cloner.begin = async () => { throw new Error('~/work/taken is already there. Pick another folder.'); };
   await again.resume();
-  await tick();
+  await until(() => again.get(s.id).clone.state === 'failed' && /could not start/.test(again.get(s.id).clone.error));
   const back = again.get(s.id);
-  assert.equal(back.clone.state, 'failed');
   assert.match(back.clone.error, /could not start the clone again: .*already there/);
   assert.equal(back.status, 'idle');
   await again.stop();

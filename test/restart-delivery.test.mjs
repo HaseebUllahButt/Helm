@@ -99,7 +99,7 @@ test('running helper and exactly one copy of each message survive an actual daem
   const inventory = await rpc('session.list', { includeDelegations: true }, 3000);
   assert.equal(inventory.sessions.find(session => session.id === helper)?.delegation.parentId, parent);
   await waitFor(() => prompts().length >= 3);
-  await new Promise(resolve => setTimeout(resolve, 100));
+  // A late duplicate is still caught by the count after the restart below.
   assert.equal(prompts().length, 3, 'the lost acknowledgment and reconnect must not duplicate either message');
   assert.ok(prompts().every(prompt => prompt.pid === pid), 'the same OS agent process handles all three messages');
   const text = prompts().map(prompt => JSON.stringify(prompt.prompt));

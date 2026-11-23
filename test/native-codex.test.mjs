@@ -29,6 +29,10 @@ const { CodexDriver } = await import('../packages/connect/src/drivers/codex.js')
 const { UNUSED_MS } = await import('../packages/connect/src/session-worktrees.js');
 class Runtime extends EventEmitter { async listLive() { return new Map(); } }
 class OfflineHost extends EventEmitter { async ensure() { return false; } has() { return false; } hasProc() { return false; } nativeSessions() { return []; } detach() {} }
+const until = async (fn, ms = 5000) => {
+  const end = Date.now() + ms;
+  while (!fn()) { if (Date.now() > end) throw new Error('timed out waiting for the state'); await new Promise((r) => setTimeout(r, 5)); }
+};
 const createSessions = () => new Sessions(new Runtime(), { terminals: new OfflineHost(), nativeHost: new OfflineHost(), procHost: new OfflineHost(), nativeDiscovery: true });
 const http = createServer();
 const wsServer = new WebSocketServer({ server: http });
@@ -93,17 +97,15 @@ test('ordinary Codex daemon sessions join the same live request without spawning
   assert.equal(s.nativeSocket, undefined, 'machine-local transport stays private');
   const resume = seen.find((m) => m.method === 'thread/resume');
   assert.deepEqual(resume.params, { threadId, excludeTurns: true }, 'attach preserves the terminal-selected configuration');
-  await new Promise((r) => setTimeout(r, 30));
-  assert.equal(first.history(s.id).pending[0].requestId, 'same-native-request');
+  await until(() => first.history(s.id).pending[0]?.requestId === 'same-native-request');
   await first.stop();
   assert.equal(answers.length, 0, 'restart neither denies nor interrupts a live native request');
   const second = createSessions();
   const rejoined = await second.list();
-  await new Promise((r) => setTimeout(r, 30));
   assert.equal(rejoined[0].id, s.id);
-  assert.equal(second.history(s.id).pending[0].requestId, 'same-native-request');
+  await until(() => second.history(s.id).pending[0]?.requestId === 'same-native-request');
   await second.answer(s.id, 'same-native-request', { option: 'allow' });
-  await new Promise((r) => setTimeout(r, 30));
+  await until(() => answers.length > 0);
   assert.deepEqual(answers[0], { jsonrpc: '2.0', id: 'same-native-request', result: { decision: 'accept' } });
   await second.input(s.id, 'Continue from phone');
   const send = seen.find((m) => m.method === 'turn/start');
@@ -145,8 +147,7 @@ test('the first prompt subscribes immediately and replays an approval before the
   const sessions = createSessions();
   const s = (await sessions.list()).find(s => s.engineSessionId === nativeId);
   await sessions.input(s.id, 'Ask before running');
-  await new Promise(r => setTimeout(r, 30));
-  assert.equal(sessions.history(s.id).pending[0].requestId, 'same-native-request');
+  await until(() => sessions.history(s.id).pending[0]?.requestId === 'same-native-request');
   approveFirstTurn = false; approved = true;
   await sessions.stop();
 });
@@ -157,8 +158,7 @@ test('a transient native disconnect preserves approvals and reconnects without a
   await d.start();
   d.onServerRequest({id:'still-pending',method:'item/commandExecution/requestApproval',params:{threadId:nativeId,command:'printf SAFE'}});
   for (const client of wsServer.clients) client.terminate();
-  await new Promise(r => setTimeout(r, 30));
-  assert.equal(d.nativeConnected, false);
+  await until(() => d.nativeConnected === false);
   assert.equal(d.pending.size, 1);
   assert.equal(events.some(e => e.type === 'error' || e.type === 'permission.resolved'), false);
   await d.start();
@@ -286,13 +286,11 @@ test('the periodic native check never overwrites what the live thread just repor
   sessions.on('session', (row) => { if (row.id === s.id) changes.push(row.status); });
   // The terminal starts a turn; the daemon's thread read lags behind it.
   broadcast('turn/started', { threadId: nativeId, turn: { id: 'terminal-turn' } });
-  await new Promise((r) => setTimeout(r, 30));
-  assert.equal(sessions.get(s.id).status, 'working');
+  await until(() => sessions.get(s.id).status === 'working');
   assert.equal((await sessions.list()).find((row) => row.id === s.id).status, 'working', 'a stale snapshot does not mark live work idle');
   broadcast('thread/status/changed', { threadId: nativeId, status: { type: 'idle' } });
   broadcast('turn/completed', { threadId: nativeId, turn: { id: 'terminal-turn', status: 'completed' } });
-  await new Promise((r) => setTimeout(r, 30));
-  assert.equal(sessions.get(s.id).status, 'idle');
+  await until(() => sessions.get(s.id).status === 'idle');
   assert.deepEqual([...new Set(changes)], ['working', 'idle'], 'every real change reaches the app');
 });
 
@@ -303,8 +301,7 @@ test('a native thread closed in its terminal drops questions nobody can answer, 
   const sessions = createSessions();
   t.after(() => sessions.stop());
   const s = (await sessions.list()).find((row) => row.engineSessionId === nativeId);
-  await new Promise((r) => setTimeout(r, 30));
-  assert.equal(sessions.history(s.id).pending.length, 1);
+  await until(() => sessions.history(s.id).pending.length === 1);
   loaded = false;
   const row = (await sessions.list()).find((r) => r.id === s.id);
   assert.equal(row.alive, false);
@@ -397,8 +394,9 @@ test('a native thread closed in its terminal while Helm was down settles from it
   t.after(() => second.stop());
   t.after(() => second.kill(s.id));
   await second.resume();
-  await new Promise((r) => setTimeout(r, 50));
-  const done = second.history(s.id).events.filter((e) => e.type === 'turn.done' && e.turnId === 'closed-while-away');
+  const closed = () => second.history(s.id).events.filter((e) => e.type === 'turn.done' && e.turnId === 'closed-while-away');
+  await until(() => closed().length && seen.slice(before).some((m) => m.method === 'turn/start'));
+  const done = closed();
   assert.deepEqual(done.map((e) => [e.status, e.error]), [['interrupted', undefined]], 'closed as Codex recorded it');
   assert.equal(second.get(s.id).recovery, undefined, 'no "Helm restarted" warning for a terminal-owned turn');
   assert.ok(seen.slice(before).some((m) => m.method === 'turn/start' && m.params.input[0].text === 'Afterwards, summarise'));
@@ -441,9 +439,8 @@ test('a native thread that cannot be read is unknown, not closed: its turn and q
   t.after(() => sessions.stop());
   t.after(() => sessions.kill(s.id));
   const s = (await sessions.list()).find((row) => row.engineSessionId === nativeId);
-  await new Promise((r) => setTimeout(r, 30));
+  await until(() => sessions.history(s.id).pending.length === 1);
   sessions.events.append(s.id, { type: 'turn.start', turnId: 'asking-turn', text: 'Terminal work' });
-  assert.equal(sessions.history(s.id).pending.length, 1);
   readFails = true;
   await sessions.list();
   assert.equal(sessions.history(s.id).pending.length, 1, 'the question is still answerable');

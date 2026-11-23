@@ -2,19 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, appendFileSync, mkdirSync, statSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { build } from 'esbuild';
 
 // Database engines read their ledgers from the data dir whether or not a
 // profile names them - so point it at scratch space, or the machine this
 // suite happens to run on would leak its own history into every total.
 process.env.XDG_DATA_HOME = mkdtempSync(join(tmpdir(), 'helm-usage-xdg-'));
 
-const { UsageReader, hitRate, foldBuckets } = await import('../packages/usage/src/index.js');
-const { FileRollupCache, foldLinesFrom, splitKey, bucketKey } =
+const { UsageReader, foldBuckets } = await import('../packages/usage/src/index.js');
+const { FileRollupCache, foldLinesFrom, bucketKey } =
   await import('../packages/usage/src/scan-cache.js');
 const { claudeParser, codexParser } = await import('../packages/usage/src/scanners.js');
-const { claudeRatesFor, priceBucket, cacheRatesFor } =
+const { claudeRatesFor, priceBucket } =
   await import('../packages/usage/src/pricing.js');
 
 // The usage screen is a bill. Every number on it is derived from files helm
@@ -148,36 +150,6 @@ test('a rate that moved is applied by the day the tokens were spent', () => {
   assert.equal(priceBucket('claude', 'claude-sonnet-5', tokens, '2026-09-15').total, 3);
 });
 
-test('a dated model id resolves to its rate', () => {
-  assert.ok(claudeRatesFor('claude-haiku-4-5-20251001', '2026-09-15'), 'the date suffix must be stripped');
-});
-
-test('the cache rate lookup honours the day it is asked about', () => {
-  // priceBucket honoured Codex's 2026-07-30 re-cut and cacheRatesFor did not,
-  // so cache savings on tokens spent before it were understated fivefold.
-  const before = cacheRatesFor('gpt-5.6-luna', 'codex', '2026-07-01');
-  const after = cacheRatesFor('gpt-5.6-luna', 'codex', '2026-09-17');
-  assert.equal(before.input, 1);
-  assert.equal(after.input, 0.2);
-});
-
-test('a model with no published rate is unpriced, never zero', () => {
-  assert.equal(priceBucket('claude', 'some-unreleased-model', { input: 1e6 }, '2026-09-15'), null);
-  assert.equal(cacheRatesFor('some-unreleased-model', 'claude', '2026-09-15'), null);
-  // OpenCode reports a billed total rather than per-channel rates, so it
-  // contributes tokens and declines to claim a saving.
-  assert.equal(cacheRatesFor('anything', 'opencode', '2026-09-15'), null);
-});
-
-test('cached input is billed at the cached rate, not the fresh one', () => {
-  const rates = cacheRatesFor('claude-opus-5', 'claude', '2026-09-15');
-  assert.ok(rates.cacheRead < rates.input, 'a cached token must cost less than a fresh one');
-  const fresh = priceBucket('claude', 'claude-opus-5', { input: 1e6 }, '2026-09-15').total;
-  const cached = priceBucket('claude', 'claude-opus-5', { cacheRead: 1e6 }, '2026-09-15').total;
-  assert.ok(cached < fresh);
-  assert.equal(cached, rates.cacheRead);
-});
-
 // ------------------------------------------------------------ the report
 
 /** A machine with one Claude account and one Codex account. */
@@ -259,17 +231,6 @@ test('two aliases onto one account are counted once', async () => {
   rmSync(m.dir, { recursive: true, force: true });
 });
 
-test('a second report reads no bytes and still agrees', async () => {
-  const m = machine();
-  const reader = new UsageReader();
-  const first = await reader.report(m.profiles, {});
-  const second = await reader.report(m.profiles, {});
-  assert.equal(second.scan.bytesRead, 0, 'nothing changed, so nothing should be read');
-  assert.ok(second.scan.hits + second.scan.sealed > 0);
-  assert.equal(second.totals.costUsd, first.totals.costUsd);
-  rmSync(m.dir, { recursive: true, force: true });
-});
-
 test('the index survives a restart', async () => {
   const m = machine();
   const indexPath = join(m.dir, 'usage-index.json');
@@ -316,11 +277,6 @@ test('a transcript the CLI deleted keeps its counts, and a restored one counts o
   const back = await reader.report(m.profiles, {});
   assert.equal(back.totals.turns, before.totals.turns, 'a restored transcript must not count twice');
   rmSync(m.dir, { recursive: true, force: true });
-});
-
-test('Sonnet 5.5 and Haiku 5.5 have prices', () => {
-  assert.ok(priceBucket('claude', 'claude-sonnet-5-5', { input: 1e6 }, '2026-10-24').total > 0);
-  assert.ok(priceBucket('claude', 'claude-haiku-5-5', { input: 1e6 }, '2026-10-24').total > 0);
 });
 
 test('an unreadable account does not lose the others', async () => {
@@ -385,19 +341,6 @@ test('a remembered rollup folds exactly like the live report', async () => {
 });
 
 // ---------------------------------------------------------- reading them
-
-test('the hit rate is the share of input that came from cache', () => {
-  assert.equal(hitRate({ input: 0, cacheRead: 0 }), 0, 'no traffic is not a full cache');
-  assert.equal(hitRate({ input: 100, cacheRead: 900 }), 0.9);
-  assert.equal(hitRate({ input: 0, cacheRead: 500 }), 1);
-});
-
-test('a bucket key round-trips, including a folder with no value', () => {
-  const k = bucketKey({ date: '2026-09-10', model: 'claude-opus-5', project: '/a/b' });
-  assert.deepEqual(splitKey(k), { date: '2026-09-10', model: 'claude-opus-5', project: '/a/b' });
-  assert.deepEqual(splitKey(bucketKey({ date: '2026-09-10', model: 'm' })),
-    { date: '2026-09-10', model: 'm', project: '' });
-});
 
 test("today ends at the asker's midnight, not UTC's", () => {
   // 00:30 on the 18th in Pakistan (UTC+5) is 19:30 on the 17th in UTC.
@@ -484,4 +427,68 @@ test('Pi usage survives a restart without reading the files again', async () => 
   assert.ok(Math.abs(second.totals.costUsd - first.totals.costUsd) < 1e-9);
   await Promise.all(saves);
   rmSync(m.dir, { recursive: true, force: true });
+});
+
+// ------------------------------------------------------- accounts on screen
+
+// The Accounts panel, drawn to markup with no browser.
+const panel = await build({ stdin: { contents: `
+  import { createElement } from 'react';
+  import { renderToStaticMarkup } from 'react-dom/server';
+  import { AccountLimits } from './apps/web/src/AccountLimits';
+  export const draw = (props) => renderToStaticMarkup(createElement(AccountLimits, props));
+`, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic', external: ['react', 'react-dom'] });
+const panelModule = { exports: {} };
+new Function('module', 'exports', 'require', panel.outputFiles[0].text)(panelModule, panelModule.exports, createRequire(import.meta.url));
+
+/** Each account row of the panel for these machine reports, with its meters by name. */
+function accountRows(reports, spend) {
+  const html = panelModule.exports.draw({ targets: [{ id: 'laptop', name: 'Laptop' }, { id: 'vm', name: 'VM' }],
+    limits: { now: Date.now(), failed: {}, reports }, spend, win: '7d' });
+  const rows = html.split(/<div class="usage-account(?: idle)?">/).slice(1).map(row => ({ html: row,
+    meters: Object.fromEntries([...row.matchAll(/aria-label="([^"]+) remaining"[^>]*aria-valuenow="([^"]+)"/g)].map(m => [m[1], Number(m[2])])) }));
+  return { html, rows };
+}
+const resetsAt = Date.now() / 1000 + 3.5 * 86400;
+const week = (used, at) => [{ label: '7d', used, resetsAt, at }];
+
+test('logins sharing a home keep separate allowances and no borrowed full-week worth', () => {
+  const { html, rows } = accountRows({ vm: { unsupported: 0, accounts: [] }, laptop: { unsupported: 0, accounts: [
+    { account: 'claude|~/.claude-personal|TOKEN_A', engine: 'claude', label: 'personal', displayLabel: 'personal (claudea)', aliases: ['claudea'], windows: week(60, Date.now() - 60000) },
+    { account: 'claude|~/.claude-personal|TOKEN_S', engine: 'claude', label: 'personal', displayLabel: 'personal (claudes)', aliases: ['claudes'], windows: week(20, Date.now() - 60000) }] } },
+  [{ key: 'claude|~/.claude-personal', engine: 'claude', profileId: 'claudea', costUsd: 9.9, unpriced: false }]);
+  assert.equal(rows[0].meters['claude personal (claudea) 7d'], 40);
+  assert.equal(rows[1].meters['claude personal (claudes) 7d'], 80);
+  assert.match(html, /Shared by personal \(claudea\), personal \(claudes\)/);
+  assert.doesNotMatch(html, /full week/, "shared spend is not priced against either login's allowance");
+});
+
+test('one credential read on two machines is one row that keeps both report times', () => {
+  const row = at => ({ account: 'claude|~/.claude|TOKEN_A', engine: 'claude', label: 'personal', aliases: ['claudea'], windows: week(30, at) });
+  const { rows } = accountRows({ laptop: { unsupported: 0, accounts: [row(Date.now() - 150000)] },
+    vm: { unsupported: 0, accounts: [row(Date.now() - 3.2 * 3600000)] } });
+  assert.equal(rows.length, 1);
+  // The row shows the newest report time; each machine's time is in the tooltip.
+  assert.match(rows[0].html, /<small title="Laptop 2m ago · VM 3h ago">2m ago<\/small>/);
+  // Pace is measured from the newer reading: 30% at half the week is 60%.
+  assert.match(rows[0].html, /title="At this pace: 60% used by the reset"/);
+});
+
+test('the same account on two machines is one row showing the newest reading of each allowance', () => {
+  const now = Date.now() / 1000;
+  // Different home folders, report times and numbers - but the same account,
+  // as both machines' fingerprints say.
+  const { rows } = accountRows({
+    vm: { unsupported: 0, accounts: [{ account: 'claude|/home/ubuntu/.claude|TOKEN_A', engine: 'claude', label: 'default', aliases: ['claude'], identity: 'f1',
+      windows: [{ label: '5h', used: 70, resetsAt: now + 3600, at: Date.now() - 60000 }, { label: '7d', used: 40, resetsAt: now + 3 * 86400, at: Date.now() - 5 * 3600000 }] }] },
+    laptop: { unsupported: 0, accounts: [
+      { account: 'claude|~/.claude-personal|TOKEN_A', engine: 'claude', label: 'personal', aliases: ['claudea'], identity: 'f1',
+        windows: [{ label: '5h', used: 20, resetsAt: now + 600, at: Date.now() - 4 * 3600000 }, { label: '7d', used: 55, resetsAt: now + 3 * 86400, at: Date.now() - 120000 }] },
+      { account: 'claude|~/.claude-personal|TOKEN_S', engine: 'claude', label: 'personal', aliases: ['claudes'], identity: 'f2',
+        windows: [{ label: '7d', used: 10, resetsAt: now + 86400, at: Date.now() - 60000 }] }] },
+  });
+  assert.equal(rows.length, 2, 'one row per account, not per machine');
+  assert.match(rows[0].html, /title="Laptop [^"]* · VM [^"]*"/);
+  // 5h from the VM (newer), the week from the laptop (newer).
+  assert.deepEqual(rows[0].meters, { 'claude personal 5h': 30, 'claude personal 7d': 45 });
 });

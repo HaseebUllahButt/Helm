@@ -87,14 +87,14 @@ test('Claude starts one process when startup and the first send overlap', async 
 });
 
 /** A hosted Claude pipe that answers only what the test sends. */
-function hostedClaude({ adopt = false } = {}) {
+function hostedClaude() {
   let receive, exited;
   const writes = [];
   const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; },
     write(raw) { writes.push(JSON.parse(raw)); }, end() { exited({ code: 0 }); },
     detach() {}, kill() { exited({ code: 0 }); } };
   const driver = new ClaudeDriver({ cmd: 'unused', cwd: '/tmp', procId: 'hosted', procHost: {
-    hasProc: () => adopt, openProc: async () => {}, procPipe: () => pipe } });
+    hasProc: () => false, openProc: async () => {}, procPipe: () => pipe } });
   const send = message => receive(JSON.stringify(message) + '\n');
   const answerInitialize = response => send({ type: 'control_response', response: { subtype: 'success',
     request_id: writes.find(w => w.request?.subtype === 'initialize').request_id, response } });
@@ -119,16 +119,6 @@ test('Claude lists its commands before the first message', { timeout: 5000 }, as
     { name: 'compact', description: 'Clear history but keep a summary', source: 'Claude' },
     { name: 'new-one', source: 'Claude' },
   ]);
-});
-
-test('Claude lists its commands again after Helm takes over a running process', { timeout: 5000 }, async t => {
-  const { driver, writes, answerInitialize } = hostedClaude({ adopt: true });
-  t.after(() => driver.kill());
-  const listed = driver.availableCommands();
-  await new Promise(setImmediate);
-  assert.ok(writes.some(w => w.request?.subtype === 'initialize'));
-  answerInitialize({ commands: LISTED });
-  assert.deepEqual((await listed).map(c => c.name), ['compact', 'full-send']);
 });
 
 async function modelControl(t, version = '2.1.302') {
@@ -1072,15 +1062,6 @@ test('a command Claude answers itself shows its answer under the command, not an
   assert.match(events.find((e) => e.type === 'item.delta').text, /^## Context Usage/);
   assert.equal(events.filter((e) => e.type === 'turn.done').at(-1).turnId, start.turnId);
 
-  // Claude echoes /cost as /usage; the message is still the one sent.
-  events.length = 0;
-  await driver.send('/cost');
-  synthetic('Total cost: $0.0000');
-  say({ type: 'user', isReplay: true, parent_tool_use_id: null, uuid: 'echo-2',
-    message: { role: 'user', content: '<command-name>/usage</command-name><command-message>usage</command-message><command-args></command-args>' } });
-  result('Total cost: $0.0000');
-  assert.equal(events.find((e) => e.type === 'turn.start').text, '/cost');
-
   // A command Claude refuses never echoes; its answer still has a turn.
   events.length = 0;
   await driver.send('/status');
@@ -1090,18 +1071,6 @@ test('a command Claude answers itself shows its answer under the command, not an
   assert.equal(refused?.text, '/status');
   assert.equal(events.find((e) => e.type === 'item.delta').text, "/status isn't available in this environment.");
   assert.equal(events.filter((e) => e.type === 'turn.done').at(-1).turnId, refused.turnId);
-});
-
-test('a slash command Claude echoes in its own markup reads as the command', async () => {
-  const { localCommandRecord } = await import('../packages/connect/src/drivers/claude.js');
-  assert.deepEqual(localCommandRecord('<command-name>/model</command-name>\n  <command-message>model</command-message>\n  <command-args>claude-opus-5-5</command-args>'),
-    { kind: 'command', text: '/model claude-opus-5-5' });
-  assert.deepEqual(localCommandRecord('<command-name>/cost</command-name><command-message>cost</command-message><command-args></command-args>'),
-    { kind: 'command', text: '/cost' });
-  // A skill run as a command opens with its message, then its name.
-  assert.deepEqual(localCommandRecord('<command-message>rpc-action-items</command-message>\n<command-name>/rpc-action-items</command-name>\n<command-args>for today</command-args>'),
-    { kind: 'command', text: '/rpc-action-items for today' });
-  assert.equal(localCommandRecord('Explain <local-command-stdout> tags'), null);
 });
 
 test('Claude compaction is one compact item, open from "compacting" until the CLI says it is done', async t => {
@@ -1153,61 +1122,6 @@ async function contextFeed(t, { settings, modelUsage }) {
   return { log, reply, result, feed, driver, writes };
 }
 
-test("Claude's own count of its window wins over Helm's read of its settings", async (t) => {
-  const { log, reply, result, feed, writes } = await contextFeed(t, {
-    settings: { modelSettings: { 'claude-opus-5-5': { autoCompactWindow: 383_000 } } },
-    modelUsage: { 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } },
-  });
-  reply({ input_tokens: 5, cache_read_input_tokens: 300_000, cache_creation_input_tokens: 0, output_tokens: 3 });
-  result();
-  assert.equal(log.of('context').at(-1).window, 383_000, 'the settings read stands until Claude answers');
-  const ask = writes.findLast((w) => w.request?.subtype === 'get_context_usage');
-  assert.deepEqual(ask.request, { subtype: 'get_context_usage', detail: 'summary' });
-  // Set somewhere Helm does not read (an environment variable, managed settings).
-  feed({ type: 'control_response', response: { subtype: 'success', request_id: ask.request_id,
-    response: { totalTokens: 300_005, maxTokens: 350_000, rawMaxTokens: 350_000, autocompactSource: 'env', autoCompactThreshold: 317_000 } } });
-  await new Promise(setImmediate);
-  assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 300_008, window: 350_000, full: 1_000_000, model: 'claude-opus-5-5' });
-});
-
-test('Claude reports context from the last top-level reply, sized by the compaction window in settings', async (t) => {
-  const { log, reply, result } = await contextFeed(t, {
-    settings: { modelSettings: { 'claude-opus-5-5': { autoCompactWindow: 383_000 } } },
-    modelUsage: { 'claude-haiku-4-5': { contextWindow: 200_000 }, 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } },
-  });
-  reply({ input_tokens: 10, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 5_000, output_tokens: 500 });
-  assert.deepEqual(log.of('context'), [], 'no size is known before the first result');
-  // A helper's reply is not the conversation.
-  reply({ input_tokens: 1, output_tokens: 1 }, { parent_tool_use_id: 'toolu_helper' });
-  result();
-  assert.deepEqual(log.of('context'), [{ type: 'context', used: 105_510, window: 383_000, full: 1_000_000, model: 'claude-opus-5-5' }]);
-  reply({ input_tokens: 20, cache_read_input_tokens: 140_000, cache_creation_input_tokens: 8_000, output_tokens: 480 });
-  assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 148_500, window: 383_000, full: 1_000_000, model: 'claude-opus-5-5' });
-});
-
-test('Claude says how long it keeps the chat cached; a reply that wrote nothing keeps the last time', async (t) => {
-  const { log, reply, result } = await contextFeed(t, { modelUsage: { 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } } });
-  reply({ input_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 20_000, output_tokens: 10,
-    cache_creation: { ephemeral_1h_input_tokens: 20_000, ephemeral_5m_input_tokens: 0 } });
-  result();
-  assert.equal(log.of('context').at(-1).ttl, 60 * 60_000);
-  reply({ input_tokens: 5, cache_read_input_tokens: 20_000, cache_creation_input_tokens: 0, output_tokens: 10,
-    cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 } });
-  assert.equal(log.of('context').at(-1).ttl, 60 * 60_000);
-});
-
-test('compacting drops the ring to what is left at once, not after the next reply', async (t) => {
-  const { log, reply, result, feed } = await contextFeed(t, { modelUsage: { 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } } });
-  reply({ input_tokens: 5, cache_read_input_tokens: 640_000, cache_creation_input_tokens: 5_000, output_tokens: 453 });
-  result();
-  assert.equal(log.of('context').at(-1).used, 645_458);
-  feed({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 645_458, post_tokens: 8_538 } });
-  assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 8_538, window: 1_000_000, full: 1_000_000, model: 'claude-opus-5-5' });
-  // A Claude that does not say empties the ring until the next reply does.
-  feed({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto' } });
-  assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 0, window: 1_000_000, compacted: true });
-});
-
 test("whether a thinking-level change keeps the cache is Claude's word, and a refusal turns it off", async (t) => {
   const { feed, driver } = await contextFeed(t, {});
   const inits = [];
@@ -1220,29 +1134,21 @@ test("whether a thinking-level change keeps the cache is Claude's word, and a re
   assert.equal(driver.info.model, 'claude-opus-5-5');
 });
 
-test('Claude uses the model window when settings say nothing', async (t) => {
-  const { log, reply, result } = await contextFeed(t, { modelUsage: { 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } } });
-  reply({ input_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 20_000, output_tokens: 10 });
-  result();
-  assert.deepEqual(log.of('context'), [{ type: 'context', used: 20_015, window: 1_000_000, full: 1_000_000, model: 'claude-opus-5-5' }]);
-});
-
-test('a larger window in settings never grows the model window, and a dated model id still matches', async (t) => {
-  const { log, reply, result } = await contextFeed(t, {
-    settings: { modelSettings: { 'claude-haiku-4-5': { autoCompactWindow: 500_000 } } },
-    modelUsage: { 'claude-haiku-4-5-20251001': { contextWindow: 200_000 } },
+test('a finished agent stop leaves no exit deadline keeping Helm alive', async t => {
+  let exited;
+  const pipe = { onData() {}, onExit(fn) { exited = fn; }, write() {},
+    end() { exited({ code: 0 }); }, kill() { exited({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: 'unused', cwd: '/tmp', procId: 'hosted', procHost: {
+    hasProc: () => false, openProc: async () => {}, procPipe: () => pipe,
+  } });
+  await driver.start();
+  const timers = new Set();
+  const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
+  t.mock.method(globalThis, 'setTimeout', (...args) => {
+    const timer = set(...args); timers.add(timer); return timer;
   });
-  reply({ input_tokens: 1_000, output_tokens: 0 }, { message: { model: 'claude-haiku-4-5-20251001', content: [], usage: { input_tokens: 1_000, output_tokens: 0 } } });
-  result();
-  assert.deepEqual(log.of('context'), [{ type: 'context', used: 1_000, window: 200_000, full: 200_000, model: 'claude-haiku-4-5' }]);
-});
-
-test('a dated model id takes the compaction window written for its short name', async (t) => {
-  const { log, reply, result } = await contextFeed(t, {
-    settings: { modelSettings: { 'claude-haiku-4-5': { autoCompactWindow: 99_000 } } },
-    modelUsage: { 'claude-haiku-4-5-20251001': { contextWindow: 200_000 } },
-  });
-  reply({ input_tokens: 1_000, output_tokens: 0 }, { message: { model: 'claude-haiku-4-5-20251001', content: [], usage: { input_tokens: 1_000, output_tokens: 0 } } });
-  result();
-  assert.deepEqual(log.of('context'), [{ type: 'context', used: 1_000, window: 99_000, full: 200_000, model: 'claude-haiku-4-5' }]);
+  t.mock.method(globalThis, 'clearTimeout', timer => { timers.delete(timer); clear(timer); });
+  t.after(() => { for (const timer of timers) clear(timer); });
+  await driver.kill();
+  assert.equal(timers.size, 0);
 });

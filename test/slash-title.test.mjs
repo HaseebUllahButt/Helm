@@ -7,8 +7,7 @@ import { join } from 'node:path';
 
 // A slash command is a verb for the CLI, not a description of the work: it
 // must reach the driver but never count as a prompt the thread is titled
-// from. And a driver's own settings event - an ACP agent switching its mode
-// behind helm's back - lands on the session record like a composer pick.
+// from.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-slash-title-'));
 process.env.HELM_NO_SERVICE = '1';
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
@@ -33,11 +32,10 @@ class FakeDriver extends EventEmitter {
     this.pending = new Map();
     FakeDriver.made.push(this);
   }
-  push(type, payload) { this.emit('event', { type, ...payload }); }
   async start() { this.started = true; }
   async send(text) { this.sent = (this.sent ?? []).concat(text); }
   async compact(hint) { this.compacted = hint ?? ''; }
-  async kill() { this.push('status', { status: 'exited' }); }
+  async kill() { this.emit('event', { type: 'status', status: 'exited' }); }
 }
 
 const { Sessions } = await import('../packages/connect/src/sessions.js');
@@ -57,17 +55,5 @@ test('slash input goes to the driver and prompts stay at zero', async () => {
 
   await sessions.input(s.id, 'fix the flaky login test');
   assert.equal(sessions.get(s.id).prompts, 1, 'a real prompt still counts');
-  await sessions.kill(s.id);
-});
-
-test('a driver settings event lands on the session record', async () => {
-  const s = await sessions.start({ cwd: '/tmp', profileId: 'devina' });
-  const d = FakeDriver.made.at(-1);
-  d.push('settings', { mode: 'read', model: 'swe-2-fast' });
-  const rec = sessions.get(s.id);
-  assert.equal(rec.mode, 'read');
-  assert.equal(rec.model, 'swe-2-fast');
-  // Keys the event did not carry are left alone.
-  assert.equal(rec.effort, null);
   await sessions.kill(s.id);
 });

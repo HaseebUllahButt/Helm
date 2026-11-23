@@ -117,8 +117,8 @@ test('local-only clients reach remote machines over the existing outbound daemon
   });
   assert.equal(read.status, 200);
   assert.equal((await read.json()).result.sub, phone.id);
+  // The hub handles a client's frames in order, so the watch below sees this.
   client.send(JSON.stringify({ t: 'subscribe', env: remote }));
-  await delay(50);
   await rpc('session.watch', { id: 'chat' });
   await until(() => frames.find(frame => frame.t === 'event' && frame.env === remote && frame.payload.id === 'chat'));
   await assert.rejects(mesh.call('indirect', 'session.list', {}, { sub: phone.id }), /not connected/);
@@ -127,12 +127,16 @@ test('local-only clients reach remote machines over the existing outbound daemon
   assert.equal(loopReply.error.code, 'offline');
   const beforeSpoof = messages.filter(message => message.call).length;
   client.send(JSON.stringify({ t: 'hubRpc', id: 'device-spoof', env: remote, sub: phone.id, method: 'session.input' }));
-  await delay(50);
-  assert.equal(messages.filter(message => message.call).length, beforeSpoof, 'devices cannot impersonate a forwarding hub');
+  // A later request on the same path proves the spoof was already handled.
+  await rpc('after-spoof');
+  await until(() => messages.some(message => message.call?.method === 'after-spoof'));
+  assert.deepEqual(messages.filter(message => message.call).slice(beforeSpoof).map(message => message.call.method), ['after-spoof'],
+    'devices cannot impersonate a forwarding hub');
   const pendingWrite = rpc('hang');
   const hanging = await until(() => messages.find(message => message.call?.method === 'hang'));
   link.send('rpcResult', { id: hanging.call.id, ok: true, result: 'forged' });
-  await delay(50);
+  // This request travels the same link after the forged answer, so its reply comes later.
+  await rpc('after-forge');
   assert.equal(frames.some(frame => frame.result === 'forged'), false, 'only the target daemon can answer its request');
   child.send({ command: 'dropBridge' });
   const uncertain = await pendingWrite;
@@ -159,8 +163,9 @@ test('local-only clients reach remote machines over the existing outbound daemon
   assert.equal(messages.some(message => message.call?.method === 'session.input'), false);
   client.close();
   await until(() => mesh.signals.size === 0);
-  await delay(50);
-  child.send({ command: 'inspect' });
-  const inspection = await until(() => messages.find(message => message.inspection));
-  assert.equal(inspection.inspection.peers, 0);
+  await until(async () => {
+    const seen = messages.length;
+    child.send({ command: 'inspect' });
+    return (await until(() => messages.slice(seen).find(message => message.inspection))).inspection.peers === 0;
+  });
 });

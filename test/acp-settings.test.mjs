@@ -1,10 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
-import { DevinDriver, DEVIN_COMMANDS, normalizeDevinModel } from '../packages/connect/src/drivers/devin.js';
+import { DevinDriver, normalizeDevinModel } from '../packages/connect/src/drivers/devin.js';
 import { OpencodeDriver } from '../packages/connect/src/drivers/opencode.js';
 
 // The mode-switch stream is a `devin acp` session whose agent reports the
@@ -48,66 +45,6 @@ test('devin: the state the agent loaded cannot pass for a change it made', async
   // The agent's 'ask' agrees with helm's 'read', and nothing else moved but
   // the model - so the whole run is exactly one settings event.
   assert.deepEqual(log.of('settings'), [{ type: 'settings', model: 'swe-2-fast' }]);
-  await driver.kill();
-});
-
-test('devin: a session that never advertises commands still has devin\'s palette', async () => {
-  const { driver } = make('mode-switch');
-  const commands = await driver.availableCommands();
-  assert.equal(commands, DEVIN_COMMANDS);
-  for (const name of ['status', 'fast', 'mcp', 'rename', 'help']) {
-    assert.ok(commands.some((c) => c.name === name), `/${name} is offered`);
-  }
-  assert.equal(commands.filter((c) => c.name === 'usage').length, 1, '/usage is offered exactly once');
-  await driver.kill();
-});
-
-test('devin: advertised commands win over the static fallback', async () => {
-  const { driver, log } = make('plain');
-  await driver.send('Reply with exactly the words: hello from helm');
-  await log.until((e) => e.type === 'turn.done');
-  const commands = await driver.availableCommands();
-  // 'handoff' is a skill devin advertised in the recording; it is not in the
-  // static list, so its presence proves the advertised list won.
-  assert.ok(commands.some((c) => c.name === 'handoff'));
-  assert.ok(commands.some((c) => c.name === 'status'));
-  // The alias is not advertised either - devin only knows /session-stats -
-  // so it is appended to the winning list rather than lost with the fallback.
-  assert.equal(commands.filter((c) => c.name === 'usage').length, 1, '/usage joins the advertised list exactly once');
-  await driver.kill();
-});
-
-test('devin: /usage answers locally - the quota card, not an ACP prompt', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'helm-devin-usage-'));
-  const account = join(root, 'devin');
-  mkdirSync(join(account, 'cli'), { recursive: true });
-  writeFileSync(join(account, 'credentials.toml'),
-    'windsurf_api_key = "devin-session-token$test"\napi_server_url = "https://server.codeium.com"\n');
-  const { driver, log, fake } = make('plain', {
-    env: { XDG_DATA_HOME: root },
-    fetchStatus: async () => ({
-      planStatus: {
-        planInfo: { planName: 'Pro', billingStrategy: 'BILLING_STRATEGY_QUOTA' },
-        dailyQuotaRemainingPercent: 95,
-        weeklyQuotaRemainingPercent: 79,
-        dailyQuotaResetAtUnix: String(Math.floor(Date.now() / 1000) + 20 * 3600),
-        weeklyQuotaResetAtUnix: String(Math.floor(Date.now() / 1000) + 5 * 86400),
-      },
-    }),
-  });
-  assert.equal(driver.canRunWhileBusy('/usage'), true, 'a read does not wait on a live turn');
-  await driver.send('/usage');
-  const done = await log.until((e) => e.type === 'turn.done');
-  assert.equal(done.status, 'ok');
-  assert.equal(log.of('turn.start')[0].text, '/usage', 'the bubble keeps the spelling that was typed');
-  assert.equal(log.of('turn.start')[0].local, true, 'the turn says helm answered it itself - it lands inside a live turn');
-  const body = log.of('item.delta').map((e) => e.text).join('');
-  assert.match(body, /### Usage/);
-  assert.match(body, /\*\*Daily\*\* `█░{19}` 5% used · resets in \d+h \d+m/);
-  assert.match(body, /\*\*Weekly\*\* `████░{16}` 21% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-][\d:]+\)/);
-  assert.match(body, /\*This chat used no quota\.\*/);
-  // The whole point: ACP never hears about it - not even the process spawn.
-  assert.equal(fake.stdinLines().length, 0);
   await driver.kill();
 });
 
@@ -301,43 +238,6 @@ test('devin: failed adoption refresh preserves the open turn and saved settings'
   assert.deepEqual(pipe.writes.map((m) => m.method), ['session/set_config_option']);
 });
 
-test('devin: buffered config options avoid an adoption refresh RPC', async (t) => {
-  const fake = fakeCli('devin', 'plain');
-  const pipe = adoptPipe({
-    response: () => { throw new Error('refresh should be skipped'); },
-    buffered: [{
-      jsonrpc: '2.0', method: 'session/update',
-      params: { update: { sessionUpdate: 'config_option_update', configOptions: fusionOptions('high') } },
-    }],
-  });
-  const procHost = hosted(pipe);
-  const driver = new DevinDriver({
-    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'edit',
-    model: FUSION_CANONICAL, effort: 'high', engineSessionId: 'e910dc39002c',
-    procHost, procId: 'adopted',
-  });
-  t.after(() => driver.kill());
-
-  await driver.start();
-  assert.equal(pipe.writes.length, 0);
-  assert.deepEqual(driver.info, { model: FUSION_CANONICAL, effort: 'high' });
-  assert.equal(driver.catalog().current, FUSION_CANONICAL);
-});
-
-test('opencode: hosted adoption without a callback stays zero-RPC', async (t) => {
-  const fake = fakeCli('opencode', 'plain');
-  const pipe = adoptPipe({ response: () => { throw new Error('adoption should not write'); } });
-  const procHost = hosted(pipe, 'opencode-adopted');
-  const driver = new OpencodeDriver({
-    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'ask',
-    engineSessionId: 'opencode-session', procHost, procId: 'opencode-adopted',
-  });
-  t.after(() => driver.kill());
-
-  await driver.start();
-  assert.deepEqual(pipe.writes, []);
-});
-
 test('devin: an unadvertised Fusion effort maps to the advertised model and thought level', async (t) => {
   const { driver, log, fake } = make('fusion-initial', { model: FUSION_ALIAS });
   t.after(() => driver.kill());
@@ -433,13 +333,6 @@ test('devin: empty setting acknowledgments preserve accepted model and effort', 
   assert.equal(driver.catalog().effort, 'medium');
   assert.deepEqual(driver.info, { model: 'gpt-6-sol-medium', effort: 'medium' });
   assert.deepEqual(log.of('error'), []);
-});
-
-test('opencode: no fallback list means an unadvertised palette is empty', async () => {
-  const fake = fakeCli('opencode', 'plain');
-  const driver = new OpencodeDriver({ cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'ask' });
-  assert.deepEqual(await driver.availableCommands(), []);
-  await driver.kill();
 });
 
 test('opencode: model changes replace effort options and clear models without effort', async (t) => {

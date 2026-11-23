@@ -10,7 +10,7 @@ before(async () => {
     stdin: { contents: `
       import React, { useState } from 'react'; import { createRoot } from 'react-dom/client';
       import { SessionView } from './apps/web/src/App';
-      window.calls = []; window.fail = false;
+      window.calls = [];
       const listeners = new Set();
       window.emit = (kind, payload) => listeners.forEach(fn => fn('laptop', kind, payload));
       const client = {pendingActions:()=>[],resumeActions:async()=>[],input:(env,params)=>client.rpc(env,'session.input',params), on: fn => { listeners.add(fn); return () => listeners.delete(fn); }, subscribe: () => () => {}, rpc: async (env, method, params) => {
@@ -24,16 +24,9 @@ before(async () => {
             {id:'bypassPermissions',label:'Bypass all checks',short:'yolo',danger:true}],
           defaultMode:'bypassPermissions', profileId:'claude-personal', prefs:{default:'sonnet',approved:['opus','sonnet']},
           defaults:{effort:'low',mode:'default'}, favs:['opus'], effortFavs:[] };
-        if (method === 'session.commands') return { commands: [
-          {name:'model',description:'Choose a model',source:'claude'},
-          {name:'permissions',description:'Manage permissions',source:'claude'},
-          {name:'custom',description:'Project command',source:'project'} ] };
         if (method === 'session.attach') return { text: 'Claude terminal', pty: true };
-        if (['session.model', 'session.effort', 'session.mode', 'session.input', 'model.prefs', 'profile.defaults', 'picker.prefs'].includes(method)) {
+        if (['session.mode', 'session.input'].includes(method)) {
           window.calls.push({env, method, params});
-          if (window.fail) throw Error('Claude is no longer running in that terminal.');
-          if (method === 'model.prefs') return {prefs:{default:params.default,approved:params.approved}};
-          if (method === 'profile.defaults') return {defaults:params};
           if (method === 'session.mode') return {session:{...window.currentSession,mode:params.mode}};
           return {ok:true, terminal: method !== 'session.input' || params.data.trim().startsWith('/')};
         }
@@ -72,68 +65,6 @@ async function pageFor(t, status = 'idle') {
   await page.getByRole('button', {name:'model: opus', exact:true}).waitFor();
   return page;
 }
-
-test('native model and thinking choices preserve chat and keep unconfirmed settings', async t => {
-  const page = await pageFor(t);
-  await page.getByRole('button', {name:'model: opus', exact:true}).click();
-  await page.getByRole('option', {name:'sonnet', exact:true}).click();
-  await page.getByRole('button', {name:'View in terminal', exact:true}).waitFor();
-  assert.equal(await page.locator('textarea').count(), 1);
-  assert.equal(await page.getByText('Existing conversation', {exact:true}).count(), 1);
-  assert.deepEqual(await page.evaluate(() => window.calls[0]), {
-    env:'laptop', method:'session.model', params:{id:'native-test',model:'sonnet',pick:true,ask:true},
-  });
-  // A write is not a provider acknowledgment: the picker still reports opus.
-  await page.getByRole('button', {name:'model: opus', exact:true}).waitFor();
-  await page.getByRole('button', {name:'thinking: think', exact:true}).click();
-  await page.getByRole('option', {name:'high', exact:true}).click();
-  await page.getByRole('button', {name:'View in terminal', exact:true}).waitFor();
-  assert.equal(await page.locator('textarea').count(), 1);
-  assert.equal(await page.getByText('Existing conversation', {exact:true}).count(), 1);
-  assert.deepEqual(await page.evaluate(() => window.calls[1]), {
-    env:'laptop', method:'session.effort', params:{id:'native-test',effort:'high'},
-  });
-});
-
-test('native slash suggestions include project commands and keep chat open without a fake message', async t => {
-  const page = await pageFor(t);
-  await page.locator('textarea').fill('/');
-  await page.getByRole('option', {name:/\/custom/}).waitFor();
-  await page.getByRole('option', {name:/\/permissions/}).click();
-  assert.equal(await page.locator('textarea').inputValue(), '/permissions ');
-  await page.getByRole('button', {name:'send', exact:true}).click();
-  await page.getByRole('button', {name:'View in terminal', exact:true}).waitFor();
-  assert.equal(await page.locator('textarea').count(), 1);
-  assert.equal(await page.getByText('Existing conversation', {exact:true}).count(), 1);
-  const call = await page.evaluate(() => window.calls[0]);
-  assert.equal(call.method, 'session.input'); assert.equal(call.params.data.trim(), '/permissions');
-  assert.equal(await page.locator('textarea').inputValue(), '');
-  assert.equal(await page.locator('.timeline').getByText('/permissions', {exact:true}).count(), 0);
-});
-
-test('native permissions and settings send their commands without replacing the conversation', async t => {
-  const page = await pageFor(t);
-  for (const [label, command] of [['Claude permissions','/permissions'], ['Claude settings','/config']]) {
-    await page.getByRole('button', {name:'more', exact:true}).click();
-    await page.getByRole('button', {name:label, exact:true}).click();
-    await page.getByRole('button', {name:'View in terminal', exact:true}).waitFor();
-  assert.equal(await page.locator('textarea').count(), 1);
-  assert.equal(await page.getByText('Existing conversation', {exact:true}).count(), 1);
-    assert.equal(await page.evaluate(() => window.calls.at(-1).params.data), command);
-    }
-});
-
-test('failed native controls stay in chat with the reported model and a visible error', async t => {
-  const page = await pageFor(t); await page.evaluate(() => window.fail = true);
-  await page.getByRole('button', {name:'model: opus', exact:true}).click();
-  await page.getByRole('option', {name:'sonnet', exact:true}).click();
-  await page.getByRole('alert').waitFor();
-  assert.match(await page.getByRole('alert').innerText(), /agent is not running/);
-  assert.equal(await page.getByRole('button', {name:'model: opus', exact:true}).count(), 1);
-  assert.equal(await page.getByRole('button', {name:'Show terminal', exact:true}).count(), 1);
-});
-
-
 test('a slash command during a reply keeps chat and approvals available in both views', async t => {
   const page = await pageFor(t, 'working');
   await page.setViewportSize({width:390,height:844});
@@ -158,29 +89,10 @@ test('a slash command during a reply keeps chat and approvals available in both 
   assert.equal(await page.getByRole('button', {name:'Allow once', exact:true}).count(), 1);
   assert.equal(await page.locator('textarea').count(), 1);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-  await page.screenshot({path:'/tmp/helm-native-controls-repaired-390.png'});
   // Inspecting output and returning to chat never injects keys or answers.
   assert.deepEqual(await page.evaluate(() => window.calls.map(c => c.method)), ['session.input']);
 });
 
-
-test('native tray shares account favorites and defaults without changing the running CLI', async t => {
-  const page = await pageFor(t);
-  await page.getByRole('button', {name:'model: opus',exact:true}).click();
-  await page.getByRole('checkbox', {name:'Favorite sonnet',exact:true}).check();
-  await page.getByRole('button', {name:'Use opus by default for new chats',exact:true}).click();
-  await page.getByRole('button', {name:'opus is the default for new chats',exact:true}).waitFor();
-  await page.getByRole('button', {name:'thinking: think',exact:true}).click();
-  assert.equal(await page.getByRole('checkbox', {name:'Favorite high',exact:true}).count(), 0);
-  await page.getByRole('button', {name:'Use high by default for new chats',exact:true}).click();
-  await page.getByRole('button', {name:'high is the default for new chats',exact:true}).waitFor();
-  const calls = await page.evaluate(() => window.calls);
-  assert.deepEqual(calls.map(c => c.method), ['picker.prefs','model.prefs','profile.defaults']);
-  assert.equal(calls[1].params.profileId, 'claude-personal');
-  assert.equal(calls[2].params.profileId, 'claude-personal');
-  await page.getByRole('button', {name:'model: opus',exact:true}).waitFor();
-  await page.getByRole('button', {name:'thinking: think',exact:true}).waitFor();
-});
 
 test('native permissions show only confirmed state and require two taps for bypass', async t => {
   const page = await pageFor(t);

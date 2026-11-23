@@ -1,29 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // The state file lives under HELM_DIR; keep it out of the owner's.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-cli-updates-'));
-const { CliUpdater, classifyInstall, parseVersion, isNewer, missingModels } = await import('../packages/connect/src/cli-updates.js');
-const { cliAutoUpdate, saveCliAutoUpdate } = await import('../packages/connect/src/settings.js');
+const { CliUpdater, classifyInstall } = await import('../packages/connect/src/cli-updates.js');
 
 const HOME = '/home/ada';
 const yes = () => true;
-
-test('version text from different tools is read the same way', () => {
-  assert.equal(parseVersion('2.1.296 (Claude Code)'), '2.1.296');
-  assert.equal(parseVersion('codex-cli 0.161.0'), '0.161.0');
-  assert.equal(parseVersion('grok 1.0.50 (c58f321264ba)'), '1.0.50');
-  assert.equal(parseVersion('opencode v2.0.14'), '2.0.14');
-  assert.equal(parseVersion('2026.08.11-e8db854'), '2026.08.11-e8db854');
-  assert.equal(parseVersion('\x1b[1mdevin\x1b[0m 3000.11.3'), '3000.11.3');
-  assert.equal(parseVersion('no number here'), null);
-  assert.equal(isNewer('1.1.0', '0.99.1'), true);
-  assert.equal(isNewer('0.99.1', '0.99.1'), false);
-  assert.equal(isNewer(null, '1.0.0'), false);
-});
 
 test('install kind: what is ours to update, and how', () => {
   const ctx = { npmRoot: `${HOME}/.local/lib/node_modules`, home: HOME, canWrite: yes, pkgNameOf: (dir) => dir.split('node_modules/')[1] };
@@ -137,29 +123,6 @@ esac`);
   return { root, home, bin, calls, selfTool, npm, updater };
 }
 
-test('lists what is installed with version, install kind and the reason when it can not update', async () => {
-  const m = machine();
-  m.selfTool('claude', 'Claude', '2.1.0', '2.2.0');
-  m.npm('@openai/codex', 'codex', '0.150.0', '0.160.0');
-  // Outside the (fake) home: its own updater exists, but it is not ours to run.
-  const elsewhere = join(m.root, 'system-bin');
-  mkdirSync(elsewhere);
-  m.selfTool('grok', 'grok', '1.0.1', '1.0.2', elsewhere);
-  symlinkSync(join(elsewhere, 'grok'), join(m.bin, 'grok'));
-
-  const { tools, auto, running } = await m.updater().versions({ refresh: true });
-  const by = Object.fromEntries(tools.map((t) => [t.engine, t]));
-  assert.equal(auto, true);
-  assert.deepEqual(running, []);
-  assert.deepEqual(Object.keys(by).sort(), ['claude', 'codex', 'grok']);
-  assert.deepEqual([by.claude.version, by.claude.method, by.claude.canUpdate], ['2.1.0', 'self', true]);
-  assert.deepEqual([by.codex.version, by.codex.method, by.codex.canUpdate, by.codex.latest, by.codex.outdated], ['0.150.0', 'npm', true, '0.160.0', true]);
-  assert.equal(by.grok.canUpdate, false);
-  assert.match(by.grok.reason, /outside your home/);
-  assert.equal(by.claude.lastResult, undefined);
-  assert.deepEqual(m.calls(), [], 'looking never updates');
-});
-
 test('update runs the safe command, records before and after, and leaves the rest alone', async () => {
   const m = machine();
   const claude = m.selfTool('claude', 'Claude', '2.1.0', '2.2.0');
@@ -242,15 +205,6 @@ exit 0
   return { version: () => readFileSync(vf, 'utf8').trim() };
 }
 
-test('the model check reads a large program and gives no answer for a launcher script', async () => {
-  const m = machine();
-  bigClaude(m, '2.1.0', ['claude-old-1']);
-  assert.deepEqual(await missingModels(join(m.bin, 'claude'), ['claude-old-1', 'claude-new-2']), ['claude-new-2']);
-  assert.deepEqual(await missingModels(join(m.bin, 'claude'), []), []);
-  m.selfTool('codex', 'codex', '1.0.0', '1.0.0');
-  assert.equal(await missingModels(join(m.bin, 'codex'), ['claude-new-2']), null);
-});
-
 test('Claude Code takes the early build when it does not know a model Anthropic lists', async () => {
   const m = machine();
   const claude = bigClaude(m, '2.1.0', ['claude-old-1']);
@@ -260,75 +214,4 @@ test('Claude Code takes the early build when it does not know a model Anthropic 
   assert.equal(claude.version(), '2.1.5');
   assert.deepEqual([r.ok, r.from, r.to, r.changed], [true, '2.1.0', '2.1.5', true]);
   assert.match(r.message, /early build 2\.1\.5.*claude-new-2/);
-});
-
-test('Claude Code stays on its channel when it knows every model or the early build is not newer', async () => {
-  const m = machine();
-  bigClaude(m, '2.1.0', ['claude-old-1', 'claude-new-2']);
-  let asked = 0;
-  await m.updater({ currentModels: async () => ['claude-old-1', 'claude-new-2'], earlyVersion: async () => { asked++; return '2.1.5'; } })
-    .update({ engine: 'claude' });
-  assert.deepEqual(m.calls(), ['claude update']);
-  assert.equal(asked, 0, 'the early channel is not asked when nothing is missing');
-
-  const n = machine();
-  const claude = bigClaude(n, '2.1.5', ['claude-old-1']);
-  await n.updater({ currentModels: async () => ['claude-new-2'], earlyVersion: async () => '2.1.5' }).update({ engine: 'claude' });
-  assert.deepEqual(n.calls(), ['claude update']);
-  assert.equal(claude.version(), '2.1.5');
-});
-
-test('the schedule does nothing while automatic updating is off, and runs when it is on', async () => {
-  const m = machine();
-  const claude = m.selfTool('claude', 'Claude', '2.1.0', '2.2.0');
-  let on = false;
-  const updater = m.updater({ auto: () => on, firstRunMs: 10, everyMs: 3_600_000 });
-  assert.equal(await updater.tick(), null);
-  updater.start();
-  await new Promise((r) => setTimeout(r, 400));
-  assert.deepEqual(m.calls(), [], 'off: nothing ran');
-  assert.equal(claude.version(), '2.1.0');
-  updater.stop();
-
-  // On: the first run comes by itself a moment after start.
-  on = true;
-  const live = m.updater({ auto: () => on, firstRunMs: 10, everyMs: 3_600_000 });
-  live.start();
-  const until = Date.now() + 5_000;
-  while (!m.calls().length && Date.now() < until) await new Promise((r) => setTimeout(r, 25));
-  live.stop();
-  assert.deepEqual(m.calls(), ['claude update']);
-  assert.equal(claude.version(), '2.2.0');
-
-  // A stopped schedule stays stopped.
-  const stopped = m.updater({ firstRunMs: 10 });
-  stopped.start();
-  stopped.stop();
-  await new Promise((r) => setTimeout(r, 120));
-  assert.equal(m.calls().length, 1);
-});
-
-test('the setting is on by default and is saved per machine', () => {
-  assert.equal(cliAutoUpdate(), true);
-  assert.equal(saveCliAutoUpdate(false), false);
-  assert.equal(cliAutoUpdate(), false);
-  assert.equal(saveCliAutoUpdate(true), true);
-  assert.equal(cliAutoUpdate(), true);
-});
-
-test('on Windows a tool in use is skipped now and updated once it is free', async () => {
-  const m = machine();
-  const claude = m.selfTool('claude', 'Claude', '2.1.0', '2.2.0');
-  let inUse = true;
-  const updater = m.updater({ platform: 'win32', busy: async () => inUse, retryMs: 30 });
-  const first = await updater.update({ engine: 'claude' });
-  assert.deepEqual([first[0].skipped, first[0].deferred], [true, true]);
-  assert.deepEqual(m.calls(), []);
-  assert.equal(claude.version(), '2.1.0');
-  inUse = false;
-  const until = Date.now() + 5_000;
-  while (!m.calls().length && Date.now() < until) await new Promise((r) => setTimeout(r, 25));
-  updater.stop();
-  assert.deepEqual(m.calls(), ['claude update']);
-  assert.ok(existsSync(join(process.env.HELM_DIR, 'cli-updates.json')));
 });

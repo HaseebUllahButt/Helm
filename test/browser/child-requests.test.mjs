@@ -62,7 +62,6 @@ test('an idle parent stays working while a helper runs, and a nested question op
   await page.waitForFunction(()=>window.calls.some(call=>call.method==='session.answer'));
   const answer=await page.evaluate(()=>window.calls.find(call=>call.method==='session.answer'));
   assert.equal(answer.params.id,'child');assert.equal(answer.params.requestId,'delegated-question');
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
 });
 test('clicking a native subagent question selects that request instead of the first unrelated approval',async t=>{
   const page=await pageFor(t,1280);

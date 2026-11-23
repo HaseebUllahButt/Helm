@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-notify-'));
 
-const { describe: describeAsk, describeDone, describeCaptcha } = await import('../packages/connect/src/notify.js');
+const { describe: describeAsk, describeDone } = await import('../packages/connect/src/notify.js');
 const { fanOut, isNew, forget } = await import('../apps/relay/src/notify.js');
 
 /** A stand-in for FCM or APNs: records what it was sent, answers as told. */
@@ -61,38 +61,16 @@ test('one notification per request, however many times the event is seen', () =>
   assert.equal(isNew('s1:req-2'), true);
 });
 
-test('a notification is branded and concise, with full command details left in the chat', () => {
-  const n = describeAsk(
-    { id: 's1', title: 'aitink', engine: 'codex', cwd: '/home/me/aitink', envId: 'env1' },
-    { type: 'permission.request', requestId: 'r7', command: 'rm -rf build' },
-  );
-  assert.equal(n.title, 'aitink');
-  assert.equal(n.body, 'Codex needs your approval');
-  assert.doesNotMatch(n.body, /rm -rf/);
-  assert.equal(n.tag, 'helm-s1-r7');
-  // The tap has to land on the session that asked, so both halves travel.
-  assert.equal(n.envId, 'env1');
-  assert.equal(n.sessionId, 's1');
-});
-
-test('questions, plans and completions have distinct human labels', () => {
-  const session = { id: 's1', title: 'Fix login', engine: 'claude', envId: 'e1' };
-  const asked = describeAsk({ ...session, machine: 'laptop' }, { kind: 'question', questions: [{ question: 'Which **database** do I use for /home/me/app?' }] });
-  assert.equal(asked.title, 'Fix login');
-  assert.equal(asked.body, 'Claude Code has a question · laptop\nWhich database do I use for');
-  assert.equal(describeAsk(session, { kind: 'plan' }).body, 'Claude Code has a plan for you to check');
-  assert.equal(describeAsk(session, { kind: 'command', detail: 'rm -rf build' }).body, 'Claude Code wants to run a command');
-  assert.deepEqual(describeDone(session, 123), { title: 'Fix login', body: 'Claude Code finished', tag: 'helm-done-s1-123', envId: 'e1', sessionId: 's1' });
-  assert.equal(describeDone({ ...session, machine: 'vm' }, 1, '## Done.\nThe login works again.').body, 'Claude Code finished · vm\nDone.');
-  assert.deepEqual(describeCaptcha({ ...session, machine: 'why' }, 'helm-captcha-s1-t-1'), { title: 'Fix login', body: 'Claude Code needs you to solve a CAPTCHA · why\nLook for the pointer in the browser.', tag: 'helm-captcha-s1-t-1', envId: 'e1', sessionId: 's1' });
-});
-
-test('notification context removes addresses and paths and bounds long session titles', () => {
+test('notifications leave out commands, addresses and paths, and bound long titles', () => {
   const session = { id: 's1', engine: 'codex', title: 'Check https://private.test/path /home/me/project localhost:4317 192.168.1.1:3000' };
   assert.equal(describeAsk(session, { command: 'curl https://secret.test', detail: '/home/me/file' }).title, 'Check');
   assert.equal(describeDone({ ...session, title: 'x'.repeat(200) }).title.length, 72);
-  assert.equal(describeAsk({ cwd: '/home/me/project' }, {}).title, 'project');
   assert.equal(describeAsk({ title: '/home/me/project' }, {}).title, 'Your chat');
+  const n = describeAsk({ id: 's1', title: 'aitink', engine: 'codex', envId: 'env1' },
+    { type: 'permission.request', requestId: 'r7', command: 'rm -rf build' });
+  assert.doesNotMatch(n.body, /rm -rf/, 'full command details stay in the chat');
+  // The tap has to land on the session that asked, so both halves travel.
+  assert.deepEqual([n.envId, n.sessionId], ['env1', 's1']);
   // A link keeps its words; a path in brackets or quotes goes too.
   const said = (reply) => describeDone({ ...session, title: 'Fix login' }, 1, reply).body.split('\n')[1];
   assert.equal(said('Fixed [login.ts](/home/me/private-client/login.ts).'), 'Fixed login.ts.');

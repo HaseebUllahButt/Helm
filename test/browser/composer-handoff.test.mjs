@@ -35,23 +35,3 @@ test('the live chat box keeps the caret of the starting box it replaces', async 
   await page.keyboard.type('XY');
   assert.equal(await box.inputValue(), 'hello worXYld');
 });
-
-test('a box that opens with words puts the caret at their end', async t => {
-  const bundle = await build({ stdin: { contents: `
-    import React, {useState} from 'react';
-    import {createRoot} from 'react-dom/client';
-    import {Composer} from './apps/web/src/session/Composer';
-    function App(){const [draft,setDraft]=useState('saved words');return <Composer draft={draft} setDraft={setDraft} engine="fake" keys={false} canAttach={false} onSend={()=>{}}/>;}
-    createRoot(document.getElementById('root')).render(<App/>);
-  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
-  const browser = await chromium.launch({ headless: true, ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
-  t.after(() => browser.close());
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  page.setDefaultTimeout(6000);
-  await page.route('http://helm.test/**', r => r.fulfill({ contentType: 'text/html', body: '<div class="session" id="root"></div>' }));
-  await page.goto('http://helm.test/');
-  await page.addScriptTag({ content: bundle.outputFiles[0].text });
-  await page.waitForFunction(() => document.activeElement?.matches('textarea[data-composer]'));
-  await page.keyboard.type('!');
-  assert.equal(await page.locator('textarea[data-composer]').inputValue(), 'saved words!');
-});

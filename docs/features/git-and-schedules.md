@@ -90,8 +90,7 @@ edited files in; with none, the Git sheet says so.
   explicit choice.
 - **Traps:** a passing check does not prove a deploy. GitHub text is
   untrusted for the agent.
-- **Tests:** `test/github`; `test/browser/automation-pr`,
-  `git-notifications`. Run with `npm run test:automation`.
+- **Tests:** `test/github`; `test/browser/git-notifications`. Run with `npm run test:automation`.
 
 ## Schedules
 

@@ -47,8 +47,7 @@ and a project copy nobody kept. A helper can run on another machine
   "this agent cannot see images" instead.
 - **Traps:** the child's result starts a new parent turn, so fake-ask asks
   again. Close the sheet with "Close thread details"; Back may not.
-- **Tests:** `test/browser/subagents`, `sidebar`, `orchestration`,
-  `child-requests`, `todos`; `test/delegation`, `task-return`,
+- **Tests:** `test/browser/subagents`, `sidebar`, `child-requests`; `test/delegation`, `task-return`,
   `subagent-usage`.
 
 ## `helm delegate`
@@ -145,7 +144,7 @@ and a project copy nobody kept. A helper can run on another machine
   A lead that ended its turn with children still running shows **Waiting for its helpers**.
   The list reads the same task result as the CLI. It refreshes after remote
   updates and checks again when an older machine misses an update.
-- **Tests:** `test/remote-helpers`, `test/browser/helper-tree`.
+- **Tests:** `test/remote-helpers`.
 
 ## The CLIs' own subagents
 - **Which one an agent uses (`delegationNote`):** Claude chats use their own
@@ -183,7 +182,7 @@ and a project copy nobody kept. A helper can run on another machine
   cards work.
 - A failed child puts the parent in "Needs you".
 - **Tests:** `test/native-subagents`, `cli-subagents`;
-  `driver-codex`; `test/browser/subagents`, `orchestration`.
+  `driver-codex`; `test/browser/subagents`.
 
 ## Messages between agents
 - **Reach:** Agents → **Messages between agents**. In a chat: `helm say
@@ -236,4 +235,4 @@ and a project copy nobody kept. A helper can run on another machine
   `consume:true` returns all five and clears them; a second call returns
   none.
 - **Tests:** `test/agent-messages`, `input-delivery`, `delegation`;
-  `test/browser/agent-messages`, `subagents`.
+  `test/browser/subagents`.

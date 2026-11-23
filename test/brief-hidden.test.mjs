@@ -44,10 +44,14 @@ test('Helm\'s brief reaches a CLI without an instructions channel, but never sho
   t.after(() => sessions.stop());
   sessions.delegationBrief = () => '[Helm: you are running on Laptop.]\n[Helm: use helpers.]';
   const chat = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'oc2' });
-  const settle = () => new Promise((r) => setTimeout(r, 50));
+  // Wait until the CLI has been handed message number n.
+  const sent = async (n) => {
+    for (let i = 0; i < 600 && !(drivers.get(chat.id)?.sent.length >= n); i++) await new Promise((r) => setTimeout(r, 5));
+    assert.ok(drivers.get(chat.id)?.sent.length >= n, `message ${n} never reached the CLI`);
+  };
 
   await sessions.input(chat.id, 'Fix the login form');
-  await settle();
+  await sent(1);
   const d = drivers.get(chat.id);
   assert.equal(d.sent[0], `<helm_instructions>\n[Helm: you are running on Laptop.]\n[Helm: use helpers.]\n</helm_instructions>\n\n<user_request>\nFix the login form\n</user_request>\n\n${WRITING_REMINDER}`);
   // The owner's bubble is what they typed; the CLI's echo is matched to it.
@@ -58,16 +62,16 @@ test('Helm\'s brief reaches a CLI without an instructions channel, but never sho
 
   // Told once per CLI conversation; the writing reminder rides on every message.
   await sessions.input(chat.id, 'Now the tests');
-  await settle();
+  await sent(2);
   assert.equal(d.sent[1], `Now the tests\n\n${WRITING_REMINDER}`);
   assert.equal(stripBrief(d.sent[0]), 'Fix the login form');
   assert.equal(stripBrief(d.sent[1]), 'Now the tests');
   // A conversation the CLI had to start over has not been told.
   d.engineSessionId = randomUUID();
   await sessions.input(chat.id, 'And the docs');
-  await settle();
+  await sent(3);
   assert.match(d.sent[2], /^<helm_instructions>[\s\S]*<user_request>\nAnd the docs\n<\/user_request>\n\n<helm_reminder>[\s\S]*<\/helm_reminder>$/);
   await sessions.input(chat.id, '/status');
-  await settle();
+  await sent(4);
   assert.equal(d.sent.at(-1), '/status');
 });

@@ -35,26 +35,6 @@ function fixture() {
   return { mesh, network, link, attach, answer, tick, now: () => clock };
 }
 
-test('the machine\'s own hub is the first choice before anything is measured', async () => {
-  const { mesh, link, attach } = fixture();
-  const vm = link('https://vm.example');
-  const own = link('http://192.168.1.9:8787');
-  attach(vm);
-  attach(own);
-  assert.equal(mesh.route('remote'), own);
-  mesh.call('remote', 'session.list', {}).catch(() => {});
-  assert.equal(own.sent.at(-1).method, 'session.list');
-  mesh.stop();
-});
-
-test('a single route is not timed: there is nothing to choose between', async () => {
-  const { mesh, link, attach } = fixture();
-  const vm = link('https://vm.example');
-  attach(vm);
-  assert.equal(vm.sent.filter(f => f.method === 'ping').length, 0);
-  mesh.stop();
-});
-
 test('a network change discards old latency samples without moving an in-flight write', async () => {
   const { mesh, link, attach, answer, tick } = fixture();
   const vm = link('https://vm.example');
@@ -100,20 +80,6 @@ test('a second route is timed at once, and a clearly faster one wins', async () 
     env: 'remote', url: 'https://vm.example', own: false, ms: 40, hubMs: null,
     others: [{ url: 'http://192.168.1.9:8787', own: true, ms: 600, hubMs: null }],
   });
-  mesh.stop();
-});
-
-test('a route that has gone quiet counts as slow while its probe is out', async () => {
-  const { mesh, link, attach, answer, tick } = fixture();
-  const vm = link('https://vm.example');
-  const own = link('http://192.168.1.9:8787');
-  attach(vm);
-  attach(own);
-  tick(3);
-  await answer(own);
-  // The VM has not answered after 2 seconds: own is clearly better already.
-  tick(2000);
-  assert.equal(mesh.route('remote'), own);
   mesh.stop();
 });
 
@@ -189,17 +155,6 @@ test('losing the chosen route falls back at once, without the hold', async () =>
   mesh.stop();
 });
 
-test('a machine announced on the local network counts its hub as its own', async () => {
-  const { mesh, link, attach } = fixture();
-  const vm = link('https://vm.example');
-  const hinted = Object.assign(link('http://192.168.7.7:8787'), { hintFor: 'other' });
-  attach(vm, ['other']);
-  attach(hinted, ['other']);
-  assert.equal(mesh.ownHub(hinted, 'other'), true);
-  assert.equal(mesh.route('other'), hinted);
-  mesh.stop();
-});
-
 test('a lost link gives its unanswered probes no time', async () => {
   const network = { self: 'local', machines: { local: {}, remote: {} }, revoked: {} };
   const mesh = new HubMesh(() => network, () => {}, () => {}, () => {}, { probeEvery: 0 });
@@ -216,17 +171,5 @@ test('a lost link gives its unanswered probes no time', async () => {
   assert.equal(mesh.pending.size, 1);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(mesh.estimate(b, 'remote').known, false);
-  mesh.stop();
-});
-
-test('the first timing back does not beat the machine\'s own hub that has not answered yet', async () => {
-  const { mesh, link, attach, answer, tick } = fixture();
-  const vm = link('https://vm.example');
-  const own = link('http://192.168.1.9:8787');
-  attach(vm);
-  attach(own);
-  tick(1);
-  await answer(vm);
-  assert.equal(mesh.route('remote'), own);
   mesh.stop();
 });

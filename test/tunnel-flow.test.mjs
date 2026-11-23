@@ -122,8 +122,7 @@ test('closing an already ended tunnel releases its update blocker while credit i
   context.after(async () => { await daemon.stop(); server.close(); delete process.env.HELM_SSH_PORT; });
   await daemon.onFrame(link, { t: T.TUNNEL_OPEN, sid: 'closing', port: server.address().port, flow: 1 });
   await closed;
-  await new Promise(resolve => setTimeout(resolve, 30));
-  assert.ok(frames.some(frame => frame.t === T.TUNNEL_DATA));
+  while (!frames.some(frame => frame.t === T.TUNNEL_DATA)) await tick();
   assert.equal(hasActiveTransfers(), true);
   await daemon.onFrame(link, { t: T.TUNNEL_CLOSE, sid: 'closing' });
   assert.equal(hasActiveTransfers(), false);

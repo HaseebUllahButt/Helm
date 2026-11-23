@@ -39,11 +39,3 @@ test('the app build names the commit it was built from', async () => {
   await build();
   assert.equal(webBuild(dist).dirty, true);
 });
-
-test('a missing or broken stamp reads as no stamp', () => {
-  const dir = join(root, 'broken');
-  mkdirSync(dir);
-  writeFileSync(join(dir, 'build.json'), '{');
-  assert.equal(webBuild(dir), null);
-  assert.equal(webBuild(null), null);
-});

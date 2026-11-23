@@ -41,13 +41,13 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   `no pending request <id>` error become final failures when read. Preserve their
   request digest and never replay them. Other unknown errors stay held.
 - **Tests:** `test/action-delivery`, `input-delivery`, `http-read`, `client-connectivity`;
-  `test/browser/client-actions`, `client-reconnect`, `delivery-recovery`, `delivery-note`.
+  `test/browser/client-reconnect`, `delivery-recovery`.
 - **Rule:** app errors use `apps/web/src/errors.ts`. Keep clear, short messages.
   Put technical text behind Details on failed tasks. Log each distinct error once.
   Retry an unconfirmed send with its original
   ID, text, images and chat references.
-- **Tests:** `test/web-errors`; `test/browser/chat-cycle`, `send-v2`, `send-entry-points`,
-  `failed-send`, `composer-card`, `composer-streaming`, `composer-handoff`; `test/message-delivery`, `user-message`,
+- **Tests:** `test/browser/chat-cycle`, `send-v2`, `send-entry-points`,
+  `failed-send`, `composer-card`, `composer-handoff`; `test/message-delivery`, `user-message`,
   `stream`, `session-driver`.
 
 ## Queue a message while the agent works
@@ -118,7 +118,7 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   this task." (driven).
 - **Traps:** the fake agent ignores the stop signal, so a stop on fake-ask
   proves nothing.
-- **Tests:** `test/browser/turn-pulse`, `chat-cycle`; `test/kick`,
+- **Tests:** `test/browser/chat-cycle`; `test/kick`,
   `restart-delivery`.
 
 ## Permission mode, model and thinking
@@ -140,8 +140,8 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   pick another model: "Claude says this conversation's prompt cache is still
   warm" with Claude's price.
 - **Tests:** `test/browser/settings-latency` (held save), `chat-shortcuts`,
-  `global-keys`, `effort-default`, `slash-model-context`; `test/chat-keys`,
-  `modes`, `session-settings`, `recache`, `driver-claude`,
+  `global-keys`; `test/chat-keys`,
+  `modes`, `session-settings`, `driver-claude`,
   `native-claude-chat`.
 
 ## Compact and send (big, idle Claude chats)
@@ -198,7 +198,7 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   reload, type `/` again: it still shows.
 - **Prove `@` (driven 2026-11-10):** two fake chats, open one,
   `$V type "@Be"`: "@Beta plan" shows above the box.
-- **Tests:** `test/commands`, `commands-devin`, `slash-title`,
+- **Tests:** `test/commands`, `slash-title`,
   `hidden-context`, `driver-claude`.
 
 ## Long chats: folds, copy, selection
@@ -242,9 +242,9 @@ Start with a quick chat on the Fake agent (see [README](README.md)).
   not with numbers from another day. On 2026-10-30 (i7-11390H, Brave),
   Helm used 5.3 s for the 32 s reply and PandaCode's own preview 10.7 s.
 - **Traps:** iPhone handles and Safari permissions still need a device.
-- **Tests:** `test/browser/activity-fold`, `chat-fold`,
-  `history-pagination`, `whole-chat`, `windowed-row`, `native-history-window`,
+- **Tests:** `test/reply-record`; `test/browser/chat-fold`,
+  `history-pagination`, `windowed-row`, `native-history-window`,
   `transcript-performance`, `copy-selection`,
-  `highlight-performance`, `markdown-loading`, `latest-first`, `chat-sync`;
+  `markdown-loading`, `latest-first`, `chat-sync`;
   `test/events` (usage readings), `test/client-connectivity` (first page);
   `test/event-stream`, `stream-routing`.

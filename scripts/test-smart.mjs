@@ -281,6 +281,8 @@ export function passKeys({ root, tests, git, lines }, settings) {
 // Only a few test runs use the machine at once; the others wait their turn.
 // HELM_TEST_SLOTS sets how many (default 2).
 async function takeSlot() {
+  // A run started by a test inside a run that holds a slot uses that slot.
+  if (process.env.HELM_TEST_SLOT_HELD) return () => {};
   const slots = Math.max(1, Number(process.env.HELM_TEST_SLOTS) || 2);
   const dir = path.join(process.env.XDG_RUNTIME_DIR || '/tmp', 'helm-test-slots');
   mkdirSync(dir, { recursive: true });
@@ -385,6 +387,7 @@ async function main() {
   const summary = ['check summary'];
   let failed = false;
   const freeSlot = await takeSlot();
+  env.HELM_TEST_SLOT_HELD = '1';
 
   if (withTypes && types) {
     // Incremental: an unchanged web app checks in about a second.

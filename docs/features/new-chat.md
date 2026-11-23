@@ -44,8 +44,8 @@
 - **After a restart (owner, 2026-11-05):** new chats and sends wait only
   until the saved chats are read back, never for old agents to reconnect.
   One stuck reconnect after a reboot held every new chat for 13 minutes.
-- **Tests:** `test/start-receipts`, `test/startingChats`, `test/reattach`; `test/browser/new-chat`, `chat-home`, `onboarding`;
-  `test/quick-chat`, `picker-prefs`, `onboarding`.
+- **Tests:** `test/start-receipts`, `test/startingChats`, `test/reattach`; `test/browser/new-chat`, `onboarding`;
+  `test/quick-chat`, `onboarding`.
 
 ## First chat setup
 
@@ -121,8 +121,7 @@
   appears without leaving the page. Check phone and desktop sizes.
 - **Tests:** `test/model-shelf`, `test/alias-accounts`, `native-account`, `profiles-refresh`,
   `engines`, `discover-wrapper`, `models`, `models-refresh`, `model-prefs`,
-  `model-follow`, `project-settings`, `session-settings`;
-  `test/browser/models`, `effort-default`.
+  `model-follow`, `project-settings`, `session-settings`.
 
 ## Shared local models
 

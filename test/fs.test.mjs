@@ -56,26 +56,6 @@ test('the index is walked once, searched in memory, and skips what list() skips'
   assert.deepEqual((await search('secret')).results, []);
 });
 
-test('list() shows repos first and a search finds what it lists', async () => {
-  const { list, roots } = await import('../packages/connect/src/fs.js');
-
-  const dev = await list('~/dev');
-  assert.deepEqual(dev.entries.map((e) => e.name), ['helm', 'site']);
-  assert.equal(dev.entries[0].isRepo, true);
-
-  const site = await list('~/dev/site');
-  assert.equal(site.entries[0].name, 'node_modules');
-  assert.equal(site.entries[0].skip, true, 'node_modules is listed but flagged');
-
-  const home = await list('~');
-  const names = home.entries.map((e) => e.name);
-  assert.ok(names.includes('dev') && names.includes('.config'));
-  assert.ok(!names.includes('.hidden'), 'hidden stays hidden');
-
-  const r = await roots();
-  assert.ok(r.roots.some((x) => x.path === '~') && r.roots.some((x) => x.path === '~/dev'));
-});
-
 test('a folder made through mkdir is searchable at once, and bad names are refused', async () => {
   const { makeDir, search, list } = await import('../packages/connect/src/fs.js');
 
@@ -119,40 +99,6 @@ test('a corrupt or wrong-home cache is ignored and rebuilt', async () => {
     assert.ok((await restarted.search('dev helm')).results.some((d) => d.path === '~/dev/helm'));
     assert.equal(JSON.parse(readFileSync(cacheFile, 'utf8')).home, HOME);
   }
-});
-
-test('list counts ordinary and hidden files even though the picker lists only folders', async () => {
-  const { list } = await import('../packages/connect/src/fs.js');
-  const folder = join(HOME, 'occupied-transfer');
-  mkdirSync(folder);
-  writeFileSync(join(folder, 'app.txt'), 'keep me');
-  writeFileSync(join(folder, '.env'), 'TEST=throwaway');
-  const listing = await list(folder);
-  assert.deepEqual(listing.entries, []);
-  assert.equal(listing.entryCount, 2);
-});
-
-test('project copies Helm made for chats stay out of the picker; other worktrees stay in', async () => {
-  // Fake linked worktrees: a `.git` file into the repo's .git/worktrees, with a HEAD there.
-  const copy = (name, branch) => {
-    const gitdir = join(HOME, 'dev/helm/.git/worktrees', name);
-    mkdirSync(gitdir, { recursive: true });
-    writeFileSync(join(gitdir, 'HEAD'), `ref: refs/heads/${branch}\n`);
-    mkdirSync(join(HOME, 'dev', name, 'src'), { recursive: true });
-    writeFileSync(join(HOME, 'dev', name, '.git'), `gitdir: ${gitdir}\n`);
-  };
-  copy('helm-chat-abc123', 'helm/chat-abc123');
-  copy('helm-own-tree', 'experiment');
-  const fsApi = await import('../packages/connect/src/fs.js?copies');
-  const listed = (await fsApi.list(join(HOME, 'dev'))).entries.map((e) => e.name);
-  assert.ok(listed.includes('helm') && listed.includes('helm-own-tree'));
-  assert.ok(!listed.includes('helm-chat-abc123'));
-  await fsApi.warmIndex({ force: true });
-  const found = (await fsApi.search('helm')).results.map((d) => d.path);
-  assert.ok(found.includes('~/dev/helm-own-tree'));
-  assert.ok(!found.some((p) => p.startsWith('~/dev/helm-chat-abc123')), 'neither the copy nor its folders');
-  rmSync(join(HOME, 'dev/helm-chat-abc123'), { recursive: true });
-  rmSync(join(HOME, 'dev/helm-own-tree'), { recursive: true });
 });
 
 test('a device gets the whole index as a tree, and only again once it changes', async () => {

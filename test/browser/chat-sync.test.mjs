@@ -127,22 +127,6 @@ test('cold live pushes cannot move the cursor past history before it is loaded',
   assert.equal(await text(page),'old latest');
 });
 
-test('a long unattended chat opens its latest window without replaying earlier pages',async t=>{
-  const events=[...transcript(),...Array.from({length:1200},(_,i)=>event(i+4,'status',{status:'working'})),...transcript('Latest answer',1204)];
-  const remote=server(events);
-  remote.handler=params=>params.tail?{
-    ...remote.history(params),events:events.slice(-3),firstSeq:1204,
-  }:remote.history(params);
-  const page=await device(t,remote,{cache:transcript()});
-  await caughtUp(page,1206);
-  assert.equal(await text(page),'Latest answer');
-  const reads=remote.calls.filter(c=>c.method==='session.events');
-  assert.equal(reads.length,1);
-  assert.equal(reads[0].params.tail,200);
-  assert.equal(reads[0].params.since,undefined);
-  assert.equal(await page.evaluate(()=>window.state.earlier),true);
-});
-
 test('earlier pages merge fuller duplicate event fields without duplicating output', async t => {
   const start = event(1, 'turn.start', { turnId: 'turn', text: 'run it' });
   const sparse = event(2, 'item.start', { id: 'cmd', turnId: 'turn', kind: 'command' });
@@ -218,7 +202,7 @@ test('two independent device views keep their own watch across refresh and close
   await caughtUp(a,3);await caughtUp(b,3);assert.equal(remote.watchers.size,2);
   await a.evaluate(()=>window.unmount());
   await a.waitForFunction(()=>document.querySelector('pre')===null);
-  await b.evaluate(()=>new Promise(r=>setTimeout(r,20)));
+  for(const end=Date.now()+5000;remote.watchers.size!==1&&Date.now()<end;) await new Promise(r=>setTimeout(r,5));
   assert.equal(remote.watchers.size,1);
   const push=event(4,'item.delta',{id:'reply-1',text:' still live'});remote.events.push(push);
   await b.evaluate(push=>window.emit('session.event',{id:'chat',events:[push]}),push);
@@ -252,4 +236,106 @@ test('chat reads recover through HTTP when a direct channel stays open but silen
     const result=await page.evaluate(method=>window.checkRoute(method),method);
     assert.deepEqual(result.calls,['direct']);assert.match(result.result.error,/timed out/);
   }
+});
+
+// A held history read, so live events can arrive while it waits.
+const holdNextRead=remote=>{
+  const started=deferred(),gate=deferred();
+  remote.handler=async p=>{remote.handler=null;const r=remote.history(p);started.resolve();await gate.promise;return r};
+  return {started:started.promise,release:gate.resolve};
+};
+const reads=remote=>remote.calls.filter(c=>c.method==='session.events');
+const reply=(seq,n)=>[
+  event(seq,'turn.start',{turnId:'t'+seq,text:'Question '+n}),
+  event(seq+1,'item.start',{id:'a'+seq,turnId:'t'+seq,kind:'text'}),
+  event(seq+2,'item.delta',{id:'a'+seq,text:'Answer '+n}),
+  event(seq+3,'turn.done',{turnId:'t'+seq,status:'ok'}),
+];
+
+test('live replies appear while a history check waits, and its old reply cannot erase them',async t=>{
+  const remote=server();remote.status='idle';
+  const page=await device(t,remote);await caughtUp(page,3);
+  const held=holdNextRead(remote);
+  await page.evaluate(()=>{void window.state.refresh();});
+  await held.started;
+  const push=event(4,'item.delta',{id:'reply-1',text:' live'});
+  await page.evaluate(push=>window.emit('session.event',{id:'chat',events:[push]}),push);
+  await page.waitForFunction(()=>window.state.log.last===4);
+  assert.equal(await text(page),'old live');
+  held.release();
+  await caughtUp(page,4);
+  assert.equal(await text(page),'old live');
+  assert.equal(reads(remote).length,2);
+});
+
+test('repeated online notices do not queue more history reads behind a slow read',async t=>{
+  const remote=server();remote.status='idle';
+  const page=await device(t,remote);await caughtUp(page,3);
+  const held=holdNextRead(remote);
+  await page.evaluate(()=>{void window.state.refresh();});
+  await held.started;
+  for(let n=0;n<4;n++) await page.evaluate(()=>window.emit('presence',{online:true}));
+  held.release();
+  await caughtUp(page,3);
+  assert.equal(reads(remote).length,2);
+});
+
+test('an older history reply keeps its unanswered question and does not restore a resolved one',async t=>{
+  const remote=server();remote.status='idle';
+  const page=await device(t,remote);await caughtUp(page,3);
+  remote.pending=[{requestId:'open',text:'Approve?'},{requestId:'done',text:'Already answered'}];
+  const held=holdNextRead(remote);
+  await page.evaluate(()=>{void window.state.refresh();});
+  await held.started;
+  await page.evaluate(events=>window.emit('session.event',{id:'chat',events}),
+    [event(4,'permission.resolved',{requestId:'done'}),event(5,'status',{status:'working'})]);
+  await page.waitForFunction(()=>window.state.log.last===5);
+  held.release();await caughtUp(page,5);
+  assert.deepEqual(await page.evaluate(()=>window.state.log.pending.map(p=>p.requestId)),['open']);
+  assert.equal(await page.evaluate(()=>window.state.log.status),'working');
+});
+
+test('a gap of several pages is read page by page and keeps the chat behind it',async t=>{
+  const remote=server();remote.status='idle';
+  const page=await device(t,remote);await caughtUp(page,3);
+  remote.pageSize=50;
+  for(let n=0;n<60;n++) remote.events.push(...reply(4+n*4,n+2));
+  const seen=reads(remote).length;
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await caughtUp(page,remote.events.at(-1).seq);
+  const later=reads(remote).slice(seen);
+  assert.ok(later.every(c=>!c.params.tail),JSON.stringify(later));
+  assert.ok(later.filter(c=>c.params.since).length>=5,'it read each page');
+  const turns=await page.evaluate(()=>window.state.log.turns.map(t=>t.items.map(i=>i.text).join('')));
+  assert.equal(turns.length,61);
+  assert.equal(turns[0],'old','the first reply is still there');
+});
+
+test('settings saves use the hub when a direct channel stops answering, with direct-only fallback',async t=>{
+  const bundle=await build({stdin:{contents:`
+    import { Client } from './apps/web/src/client';
+    window.testRoute = async (method, relayOpen) => {
+      const client = Object.create(Client.prototype), calls = [];
+      client.seq = 0; client.pending = new Map();
+      const reply = (route, frame) => {
+        calls.push(route);
+        const msg = JSON.parse(frame);
+        client.pending.get(msg.id).resolve({ok:true}); client.pending.delete(msg.id);
+      };
+      client.ws = { readyState:relayOpen ? WebSocket.OPEN : WebSocket.CLOSED,send:frame=>reply('hub',frame) };
+      client.peers = new Map([['machine',{ready:true,channel:{readyState:'open',bufferedAmount:0,send:frame=>{
+        if (relayOpen && ['profile.defaults','model.prefs','picker.prefs'].includes(method)) { calls.push('stale-direct'); throw new Error('stale channel'); }
+        reply('direct',frame);
+      }}}]]);
+      await client.rpc('machine',method,{},1000);
+      return calls;
+    };
+  `,resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,format:'iife'});
+  const context=await browser.newContext();t.after(()=>context.close());
+  const page=await context.newPage();await page.addScriptTag({content:bundle.outputFiles[0].text});
+  for(const method of ['profile.defaults','model.prefs','picker.prefs']){
+    assert.deepEqual(await page.evaluate(method=>window.testRoute(method,true),method),['hub']);
+    assert.deepEqual(await page.evaluate(method=>window.testRoute(method,false),method),['direct']);
+  }
+  assert.deepEqual(await page.evaluate(()=>window.testRoute('session.messages',true)),['direct']);
 });

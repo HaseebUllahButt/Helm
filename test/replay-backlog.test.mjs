@@ -54,7 +54,7 @@ test('both process backlogs preserve the hard UTF-16 tail across disconnect, att
   second.detach();
   const empty = b.procPipe('private');
   empty.onData(data => { replay += data; });
-  await pause(30);
+  await new Promise(setImmediate); // A held backlog is handed over in a microtask.
   assert.equal(replay, received, 'consuming a backlog does not replay it twice');
   const exited = new Promise(resolve => empty.onExit(resolve));
   await empty.kill('SIGTERM');

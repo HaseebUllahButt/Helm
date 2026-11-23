@@ -47,6 +47,12 @@ async function until(check) {
   throw new Error('condition timed out');
 }
 
+/** Request timers are unref'ed; keep the test alive until the promise settles. */
+async function settled(promise) {
+  const alive = setInterval(() => {}, 1000);
+  try { await promise; } finally { clearInterval(alive); }
+}
+
 test('a timed-out queued write cannot leave later', async () => {
   let release;
   const blocked = new Promise(resolve => { release = resolve; });
@@ -63,14 +69,12 @@ test('a timed-out queued write cannot leave later', async () => {
     }),
   });
   mesh.want('b');
-  await delay(1);
+  await until(() => mesh.channels.get('b')?.state === 'open');
   const write = mesh.call('b', 'session.input', { text: 'expired' }, { timeout: 10 });
-  // The request timer is unref'ed; keep the test alive until it expires.
-  const rejected = assert.rejects(write, { code: 'timeout' });
-  await delay(30);
-  await rejected;
+  await settled(assert.rejects(write, { code: 'timeout' }));
   release();
-  await delay(5);
+  // The released send runs in the next few microtasks.
+  await new Promise(setImmediate);
   assert.equal(sent.filter(frame => frame.method === 'session.input').length, 0);
   assert.equal(mesh.channels.size, 0);
   mesh.stop();
@@ -110,9 +114,7 @@ test('turning directRoutes off also stops sends on an already open outgoing chan
   const before = sent.length;
   writeFileSync(join(process.env.HELM_DIR, 'config.json'), JSON.stringify({ directRoutes: false }));
   try {
-    const rejected = assert.rejects(mesh.call('source', 'session.input', {}, { timeout: 10 }), error => error.unsent === true);
-    await delay(30);
-    await rejected;
+    await settled(assert.rejects(mesh.call('source', 'session.input', {}, { timeout: 10 }), error => error.unsent === true));
     assert.equal(sent.length, before);
     mesh.tick();
     assert.equal(mesh.channels.size, 0);

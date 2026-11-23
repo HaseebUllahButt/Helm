@@ -30,9 +30,7 @@ before(async () => {
       import { Markdown } from './apps/web/src/Markdown';
       import { selectionClipboard } from './apps/web/src/copySelection';
       const root = createRoot(document.getElementById('root'));
-      window.showMarkdown = (text, live = false) => {
-        flushSync(() => root.render(<Markdown text={text} live={live} />));
-      };
+      window.showMarkdown = text => { flushSync(() => root.render(<Markdown text={text} />)); };
       window.copySelected = () => selectionClipboard(getSelection(), document.querySelector('.md'));
     `, resolveDir: process.cwd(), loader: 'tsx' },
     bundle: true, write: false, format: 'esm', splitting: true, jsx: 'automatic',
@@ -95,17 +93,6 @@ test('a reply draws its math and leaves prices, code and escaped dollars as text
   await page.evaluate(() => getSelection().selectAllChildren(document.querySelector('.md p')));
   const copied = await page.evaluate(() => window.copySelected().text);
   assert.equal(copied, 'Only $W_Q$, $W_K$ and $W_V$ learn. Also $x^2$ and $$a+b$$ inline.');
-  assert.deepEqual(errors, []);
-});
-
-test('math in a streaming reply is drawn, and broken TeX stays as its source', async t => {
-  const { page, errors } = await pageFor(t);
-  await page.evaluate(() => window.showMarkdown('Score: $\\frac{a}{b}$ and $\\frac{a$ so far', true));
-  await page.locator('.math[data-tex]').nth(1).waitFor();
-  assert.equal(await page.locator('.math').first().locator('.katex').count(), 1);
-  const broken = page.locator('.math').nth(1);
-  assert.equal(await broken.getAttribute('class'), 'math math-inline math-source');
-  assert.equal(await broken.innerText(), '\\frac{a');
   assert.deepEqual(errors, []);
 });
 

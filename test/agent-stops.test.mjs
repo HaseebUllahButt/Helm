@@ -66,9 +66,14 @@ test('the process host records who stopped an agent', async (t) => {
   const asked = await until(() => lastStop('asked'));
   assert.equal(asked.askedByHelm, true);
 
-  // A clean exit is not recorded.
+  // A clean exit is not recorded. A failed process started after it is,
+  // so once that record lands the clean one would have landed too.
+  const exited = (id) => new Promise((r) => host.on('proc.exit', (e) => { if (e.id === id) r(); }));
+  const cleanGone = exited('clean');
   await host.openProc('clean', { cmd: '/bin/sh', args: ['-c', 'exit 0'], cwd: dir, env: {} });
-  await new Promise((r) => setTimeout(r, 300));
+  await cleanGone;
+  await host.openProc('marker', { cmd: '/bin/sh', args: ['-c', 'exit 3'], cwd: dir, env: {} });
+  await until(() => lastStop('marker'));
   assert.equal(lastStop('clean'), null);
 });
 

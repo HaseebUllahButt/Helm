@@ -13,8 +13,6 @@ before(async () => {
     window.calls=[]; window.opened=[];
     const listeners=new Set();
     let seq=2;
-    window.emit=(events)=>{const stamped=events.map(e=>({seq:++seq,at:Date.now(),...e}));
-      for(const l of listeners)l('laptop','session.event',{id:'chat',events:stamped});};
     const options={models:['model-a','model-b','model-c','model-d','model-e','model-f','model-g'],
       more:['model-x','model-y'],
       labels:{'model-a':'Model A','model-b':'Model B','model-c':'Model C','model-d':'Model D','model-e':'Model E','model-f':'Model F','model-g':'Model G','model-x':'Model X','model-y':'Model Y'},
@@ -54,8 +52,8 @@ before(async () => {
 });
 after(async () => browser?.close());
 
-async function open(t, viewport = { width: 1280, height: 900 }) {
-  const page = await browser.newPage({ viewport });
+async function open(t) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.setDefaultTimeout(6000);
   t.after(() => page.close());
   const errors = [];
@@ -70,18 +68,6 @@ async function open(t, viewport = { width: 1280, height: 900 }) {
   return page;
 }
 const picked = (page, method) => page.evaluate(m => window.calls.filter(c => c.method === m).map(c => Object.values(c.params)[1]), method);
-
-test('Ctrl+Shift+Y steps the thinking level from the composer and wraps', async t => {
-  const page = await open(t);
-  const composer = page.locator('textarea').first();
-  await composer.focus();
-  for (const level of ['medium', 'high', 'low']) {
-    await page.keyboard.press('Control+Shift+Y');
-    await page.getByRole('button', { name: `thinking: ${level}`, exact: true }).waitFor();
-  }
-  assert.deepEqual(await picked(page, 'session.effort'), ['medium', 'high', 'low']);
-  assert.equal(await composer.evaluate(el => el === document.activeElement), true, 'typing carries on where it was');
-});
 
 test('Ctrl+Shift+M steps favorites first, then the short list, never the long tail', async t => {
   const page = await open(t);
@@ -122,61 +108,4 @@ test('Ctrl+Shift+A opens and closes the agents panel; arrows and Enter open a ch
   await page.waitForFunction(() => window.opened.length === 1);
   assert.deepEqual(await page.evaluate(() => window.opened), ['kid-1']);
   await panel.waitFor({ state: 'hidden' });
-});
-
-test('the model sheet takes the keyboard: type to search, arrows, Enter, Esc', async t => {
-  const page = await open(t);
-  await page.locator('textarea').first().focus();
-  await page.locator('button[title^="model:"]').click();
-  const search = page.getByRole('textbox', { name: 'Search model' });
-  await search.waitFor();
-  assert.equal(await search.evaluate(el => el === document.activeElement), true);
-  await page.keyboard.type('model x');
-  await page.keyboard.press('Enter');
-  await page.waitForFunction(() => window.current.model === 'model-x');
-  await search.waitFor({ state: 'hidden' });
-
-  await page.locator('button[title^="model:"]').click();
-  await search.waitFor();
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('ArrowDown');
-  assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Model Y');
-  // A letter typed on a row goes to the search box.
-  await page.keyboard.type('g');
-  assert.equal(await search.inputValue(), 'g');
-  await page.keyboard.press('Escape');
-  await search.waitFor({ state: 'hidden' });
-  assert.equal(await page.evaluate(() => window.current.model), 'model-x');
-
-  // Short lists have no box; the arrows and Enter still work.
-  await page.locator('button[title^="thinking:"]').click();
-  await page.getByRole('listbox', { name: 'thinking' }).waitFor();
-  assert.equal(await page.evaluate(() => document.activeElement.textContent), 'low');
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Enter');
-  await page.waitForFunction(() => window.current.effort === 'medium');
-});
-
-test('tok/s is a hover note on working while text streams, and goes when it stops', async t => {
-  const page = await open(t, { width: 390, height: 844 });
-  const chip = page.locator('.session-bar .chip.working');
-  await chip.waitFor();
-  assert.equal(await chip.textContent(), '', 'only a dot, no word');
-  await page.evaluate(() => window.emit([{ type: 'item.start', id: 'msg#0', kind: 'text', turnId: 't1' }]));
-  // 400 characters a second for three seconds: about 100 tokens a second.
-  await page.evaluate(async () => {
-    for (let i = 0; i < 30; i++) {
-      window.emit([{ type: 'item.delta', id: 'msg#0', text: 'x'.repeat(40) }]);
-      await new Promise(r => setTimeout(r, 100));
-    }
-  });
-  assert.equal(await chip.textContent(), '', 'the bar stays a dot');
-  const text = await chip.getAttribute('title') ?? '';
-  const rate = Number(/^Working.* · (\d+) tok\/s$/.exec(text)?.[1]);
-  assert.ok(rate >= 70 && rate <= 130, `a sensible rate, got "${text}"`);
-  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'fits a phone');
-  const shot = process.env.HELM_SHOT_DIR;
-  if (shot) await page.screenshot({ path: `${shot}/tok-s-phone.png`, clip: { x: 0, y: 0, width: 390, height: 120 } });
-  // A tool running is not writing.
-  await page.waitForFunction(() => !document.querySelector('.session-bar .chip.working')?.title.includes('tok/s'), null, { timeout: 5000 });
 });

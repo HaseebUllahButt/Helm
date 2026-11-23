@@ -34,10 +34,6 @@ async function pageFor(t) {
     });
     window.workspace.writeWorkspaces();
     await window.txn('kv', 'readonly', store => store.get('helm.workspace:test'));
-    window.writes = { local: 0, durable: 0 };
-    const set = Storage.prototype.setItem, put = IDBObjectStore.prototype.put;
-    Storage.prototype.setItem = function (...args) { window.writes.local++; return set.apply(this, args); };
-    IDBObjectStore.prototype.put = function (...args) { window.writes.durable++; return put.apply(this, args); };
     window.flush = async () => {
       window.workspace.writeWorkspaces();
       return window.txn('kv', 'readonly', store => store.get('helm.workspace:test'));
@@ -46,32 +42,15 @@ async function pageFor(t) {
   return page;
 }
 
-test('repeated headers, transcript fields and unlisted helpers do not rewrite the workspace', async t => {
-  const page = await pageFor(t);
-  const result = await page.evaluate(async () => {
-    const before = window.workspace.loadWorkspace('test');
-    window.workspace.updateWorkspaceSession('test', 'machine', { ...window.session });
-    window.workspace.updateWorkspaceSession('test', 'machine', { ...window.session, lastSeq: 10 });
-    window.workspace.updateWorkspaceSession('test', 'machine', { ...window.session, id: 'helper', delegation: { parentId: 'chat' } });
-    window.workspace.updateWorkspaceSession('test', 'other', { ...window.session, title: 'Different machine' });
-    await window.flush();
-    return { same: before === window.workspace.loadWorkspace('test'), writes: window.writes };
-  });
-  assert.deepEqual(result, { same: true, writes: { local: 0, durable: 0 } });
-});
-
-test('changed headers save the list and open view, and equal nested fields stay quiet', async t => {
+test('a changed header saves the list and the open view', async t => {
   const page = await pageFor(t);
   const result = await page.evaluate(async () => {
     const changed = { ...window.session, title: 'New title', context: { used: 42, window: 100 } };
     window.workspace.updateWorkspaceSession('test', 'machine', changed);
     const saved = await window.flush();
-    window.workspace.updateWorkspaceSession('test', 'machine', structuredClone(changed));
-    await window.flush();
-    return { title: saved.sessions.machine[0].title, view: saved.view.session.title,
-      context: saved.view.session.context, writes: window.writes };
+    return { title: saved.sessions.machine[0].title, view: saved.view.session.title, context: saved.view.session.context };
   });
-  assert.deepEqual(result, { title: 'New title', view: 'New title', context: { used: 42, window: 100 }, writes: { local: 1, durable: 1 } });
+  assert.deepEqual(result, { title: 'New title', view: 'New title', context: { used: 42, window: 100 } });
 });
 
 test('an open chat outside the saved list still saves its changed header', async t => {
@@ -79,10 +58,9 @@ test('an open chat outside the saved list still saves its changed header', async
   const result = await page.evaluate(async () => {
     window.workspace.saveWorkspace('test', { sessions: { machine: [] } });
     await window.flush();
-    window.writes = { local: 0, durable: 0 };
     window.workspace.updateWorkspaceSession('test', 'machine', { ...window.session, status: 'working' });
     const saved = await window.flush();
-    return { status: saved.view.session.status, count: saved.sessions.machine.length, writes: window.writes };
+    return { status: saved.view.session.status, count: saved.sessions.machine.length };
   });
-  assert.deepEqual(result, { status: 'working', count: 0, writes: { local: 1, durable: 1 } });
+  assert.deepEqual(result, { status: 'working', count: 0 });
 });

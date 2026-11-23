@@ -79,6 +79,10 @@ async function delegateAway(sessions, parent, task = 'Review on the laptop') {
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+const until = async (fn, ms = 5000) => {
+  const end = Date.now() + ms;
+  while (!fn()) { if (Date.now() > end) throw new Error('timed out waiting for the state'); await new Promise((r) => setTimeout(r, 5)); }
+};
 
 test('a helper on another machine counts under its chat and is no chat of its own there', async (t) => {
   const { sessions } = setup(t);
@@ -103,8 +107,8 @@ test('its result starts one parent turn, and a parent that read it first is not 
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
   const child = await delegateAway(sessions, parent);
   drivers.get(child.id).finish();
-  await settle();
-  assert.match(drivers.get(parent.id).sent ?? '', /Opus on the laptop reviewed it/);
+  await until(() => /Opus on the laptop reviewed it/.test(drivers.get(parent.id).sent ?? '')
+    && calls.some((call) => call.method === 'session.helper-result') && sessions.get(parent.id).remoteHelpers[0].status === 'done');
   assert.match(drivers.get(parent.id).sent, /Machine: laptop\nStatus: done\nResult:\nOpus on the laptop reviewed it\.\nFull output: helm delegate-result /);
   const result = calls.find((call) => call.method === 'session.helper-result');
   assert.equal(result.machine, 'vm');

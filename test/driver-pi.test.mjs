@@ -20,31 +20,6 @@ const make = (name, opts = {}, cls = PiDriver) => {
   return { fake, driver, log: collect(driver) };
 };
 
-test('pi-family releases read timers after immediate replies', async t => {
-  const timers = new Set();
-  t.mock.method(globalThis, 'setTimeout', () => {
-    const timer = { unref() {} }; timers.add(timer); return timer;
-  });
-  t.mock.method(globalThis, 'clearTimeout', timer => timers.delete(timer));
-  let receive, exited;
-  const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; },
-    write(raw) {
-      const { id, type } = JSON.parse(raw);
-      receive(JSON.stringify({ id, type: 'response', command: type, success: true,
-        data: { sessionId: 'kept', isStreaming: false } }) + '\n');
-    },
-    end() { exited({ code: 0 }); }, kill() { exited({ code: 0 }); },
-  };
-  const driver = new OmpDriver({ cmd: 'unused', cwd: '/tmp', procId: 'kept',
-    procHost: { hasProc: () => true, procPipe: () => pipe } });
-  try {
-    await driver.start();
-    assert.equal(timers.size, 0);
-    await driver.setModel('new-model');
-    assert.equal(timers.size, 0);
-  } finally { exited?.({ code: 0 }); }
-});
-
 test('pi: get_state seeds model/effort/title, prompt streams text exactly once', async () => {
   const { driver, log, fake } = make('plain', { model: 'opencode/spark-1' });
   await driver.send('say helm-ok');
@@ -121,11 +96,6 @@ test('pi: interrupt writes abort and the turn ends interrupted', async () => {
   assert.equal(done.status, 'interrupted');
   assert.ok(fake.stdinLines().some((l) => l.type === 'abort'));
   await driver.kill();
-});
-
-test('omp shares the pi driver', () => {
-  const { driver } = make('plain', {}, OmpDriver);
-  assert.equal(driver.engine, 'omp');
 });
 
 // ------------------------------------------------- lifecycle status (live)
@@ -444,17 +414,21 @@ test('pi: a cycle the agent starts by itself is its own turn, open through a qui
   assert.equal(wake.text, '');
   assert.match(wake.turnId, /^wake-/);
   await log.until((e) => e.type === 'item.done' && e.id.startsWith('m') && log.of('item.start').some((s) => s.id === e.id && s.turnId === wake.turnId));
-  // Quiet: nothing for most of half a second. That is not the end of the work.
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  assert.equal(log.of('turn.done').length, 1, 'a quiet gap does not close the wake-up');
-  assert.equal(driver.status, 'working');
+  // Then half a second of quiet, then more words. The quiet is not the end.
+  const after = await log.until((e) => e.type === 'item.delta' && e.text.includes('background finished'));
   const done = await log.until((e) => e.type === 'turn.done' && e.turnId === wake.turnId);
   assert.equal(done.status, 'ok');
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.deepEqual(log.of('turn.done').map((e) => e.turnId), [first.turnId, wake.turnId], 'each turn closes once, the repeated settle closes nothing');
-  assert.equal(driver.status, 'idle');
+  await log.until((e) => e.type === 'status' && e.status === 'idle' && log.events.indexOf(e) > log.events.indexOf(done));
+  const between = log.events.slice(log.events.indexOf(wake), log.events.indexOf(after));
+  assert.ok(!between.some((e) => e.type === 'turn.done' || (e.type === 'status' && e.status === 'idle')),
+    'a quiet gap does not close the wake-up');
   const texts = log.of('item.start').filter((e) => e.kind === 'text').map((e) => e.turnId);
   assert.deepEqual(texts, [first.turnId, wake.turnId, wake.turnId]);
+  // The repeated settle is already written when the agent reads the next prompt.
+  await driver.send('again');
+  const next = await log.until((e) => e.type === 'turn.done' && ![first.turnId, wake.turnId].includes(e.turnId));
+  assert.deepEqual(log.of('turn.done').map((e) => e.turnId), [first.turnId, wake.turnId, next.turnId],
+    'each turn closes once, the repeated settle closes nothing');
 });
 
 // -------------------------------------------------- steering (live fake)

@@ -34,7 +34,7 @@
   `DataTransfer` file on `.main`, `shot`, then a `drop`. Proof: the card,
   then the file in the box and no card.
 - **Tests:** `test/browser/image-paste`; `test/paste-store`,
-  `attach-tags`, `retain-assets`.
+  `retain-assets`.
 
 ## Canvas (notes and docs beside the chat)
 - **Reach:** the Canvas button in the chat header, or Ctrl/⌘ Shift D. A wide
@@ -145,7 +145,7 @@
   sidebar folds and opens again, and the frame's keydown is cancelled.
 - **Traps:** without `HELM_DIR` and `--session`, `render` posts into the
   owner's real chat.
-- **Tests:** `test/visual-replies`, `visual-frame-keys`; `test/browser/visual-replies`. Design:
+- **Tests:** `test/visual-replies`; `test/browser/visual-replies`. Design:
   [`docs/visual-replies.md`](../visual-replies.md).
 
 ## Markdown, code and diffs in replies

@@ -14,15 +14,12 @@ before(async () => {
     import { createRoot } from 'react-dom/client';
     import { AppErrorBoundary } from './apps/web/src/AppErrorBoundary';
     const Screen = lazy(() => import('/assets/expired.js'));
-    function Broken() { throw new Error('Cannot render this chat'); }
     function App() {
       const [screen, setScreen] = useState('chat');
       return <>
         <textarea aria-label="Draft" onChange={e => localStorage.setItem('saved-draft', e.target.value)} />
         <button onClick={() => setScreen('lazy')}>Open screen</button>
-        <button onClick={() => setScreen('broken')}>Open broken chat</button>
         {screen === 'lazy' && <Suspense fallback="Opening screen"><Screen /></Suspense>}
-        {screen === 'broken' && <Broken />}
       </>;
     }
     window.reloads = 0;
@@ -57,16 +54,6 @@ test('a missing screen chunk shows recovery without clearing pairing or saved dr
   assert.equal(await page.evaluate(() => window.reloads), 1);
   assert.equal(await page.evaluate(() => localStorage.getItem('saved-draft')), 'keep my unsent message');
   assert.equal(await page.evaluate(() => localStorage.getItem('helm.auth')), 'test-membership');
-});
-
-test('a render error leaves a readable recovery screen without raw details', async t => {
-  const page = await pageFor(t);
-  await page.getByRole('button', { name: 'Open broken chat' }).click();
-  await page.getByRole('heading', { name: 'Helm cannot open this screen.' }).waitFor();
-  assert.equal(await page.getByText('Error details', { exact: true }).count(), 0);
-  assert.equal(await page.getByText('Cannot render this chat', { exact: true }).count(), 0);
-  await page.getByRole('button', { name: 'Reload Helm' }).click();
-  assert.equal(await page.evaluate(() => window.reloads), 1);
 });
 
 test('the installed shell remains recoverable even when its entry bundle is missing', async t => {

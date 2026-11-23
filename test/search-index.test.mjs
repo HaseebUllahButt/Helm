@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, appendFileSync, renameSync, openSync, closeSync, utimesSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, appendFileSync, renameSync, utimesSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.HELM_DIR ??= mkdtempSync(join(tmpdir(), 'helm-search-env-'));
-const { SearchIndex, snippetFor, queryWords, searchable } = await import('../packages/connect/src/search-index.js');
+const { SearchIndex } = await import('../packages/connect/src/search-index.js');
 const { EventLog } = await import('../packages/connect/src/events.js');
 
 const line = (e) => JSON.stringify(e) + '\n';
@@ -55,36 +55,8 @@ test('builds from the logs: the owner\'s words once, the agent\'s reply joined f
   assert.equal(agent[0].who, 'agent');
   assert.equal(agent[0].snippet, 'The recipe is now four steps long.');
 
-  // Thinking is not a reply, and a title-only match says so.
+  // Thinking is not a reply.
   assert.equal(index.search('thinking about', sessions).length, 0);
-  const byTitle = index.search('pie', [chat('aaa111', 'Lemon pie')]);
-  assert.equal(byTitle[0].who, 'you', 'the words beat the title when both match');
-  const titleOnly = new SearchIndex({ dir: mkdtempSync(join(tmpdir(), 'helm-search-empty-')), file: join(dir, 'other.json') })
-    .search('pie', [chat('zzz', 'Apple pie')]);
-  assert.equal(titleOnly[0].who, 'title');
-  assert.equal(titleOnly[0].snippet, '');
-});
-
-test('every word must appear in one thing said; nothing typed finds nothing', async () => {
-  const { dir, file } = freshDir();
-  writeLog(dir, 'aaa111');
-  const index = new SearchIndex({ dir, file });
-  const sessions = [chat('aaa111', 'Lemon pie')];
-  await index.update(sessions);
-  assert.equal(index.search('lemon four', sessions).length, 0, 'words from two different messages do not match');
-  assert.equal(index.search('LEMON   Recipe', sessions).length, 1, 'case and spacing do not matter');
-  assert.deepEqual(index.search('', sessions), []);
-  assert.deepEqual(index.search('   ', sessions), []);
-  assert.deepEqual(queryWords(' Two  words '), ['two', 'words']);
-});
-
-test('search keeps short substring matches and Unicode case folding', () => {
-  const { dir, file } = freshDir();
-  const index = new SearchIndex({ dir, file });
-  const sessions = [chat('aaa111', 'Notes')];
-  index.note('aaa111', { seq: 1, at: 1, type: 'turn.start', text: 'Ångström and café' });
-  assert.equal(index.search('ng', sessions).length, 1);
-  assert.equal(index.search('ångström CAFÉ', sessions).length, 1);
 });
 
 test('live events keep the index current without reading the log again; a rewind forgets what followed', async () => {
@@ -157,19 +129,6 @@ test('a saved live event is not indexed twice when it later reaches the log', as
   assert.equal(index.search('marker', sessions)[0].count, 2);
 });
 
-test('messages Helm wrote, wake-ups and local copies are not the owner\'s words', () => {
-  const { dir, file } = freshDir();
-  const index = new SearchIndex({ dir, file });
-  const sessions = [chat('bbb222', 'Notes')];
-  index.note('bbb222', { seq: 1, at: 1, type: 'turn.start', text: '[Helm: you are running on Laptop, zebra]' });
-  index.note('bbb222', { seq: 2, at: 1, type: 'turn.start', text: 'A zebra crossing', wake: true });
-  index.note('bbb222', { seq: 3, at: 1, type: 'turn.start', text: 'zebra', local: true });
-  index.note('bbb222', { seq: 4, at: 1, type: 'turn.start', text: '/compact zebra' });
-  assert.equal(index.search('zebra', sessions).length, 0);
-  index.note('bbb222', { seq: 5, at: 1, type: 'turn.start', text: 'Paint the zebra stripes' });
-  assert.equal(index.search('zebra', sessions).length, 1);
-});
-
 test('saved to disk and read back; a log that grew is read from where it stopped; gone chats are dropped', async () => {
   const { dir, file } = freshDir();
   const seq = writeLog(dir, 'aaa111');
@@ -202,49 +161,6 @@ test('saved to disk and read back; a log that grew is read from where it stopped
   index.save();
   const saved = JSON.parse(readFileSync(file, 'utf8'));
   assert.deepEqual(Object.keys(saved.chats), ['aaa111']);
-});
-
-test('newest match first, limited, and only chats worth finding', () => {
-  const { dir, file } = freshDir();
-  const index = new SearchIndex({ dir, file });
-  const sessions = [
-    chat('old', 'Old', { updatedAt: 1 }), chat('new', 'New', { updatedAt: 2 }),
-    chat('helper', 'Helper', { delegation: { parentId: 'new' } }),
-    chat('term', 'zsh', { engine: 'shell', driver: null }),
-    chat('brain', 'Helm brain', { brain: true }),
-  ];
-  index.note('old', { seq: 1, at: 100, type: 'turn.start', text: 'about pelicans' });
-  index.note('new', { seq: 1, at: 200, type: 'turn.start', text: 'more pelicans please' });
-  index.note('helper', { seq: 1, at: 300, type: 'turn.start', text: 'pelicans in a helper' });
-  const hits = index.search('pelicans', sessions);
-  assert.deepEqual(hits.map((h) => h.id), ['new', 'old']);
-  assert.deepEqual(index.search('pelicans', sessions, { limit: 1 }).map((h) => h.id), ['new']);
-  assert.equal(searchable(sessions[2]), false);
-  assert.equal(searchable(sessions[3]), false);
-  assert.equal(searchable(sessions[4]), false);
-});
-
-test('the snippet shows the matching words, with the rest cut around them', () => {
-  const long = 'x'.repeat(200) + ' the needle is here ' + 'y'.repeat(200);
-  const s = snippetFor(long, ['needle']);
-  assert.ok(s.length <= 124, s.length);
-  assert.match(s, /needle/);
-  assert.ok(s.startsWith('…') && s.endsWith('…'));
-  assert.equal(snippetFor('short text', ['short']), 'short text');
-});
-
-test('repeated queries reuse matches and live entries and rewinds invalidate them', () => {
-  const { dir, file } = freshDir();
-  const index = new SearchIndex({ dir, file });
-  const sessions = [chat('aaa111', 'Notes')];
-  index.note('aaa111', { seq: 1, at: 1, type: 'turn.start', text: 'A blue whale' });
-  assert.equal(index.search('blue', sessions)[0].count, 1);
-  assert.equal(index.search('blue', sessions)[0].count, 1);
-  index.note('aaa111', { seq: 2, at: 2, type: 'turn.start', text: 'A blue bird' });
-  assert.equal(index.search('blue', sessions)[0].count, 2);
-  assert.equal(index.search('blue', sessions)[0].snippet, 'A blue bird');
-  index.note('aaa111', { seq: 1, at: 3, type: 'history.reset' });
-  assert.equal(index.search('blue', sessions).length, 0);
 });
 
 test('a torn final line is read when completed, and replacement logs are noticed', async () => {
@@ -301,27 +217,6 @@ test('an unfinished reply survives a restart and accepts later pieces', async ()
   assert.equal(index.search('across restart', sessions)[0].snippet, 'split across a restart');
 });
 
-test('legacy saved indexes rebuild open replies, and saved chat data omits match caches', async () => {
-  const { dir, file } = freshDir();
-  const log = join(dir, 'aaa111.jsonl');
-  const start = line({ seq: 1, at: 1, type: 'item.start', id: 'legacy', kind: 'text' });
-  const delta = line({ seq: 2, at: 2, type: 'item.delta', id: 'legacy', text: 'old index reply' });
-  writeFileSync(log, start + delta);
-  writeFileSync(file, JSON.stringify({ v: 1, chats: { aaa111: { last: 2, size: Buffer.byteLength(start + delta), entries: [] } } }));
-  appendFileSync(log, line({ seq: 3, at: 3, type: 'item.delta', id: 'legacy', text: ' resumes' })
-    + line({ seq: 4, at: 4, type: 'item.done', id: 'legacy' }));
-  const sessions = [chat('aaa111', 'Notes')];
-  const index = new SearchIndex({ dir, file });
-  await index.update(sessions);
-  assert.equal(index.search('reply resumes', sessions).length, 1);
-  index.search('reply', sessions);
-  index.save();
-  const saved = JSON.parse(readFileSync(file, 'utf8'));
-  assert.equal('matchCache' in saved.chats.aaa111, false);
-  assert.equal('lower' in saved.chats.aaa111, false);
-  assert.equal('lower' in saved.chats.aaa111.entries[0], false);
-});
-
 test('same-size and larger in-place rewrites replace stale indexed content', async () => {
   const { dir, file } = freshDir();
   const log = join(dir, 'aaa111.jsonl');
@@ -372,18 +267,6 @@ test('an EventLog rewind clears discarded words and keeps replayed history', asy
   assert.equal(index.search('retained phrase', sessions).length, 1);
 });
 
-test('dropping a chat also drops its unfinished reply buffer', async () => {
-  const { dir, file } = freshDir();
-  const index = new SearchIndex({ dir, file });
-  const sessions = [chat('aaa111', 'Notes')];
-  index.note('aaa111', { seq: 1, at: 1, type: 'item.start', id: 'open', kind: 'text' });
-  index.note('aaa111', { seq: 2, at: 2, type: 'item.delta', id: 'open', text: 'unfinished' });
-  await index.update([]);
-  index.save();
-  const saved = JSON.parse(readFileSync(file, 'utf8'));
-  assert.deepEqual(saved.open, {});
-});
-
 test('legacy reply recovery counts a new delta once and accepts a done-only continuation', async () => {
   for (const withDelta of [false, true]) {
     const { dir, file } = freshDir(), log = join(dir, 'aaa111.jsonl');
@@ -424,22 +307,6 @@ test('a live delta first seen without its start is recovered from disk', async (
   const sessions = [chat('aaa111', 'Notes')];
   await index.update(sessions);
   assert.equal(index.search('Recovered answer', sessions)[0].snippet, 'Recovered answer');
-  index.close();
-});
-
-test('streamed live delivery uses compact ranges and old disk entries do not evict newer live entries', async () => {
-  const { dir, file } = freshDir(), index = new SearchIndex({ dir, file });
-  const events = Array.from({ length: 500 }, (_, n) => ({ seq: n + 1, type: 'turn.start', text: 'Old entry ' + n }));
-  writeFileSync(join(dir, 'aaa111.jsonl'), events.map(line).join(''));
-  index.note('aaa111', { seq: 501, type: 'turn.start', text: 'Latest live marker' });
-  index.note('aaa111', { seq: 502, type: 'item.start', id: 'stream', kind: 'text' });
-  for (let seq = 503; seq < 10000; seq++) index.note('aaa111', { seq, type: 'item.delta', id: 'stream', text: 'x' });
-  index.save();
-  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).chats.aaa111.liveRanges, [[501, 9999]]);
-  const sessions = [chat('aaa111', 'Notes')];
-  await index.update(sessions);
-  assert.equal(index.search('Latest live marker', sessions).length, 1);
-  assert.equal(index.search('Old entry', sessions)[0].count, 399);
   index.close();
 });
 

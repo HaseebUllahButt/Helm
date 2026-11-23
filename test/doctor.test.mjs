@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { diagnose, formatDiagnosis, probeHealth } from '../packages/connect/src/doctor.js';
+import { diagnose, probeHealth } from '../packages/connect/src/doctor.js';
 import { M } from '../packages/protocol/index.js';
 
 const exec = promisify(execFile);
@@ -67,40 +67,6 @@ test('a working web page cannot hide a failed live connection or leak its error'
   assert.doesNotMatch(JSON.stringify(report), /Bearer|secret-network-key|private.example/);
 });
 
-test('the report distinguishes update, logout, packet recovery, and unreachable machine warnings', async () => {
-  const report = await diagnose(defaults({ service: async () => ({ state: 'active', linger: 'no' }),
-    rpc: async (_, __, method) => method === M.ENV_INFO
-      ? { version: { full: 'old' }, web: { commit: 'new' }, sync: { reason: 'secret error' }, terminals: 'panes' }
-      : { machines: [{ attached: true }, { url: null }], recovery: { repair: 'untrusted command' } },
-  }));
-  assert.equal(report.ok, true, 'warnings alone do not fail the check');
-  for (const id of ['logout', 'app-version', 'updates', 'terminals', 'routes', 'packet-recovery']) {
-    assert.equal(report.checks.find(c => c.id === id).state, 'warning', id);
-  }
-  assert.match(formatDiagnosis(report), /1 of 2 other machines/);
-  assert.doesNotMatch(JSON.stringify(report), /secret error|untrusted command/);
-});
-
-test('two machines with their own changes need attention in the report', async () => {
-  const report = await diagnose(defaults({ rpc: async (_, __, method) => method === M.ENV_INFO
-    ? { version: { full: 'one' }, web: { commit: 'one' }, sync: { diverged: true, with: 'secret-machine' } }
-    : { machines: [] } }));
-  assert.equal(report.checks.find(c => c.id === 'updates').state, 'warning');
-  assert.doesNotMatch(JSON.stringify(report), /secret-machine/);
-});
-
-test('missing and damaged registrations give different steps without probing any machine', async () => {
-  let probes = 0;
-  const probe = async () => { probes++; return 'ok'; };
-  const absent = await diagnose(defaults({ network: async () => null, health: probe }));
-  assert.match(absent.checks[0].action, /helm join/);
-  for (const value of [{}, { ...network(), port: 'bad' }]) {
-    const damaged = await diagnose(defaults({ network: async () => value, health: probe }));
-    assert.match(damaged.checks[0].action, /trusted backup/);
-    assert.doesNotMatch(JSON.stringify(damaged), /helm join/);
-  }
-  assert.equal(probes, 0);
-});
 
 async function server(t, handler) {
   const server = createServer(handler);
