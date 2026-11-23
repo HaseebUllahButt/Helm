@@ -1,5 +1,5 @@
 /**
- * How this device looks: theme, diff colours, chat width, list density.
+ * How this device looks: look, theme, diff colours, chat width, list density.
  *
  * Per device rather than per network, because the reasons are per device - a
  * phone read outdoors wants light, the laptop at night does not - so it lives
@@ -7,8 +7,12 @@
  * on. `system` follows the OS and keeps following it.
  */
 
-export type Theme = 'system' | 'dark' | 'light' | 'navy';
+export type Theme = 'system' | 'dark' | 'light' | 'tokyo';
+/** `new` is the tiled look (mono details, an edge on the open panel, bigger
+ *  phone text); `classic` is the look from before it. Same layout in both. */
+export type Look = 'classic' | 'new';
 export interface Appearance {
+  look: Look;
   theme: Theme;
   /** `blue` swaps the green/red of a diff for blue/orange, for red-green colour blindness. */
   diff: 'green' | 'blue';
@@ -17,13 +21,16 @@ export interface Appearance {
 }
 
 const KEY = 'helm.appearance';
-export const DEFAULTS: Appearance = { theme: 'system', diff: 'green', width: 'comfortable', density: 'comfortable' };
+export const DEFAULTS: Appearance = { look: 'classic', theme: 'system', diff: 'green', width: 'comfortable', density: 'comfortable' };
 
 export function loadAppearance(): Appearance {
   try {
     const v = JSON.parse(localStorage.getItem(KEY) || '{}');
+    // Navy was dropped on 2026-11-24; Tokyo Night is the nearest dark blue.
+    const theme = v.theme === 'navy' ? 'tokyo' : v.theme;
     return {
-      theme: ['system', 'dark', 'light', 'navy'].includes(v.theme) ? v.theme : DEFAULTS.theme,
+      look: v.look === 'new' ? 'new' : 'classic',
+      theme: ['system', 'dark', 'light', 'tokyo'].includes(theme) ? theme : DEFAULTS.theme,
       diff: v.diff === 'blue' ? 'blue' : 'green',
       width: v.width === 'wide' ? 'wide' : 'comfortable',
       density: v.density === 'compact' ? 'compact' : 'comfortable',
@@ -39,12 +46,13 @@ export function applyAppearance(a: Appearance = loadAppearance()) {
   const root = document.documentElement;
   const theme = resolved(a.theme);
   root.dataset.theme = theme;
+  root.dataset.look = a.look;
   root.dataset.diff = a.diff;
   root.dataset.width = a.width;
   root.dataset.density = a.density;
   // The browser bar and the installed app's status area take the page's colour.
   document.querySelector('meta[name="theme-color"]')
-    ?.setAttribute('content', theme === 'light' ? '#f3f4f7' : theme === 'navy' ? '#081b26' : '#0a0a0a');
+    ?.setAttribute('content', theme === 'light' ? '#f3f4f7' : theme === 'tokyo' ? '#16161e' : '#0a0a0a');
 }
 
 export function saveAppearance(a: Appearance) {

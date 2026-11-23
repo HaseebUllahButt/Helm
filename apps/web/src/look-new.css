@@ -1,0 +1,55 @@
+/* The "New" look (Settings > Look > New). The layout is the same as Classic:
+   the same sidebar, shelves and screens in the same places. Only the skin
+   changes. From Omarchy: a mono face for details, lowercase shelf names,
+   smaller corners and a thin accent edge on the open panel (its active
+   window border). From Apple: bigger text on phones (17 pt is their phone
+   default). Classic keeps the owner's "no outlines" rule; New is the one
+   place an edge is drawn. */
+
+:root[data-look="new"] {
+  --radius:    7px;
+  --radius-sm: 5px;
+  --radius-md: 6px;
+  --radius-xl: 10px;
+  --slab:      12px;
+  --edge-on:   color-mix(in srgb, var(--primary-q) 50%, transparent);
+}
+
+/* Phones: Apple's sizes. Rows 16 px, reading text 17 px. */
+@media (max-width: 899px) {
+  :root[data-look="new"] {
+    --t-micro: 12px;
+    --t-meta:  13.5px;
+    --t-body:  16px;
+    --t-read:  17px;
+  }
+}
+
+/* Shelf and section names read like btop's panel labels. */
+:root[data-look="new"] .section {
+  text-transform: lowercase; letter-spacing: 0;
+  font-family: var(--mono); font-weight: 500;
+}
+
+/* Details in mono: where a chat runs, times, counts, machine load, chips. */
+:root[data-look="new"] :is(
+  .tri-where, .tri-end, .tclock, .need-m, .count,
+  .home-state, .machine .rm, .crumb-folder,
+  .bubble-meta, .turn-meta, .chips .chip-label, .limits-line
+) {
+  font-family: var(--mono); letter-spacing: 0;
+}
+:root[data-look="new"] :is(.tri-where, .need-m, .machine .rm) { font-size: calc(var(--t-meta) - 1px); }
+
+/* Smaller corners where Classic draws its own. */
+:root[data-look="new"] .side-actions .home-search { border-radius: var(--radius); }
+:root[data-look="new"] .turn.user .bubble { border-radius: 10px 10px 4px 10px; }
+
+/* The open panel: a thin edge in the accent color, like Omarchy's active
+   window. Desktop only: on a phone the panel is the whole screen. */
+@media (min-width: 900px) {
+  :root[data-look="new"] .main {
+    border-radius: 10px;
+    box-shadow: 0 0 0 1px var(--edge-on), var(--panel-shadow);
+  }
+}

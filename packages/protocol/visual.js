@@ -73,7 +73,7 @@ function bootVisual(config) {
  * Chart colours from the dataviz skill's reference palette (2026-11-02): eight
  * series colours in a fixed order that colour-blind readers can still tell
  * apart next to each other, each stepped for the dark or light surface.
- * Checked with its validate_palette.js on Helm's dark, navy and light
+ * Checked with its validate_palette.js on Helm's dark and light
  * backgrounds. In light mode slots 2-5 sit below 3:1, so charts label them.
  * Status colours are kept apart from series colours.
  */

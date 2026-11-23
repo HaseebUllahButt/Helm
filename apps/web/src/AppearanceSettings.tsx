@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { applyAppearance, loadAppearance, saveAppearance, type Appearance } from './appearance';
 
-/** Four small choices about how helm looks on this device. */
+/** Five small choices about how helm looks on this device. */
 export function AppearanceSettings() {
   const [a, setA] = useState<Appearance>(loadAppearance);
   const set = <K extends keyof Appearance>(k: K, v: Appearance[K]) => {
@@ -23,7 +23,8 @@ export function AppearanceSettings() {
   );
   return (
     <>
-      {seg('theme', 'Theme', [['system', 'Auto'], ['dark', 'Dark'], ['light', 'Light'], ['navy', 'Navy']])}
+      {seg('look', 'Look', [['classic', 'Classic'], ['new', 'New']])}
+      {seg('theme', 'Theme', [['system', 'Auto'], ['dark', 'Dark'], ['light', 'Light'], ['tokyo', 'Tokyo Night']])}
       {seg('diff', 'Diff colours', [['green', 'Green/red'], ['blue', 'Blue/orange']])}
       {seg('width', 'Chat width', [['comfortable', 'Normal'], ['wide', 'Wide']], 'wide-only')}
       {seg('density', 'Lists', [['comfortable', 'Roomy'], ['compact', 'Compact']])}
