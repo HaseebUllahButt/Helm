@@ -209,6 +209,46 @@ test('the chat CLI prints a Codex command failure cause once', async () => {
   } finally { chat.close(); }
 });
 
+test('helm chat prints one cause when a command fails in its events and input reply', async () => {
+  const connection = new EventEmitter();
+  const input = new PassThrough(), output = new PassThrough();
+  const cause = 'Cannot list permissions.';
+  const events = [];
+  let printed = '', beforeUnreported;
+  connection.close = () => {};
+  connection.rpc = async (method, params) => {
+    if (method === M.SESSION_CONNECT) return { session: { id: 's', engine: 'codex', quick: true } };
+    if (method === M.SESSION_EVENTS) {
+      return { events: events.filter(event => event.seq > (params.since ?? 0)), last: events.length, pending: [] };
+    }
+    if (method === M.SESSION_INPUT) {
+      if (params.data === '/permissions') {
+        events.push(
+          { seq: 1, type: 'turn.start', turnId: 'cmd', text: '/permissions' },
+          { seq: 2, type: 'error', kind: 'command', message: cause },
+          { seq: 3, type: 'status', status: 'working' },
+          { seq: 4, type: 'turn.done', turnId: 'cmd', status: 'error', error: cause },
+        );
+      } else if (params.data === '/unreported') {
+        beforeUnreported = printed;
+        throw new Error(cause);
+      } else {
+        connection.emit('event', E.SESSION_EVENT, { id: 's', events });
+        return {};
+      }
+      throw new Error(cause);
+    }
+    return {};
+  };
+  output.on('data', chunk => { printed += chunk; });
+  const running = runChat(['--attach', 's'], { connection, input, output });
+  input.end('/permissions\nshow later events\n/unreported\n');
+  await running;
+  assert.equal(beforeUnreported.split(cause).length - 1, 1, beforeUnreported);
+  assert.equal(printed.slice(beforeUnreported.length).split(cause).length - 1, 1, printed);
+  assert.match(printed, /\[error\]/);
+});
+
 test('persistent controller RPC carries answers and events; disconnect rejects calls without replay', async () => {
   class Socket extends EventEmitter {
     sent = [];

@@ -14,6 +14,8 @@ export class ManagedChat {
   #items = new Map();
   #providerFailures = new Set();
   #lastError = null;
+  #lastTurnId = null;
+  #commandAttempt = null;
   #pending = new Map();
   #answers = new Map();
   #buffer = [];
@@ -72,8 +74,15 @@ export class ManagedChat {
     for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
       if (event.seq <= this.#last) continue;
       this.#last = event.seq;
+      const attempt = this.#commandAttempt;
       switch (event.type) {
-        case 'turn.start': this.write(`\nYou: ${safe(event.text)}\n`); break;
+        case 'turn.start':
+          this.#lastTurnId = event.turnId;
+          if (attempt && !attempt.turnId && attempt.text === event.text?.trim()) {
+            attempt.turnId = event.turnId;
+          }
+          this.write(`\nYou: ${safe(event.text)}\n`);
+          break;
         case 'item.start':
           this.#items.set(event.id, event.kind);
           if (event.kind === 'text') this.write('\nAgent: ');
@@ -89,7 +98,13 @@ export class ManagedChat {
           else if (event.output) this.write(`${safe(event.output).slice(0, 8000)}\n`);
           break;
         case 'turn.done': {
-          const printed = this.#lastError?.seq === event.seq - 1 && this.#lastError.message === event.error;
+          const earlier = this.#lastError;
+          const printed = earlier && earlier.message === event.error && (earlier.seq === event.seq - 1
+            || earlier.kind === 'command' && earlier.turnId && earlier.turnId === event.turnId);
+          if (printed) this.#lastError = null;
+          if (attempt?.turnId && attempt.turnId === event.turnId && event.status === 'error' && event.error) {
+            attempt.error = event.error;
+          }
           if (!this.#providerFailures.delete(event.turnId) || event.status !== 'ok') {
             this.write(`\n[${safe(event.status)}]${event.error && !printed ? ` ${safe(event.error)}` : ''}\n`);
           }
@@ -105,7 +120,11 @@ export class ManagedChat {
             if (event.turnId) this.#providerFailures.add(event.turnId);
             this.write(`\n[error] ${safe(event.message)}\n`);
           } else {
-            this.#lastError = event;
+            const turnId = event.turnId ?? this.#lastTurnId;
+            this.#lastError = { ...event, turnId };
+            if (event.kind === 'command' && turnId && attempt?.turnId === turnId) {
+              attempt.error = event.message;
+            }
             this.write(`\n${safe(event.message)}\n`);
           }
           break;
@@ -176,7 +195,22 @@ export class ManagedChat {
       await this.connection.rpc(M.SESSION_ANSWER, { id: this.id, requestId: request.requestId, decision: { option: 'allow', answers } });
       return;
     }
-    if (text.trim()) await this.connection.rpc(M.SESSION_INPUT, { id: this.id, data: text });
+    if (!text.trim()) return;
+    const params = { id: this.id, data: text };
+    if (!command) {
+      await this.connection.rpc(M.SESSION_INPUT, params);
+      return;
+    }
+    const attempt = this.#commandAttempt = { text: text.trim() };
+    try {
+      await this.connection.rpc(M.SESSION_INPUT, params);
+    } catch (error) {
+      // The command's failure can already be in the chat log while its live events are on the way.
+      if (attempt.error !== error.message) await this.sync().catch(() => {});
+      if (attempt.error !== error.message) throw error;
+    } finally {
+      if (this.#commandAttempt === attempt) this.#commandAttempt = null;
+    }
   }
   close() { this.#closed = true; this.connection.off('event', this.onEvent); }
 }
