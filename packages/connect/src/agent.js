@@ -1066,7 +1066,15 @@ export class Daemon {
     if (this.#stopped) return;
     this.routes();
     void this.#checkNetworkRecovery().catch(error => console.warn('[helm] packet-size recovery:', error.message));
-    await this.#publishSelf();
+    // `helm leave` removed the roster: this machine is in no network now.
+    // Checked first, because #publishSelf would write the kept copy back;
+    // every direct channel goes, so the other side's streams end too.
+    let left = false;
+    try { left = loadNetwork() === null; } catch { /* unreadable is not gone */ }
+    if (left) {
+      this.peers?.stop();
+      this.#dropDirectTunnels();
+    } else await this.#publishSelf();
 
     // Offer a fingerprint of what we know on every cycle. It is what makes a
     // revocation typed on one machine reach a machine that has been asleep
@@ -1087,7 +1095,7 @@ export class Daemon {
       else this.peers?.dropRevoked(net.revoked);
       this.copyReceiver?.dropRevoked(net.revoked);
       this.mesh?.dropRevoked(net.revoked);
-    } else this.#dropDirectTunnels();
+    }
 
     this.#reconcileLinks();
   }
@@ -1888,6 +1896,12 @@ export class Daemon {
       if (!net?.machines?.[net.self] || typeof caller !== 'string' || caller === net.self
           || !Object.hasOwn(net.machines, caller) || net.revoked?.[caller] || net.revoked?.[net.self]) {
         link.send(T.TUNNEL_CLOSE, { sid: frame.sid, reason: 'a direct stream comes from another machine of this network only' });
+        return;
+      }
+      // Only with credit, which is what keeps its bytes behind the channel's
+      // room (peer.js tunnelRoom). Without it: the hub, as always.
+      if (frame.flow !== 1) {
+        link.send(T.TUNNEL_CLOSE, { sid: frame.sid, reason: 'a direct stream needs flow control' });
         return;
       }
       return this.#openTunnel(link, frame, { direct: true });
