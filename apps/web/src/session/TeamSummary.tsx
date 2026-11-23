@@ -1,5 +1,5 @@
 import { errorMessage } from '../errors';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Client, type Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { useNow } from '../useNow';
@@ -11,6 +11,7 @@ export type TeamMember = { session: Session; depth: number; envId?: string };
 export function useThreadTeam(client: Client, envId: string, parentId: string, remote: NonNullable<Session['remoteHelpers']> = []) {
   const remoteKey = JSON.stringify(remote);
   const [team, setTeam] = useState<TeamMember[]>([]);
+  const offlineMachines = useRef(new Set<string>()).current;
   useEffect(() => {
     let stale = false;
     let loading = false;
@@ -18,6 +19,9 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
     let version = 0;
     const updates = new Map<string, { version: number; session: Session }>();
     const known = new Set([`${envId}/${parentId}`]);
+    const knownMachines = new Set([envId]);
+    const markOffline = (member: TeamMember) => member.envId && offlineMachines.has(member.envId) && !member.session.offline
+      ? { ...member, session: { ...member.session, offline: true } } : member;
     // Until the first full read, an update is kept for it and not shown alone:
     // a list with one helper looks complete and hides the one that failed.
     let published = false;
@@ -34,7 +38,7 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
         const rows = [...next, ...extra].map((m) => {
           const update = updates.get(`${m.envId}/${m.session.id}`);
           return update && update.version > loadVersion ? { ...m, session: update.session } : m;
-        }).filter((m) => !m.session.archived);
+        }).filter((m) => !m.session.archived).map(markOffline);
         const ordered: TeamMember[] = [];
         const used = new Set<string>();
         const visit = (host: string, id: string) => {
@@ -52,6 +56,7 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
       };
       const reads = new Map<string, Promise<Session[]>>();
       const read = (machine: string, id: string) => {
+        knownMachines.add(machine);
         const key = `${machine}/${id}`;
         if (!reads.has(key)) reads.set(key, client.rpc<{ sessions: Session[] }>(machine, 'session.list', { parentId: id, nested: true }).then((r) => r.sessions ?? []));
         return reads.get(key)!;
@@ -98,6 +103,15 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
     void load();
     const off = client.on((machine, kind, payload: any) => {
       const session = payload?.session as Session | undefined;
+      if (kind === 'presence' && machine) {
+        if (payload?.online === false) {
+          offlineMachines.add(machine);
+          if (knownMachines.has(machine)) setTeam(now => now.map(markOffline));
+        } else if (payload?.online === true) {
+          offlineMachines.delete(machine);
+          if (knownMachines.has(machine)) void load();
+        }
+      }
       if (kind === 'connection' && payload?.online || kind === 'session.exit') void load();
       if (kind === 'session.update' && session) {
         const key = `${machine}/${session.id}`;
@@ -111,7 +125,7 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
             const previous = now.find((m) => m.envId === machine && m.session.id === session.id);
             const parent = now.find((m) => `${m.envId}/${m.session.id}` === owner);
             return [...now.filter((m) => !(m.envId === machine && m.session.id === session.id)),
-              ...(!session.archived ? [{ session, envId: machine, depth: previous?.depth ?? (parent ? parent.depth + 1 : 0) }] : [])];
+              ...(!session.archived ? [markOffline({ session, envId: machine, depth: previous?.depth ?? (parent ? parent.depth + 1 : 0) })] : [])];
           });
           if (session.remoteHelpers?.length) void load();
         }
@@ -120,7 +134,7 @@ export function useThreadTeam(client: Client, envId: string, parentId: string, r
     // Older machines and lost broadcasts must also converge to the CLI state.
     const timer = setInterval(() => void load(), 5000);
     return () => { stale = true; clearInterval(timer); off(); };
-  }, [client, envId, parentId, remoteKey]);
+  }, [client, envId, parentId, remoteKey, offlineMachines]);
   return team;
 }
 

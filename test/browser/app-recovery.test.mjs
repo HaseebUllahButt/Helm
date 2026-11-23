@@ -33,16 +33,23 @@ before(async () => {
       id: 'turn', text: 'Run the command', at: 1000, done: { status: 'error', durationMs: 3000 },
       items: [{ id: 'cmd', kind: 'command', command: 'example', output: 'working', status: 'error', exitCode, startedAt: 1000, doneAt: 4000 }],
     }]} />);
-    window.mountRecovery = (message, models, offlineHelper = false) => {
+    window.mountRecovery = (message, models, { helper } = {}) => {
       const env = { id: 'here', name: 'Here', online: true };
       const chat = { id: models.length ? 'model' : 'folder', cwd: '/project', title: 'Test chat',
         profileId: 'codex', driver: 'codex', engine: 'codex', status: 'idle',
         recovery: { kind: 'error', message, at: Date.now() },
-        remoteHelpers: offlineHelper ? [{ id: 'helper', machine: 'away', title: 'Offline helper', status: 'blocked' }] : [] };
+        remoteHelpers: helper ? [{ id: 'helper', machine: 'away', title: 'Remote helper', status: 'blocked' }] : [] };
+      const listeners = new Set();
+      window.helperPresence = (online) => listeners.forEach(listener => listener('away', 'presence', { online }));
       const client = {
-        on: () => () => {}, subscribe: () => {}, pendingActions: () => [], resumeActions: async () => [],
+        on: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+        subscribe: () => {}, pendingActions: () => [], resumeActions: async () => [],
         rpc: async (target, method) => {
-          if (target === 'away') throw Error('Machine offline.');
+          if (target === 'away' && method === 'session.list') {
+            if (helper === 'offline') throw Error('Machine offline.');
+            return { sessions: [{ id: 'helper', title: 'Remote helper', status: 'blocked', engine: 'codex',
+              delegation: { parentId: chat.id, parentMachine: env.id, status: 'blocked' } }] };
+          }
           if (method === 'session.list') return { sessions: [] };
           if (method === 'session.events') return { session: chat, events: [], pending: [], last: 0 };
           if (method === 'model.list') return { models, default: models[0] };
@@ -128,11 +135,21 @@ test('a missing saved chat directs the owner to a new chat without a retry butto
 
 test('a helper waiting for approval has a disabled review button when offline', async t => {
   const page = await pageFor(t);
-  await page.evaluate(() => window.mountRecovery('Test error.', [], true));
-  const review = page.locator('.child-requests button').filter({ hasText: 'Offline helper' });
+  await page.evaluate(() => window.mountRecovery('Test error.', [], { helper: 'offline' }));
+  const review = page.locator('.child-requests button').filter({ hasText: 'Remote helper' });
   await review.waitFor();
   assert.match(await review.innerText(), /Review request/);
   assert.equal(await review.isDisabled(), true);
+});
+
+test('a disconnect disables the helper review button before the next read', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.mountRecovery('Test error.', [], { helper: 'online' }));
+  const review = page.locator('.child-requests button').filter({ hasText: 'Remote helper' });
+  await review.waitFor();
+  assert.equal(await review.isEnabled(), true);
+  await page.evaluate(() => window.helperPresence(false));
+  await page.waitForFunction(() => document.querySelector('.child-requests button')?.disabled, null, { timeout: 1500 });
 });
 
 test('the installed shell remains recoverable even when its entry bundle is missing', async t => {
