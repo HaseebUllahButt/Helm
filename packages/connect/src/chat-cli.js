@@ -13,6 +13,7 @@ export class ManagedChat {
   #last = 0;
   #items = new Map();
   #providerFailures = new Set();
+  #lastError = null;
   #pending = new Map();
   #answers = new Map();
   #buffer = [];
@@ -87,11 +88,13 @@ export class ManagedChat {
           if (this.#items.get(event.id) === 'text') this.write('\n');
           else if (event.output) this.write(`${safe(event.output).slice(0, 8000)}\n`);
           break;
-        case 'turn.done':
+        case 'turn.done': {
+          const printed = this.#lastError?.seq === event.seq - 1 && this.#lastError.message === event.error;
           if (!this.#providerFailures.delete(event.turnId) || event.status !== 'ok') {
-            this.write(`\n[${safe(event.status)}]${event.error ? ` ${safe(event.error)}` : ''}\n`);
+            this.write(`\n[${safe(event.status)}]${event.error && !printed ? ` ${safe(event.error)}` : ''}\n`);
           }
           break;
+        }
         case 'permission.request': if (live) this.#replacePending([...this.#pending.values(), event]); break;
         case 'permission.resolved':
           if (this.#pending.delete(event.requestId)) this.write(`\n[Request ${safe(event.requestId)} answered: ${safe(event.decision)}]\n`);
@@ -101,7 +104,10 @@ export class ManagedChat {
           if (event.kind === 'provider-reply') {
             if (event.turnId) this.#providerFailures.add(event.turnId);
             this.write(`\n[error] ${safe(event.message)}\n`);
-          } else this.write(`\n${safe(event.message)}\n`);
+          } else {
+            this.#lastError = event;
+            this.write(`\n${safe(event.message)}\n`);
+          }
           break;
       }
     }

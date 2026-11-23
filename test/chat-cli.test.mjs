@@ -193,6 +193,22 @@ test('the chat CLI shows the provider cause beside a failed reply', async () => 
   } finally { chat.close(); }
 });
 
+test('the chat CLI prints a Codex command failure cause once', async () => {
+  const connection = new EventEmitter();
+  connection.rpc = async () => ({ events: [
+    { seq: 1, type: 'error', kind: 'command', message: 'Cannot list permissions.' },
+  ], last: 1, pending: [] });
+  let output = '';
+  const chat = new ManagedChat(connection, 's', { write: text => { output += text; } });
+  try {
+    await chat.sync();
+    connection.emit('event', E.SESSION_EVENT, { id: 's', events: [
+      { seq: 2, type: 'turn.done', turnId: 'cmd', status: 'error', error: 'Cannot list permissions.' },
+    ] });
+    assert.equal(output, '\nCannot list permissions.\n\n[error]\n');
+  } finally { chat.close(); }
+});
+
 test('persistent controller RPC carries answers and events; disconnect rejects calls without replay', async () => {
   class Socket extends EventEmitter {
     sent = [];
