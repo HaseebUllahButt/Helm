@@ -22,6 +22,8 @@ export function missingFolderPath(message: string): string | undefined {
   return /\bthe folder ([^\r\n]+?) does not exist on this machine\b/i.exec(message)?.[1].trim();
 }
 
+export const isMissingSavedChat = (message?: string) => /No conversation found with session ID/i.test(message ?? '');
+
 export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot finish this action. Try again.' }: ErrorContext = {}): string {
   const value = error && typeof error === 'object' ? error as { message?: unknown; code?: unknown; status?: unknown; name?: unknown } : {};
   const message = typeof error === 'string' ? error : typeof value.message === 'string' ? value.message : '';
@@ -46,7 +48,7 @@ export function errorMessage(error: unknown, { machine, fallback = 'Helm cannot 
   if (SAFETY_BLOCK.test(text)) return 'The AI service blocked this reply for safety. Review your request.';
   if (/an internal error occurred/i.test(text)) return 'The AI service did not finish this reply. Try again. Select another model if it fails again.';
   if (/image in the conversation could not be processed/i.test(text)) return 'The AI service could not read an image in this chat. Send the image again as a JPEG or PNG.';
-  if (/No conversation found with session ID/i.test(text)) return 'The agent cannot find its saved chat. Start a new chat and copy the details you still need.';
+  if (isMissingSavedChat(text)) return 'The agent cannot find its saved chat. Start a new chat and copy the details you still need.';
   if (/can.t reach the API server|no response from API|connection lost mid-response|workspace routing discovery|connection error, send a message|\bEAI_AGAIN\b/i.test(text)) return 'The AI service stopped responding. Check your connection and try again.';
   if (/file is empty/i.test(text)) return 'The file is empty. Select another file.';
   if (/file is [\d.]+ MB|file.*too large/i.test(text)) return 'The file is too large. Select a file smaller than 20 MB.';

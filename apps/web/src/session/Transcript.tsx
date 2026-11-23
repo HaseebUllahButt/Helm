@@ -9,6 +9,7 @@ import { userMessage } from './userMessage';
 import { splitAgentMessage, helperMessages } from './agentMessage';
 import { stripBrief } from '@helm/protocol/brief';
 import { plainError } from './problem';
+import { isMissingSavedChat } from '../errors';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
 import { ContextCard } from './ContextCard';
 import { TodoCard, isTodoItem, parseTodos } from './Todos';
@@ -867,7 +868,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
             // nothing else says anything. A bare error turn needs neither.
             !turn.text && turn.items.some((it) => it.kind === 'error') ? null : <div className="turn-meta bad">
               {saidBelow || turn.items.some((it) => it.kind === 'error') || !d.error ? 'Failed' : plainError(d.error)}
-              {failed && onResend && (
+              {failed && onResend && !isMissingSavedChat(d.error) && (
                 // A message that never reached the agent deserves a way to
                 // try again that does not start with retyping it.
                 <button className="resend" onClick={() => onResend(turn)}>Send again</button>

@@ -33,7 +33,7 @@ before(async () => {
       id: 'turn', text: 'Run the command', at: 1000, done: { status: 'error', durationMs: 3000 },
       items: [{ id: 'cmd', kind: 'command', command: 'example', output: 'working', status: 'error', exitCode, startedAt: 1000, doneAt: 4000 }],
     }]} />);
-    window.mountRecovery = (message, models, { helper } = {}) => {
+    window.mountRecovery = (message, models, { helper, failedTurn } = {}) => {
       const env = { id: 'here', name: 'Here', online: true };
       const chat = { id: models.length ? 'model' : 'folder', cwd: '/project', title: 'Test chat',
         profileId: 'codex', driver: 'codex', engine: 'codex', status: 'idle',
@@ -41,6 +41,10 @@ before(async () => {
         remoteHelpers: helper ? [{ id: 'helper', machine: 'away', title: 'Remote helper', status: 'blocked' }] : [] };
       const listeners = new Set();
       window.helperPresence = (online) => listeners.forEach(listener => listener('away', 'presence', { online }));
+      const events = failedTurn ? [
+        { seq: 1, type: 'turn.start', turnId: 'failed', text: 'Try this task' },
+        { seq: 2, type: 'turn.done', turnId: 'failed', status: 'error', error: message },
+      ] : [];
       const client = {
         on: listener => { listeners.add(listener); return () => listeners.delete(listener); },
         subscribe: () => {}, pendingActions: () => [], resumeActions: async () => [],
@@ -51,7 +55,7 @@ before(async () => {
               delegation: { parentId: chat.id, parentMachine: env.id, status: 'blocked' } }] };
           }
           if (method === 'session.list') return { sessions: [] };
-          if (method === 'session.events') return { session: chat, events: [], pending: [], last: 0 };
+          if (method === 'session.events') return { session: chat, events, pending: [], last: events.length };
           if (method === 'model.list') return { models, default: models[0] };
           return {};
         },
@@ -150,6 +154,17 @@ test('a disconnect disables the helper review button before the next read', asyn
   assert.equal(await review.isEnabled(), true);
   await page.evaluate(() => window.helperPresence(false));
   await page.waitForFunction(() => document.querySelector('.child-requests button')?.disabled, null, { timeout: 1500 });
+});
+
+test('the transcript hides Send again for a missing saved chat', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.mountRecovery('Could not finish the task.', [], { failedTurn: true }));
+  const resend = page.getByRole('button', { name: 'Send again', exact: true });
+  await resend.waitFor();
+  await page.evaluate(() => window.mountRecovery('No conversation found with session ID: test-chat', ['gpt-5'], { failedTurn: true }));
+  await page.getByText('Try this task', { exact: true }).waitFor();
+  await page.locator('.recovery').getByText('Saved chat missing', { exact: true }).waitFor();
+  assert.equal(await resend.count(), 0);
 });
 
 test('the installed shell remains recoverable even when its entry bundle is missing', async t => {

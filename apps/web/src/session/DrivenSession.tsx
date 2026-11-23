@@ -1,4 +1,4 @@
-import { errorMessage } from '../errors';
+import { errorMessage, isMissingSavedChat } from '../errors';
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
 import { Client, chatFolder, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
@@ -921,7 +921,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         readVisual={readVisual} openAgent={openAgent}
         pending={log.pending} onReviewRequest={reviewRequest} focusItem={focusItem}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
-        onResend={resend} onWithdraw={withdraw}
+        onResend={isMissingSavedChat(session.recovery?.message) ? undefined : resend} onWithdraw={withdraw}
         onRewind={session.rewindSupported && !working && !busy && !pending && !queuedTurns.length ? (turn) => {
           void call(async () => {
             const check = await client.rpc<{ restoreFiles: boolean; reason?: string }>(env.id, 'session.rewind-check', { id: session.id, turnId: turn.id });
