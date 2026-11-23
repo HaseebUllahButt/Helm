@@ -17,7 +17,7 @@
 // - Where the page sees Super+Ctrl+Esc, or the owner leaves fullscreen, the
 //   window stays in control but keeps Super keys here. A bar offers to send
 //   all keys again.
-// screen-relay's own toolbar stays for scaling, screenshots and watch only.
+// screen-relay's own toolbar stays for scaling, screenshots and Release control.
 (() => {
   const params = new URLSearchParams(location.search);
   const name = params.get('name') || 'Remote';
@@ -25,7 +25,7 @@
   const canvas = document.getElementById('screen');
   const viewer = window.relayViewer;
   const lockable = !!navigator.keyboard?.lock;
-  const watchOnly = params.get('view') === '1';
+  const controlButton = document.querySelector('[data-action="control"]');
 
   const el = (tag, attrs = {}, text = '') => {
     const node = document.createElement(tag);
@@ -54,7 +54,7 @@
   const showBar = (text) => { barText.textContent = text; bar.hidden = false; };
 
   // wanted: the owner wants all keys there. locked: the browser holds them.
-  let wanted = lockable && !watchOnly;
+  let wanted = lockable;
   let locked = false;
   let grabbing = false;
   let swallowUp = -1;
@@ -64,6 +64,8 @@
   async function grab({ quiet = false, gesture = false } = {}) {
     if (!lockable || grabbing) return false;
     grabbing = true;
+    // "Send all keys" after the toolbar's Release control: control comes back too.
+    if (controlButton?.getAttribute('aria-pressed') === 'false') viewer?.setViewOnly(false);
     try {
       if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
       await navigator.keyboard.lock();
@@ -74,9 +76,9 @@
       if (!quiet) say(`All keys go to ${name}. Super+Ctrl+Esc gives them back.`);
       return true;
     } catch {
-      if (gesture && !document.fullscreenElement) {
+      if (gesture || document.fullscreenElement) {
         wanted = false;
-        showBar(`The browser did not fill the screen, so it keeps Super keys. Other keys go to ${name}.`);
+        showBar(`The browser keeps Super keys. Other keys go to ${name}.`);
       }
       return false;
     } finally { grabbing = false; }
@@ -91,9 +93,8 @@
     canvas?.focus();
   }
 
-  if (watchOnly) showBar(`You only watch ${name}. Nothing you press goes there.`);
-  else viewer?.setViewOnly(false);
-  if (!lockable && !watchOnly) say(`Your keys go to ${name}. This browser keeps Super keys; Chrome, Edge or Brave send them too.`, 6000);
+  viewer?.setViewOnly(false);
+  if (!lockable) say(`Your keys go to ${name}. This browser keeps Super keys; Chrome, Edge or Brave send them too.`, 6000);
   canvas?.focus();
   // Some browsers allow fullscreen with no click. Others wait for the first one.
   if (wanted) void grab();
@@ -122,12 +123,15 @@
     if (e.code === 'Escape' && e.ctrlKey && e.metaKey) {
       e.preventDefault();
       e.stopImmediatePropagation();
-      if (e.type === 'keydown' && lockable && !watchOnly && bar.hidden) void giveBack(`Super keys work here again. Other keys still go to ${name}.`);
+      if (e.type === 'keydown' && lockable && bar.hidden) void giveBack(`Super keys work here again. Other keys still go to ${name}.`);
       return;
     }
-    if (e.type === 'keydown' && wanted && !locked && !document.fullscreenElement && !watchOnly) void grab({ gesture: true });
-    // A key pressed while a toolbar button has focus still goes to the screen.
-    if (e.target !== canvas && canvas && !typing(e.target) && !e.target?.closest?.('#helm-bar')) {
+    if (e.type === 'keydown' && wanted && !locked && !document.fullscreenElement) void grab({ gesture: true });
+    // A key pressed while a toolbar button has focus still goes to the
+    // screen; Enter, Space, Tab and Esc stay with the button.
+    const local = typing(e.target) || e.target?.closest?.('#helm-bar')
+      || (e.target instanceof HTMLButtonElement && /^(Enter|NumpadEnter|Space|Tab|Escape)$/.test(e.code));
+    if (e.target !== canvas && canvas && !local) {
       e.preventDefault();
       e.stopImmediatePropagation();
       canvas.focus();
@@ -159,6 +163,12 @@
     navigator.keyboard?.unlock?.();
     locked = false;
   });
+  // The toolbar's Release control: the keys must come back here too, or the
+  // lock keeps shortcuts that the viewer then drops.
+  if (controlButton) new MutationObserver(() => {
+    if (controlButton.getAttribute('aria-pressed') !== 'false' || !(locked || wanted)) return;
+    void giveBack(`You only watch ${name}. Your keys work here.`);
+  }).observe(controlButton, { attributes: true, attributeFilter: ['aria-pressed'] });
   window.addEventListener('focus', () => {
     canvas?.focus();
     if (wanted && !locked && document.fullscreenElement) void grab({ quiet: true });

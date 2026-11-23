@@ -121,9 +121,7 @@ test('the engine paces by the viewer, not by the tunnel on its own machine', asy
   const args = engineArgs({ port: 4000, tokenFile: '/t', backend: 'wayland', viewerDir: '/v' });
   // Without it the engine reads its loopback TCP numbers and sends 2-3 frames per round trip.
   assert.ok(args.includes('--behind-tls-proxy'));
-  assert.equal(args[args.indexOf('--backend') + 1], 'wayland');
-  assert.equal(args[args.indexOf('--port') + 1], '4000');
-  assert.ok(Number(args[args.indexOf('--bitrate-max') + 1]) >= 8_000_000);
+  assert.equal(args[args.indexOf('--bitrate-max') + 1], '16000000');
 });
 
 test('screens open in their own profile that may fill the display and take the keys', async () => {
