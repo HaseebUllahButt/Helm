@@ -102,6 +102,7 @@ class PiRpcDriver extends Driver {
   #replyTurnId;
   #replyEnded = false;
   #replyFailures = new Map();
+  #replyPrompts = new Map();
   /** usage reported by the latest message_update, for the turn summary */
   #usage = null;
   #commands = [];
@@ -295,6 +296,7 @@ class PiRpcDriver extends Driver {
         this.#turnQueue = [];
         this.#turnId = null;
         this.#resetReplyFailures();
+        this.#replyPrompts.clear();
         this.#working = false;
         this.#manualCompact = false;
         this.#inFlight.clear();
@@ -433,6 +435,7 @@ class PiRpcDriver extends Driver {
     const id = `helm-${++this.#seq}`;
     this.#turnQueue.push(turnId);
     this.#turnId ??= turnId;
+    this.#replyPrompts.set(turnId, text.trim());
     // Only a fresh cycle clears the counters; a followUp queued behind a
     // live turn must not zero the usage that turn is still accumulating.
     if (!this.#working) this.#usage = null;
@@ -510,12 +513,17 @@ class PiRpcDriver extends Driver {
     this.push('input.consumed', { text: entry.text, inputId: entry.inputId });
   }
 
-  /** The echo of a steered message - the oldest one with this text. */
+  /** A queued follow-up can start inside the same agent cycle. Its echo identifies the reply. */
   #onUserMessage(message) {
-    if (!this.#steers.length) return;
     const text = (typeof message?.content === 'string' ? message.content : contentText(message?.content)).trim();
     const entry = this.#steers.find((e) => e.text.trim() === text);
-    if (entry) this.#steerRead(entry);
+    if (entry) { this.#steerRead(entry); return; }
+    const at = Math.max(0, this.#turnQueue.indexOf(this.#replyTurnId ?? this.#turnId));
+    const reply = this.#turnQueue.slice(at).find(id => this.#replyPrompts.get(id) === text);
+    if (!reply) return;
+    this.#replyPrompts.delete(reply);
+    this.#replyTurnId = reply;
+    this.#replyEnded = false;
   }
 
   /**
@@ -1039,6 +1047,7 @@ class PiRpcDriver extends Driver {
     if (done.length) this.flush();
     const u = this.#usage;
     done.forEach((turnId, i) => {
+      this.#replyPrompts.delete(turnId);
       const last = i === done.length - 1;
       this.push('turn.done', {
         turnId, status,
@@ -1056,6 +1065,7 @@ class PiRpcDriver extends Driver {
   #turnDone(status, error, which = null) {
     const turnId = which ?? this.#turnQueue[0] ?? this.#turnId;
     if (!turnId) return;
+    this.#replyPrompts.delete(turnId);
     const at = this.#turnQueue.indexOf(turnId);
     if (at >= 0) this.#turnQueue.splice(at, 1);
     if (this.#turnId === turnId) this.#turnId = this.#turnQueue[0] ?? null;

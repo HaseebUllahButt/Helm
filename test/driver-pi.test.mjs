@@ -199,6 +199,14 @@ async function onMessage(m) {
         out({ type: 'agent_end', messages: [] });
         out({ type: 'agent_settled' });
       }
+      if (scenario === 'failed-inner-follow-up') {
+        out({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: 'Follow-up message' }] } });
+        out({ type: 'turn_start' });
+        const failed = { role: 'assistant', stopReason: 'error', content: [], errorMessage: 'The follow-up model refused.' };
+        out({ type: 'message_end', message: failed });
+        out({ type: 'agent_end', messages: [failed] });
+        out({ type: 'agent_settled' });
+      }
       return ok(m);
     case 'abort':
       ok(m);
@@ -221,6 +229,15 @@ async function onMessage(m) {
   }
   if (scenario === 'ext-command') return ok(m);
   if (scenario === 'omp-ext') { ok(m); return out({ type: 'prompt_result', id: m.id, agentInvoked: false }); }
+  if (scenario === 'failed-inner-follow-up') {
+    if (m.streamingBehavior === 'followUp') return ok(m);
+    state.streaming = true;
+    out({ type: 'agent_start' });
+    out({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: m.message }] } });
+    text('First reply succeeded');
+    out({ type: 'turn_end' });
+    return ok(m);
+  }
   if (scenario === 'failed-follow-up') {
     if (m.streamingBehavior === 'followUp') return ok(m);
     state.streaming = true;
@@ -408,6 +425,25 @@ test('a Pi follow-up before settlement keeps the failure on the first reply', as
   t.after(() => chat.close());
   await chat.sync();
   assert.match(output, /\[error\] Too many requests/);
+  assert.equal(output.match(/\[ok\]/g)?.length, 1);
+});
+
+test('a Pi follow-up within the same cycle keeps its own provider failure', async t => {
+  const { driver, log } = livePi(t, 'failed-inner-follow-up');
+  await driver.send('First message');
+  await driver.send('Follow-up message');
+  await driver.setEffort('high');
+  const [first, second] = log.of('turn.start');
+  assert.deepEqual(log.of('error').map(e => [e.turnId, e.message]), [[second.turnId, 'The follow-up model refused.']]);
+  const events = log.events.map((event, i) => ({ ...event, seq: i + 1 }));
+  const connection = new EventEmitter();
+  connection.rpc = async () => ({ events, last: events.length, pending: [] });
+  let output = '';
+  const chat = new ManagedChat(connection, 's', { write: text => { output += text; } });
+  t.after(() => chat.close());
+  await chat.sync();
+  assert.deepEqual(log.of('turn.done').map(e => e.turnId), [first.turnId, second.turnId]);
+  assert.match(output, /\[error\] The follow-up model refused\./);
   assert.equal(output.match(/\[ok\]/g)?.length, 1);
 });
 
