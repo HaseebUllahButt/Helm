@@ -1,6 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { M } from '@helm/protocol';
+import { M, T } from '@helm/protocol';
 import { directPeer } from './direct-rpc.js';
+
+const TUNNEL_TYPES = new Set([T.TUNNEL_READY, T.TUNNEL_ACK, T.TUNNEL_DATA, T.TUNNEL_CLOSE]);
 
 /**
  * Direct channels from this machine to the others it talks to.
@@ -85,6 +87,8 @@ export class DirectMesh {
     const channel = {
       env, id: `dm-${randomBytes(8).toString('hex')}`, state: 'connecting',
       ms: null, probing: null, opened: null, pending: new Map(), peer: null,
+      // sid -> { onFrame, onClose }: byte streams on this channel (tunnel()).
+      tunnels: new Map(),
       // What setup said so far, and where on the local network each went.
       log: [],
     };
@@ -148,6 +152,10 @@ export class DirectMesh {
   }
 
   #message(channel, message) {
+    if (TUNNEL_TYPES.has(message?.t)) {
+      channel.tunnels.get(message.sid)?.onFrame(message);
+      return;
+    }
     if (message?.t !== 'rpcResult') return;
     const request = channel.pending.get(message.id);
     if (!request) return;
@@ -170,6 +178,11 @@ export class DirectMesh {
       channel.pending.delete(id);
       clearTimeout(request.timer);
       request.reject(Object.assign(new Error('direct channel closed; delivery may be uncertain'), { code: 'disconnected', uncertain: true }));
+    }
+    const tunnels = [...channel.tunnels.values()];
+    channel.tunnels.clear();
+    for (const tunnel of tunnels) {
+      try { tunnel.onClose(new Error('direct channel closed')); } catch {}
     }
     const steady = channel.opened != null && this.now() - channel.opened >= STEADY_MS;
     const wait = this.waits.get(channel.env) ?? { failures: 0, retryAt: 0 };
@@ -245,6 +258,24 @@ export class DirectMesh {
     });
   }
 
+  /**
+   * A byte stream over the open channel, in the hub's tunnel frames (the
+   * other machine's agent.js directTunnel). Frames for its sid go to
+   * `onFrame`; a channel that closes calls `onClose` once. Null when no
+   * channel is open.
+   */
+  tunnel(env, { onFrame, onClose }) {
+    const channel = this.channels.get(env);
+    if (!this.#usable(env) || channel?.state !== 'open') return null;
+    const sid = `dt-${randomBytes(8).toString('hex')}`;
+    channel.tunnels.set(sid, { onFrame, onClose });
+    return {
+      sid,
+      send: (t, extra = {}) => channel.peer.send({ ...extra, t, sid }),
+      close: () => { channel.tunnels.delete(sid); },
+    };
+  }
+
   /** Time the channel with the same `ping` a hub route is timed with. */
   ping(env) {
     const channel = this.channels.get(env);
@@ -269,7 +300,10 @@ export class DirectMesh {
   /** The keepalive round: time open channels, retry wanted ones, close idle ones. */
   tick() {
     for (const [env, last] of this.used) {
-      if (this.now() - last > IDLE_MS || !this.#usable(env)) {
+      // A stream still on the channel is use, however long since it opened.
+      const streaming = !!this.channels.get(env)?.tunnels.size;
+      if (streaming) this.used.set(env, this.now());
+      if ((!streaming && this.now() - last > IDLE_MS) || !this.#usable(env)) {
         // Closed for being idle, not for failing: no wait before the next.
         this.used.delete(env);
         this.#drop(env);

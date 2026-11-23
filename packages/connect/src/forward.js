@@ -1,12 +1,14 @@
 import { createServer } from 'node:net';
 import { hubCredential, hubAddresses } from '@helm/protocol/network';
-import { bridge } from './proxy.js';
+import { bridge, bridgeDirect } from './proxy.js';
 
 /**
  * A forward: another machine's localhost port, on this machine's localhost.
  *
  * Listens on 127.0.0.1 and carries each connection to <machine>'s own
- * 127.0.0.1:<port> over a hub, the same tunnel `helm ssh` rides. Nothing new
+ * 127.0.0.1:<port> over a hub, the same tunnel `helm ssh` rides - or, in
+ * the Helm service, over the direct channel to that machine when requests
+ * to it go that way because it is faster (`direct`). Nothing new
  * is opened to the world: the far machine still accepts tunnels only to the
  * ports it shared or forwards (`#allowedTunnelPorts` in agent.js), and only
  * a member's credential can ask a hub for one. No browser sign-in either -
@@ -88,6 +90,7 @@ function kindOf(err) {
 export async function startForward(net, {
   target, port, localPort = port, exact = false, hubs = forwardHubs(net), machine = target,
   open = bridge, credential = hubCredential, onRefused = () => {}, onError = () => {},
+  direct = null, openDirect = bridgeDirect,
 } = {}) {
   // The hub that worked last goes first; most connections are a page's
   // files, all to the same place.
@@ -105,6 +108,22 @@ export async function startForward(net, {
     // A live stream's small pieces (video, keys, acks) leave at once.
     sock.setNoDelay(true);
     sock.on('error', () => {});
+    // Straight to the machine when that is the faster way now; a hub when
+    // it is not, or when the stream could not start (an older Helm there
+    // refuses one, the channel just went). Never once a byte has moved.
+    if (direct) {
+      try {
+        await openDirect(direct, port, { input: sock, output: sock });
+        sock.end();
+        return;
+      } catch (err) {
+        if (err.established) { sock.destroy(); return; }
+        if (sock.destroyed) return;
+        const kind = err.far ? kindOf(err) : 'unreachable';
+        if (kind === 'refused') { onRefused(err); answerFailure(sock, kind, where); return; }
+        if (kind === 'app') { answerFailure(sock, kind, where); return; }
+      }
+    }
     const list = hubList();
     const order = preferred ? [preferred, ...list.filter((h) => h !== preferred)] : list;
     const failures = [];

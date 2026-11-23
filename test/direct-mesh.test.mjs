@@ -44,6 +44,7 @@ function fakePeers() {
         return Promise.resolve();
       },
       answer(id, result = {}) { onMessage({ t: 'rpcResult', id, ok: true, result }); },
+      deliver(frame) { onMessage(frame); },
       die() {
         if (this.closed) return;
         this.closed = true;
@@ -296,6 +297,35 @@ test('an idle channel is closed, and one that will not connect backs off', async
   }
   assert.ok(waits[2] > waits[0] * 2, `waits grow: ${waits.map(Math.round)}`);
   assert.equal(mesh.table()[0].direct.state, 'retrying');
+  mesh.stop();
+});
+
+test('a forward\'s stream goes direct only when requests do, and hears only its own frames', async () => {
+  const slow = fixture();
+  const none = { onFrame() {}, onClose() {} };
+  assert.equal(slow.mesh.tunnel('remote', none), null, 'no channel yet');
+  await slow.timed(600, 40);
+  assert.equal(slow.mesh.tunnel('remote', none), null, 'a channel that is not faster is not used');
+  slow.mesh.stop();
+
+  const { mesh, timed, peers, tick } = fixture();
+  const peer = await timed(5, 600);
+  const heard = [], closes = [];
+  const stream = mesh.tunnel('remote', { onFrame: (f) => heard.push(f), onClose: (e) => closes.push(e) });
+  assert.ok(stream);
+  await stream.send(T.TUNNEL_OPEN, { port: 8080, flow: 1 });
+  assert.deepEqual(peer.sent.at(-1), { port: 8080, flow: 1, t: T.TUNNEL_OPEN, sid: stream.sid });
+  peer.deliver({ t: T.TUNNEL_READY, sid: stream.sid, flow: 1 });
+  peer.deliver({ t: T.TUNNEL_DATA, sid: 'another', data: Buffer.from('x') });
+  assert.deepEqual(heard, [{ t: T.TUNNEL_READY, sid: stream.sid, flow: 1 }]);
+  // A long stream (a screen) keeps the channel: it is in use, not idle.
+  tick(16 * 60_000);
+  mesh.direct.tick();
+  assert.equal(peer.closed, false);
+  peer.die();
+  assert.equal(closes.length, 1);
+  assert.equal(mesh.tunnel('remote', none), null, 'the channel went, so the next stream takes a hub');
+  assert.equal(peers.made.length, 1);
   mesh.stop();
 });
 

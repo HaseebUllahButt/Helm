@@ -13,8 +13,8 @@ import { startForward, forwardHubs } from './forward.js';
  * - `out`, on the machine with the app: lets the other machine's tunnels
  *   reach that one port (`#allowedTunnelPorts` in agent.js). No public link.
  * - `in`, on the machine where the owner opens it: the Helm service listens
- *   on 127.0.0.1:<localPort> and carries each connection over the network's
- *   hubs (forward.js).
+ *   on 127.0.0.1:<localPort> and carries each connection over the direct
+ *   channel when that is the faster way, else the network's hubs (forward.js).
  *
  * The Helm service owns both halves, so a forward outlives the shell that
  * asked for it and comes back after a restart. It ends at `expiresAt`
@@ -76,11 +76,13 @@ export class Forwards {
    * @param {object} o
    * @param {() => object} o.network   the roster
    * @param {(env, method, params, opts?) => Promise} o.rpc  a call to another machine
+   * @param {(env, handlers) => object|null} [o.direct]  a stream over the direct channel, when that is the faster way (hub-mesh.js tunnel)
    */
-  constructor({ network, rpc, start = startForward, now = Date.now, log = () => {}, retryMs = RETRY_MS }) {
+  constructor({ network, rpc, direct = () => null, start = startForward, now = Date.now, log = () => {}, retryMs = RETRY_MS }) {
     this.retryMs = retryMs;
     this.network = network;
     this.rpc = rpc;
+    this.direct = direct;
     this.start = start;
     this.now = now;
     this.log = log;
@@ -196,6 +198,7 @@ export class Forwards {
       const fwd = await this.start(this.network(), {
         target: f.peer, port: f.port, localPort: f.localPort, machine: this.#name(f.peer),
         hubs: () => forwardHubs(this.network()),
+        direct: (handlers) => this.direct(f.peer, handlers),
         onRefused: () => { void this.#refused(f.id); },
       });
       if (this.#stopped) { await fwd.close(); return; }

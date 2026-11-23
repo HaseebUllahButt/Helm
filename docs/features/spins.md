@@ -83,14 +83,22 @@ for websites that cannot run inside a frame.
 - **Design:** two halves with one id in `~/.helm/forwards.json`. `out` on
   the app's machine allows that port for tunnels; `in` on the owner's
   machine is a listener the Helm service owns. No Spin is made. Each
-  connection opens its own hub tunnel, so app restarts and network drops
+  connection opens its own stream, so app restarts and network drops
   heal on the next load. Failures give a 502 page naming the machine, the
   port and the reason (`x-helm-forward: app|refused|unreachable`).
+- **Route:** a connection takes the direct channel to that machine when
+  requests to it go direct (hub-mesh.js `tunnel`, the same choice `helm
+  status` shows), else a hub. The far side takes a direct stream only from
+  another machine of the network, to the same allowed ports. A direct open
+  that fails before any byte moved (an older Helm refuses it, the channel
+  is down, no answer in 3 s) goes to the hub; one that fails later is never
+  replayed. A connection stays on the route it opened on, so a screen that
+  opened before the channel was up stays on the hub until it reconnects.
 - **Lifetime:** 3 hours unless --keep or --for. A restart reopens the
   same local port. A stop on either machine removes its half and tells the
   other; an away machine is told when it is back (`pending`). A refused
   `in` half asks the other machine and goes if its half is gone.
-- **Tests:** `test/forward-service`, `share-private`, `tunnel-ports`.
+- **Tests:** `test/forward-service`, `forward-direct`, `share-private`, `tunnel-ports`.
 
 ## Access checks
 
