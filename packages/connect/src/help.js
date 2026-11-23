@@ -328,6 +328,7 @@ const DETAILS = {
   Run pipelines with: helm exec <machine> --cwd <path> -- sh -lc '<script>'.
   Do not rerun a command if Helm cannot confirm that it started.
   Read it with helm exec-status <machine> <id> --wait.
+  Command output expires after one hour. You can still read the exit details.
   Stop it with helm exec-cancel.`,
 
   copy: `

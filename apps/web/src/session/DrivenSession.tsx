@@ -1,4 +1,4 @@
-import { errorMessage } from '../errors';
+import { errorMessage, isMissingSavedChat } from '../errors';
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
 import { Client, chatFolder, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
@@ -921,7 +921,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         readVisual={readVisual} openAgent={openAgent}
         pending={log.pending} onReviewRequest={reviewRequest} focusItem={focusItem}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
-        onResend={resend} onWithdraw={withdraw}
+        onResend={isMissingSavedChat(session.recovery?.message) ? undefined : resend} onWithdraw={withdraw}
         onRewind={session.rewindSupported && !working && !busy && !pending && !queuedTurns.length ? (turn) => {
           void call(async () => {
             const check = await client.rpc<{ restoreFiles: boolean; reason?: string }>(env.id, 'session.rewind-check', { id: session.id, turnId: turn.id });
@@ -993,10 +993,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         )}
         {session.recovery && session.recovery.kind !== 'interrupted' && !working && !pending && (
           <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} autoResume={session.autoResumeLimited}
+            onChangeModel={controls.hasPicker('model') ? () => controls.show('model') : undefined}
             onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(errorMessage(e))); }} />
         )}
         {childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Helpers need your answer">
-          {childrenWaiting.map(({ session: child, envId }) => <button key={child.id} disabled={!onOpenSession} onClick={() => onOpenSession?.(child, envId)}>
+          {childrenWaiting.map(({ session: child, envId }) => <button key={child.id} disabled={child.offline || !onOpenSession} onClick={() => onOpenSession?.(child, envId)}>
             <Icon name="subagents" size={15} /><span><b>{child.title}</b><small>{child.ask?.kind === 'question' ? 'Answer question' : 'Review request'}{child.ask?.text ? ` · ${child.ask.text}` : ''}</small></span><Icon name="forward" size={14} />
           </button>)}
         </div>}

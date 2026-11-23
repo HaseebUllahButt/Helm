@@ -125,6 +125,8 @@ export interface Session {
   queueOrder?: string[];
   /** Delegated children's states, plus native subagents; a card only adds to `working`. */
   team?: { working: number; blocked: number; failed: number };
+  /** The helper's machine did not answer. The state is from its last update. */
+  offline?: boolean;
   /** Claude Code's own subagents (its Agent/Task tool), read from its files; no Helm session behind them. */
   nativeCards?: NativeAgent[];
   autoResumeLimited?: boolean;
