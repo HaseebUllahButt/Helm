@@ -154,7 +154,7 @@ export class FrameLanes {
     const bytes = size(data);
     const stream = !!key?.startsWith('sid:');
     // A short stream frame still takes its turn while other frames wait.
-    if (bytes <= PIECE && !(key && this.#keys.has(key)) && !(stream && this.#other.length)) {
+    if (bytes <= PIECE && !(key && this.#keys.has(key)) && !(stream && this.#waiting)) {
       this.#write(data, done, compress);
       return;
     }

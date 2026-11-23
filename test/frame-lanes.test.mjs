@@ -254,3 +254,17 @@ test('short stream frames also take turns while a large frame waits', () => {
   assert.ok(listDoneAt < sock.written.length - 1, 'the list finishes before the last stream frame');
   assert.equal(lanes.queuedStreams, 0);
 });
+
+test('a stream of short frames does not hold back another stream', () => {
+  const sock = heldSocket();
+  const lanes = new FrameLanes(sock, { text: () => true, binary: () => true });
+  lanes.send(encodeTunnelFrame({ t: 'tunnel.data', sid: 'b', data: randomBytes(64 * 1024) }, true), { key: 'sid:b', compress: false });
+  for (let i = 0; i < 40; i++) {
+    lanes.send(encodeTunnelFrame({ t: 'tunnel.data', sid: 'a', data: randomBytes(1024) }, true), { key: 'sid:a', compress: false });
+  }
+  while (sock.held.length) sock.held.shift().cb?.();
+  const frames = new TunnelFrames();
+  const order = [];
+  for (const raw of sock.written) { const f = frames.decode(raw); if (f) order.push(f.sid); }
+  assert.ok(order.indexOf('b') < order.length - 1, 'stream b is not last behind every short frame of a');
+});
