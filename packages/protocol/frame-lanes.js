@@ -181,7 +181,8 @@ export class FrameLanes {
     if (!this.#other.length) return stream;
     // A frame near the joiner's limit goes alone: a stream part next to it
     // could push the joiner over JOIN_LIMIT and lose the frame.
-    if (this.#other[0].bytes > JOIN_LIMIT - 1024 * 1024) return this.#other[0];
+    // A stream frame already part sent finishes first.
+    if (this.#other[0].bytes > JOIN_LIMIT - 1024 * 1024) return this.#stream ?? this.#other[0];
     return this.#streamTurn ? stream : this.#other[0];
   }
 
