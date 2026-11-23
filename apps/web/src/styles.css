@@ -1883,6 +1883,12 @@ li.marked .usage-share-track { margin-left: 32px; }
 .modal-input { width: 100%; font-size: var(--t-body); padding: 9px 11px; margin-bottom: 14px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .modal-actions button { width: auto; margin: 0; padding: 8px 16px; min-height: 40px; font-size: var(--t-body); }
+.modal-actions.stacked { flex-direction: column; align-items: stretch; gap: 8px; margin-top: 4px; }
+.modal-actions.stacked button { width: 100%; min-height: 44px; }
+.modal-actions.stacked .ghost { background: var(--hover); color: var(--text); }
+.modal-actions.stacked .ghost:hover:not(:disabled) { background: var(--muted); filter: brightness(1.4); }
+.modal-actions.stacked .quiet { background: none; border: 0; color: var(--mutedfg); min-height: 36px; }
+.modal-actions.stacked .quiet:hover:not(:disabled) { color: var(--text); }
 /* A checklist in a sheet (the agent chooser on New session) can be longer
    than the screen; the list scrolls, the sheet does not grow. */
 .sheetlist { max-height: 55dvh; overflow-y: auto; margin-bottom: 12px; }
@@ -3005,6 +3011,9 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .child-requests button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 9px 12px; color: var(--need-text); }
 .child-requests button span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .child-requests small { display: block; color: var(--text-dim); font-size: var(--t-meta); }
+.child-request-error { padding: 0 12px 8px; color: var(--text-dim); font-size: var(--t-meta); }
+.child-request-error p { margin: 4px 0; }
+.child-request-error button { width: auto; }
 .subagent-request { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 5px 8px; color: var(--need-text); font-size: var(--t-meta); }
 .subagent-request.subagent-open { color: var(--text-dim); }
 .subagent-request.subagent-open:hover { color: var(--text); }

@@ -1,4 +1,4 @@
-import { errorMessage } from '../errors';
+import { errorMessage, isMissingSavedChat } from '../errors';
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
 import { Client, chatFolder, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
@@ -28,7 +28,7 @@ import { loadModels, peekModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
 import { HistoryChoice, historySendLabel, useStaleHistory } from './HistoryChoice';
-import type { Decision, Item, Turn } from './types';
+import type { Decision, Item, Permission, Turn } from './types';
 import { useThreadTeam } from './TeamSummary';
 import { ThreadDetails, type DetailsTab } from './ThreadDetails';
 import { ExternalSessionNotice } from './ExternalSessionNotice';
@@ -921,7 +921,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         readVisual={readVisual} openAgent={openAgent}
         pending={log.pending} onReviewRequest={reviewRequest} focusItem={focusItem}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
-        onResend={resend} onWithdraw={withdraw}
+        onResend={isMissingSavedChat(session.recovery?.message) ? undefined : resend} onWithdraw={withdraw}
         onRewind={session.rewindSupported && !working && !busy && !pending && !queuedTurns.length ? (turn) => {
           void call(async () => {
             const check = await client.rpc<{ restoreFiles: boolean; reason?: string }>(env.id, 'session.rewind-check', { id: session.id, turnId: turn.id });
@@ -993,12 +993,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         )}
         {session.recovery && session.recovery.kind !== 'interrupted' && !working && !pending && (
           <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} autoResume={session.autoResumeLimited}
+            onChangeModel={controls.hasPicker('model') ? () => controls.show('model') : undefined}
             onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(errorMessage(e))); }} />
         )}
-        {childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Helpers need your answer">
-          {childrenWaiting.map(({ session: child, envId }) => <button key={child.id} disabled={!onOpenSession} onClick={() => onOpenSession?.(child, envId)}>
-            <Icon name="subagents" size={15} /><span><b>{child.title}</b><small>{child.ask?.kind === 'question' ? 'Answer question' : 'Review request'}{child.ask?.text ? ` · ${child.ask.text}` : ''}</small></span><Icon name="forward" size={14} />
-          </button>)}
+        {onOpenSession && childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Helpers need your answer">
+          {childrenWaiting.map(({ session: child, envId = env.id }) => <HelperRequestCard key={`${envId}/${child.id}`} client={client} child={child}
+            machine={envId} name={envId === env.id ? env.name : machines?.find(machine => machine.id === envId)?.name ?? 'the helper’s machine'} onOpen={onOpenSession} />)}
         </div>}
         {log.pending.length > 1 && <div className="child-requests" role="group" aria-label="Other requests need your answer">
           {log.pending.filter(request => request.requestId !== pending?.requestId).map(request => <button key={request.requestId} onClick={() => reviewRequest(request.requestId)}>
@@ -1091,6 +1091,43 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       )}
     </>
   );
+}
+
+function HelperRequestCard({ client, child, machine, name, onOpen }: {
+  client: Client; child: Session; machine: string; name: string; onOpen: (session: Session, machine: string) => void;
+}) {
+  const [state, setState] = useState<'ready' | 'loading' | 'unreachable'>('ready');
+  const mounted = useRef(false);
+  const label = child.ask?.kind === 'question' ? 'Answer question' : 'Review request';
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const open = async () => {
+    if (state === 'loading') return;
+    setState('loading');
+    try {
+      const { session, pending } = await client.rpc<{ session: Session; pending: Permission[] }>(
+        machine, 'session.events', { id: child.id, limit: 1 }, 10_000);
+      if (!mounted.current) return;
+      setState('ready');
+      const request = pending.find(item => item.requestId === child.ask?.requestId) ?? pending[0];
+      onOpen({ ...session, ask: request ? { kind: request.kind, text: request.title, requestId: request.requestId, more: pending.length - 1 } : null }, machine);
+    } catch {
+      if (mounted.current) setState('unreachable');
+    }
+  };
+  return <div>
+    <button type="button" aria-busy={state === 'loading'} onClick={() => void open()}>
+      <Icon name="subagents" size={15} />
+      <span><b>{child.title}</b><small>{state === 'loading' ? 'Loading request…' : `${label}${child.ask?.text ? ` · ${child.ask.text}` : ''}`}</small></span>
+      <Icon name="forward" size={14} />
+    </button>
+    {state === 'unreachable' && <div className="child-request-error">
+      <p role="alert">Cannot reach {name} now. Try again when it is back online.</p>
+      <button type="button" className="ghost" onClick={() => void open()}>Try again</button>
+    </div>}
+  </div>;
 }
 
 // Only the status readout listens to its clocks. A second passing must not

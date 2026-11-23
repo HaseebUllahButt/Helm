@@ -7,13 +7,13 @@ import { T, E, M, PROTOCOL_VERSION } from '@helm/protocol';
 import { foldBuckets } from '@helm/usage';
 import { q, now, newId } from './db.js';
 import {
-  loadNetwork, saveNetwork, roster, mergeRoster, rosterHash, watchNetwork,
+  loadNetwork, saveNetwork, roster, mergeRoster, rosterHash, watchNetwork, isRevoked,
 } from '@helm/protocol/network';
 import { loadOwner, mergeOwner, ownerHash } from '../../../packages/protocol/owner.js';
 import { wakeState, wakeHash } from '@helm/protocol/wake-state';
 import { fanOut, isNew } from './notify.js';
 import { desktop } from './desktop-notify.js';
-import { encodeTunnelFrame, decodeTunnelFrame, TunnelFrames } from '../../../packages/protocol/tunnel-frame.js';
+import { encodeTunnelFrame, decodeTunnelFrame, frameCompress, TunnelFrames } from '../../../packages/protocol/tunnel-frame.js';
 import { CHUNK_MAX } from '../../../packages/protocol/frame-chunks.js';
 import { FrameLanes, FramePieces, laneKey } from '../../../packages/protocol/frame-lanes.js';
 
@@ -72,8 +72,9 @@ export function createWsLayer() {
   const send = (sock, t, extra) => {
     if (sock?.readyState !== 1) return;
     const frame = { t, ...extra };
-    lanesFor(sock).send(encodeTunnelFrame(frame, sock.binaryTunnel === true),
-      { key: laneKey(frame), rid: t === T.RPC_RESULT ? extra?.id : undefined });
+    const encoded = encodeTunnelFrame(frame, sock.binaryTunnel === true);
+    lanesFor(sock).send(encoded,
+      { key: laneKey(frame), rid: t === T.RPC_RESULT ? extra?.id : undefined, compress: frameCompress(frame, encoded) });
   };
 
   /** Whether a browser or another hub here wants this machine's live events. */
@@ -841,6 +842,9 @@ export function createWsLayer() {
       return send(target, T.TUNNEL_OPEN, {
         sid, port: msg.port || 22,
         ...(msg.flow === 1 ? { flow: 1 } : {}),
+        // What the initiator takes (tunnel-flow.js STREAM_WINDOW); the far
+        // end checks it. Absent: the far end sends 512 KiB at a time.
+        ...(Number.isSafeInteger(msg.window) && msg.window > 0 ? { window: msg.window } : {}),
         ...(msg.copy !== undefined ? { copy: msg.copy, caller: from.sub } : {}),
       });
     }
@@ -978,7 +982,7 @@ export function createWsLayer() {
       }
       if (msg === undefined) return;
       try {
-        if (loadNetwork()?.revoked?.[sock.envId ?? sock.sub]) return;
+        if (isRevoked(sock.envId ?? sock.sub)) return;
         if (sock.envId) handleDaemonFrame(sock, msg);
         else handleClientFrame(sock, msg);
       } catch (err) {

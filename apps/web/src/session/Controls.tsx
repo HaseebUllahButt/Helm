@@ -84,6 +84,7 @@ export function Controls({ options, session, busy, pending, onPick, onFavs, onDe
   return {
     step,
     show,
+    hasPicker: (kind: Kind) => groups.some((g) => g.kind === kind),
     /** Fold whatever sheet is open: another picker beside these took the slot. */
     close: () => setOpen(null),
     chips: (

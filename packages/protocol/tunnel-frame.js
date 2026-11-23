@@ -26,6 +26,29 @@ export function encodeTunnelFrame(frame, binary = false) {
   return Buffer.concat([prefix, header, data]);
 }
 
+/**
+ * Whether deflate can help with these bytes. Video, SSH and copy bytes are
+ * compressed or encrypted already: deflate only made them wait, and every
+ * small frame on that socket waited behind the job. A sample of 256 bytes
+ * from random data holds about 162 different values; text holds under 100.
+ */
+export function compressible(data) {
+  if (data.length < 1024) return false;
+  const seen = new Uint8Array(256), step = Math.floor(data.length / 256);
+  let distinct = 0;
+  for (let i = 0; i < 256; i++) if (!seen[data[i * step]]++) distinct++;
+  return distinct < 128;
+}
+
+/**
+ * The `compress` option for one encoded frame: false for binary tunnel bytes
+ * that deflate cannot shrink, undefined (the socket's own rule) otherwise.
+ * The receiver needs nothing: a WebSocket marks each message it compressed.
+ */
+export function frameCompress(frame, encoded) {
+  return Buffer.isBuffer(encoded) && frame?.t === 'tunnel.data' && !compressible(frame.data) ? false : undefined;
+}
+
 export function decodeTunnelFrame(raw) {
   const input = bytes(raw);
   if (!input || input.length < 4 || !input.subarray(0, 4).equals(MAGIC)) return JSON.parse(input ? input.toString('utf8') : raw);

@@ -183,8 +183,122 @@ test('a failed update is recorded and the old version stays', async () => {
   writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
 case "$1" in --version) echo "2.1.0 (Claude Code)";; update) echo "network is down" >&2; exit 3;; esac\n`);
   chmodSync(join(m.bin, 'claude'), 0o755);
-  const [r] = await m.updater().update({ engine: 'claude' });
+  const messages = [];
+  const log = message => messages.push(message);
+  const [r] = await m.updater({ log }).update({ engine: 'claude' });
   assert.deepEqual([r.ok, r.changed, r.to, r.message], [false, false, '2.1.0', 'network is down']);
+  const [again] = await m.updater({ log }).update({ engine: 'claude' });
+  assert.equal(again.ok, false);
+  assert.equal(messages.filter(message => message.includes('network is down')).length, 1);
+});
+
+test('an update logs each cause and exit code once across updater instances', async () => {
+  const m = machine();
+  const failure = join(m.root, 'failure');
+  const binary = join(m.bin, 'claude');
+  writeFileSync(binary, `#!/bin/sh
+case "$1" in
+  --version) echo '2.1.0 (Claude Code)';;
+  update) read -r code cause < '${failure}'; echo "$cause" >&2; exit "$code";;
+esac
+`, { mode: 0o755 });
+  const messages = [];
+  for (const entry of ['3 First cause', '3 Second cause', '3 First cause', '4 First cause']) {
+    writeFileSync(failure, entry + '\n');
+    await m.updater({ log: message => messages.push(message) }).update({ engine: 'claude' });
+  }
+  assert.equal(messages.filter(message => message.includes('First cause')).length, 2);
+  assert.equal(messages.filter(message => message.includes('Second cause')).length, 1);
+  assert.ok(messages.some(message => message.includes('Exit code 4.')));
+});
+
+test('different update causes with the same final lines log once each', async () => {
+  const m = machine();
+  const causeFile = join(m.root, 'cause');
+  writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo '2.1.0 (Claude Code)';;
+  update) read -r cause < '${causeFile}'; printf '%s\\n' "$cause" 'update failed' 'see log' 'exiting' >&2; exit 6;;
+esac
+`, { mode: 0o755 });
+  const messages = [];
+  for (const cause of ['Permission denied', 'Disk full', 'Permission denied']) {
+    writeFileSync(causeFile, cause + '\n');
+    await m.updater({ log: message => messages.push(message) }).update({ engine: 'claude' });
+  }
+  assert.equal(messages.length, 2);
+  assert.ok(messages.every(message => message.includes('Exit code 6.')));
+  assert.match(messages[0], /Permission denied/);
+  assert.match(messages[1], /Disk full/);
+});
+
+test('timestamps and progress numbers do not turn an old update failure into a new one', async () => {
+  const m = machine();
+  const output = join(m.root, 'update-output');
+  writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo '2.1.0 (Claude Code)';;
+  update) while IFS= read -r line; do echo "$line"; done < '${output}'; exit 6;;
+esac
+`, { mode: 0o755 });
+  const messages = [];
+  for (const [time, progress, cause] of [
+    ['12:34:56', ['10%', '20%'], 'Disk full (error 28)'],
+    ['14:34:56', ['50%'], 'Disk full (error 28)'],
+    ['15:34:56', ['35%'], 'Disk full (error 122)'],
+  ]) {
+    const log = [...progress.map(value => `[${time}] Downloading ${value}`), `[2026-11-23T${time}.456Z] ${cause}`];
+    writeFileSync(output, log.join('\r\n') + '\r\n');
+    await m.updater({ log: message => messages.push(message) }).update({ engine: 'claude' });
+  }
+  assert.equal(messages.length, 2);
+  assert.match(messages[0], /Disk full \(error 28\)/);
+  assert.match(messages[1], /Disk full \(error 122\)/);
+});
+
+test('different update causes on stdout log once each with the same stderr warning', async () => {
+  const m = machine();
+  const causeFile = join(m.root, 'cause');
+  writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo '2.1.0 (Claude Code)';;
+  update) read -r cause < '${causeFile}'; echo "$cause"; echo 'Update warning' >&2; exit 6;;
+esac
+`, { mode: 0o755 });
+  const messages = [];
+  for (const cause of ['Permission denied', 'Disk full', 'Permission denied']) {
+    writeFileSync(causeFile, cause + '\n');
+    await m.updater({ log: message => messages.push(message) }).update({ engine: 'claude' });
+  }
+  assert.equal(messages.length, 2);
+  assert.match(messages[0], /Permission denied/);
+  assert.match(messages[1], /Disk full/);
+});
+
+test('reading Settings during an update keeps its failure history', async () => {
+  const m = machine();
+  writeFileSync(join(m.bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo '2.1.0 (Claude Code)';;
+  update) echo 'Cannot reach the update server' >&2; exit 5;;
+esac
+`, { mode: 0o755 });
+  const { promise: reading, resolve: readStarted } = Promise.withResolvers();
+  const { promise: root, resolve: finishRead } = Promise.withResolvers();
+  const settings = m.updater({ npmRoot: () => { readStarted(); return root; } });
+  const versions = settings.versions({ refresh: true });
+  const messages = [];
+  const updater = m.updater({ log: message => messages.push(message) });
+  await reading;
+  try {
+    await updater.update({ engine: 'claude' });
+  } finally {
+    finishRead(join(m.root, 'npm'));
+  }
+  const { tools } = await versions;
+  assert.equal(tools.find(tool => tool.engine === 'claude').lastResult?.message, 'Cannot reach the update server');
+  await updater.update({ engine: 'claude' });
+  assert.equal(messages.filter(message => message.includes('Cannot reach the update server')).length, 1);
 });
 
 /** A fake Claude Code as large as the real program, which names the models it knows. */

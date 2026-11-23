@@ -26,15 +26,32 @@ export function Sheet({ children, onClose, label, onKeyDown }: { children: React
  * `enterConfirms` puts focus on the yes button, so Enter answers yes. The key
  * that asked never answers: a double press of Delete lost the owner's chats.
  */
-export function Confirm({ title, body, confirmLabel = 'Confirm', danger, busy, enterConfirms, other, onCancel, onConfirm }: {
+export function Confirm({ title, body, confirmLabel = 'Confirm', busyLabel, danger, busy, enterConfirms, other, stacked, onCancel, onConfirm }: {
   title: string; body?: ReactNode; confirmLabel?: string; danger?: boolean; busy?: boolean; enterConfirms?: boolean;
+  /** Shown on the yes button while busy; default "…". */
+  busyLabel?: string;
   /** A third answer beside Cancel and yes. */
   other?: { label: string; onClick: () => void };
+  /** Full-width buttons, one under the other, yes first: for long labels. */
+  stacked?: boolean;
   onCancel: () => void; onConfirm: () => void;
 }) {
   const yes = useRef<HTMLButtonElement>(null);
   // Runs after the sheet focuses its first button.
   useEffect(() => { if (enterConfirms) yes.current?.focus(); }, [enterConfirms]);
+  if (stacked) return (
+    <Sheet onClose={onCancel} label={title}>
+      <div className="modal-title">{title}</div>
+      {body && <div className="modal-body">{body}</div>}
+      <div className="modal-actions stacked">
+        <button ref={yes} className={danger ? 'primary danger' : 'primary'} onClick={onConfirm} disabled={busy}>
+          {busy ? (busyLabel ?? '…') : confirmLabel}
+        </button>
+        {other && <button className="ghost" onClick={other.onClick} disabled={busy}>{other.label}</button>}
+        <button className="quiet" onClick={onCancel} disabled={busy}>Cancel</button>
+      </div>
+    </Sheet>
+  );
   return (
     <Sheet onClose={onCancel} label={title}>
       <div className="modal-title">{title}</div>

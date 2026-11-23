@@ -356,6 +356,21 @@ export class HubMesh {
         && Object.hasOwn(network.devices ?? {}, sub) && !network.revoked?.[sub]);
   }
 
+  /**
+   * A byte stream to that machine over the direct channel (a forward's
+   * connection, forward.js), when new requests to it go direct now - the
+   * same choice as #send. Null: take a hub. Asking keeps the channel wanted,
+   * so the next connection can go direct even when this one cannot.
+   */
+  tunnel(env, handlers) {
+    const network = this.network();
+    if (!this.direct || !Object.hasOwn(network?.machines ?? {}, env) || network.revoked?.[env]) return null;
+    this.direct.want(env);
+    const link = this.route(env);
+    if (!link || !this.#preferDirect(env, link)) return null;
+    return this.direct.tunnel(env, handlers);
+  }
+
   /** Close the channels of machines taken out of the network. */
   dropRevoked(revoked) {
     this.direct?.dropRevoked(revoked);

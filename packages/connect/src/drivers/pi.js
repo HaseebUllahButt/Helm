@@ -98,6 +98,11 @@ class PiRpcDriver extends Driver {
   /** user-message cycle in flight (agent_start .. agent_settled) */
   #working = false;
   #interrupting = false;
+  /** Pi can start a follow-up before it settles both prompts. Keep its errors by reply. */
+  #replyTurnId;
+  #replyEnded = false;
+  #replyFailures = new Map();
+  #replyPrompts = new Map();
   /** usage reported by the latest message_update, for the turn summary */
   #usage = null;
   #commands = [];
@@ -290,6 +295,8 @@ class PiRpcDriver extends Driver {
         const open = [...new Set([this.#turnId, ...this.#turnQueue].filter(Boolean))];
         this.#turnQueue = [];
         this.#turnId = null;
+        this.#resetReplyFailures();
+        this.#replyPrompts.clear();
         this.#working = false;
         this.#manualCompact = false;
         this.#inFlight.clear();
@@ -428,6 +435,7 @@ class PiRpcDriver extends Driver {
     const id = `helm-${++this.#seq}`;
     this.#turnQueue.push(turnId);
     this.#turnId ??= turnId;
+    this.#replyPrompts.set(turnId, text.trim());
     // Only a fresh cycle clears the counters; a followUp queued behind a
     // live turn must not zero the usage that turn is still accumulating.
     if (!this.#working) this.#usage = null;
@@ -505,12 +513,21 @@ class PiRpcDriver extends Driver {
     this.push('input.consumed', { text: entry.text, inputId: entry.inputId });
   }
 
-  /** The echo of a steered message - the oldest one with this text. */
+  /** A queued follow-up can start inside the same agent cycle. Its echo identifies the reply. */
   #onUserMessage(message) {
-    if (!this.#steers.length) return;
     const text = (typeof message?.content === 'string' ? message.content : contentText(message?.content)).trim();
     const entry = this.#steers.find((e) => e.text.trim() === text);
-    if (entry) this.#steerRead(entry);
+    if (entry) { this.#steerRead(entry); return; }
+    const at = Math.max(0, this.#turnQueue.indexOf(this.#replyTurnId ?? this.#turnId));
+    const prompts = this.#turnQueue.slice(at).filter(id => this.#replyPrompts.has(id));
+    // Pi extensions can change the text. Without a possible steer, Pi reads
+    // the remaining prompts in order.
+    const reply = prompts.find(id => this.#replyPrompts.get(id) === text)
+      ?? (this.engine === 'pi' && !this.#steers.length ? prompts[0] : undefined);
+    if (!reply) return;
+    this.#replyPrompts.delete(reply);
+    this.#replyTurnId = reply;
+    this.#replyEnded = false;
   }
 
   /**
@@ -707,6 +724,12 @@ class PiRpcDriver extends Driver {
         // turn of its own, ended by the cycle's own agent_settled - never by
         // a quiet stream.
         if (!this.#working && !this.#turnQueue.length && !this.#turnId) this.#wake();
+        if (this.#replyTurnId === undefined) this.#replyTurnId = this.#turnId;
+        else if (this.#replyEnded) {
+          const at = this.#turnQueue.indexOf(this.#replyTurnId);
+          this.#replyTurnId = at >= 0 ? this.#turnQueue[at + 1] ?? null : null;
+        } else this.#replyFailures.delete(this.#replyTurnId);
+        this.#replyEnded = false;
         this.#working = true;
         if (!this.pending.size) this.push('status', { status: 'working' });
         return;
@@ -714,6 +737,11 @@ class PiRpcDriver extends Driver {
         // The final messages carry the last word on text and usage - a
         // model that does not stream deltas still reports them here.
         const last = Array.isArray(m.messages) ? m.messages.filter((x) => x?.role === 'assistant').at(-1) : null;
+        const reply = this.#replyTurnId === undefined ? this.#turnId : this.#replyTurnId;
+        if (last?.stopReason === 'error' && reply) {
+          this.#replyFailures.set(reply, last.errorMessage || 'The AI service did not finish this reply.');
+        }
+        this.#replyEnded = !m.willRetry && !m.willContinue;
         if (last?.usage) this.#usage = last.usage;
         if (last) this.#onAssistantSnapshot(last, true);
         // willRetry (pi) / willContinue (omp) mean the cycle is not over.
@@ -727,7 +755,7 @@ class PiRpcDriver extends Driver {
       }
       case 'agent_settled':
         this.#settles = true;
-        return this.#settled(true);
+        return this.#settled(true, m.aborted);
       case 'turn_start': case 'turn_end':
         return; // the model+tool loop inside one agent cycle
       case 'message_start':
@@ -800,7 +828,8 @@ class PiRpcDriver extends Driver {
           this.#compacting = null;
         }
         // willRetry: the prompt runs again on the compacted context.
-        if (!m.willRetry) this.#maybeIdle();
+        if (m.willRetry) this.#replyEnded = false;
+        else this.#maybeIdle();
         return;
       // omp: the prompt was handled without the model (a command, an
       // extension) - no agent cycle will come to end its turn.
@@ -812,11 +841,21 @@ class PiRpcDriver extends Driver {
         return this.#turnDone('ok', undefined, turnId);
       }
       case 'auto_retry_start':
+        this.#replyEnded = false;
         this.push('status', { status: 'working' });
         return;
-      case 'auto_retry_end':
-        if (m.success === false) this.push('error', { message: m.error ?? 'retry failed', kind: 'retry' });
+      case 'auto_retry_end': {
+        const reply = this.#replyTurnId === undefined ? this.#turnId : this.#replyTurnId;
+        if (!reply) return;
+        if (m.success === false) {
+          const error = m.finalError || m.error;
+          if (!this.#interrupting && error !== 'Retry cancelled') {
+            this.#replyFailures.set(reply, error || this.#replyFailures.get(reply) || 'The AI service could not finish the reply after several attempts.');
+            this.#replyEnded = true;
+          }
+        } else if (m.success === true) this.#replyFailures.delete(reply);
         return;
+      }
       // queue_update, bash_execution_update, summarization_retry_* - client
       // plumbing the transcript does not need.
       default: return;
@@ -972,9 +1011,16 @@ class PiRpcDriver extends Driver {
    * The agent's whole cycle settled. The front of the queue is the prompt
    * it was answering; a queued followUp becomes the live turn next.
    */
-  #settled(all = false) {
+  #settled(all = false, aborted = false) {
     this.#working = false;
     const status = this.#interrupting ? 'interrupted' : 'ok';
+    // These errors only add text to the reply. They do not drive recovery.
+    if (!this.#interrupting && !aborted) {
+      for (const [turnId, message] of this.#replyFailures) {
+        this.push('error', { kind: 'provider-reply', turnId, message });
+      }
+    }
+    this.#resetReplyFailures();
     // Both agents read every steered message they took before a cycle
     // ends on its own. One still here was read under other words - an
     // extension input handler can rewrite it. One not answered yet starts
@@ -992,6 +1038,12 @@ class PiRpcDriver extends Driver {
     this.#settleTurns(n, status);
   }
 
+  #resetReplyFailures() {
+    this.#replyFailures.clear();
+    this.#replyTurnId = undefined;
+    this.#replyEnded = false;
+  }
+
   /** Close the oldest n open turns; the usage so far belongs to the last. */
   #settleTurns(n, status) {
     const done = this.#turnQueue.splice(0, n);
@@ -999,6 +1051,7 @@ class PiRpcDriver extends Driver {
     if (done.length) this.flush();
     const u = this.#usage;
     done.forEach((turnId, i) => {
+      this.#replyPrompts.delete(turnId);
       const last = i === done.length - 1;
       this.push('turn.done', {
         turnId, status,
@@ -1016,6 +1069,7 @@ class PiRpcDriver extends Driver {
   #turnDone(status, error, which = null) {
     const turnId = which ?? this.#turnQueue[0] ?? this.#turnId;
     if (!turnId) return;
+    this.#replyPrompts.delete(turnId);
     const at = this.#turnQueue.indexOf(turnId);
     if (at >= 0) this.#turnQueue.splice(at, 1);
     if (this.#turnId === turnId) this.#turnId = this.#turnQueue[0] ?? null;

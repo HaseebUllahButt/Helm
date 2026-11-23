@@ -2,7 +2,7 @@ import { StartReceipts } from './start-receipts.js';
 import { assertRestoreReviewed } from './restore-guard.js';
 import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
-import { encodeTunnelFrame, decodeTunnelFrame, TunnelFrames } from '../../protocol/tunnel-frame.js';
+import { encodeTunnelFrame, decodeTunnelFrame, frameCompress, TunnelFrames } from '../../protocol/tunnel-frame.js';
 import { FrameLanes, FramePieces, laneKey } from '../../protocol/frame-lanes.js';
 import { createHash } from 'node:crypto';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
@@ -61,7 +61,7 @@ import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfe
 import { Handoffs } from './handoffs.js';
 import { TaskTransfers } from './task-transfer.js';
 import { ChatMoves } from './chat-move.js';
-import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
+import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT, STREAM_WINDOW, tunnelWindow } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { CliUpdater } from './cli-updates.js';
 import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, rebuildStaleApp, watchCheckout } from './update.js';
@@ -308,12 +308,23 @@ export class Link {
   send(t, extra = {}) {
     if (this.#ws?.readyState === WebSocket.OPEN) {
       const frame = { t, ...extra };
-      this.#out.send(encodeTunnelFrame(frame, this.binaryTunnel === true), { key: laneKey(frame) });
+      const encoded = encodeTunnelFrame(frame, this.binaryTunnel === true);
+      this.#out.send(encoded, { key: laneKey(frame), compress: frameCompress(frame, encoded) });
     }
   }
 
   get tunnelWritable() {
     return this.#ws?.readyState === WebSocket.OPEN && this.#out.bufferedAmount < TUNNEL_SOCKET_LIMIT;
+  }
+
+  /**
+   * Whether tunnel streams may queue more. Only stream frames held back
+   * count, not a chat list: the large lane lets stream frames pass those
+   * (frame-lanes.js). All streams share the one budget.
+   */
+  tunnelRoom() {
+    return this.#ws?.readyState === WebSocket.OPEN
+      && (this.#ws.bufferedAmount ?? 0) + this.#out.queuedStreams < TUNNEL_SOCKET_LIMIT;
   }
 
   async #open() {
@@ -501,6 +512,8 @@ export class Daemon {
     this.forwards = new Forwards({
       network: () => loadNetwork() ?? this.net,
       rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 15_000, ...opts }),
+      // A connection goes straight to that machine when requests to it do.
+      direct: (env, handlers) => this.mesh?.tunnel(env, handlers) ?? null,
       log: (line) => console.error(`[helm] ${line}`),
     });
     const modelNetwork = () => loadNetwork() ?? this.net;
@@ -551,8 +564,8 @@ export class Daemon {
         (link ?? { send: (t, e) => this.broadcastFrame(t, e) }).send(T.SIGNAL, { peer, payload }),
       (method, params, caller) => this.dispatch(method, params, caller),
       {
-        onTunnel: (link, frame, caller) => this.#directTunnel(link, frame, caller),
-        onTunnelClose: (link) => this.copyReceiver?.dropLink(link),
+        onTunnel: (link, frame, caller) => this.directTunnel(link, frame, caller),
+        onTunnelClose: (link) => this.directChannelGone(link),
         // Every request on a direct channel is checked as a hub checks the
         // ones it forwards: against who the hub introduced, never who the
         // request says it is from. Machine offers first prove that identity
@@ -868,14 +881,7 @@ export class Daemon {
     this.mesh?.down(link);
     this.#noteRemote(false);
     this.copyReceiver?.dropLink(link);
-    for (const [key, tunnel] of this.#tunnels) {
-      if (tunnel.link !== link) continue;
-      tunnel.release?.();
-      tunnel.sender?.stop();
-      tunnel.receiver?.stop();
-      tunnel.sock.destroy();
-      this.#tunnels.delete(key);
-    }
+    this.#dropTunnels(link);
   }
 
   /**
@@ -1060,7 +1066,15 @@ export class Daemon {
     if (this.#stopped) return;
     this.routes();
     void this.#checkNetworkRecovery().catch(error => console.warn('[helm] packet-size recovery:', error.message));
-    await this.#publishSelf();
+    // `helm leave` removed the roster: this machine is in no network now.
+    // Checked first, because #publishSelf would write the kept copy back;
+    // every direct channel goes, so the other side's streams end too.
+    let left = false;
+    try { left = loadNetwork() === null; } catch { /* unreadable is not gone */ }
+    if (left) {
+      this.peers?.stop();
+      this.#dropDirectTunnels();
+    } else await this.#publishSelf();
 
     // Offer a fingerprint of what we know on every cycle. It is what makes a
     // revocation typed on one machine reach a machine that has been asleep
@@ -1777,28 +1791,9 @@ export class Daemon {
         return this.#openTunnel(link, msg);
 
       case T.TUNNEL_ACK:
-        if (this.copyReceiver?.handle(link, msg, msg.caller)) return;
-        this.#tunnels.get(this.#key(link, msg.sid))?.sender?.ack(msg.bytes);
-        return;
-      case T.TUNNEL_DATA: {
-        if (this.copyReceiver?.handle(link, msg, msg.caller)) return;
-        const tunnel = this.#tunnels.get(this.#key(link, msg.sid));
-        if (tunnel?.receiver) tunnel.receiver.write(msg.data);
-        else tunnel?.sock.write(Buffer.from(msg.data, 'base64'));
-        return;
-      }
-
-      case T.TUNNEL_CLOSE: {
-        if (this.copyReceiver?.handle(link, msg, msg.caller)) return;
-        const key = this.#key(link, msg.sid);
-        const tunnel = this.#tunnels.get(key);
-        this.#tunnels.delete(key);
-        tunnel?.release?.();
-        tunnel?.sender?.stop();
-        tunnel?.receiver?.stop();
-        tunnel?.sock.destroy();
-        return;
-      }
+      case T.TUNNEL_DATA:
+      case T.TUNNEL_CLOSE:
+        return this.#tunnelFrame(link, msg, msg.caller);
 
       case T.PING:
         return link.send(T.PONG);
@@ -1845,12 +1840,88 @@ export class Daemon {
     ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536 && p !== this.port);
   }
 
-  #directTunnel(link, frame, caller) {
-    if (frame?.t === T.TUNNEL_OPEN && frame.copy === undefined) {
-      link.send(T.TUNNEL_CLOSE, { sid: frame.sid, reason: 'direct tunnels carry signed copy requests only' });
-      return;
+  /** An ack, bytes or a close for a stream on `link`: a copy's, or one #openTunnel made. */
+  #tunnelFrame(link, msg, caller) {
+    if (this.copyReceiver?.handle(link, msg, caller)) return;
+    const key = this.#key(link, msg.sid);
+    const tunnel = this.#tunnels.get(key);
+    if (msg.t === T.TUNNEL_ACK) tunnel?.sender?.ack(msg.bytes);
+    else if (msg.t === T.TUNNEL_DATA) {
+      if (tunnel?.receiver) tunnel.receiver.write(msg.data);
+      else tunnel?.sock.write(Buffer.from(msg.data, 'base64'));
+    } else if (msg.t === T.TUNNEL_CLOSE) {
+      this.#tunnels.delete(key);
+      this.#endTunnel(tunnel);
     }
-    this.copyReceiver?.handle(link, frame, caller);
+  }
+
+  #endTunnel(tunnel) {
+    tunnel?.release?.();
+    tunnel?.sender?.stop();
+    tunnel?.receiver?.stop();
+    tunnel?.sock.destroy();
+  }
+
+  /** The hub link or direct channel went, and so did every stream on it. */
+  #dropTunnels(link) {
+    for (const [key, tunnel] of this.#tunnels) {
+      if (tunnel.link !== link) continue;
+      this.#tunnels.delete(key);
+      this.#endTunnel(tunnel);
+    }
+  }
+
+  /**
+   * A stream on a direct channel: a copy, as before, or a forward's
+   * connection from another machine of this network, straight instead of
+   * through a hub (forward.js), to the same ports #openTunnel allows. The
+   * channel itself is checked on every frame (peer.js directCaller), so a
+   * removed machine loses it at once.
+   */
+  directTunnel(link, frame, caller) {
+    if (frame?.t === T.TUNNEL_OPEN) {
+      if (typeof frame.sid !== 'string' || !frame.sid || frame.sid.length > 64) return;
+      // One id, one stream: a copy and a forward never share one, or the
+      // copy would take the forward's close.
+      const key = this.#key(link, frame.sid);
+      if (this.#tunnels.has(key) || this.copyReceiver?.streams.has(key) || this.copyReceiver?.closing.has(key)) {
+        link.send(T.TUNNEL_CLOSE, { sid: frame.sid, reason: 'duplicate stream id' });
+        return;
+      }
+    }
+    if (frame?.t === T.TUNNEL_OPEN && frame.copy === undefined) {
+      // The roster on disk, not the one kept from the start: after `helm
+      // leave` this machine is in no network and opens nothing.
+      const net = loadNetwork();
+      if (!net?.machines?.[net.self] || typeof caller !== 'string' || caller === net.self
+          || !Object.hasOwn(net.machines, caller) || net.revoked?.[caller] || net.revoked?.[net.self]) {
+        link.send(T.TUNNEL_CLOSE, { sid: frame.sid, reason: 'a direct stream comes from another machine of this network only' });
+        return;
+      }
+      // Only with credit, which is what keeps its bytes behind the channel's
+      // room (peer.js tunnelRoom). Without it: the hub, as always.
+      if (frame.flow !== 1) {
+        link.send(T.TUNNEL_CLOSE, { sid: frame.sid, reason: 'a direct stream needs flow control' });
+        return;
+      }
+      return this.#openTunnel(link, frame, { direct: true });
+    }
+    this.#tunnelFrame(link, frame, caller);
+  }
+
+  /** A direct channel closed: its copies and streams end with it. */
+  directChannelGone(link) {
+    this.copyReceiver?.dropLink(link);
+    this.#dropTunnels(link);
+  }
+
+  /** This machine left its network: no direct stream outlives that. */
+  #dropDirectTunnels() {
+    for (const [key, tunnel] of this.#tunnels) {
+      if (!tunnel.direct) continue;
+      this.#tunnels.delete(key);
+      this.#endTunnel(tunnel);
+    }
   }
 
   /**
@@ -1858,39 +1929,49 @@ export class Daemon {
    * interface. This is how ssh reaches a box behind NAT: the daemon already
    * holds the outbound connection, so nothing has to accept an inbound one.
    */
-  #openTunnel(link, { sid, port, flow }) {
+  #openTunnel(link, { sid, port, flow, window }, { direct = false } = {}) {
     const wanted = Number(port) || 22;
     if (!this.#allowedTunnelPorts().includes(wanted)) {
       return link.send(T.TUNNEL_CLOSE, { sid, reason: 'port not allowed' });
     }
     const key = this.#key(link, sid);
     const sock = connectLoopback(wanted);
-    const tunnel = { sock, link, release: beginTransferActivity() };
+    const tunnel = { sock, link, direct, release: beginTransferActivity() };
     this.#tunnels.set(key, tunnel);
+    // The entry under this key, if it is still this stream's: a new stream
+    // can reuse the id while this socket's close is on its way.
+    const mine = () => this.#tunnels.get(key) === tunnel;
     const end = reason => {
       tunnel.release?.();
       tunnel.sender?.stop();
       tunnel.receiver?.stop();
-      if (!this.#tunnels.delete(key)) return;
+      if (!mine()) return;
+      this.#tunnels.delete(key);
       link.send(T.TUNNEL_CLOSE, { sid, reason });
       sock.destroy();
     };
     sock.on('connect', () => {
       const negotiated = flow === 1;
-      link.send(T.TUNNEL_READY, { sid, ...(negotiated ? { flow: 1 } : {}) });
+      // `window`: what this end takes. Offered only when the open carried an
+      // offer, so an older hub that drops it keeps both directions at 512 KiB.
+      const offer = negotiated && window !== undefined ? { window: STREAM_WINDOW } : {};
+      link.send(T.TUNNEL_READY, { sid, ...(negotiated ? { flow: 1, ...offer } : {}) });
       if (negotiated) {
         tunnel.receiver = new TunnelReceiver(sock,
-          bytes => link.send(T.TUNNEL_ACK, { sid, bytes }), err => end(err.message));
+          bytes => link.send(T.TUNNEL_ACK, { sid, bytes }), err => end(err.message), { window: STREAM_WINDOW });
+        // Bytes stay bytes: the link sends them binary to a hub that takes
+        // that, and as base64 to one that does not (tunnel-frame.js).
         tunnel.sender = new TunnelSender(sock,
-          chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }), err => end(err.message),
-          { canSend: () => link.tunnelWritable !== false });
+          chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk }), err => end(err.message),
+          { window: tunnelWindow(window),
+            canSend: () => (link.tunnelRoom ? link.tunnelRoom() : link.tunnelWritable !== false) });
       } else {
         sock.on('data', chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }));
       }
     });
     sock.on('error', err => end(err.message));
     sock.on('close', () => {
-      if (tunnel.sender && this.#tunnels.has(key)) tunnel.sender.finish(() => end('closed'));
+      if (tunnel.sender && mine()) tunnel.sender.finish(() => end('closed'));
       else end('closed');
     });
   }

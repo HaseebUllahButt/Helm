@@ -1,7 +1,7 @@
-import { errorMessage, SAFETY_BLOCK } from '../errors';
+import { errorMessage, isMissingSavedChat, missingFolderPath, SAFETY_BLOCK } from '../errors';
 
 /** A task outcome, with a safe message and a way to continue. */
-export interface Problem { title: string; text: string; action: string; raw?: string }
+export interface Problem { title: string; text: string; action?: string; changeModel?: boolean; raw?: string }
 type Kind = 'limited' | 'error' | 'interrupted' | 'restart';
 
 function tidy(message: string): string {
@@ -45,5 +45,19 @@ export function plainProblem(kind: Kind, message: string): Problem {
     };
   }
   if (SAFETY_BLOCK.test(message ?? '')) return { title: 'Blocked for safety', action: 'Try again', text: plainError(message), raw };
+  const folder = missingFolderPath(message ?? '');
+  if (folder) return {
+    title: 'Chat folder missing', action: 'Try again',
+    text: `Restore the folder ${folder} on the chat’s machine. Then try again.`, raw,
+  };
+  if (isMissingSavedChat(message)) return {
+    title: 'Saved chat missing', text: plainError(message), raw,
+  };
+  if (/\b401\b|unauthori[sz]ed|authentication required|not logged in|missing api key|no api key found/i.test(message)) return {
+    title: 'Check this account', action: 'Try again', text: plainError(message), raw,
+  };
+  if (/model.*(?:not supported|not enabled|not available|unavailable|at capacity)|does not offer/i.test(message)) return {
+    title: 'Model unavailable', action: 'Try again', changeModel: true, text: plainError(message), raw,
+  };
   return { title: 'Task failed', action: 'Try again', text: plainError(message ?? ''), raw };
 }

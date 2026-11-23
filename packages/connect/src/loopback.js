@@ -3,7 +3,8 @@ import { connect } from 'node:net';
 /** Dial both loopback families, without relying on the machine's DNS order. */
 export function connectLoopback(port) {
   const socket = connect({
-    host: 'localhost', port, autoSelectFamily: true,
+    // A live stream's small pieces (video, keys, acks) leave at once.
+    host: 'localhost', port, autoSelectFamily: true, noDelay: true,
     lookup: (_host, _options, done) => done(null, [
       { address: '127.0.0.1', family: 4 }, { address: '::1', family: 6 },
     ]),

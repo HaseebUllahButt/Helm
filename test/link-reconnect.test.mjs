@@ -315,3 +315,43 @@ for (const newer of [true, false]) {
     }
   });
 }
+
+test('a tunnel stream keeps room and goes first while a large chat list waits on the same link', async context => {
+  const { TunnelFrames } = await import('../packages/protocol/tunnel-frame.js');
+  const { FramePieces } = await import('../packages/protocol/frame-lanes.js');
+  const { randomBytes } = await import('node:crypto');
+  const setup = await fixture(context, null);
+  const order = [];
+  const changed = new EventEmitter();
+  let welcomed;
+  const told = new Promise(resolve => { welcomed = resolve; });
+  setup.daemon.onFrame = async (_link, frame) => { if (frame.t === 'welcome') welcomed(); };
+  let hub;
+  setup.webSockets.on('connection', socket => {
+    hub = socket;
+    socket.send(JSON.stringify({ t: 'welcome', version: 1, lanes: 1, binaryTunnel: 1 }));
+    const parts = new TunnelFrames(), pieces = new FramePieces();
+    socket.on('message', (raw, isBinary) => {
+      const frame = parts.decode(raw);
+      if (frame === undefined) return;
+      const whole = pieces.take(frame);
+      if (whole === null) return;
+      const done = whole === undefined ? frame : JSON.parse(whole);
+      if (done.t === 'ping') return;
+      order.push({ t: done.t, binary: isBinary, data: done.data });
+      changed.emit('change');
+    });
+  });
+  setup.link.start(); await setup.ready; await told;
+  // A slow hub link: the kernel takes what it can, the rest waits here.
+  hub._socket.pause();
+  setup.link.send('rpcResult', { id: 'list', ok: true, result: 'x'.repeat(16 * 1024 * 1024) });
+  assert.equal(setup.link.tunnelWritable, false, 'the whole link is full of the list');
+  assert.equal(setup.link.tunnelRoom('s'), true, 'the stream still has room');
+  const video = randomBytes(64 * 1024);
+  setup.link.send('tunnel.data', { sid: 's', data: video });
+  hub._socket.resume();
+  while (order.length < 2) await once(changed, 'change');
+  assert.deepEqual(order.map(f => f.t), ['tunnel.data', 'rpcResult'], 'the stream does not wait for the list');
+  assert.ok(order[0].binary && Buffer.isBuffer(order[0].data) && order[0].data.equals(video), 'stream bytes go binary');
+});

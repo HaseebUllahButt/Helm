@@ -42,6 +42,7 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
   let disconnectedTimer;
   let localCount = 0, remoteCount = 0;
   let sendChain = Promise.resolve();
+  let queued = 0;
   let resolveReady, rejectReady;
   const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
   const finish = (error) => {
@@ -111,7 +112,7 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
 
   // `unsent` on a failure means not one byte of this frame left: the caller
   // may send it another way without any chance of it running twice.
-  const sendBuffered = async (serialized, onStart) => {
+  const sendBuffered = async (serialized, onStart, skip) => {
     const binaryParts = Buffer.isBuffer(serialized) ? fragmentTunnelFrame(serialized) : null;
     const count = binaryParts?.length ?? Math.ceil(serialized.length / CHUNK);
     const gid = randomBytes(12).toString('hex');
@@ -120,6 +121,8 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
       while (!closed && channel.readyState === 'open' && channel.bufferedAmount > HIGH_WATER && Date.now() < deadline) await drained();
       if (closed || channel.readyState !== 'open') throw Object.assign(new Error('direct channel closed'), { unsent: index === 0 });
       if (Date.now() >= deadline) throw Object.assign(new Error('direct channel backpressure did not drain'), { unsent: index === 0 });
+      // Its sender gave up on it while it waited in the queue.
+      if (index === 0 && skip?.()) throw Object.assign(new Error('direct frame no longer wanted'), { unsent: true, cancelled: true });
       if (index === 0) onStart?.();
       channel.send(binaryParts ? binaryParts[index] : count === 1 ? serialized : JSON.stringify({
         t: 'dc-chunk', gid, i: index, n: count,
@@ -130,16 +133,21 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, 
   return {
     ready,
     close: () => finish(new Error('direct channel closed')),
-    send(frame, onStart) {
+    // `skip`: asked just before the frame leaves; true drops it unsent.
+    send(frame, onStart, { skip } = {}) {
       const unsent = (message) => Promise.reject(Object.assign(new Error(message), { unsent: true }));
       let serialized;
       try { serialized = encodeTunnelFrame(frame, true); } catch { return unsent('unserializable direct frame'); }
       if (typeof serialized !== 'string' && !Buffer.isBuffer(serialized)) return unsent('unserializable direct frame');
       if (serialized.length > MAX_FRAME) return unsent('direct frame exceeds size limit');
-      const run = sendChain.then(() => sendBuffered(serialized, onStart));
+      queued += serialized.length;
+      const run = sendChain.then(() => sendBuffered(serialized, onStart, skip))
+        .finally(() => { queued -= serialized.length; });
       sendChain = run.catch(() => {});
       return run;
     },
+    /** Bytes waiting to leave: queued here and in the channel's own buffer. */
+    backlog: () => queued + (channel.bufferedAmount ?? 0),
     async receive(payload) {
       if (closed || (payload?.negotiation && payload.negotiation !== negotiation)) return;
       try {

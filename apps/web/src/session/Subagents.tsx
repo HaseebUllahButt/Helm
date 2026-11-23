@@ -30,7 +30,7 @@ const TAIL = 1500;
 const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 const stateOf = helperState;
 /** A helper on a machine that did not answer: only its last state is known. */
-const offline = (task: Session) => (task as Session & { offline?: boolean }).offline === true;
+const offline = (task: Session) => task.offline === true;
 /**
  * The accounts new chats offer on this machine, plus the one this chat runs
  * as in place of its account's usual row. An older machine does not say
@@ -129,9 +129,10 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   // own helpers, then finished, then failed. Live ones oldest first, ended
   // ones newest first.
   const ended = (child: Session) => child.delegation?.finishedAt ?? child.updatedAt ?? child.createdAt ?? 0;
-  const live = (states: string[]) => shown.filter((child) => states.includes(stateOf(child)))
+  const available = shown.filter((child) => !offline(child));
+  const live = (states: string[]) => available.filter((child) => states.includes(stateOf(child)))
     .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
-  const over = (states: string[]) => shown.filter((child) => states.includes(stateOf(child)))
+  const over = (states: string[]) => available.filter((child) => states.includes(stateOf(child)))
     .sort((left, right) => ended(right) - ended(left));
   // The CLI's own subagents: read from its records, opened as chats.
   const natives = (parent.nativeCards ?? []).filter((agent) => matches(agent.title, agent.agentType, agent.model));
@@ -146,8 +147,9 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
   const known = GROUPS.flatMap((g) => g.states);
   const groups = GROUPS.map((g) => ({ ...g,
     // A state Helm does not know yet goes with the finished ones.
-    items: g.id === 'finished' ? over([...g.states, ...shown.map(stateOf).filter((state) => !known.includes(state))]) : g.id === 'failed' ? over(g.states) : live(g.states),
+    items: g.id === 'finished' ? over([...g.states, ...available.map(stateOf).filter((state) => !known.includes(state))]) : g.id === 'failed' ? over(g.states) : live(g.states),
     native: nativeIn(g.id === 'finished' ? [...g.states, ...natives.map((a) => a.status).filter((state) => !known.includes(state))] : g.states) }));
+  groups.push({ id: 'offline', title: 'Offline', states: [], items: shown.filter(offline), native: [] });
   const openNative = natives.find((agent) => agent.id === nativeOpen);
   const readOnly = ['plan', 'readonly', 'read'].includes(parent.mode ?? '');
   const modes = agent?.modes.filter((option) => option.id !== 'plan' && (!readOnly || ['readonly', 'read'].includes(option.id))) ?? [];
@@ -202,9 +204,9 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
     if (reviewAttention) {
       // Open the helper that needs the owner, at any depth: a failure two
       // levels down shows that helper and its reason, not only its lead.
-      const all = liveTeam.map((m) => m.session);
+      const all = liveTeam.map((m) => m.session).filter((child) => !offline(child));
       const unseen = (s: Session) => failureUnseen(s, remote);
-      const tasks = liveTeam.filter((m) => m.depth === 0).map((m) => m.session);
+      const tasks = liveTeam.filter((m) => m.depth === 0 && !offline(m.session)).map((m) => m.session);
       const attention = all.find((s) => stateOf(s) === 'blocked') ?? all.find((s) => stateOf(s) === 'error' && unseen(s))
         ?? tasks.find((s) => s.team?.blocked || s.team?.failed);
       if (attention) {
@@ -472,7 +474,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
     const open = selected === child.id;
     const nested = sessions.filter((s) => !s.archived && s.delegation?.parentId === child.id);
     const unfolded = expanded.has(child.id);
-    const label = STATUS[state] || state;
+    const label = `${offline(child) ? 'Last seen: ' : ''}${STATUS[state] || state}`;
     const toggle = () => select(open ? '' : child.id);
     return <li key={child.id} className={`delegation-branch${open ? ' selected' : ''}`}>
       <div className="delegation-row">
@@ -483,7 +485,7 @@ export function Subagents({ client, env, machines = [], parent, onClose, onOpen,
           <span className="grow"><b>{child.title}</b>{nested.length > 0 && <small>{nested.length} {nested.length === 1 ? 'helper' : 'helpers'} <Icon name={unfolded ? 'up' : 'down'} size={12} /></small>}<small>{offline(child) ? `${nameOf(where ?? '')} is offline`
             : [child.profileId, child.model || child.engineModel || 'Agent default', where && `on ${nameOf(where)}`].filter(Boolean).join(' · ')}</small></span>
         </button>
-        <button type="button" className={`delegation-status state-${state}`} data-task={child.id} aria-label={`${label}, details`}
+        <button type="button" className={`delegation-status state-${offline(child) ? 'idle' : state}`} data-task={child.id} aria-label={`${label}, details`}
           aria-expanded={open} aria-controls={`task-detail-${child.id}`} onClick={toggle}>
           <i aria-hidden="true" />{label}<Icon name={open ? 'up' : 'down'} size={14} />
         </button>

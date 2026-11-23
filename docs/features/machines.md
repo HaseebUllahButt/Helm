@@ -88,12 +88,21 @@ owner's home or network to bypass this check.
   opens only from a page on a loopback address (the Helm app on a
   computer), because the forward listens on that computer's 127.0.0.1.
   A phone gets a note instead.
-- **Keys:** the window opens on a card: Take over (fullscreen plus keyboard
-  lock, so Super keys reach the other machine) or Only watch. Super+Ctrl+Esc,
-  leaving fullscreen or going to another window gives the keys back and
-  switches to watch only, with a "Take over again" bar. niri reserves
-  Super+Ctrl+Esc on the owner's machines. A hidden test browser has no
-  keyboard lock, so only Brave or Chrome proves the Super keys.
+- **Keys:** the window works like a virtual machine's window. It opens
+  full screen with control on and the keyboard locked, so Super keys and
+  the browser's own keys (Ctrl+W) reach the other machine. No click first:
+  screens open in their own browser profile (`~/.helm/screen-window`,
+  `seedScreenProfile` in desktop.js) that allows 127.0.0.1 pages automatic
+  fullscreen and keyboard lock. Brave hides keyboard lock behind its Shields
+  (`navigator.keyboard.lock` is missing); its `brave_webcompat_keyboard`
+  setting brings it back (tested 2026-11-23, Brave 1.99). A browser that
+  still asks for a click gets it from the first click or key; that click is
+  not sent on. On niri, Super+Ctrl+Esc (the owner's binding) turns the lock
+  off without telling the page; going to another window and back locks
+  again. Where the page sees Super+Ctrl+Esc, or after leaving fullscreen,
+  control stays on, Super keys stay here, and a bar offers "Send all keys".
+  A hidden test browser has no keyboard lock: prove it in a visible browser
+  on a test display (Xvfb).
 - **Desktop shortcuts on Wayland:** niri never runs its own binds for keys
   from a Wayland virtual keyboard (tested 2026-11-19: `wtype` Super+Esc did
   not open the overview). So the engine presses keys through a kernel
@@ -101,18 +110,30 @@ owner's home or network to bypass this check.
   keyboard for typed text. Set up writes a `uaccess` udev rule
   (`70-helm-screen.rules`) so the signed-in person may use it. Until then a
   Wayland screen asks for Set up; "Open without shortcuts" skips it.
-- **Speed:** every frame goes through a hub, so the delay is the path to the
-  hub and back (about 0.2 to 0.9 s from why through the VM). The owner's
-  router blocks devices on its Wi-Fi from reaching each other, so why and
-  Laptop cannot use a direct path. The engine writes to Helm's tunnel on its
-  own machine and cannot see that path, so Helm caps it at 8 Mbps.
+- **Speed:** the picture rides a forward, so it takes the direct channel
+  when `helm status` says that machine is reached direct (spins.md, Route).
+  Otherwise every frame goes through a hub, and the delay is the path to
+  the hub and back (about 0.4 to 0.9 s from why through the VM). The engine writes to Helm's tunnel on its
+  own machine, so its TCP numbers show a loopback link. With them it let
+  two or three pictures travel at once: about 3 a second on a 360 ms path.
+  Helm starts it with `--behind-tls-proxy`, which makes it pace by the
+  viewer's acknowledgements instead (13 a second in the same test, the test
+  machine's own limit). `ENGINE_OPTIONS` in screen.js restarts an engine
+  started with older options.
 - **Linux only** for now: X11, or Wayland on niri, sway or Hyprland. GNOME
   and KDE on Wayland lack the screen copy the engine uses.
-- **Prove (driven 2026-11-19):** `$V open --desktop; $V key
-  Control+Shift+KeyR` shows "Open a screen" with this machine as "this
-  computer". Click it: a machine with no build packages shows "Set up the
-  screen of …". Never press Set up in a copy: it installs packages on the
-  real machine. The live picture needs two real machines.
+- **Not this computer:** the menu, search and the machine page leave out
+  the computer that runs the window: its screen would only show itself.
+  With no other machine online the menu says so.
+- **Stops:** the engine stops 1 minute after the last viewer goes, with
+  the forwards that carry it.
+- **Prove (driven 2026-11-23):** `$V open --desktop; $V key
+  Control+Shift+KeyR` shows "Open a screen" and "No other machine is
+  online". The copy has one machine, so to see the Set up box, let the
+  picker list this machine for a moment (App.tsx screenPicker filter): it
+  shows "Turn on shortcuts for …" with stacked buttons. Never press it in a
+  copy: it changes the real machine. The live picture needs two real
+  machines.
 - **Tests:** `test/screen.test.mjs`.
 
 ## Check installation and connections
@@ -197,7 +218,7 @@ owner's home or network to bypass this check.
 - **Traps:** if exec says the command may have started, never rerun it;
   read it with `exec-status`. A detached supervisor saves its output and
   result across daemon restarts. Output keeps only the last 256 KB for an
-  hour; the id remains reserved after that, so it cannot start the work again.
+  hour. The exit details and reserved ID remain after the output expires.
   `helm copy` needs rsync 3.2.3+ on both ends; a break resumes on rerun.
   With protected arguments, rsync receives its folder and options inside
   the byte stream. Check those before passing them to rsync, and bind the

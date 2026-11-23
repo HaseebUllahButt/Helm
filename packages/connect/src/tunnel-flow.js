@@ -5,6 +5,17 @@ export const TUNNEL_CHUNK = 64 * 1024;
 export const TUNNEL_SOCKET_LIMIT = 256 * 1024;
 /** Copies run long and far; a bigger window keeps a high-latency link full. */
 export const COPY_WINDOW = 16 * 1024 * 1024;
+/**
+ * A forward carries live video too: 512 KiB over a 360-700 ms trip held a
+ * stream near 6-11 Mbps. Each end says in `window` what it can take; an end
+ * that says nothing gets TUNNEL_WINDOW, as before.
+ */
+export const STREAM_WINDOW = 4 * 1024 * 1024;
+
+/** The window to send with, from what the other end said it can take. */
+export const tunnelWindow = (offered, most = STREAM_WINDOW) => (Number.isSafeInteger(offered) && offered >= TUNNEL_WINDOW
+  ? Math.min(offered, most)
+  : TUNNEL_WINDOW);
 
 export class TunnelSender {
   sent = 0;
