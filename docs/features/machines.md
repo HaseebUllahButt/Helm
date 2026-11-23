@@ -110,10 +110,10 @@ owner's home or network to bypass this check.
   keyboard for typed text. Set up writes a `uaccess` udev rule
   (`70-helm-screen.rules`) so the signed-in person may use it. Until then a
   Wayland screen asks for Set up; "Open without shortcuts" skips it.
-- **Speed:** every frame goes through a hub, so the delay is the path to the
-  hub and back (about 0.4 to 0.9 s from why through the VM). The owner's
-  router blocks devices on its Wi-Fi from reaching each other, so why and
-  Laptop cannot use a direct path. The engine writes to Helm's tunnel on its
+- **Speed:** the picture rides a forward, so it takes the direct channel
+  when `helm status` says that machine is reached direct (spins.md, Route).
+  Otherwise every frame goes through a hub, and the delay is the path to
+  the hub and back (about 0.4 to 0.9 s from why through the VM). The engine writes to Helm's tunnel on its
   own machine, so its TCP numbers show a loopback link. With them it let
   two or three pictures travel at once: about 3 a second on a 360 ms path.
   Helm starts it with `--behind-tls-proxy`, which makes it pace by the
@@ -212,7 +212,7 @@ owner's home or network to bypass this check.
 - **Traps:** if exec says the command may have started, never rerun it;
   read it with `exec-status`. A detached supervisor saves its output and
   result across daemon restarts. Output keeps only the last 256 KB for an
-  hour; the id remains reserved after that, so it cannot start the work again.
+  hour. The exit details and reserved ID remain after the output expires.
   `helm copy` needs rsync 3.2.3+ on both ends; a break resumes on rerun.
   With protected arguments, rsync receives its folder and options inside
   the byte stream. Check those before passing them to rsync, and bind the

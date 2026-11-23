@@ -45,6 +45,87 @@ async function connectProxy(host, port) {
   throw new Error(`could not reach "${host}" through any hub\n  ${failures.join('\n  ')}`);
 }
 
+/**
+ * The same stream as `bridge`, over a direct channel to the machine instead
+ * of a hub. `openChannel(handlers)` gives { send(t, extra) -> Promise,
+ * close(), room?() -> whether stream bytes may go now } or null
+ * (hub-mesh.js tunnel); frames for the stream reach
+ * handlers.onFrame, a lost channel handlers.onClose. Always with credit.
+ * Rejects with `established` as `bridge` does, so a caller can try a hub
+ * only when no byte has moved.
+ */
+export function bridgeDirect(openChannel, port, { input, output, timeout = 3000 } = {}) {
+  return new Promise((resolve, reject) => {
+    let open = false, settled = false, ended = false;
+    // Whether the far end still holds the stream and needs a close.
+    let farHolds = false;
+    let sender, receiver, release, linger = null, channel = null;
+    const shutdown = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(linger);
+      release?.();
+      input.pause();
+      sender?.stop();
+      receiver?.stop();
+      input.off('end', end);
+      input.off('close', gone);
+      input.off('error', shutdown);
+      output.off('error', shutdown);
+      // Given up on (a timeout, this side's socket gone): the far end must
+      // not keep a socket to the app open for it.
+      if (farHolds) channel.send(T.TUNNEL_CLOSE, {}).catch(() => {});
+      channel?.close();
+      if (err) { err.established = open; reject(err); } else resolve();
+    };
+    const send = (t, extra) => channel.send(t, extra).catch((err) => shutdown(err ?? new Error('direct channel closed')));
+    const end = () => {
+      ended = true;
+      const close = () => {
+        farHolds = false;
+        send(T.TUNNEL_CLOSE, {});
+        // As `bridge`: a close is the whole stream, both ways, unanswered.
+        linger = setTimeout(() => shutdown(), 2000);
+      };
+      if (sender) sender.finish(close); else close();
+    };
+    const gone = () => {
+      if (!ended) shutdown(new Error('connection closed'));
+      else if (output.destroyed) shutdown();
+    };
+    const timer = setTimeout(() => shutdown(new Error('direct stream open timed out')), timeout);
+    channel = openChannel({
+      onClose: (err) => { farHolds = false; shutdown(err ?? new Error('direct channel closed')); },
+      onFrame: (msg) => {
+        if (settled) return;
+        if (msg.t === T.TUNNEL_CLOSE) farHolds = false;
+        if (msg.t === T.TUNNEL_READY && !open) {
+          open = true;
+          release = beginTransferActivity();
+          clearTimeout(timer);
+          receiver = new TunnelReceiver(output, (bytes) => send(T.TUNNEL_ACK, { bytes }), shutdown, { window: STREAM_WINDOW });
+          sender = new TunnelSender(input, (chunk) => send(T.TUNNEL_DATA, { data: chunk }), shutdown,
+            { window: tunnelWindow(msg.window), ...(channel.room ? { canSend: channel.room } : {}) });
+          input.on('end', end);
+          input.on('error', shutdown);
+          output.on('error', shutdown);
+        } else if (msg.t === T.TUNNEL_ACK && sender) sender.ack(msg.bytes);
+        else if (msg.t === T.TUNNEL_DATA && receiver) receiver.write(msg.data);
+        else if (msg.t === T.TUNNEL_CLOSE) {
+          shutdown(open && (!msg.reason || msg.reason === 'closed')
+            ? null : Object.assign(new Error(msg.reason || 'tunnel refused'), { far: true }));
+        }
+      },
+    });
+    if (!channel) { shutdown(new Error('no direct channel')); return; }
+    input.once('close', gone);
+    if (input.destroyed) process.nextTick(gone);
+    farHolds = true;
+    send(T.TUNNEL_OPEN, { port, flow: 1, window: STREAM_WINDOW });
+  });
+}
+
 export function bridge(hub, token, host, port, {
   path = '/helm/ws', input = process.stdin, output = process.stdout, timeout = 5000,
 } = {}) {

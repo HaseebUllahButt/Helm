@@ -177,6 +177,109 @@ test('push/history race and missing sequences recover without displaying duplica
   chat.close();
 });
 
+test('the chat CLI shows the provider cause beside a failed reply', async () => {
+  const connection = new EventEmitter();
+  const events = [
+    { seq: 1, type: 'turn.done', turnId: 'old', status: 'error', error: 'Pi ran out of retries.' },
+    { seq: 2, type: 'error', turnId: 'new', kind: 'provider-reply', message: 'Too many requests.' },
+    { seq: 3, type: 'turn.done', turnId: 'new', status: 'ok' },
+  ];
+  connection.rpc = async () => ({ events, last: 3, pending: [] });
+  let output = '';
+  const chat = new ManagedChat(connection, 's', { write: text => { output += text; } });
+  try {
+    await chat.sync();
+    assert.equal(output, '\n[error] Pi ran out of retries.\n\n[error] Too many requests.\n');
+  } finally { chat.close(); }
+});
+
+test('the chat CLI prints a Codex command failure cause once', async () => {
+  const connection = new EventEmitter();
+  connection.rpc = async () => ({ events: [
+    { seq: 1, type: 'error', kind: 'command', message: 'Cannot list permissions.' },
+  ], last: 1, pending: [] });
+  let output = '';
+  const chat = new ManagedChat(connection, 's', { write: text => { output += text; } });
+  try {
+    await chat.sync();
+    connection.emit('event', E.SESSION_EVENT, { id: 's', events: [
+      { seq: 2, type: 'turn.done', turnId: 'cmd', status: 'error', error: 'Cannot list permissions.' },
+    ] });
+    assert.equal(output, '\nCannot list permissions.\n\n[error]\n');
+  } finally { chat.close(); }
+});
+
+test('helm chat prints one cause when a command fails in its events and input reply', async () => {
+  const connection = new EventEmitter();
+  const input = new PassThrough(), output = new PassThrough();
+  const cause = 'Cannot list permissions.';
+  const events = [];
+  let printed = '', beforeUnreported;
+  connection.close = () => {};
+  connection.rpc = async (method, params) => {
+    if (method === M.SESSION_CONNECT) return { session: { id: 's', engine: 'codex', quick: true } };
+    if (method === M.SESSION_EVENTS) {
+      return { events: events.filter(event => event.seq > (params.since ?? 0)), last: events.length, pending: [] };
+    }
+    if (method === M.SESSION_INPUT) {
+      if (params.data === '/permissions') {
+        events.push(
+          { seq: 1, type: 'turn.start', turnId: 'cmd', text: '/permissions' },
+          { seq: 2, type: 'error', kind: 'command', message: cause },
+          { seq: 3, type: 'status', status: 'working' },
+          { seq: 4, type: 'turn.done', turnId: 'cmd', status: 'error', error: cause },
+        );
+      } else if (params.data === '/unreported') {
+        beforeUnreported = printed;
+        throw new Error(cause);
+      } else {
+        connection.emit('event', E.SESSION_EVENT, { id: 's', events });
+        return {};
+      }
+      throw new Error(cause);
+    }
+    return {};
+  };
+  output.on('data', chunk => { printed += chunk; });
+  const running = runChat(['--attach', 's'], { connection, input, output });
+  input.end('/permissions\nshow later events\n/unreported\n');
+  await running;
+  assert.equal(beforeUnreported.split(cause).length - 1, 1, beforeUnreported);
+  assert.equal(printed.slice(beforeUnreported.length).split(cause).length - 1, 1, printed);
+  assert.match(printed, /\[error\]/);
+});
+
+test('a failed command given to helm chat at launch prints once and exits with failure', async () => {
+  const connection = new EventEmitter();
+  const input = new PassThrough(), output = new PassThrough();
+  const cause = 'Cannot list permissions.';
+  const events = [];
+  connection.close = () => {};
+  connection.rpc = async (method) => {
+    if (method === M.AGENT_LIST) return { agents: [{ id: 'codex', engine: 'codex', available: true }] };
+    if ([M.SESSION_START, M.SESSION_CONNECT].includes(method)) return { session: { id: 's', engine: 'codex', quick: true } };
+    if (method === M.SESSION_EVENTS) return { events, last: events.length, pending: [] };
+    if (method === M.SESSION_INPUT) {
+      events.push(
+        { seq: 1, type: 'turn.start', turnId: 'cmd', text: '/permissions' },
+        { seq: 2, type: 'turn.done', turnId: 'cmd', status: 'error', error: cause },
+      );
+      throw new Error(cause);
+    }
+    return {};
+  };
+  let printed = '';
+  output.on('data', chunk => { printed += chunk; });
+  const before = process.exitCode;
+  input.end();
+  try {
+    await runChat(['codex', '--quick', '--', '/permissions'], { connection, input, output });
+    assert.equal(printed.split(cause).length - 1, 1, printed);
+    assert.equal(process.exitCode, 1);
+    assert.doesNotMatch(printed, /> $/);
+  } finally { process.exitCode = before; }
+});
+
 test('persistent controller RPC carries answers and events; disconnect rejects calls without replay', async () => {
   class Socket extends EventEmitter {
     sent = [];

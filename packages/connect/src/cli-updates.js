@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { accessSync, constants, createReadStream, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join, relative, isAbsolute } from 'node:path';
 import { ENGINES } from './engines.js';
@@ -239,6 +240,8 @@ export function classifyInstall(engine, realPath, {
 
 // ----------------------------------------------------------------- processes
 
+const outputLines = text => stripAnsi(text ?? '').split('\n').map(line => line.trim()).filter(Boolean);
+
 /** Run a program with an argument list (never a shell string) and collect what it says. */
 function run(cmd, args, { timeout, env = process.env, platform = process.platform } = {}) {
   return new Promise((resolve) => {
@@ -250,9 +253,11 @@ function run(cmd, args, { timeout, env = process.env, platform = process.platfor
     const child = execFile(viaNode ? process.execPath : cmd, viaNode ? [npmCli, ...args] : args,
       { timeout, env, maxBuffer: 2 << 20, windowsHide: true },
       (error, stdout, stderr) => {
-        const out = stripAnsi(`${stdout ?? ''}\n${stderr ?? ''}`).split('\n').map((l) => l.trim()).filter(Boolean);
+        const output = outputLines(stdout);
+        const errors = outputLines(stderr);
         resolve({
-          ok: !error, code: error?.code ?? 0, ms: Date.now() - started, out,
+          ok: !error, code: error ? error.code ?? null : 0, ms: Date.now() - started, out: [...output, ...errors],
+          diagnostics: errors.length ? errors : output,
           timedOut: !!error && (error.killed === true || error.signal === 'SIGTERM'),
         });
       });
@@ -262,6 +267,19 @@ function run(cmd, args, { timeout, env = process.env, platform = process.platfor
 }
 
 const tail = (lines, n = 3) => lines.slice(-n).join(' · ').slice(0, 300);
+
+function rememberFailure(entry, stage, version, result) {
+  const seen = entry.failures?.[stage] ?? [];
+  const key = createHash('sha256').update(JSON.stringify([version, result.code, result.timedOut, result.diagnostics])).digest('hex');
+  if (seen.includes(key)) return false;
+  entry.failures = { ...entry.failures, [stage]: [...seen, key] };
+  return true;
+}
+
+function failureLog(result, message) {
+  const code = typeof result.code === 'number' ? ` Exit code ${result.code}.` : '';
+  return `failed.${code}${message ? ` ${message}` : ''}`;
+}
 
 // -------------------------------------------------------------------- state
 
@@ -338,13 +356,17 @@ export class CliUpdater {
     return (await Promise.all(ids.map((id) => this.inspect(id, root)))).filter(Boolean);
   }
 
-  async #latest(tool, state) {
+  async #latest(tool) {
     if (tool.method !== 'npm' || !tool.pkg) return null;
-    const hit = state.latest[tool.pkg];
+    const hit = loadState().latest[tool.pkg];
     if (hit && this.now() - hit.at < LATEST_TTL_MS) return hit.version;
     const r = await run('npm', ['view', tool.pkg, 'version'], { timeout: 20_000, env: this.env, platform: this.platform });
     const version = r.ok ? parseVersion(r.out[0]) : null;
-    if (version) state.latest[tool.pkg] = { version, at: this.now() };
+    if (version) {
+      const state = loadState();
+      state.latest[tool.pkg] = { version, at: this.now() };
+      saveState(state);
+    }
     return version ?? hit?.version ?? null;
   }
 
@@ -353,19 +375,21 @@ export class CliUpdater {
   /** Every installed tool: version, how it can be updated, and the last attempt. */
   async versions({ refresh = false } = {}) {
     if (!refresh && this.#shown && this.now() - this.#shown.at < SHOWN_TTL_MS) return this.#view(this.#shown.tools);
-    const state = loadState();
     const found = await this.#inspectAll();
     const tools = [];
     for (const t of found) {
-      const latest = await this.#latest(t, state).catch(() => null);
+      const latest = await this.#latest(t).catch(() => null);
       tools.push({
         engine: t.engine, label: t.label, version: t.version, ...(latest ? { latest, outdated: isNewer(latest, t.version) } : {}),
         method: t.method, canUpdate: t.canUpdate, ...(t.reason ? { reason: t.reason } : {}),
         lastChecked: this.now(),
-        ...(state.engines[t.engine]?.lastResult ? { lastResult: state.engines[t.engine].lastResult } : {}),
       });
     }
-    saveState(state);
+    const { engines } = loadState();
+    for (const tool of tools) {
+      const lastResult = engines[tool.engine]?.lastResult;
+      if (lastResult) tool.lastResult = lastResult;
+    }
     this.#shown = { at: this.now(), tools };
     return this.#view(tools);
   }
@@ -435,8 +459,9 @@ export class CliUpdater {
     let to = r.ok ? await this.#version(tool.path) : tool.version;
     let message = r.timedOut ? 'the update took too long and was stopped' : tail(r.out);
     let ms = r.ms;
+    let early;
     if (r.ok && id === 'claude') {
-      const early = await this.#claudeEarly(tool, to).catch((err) => ({ ok: false, message: `early build check failed: ${err?.message || err}` }));
+      early = await this.#claudeEarly(tool, to).catch((err) => ({ message: `early build check failed: ${err?.message || err}` }));
       if (early) {
         ms += early.ms ?? 0;
         if (early.to) to = early.to;
@@ -448,9 +473,15 @@ export class CliUpdater {
       message,
     };
     const state = loadState();
-    state.engines[id] = { ...state.engines[id], lastResult: result };
+    const entry = { ...state.engines[id], lastResult: result };
+    const logUpdate = r.ok || rememberFailure(entry, 'update', tool.version, r);
+    const logEarly = early?.run && (early.run.ok || rememberFailure(entry, 'early', early.version, early.run));
+    state.engines[id] = entry;
     saveState(state);
-    this.log(`${tool.label}: ${r.ok ? (result.changed ? `updated ${result.from} -> ${result.to}` : 'already up to date') : `update failed (${result.message})`}`);
+    if (logEarly) this.log(early.log);
+    if (logUpdate) {
+      this.log(`${tool.label}: ${r.ok ? (result.changed ? `updated ${result.from} -> ${result.to}` : 'already up to date') : `update ${failureLog(r, result.message)}`}`);
+    }
     return { ...base, ...result };
   }
 
@@ -472,9 +503,9 @@ export class CliUpdater {
       : { cmd: tool.path, args: ['install', next] };
     const r = await run(command.cmd, command.args, { timeout: UPDATE_TIMEOUT_MS, env: this.env, platform: this.platform });
     const to = r.ok ? await this.#version(tool.path) : null;
-    this.log(`Claude Code: ${r.ok ? `early build ${to} for ${missing.join(', ')}` : `early build failed (${tail(r.out)})`}`);
     return {
-      ms: r.ms, to,
+      ms: r.ms, to, run: r, version: `${have} -> ${next}`,
+      log: `Claude Code: ${r.ok ? `early build ${to} for ${missing.join(', ')}` : `early build ${next} ${failureLog(r, r.timedOut ? 'The update timed out.' : tail(r.out))}`}`,
       message: r.ok
         ? `Installed early build ${to}, because this version did not know ${missing.join(', ')}`
         : `Could not install early build ${next}: ${r.timedOut ? 'it took too long' : tail(r.out)}`,

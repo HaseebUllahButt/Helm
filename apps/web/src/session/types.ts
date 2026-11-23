@@ -523,10 +523,12 @@ export function apply(state: LogState, e: HelmEvent): void {
       state.limits = { ...(state.limits ?? {}), ...e };
       return;
     case 'error': {
-      const turn = state.turns[state.turns.length - 1];
+      const turn = e.kind === 'provider-reply' && e.turnId
+        ? state.turns.find(t => t.id === e.turnId)
+        : state.turns[state.turns.length - 1];
       const note = e.tone === 'note';
       const item: Item = { id: `err-${e.seq}`, kind: 'error', text: e.message ?? 'error', status: note ? 'ok' : 'error', startedAt: e.at, ...(note ? { tone: 'note' as const } : {}), ...(e.kind === 'folder' ? { own: true } : {}) };
-      if (turn && !turn.done) { turn.items.push(item); turn.revision = e.seq; }
+      if (turn && (!turn.done || e.kind === 'provider-reply')) { turn.items.push(item); turn.revision = e.seq; }
       else state.turns.push({ id: `sys-${e.seq}`, revision: e.seq, text: '', at: e.at, items: [item], done: { status: note ? 'ok' : 'error' } });
       return;
     }
