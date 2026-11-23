@@ -84,19 +84,34 @@ const write = (net, { joining = false } = {}) => {
 let networkCache = null;
 
 export function loadNetwork() {
+  const net = currentNetwork();
+  return net && structuredClone(net);
+}
+
+/**
+ * Whether a member is removed now. The hub asks on every frame it gets: the
+ * same fresh check as loadNetwork, without a copy of the whole roster.
+ */
+export function isRevoked(id) {
+  const revoked = currentNetwork()?.revoked;
+  return !!(revoked && typeof id === 'string' && Object.hasOwn(revoked, id) && revoked[id]);
+}
+
+/** The cached registration itself: never hand it out, never change it. */
+function currentNetwork() {
   let info;
   try { info = statSync(NETWORK_FILE, { bigint: true }); }
   catch { networkCache = null; return null; }
   // Check metadata on every read: revocations and writes from another
   // process must be visible immediately, without waiting for a watcher.
   const stamp = `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
-  if (networkCache?.stamp === stamp) return structuredClone(networkCache.net);
+  if (networkCache?.stamp === stamp) return networkCache.net;
   try {
     const net = JSON.parse(readFileSync(NETWORK_FILE, 'utf8'));
     if (isProductionDirectory() && (!net || typeof net.id !== 'string'
         || typeof net.self !== 'string' || typeof net.key !== 'string')) throw new Error();
     networkCache = { stamp, net };
-    return structuredClone(net);
+    return net;
   } catch {
     networkCache = null;
     if (isProductionDirectory()) {
